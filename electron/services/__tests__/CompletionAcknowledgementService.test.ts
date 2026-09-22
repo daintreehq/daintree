@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CompletionAcknowledgementService,
   COMPLETION_ACK_DWELL_MS,
@@ -233,5 +233,71 @@ describe("CompletionAcknowledgementService", () => {
     // Guards against the dwell accidentally dropping below the sample interval
     // — the "continuous" guarantee needs at least two observations.
     expect(COMPLETION_ACK_DWELL_MS).toBeGreaterThanOrEqual(2 * TICK);
+  });
+
+  describe("observation gating (#12515)", () => {
+    afterEach(() => {
+      service.stop();
+      vi.useRealTimers();
+    });
+
+    it("stops sampling while nobody can observe and resumes on a fresh dwell", () => {
+      vi.useFakeTimers();
+      statusMap = {
+        alpha: entry({
+          completedAgentCount: 1,
+          unacknowledgedCompletedAgentCount: 1,
+          latestUnacknowledgedCompletionAt: BASE - 60_000,
+        }),
+      };
+      // A locked screen leaves the window focused, so the observed-project
+      // read alone would keep reporting alpha the whole time.
+      observed = "alpha";
+      const sampleSpy = vi.spyOn(service, "sample");
+
+      // Advance the service clock and the timers together, one sample at a time.
+      const advance = (ticks: number) => {
+        for (let i = 0; i < ticks; i++) {
+          now += TICK;
+          vi.advanceTimersByTime(TICK);
+        }
+      };
+
+      service.start();
+      advance(1); // dwell starts on alpha
+      service.setObserving(false);
+      advance(10); // locked: time passes, nothing is sampled
+      expect(sampleSpy).toHaveBeenCalledTimes(1);
+
+      service.setObserving(true);
+      advance(1); // first sight again — a new dwell, not the pre-lock one
+      expect(stamps).toHaveLength(0);
+      advance(1);
+      expect(stamps).toHaveLength(0);
+      advance(1);
+      expect(stamps).toHaveLength(1);
+    });
+
+    it("does not start a timer while unobserved, even when started", () => {
+      vi.useFakeTimers();
+      const sampleSpy = vi.spyOn(service, "sample");
+
+      service.setObserving(false);
+      service.start();
+      vi.advanceTimersByTime(5 * TICK);
+
+      expect(sampleSpy).not.toHaveBeenCalled();
+    });
+
+    it("does not start sampling on regained observation before start()", () => {
+      vi.useFakeTimers();
+      const sampleSpy = vi.spyOn(service, "sample");
+
+      service.setObserving(false);
+      service.setObserving(true);
+      vi.advanceTimersByTime(5 * TICK);
+
+      expect(sampleSpy).not.toHaveBeenCalled();
+    });
   });
 });

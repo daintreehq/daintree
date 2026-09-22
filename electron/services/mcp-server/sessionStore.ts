@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import type { ActionContext } from "../../../shared/types/actions.js";
 import type { McpActiveClientInfo } from "../../../shared/types/ipc/mcpServer.js";
 import type { McpTier, McpSseSession, McpHttpSession, McpSessionOrigin } from "./shared.js";
@@ -5,6 +6,7 @@ import { MCP_SSE_IDLE_TIMEOUT_MS, MCP_TIER_ELEVATION_TTL_MS } from "./shared.js"
 import type { DedupCacheEntry, DedupInFlightEntry } from "./sessionDedup.js";
 import { GrantCache, type GrantLifecycleEmitter } from "./grantCache.js";
 import { ResourceOwnershipLedger } from "./resourceOwnership.js";
+import { TerminalAdoptionLedger } from "./terminalAdoption.js";
 import { getSystemSleepService } from "../SystemSleepService.js";
 
 export interface SessionStoreOptions {
@@ -82,6 +84,16 @@ export class SessionStore {
   // focused-window fallback, and for help / assistant-pane sessions, which
   // route through `sessionWebContentsMap` instead.
   readonly sessionWorkspaceMap = new Map<string, string>();
+  // sessionId → digest of the credential that created the session, written at
+  // handshake. A session id is a routing handle that travels in URLs and
+  // headers, not proof of ownership: `isAuthorized` only establishes that a
+  // bearer is valid *somewhere*, and every follow-up inherits the session's
+  // tier, pins, grants and owned resources. Kept apart from the bearer
+  // register in `httpLifecycle`, which is a settings-UI inventory that a
+  // "disconnect" clears while the session's transport is still being torn
+  // down — authorization must not ride on something the UI can empty. Read
+  // through `isSessionCredential`, which refuses a missing row.
+  readonly sessionCredentialMap = new Map<string, string>();
   // MCP transport sessionId → public help-session id (the one persisted in
   // the renderer's helpPanelStore). Populated only for help-session bearers,
   // in lockstep with sessionWebContentsMap. The transport mints its own
@@ -114,9 +126,17 @@ export class SessionStore {
    * `worktree.deleteOwned` check before they delegate. Co-located with the
    * other session-scoped state so one teardown tears it down too — see
    * {@link clearSessionBinding}, which revokes the authority without touching
-   * the resources themselves.
+   * the resources themselves. A per-pane bearer's records are held by its
+   * principal and outlive the session (#12487).
    */
   readonly resourceOwnership = new ResourceOwnershipLedger();
+  /**
+   * Terminals the user handed to an orchestrating pane (#12490) — a second,
+   * separately written source of authority the non-destructive `*Owned` tools
+   * consult. Held by bearer principals only, so no session teardown or drain
+   * touches it; a principal's adoptions go when its bearer is revoked.
+   */
+  readonly terminalAdoption = new TerminalAdoptionLedger();
 
   // Wall-clock timestamps recording when each session's idle timer was armed.
   // Used by recomputeIdleTimers() to calculate awake elapsed time across
@@ -240,17 +260,20 @@ export class SessionStore {
    *
    * The maps must die together: a stale origin would let a recycled
    * session id inherit another session's privileges, a stale route would
-   * dispatch into a view the session no longer owns, and a stale ownership
+   * dispatch into a view the session no longer owns, a stale ownership
    * record would hand a recycled id authority over another session's
-   * terminals. Teardown is duplicated across ~9 call sites (four here, five
+   * terminals, and a stale credential row would let a recycled id admit the
+   * previous owner's bearer. Teardown is duplicated across ~9 call sites (four here, five
    * inline in `httpLifecycle`), so the lockstep lives in one method rather
    * than in nine copies that drift.
    *
    * Dropping the ownership records revokes *authority*, not the resources
    * (#11909). A disconnected client's terminals and worktrees stay exactly
    * where they are: the session ending is not a decision to destroy work the
-   * user can still see. `drain` clears the same ledger inline, alongside the
-   * maps it also clears without going through here.
+   * user can still see. A session a per-pane bearer authenticated only loses
+   * its binding here — its records belong to the bearer's principal and go
+   * when the bearer is revoked (#12487). `drain` clears the same ledger inline,
+   * alongside the maps it also clears without going through here.
    *
    * Callers must still revoke grants BEFORE calling this — the grant lifecycle
    * emitter resolves the pinned renderer to push `grant.revoked`, and that
@@ -261,7 +284,34 @@ export class SessionStore {
     this.sessionContextMap.delete(sessionId);
     this.sessionOriginMap.delete(sessionId);
     this.sessionWorkspaceMap.delete(sessionId);
+    this.sessionCredentialMap.delete(sessionId);
     this.resourceOwnership.clearSession(sessionId);
+  }
+
+  /**
+   * Record the credential digest that created `sessionId`. Called once per
+   * session at handshake, at the same point the bearer is registered and
+   * before the session becomes reachable by id.
+   */
+  bindSessionCredential(sessionId: string, credentialDigest: string): void {
+    this.sessionCredentialMap.set(sessionId, credentialDigest);
+  }
+
+  /**
+   * Whether `credentialDigest` is the one that created `sessionId`.
+   *
+   * A missing row is a refusal, not a pass: every handshake path writes the
+   * row before the session can be addressed, so its absence means the session
+   * is half torn down or was never ours to hand out. The missing-row branch
+   * still runs a same-sized compare so "live but not yours" and "unknown" take
+   * the same path as closely as the lookup allows.
+   */
+  isSessionCredential(sessionId: string, credentialDigest: string): boolean {
+    const bound = this.sessionCredentialMap.get(sessionId);
+    const presented = Buffer.from(credentialDigest, "utf8");
+    const expected = bound === undefined ? Buffer.alloc(presented.length) : Buffer.from(bound);
+    const equal = expected.length === presented.length && timingSafeEqual(expected, presented);
+    return bound !== undefined && equal;
   }
 
   /**
@@ -845,11 +895,14 @@ export class SessionStore {
     this.sessionContextMap.clear();
     this.sessionOriginMap.clear();
     this.sessionWorkspaceMap.clear();
+    this.sessionCredentialMap.clear();
     // Authority only — the terminals and worktrees these records named are
     // deliberately left alone (#11909). See `clearSessionBinding`, which drops
     // the same ledger per session; `drain` clears the session-scoped maps
     // inline rather than routing through it, so this line is not redundant.
-    this.resourceOwnership.clear();
+    // Pane-bearer principals keep their records: a server restart revokes no
+    // pane bearer, and a pane that reconnects must find them (#12487).
+    this.resourceOwnership.clearAllSessions();
     this.sessionHelpIdMap.clear();
     this.figureCounters.clear();
     this.sessionConnectedAtMs.clear();

@@ -74,6 +74,26 @@ vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: projectStoreMock,
 }));
 
+const noteRendererSessionIdentityEditsMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../services/pty/agentSessionCapturePersistence.js", () => ({
+  noteRendererSessionIdentityEdits: noteRendererSessionIdentityEditsMock,
+}));
+
+const statusTimingMock = vi.hoisted(() => ({
+  begin: vi.fn((_switchId: string, _projectId: string, _windowId: number, requestedAt: number) => {
+    return requestedAt + 15_000;
+  }),
+  hostReady: vi.fn(),
+  fail: vi.fn(),
+  complete: vi.fn(),
+}));
+
+vi.mock("../../../services/ProjectSwitchStatusTiming.js", () => ({
+  STATUS_TIMING_DEADLINE_MS: 15_000,
+  STATUS_TIMING_REPORT_GRACE_MS: 5_000,
+  projectSwitchStatusTiming: statusTimingMock,
+}));
+
 vi.mock("../../../services/ProjectSwitchService.js", () => ({
   ProjectSwitchService: class MockProjectSwitchService {
     onSwitch = vi.fn();
@@ -1248,6 +1268,7 @@ describe("project:switch outgoing agentSessionId field merge (#11461)", () => {
     });
 
     expect(terminals.find((t) => t.id === "t1")?.agentSessionId).toBe("captured");
+    expect(noteRendererSessionIdentityEditsMock.mock.calls.flatMap(([ids]) => ids)).toEqual([]);
   });
 
   it("clears it when the outgoing delta claims the change", async () => {
@@ -1261,6 +1282,9 @@ describe("project:switch outgoing agentSessionId field merge (#11461)", () => {
     });
 
     expect(terminals.find((t) => t.id === "t1")?.agentSessionId).toBeUndefined();
+    // The same authority an ordinary save carries reaches capture writeback,
+    // so a capture still queued can't put the id back (#12433).
+    expect(noteRendererSessionIdentityEditsMock).toHaveBeenCalledWith(["t1"]);
   });
 });
 
@@ -1382,6 +1406,36 @@ describe("project:switch outgoing terminalSizes merge", () => {
       { terminals: [sizedPane("t1")], terminalSizes: { t1: { cols: 0, rows: 51 } } }
     );
     expect(sizes).toEqual({ t1: { cols: 80, rows: 24 } });
+  });
+
+  it("drops a collapsed grid already stored, not just one arriving (#12442)", async () => {
+    // The entries written before the floor existed are still on disk — three of
+    // the reporter's panes persisted at 2x1 — and hydration builds a restored
+    // pane's xterm on exactly this map. A merge that only filters the INCOMING
+    // side preserves every one of them, so each restore rebuilds the collapse.
+    // `sib` is the guard on over-correcting: sanitizing the stored side must
+    // still keep a sibling window's healthy entries.
+    // `t1` is overwritten by the healthy incoming entry, so it proves nothing
+    // on its own — `collapsed` and `narrow` are the subjects: nothing incoming
+    // touches them, so they survive unless the STORED side is sanitized too.
+    // `sib` is the guard against over-correcting: sanitizing the stored side
+    // must still keep a sibling window's healthy entries.
+    const sizes = await runSwitchWithSizes(
+      {
+        terminals: [sizedPane("t1"), sizedPane("collapsed"), sizedPane("narrow"), sizedPane("sib")],
+        terminalSizes: {
+          t1: { cols: 80, rows: 24 },
+          collapsed: { cols: 2, rows: 1 },
+          narrow: { cols: 80, rows: 1 },
+          sib: { cols: 100, rows: 30 },
+        },
+      },
+      {
+        terminals: [sizedPane("t1"), sizedPane("collapsed"), sizedPane("narrow"), sizedPane("sib")],
+        terminalSizes: { t1: { cols: 203, rows: 51 } },
+      }
+    );
+    expect(sizes).toEqual({ t1: { cols: 203, rows: 51 }, sib: { cols: 100, rows: 30 } });
   });
 });
 
@@ -1632,6 +1686,158 @@ describe("project:switch concurrent worktree load", () => {
       projectId: "proj-new",
       worktreeLoadError: "Not a git repository",
     });
+  });
+});
+
+describe("project:switch status timing (#12461)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function setup(opts: {
+    switchTo?: () => Promise<{ view: unknown; isNew: boolean }>;
+    loadProject?: () => Promise<unknown>;
+    withWorktreeService?: boolean;
+  }) {
+    const sendMock = vi.fn();
+    const view = { webContents: { id: 300, isDestroyed: () => false, send: sendMock } };
+    const pvm = {
+      switchTo: vi.fn(opts.switchTo ?? (async () => ({ view, isNew: false }))),
+      getProjectIdForWebContents: vi.fn(),
+    };
+
+    mockGetWindowForWebContents.mockReturnValue({ id: 7, isDestroyed: () => false });
+    projectStoreMock.getCurrentProjectId.mockReturnValue("proj-old");
+    mockGetProjectForWebContents.mockReturnValue("proj-old");
+    projectStoreMock.getProjectById.mockImplementation((id: string) =>
+      id === "proj-new"
+        ? { id: "proj-new", name: "New Project", path: "/projects/new" }
+        : { id: "proj-old", name: "Old Project", path: "/projects/old" }
+    );
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+
+    const worktreeService = {
+      loadProject: vi.fn(opts.loadProject ?? (async () => "cold")),
+      attachDirectPort: vi.fn(),
+      getHostForProject: vi.fn(() => null),
+      resumeProject: vi.fn(),
+      pauseProject: vi.fn(),
+      unregisterWindow: vi.fn(),
+    };
+
+    const deps = {
+      mainWindow: { id: 7 } as unknown,
+      projectViewManager: pvm,
+      ...(opts.withWorktreeService !== false && { worktreeService: worktreeService as never }),
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+
+    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
+    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
+      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
+    }
+    const invoke = () =>
+      handleMap.get(CHANNELS.PROJECT_SWITCH)!({ sender: { id: 300 } }, "proj-new", undefined, {
+        trace: { switchId: "switch-1", entryPoint: "palette-keyboard" },
+      });
+    return { invoke, sendMock };
+  }
+
+  function onSwitchPayload(sendMock: ReturnType<typeof vi.fn>) {
+    return sendMock.mock.calls.find((c) => c[0] === CHANNELS.PROJECT_ON_SWITCH)![1] as {
+      switchId: string;
+      statusTimingDeadlineAt?: number;
+    };
+  }
+
+  it("times the switch from the request and hands the view its deadline", async () => {
+    const before = Date.now();
+    const { invoke, sendMock } = setup({});
+    await invoke();
+
+    expect(statusTimingMock.begin).toHaveBeenCalledTimes(1);
+    const [switchId, projectId, windowId, requestedAt] = statusTimingMock.begin.mock.calls[0]!;
+    expect([switchId, projectId, windowId]).toEqual(["switch-1", "proj-new", 7]);
+    expect(requestedAt).toBeGreaterThanOrEqual(before);
+    expect(requestedAt).toBeLessThanOrEqual(Date.now());
+
+    expect(onSwitchPayload(sendMock).statusTimingDeadlineAt).toBe(
+      statusTimingMock.begin.mock.results[0]!.value
+    );
+    expect(statusTimingMock.hostReady).toHaveBeenCalledWith("switch-1", "cold");
+    expect(statusTimingMock.fail).not.toHaveBeenCalled();
+  });
+
+  it("stamps host readiness when the load settles, before the swap finishes", async () => {
+    let resolveSwap!: (v: { view: unknown; isNew: boolean }) => void;
+    const { invoke } = setup({
+      switchTo: () => new Promise((resolve) => (resolveSwap = resolve)),
+      loadProject: async () => "warm",
+    });
+
+    const pending = invoke();
+    await vi.waitFor(() =>
+      expect(statusTimingMock.hostReady).toHaveBeenCalledWith("switch-1", "warm")
+    );
+
+    resolveSwap({
+      view: { webContents: { id: 300, isDestroyed: () => false, send: vi.fn() } },
+      isNew: false,
+    });
+    await pending;
+  });
+
+  it("finishes the timing as load-failed when the worktree load rejects", async () => {
+    const { invoke } = setup({
+      loadProject: async () => {
+        throw new Error("Not a git repository");
+      },
+    });
+    await invoke();
+
+    expect(statusTimingMock.fail).toHaveBeenCalledWith("switch-1", "load-failed");
+    expect(statusTimingMock.hostReady).not.toHaveBeenCalled();
+  });
+
+  it("records the load failure as it happens, not once the swap finishes", async () => {
+    let resolveSwap!: (v: { view: unknown; isNew: boolean }) => void;
+    const { invoke } = setup({
+      switchTo: () => new Promise((resolve) => (resolveSwap = resolve)),
+      loadProject: async () => {
+        throw new Error("Not a git repository");
+      },
+    });
+
+    const pending = invoke();
+    await vi.waitFor(() =>
+      expect(statusTimingMock.fail).toHaveBeenCalledWith("switch-1", "load-failed")
+    );
+
+    resolveSwap({
+      view: { webContents: { id: 300, isDestroyed: () => false, send: vi.fn() } },
+      isNew: false,
+    });
+    await pending;
+  });
+
+  it("finishes the timing as swap-failed when the view swap throws", async () => {
+    const { invoke } = setup({
+      switchTo: async () => {
+        throw new Error("load timeout");
+      },
+    });
+    await expect(invoke()).rejects.toThrow("load timeout");
+
+    expect(statusTimingMock.fail).toHaveBeenCalledWith("switch-1", "swap-failed");
+  });
+
+  it("does not time a switch that loads no worktrees", async () => {
+    const { invoke, sendMock } = setup({ withWorktreeService: false });
+    await invoke();
+
+    expect(statusTimingMock.begin).not.toHaveBeenCalled();
+    expect(onSwitchPayload(sendMock)).not.toHaveProperty("statusTimingDeadlineAt");
   });
 });
 

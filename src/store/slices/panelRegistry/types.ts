@@ -207,6 +207,13 @@ export interface PanelRegistrySlice {
   restartTerminal: (id: string, options?: RestartTerminalOptions) => Promise<void>;
   clearTerminalError: (id: string) => void;
   updateTerminalCwd: (id: string, cwd: string) => void;
+  /**
+   * Settle where a pane held for recovery will run (#12434): moved onto a
+   * worktree (`cwd` is its path), or kept in the folder it was launched in (no
+   * `cwd`). Clears `awaitingDestination`; the hold itself stays until the user
+   * picks a conversation or starts a new one.
+   */
+  confirmRestoreRecoveryDestination: (id: string, cwd?: string) => void;
   moveTerminalToWorktree: (id: string, worktreeId: string) => void;
   /**
    * Create a worktree and file this panel under it. The process is never

@@ -56,8 +56,8 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
-vi.mock("@/hooks/useWorktrees", () => ({
-  useWorktrees: () => ({ worktrees: [] }),
+vi.mock("@/hooks/useSidebarWorktreeOrder", () => ({
+  useSidebarWorktreeOrder: () => [],
 }));
 
 vi.mock("@/hooks/useIsHibernated", () => ({

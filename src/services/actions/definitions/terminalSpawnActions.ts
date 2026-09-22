@@ -33,7 +33,7 @@ export function registerTerminalSpawnActions(
 ): void {
   actions.set("terminal.new", () => ({
     id: "terminal.new",
-    title: "New Terminal",
+    title: "New terminal",
     description:
       "Open a new terminal, ready for commands. This creates a visible panel and starts a shell process that consumes resources until it is closed. Defaults to the active worktree, and can instead open at a chosen directory and run something there immediately. Launch an agent instead when the intent is to start an AI CLI rather than a plain shell.",
     category: "terminal",
@@ -85,7 +85,7 @@ export function registerTerminalSpawnActions(
 
   actions.set("terminal.resumeSessions", () => ({
     id: "terminal.resumeSessions",
-    title: "Resume Session…",
+    title: "Resume session…",
     description: "Browse and resume a closed agent session in this project",
     category: "terminal",
     kind: "command",
@@ -106,7 +106,7 @@ export function registerTerminalSpawnActions(
 
   actions.set("terminal.duplicate", () => ({
     id: "terminal.duplicate",
-    title: "Duplicate Panel",
+    title: "Duplicate panel",
     description: "Duplicate the focused panel, or create a new terminal if no panels exist",
     category: "terminal",
     kind: "command",
@@ -215,7 +215,7 @@ export function registerTerminalSpawnActions(
 
   actions.set("terminal.reopenLast", () => ({
     id: "terminal.reopenLast",
-    title: "Reopen Last Closed",
+    title: "Reopen last closed",
     description:
       "Restore the most recently trashed terminal, or resume the most recent journaled agent session once the trash window has lapsed",
     category: "terminal",
@@ -284,7 +284,7 @@ export function registerTerminalSpawnActions(
 
   actions.set("terminal.moveToWorktree", () => ({
     id: "terminal.moveToWorktree",
-    title: "Move to Worktree",
+    title: "Move to worktree",
     description:
       "Move a terminal panel to a different worktree. The process is never restarted: a live " +
       "agent keeps running in the directory it launched from, and its pane offers to tell it " +
@@ -354,7 +354,7 @@ export function registerTerminalSpawnActions(
 
   actions.set("terminal.moveToNewWorktree", () => ({
     id: "terminal.moveToNewWorktree",
-    title: "Move to New Worktree…",
+    title: "Move to new worktree…",
     description: "Create a new worktree and move this terminal panel to it",
     category: "terminal",
     kind: "command",

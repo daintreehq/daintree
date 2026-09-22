@@ -3,6 +3,7 @@ import type { AgentEvent } from "../../services/AgentStateMachine.js";
 import type { SpawnResult } from "../../../shared/types/pty-host.js";
 import type { HandlerMap, HostContext } from "./types.js";
 import { markHostPerformance } from "../../utils/hostPerformance.js";
+import { finishAgentSessionCaptures } from "../../services/pty/agentSessionCaptureDelivery.js";
 
 /** A PTY PID is usable only once it is a positive integer. */
 function isValidPid(pid: number | undefined): pid is number {
@@ -231,6 +232,13 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
         requestId: msg.requestId,
         results,
       });
+    },
+
+    // Replies only after every observed capture has been emitted, so on the
+    // shared port the records reach Main ahead of this acknowledgement (#12433).
+    "finish-session-captures": async (msg) => {
+      const result = await finishAgentSessionCaptures(msg.budgetMs);
+      sendEvent({ type: "session-captures-finished", requestId: msg.requestId, result });
     },
 
     "mark-checked": (msg) => {

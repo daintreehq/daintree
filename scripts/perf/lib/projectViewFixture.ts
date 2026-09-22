@@ -843,6 +843,15 @@ export class ProjectViewHarness {
     };
   }
 
+  /**
+   * Backdate every view's recency stamp by `ms`, keeping their order. The
+   * pressure ladder will not take a view used within the last minute (#12363),
+   * which is not something a scenario can sit out.
+   */
+  ageViews(ms: number): void {
+    for (const entry of this.manager.getAllViews()) entry.lastUsed -= ms;
+  }
+
   /** The forced tier-2 reclaim — a one-pass collapse to the active view. */
   forcedReclaim(): { evicted: string[]; wcIds: number[]; reported: number } {
     const before = this.viewSnapshot();

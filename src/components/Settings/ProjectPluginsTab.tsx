@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
+import { ProjectAgentToolsSection } from "@/components/Settings/ProjectAgentToolsSection";
 import {
   PROJECT_PLUGINS_OVERVIEW_ID,
   ProjectPluginSelectorDropdown,
@@ -229,6 +230,8 @@ function ProjectOverviewPane({ projectPluginCount }: { projectPluginCount: numbe
       </div>
 
       <EmptyCanvasSection />
+
+      <ProjectAgentToolsSection />
 
       <div className="space-y-2 pt-1 border-t border-border-default">
         <h5 className={SECTION_HEADING_CLASS}>Reload</h5>

@@ -9,7 +9,18 @@ const projectStoreMock = vi.hoisted(() => ({
 
 vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStoreMock }));
 
-import { terminalLayoutNamespace, sanitizeFieldEdits } from "../terminalLayout.js";
+const { noteRendererSessionIdentityEdits } = vi.hoisted(() => ({
+  noteRendererSessionIdentityEdits: vi.fn(),
+}));
+vi.mock("../../../services/pty/agentSessionCapturePersistence.js", () => ({
+  noteRendererSessionIdentityEdits,
+}));
+
+import {
+  terminalLayoutNamespace,
+  sanitizeFieldEdits,
+  sanitizeTerminalSizes,
+} from "../terminalLayout.js";
 
 const setTerminals = terminalLayoutNamespace.ops.setTerminals.handler as (payload: {
   projectId: string;
@@ -334,6 +345,89 @@ describe("setTerminals session-id preservation (#11461)", () => {
   });
 });
 
+describe("setTerminals — identity edits reach capture writeback (#12433)", () => {
+  beforeEach(() => {
+    noteRendererSessionIdentityEdits.mockReset();
+  });
+
+  const claimed = (): string[] =>
+    noteRendererSessionIdentityEdits.mock.calls.flatMap(([ids]) => [...(ids as Iterable<string>)]);
+
+  it("reports the panes whose session id the renderer claims to have changed", async () => {
+    const order: string[] = [];
+    noteRendererSessionIdentityEdits.mockImplementation(() => order.push("noted"));
+    projectStoreMock.enqueueProjectStateUpdate.mockImplementation(async () => {
+      order.push("enqueued");
+    });
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [term("1"), term("2")],
+      changedIds: ["1", "2"],
+      removedIds: [],
+      fieldEdits: [{ id: "2", fields: ["agentSessionId"] }],
+    });
+
+    expect(claimed()).toEqual(["2"]);
+    // Ahead of the save, so a capture already queued behind it sees the edit.
+    expect(order).toEqual(["noted", "enqueued"]);
+  });
+
+  it("reports nothing for an ordinary save or one with no usable claim", async () => {
+    onDisk(baseState([term("1")]));
+
+    await setTerminals({ projectId: "p1", terminals: [term("1")], changedIds: ["1"] });
+    await setTerminals({
+      projectId: "p1",
+      terminals: [term("1")],
+      changedIds: ["1"],
+      fieldEdits: [
+        { id: "1", fields: ["title"] },
+        { id: 7, fields: ["agentSessionId"] },
+      ],
+    });
+
+    expect(claimed()).toEqual([]);
+  });
+
+  it.each([
+    ["not marked changed", { terminals: ["1", "2"], changedIds: ["1"], removedIds: [] }],
+    [
+      "changed but tombstoned",
+      { terminals: ["1", "2"], changedIds: ["1", "2"], removedIds: ["2"] },
+    ],
+    [
+      "changed but missing from the snapshot",
+      { terminals: ["1"], changedIds: ["1", "2"], removedIds: [] },
+    ],
+  ])("reports nothing for a claim on a pane %s", async (_label, delta) => {
+    onDisk(baseState([term("1"), term("2")]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: delta.terminals.map((id) => term(id)),
+      changedIds: delta.changedIds,
+      removedIds: delta.removedIds,
+      // The merge ignores this claim, so capture writeback must too.
+      fieldEdits: [{ id: "2", fields: ["agentSessionId"] }],
+    });
+
+    expect(claimed()).toEqual([]);
+  });
+
+  it("reports nothing for a legacy full-replace write, whose claims the merge ignores", async () => {
+    onDisk(baseState([term("1")]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [term("1")],
+      fieldEdits: [{ id: "1", fields: ["agentSessionId"] }],
+    });
+
+    expect(claimed()).toEqual([]);
+  });
+});
+
 describe("sanitizeFieldEdits (#11461 trust boundary)", () => {
   // Asserted directly: the merge independently ignores unknown fields, so a
   // handler-level test alone would still pass with the sanitizer bypassed.
@@ -532,5 +626,45 @@ describe("setDraftInputs merge (#11352)", () => {
       removedIds: [],
     });
     expect(saved()?.draftInputs).toEqual({ t1: "first draft" });
+  });
+});
+
+/**
+ * `terminalSizes` is the grid a restored pane is BORN on, so this sanitizer is
+ * the last thing between a collapsed measurement and a pane that rebuilds into
+ * the collapse on every eviction and restart (#12442).
+ */
+describe("sanitizeTerminalSizes", () => {
+  it("drops a collapsed entry and keeps every grid a pane could have measured", () => {
+    const sanitized = sanitizeTerminalSizes({
+      wide: { cols: 302, rows: 90 },
+      ordinary: { cols: 80, rows: 24 },
+      // A pane at the smallest supported size and the largest supported font.
+      // It has to survive: this map is a RECORD of what the pane measured, and
+      // Main MERGES rather than replaces, so dropping it would leave that pane
+      // restoring at whatever older, wronger entry is already on disk.
+      smallest: { cols: 23, rows: 4 },
+      collapsed: { cols: 2, rows: 1 },
+      "one-row": { cols: 80, rows: 1 },
+      "two-col": { cols: 2, rows: 90 },
+      zero: { cols: 0, rows: 51 },
+      fractional: { cols: 80.5, rows: 24 },
+      "not-finite": { cols: Number.NaN, rows: 24 },
+      infinite: { cols: Number.POSITIVE_INFINITY, rows: 24 },
+      oversized: { cols: 12000, rows: 24 },
+      "missing-rows": { cols: 80 },
+      "wrong-type": { cols: "80", rows: "24" },
+      "not-an-object": 80,
+      null: null,
+    } as Record<string, unknown>);
+
+    // Asserted as the whole map rather than per key: a sanitizer is only as good
+    // as what it leaves behind, and an equality catches an entry that survives
+    // for a reason nobody predicted.
+    expect(sanitized).toEqual({
+      wide: { cols: 302, rows: 90 },
+      ordinary: { cols: 80, rows: 24 },
+      smallest: { cols: 23, rows: 4 },
+    });
   });
 });

@@ -146,3 +146,54 @@ describe("addPanel workspace ownership (#11079)", () => {
     expect(spawnedProjectId()).toBeUndefined();
   });
 });
+
+describe("addPanel launch context (#12486)", () => {
+  beforeEach(async () => {
+    currentProject = { id: "project-abc", path: "/repo" };
+    setViewWorkspaceId("project-abc");
+    const { reset } = usePanelStore.getState();
+    await reset();
+
+    spawnMock.mockReset();
+    spawnMock.mockImplementation(async ({ id }) => id ?? "spawn-id");
+  });
+
+  it("sends a Claude launch the context its MCP session replays, naming the pane itself", async () => {
+    await usePanelStore.getState().addPanel({
+      requestedId: "claude-1",
+      launchAgentId: "claude",
+      command: "claude",
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+
+    expect(spawnMock.mock.calls[0]?.[0]?.actionContext).toMatchObject({
+      focusedTerminalId: "claude-1",
+      focusedTerminalKind: "terminal",
+    });
+  });
+
+  it("keeps a context the caller supplied", async () => {
+    const supplied = { projectId: "project-abc", activeWorktreeId: "wt-supplied" };
+
+    await usePanelStore.getState().addPanel({
+      requestedId: "claude-2",
+      launchAgentId: "claude",
+      command: "claude",
+      bypassLimits: true,
+      actionContext: supplied,
+    });
+    await drainMicrotasks();
+
+    expect(spawnMock.mock.calls[0]?.[0]?.actionContext).toEqual(supplied);
+  });
+
+  it("sends no context for a plain terminal", async () => {
+    await usePanelStore.getState().addPanel({ requestedId: "term-5", bypassLimits: true });
+    await drainMicrotasks();
+
+    // Premise first: a spawn that never happened would also carry no context.
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock.mock.calls[0]![0]!.actionContext).toBeUndefined();
+  });
+});

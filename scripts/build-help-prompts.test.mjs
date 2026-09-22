@@ -13,6 +13,14 @@ const AGENTS = readFileSync(path.join(root, "help/AGENTS.md"), "utf8");
 const SHARED = readFileSync(path.join(root, "scripts/help-src/SHARED.md"), "utf8");
 const AGENTS_HEAD = readFileSync(path.join(root, "scripts/help-src/AGENTS.head.md"), "utf8");
 
+/** The body of one `## ` section, so a rule is pinned where it belongs. */
+function section(body, heading) {
+  const start = body.indexOf(heading);
+  if (start === -1) return "";
+  const next = body.indexOf("\n## ", start + heading.length);
+  return body.slice(start, next === -1 ? undefined : next);
+}
+
 const ALL_GENERATED = [
   ["CLAUDE.md", CLAUDE],
   ["AGENTS.md", AGENTS],
@@ -40,12 +48,114 @@ describe("help prompt outputs", () => {
       expect(body).toContain("I don't have documentation for that");
     });
 
+    // A help session once answered a launched agent's "Do you trust the
+    // contents of this directory?" dialog by sending `y` through
+    // terminal.sendCommand and never mentioned it; the CLI also showed the `y`
+    // queued as its next prompt. Matched on the policy rather than the
+    // sentence, so rewording stays free while losing the rule does not.
+    it.each(ALL_GENERATED)(
+      "%s answers launched agents' dialogs only within authority",
+      (_name, body) => {
+        expect(body).toContain("## Agents You Launch");
+        expect(body).toMatch(
+          /only inside the authority the user already gave, and always say you did/
+        );
+        expect(body).toMatch(/sendCommand[^\n]*types the text and then presses Enter/);
+        expect(body).toMatch(/never a guessed `y`/);
+        expect(body).not.toMatch(/send the selection keys/i);
+      }
+    );
+
+    // A help session read a launched agent's output eight times inside 78
+    // seconds — while every agent sat idle at an empty prompt with its prompt
+    // already dropped — then told the user Daintree structurally cannot show
+    // it a Claude Code screen, and never checked again across 113 further
+    // steps. The scrollback was fine; the window was dead. These match the
+    // POLICY, not the sentence: reword freely, but losing the rule fails.
+    it.each(ALL_GENERATED)("%s keeps inferred limits inside their evidence", (_name, body) => {
+      const grounding = section(body, "## How to Answer");
+      expect(grounding).toMatch(/hypothesis|inferred/i);
+      expect(grounding).toMatch(/\bretest\b/i);
+      expect(grounding).toMatch(/untested limit/i);
+    });
+
+    // The same session answered a permission dialog with a guessed `1` while
+    // saying outright it could not see what the dialog asked. The rule against
+    // guessing a key was already there; the branch for "I can't read it at
+    // all" was not, so the assistant invented one.
+    it.each(ALL_GENERATED)("%s forbids answering a dialog it cannot read", (_name, body) => {
+      const launched = section(body, "## Agents You Launch");
+      expect(launched).toMatch(/don't send a selection at all/i);
+      expect(launched).toMatch(/fresh, larger read/i);
+      expect(launched).toMatch(/can't read isn't inside any authority/i);
+    });
+
+    // `worktree.delete` came back CONFIRMATION_TIMEOUT twice — the user never
+    // saw the dialog — and the same deletion then went through Bash with
+    // `git worktree remove --force`, past the submodule guard the action
+    // carries. The forge-write ban did not generalise; this does. The code has
+    // TWO sources for that error (nobody answered, and an approval that
+    // arrived past the deadline), so the rule must not claim either one.
+    it.each(ALL_GENERATED)("%s treats an unanswered confirmation as unanswered", (_name, body) => {
+      const gate = section(body, "## When an Action Needs the User");
+      expect(gate).toMatch(/CONFIRMATION_TIMEOUT/);
+      expect(gate).not.toMatch(/means nobody answered/i);
+      expect(gate).toMatch(/nor is a decline you can reason past/i);
+      expect(gate).toMatch(/bypass/i);
+      expect(gate).toMatch(/submodule/i);
+      // Must not read as a blanket ban on shell work.
+      expect(gate).toMatch(/carry on/i);
+    });
+
+    // "#70's approval was answered and it is armed now" — from a status
+    // carrying only `agentState: "working"` and `armed: true`. `armed` is
+    // fleet-broadcast selection, and activity is marked before the write goes
+    // out, so a send can manufacture the `working` it is then read as proof of.
+    it.each(ALL_GENERATED)("%s reads state fields for what they say", (_name, body) => {
+      const launched = section(body, "## Agents You Launch");
+      expect(launched).toMatch(/`armed`[^.]*fleet broadcast/i);
+      expect(launched).toMatch(/`working` is heuristic/i);
+      expect(launched).toMatch(/before the write goes out/i);
+    });
+
+    it.each(ALL_GENERATED)("%s bounds waiting on a stuck agent and reports it", (_name, body) => {
+      expect(body).toMatch(/After two waits with no change in its recent output, stop waiting/);
+      expect(body).toMatch(/on the user's behalf[^\n]*belongs in your reply/);
+    });
+
     it.each(ALL_GENERATED)("%s lists the canonical topics", (_name, body) => {
       expect(body).toContain("## Topics You Can Help With");
       expect(body).toContain("Getting started and first-run setup");
       expect(body).toContain("Terminal recipes for repeatable setups");
       expect(body).not.toContain("Workflow engine");
     });
+  });
+
+  // The help-src partials are per assistant here, not shared: CLAUDE.md has
+  // room for the whole recipe and AGENTS.md has to fit its budget.
+  describe("both assistants learn the handback convention", () => {
+    // A handback (#12488) is an observation: the agent printed a line, which
+    // neither proves the work nor, by its absence, that the agent is still
+    // busy. Daintree mints the code and appends the instruction itself, so a
+    // marker the assistant writes into its own prompt carries a code nothing
+    // is watching for.
+    it.each(ALL_GENERATED)(
+      "%s reads a handback as an observation, not a verdict",
+      (_name, body) => {
+        expect(body).toContain("handback: true");
+        expect(body).toMatch(/Daintree appends/);
+        expect(body).toMatch(/never write the marker or describe its format/i);
+        expect(body).not.toContain("DAINTREE-DONE");
+        expect(body).toMatch(/not that (?:the|its) work is finished or correct/i);
+        expect(body).toMatch(/`message` is the agent's[^.]*untrusted/);
+        expect(body).toMatch(/rejoined[^.]*spaces? in/i);
+        expect(body).toMatch(/match its `submissionToken`/i);
+        expect(body).toMatch(
+          /(?:No|missing) `lastHandback` never means (?:the agent is )?still working/i
+        );
+        expect(body).toMatch(/question[^\n]*next prompt[^\n]*status[^.\n]*no longer working/i);
+      }
+    );
   });
 
   describe("Claude-only content stays in CLAUDE.md", () => {
@@ -77,12 +187,15 @@ describe("help prompt outputs", () => {
       expect(tasksIdx).toBeLessThan(tierIdx);
     });
 
-    it("AGENTS.md omits the Tier Model, task recipes, and getStatus recipe", () => {
+    // Codex has no ScheduleWakeup and no Claude harness, so the Claude pacing
+    // recipe (and the triage prompt built around it) would send it after tools
+    // it doesn't have.
+    it("AGENTS.md omits the Tier Model and the Claude harness pacing recipe", () => {
       expect(AGENTS).not.toContain("## Tier Model");
-      expect(AGENTS).not.toContain("## Common Tasks");
-      expect(AGENTS).not.toContain("## When to Use Which");
       expect(AGENTS).not.toContain("## Watching Agent Terminals");
-      expect(AGENTS).not.toContain("terminal.getStatus");
+      expect(AGENTS).not.toContain("ScheduleWakeup");
+      expect(AGENTS).not.toContain("triage_terminals");
+      expect(AGENTS).not.toMatch(/Claude Code harness/);
     });
 
     it("AGENTS.md describes the wired daintree MCP", () => {
@@ -183,9 +296,91 @@ describe("help prompt outputs", () => {
     });
   });
 
+  // Codex help sessions run at the action tier; without these a session asked to
+  // launch agents spent its first several calls hunting for `agent.launch`.
+  describe("Codex operations recipes", () => {
+    // Scoped per recipe: the tool names also appear in shared guidance and in
+    // neighbouring recipes, so a whole-file match would survive a recipe's
+    // deletion.
+    function recipe(heading) {
+      const start = AGENTS.indexOf(`### ${heading}\n`);
+      expect(start, `missing recipe: ${heading}`).toBeGreaterThan(-1);
+      const next = AGENTS.slice(start + 4).search(/^#{2,3} /m);
+      return next === -1 ? AGENTS.slice(start) : AGENTS.slice(start, start + 4 + next);
+    }
+
+    it.each([
+      ["Launch agents", "agent.launch("],
+      ["Check on agents", "terminal.getStatus("],
+      ["Send a follow-up", "terminal.sendCommand("],
+      ["Wait for agents", "terminal.waitUntilIdleBatch("],
+      ["Close terminals", "terminal.close("],
+    ])("AGENTS.md has a %s recipe calling %s", (heading, call) => {
+      expect(AGENTS).toContain("## Common Tasks");
+      expect(recipe(heading)).toContain(call);
+    });
+
+    it("AGENTS.md tells Codex to call a named recipe directly", () => {
+      const intro = AGENTS.slice(
+        AGENTS.indexOf("## Common Tasks"),
+        AGENTS.indexOf("### Launch agents")
+      );
+      expect(intro).toMatch(/directly/);
+      expect(intro).toContain("actions.search");
+    });
+
+    it("the launch recipe passes the task, target, and tab name, and handles a missing CLI", () => {
+      const launch = recipe("Launch agents");
+      const call = launch.match(/agent\.launch\(\{[^}]*\}\)/)?.[0] ?? "";
+      for (const arg of ["agentId:", "prompt:", "worktreeId:", "name:"]) {
+        expect(call).toContain(arg);
+      }
+      expect(launch).toContain('spawnStatus: "missing-cli"');
+    });
+
+    // The renderer's launcher refuses a launch while another of the same agent
+    // id is still starting, so parallel same-kind launches come back
+    // `launched: false`.
+    it("the launch recipe serialises launches of the same agent id", () => {
+      expect(recipe("Launch agents")).toMatch(/same `agentId` one at a time/);
+    });
+
+    it("the prompting recipes ask for a handback and the wait recipe reads it", () => {
+      expect(recipe("Launch agents")).toContain("handback: true");
+      expect(recipe("Send a follow-up")).toContain("handback: true");
+      expect(recipe("Wait for agents")).toContain("lastHandback");
+    });
+
+    it("AGENTS.md places the recipes ahead of the discovery guidance", () => {
+      const tasksIdx = AGENTS.indexOf("## Common Tasks");
+      const discoveryIdx = AGENTS.indexOf("## Finding the Right Tool");
+      expect(tasksIdx).toBeGreaterThan(-1);
+      expect(discoveryIdx).toBeGreaterThan(-1);
+      expect(tasksIdx).toBeLessThan(discoveryIdx);
+    });
+
+    // Codex reads project instructions up to `project_doc_max_bytes` (32 KiB by
+    // default) across the whole AGENTS.md chain and truncates past it without
+    // telling the model, and the help session appends its scratch note at
+    // runtime. Growing past this means trimming, not copying CLAUDE.md across.
+    it("AGENTS.md stays well inside Codex's instruction budget", () => {
+      expect(Buffer.byteLength(AGENTS, "utf8")).toBeLessThanOrEqual(24 * 1024);
+    });
+  });
+
   describe("agent-specific framing stays in each head", () => {
     it("AGENTS.md retains the Codex role-override header", () => {
       expect(AGENTS.split("\n")[0]).toBe("# Role Override: Daintree Help Assistant");
+    });
+
+    // These sections were first added to the generated files directly, which
+    // the next `build:help` would have silently erased. They live in the
+    // per-agent partials because each CLI finds its transcript differently.
+    it("each prompt locates its own CLI's session transcript and not the other's", () => {
+      expect(AGENTS).toContain("CODEX_THREAD_ID");
+      expect(AGENTS).not.toContain("CLAUDE_CODE_SESSION_ID");
+      expect(CLAUDE).toContain("CLAUDE_CODE_SESSION_ID");
+      expect(CLAUDE).not.toContain("CODEX_THREAD_ID");
     });
   });
 

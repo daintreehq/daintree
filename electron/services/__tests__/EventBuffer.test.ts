@@ -286,6 +286,52 @@ describe("EventBuffer", () => {
       expect(searchAgent.length).toBe(1);
     });
 
+    it("redacts a handback message but keeps the rest of the transition (#12488)", () => {
+      events.emit("agent:state-changed", {
+        agentId: "claude",
+        terminalId: "term-1",
+        state: "waiting",
+        previousState: "working",
+        trigger: "activity",
+        confidence: 1,
+        timestamp: Date.now(),
+        lastHandback: {
+          message: "HANDBACK-SENTINEL migrated the schema",
+          observedAt: 1_700_000_000_000,
+          submissionToken: "tok-1",
+          truncated: false,
+        },
+      });
+
+      const event = buffer.getAll().find((e) => e.type === "agent:state-changed");
+
+      expect(event?.payload.state).toBe("waiting");
+      expect(event?.payload.lastHandback).toEqual({
+        message: "[REDACTED - May contain sensitive information]",
+        observedAt: 1_700_000_000_000,
+        submissionToken: "tok-1",
+        truncated: false,
+      });
+      expect(buffer.getFiltered({ search: "HANDBACK-SENTINEL" })).toHaveLength(0);
+    });
+
+    it("leaves a state change without a handback message as it was", () => {
+      const payload = {
+        agentId: "claude",
+        terminalId: "term-1",
+        state: "waiting" as const,
+        previousState: "working" as const,
+        trigger: "activity" as const,
+        confidence: 1,
+        timestamp: Date.now(),
+        lastHandback: { message: null, observedAt: 1, truncated: false },
+      };
+      events.emit("agent:state-changed", payload);
+
+      const event = buffer.getAll().find((e) => e.type === "agent:state-changed");
+      expect(event?.payload).toEqual(payload);
+    });
+
     it("does not redact non-sensitive events", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",

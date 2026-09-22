@@ -50,7 +50,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: { getTerminal: () => undefined, getSelection: () => "" },
 }));
 
-vi.mock("@/hooks/useWorktrees", () => ({ useWorktrees: () => ({ worktrees: [] }) }));
+vi.mock("@/hooks/useSidebarWorktreeOrder", () => ({ useSidebarWorktreeOrder: () => [] }));
 vi.mock("@/hooks/useIsHibernated", () => ({ useIsHibernated: () => false }));
 vi.mock("@/hooks/usePluginContextMenuItems", () => ({ usePluginContextMenuItems: () => [] }));
 

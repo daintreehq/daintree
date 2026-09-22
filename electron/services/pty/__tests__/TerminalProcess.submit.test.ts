@@ -92,6 +92,27 @@ describe("TerminalProcess.submit", () => {
     vi.useRealTimers();
   });
 
+  it("keeps text that carries its own paste terminator inside the paste", async () => {
+    // The rule: whatever the submitted text contains, exactly one paste
+    // terminator reaches the pty, and it is the last thing written. A body that
+    // could end the paste early hands the rest to the program as keystrokes —
+    // text taken from a web page (a DOM id) reaches here from SvelteKit Tools.
+    vi.useFakeTimers();
+    const terminal = createTerminal();
+
+    terminal.submit("tell the agent\nid=x\x1b[201~\nrm -rf ~");
+
+    const written = ptyWriteMock.mock.calls[0]?.[0] ?? "";
+    expect(written.startsWith("\x1b[200~")).toBe(true);
+    expect(written.split("\x1b[201~")).toHaveLength(2);
+    expect(written.endsWith("\x1b[201~")).toBe(true);
+    // Nothing after the paste but the submit itself.
+    await vi.advanceTimersByTimeAsync(250);
+    expect(ptyWriteMock).toHaveBeenCalledTimes(2);
+    expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
+    vi.useRealTimers();
+  });
+
   it("sends multiple CRs when input has multiple trailing newlines", async () => {
     vi.useFakeTimers();
     const terminal = createTerminal();
@@ -122,6 +143,43 @@ describe("TerminalProcess.submit", () => {
 
     expect(ptyWriteMock).toHaveBeenCalledTimes(1);
     expect(ptyWriteMock.mock.calls[0]?.[0]).toBe("line1\x1b\rline2");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
+    vi.useRealTimers();
+  });
+
+  it("neutralizes page-derived controls on Gemini's soft-newline path", async () => {
+    // Gemini declares no bracketed paste, so its body used to reach the pty
+    // byte for byte. A DOM id SvelteKit Tools quotes into a prompt can carry
+    // a cursor sequence and an interrupt; neither may be written as input.
+    vi.useFakeTimers();
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "gemini" });
+    (
+      terminal as unknown as { terminalInfo: { detectedAgentId: string } }
+    ).terminalInfo.detectedAgentId = "gemini";
+
+    terminal.submit("button#x\x1b[D\x03\nsecond line");
+
+    const written = ptyWriteMock.mock.calls[0]?.[0] ?? "";
+    // The soft newline Gemini needs is still generated, and it is the only
+    // ESC in the payload — the one that came from the page is a glyph.
+    expect(written).toBe("button#x\u241b[D\u2403\x1b\rsecond line");
+    expect(written.split("\x1b")).toHaveLength(2);
+    expect(written).not.toContain("\x03");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
+    vi.useRealTimers();
+  });
+
+  it("neutralizes page-derived controls on the plain short-text path", async () => {
+    // Short single-line text takes neither the paste nor the soft-newline
+    // branch and is written straight through.
+    vi.useFakeTimers();
+    const terminal = createTerminal();
+
+    terminal.submit("about button#x\x1b[D\x03");
+
+    expect(ptyWriteMock.mock.calls[0]?.[0]).toBe("about button#x\u241b[D\u2403");
     await vi.advanceTimersByTimeAsync(250);
     expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
     vi.useRealTimers();

@@ -247,7 +247,7 @@ describe("SafeModeBanner", () => {
     expect(screen.getByText("Another")).toBeTruthy();
     expect(screen.getByText("/repo/foo")).toBeTruthy();
     expect(screen.getByText("wt-issue-1")).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: /Restore panel/ })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: /Restore on next launch/ })).toHaveLength(2);
   });
 
   it("falls back to count-only copy when ledger has no quarantined entries", () => {
@@ -259,10 +259,10 @@ describe("SafeModeBanner", () => {
     render(<SafeModeBanner />);
     fireEvent.click(screen.getByRole("button", { name: /Show details/i }));
     expect(screen.getByText(/4 panels were skipped/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /Restore panel/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Restore on next launch/ })).toBeNull();
   });
 
-  it("clicking Restore panel calls clearQuarantinedPanel and shows the restoring hint", async () => {
+  it("clicking Restore on next launch calls clearQuarantinedPanel and shows the restoring hint", async () => {
     useSafeModeStore.setState({
       safeMode: true,
       crashCount: 2,
@@ -271,7 +271,7 @@ describe("SafeModeBanner", () => {
     });
     render(<SafeModeBanner />);
     fireEvent.click(screen.getByRole("button", { name: /Show details/i }));
-    fireEvent.click(screen.getByRole("button", { name: /Restore panel/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Restore on next launch/ }));
     await waitFor(() => {
       expect(clearQuarantinedPanel).toHaveBeenCalledWith("p1");
     });
@@ -291,7 +291,7 @@ describe("SafeModeBanner", () => {
     });
     render(<SafeModeBanner />);
     fireEvent.click(screen.getByRole("button", { name: /Show details/i }));
-    fireEvent.click(screen.getByRole("button", { name: /Restore panel/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Restore on next launch/ }));
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /Retry/ })).toBeTruthy();
     });

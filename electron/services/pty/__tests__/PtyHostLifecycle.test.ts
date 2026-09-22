@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { EventEmitter } from "events";
+import type { HostLogEvent } from "../../../../shared/types/host-log.js";
 import {
   classifyCrash,
   mapGoneReasonToCrashType,
@@ -53,6 +54,7 @@ function createCallbacks(): {
     onCrashClassifiedCalls: Array<Parameters<PtyHostLifecycleCallbacks["onCrashClassified"]>[0]>;
     onMaxRestartsCalls: Array<number | null>;
     onForkFailedCalls: unknown[];
+    onHostLogCalls: HostLogEvent[];
     onBeforeRestartCalls: number;
     isDisposed: { current: boolean };
   };
@@ -64,6 +66,7 @@ function createCallbacks(): {
   > = [];
   const onMaxRestartsCalls: Array<number | null> = [];
   const onForkFailedCalls: unknown[] = [];
+  const onHostLogCalls: HostLogEvent[] = [];
   let onBeforeRestartCalls = 0;
   const isDisposed = { current: false };
 
@@ -77,6 +80,7 @@ function createCallbacks(): {
       onBeforeRestartCalls++;
     },
     isDisposed: () => isDisposed.current,
+    onHostLog: (event) => onHostLogCalls.push(event),
     logInfo: vi.fn(),
     logWarn: vi.fn(),
   };
@@ -89,6 +93,7 @@ function createCallbacks(): {
       onCrashClassifiedCalls,
       onMaxRestartsCalls,
       onForkFailedCalls,
+      onHostLogCalls,
       get onBeforeRestartCalls() {
         return onBeforeRestartCalls;
       },
@@ -282,12 +287,147 @@ describe("PtyHostLifecycle", () => {
     expect(captured.error?.message).toBe("PTY host exited before ready");
   });
 
-  it("forwards each child message to onMessage callback", () => {
+  it("forwards each domain message to onMessage callback", () => {
     const { lifecycle, callbacks } = makeLifecycle();
     lifecycle.start();
     mockChild.emit("message", { type: "ready" });
     mockChild.emit("message", { type: "pong" });
     expect(callbacks.log.onMessageCalls).toEqual([{ type: "ready" }, { type: "pong" }]);
+  });
+
+  describe("structured host log events (#12544)", () => {
+    const logEvent: HostLogEvent = {
+      type: "log",
+      timestamp: 1_700_000_000_000,
+      level: "warn",
+      source: "pty-host:Graceful",
+      message: "Graceful shutdown capture outcome",
+      contextJson: '{"captured":2}',
+    };
+
+    it("routes a log event to onHostLog and never to the event router", () => {
+      const { lifecycle, callbacks } = makeLifecycle();
+      lifecycle.start();
+
+      mockChild.emit("message", { type: "ready" });
+      mockChild.emit("message", logEvent);
+
+      expect(callbacks.log.onHostLogCalls).toEqual([logEvent]);
+      // routeHostEvent, the domain bus and the broker have no business seeing
+      // a log line — a missed case there would silently drop it (#6821).
+      expect(callbacks.log.onMessageCalls).toEqual([{ type: "ready" }]);
+    });
+
+    it("keeps delivering log events once the client reports itself disposed", () => {
+      const { lifecycle, callbacks } = makeLifecycle();
+      lifecycle.start();
+      callbacks.log.isDisposed.current = true;
+
+      mockChild.emit("message", logEvent);
+
+      // A host's own teardown logs arrive after dispose; dropping them would
+      // blind the one window where the host is most likely to misbehave.
+      expect(callbacks.log.onHostLogCalls).toEqual([logEvent]);
+    });
+  });
+
+  describe("raw host output lifecycle", () => {
+    it("forwards stdout as info and stderr as warn with the [PtyHost] prefix", () => {
+      const { lifecycle, callbacks } = makeLifecycle();
+      lifecycle.start();
+
+      mockChild.stdout.emit("data", Buffer.from("plain host line\n"));
+      mockChild.stderr.emit("data", Buffer.from("Segmentation fault\n"));
+
+      expect(callbacks.callbacks.logInfo).toHaveBeenCalledWith("[PtyHost] plain host line");
+      expect(callbacks.callbacks.logWarn).toHaveBeenCalledWith("[PtyHost] Segmentation fault");
+    });
+
+    it("captures the final partial line when the pipe closes after exit", () => {
+      const { lifecycle, callbacks } = makeLifecycle();
+      lifecycle.start();
+
+      // 'exit' fires before the pipes drain, so the tail of a crash trace
+      // lands after the exit-time flush has already run.
+      mockChild.emit("exit", 1);
+      mockChild.stderr.emit("data", Buffer.from("FATAL ERROR: unterminated tail"));
+      mockChild.stderr.emit("close");
+
+      expect(callbacks.callbacks.logWarn).toHaveBeenCalledWith(
+        "[PtyHost] FATAL ERROR: unterminated tail"
+      );
+    });
+
+    it("keeps a dead child's tail and a successor's partial line apart", () => {
+      const { lifecycle, callbacks } = makeLifecycle();
+      lifecycle.start();
+      const firstChild = mockChild;
+
+      firstChild.emit("exit", 1);
+
+      const secondChild = createMockChild();
+      shared.forkMock.mockReturnValue(secondChild);
+      lifecycle.start();
+      mockChild = secondChild;
+      secondChild.stdout.emit("data", Buffer.from("successor partial"));
+
+      // The dead pipe delivers its crash tail only now, with a replacement
+      // already running — the ordering that makes this hard.
+      firstChild.stderr.emit("data", Buffer.from("FATAL: dying child tail"));
+      firstChild.stderr.emit("close");
+
+      const infos = (callbacks.callbacks.logInfo as Mock).mock.calls.map((c) => c[0]);
+      const warns = (callbacks.callbacks.logWarn as Mock).mock.calls.map((c) => c[0]);
+      // The old child's diagnostics must not be dropped just because a
+      // successor exists...
+      expect(warns.filter((m) => m === "[PtyHost] FATAL: dying child tail")).toHaveLength(1);
+      // ...and must not consume the successor's still-incomplete line.
+      expect(infos).not.toContain("[PtyHost] successor partial");
+
+      secondChild.stdout.emit("data", Buffer.from(" line\n"));
+      const infosAfter = (callbacks.callbacks.logInfo as Mock).mock.calls.map((c) => c[0]);
+      expect(infosAfter).toContain("[PtyHost] successor partial line");
+    });
+
+    it("does not split one stream's partial line when the other closes", () => {
+      const { lifecycle, callbacks } = makeLifecycle();
+      lifecycle.start();
+
+      mockChild.stderr.emit("data", Buffer.from("FATAL ERROR: out of mem"));
+      mockChild.stdout.emit("close");
+      mockChild.stderr.emit("data", Buffer.from("ory\n"));
+
+      const warns = (callbacks.callbacks.logWarn as Mock).mock.calls.map((c) => c[0]);
+      // A close on the other pipe must not truncate this one mid-line.
+      expect(warns).toContain("[PtyHost] FATAL ERROR: out of memory");
+      expect(warns).not.toContain("[PtyHost] FATAL ERROR: out of mem");
+    });
+
+    it("flushes a tail exactly once across exit and both stream closes", () => {
+      const { lifecycle, callbacks } = makeLifecycle();
+      lifecycle.start();
+
+      mockChild.stderr.emit("data", Buffer.from("crash tail"));
+      mockChild.emit("exit", 1);
+      mockChild.stdout.emit("close");
+      mockChild.stderr.emit("close");
+
+      const warns = (callbacks.callbacks.logWarn as Mock).mock.calls.map((c) => c[0]);
+      expect(warns.filter((m) => m === "[PtyHost] crash tail")).toHaveLength(1);
+    });
+
+    it("swallows a post-exit pipe error instead of throwing", () => {
+      const { lifecycle } = makeLifecycle();
+      lifecycle.start();
+      const child = mockChild;
+
+      child.emit("exit", 1);
+
+      // Without an "error" listener Node re-throws as an uncaughtException,
+      // which is exactly when the host is already on its way down.
+      expect(() => child.stdout.emit("error", new Error("pipe gone"))).not.toThrow();
+      expect(() => child.stderr.emit("error", new Error("pipe gone"))).not.toThrow();
+    });
   });
 
   it("markReady transitions to initialized and resolves the promise", async () => {

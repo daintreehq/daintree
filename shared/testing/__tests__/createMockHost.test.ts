@@ -584,6 +584,55 @@ describe("createMockHost", () => {
     expect(host.registeredFileDecorationProviders).toHaveLength(0);
   });
 
+  describe("mcp.registerTools", () => {
+    const tool = (result: unknown) => ({
+      description: "Lists rows.",
+      inputSchema: { type: "object" as const },
+      execute: vi.fn(() => result),
+    });
+
+    it("records the roster so a test can call a tool's execute directly", async () => {
+      const host = createMockHost();
+      const listRows = tool(["row"]);
+      await host.mcp.registerTools("data", { list_rows: listRows });
+
+      expect(host.registeredMcpTools).toHaveLength(1);
+      const record = host.registeredMcpTools[0];
+      expect(record?.endpointId).toBe("data");
+      const caller = { credentialId: "c", projectId: "p", terminalId: "t" };
+      const signal = new AbortController().signal;
+      expect(record?.tools.list_rows?.execute({ q: 1 }, caller, signal)).toEqual(["row"]);
+      expect(listRows.execute).toHaveBeenCalledWith({ q: 1 }, caller, signal);
+    });
+
+    it("replaces a roster per endpoint and makes the replaced disposer inert", async () => {
+      const host = createMockHost();
+      const disposeFirst = await host.mcp.registerTools("data", { first: tool(1) });
+      const disposeSecond = await host.mcp.registerTools("data", { second: tool(2) });
+      await host.mcp.registerTools("reports", { summary: tool(3) });
+
+      disposeFirst();
+      expect(host.registeredMcpTools.map((r) => Object.keys(r.tools))).toEqual([
+        ["second"],
+        ["summary"],
+      ]);
+
+      disposeSecond();
+      expect(host.registeredMcpTools.map((r) => r.endpointId)).toEqual(["reports"]);
+    });
+
+    it("rejects an empty endpoint id and a tool without execute", () => {
+      const host = createMockHost();
+      expect(() => host.mcp.registerTools("", { list_rows: tool(1) })).toThrow(/endpointId/);
+      expect(() =>
+        host.mcp.registerTools("data", {
+          list_rows: { description: "d", inputSchema: { type: "object" } } as never,
+        })
+      ).toThrow(/execute/);
+      expect(host.registeredMcpTools).toHaveLength(0);
+    });
+  });
+
   describe("registerFileDecorationProvider", () => {
     it("replaces a prior registration with the same id (replace-by-id)", async () => {
       const host = createMockHost();
@@ -1155,6 +1204,28 @@ describe("createMockHost production-parity validation (#10617)", () => {
         { options: { title: "Sure?" } },
         { options: { title: "Sure?" } },
       ]);
+    });
+  });
+
+  describe("fs.writeFile checked path (#12323)", () => {
+    it("reports a revision and honours expectedRevision, null and mismatch", async () => {
+      const host = createMockHost();
+      const first = await host.fs.writeFile("/repo/doc.md", "v1");
+      expect(first.revision).toMatch(/^[0-9a-f]{64}$/);
+      const second = await host.fs.writeFile("/repo/doc.md", "v2", {
+        expectedRevision: first.revision,
+      });
+      expect(second.revision).not.toBe(first.revision);
+      await expect(
+        host.fs.writeFile("/repo/doc.md", "v3", { expectedRevision: first.revision })
+      ).rejects.toMatchObject({ code: "REVISION_MISMATCH", currentRevision: second.revision });
+      await expect(
+        host.fs.writeFile("/repo/doc.md", "v3", { expectedRevision: null })
+      ).rejects.toMatchObject({ code: "TARGET_EXISTS" });
+      await expect(
+        host.fs.writeFile("/repo/new.md", "v1", { expectedRevision: "a".repeat(64) })
+      ).rejects.toMatchObject({ code: "TARGET_UNAVAILABLE" });
+      expect(await host.fs.readFile("/repo/doc.md")).toBe("v2");
     });
   });
 

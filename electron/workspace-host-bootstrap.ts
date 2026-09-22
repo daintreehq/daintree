@@ -4,6 +4,11 @@ import path from "node:path";
 import { PERF_MARKS } from "../shared/perf/marks.js";
 import { getCompileCacheMeta, markHostPerformance } from "./utils/hostPerformance.js";
 import { installBootstrapErrorGuard } from "./utils/bootstrapErrorGuard.js";
+import { installSpawnCensusFromEnv } from "./utils/spawnCensus.js";
+
+// Idle harness spawn census (#12521). Main strips the variable from every
+// launch that is not an unpackaged idle-harness run, so only that reaches here.
+installSpawnCensusFromEnv("workspace-host");
 
 const userData = process.env.DAINTREE_USER_DATA;
 if (userData) {

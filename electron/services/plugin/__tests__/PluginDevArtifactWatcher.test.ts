@@ -388,8 +388,8 @@ describe("PluginDevArtifactWatcher", () => {
     };
     const state = internals.states.get(PLUGIN_ID) as object;
 
-    // FAST.rearmMaxAttempts is 2, and a successful re-arm resets the budget —
-    // so spend it without letting the retries land.
+    // FAST.rearmMaxAttempts is 2. Spend it back to back, before any retry
+    // lands.
     for (let i = 0; i <= FAST.rearmMaxAttempts; i++) {
       internals.rearmAfterError(state, "simulated backend failure");
     }

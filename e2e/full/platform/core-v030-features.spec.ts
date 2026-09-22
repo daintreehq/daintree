@@ -30,6 +30,7 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
+import { ensureFilterSectionOpen } from "../../helpers/workflows";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
@@ -335,6 +336,7 @@ test.describe.serial("Core: v0.3.0 Features", () => {
       // The popover should appear with sort radio buttons
       const popover = window.locator(SEL.worktree.filterPopover);
       await expect(popover).toBeVisible({ timeout: T_SHORT });
+      await ensureFilterSectionOpen(popover, "Sort by");
 
       // Should have at least one sort option (radio button)
       const sortOption = popover.locator('[role="radio"]').first();

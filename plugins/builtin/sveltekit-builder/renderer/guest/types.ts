@@ -1,0 +1,83 @@
+/// <reference lib="dom" />
+/**
+ * Types shared by the guest runtime, its bundled entry and the tests.
+ *
+ * Everything here is erased at compile time: the runtime runs inside the
+ * user's page as a bundled asset, and nothing of the host's module graph goes
+ * with it.
+ */
+
+export type GuestMode = "browse" | "select";
+
+/** Host-supplied, embedded into the injected source as a literal. */
+export interface GuestBootstrapConfig {
+  protocolVersion: number;
+  sessionId: string;
+  documentEpoch: number;
+  mode: GuestMode;
+  /** Global the host installed its binding function under (CDP `addBinding`). */
+  bindingName: string;
+  /** Global the runtime publishes its handle under, for host-driven control. */
+  handleName: string;
+}
+
+/**
+ * How observations leave the page.
+ *
+ * In production the host prelude supplies `post` and addresses the envelope:
+ * session id and epoch are baked in per install and the prelude counts the
+ * sequence. That keeps an honest runtime from drifting out of step with the
+ * host; it does not stop a hostile page, which shares the main world and can
+ * call the binding itself. Without a transport the
+ * runtime builds its own envelope and calls the binding directly — the
+ * standalone shape, used where no prelude is present.
+ */
+export interface GuestTransport {
+  post(event: unknown): void;
+}
+
+/**
+ * What the host drives after injection. Everything is synchronous: the host
+ * calls these over `Runtime.evaluate`, and a promise would cost a round trip.
+ */
+/** A compiled source location, as `__svelte_meta.loc` carries it. */
+export interface GuestSourceLoc {
+  file: string;
+  line: number;
+  column: number;
+}
+
+export interface GuestRuntimeHandle {
+  setMode(mode: GuestMode): void;
+  getMode(): GuestMode;
+  /**
+   * Select the element compiled from `loc`, as a click on it would: the
+   * overlay moves and a `selectionChanged` observation goes out, so the host
+   * re-resolves it with fresh proof. Returns false — and changes nothing —
+   * when no such element is in the document. The host uses this to keep a
+   * selection through its own write and the reload that follows.
+   */
+  /** `component`: the call site of the component the selection was widened to, if any. */
+  reselect(
+    loc: GuestSourceLoc,
+    index?: number,
+    component?: GuestSourceLoc | null,
+    occurrence?: string | null
+  ): boolean;
+  /**
+   * Drop the selection and its overlay without observing anything. The host
+   * uses this when a re-proof turned out to name a different element, so the
+   * page stops highlighting something the drawer does not show.
+   */
+  clearSelection(): void;
+  /** Repaint the overlay now, e.g. after a host-side zoom or fit change. */
+  refresh(): void;
+  /**
+   * The overlay's shadow root, or null while nothing is drawn. The root is
+   * closed, so this handle is the only way in — for the host and for tests.
+   */
+  /** The host saw the pointer leave the preview, which the page may never be told. */
+  clearHover(): void;
+  getOverlayRoot(): ShadowRoot | null;
+  dispose(): void;
+}

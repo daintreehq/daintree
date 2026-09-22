@@ -158,6 +158,8 @@ describe("project-view perf scenarios", () => {
     // (#11477), and never nothing (#11469).
     expect(metrics.pressureEvictionCount).toBe(2);
     expect(metrics.pressureLadderMisses).toBe(0);
+    // The tick before those two confirms the pressure and takes nothing (#12363).
+    expect(metrics.pressureConfirmationMisses).toBe(0);
     expect(metrics.pressureBudgetMisses).toBe(0);
     // A healthy reading must move nothing at all.
     expect(metrics.healthyBandMisses).toBe(0);

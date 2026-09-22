@@ -291,6 +291,8 @@ export class GitStatusPass {
     // a flaky git that throws here can't get its old baseline re-stamped and
     // silently suppress the next retry.
     let checkSucceeded = false;
+    // Pinned: a stop-then-start swaps the monitor's controller mid-pass.
+    const signal = this.host.abortSignal;
 
     try {
       if (forceRefresh) {
@@ -306,6 +308,7 @@ export class GitStatusPass {
         forceRefresh,
         cacheTTL,
         wsl: this.host.wslInvocation,
+        signal,
       });
 
       if (!this.host.isRunning) {
@@ -473,6 +476,12 @@ export class GitStatusPass {
       this.host.emitUpdate();
       checkSucceeded = true;
     } catch (error) {
+      // The monitor stopped mid-pass and its signal killed the git child. A
+      // cancelled read says nothing about the worktree, so no error mood.
+      if (signal.aborted) {
+        return;
+      }
+
       if (error instanceof WorktreeRemovedError) {
         this.host.stop();
         this.host.onRemoved();

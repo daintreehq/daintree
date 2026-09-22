@@ -27,11 +27,14 @@ vi.mock("@/clients", () => ({
 }));
 
 const statsStoreState: { stats: Record<string, { processCount: number }> } = { stats: {} };
-vi.mock("@/store/projectStatsStore", () => ({
-  useProjectStatsStore: {
-    getState: () => statsStoreState,
-  },
-}));
+// Callable as well as `getState`-able: the badge subscribes to this store for
+// live agent activity and reads it imperatively inside the poll.
+vi.mock("@/store/projectStatsStore", () => {
+  const useProjectStatsStore = (selector: (s: typeof statsStoreState) => unknown) =>
+    selector(statsStoreState);
+  useProjectStatsStore.getState = () => statsStoreState;
+  return { useProjectStatsStore };
+});
 
 // Controlled-popover stub: the component drives `open` through onOpenChange, so
 // any click inside the wrapper opens it and the content always renders.

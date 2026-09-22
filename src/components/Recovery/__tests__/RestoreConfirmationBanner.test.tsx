@@ -38,28 +38,33 @@ describe("RestoreConfirmationBanner", () => {
   it("renders info copy for non-suspect restore", () => {
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
     render(<RestoreConfirmationBanner />);
-    expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
+    expect(screen.getByText("Session recovered after unexpected exit")).toBeTruthy();
     expect(screen.queryByText(/may be affected/)).toBeNull();
   });
 
   it("renders warning copy with suspect count (singular)", () => {
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 1, crashCount: 1 });
     render(<RestoreConfirmationBanner />);
-    expect(
-      screen.getByText(
-        "Session recovered after unexpected exit — 1 panel created near the crash may be affected."
-      )
-    ).toBeTruthy();
+    expect(screen.getByText("Session recovered after unexpected exit")).toBeTruthy();
+    expect(screen.getByText("1 panel created near the crash may be affected.")).toBeTruthy();
   });
 
   it("renders warning copy with suspect count (plural)", () => {
     useRestoreConfirmationStore.setState({ visible: true, suspectCount: 3, crashCount: 1 });
     render(<RestoreConfirmationBanner />);
-    expect(
-      screen.getByText(
-        "Session recovered after unexpected exit — 3 panels created near the crash may be affected."
-      )
-    ).toBeTruthy();
+    expect(screen.getByText("Session recovered after unexpected exit")).toBeTruthy();
+    expect(screen.getByText("3 panels created near the crash may be affected.")).toBeTruthy();
+  });
+
+  it("is informational when nothing is implicated and a warning once panels are", () => {
+    useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
+    const clean = render(<RestoreConfirmationBanner />);
+    expect(screen.getByRole("status").style.backgroundColor).toContain("--color-status-info");
+    clean.unmount();
+
+    useRestoreConfirmationStore.setState({ visible: true, suspectCount: 2, crashCount: 1 });
+    render(<RestoreConfirmationBanner />);
+    expect(screen.getByRole("status").style.backgroundColor).toContain("--color-status-warning");
   });
 
   it("auto-dismisses non-suspect banner after 10 seconds", () => {

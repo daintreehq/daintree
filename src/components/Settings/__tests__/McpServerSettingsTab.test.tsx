@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { parse as parseToml } from "smol-toml";
 import { McpServerSettingsTab } from "../McpServerSettingsTab";
@@ -31,6 +31,7 @@ vi.mock("@/components/icons", () => {
   const stub = () => null;
   return {
     McpServerIcon: stub,
+    Radar: stub,
     DaintreeIcon: stub,
     SpinnerCircle: stub,
     HollowCircle: stub,
@@ -105,6 +106,8 @@ function createMcpApi(overrides: Partial<typeof window.electron.mcpServer> = {})
     listActiveBearers: vi.fn().mockResolvedValue([]),
     listHelpSessionBearers: vi.fn().mockResolvedValue([]),
     disconnectBearer: vi.fn().mockResolvedValue({ tokenHash: "", disconnected: true }),
+    getPaneWakeEnabled: vi.fn().mockResolvedValue(false),
+    setPaneWakeEnabled: vi.fn().mockImplementation(async (enabled: boolean) => enabled),
     ...overrides,
   };
 }
@@ -165,6 +168,37 @@ describe("McpServerSettingsTab", () => {
       },
       { timeout: 5000 }
     );
+
+  describe("pane wakes (#12491)", () => {
+    const paneWakeSwitch = (container: HTMLElement) =>
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="Wake agents from terminal watches"]'
+      );
+
+    it("shows the stored value once main has answered", async () => {
+      installMcpApi({ getPaneWakeEnabled: vi.fn().mockResolvedValue(true) });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+
+      await waitFor(() => expect(paneWakeSwitch(container)?.disabled).toBe(false));
+      expect(paneWakeSwitch(container)?.getAttribute("aria-checked")).toBe("true");
+    });
+
+    it("never presents a failed read as off", async () => {
+      installMcpApi({ getPaneWakeEnabled: vi.fn().mockRejectedValue(new Error("ipc down")) });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+
+      await waitForContent(container, "Couldn't read this setting.");
+      expect(paneWakeSwitch(container)?.disabled).toBe(true);
+    });
+  });
 
   it("renders API key in a non-input display element", async () => {
     const { container } = render(
@@ -1078,8 +1112,8 @@ describe("McpServerSettingsTab", () => {
             id: "latency-drift:1",
             kind: "latency-drift",
             toolId: "slow.tool",
-            severity: "danger",
-            timestamp: Date.now() - 3_600_001,
+            severity: "warning",
+            timestamp: Date.now(),
             recordIds: ["r1"],
             zScore: 4.2,
             durationMs: 5000,
@@ -1118,7 +1152,7 @@ describe("McpServerSettingsTab", () => {
             id: "latency-drift:1",
             kind: "latency-drift",
             toolId: "slow.tool",
-            severity: "danger",
+            severity: "warning",
             timestamp: Date.now(),
             recordIds: ["r1"],
             zScore: 4.2,
@@ -1140,21 +1174,106 @@ describe("McpServerSettingsTab", () => {
     expect(container.textContent).not.toContain("anomaly signal");
   });
 
-  it("Ignore last hour chip appears when signals exist and is not suppressed", async () => {
+  it("tones the banner and each row marker by the highest severity backing it", async () => {
+    const now = Date.now();
     installMcpApi({
       getAuditStats: vi.fn().mockResolvedValue({
         auth401Count: 0,
         anomalySignals: [
           {
-            id: "latency-drift:1",
+            id: "first-seen:flaky.tool:action",
+            kind: "first-seen-combination",
+            toolId: "flaky.tool",
+            tier: "action",
+            severity: "info",
+            timestamp: now,
+            recordIds: ["r1"],
+          },
+          {
+            id: "failure-cluster:flaky.tool:r1",
+            kind: "failure-cluster",
+            toolId: "flaky.tool",
+            severity: "danger",
+            timestamp: now,
+            recordIds: ["r1"],
+            clusterSize: 3,
+            clusterWindow: 10,
+          },
+          {
+            id: "latency-drift:slow.tool:r2",
             kind: "latency-drift",
             toolId: "slow.tool",
-            severity: "danger",
-            timestamp: Date.now() - 3_600_001,
-            recordIds: ["r1"],
+            severity: "warning",
+            timestamp: now,
+            recordIds: ["r2"],
             zScore: 4.2,
             durationMs: 5000,
             baselineMedianMs: 10,
+          },
+        ],
+        anomalySuppressed: false,
+        anomalyRecordFloor: 50,
+      }),
+      getLogRecords: vi.fn().mockResolvedValue([
+        {
+          id: "r1",
+          toolId: "flaky.tool",
+          argsSummary: "{}",
+          result: "error" as const,
+          timestamp: now,
+          durationMs: 5,
+        },
+        {
+          id: "r2",
+          toolId: "slow.tool",
+          argsSummary: "{}",
+          result: "success" as const,
+          timestamp: now,
+          durationMs: 5000,
+        },
+      ]),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <McpServerSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "anomaly signal");
+
+    const banner = container.querySelector("[data-anomaly-severity]");
+    expect(banner?.getAttribute("data-anomaly-severity")).toBe("danger");
+    expect(container.querySelectorAll('[aria-label="Anomaly (error)"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[aria-label="Anomaly (warning)"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[aria-label="Anomaly (info)"]')).toHaveLength(0);
+    expect(container.textContent).not.toContain("Ignore last hour");
+  });
+
+  it("drops signals whose expiresAt has passed but keeps unexpiring first-seen ones", async () => {
+    const now = Date.now();
+    installMcpApi({
+      getAuditStats: vi.fn().mockResolvedValue({
+        auth401Count: 0,
+        anomalySignals: [
+          {
+            id: "failure-cluster:flaky.tool:r1",
+            kind: "failure-cluster",
+            toolId: "flaky.tool",
+            severity: "danger",
+            timestamp: now - 20 * 60_000,
+            recordIds: ["r1"],
+            expiresAt: now - 5 * 60_000,
+            clusterSize: 3,
+            clusterWindow: 10,
+          },
+          {
+            id: "first-seen:new.tool:external",
+            kind: "first-seen-combination",
+            toolId: "new.tool",
+            tier: "external",
+            severity: "info",
+            timestamp: now - 20 * 60_000,
+            recordIds: ["r2"],
           },
         ],
         anomalySuppressed: false,
@@ -1167,7 +1286,121 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "Ignore last hour");
+    await waitForContent(container, "1 anomaly signal");
+    expect(container.textContent).not.toContain("failure-cluster");
+    const banner = container.querySelector("[data-anomaly-severity]");
+    expect(banner?.getAttribute("data-anomaly-severity")).toBe("info");
+  });
+
+  function hideDocument(hidden: boolean): void {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+  }
+
+  it("expires a signal while Settings stays open, without refetching", async () => {
+    const t0 = new Date("2026-09-19T10:00:00Z").getTime();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(t0);
+    try {
+      const getAuditStats = vi.fn().mockResolvedValue({
+        auth401Count: 0,
+        anomalySignals: [
+          {
+            id: "failure-cluster:flaky.tool:r1",
+            kind: "failure-cluster",
+            toolId: "flaky.tool",
+            severity: "danger",
+            timestamp: t0,
+            recordIds: ["r1"],
+            expiresAt: t0 + 60_000,
+            clusterSize: 3,
+            clusterWindow: 10,
+          },
+          {
+            id: "first-seen:new.tool:external",
+            kind: "first-seen-combination",
+            toolId: "new.tool",
+            tier: "external",
+            severity: "info",
+            timestamp: t0,
+            recordIds: ["r2"],
+          },
+        ],
+        anomalySuppressed: false,
+        anomalyRecordFloor: 50,
+      });
+      installMcpApi({
+        getAuditStats,
+        getLogRecords: vi.fn().mockResolvedValue([
+          {
+            id: "r1",
+            toolId: "flaky.tool",
+            argsSummary: "{}",
+            result: "error" as const,
+            timestamp: t0,
+            durationMs: 5,
+          },
+        ]),
+      });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "2 anomaly signals");
+      expect(container.querySelectorAll('[aria-label="Anomaly (error)"]')).toHaveLength(1);
+      const fetches = getAuditStats.mock.calls.length;
+
+      // The shared minute ticker emits on visibility restore; that re-derives the
+      // viewer's `now` past the cluster's expiry. A restore is a hidden →
+      // visible flip — the ticker resumes on that edge, not on a bare event.
+      vi.setSystemTime(t0 + 61_000);
+      hideDocument(true);
+      hideDocument(false);
+
+      await waitForContent(container, "1 anomaly signal (1 first-seen-combination)");
+      expect(
+        container.querySelector("[data-anomaly-severity]")?.getAttribute("data-anomaly-severity")
+      ).toBe("info");
+      expect(container.querySelectorAll('[aria-label="Anomaly (error)"]')).toHaveLength(0);
+      expect(getAuditStats.mock.calls.length).toBe(fetches);
+    } finally {
+      Reflect.deleteProperty(document, "hidden");
+      vi.useRealTimers();
+    }
+  });
+
+  it("renders an info-toned banner when only first-seen signals are present", async () => {
+    installMcpApi({
+      getAuditStats: vi.fn().mockResolvedValue({
+        auth401Count: 0,
+        anomalySignals: [
+          {
+            id: "first-seen:new.tool:external",
+            kind: "first-seen-combination",
+            toolId: "new.tool",
+            tier: "external",
+            severity: "info",
+            timestamp: Date.now(),
+            recordIds: ["r1"],
+          },
+        ],
+        anomalySuppressed: false,
+        anomalyRecordFloor: 50,
+      }),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <McpServerSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "anomaly signal");
+    const banner = container.querySelector("[data-anomaly-severity]");
+    expect(banner?.getAttribute("data-anomaly-severity")).toBe("info");
   });
 
   it("anomaly signals do not trigger notify()", async () => {
@@ -1179,7 +1412,7 @@ describe("McpServerSettingsTab", () => {
             id: "latency-drift:1",
             kind: "latency-drift",
             toolId: "slow.tool",
-            severity: "danger",
+            severity: "warning",
             timestamp: Date.now(),
             recordIds: ["r1"],
             zScore: 4.2,

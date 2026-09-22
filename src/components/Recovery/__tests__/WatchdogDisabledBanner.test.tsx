@@ -17,6 +17,7 @@ vi.mock("@/utils/logger", () => ({
 
 import { WatchdogDisabledBanner } from "../WatchdogDisabledBanner";
 import { usePanelStore } from "@/store/panelStore";
+import { useGlobalBannerDismissalStore } from "@/store/globalBannerDismissalStore";
 import { actionService } from "@/services/ActionService";
 
 const mockedDispatch = vi.mocked(actionService.dispatch);
@@ -130,22 +131,26 @@ describe("WatchdogDisabledBanner", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("uses role=alert without redundant aria-live", () => {
+  it("announces politely: a downed monitor is a standing condition, not an emergency", () => {
     usePanelStore.setState({
       watchdogStatus: "disabled",
       watchdogDisabledInfo: { attemptCount: 3, lastExitCode: null, timestamp: 0 },
     });
     render(<WatchdogDisabledBanner />);
-    const alert = screen.getByRole("alert");
-    expect(alert.hasAttribute("aria-live")).toBe(false);
+    const status = screen.getByRole("status");
+    expect(status.hasAttribute("aria-live")).toBe(false);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("does not render a dismiss button", () => {
+  it("× records a session dismissal for the coordinator rather than touching the watchdog", () => {
     usePanelStore.setState({
       watchdogStatus: "disabled",
       watchdogDisabledInfo: { attemptCount: 3, lastExitCode: null, timestamp: 0 },
     });
+    useGlobalBannerDismissalStore.getState().reset("watchdog-disabled");
     render(<WatchdogDisabledBanner />);
-    expect(screen.queryByRole("button", { name: /dismiss/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss watchdog warning" }));
+    expect(useGlobalBannerDismissalStore.getState().dismissed.has("watchdog-disabled")).toBe(true);
+    expect(usePanelStore.getState().watchdogStatus).toBe("disabled");
   });
 });

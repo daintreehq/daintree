@@ -25,6 +25,7 @@ import {
   pluginRecipesClient,
 } from "@/clients";
 import { getAgentConfig, getMergedPreset } from "@/config/agents";
+import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import {
   generateAgentCommand,
   buildAgentLaunchFlags,
@@ -39,6 +40,7 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { sanitizeTerminalName } from "@/utils/agentLaunchValidation";
+import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import { sanitizeRecipeTerminals, MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
 import type { ActionSource, HostApprovedRecipeRun } from "@shared/types/actions";
 import type { AgentCliDetail } from "@shared/types/ipc";
@@ -1189,6 +1191,16 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             : {};
 
           if (isAgentRecipeType(terminal.type)) {
+            // The sanitizer admits every built-in agent id, the assistant's
+            // included, but an assistant-only agent is never a standalone
+            // launch (#12407). Launching one here would mint the assistant's
+            // pinned bearer for whichever caller ran the recipe — an agent
+            // pane's MCP session among them.
+            if (isAssistantOnlyAgentId(terminal.type)) {
+              throw new Error(
+                `'${terminal.type}' only runs as Daintree's assistant and cannot be launched from a recipe.`
+              );
+            }
             const agentId = terminal.type as string;
             const agentConfig = getAgentConfig(agentId);
             let launchCliDetail = launchCliDetails.get(agentId);
@@ -1263,6 +1275,9 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               initialPrompt,
               clipboardDirectory,
               modelId: terminal.agentModelId,
+              // An in-memory recipe's captured flags can carry a standing
+              // instruction; apply it to this launch as well (#12431).
+              systemPromptArgs: extractSystemPromptArgs(terminal.agentLaunchFlags, agentId),
               recipeArgs: terminal.args?.trim() || undefined,
               presetArgs: preset?.args?.join(" "),
               globalSkipPermissions,

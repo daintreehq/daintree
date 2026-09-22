@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
-import { MoreHorizontal, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, MoreHorizontal, X } from "lucide-react";
 import { AnimatePresence, m, useReducedMotion } from "framer-motion";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
@@ -31,6 +31,12 @@ import { usePanelStore } from "@/store/panelStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { actionService } from "@/services/ActionService";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Kbd } from "@/components/ui/Kbd";
+import {
+  FLEET_RIBBON_ICON_BUTTON_CLASS,
+  FLEET_RIBBON_SHELL_CLASS,
+  FLEET_RIBBON_TEXT_BUTTON_CLASS,
+} from "./fleetRibbonStyles";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,14 +46,99 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-function buildRunCountSegments(run: FleetRun): string[] {
+interface RunCountSegment {
+  label: string;
+  tone: "neutral" | "error";
+}
+
+interface RunStatusLine {
+  segments: RunCountSegment[];
+  dismissible: boolean;
+  failed: boolean;
+}
+
+function deriveRunStatus(run: FleetRun | null, progressActive: boolean): RunStatusLine | null {
+  if (run === null || progressActive) return null;
+  switch (run.status) {
+    case "watching":
+      return { segments: buildRunCountSegments(run), dismissible: false, failed: false };
+    case "completed":
+      return {
+        segments: [{ label: "Run finished", tone: "neutral" }, ...buildRunCountSegments(run)],
+        dismissible: true,
+        failed: false,
+      };
+    case "failed":
+      return {
+        segments: [{ label: "Run failed · nothing sent", tone: "error" }],
+        dismissible: true,
+        failed: true,
+      };
+    default:
+      return null;
+  }
+}
+
+function buildRunCountSegments(run: FleetRun): RunCountSegment[] {
   const counts = summarizeFleetRun(run);
-  const segments: string[] = [];
-  if (counts.working > 0) segments.push(`${counts.working} working`);
-  if (counts.waiting > 0) segments.push(`${counts.waiting} waiting`);
-  if (counts.done > 0) segments.push(`${counts.done} done`);
-  if (counts.sendFailed > 0) segments.push(`${counts.sendFailed} failed`);
+  const segments: RunCountSegment[] = [];
+  if (counts.working > 0) segments.push({ label: `${counts.working} working`, tone: "neutral" });
+  if (counts.waiting > 0) segments.push({ label: `${counts.waiting} waiting`, tone: "neutral" });
+  if (counts.done > 0) segments.push({ label: `${counts.done} done`, tone: "neutral" });
+  if (counts.sendFailed > 0) segments.push({ label: `${counts.sendFailed} failed`, tone: "error" });
   return segments;
+}
+
+/**
+ * Its own component rather than inline JSX: reading `status.segments` inside
+ * the ribbon's render made the React Compiler lose the stability of an
+ * unrelated `useState` setter and bail out of the whole component.
+ */
+function FleetRunStatusLine({
+  status,
+  onDismiss,
+}: {
+  status: RunStatusLine;
+  onDismiss: () => void;
+}): ReactElement {
+  return (
+    <span
+      className="flex min-w-0 items-center gap-1 text-2xs tabular-nums text-text-secondary"
+      data-testid="fleet-run-status"
+    >
+      <span className="truncate">
+        {status.segments.map((segment, index) => (
+          <span
+            key={segment.label}
+            className={segment.tone === "error" ? "font-medium text-text-primary" : undefined}
+          >
+            {index > 0 ? " · " : ""}
+            {/* The glyph carries the tone and sits with the clause it is
+                about; the words stay on a text token because the danger
+                colour sits under 4.5:1 on the amber fill. */}
+            {segment.tone === "error" && (
+              <AlertCircle
+                className="mr-1 inline-block h-3 w-3 align-[-2px] text-status-error"
+                aria-hidden="true"
+              />
+            )}
+            {segment.label}
+          </span>
+        ))}
+      </span>
+      {status.dismissible && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss run summary"
+          data-testid="fleet-run-dismiss"
+          className={FLEET_RIBBON_ICON_BUTTON_CLASS}
+        >
+          <X className="h-3 w-3" />
+        </button>
+      )}
+    </span>
+  );
 }
 
 export function FleetArmingRibbon(): ReactElement | null {
@@ -71,19 +162,7 @@ export function FleetArmingRibbon(): ReactElement | null {
   // runs render nothing — the announcer + progress store already covered them.
   const run = useFleetRunStore((s) => s.run);
   const dismissRun = useFleetRunStore((s) => s.dismiss);
-  let runStatus: { label: string; dismissible: boolean } | null = null;
-  if (run !== null && !progressActive) {
-    if (run.status === "watching") {
-      runStatus = { label: buildRunCountSegments(run).join(" · "), dismissible: false };
-    } else if (run.status === "completed") {
-      runStatus = {
-        label: ["Run finished", ...buildRunCountSegments(run)].join(" · "),
-        dismissible: true,
-      };
-    } else if (run.status === "failed") {
-      runStatus = { label: "Run failed · nothing sent", dismissible: true };
-    }
-  }
+  const runStatus = deriveRunStatus(run, progressActive);
 
   const [popoverOpen, setPopoverOpen] = useState(false);
   // The selection menu is controlled so a fleet-delete request can close it
@@ -322,29 +401,25 @@ export function FleetArmingRibbon(): ReactElement | null {
           role="status"
           aria-live="polite"
           aria-atomic="true"
-          className={cn(
-            "relative flex items-center gap-3 border-b border-border-default px-3 py-2 text-xs leading-[inherit] text-text-primary",
-            // Keep the Fleet surface continuous through confirm-pending so the
-            // mode chrome doesn't visually exit and re-enter during a confirm.
-            "bg-category-amber-subtle",
-            "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-[var(--color-category-amber-border)]"
-          )}
+          // Same shell as the armed bar so the mode chrome doesn't visually
+          // exit and re-enter during a confirm — only the content swaps.
+          className={FLEET_RIBBON_SHELL_CLASS}
           data-testid="fleet-arming-ribbon"
           data-pending-action={pending.kind}
         >
-          <span className="font-medium text-accent-primary">{message}</span>
-          <div className="ml-auto flex items-center gap-2 text-2xs text-text-secondary">
-            <span>
-              <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-3xs">
-                Enter
-              </kbd>{" "}
-              to confirm
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <AlertTriangle
+              className="h-3.5 w-3.5 shrink-0 text-category-amber-text"
+              aria-hidden="true"
+            />
+            <span className="truncate font-semibold">{message}</span>
+          </div>
+          <div className="ml-auto flex shrink-0 items-center gap-3 text-2xs text-text-secondary">
+            <span className="inline-flex items-center gap-1">
+              <Kbd>Enter</Kbd> to confirm
             </span>
-            <span>
-              <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-3xs">
-                Esc
-              </kbd>{" "}
-              to cancel
+            <span className="inline-flex items-center gap-1">
+              <Kbd>Esc</Kbd> to cancel
             </span>
           </div>
         </div>
@@ -436,7 +511,6 @@ export function FleetArmingRibbon(): ReactElement | null {
             Focus selection
           </DropdownMenuItem>
           <DropdownMenuItem
-            destructive
             onSelect={() => {
               clear();
             }}
@@ -503,115 +577,120 @@ export function FleetArmingRibbon(): ReactElement | null {
           aria-live="off"
           tabIndex={-1}
           onKeyDown={handleRibbonKeyDown}
-          className={cn(
-            "relative flex items-center gap-3 overflow-hidden border-b border-border-default px-3 py-2 text-xs leading-[inherit] text-text-primary outline-hidden",
-            "bg-category-amber-subtle",
-            // Non-color structural cue: 2px amber left-edge stripe, so the
-            // "mode surface" reads even with CVD / low-saturation themes where
-            // the amber tint alone might not register as a distinct surface.
-            "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-[var(--color-category-amber-border)]"
-          )}
+          className={cn(FLEET_RIBBON_SHELL_CLASS, "overflow-hidden outline-hidden")}
           data-testid="fleet-arming-ribbon"
           {...ribbonMotionProps}
         >
-          <button
-            type="button"
-            onClick={exitFleet}
-            aria-label="Exit fleet mode"
-            data-testid="fleet-leading-exit"
-            className="rounded p-1 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-text-primary"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-          <FleetCountChip
-            armedCount={armedCount}
-            open={popoverOpen}
-            onOpenChange={setPopoverOpen}
-          />
-          {showProgress && (
-            <span
-              className="text-2xs tabular-nums text-text-secondary"
-              data-testid="fleet-broadcast-progress"
-            >
-              {progressCompleted}/{progressTotal}
-              {progressFailed > 0 && (
-                <span className="text-text-secondary"> · {progressFailed} failed</span>
-              )}
-            </span>
-          )}
-          {/* Cancel surface is gated on batching, not on the counter threshold:
-           * cooperative cancellation can only interrupt batched fan-out
-           * (resolved.length > FLEET_LARGE_PASTE_BATCH_SIZE), so showing
-           * Cancel for sub-threshold but batching-eligible fleets keeps the
-           * affordance reachable for 6–9 target large-paste broadcasts. */}
-          {progressActive && progressTotal > FLEET_LARGE_PASTE_BATCH_SIZE && (
+          {/* Three areas — a fixed membership anchor, a flexible status slot,
+           * and the trailing controls — so the transient centre content can
+           * come and go without moving the menu or Exit. */}
+          <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
-              onClick={cancelActiveBroadcast}
-              aria-label="Cancel broadcast"
-              data-testid="fleet-broadcast-cancel"
-              className="rounded px-1.5 py-0.5 text-2xs text-text-secondary transition-colors hover:bg-tint/[0.08] hover:text-text-primary"
+              onClick={exitFleet}
+              aria-label="Exit fleet mode"
+              data-testid="fleet-leading-exit"
+              className={FLEET_RIBBON_ICON_BUTTON_CLASS}
             >
-              Cancel
+              <X className="h-3.5 w-3.5" />
             </button>
-          )}
-          {runStatus !== null && (
-            <span
-              className="flex items-center gap-1 text-2xs tabular-nums text-text-secondary"
-              data-testid="fleet-run-status"
-            >
-              <span>{runStatus.label}</span>
-              {runStatus.dismissible && (
-                <button
-                  type="button"
-                  onClick={dismissRun}
-                  aria-label="Dismiss run summary"
-                  data-testid="fleet-run-dismiss"
-                  className="rounded p-0.5 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-text-primary"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              )}
-            </span>
-          )}
-          <DropdownMenu
-            open={selectionMenuOpen}
-            onOpenChange={(open) => {
-              setSelectionMenuOpen(open);
-              if (!open) clearPreviewArmedIds();
-            }}
-          >
-            <DropdownMenuTrigger asChild>
+            <FleetCountChip
+              armedCount={armedCount}
+              open={popoverOpen}
+              onOpenChange={setPopoverOpen}
+            />
+          </div>
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            {showProgress && (
+              <span
+                role="progressbar"
+                aria-label="Broadcast progress"
+                aria-valuemin={0}
+                aria-valuemax={progressTotal}
+                aria-valuenow={progressCompleted}
+                aria-valuetext={
+                  progressFailed > 0
+                    ? `${progressCompleted - progressFailed} of ${progressTotal} sent, ${progressFailed} failed`
+                    : `${progressCompleted} of ${progressTotal} sent`
+                }
+                className="shrink-0 text-2xs tabular-nums text-text-secondary"
+                data-testid="fleet-broadcast-progress"
+              >
+                Sending {progressCompleted}/{progressTotal}
+                {progressFailed > 0 && (
+                  <span className="font-medium text-text-primary">
+                    {" · "}
+                    <AlertCircle
+                      className="mr-1 inline-block h-3 w-3 align-[-2px] text-status-error"
+                      aria-hidden="true"
+                    />
+                    {progressFailed} failed
+                  </span>
+                )}
+              </span>
+            )}
+            {/* Cancel surface is gated on batching, not on the counter threshold:
+             * cooperative cancellation can only interrupt batched fan-out
+             * (resolved.length > FLEET_LARGE_PASTE_BATCH_SIZE), so showing
+             * Cancel for sub-threshold but batching-eligible fleets keeps the
+             * affordance reachable for 6–9 target large-paste broadcasts. */}
+            {progressActive && progressTotal > FLEET_LARGE_PASTE_BATCH_SIZE && (
               <button
                 type="button"
-                aria-label="Open selection menu"
-                className="rounded p-1 text-daintree-text/60 transition-colors hover:bg-tint/[0.08] hover:text-text-primary"
-                data-testid="fleet-selection-menu-trigger"
+                onClick={cancelActiveBroadcast}
+                aria-label="Cancel broadcast"
+                data-testid="fleet-broadcast-cancel"
+                className={FLEET_RIBBON_TEXT_BUTTON_CLASS}
               >
-                <MoreHorizontal className="h-3.5 w-3.5" />
+                Cancel
               </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" sideOffset={4}>
-              {selectionMenuItems}
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <div className="ml-auto flex items-center gap-1.5">
+            )}
+            {runStatus !== null && <FleetRunStatusLine status={runStatus} onDismiss={dismissRun} />}
+          </div>
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            <DropdownMenu
+              open={selectionMenuOpen}
+              onOpenChange={(open) => {
+                setSelectionMenuOpen(open);
+                if (!open) clearPreviewArmedIds();
+              }}
+            >
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Open selection menu"
+                  className={FLEET_RIBBON_ICON_BUTTON_CLASS}
+                  data-testid="fleet-selection-menu-trigger"
+                >
+                  <MoreHorizontal className="h-3.5 w-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" sideOffset={4}>
+                {selectionMenuItems}
+              </DropdownMenuContent>
+            </DropdownMenu>
             <button
               type="button"
               onClick={exitFleet}
               aria-label={`Exit fleet mode (${exitChordLabel})`}
               data-testid="fleet-exit"
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-2xs transition-colors",
-                "bg-tint/[0.08] text-daintree-text/80 hover:bg-tint/[0.14] hover:text-text-primary"
-              )}
+              className={FLEET_RIBBON_TEXT_BUTTON_CLASS}
             >
               <span>Exit</span>
-              <kbd className="rounded border border-category-amber-border bg-category-amber-subtle px-1 font-mono text-3xs leading-tight text-category-amber-text">
-                {exitChordLabel}
-              </kbd>
+              <Kbd>{exitChordLabel}</Kbd>
             </button>
           </div>
+          {/* A 2px delivery track along the bottom edge: the only graphical
+           * progress cue a 36px bar has room for. Width is the signal, so
+           * reduced motion just drops the interpolation. */}
+          {showProgress && progressTotal > 0 && (
+            <span
+              aria-hidden="true"
+              data-testid="fleet-broadcast-track"
+              className="absolute inset-x-0 bottom-0 h-0.5 bg-category-amber-text transition-[width] duration-150 ease-out motion-reduce:transition-none"
+              style={{ width: `${Math.round((progressCompleted / progressTotal) * 100)}%` }}
+            />
+          )}
         </m.div>
       </AnimatePresence>
     </div>

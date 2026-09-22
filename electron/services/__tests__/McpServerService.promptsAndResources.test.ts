@@ -18,7 +18,20 @@ import type {
 } from "../../../shared/types/actions.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { BUILT_IN_ACTION_IDS } from "../../../shared/config/actionIds.js";
-import { TIER_ALLOWLISTS } from "../mcp-server/shared.js";
+import { RESOURCE_TEXT_MAX_BYTES, TIER_ALLOWLISTS } from "../mcp-server/shared.js";
+
+function namesActionId(line: string, id: string): boolean {
+  let from = line.indexOf(id);
+  while (from !== -1) {
+    const before = from === 0 ? "" : line[from - 1];
+    // A trailing dot followed by a word character continues a longer id; one
+    // that ends the sentence does not.
+    const rest = line.slice(from + id.length);
+    if (!/[\w.]/.test(before) && !/^(?:\w|\.\w)/.test(rest)) return true;
+    from = line.indexOf(id, from + 1);
+  }
+  return false;
+}
 
 const testHomeDir = vi.hoisted(
   () => `${process.cwd()}/.vitest-mcp-home-${Math.random().toString(36).slice(2)}`
@@ -460,6 +473,21 @@ describe("McpServerService", () => {
     await fs.rm(testHomeDir, { recursive: true, force: true });
   });
 
+  // The prompt guard below is only as strict as this matcher, and a matcher
+  // that never matched would leave it green.
+  it("matches whole action ids only", () => {
+    expect(namesActionId("call `terminal.sendCommand`.", "terminal.sendCommand")).toBe(true);
+    expect(namesActionId("terminal.sendCommand({ terminalId })", "terminal.sendCommand")).toBe(
+      true
+    );
+    expect(namesActionId("use terminal.sendCommand", "terminal.sendCommand")).toBe(true);
+    expect(namesActionId("`terminal.sendCommandOwned`", "terminal.sendCommand")).toBe(false);
+    expect(namesActionId("app.theme.pick", "app.theme")).toBe(false);
+    expect(
+      namesActionId("terminal.sendCommandOwned then terminal.sendCommand", "terminal.sendCommand")
+    ).toBe(true);
+  });
+
   describe("prompts", () => {
     // Prompts render tier-agnostically — the same text goes to an api-key
     // session and to the in-app assistant. So naming a tool unconditionally is
@@ -487,10 +515,13 @@ describe("McpServerService", () => {
 
         // Match action ids wherever they appear — backticked, bare, or followed
         // by call syntax — rather than only the backticked form, so a reference
-        // does not escape the guard by dropping its markup.
+        // does not escape the guard by dropping its markup. Whole ids only: an
+        // owned variant's name contains the unscoped id it narrows
+        // (`terminal.sendCommandOwned`), and naming the reachable one is not a
+        // reference to the other.
         for (const line of text.split("\n")) {
           for (const id of BUILT_IN_ACTION_IDS) {
-            if (!line.includes(id)) continue;
+            if (!namesActionId(line, id)) continue;
             if (TIER_ALLOWLISTS.external.has(id)) continue;
             // Naming an unreachable tool is allowed only alongside a fallback the
             // caller can actually run. The fallback must be on the SAME line as
@@ -896,6 +927,36 @@ describe("McpServerService", () => {
       expect(uris).not.toContain("daintree://agent/term-2/state");
     });
 
+    it("listResources lists a shared agent type's state URI once", async () => {
+      const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
+        if (payload.actionId === "terminal.list") {
+          return {
+            ok: true,
+            result: [
+              { id: "term-1", title: "claude one", agentId: "claude" },
+              { id: "term-2", title: "claude two", agentId: "claude" },
+              { id: "term-3", title: "codex", agentId: "codex" },
+            ],
+          };
+        }
+        return { ok: true, result: [] };
+      });
+      const { window } = createMockWindow({
+        getManifest: manifestForResources,
+        dispatchAction: dispatchMock,
+      });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, workbenchHeaders);
+      transports.push(transport);
+
+      const uris = (await client.listResources()).resources.map((r) => r.uri);
+      expect(uris.filter((u) => u === "daintree://agent/claude/state")).toHaveLength(1);
+      expect(uris).toContain("daintree://agent/codex/state");
+      // Scrollback is per terminal, so both claude panes keep theirs.
+      expect(uris).toContain("daintree://terminal/term-1/scrollback");
+      expect(uris).toContain("daintree://terminal/term-2/scrollback");
+    });
+
     it("listResources still returns the dispatch-free URIs when enumeration fails", async () => {
       const dispatchMock = vi.fn((_payload: DispatchRequest): ActionDispatchResult => ({
         ok: false,
@@ -1074,8 +1135,14 @@ describe("McpServerService", () => {
       const { getAgentAvailabilityStore } = await import("../AgentAvailabilityStore.js");
       // Force singleton construction so its event listeners are wired before we emit.
       getAgentAvailabilityStore();
+      events.emit("agent:spawned", {
+        agentId: "agent-xyz",
+        terminalId: "term-xyz",
+        timestamp: 1_699_999_999_000,
+      });
       events.emit("agent:state-changed", {
         agentId: "agent-xyz",
+        terminalId: "term-xyz",
         state: "working",
         previousState: "idle",
         trigger: "output",
@@ -1095,7 +1162,9 @@ describe("McpServerService", () => {
       // state change.
       expect(JSON.parse(content.text)).toEqual({
         agentId: "agent-xyz",
+        terminalId: "term-xyz",
         state: "working",
+        spawnedAt: 1_699_999_999_000,
         lastTransitionAt: 1_700_000_000_000,
       });
 
@@ -1112,8 +1181,14 @@ describe("McpServerService", () => {
       const { events } = await import("../events.js");
       const { getAgentAvailabilityStore } = await import("../AgentAvailabilityStore.js");
       getAgentAvailabilityStore();
+      events.emit("agent:spawned", {
+        agentId: "agent-waiting",
+        terminalId: "term-waiting",
+        timestamp: 1_699_999_999_000,
+      });
       events.emit("agent:state-changed", {
         agentId: "agent-waiting",
+        terminalId: "term-waiting",
         state: "waiting",
         previousState: "working",
         trigger: "output",
@@ -1131,10 +1206,93 @@ describe("McpServerService", () => {
       const content = result.contents[0] as { uri: string; mimeType: string; text: string };
       expect(JSON.parse(content.text)).toEqual({
         agentId: "agent-waiting",
+        terminalId: "term-waiting",
         state: "waiting",
         waitingReason: "question",
+        spawnedAt: 1_699_999_999_000,
         lastTransitionAt: 1_700_000_000_000,
       });
+    });
+
+    // #12494 — the URI names an agent type, so it can only describe one of the
+    // terminals running it. It must be one terminal's whole observation, and
+    // say which terminal, never a sibling's fields under another's name.
+    it("readResource for a shared agent type reports one named terminal's whole state", async () => {
+      const { events } = await import("../events.js");
+      const { getAgentAvailabilityStore } = await import("../AgentAvailabilityStore.js");
+      getAgentAvailabilityStore();
+      const transition = (
+        terminalId: string,
+        state: "waiting" | "completed",
+        timestamp: number,
+        extra: { waitingReason?: "question"; exitCode?: number } = {}
+      ) =>
+        events.emit("agent:state-changed", {
+          agentId: "agent-shared",
+          terminalId,
+          state,
+          previousState: "working",
+          trigger: state === "completed" ? "exit" : "output",
+          confidence: 1,
+          timestamp,
+          ...extra,
+        });
+      // The older terminal is the one heard from last, so every field has to
+      // come from it — including the spawn time the newer sibling overwrote
+      // when state was one slot per agent type.
+      events.emit("agent:spawned", {
+        agentId: "agent-shared",
+        terminalId: "term-shared-a",
+        timestamp: 1_000,
+      });
+      events.emit("agent:spawned", {
+        agentId: "agent-shared",
+        terminalId: "term-shared-b",
+        timestamp: 2_000,
+      });
+      transition("term-shared-b", "completed", 3_000, { exitCode: 0 });
+      transition("term-shared-a", "waiting", 4_000, { waitingReason: "question" });
+
+      const { window } = createMockWindow({ getManifest: manifestForResources });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const read = async () => {
+        const result = await client.readResource({ uri: "daintree://agent/agent-shared/state" });
+        const content = result.contents[0] as { uri: string; mimeType: string; text: string };
+        return JSON.parse(content.text);
+      };
+
+      expect(await read()).toEqual({
+        agentId: "agent-shared",
+        terminalId: "term-shared-a",
+        state: "waiting",
+        waitingReason: "question",
+        spawnedAt: 1_000,
+        lastTransitionAt: 4_000,
+      });
+
+      events.emit("agent:killed", {
+        agentId: "agent-shared",
+        terminalId: "term-shared-a",
+        timestamp: Date.now(),
+      });
+      expect(await read()).toEqual({
+        agentId: "agent-shared",
+        terminalId: "term-shared-b",
+        state: "completed",
+        exitCode: 0,
+        spawnedAt: 2_000,
+        lastTransitionAt: 3_000,
+      });
+
+      events.emit("agent:killed", {
+        agentId: "agent-shared",
+        terminalId: "term-shared-b",
+        timestamp: Date.now(),
+      });
+      expect(await read()).toEqual({ agentId: "agent-shared", state: null });
     });
 
     it("readResource on an unknown URI rejects as InvalidRequest", async () => {
@@ -1188,8 +1346,9 @@ describe("McpServerService", () => {
       expect(uris.some((u) => u.startsWith("daintree://worktree/"))).toBe(false);
     });
 
-    it("truncates oversized scrollback payloads with a marker", async () => {
-      const huge = "x".repeat(60 * 1024);
+    it("keeps the newest lines of an oversized raw scrollback payload", async () => {
+      const lines = Array.from({ length: 2000 }, (_, i) => `line ${i} `.padEnd(60, "."));
+      const huge = lines.join("\n");
       const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
         if (payload.actionId === "terminal.getOutput") return { ok: true, result: huge };
         return { ok: true, result: [] };
@@ -1204,8 +1363,36 @@ describe("McpServerService", () => {
 
       const result = await client.readResource({ uri: "daintree://terminal/t-1/scrollback" });
       const content = result.contents[0] as { uri: string; mimeType: string; text: string };
-      expect(content.text.endsWith("\n\n[truncated]")).toBe(true);
-      expect(content.text.length).toBeLessThan(huge.length);
+      const marker = "[truncated]\n\n";
+      expect(content.text.startsWith(marker)).toBe(true);
+      expect(Buffer.byteLength(content.text, "utf8")).toBeLessThanOrEqual(RESOURCE_TEXT_MAX_BYTES);
+      const kept = content.text.slice(marker.length).split("\n");
+      expect(kept.length).toBeGreaterThan(1);
+      expect(kept).toEqual(lines.slice(-kept.length));
+    });
+
+    it("serves a fitted scrollback read as parseable JSON rather than cutting it", async () => {
+      // `terminal.getOutput` fits its compact JSON to the cap; indenting it for
+      // the resource used to push it back over and into the head-first cut.
+      const base = { terminalId: "t-1", content: "", lineCount: 1, truncated: true };
+      const filler = "y".repeat(RESOURCE_TEXT_MAX_BYTES - JSON.stringify(base).length);
+      const output = { ...base, content: filler };
+      const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
+        if (payload.actionId === "terminal.getOutput") return { ok: true, result: output };
+        return { ok: true, result: [] };
+      });
+      const { window } = createMockWindow({
+        getManifest: manifestForResources,
+        dispatchAction: dispatchMock,
+      });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const result = await client.readResource({ uri: "daintree://terminal/t-1/scrollback" });
+      const content = result.contents[0] as { uri: string; mimeType: string; text: string };
+      expect(Buffer.byteLength(content.text, "utf8")).toBeLessThanOrEqual(RESOURCE_TEXT_MAX_BYTES);
+      expect(JSON.parse(content.text)).toEqual(output);
     });
 
     it("workbench tier sees resources and is permitted to read them", async () => {
@@ -1273,6 +1460,60 @@ describe("McpServerService", () => {
 
       await new Promise((r) => setTimeout(r, 50));
       expect(updated).toEqual(["daintree://agent/agent-7/state"]);
+    });
+
+    // Killing an already-idle agent emits no state change, but it still drops
+    // the terminal the read was reporting.
+    it("notifies agent-state subscribers when an agent of that type is spawned, killed or quits", async () => {
+      const { events } = await import("../events.js");
+      const { window } = createMockWindow({ getManifest: manifestForResources });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const updated: string[] = [];
+      const { ResourceUpdatedNotificationSchema } =
+        await import("@modelcontextprotocol/sdk/types.js");
+      client.setNotificationHandler(ResourceUpdatedNotificationSchema, async (notification) => {
+        updated.push(notification.params.uri);
+      });
+
+      await client.subscribeResource({ uri: "daintree://agent/agent-life/state" });
+
+      events.emit("agent:spawned", {
+        agentId: "agent-life",
+        terminalId: "term-life",
+        timestamp: Date.now(),
+      });
+      events.emit("agent:killed", {
+        agentId: "agent-life",
+        terminalId: "term-life",
+        timestamp: Date.now(),
+      });
+      events.emit("agent:exited", {
+        terminalId: "term-life-2",
+        agentType: "agent-life",
+        timestamp: Date.now(),
+        exitKind: "subcommand",
+      });
+      events.emit("agent:killed", {
+        agentId: "different-agent",
+        terminalId: "term-other",
+        timestamp: Date.now(),
+      });
+      events.emit("agent:exited", {
+        terminalId: "term-other",
+        agentType: "different-agent",
+        timestamp: Date.now(),
+        exitKind: "subcommand",
+      });
+
+      await new Promise((r) => setTimeout(r, 50));
+      expect(updated).toEqual([
+        "daintree://agent/agent-life/state",
+        "daintree://agent/agent-life/state",
+        "daintree://agent/agent-life/state",
+      ]);
     });
 
     it("unsubscribe stops further notifications and clears the per-session entry", async () => {

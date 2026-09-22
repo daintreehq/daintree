@@ -119,6 +119,6 @@ See [Distribution](./distribution.md) for how users install it.
 ## Next steps
 
 - Add more contribution points — see [Contribution points](./contribution-points.md)
-- Register an MCP server or Skill so Daintree's agents can use your plugin — see [Agent extensions](./agent-extensions.md)
+- Serve tools to the agents in Daintree's terminals with an agent MCP endpoint, or ship a skill — see [Agent extensions](./agent-extensions.md)
 - Explore the host API — see [Host API](./host-api.md)
 - Understand what runs when — see [Architecture](./architecture.md)

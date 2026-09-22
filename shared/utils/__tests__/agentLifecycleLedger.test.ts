@@ -231,6 +231,18 @@ describe("journal: exactly-once per generation", () => {
     ledger.rescindJournal("ghost", 1);
   });
 
+  it("keeps the session id out of a duplicate's anomaly", () => {
+    const seen: LedgerAnomaly[] = [];
+    const ledger = makeLedger({ onAnomaly: (a) => seen.push(a) });
+    const gen = ledger.recordLaunch("t1", {});
+    ledger.recordJournal("t1", gen, "sess-secret");
+    const verdict = ledger.recordJournal("t1", gen, "sess-other");
+
+    // Anomalies reach logs and support bundles; a session id resumes a
+    // conversation.
+    expect(JSON.stringify([verdict, seen, ledger.getAnomalies()])).not.toContain("sess-");
+  });
+
   it("journals each generation independently across respawns", () => {
     const ledger = makeLedger();
     const gen1 = ledger.recordLaunch("t1", {});
@@ -286,6 +298,25 @@ describe("bounds and eviction", () => {
     expect(ledger.getEntry("t2")).toBeUndefined();
     expect(ledger.getEntry("t3")).toBeDefined();
     expect(ledger.getEntry("t4")).toBeDefined();
+  });
+
+  it("never hands an evicted terminal's generation to its next launch", () => {
+    const ledger = makeLedger({ maxTerminals: 2 });
+    ledger.recordLaunch("t1", {});
+    const evictedGen = ledger.recordLaunch("t1", {});
+    ledger.recordClose("t1", evictedGen, "exit");
+    ledger.recordJournal("t1", evictedGen, "sess-old");
+    ledger.recordLaunch("t2", {});
+    ledger.recordLaunch("t3", {});
+    expect(ledger.getEntry("t1")).toBeUndefined();
+
+    const relaunched = ledger.recordLaunch("t1", {});
+
+    // A completion still in flight for the evicted incarnation must not pass
+    // for the relaunch — nor may its journal mark swallow the relaunch's.
+    expect(relaunched).toBeGreaterThan(evictedGen);
+    expect(ledger.isCurrent("t1", evictedGen)).toBe(false);
+    expect(ledger.recordJournal("t1", relaunched, "sess-new").accepted).toBe(true);
   });
 
   it("bounds the generation-mark map", () => {

@@ -9,11 +9,18 @@ import { CHANNELS } from "../../channels.js";
 import { waitForBurstRateLimitSlot, consumeRestoreQuota } from "../../utils.js";
 import { defineIpcNamespace, op, opValidated } from "../../define.js";
 import { projectStore } from "../../../services/ProjectStore.js";
+import { noteTerminalLaunch } from "../../../services/pty/agentSessionCapturePersistence.js";
 import type * as McpServerServiceModule from "../../../services/McpServerService.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
 import { helpSessionService } from "../../../services/HelpSessionService.js";
 import { isAssistantTerminalRecord } from "../../../services/assistantTerminal.js";
+import {
+  findUntouchedClaudeSession,
+  rememberClaudePaneStore,
+  resolvePaneClaudeProjectsRoot,
+} from "../../../services/claude/ClaudeSessionStore.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
+import { getProjectIdFromSenderUrl } from "../../senderIdentity.js";
 import {
   TerminalSpawnOptionsSchema,
   AgentSessionRetentionDaysSchema,
@@ -24,15 +31,18 @@ import {
 } from "../../../schemas/ipc.js";
 import { store } from "../../../store.js";
 import { AppError } from "../../../utils/errorTypes.js";
+import { withTimeout } from "../../../utils/withTimeout.js";
 import type {
   AgentSessionBookmarkMetadata,
   AgentSessionRecord,
   AgentSessionRetentionDays,
 } from "../../../../shared/types/ipc/agentSessionHistory.js";
+import type { HostMemoryPauseSnapshot } from "../../../../shared/types/pty-host.js";
 import { resolveDaintreeMcpTier } from "../../../../shared/types/project.js";
 import { normalizeTerminalGridDimension } from "../../../../shared/types/terminal.js";
 import {
   DEFAULT_DANGEROUS_ARGS,
+  relaunchResumeAsAssignedSession,
   supportsExactSessionCapture,
 } from "../../../../shared/types/agentSettings.js";
 import {
@@ -46,6 +56,13 @@ import {
   substituteSettingsTemplates,
 } from "../../../services/settingsTemplateResolver.js";
 import type * as PluginServiceModule from "../../../services/PluginService.js";
+import { listDeclaredAgentMcpEndpoints } from "../../../services/pluginAgentMcp/declaredEndpoints.js";
+import {
+  isAgentMcpEndpointEnabled,
+  listEnabledAgentMcpEndpoints,
+} from "../../../services/pluginAgentMcp/projectEnablement.js";
+import type { DeclaredAgentMcpEndpoint } from "../../../services/pluginAgentMcp/types.js";
+import { isProjectWorkspaceId } from "../../../../shared/utils/workspaceIds.js";
 
 type ValidatedTerminalSpawnOptions = z.output<typeof TerminalSpawnOptionsSchema>;
 
@@ -125,26 +142,40 @@ async function getMcpServerService(): Promise<McpServerSingleton> {
   return cachedMcpServerService;
 }
 
-// One-time wiring of the assistant-pane pinning resolvers (#10647). Help-session
-// resolvers are wired in globalServicesInit / HelpSessionService; the assistant
-// pane path has no such owner, so we lazily wire it on first assistant spawn —
-// before `registerAssistantPaneBearer` and the CLI's first `/mcp` handshake.
-// Idempotent re-set is harmless, but the guard avoids re-binding on every spawn.
-let assistantPaneResolversWired = false;
-function wireAssistantPaneResolvers(mcpServerService: McpServerSingleton): void {
-  if (assistantPaneResolversWired) return;
+// Wiring of the pane-token resolvers: the assistant pane's WebContents pin
+// (#10647), an agent pane's launch-workspace binding (#12486), and the principal
+// a pane bearer's resource ownership is held under, with the revocation that
+// drops it (#12487). Help-session resolvers are wired in globalServicesInit /
+// HelpSessionService; pane tokens have no such owner, so every spawn that
+// registers one wires them first — before the CLI's first handshake.
+// Re-setting is a handful of reference writes, and doing it per registration
+// keeps the wiring ahead of each one rather than dependent on which kind of
+// pane happened to launch first.
+function wirePaneTokenResolvers(mcpServerService: McpServerSingleton): void {
   mcpServerService.setAssistantPaneWebContentsResolver((token) =>
     mcpPaneConfigService.getWebContentsIdForToken(token)
   );
   mcpServerService.setAssistantPaneActionContextResolver((token) =>
     mcpPaneConfigService.getActionContextForToken(token)
   );
-  assistantPaneResolversWired = true;
+  mcpServerService.setPaneWorkspaceBindingResolver((token) =>
+    mcpPaneConfigService.getPaneWorkspaceBindingForToken(token)
+  );
+  mcpServerService.setPaneOwnershipPrincipalResolver((token) =>
+    mcpPaneConfigService.getOwnershipPrincipalForToken(token)
+  );
+  mcpServerService.setPaneTerminalResolver((token) =>
+    mcpPaneConfigService.getPaneIdForToken(token)
+  );
+  mcpPaneConfigService.setOwnershipPrincipalRevokedListener((principal) =>
+    mcpServerService.revokeOwnershipPrincipal(principal)
+  );
 }
 
 // Same lazy-import discipline as the MCP service above: PluginService pulls in
 // the whole plugin host (~thousands of lines), and only plugin-agent launches
-// that actually embed a `${settings:*}` template need it — so keep it off the
+// that actually embed a `${settings:*}` template, or Claude launches in a
+// project with a plugin MCP endpoint turned on, need it — so keep it off the
 // eager spawn path and load on first such launch.
 type PluginServiceSingleton = typeof PluginServiceModule.pluginService;
 let cachedPluginService: PluginServiceSingleton | null = null;
@@ -179,6 +210,56 @@ import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { quoteCommandArg } from "../../../../shared/utils/shellEscape.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../../../shared/utils/recipeSanitizer.js";
 import { buildCommandLaunchShell } from "./commandLaunch.js";
+
+// The plugin MCP endpoints a Claude launch in this project should be handed:
+// enabled by the user for this project AND declared by a plugin instance that
+// is running and may serve it. Enablement is read first because it is a plain
+// store read, and an empty answer — every project that never turned a plugin
+// endpoint on — keeps the launch off the lazy PluginService load entirely.
+const PLUGIN_INIT_WAIT_MS = 5000;
+
+async function resolveEnabledPluginMcpEndpoints(
+  projectId: string
+): Promise<DeclaredAgentMcpEndpoint[]> {
+  if (!isProjectWorkspaceId(projectId)) return [];
+  if (listEnabledAgentMcpEndpoints(projectId).length === 0) return [];
+  const pluginService = await getPluginService();
+  // PluginService initialises as a deferred task after first-interactive, so
+  // panes restored at startup would otherwise see no loaded plugins. Bounded so
+  // a slow init (blocklist fetch, activation) degrades to a launch without
+  // plugin tools instead of a hung pane.
+  try {
+    await withTimeout(
+      pluginService.waitForInit(),
+      PLUGIN_INIT_WAIT_MS,
+      "PluginService init did not settle"
+    );
+  } catch {
+    console.warn(
+      `[TerminalSpawn] Plugin service not ready after ${PLUGIN_INIT_WAIT_MS}ms; launching without plugin MCP endpoints`
+    );
+    return [];
+  }
+  return listDeclaredAgentMcpEndpoints(pluginService.listPlugins(), projectId, (instanceId) =>
+    pluginService.hasPlugin(instanceId)
+  ).filter((endpoint) =>
+    isAgentMcpEndpointEnabled(projectId, endpoint.pluginInstanceId, endpoint.endpointId)
+  );
+}
+
+// Re-checked synchronously as each grant is minted: the endpoints above were
+// resolved before the launch's awaits, and a plugin unloaded or an endpoint
+// switched off in between would otherwise get a grant its revocation sweep has
+// already run past. `cachedPluginService` is always set by then — the endpoint
+// list could not have been non-empty without loading it.
+function isPluginMcpEndpointStillEligible(
+  projectId: string
+): (endpoint: { pluginInstanceId: string; endpointId: string }) => boolean {
+  return (endpoint) =>
+    cachedPluginService !== null &&
+    cachedPluginService.hasPlugin(endpoint.pluginInstanceId) &&
+    isAgentMcpEndpointEnabled(projectId, endpoint.pluginInstanceId, endpoint.endpointId);
+}
 
 export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -494,6 +575,26 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       });
     }
 
+    // Which Claude store this pane will read, decided from what it launches with
+    // (#12371). Remembered for the close that journals it, and needed right here:
+    // an untouched Claude pane comes back as `--resume <id>` for an id Claude Code
+    // never wrote a conversation for, and the CLI exits on it. Every way a pane
+    // resumes (relaunch, restart, sleep/wake, eviction, the resume list) funnels
+    // through this spawn, so this is where to look. Awaited above the resource
+    // bindings for the same reason as the PATH refresh, and applied below to the
+    // finished command the launch carriers are built from. Enrichment too: a
+    // lookup that fails leaves the resume exactly as it was.
+    const claudePaneStore =
+      launchAgentId === "claude"
+        ? resolvePaneClaudeProjectsRoot({ shell: quotingShell, env: spawnEnv })
+        : undefined;
+    if (claudePaneStore !== undefined) rememberClaudePaneStore(id, claudePaneStore);
+    const untouchedSessionId = await findUntouchedClaudeSession(safeCommand, launchAgentId, {
+      cwd,
+      agentSessionId: validatedOptions.agentSessionId,
+      projectsRoot: claudePaneStore ?? null,
+    }).catch(() => undefined);
+
     if (isHelpLaunch && launchAgentId) {
       const dangerous = DEFAULT_DANGEROUS_ARGS[launchAgentId];
       const bypassPermissions = helpSessionService.getBypassPermissions(helpToken);
@@ -642,10 +743,44 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // Mints a per-pane bearer token, writes a managed --mcp-config JSON under
       // userData, and injects the flag into the command + the token into env.
       // Token is revoked and the file deleted on PTY exit (see registerTerminalEventHandlers).
+      //
+      // The same file carries one entry per plugin MCP endpoint the user enabled
+      // for this project, each with a grant minted for this launch alone. Those
+      // are independent of the Daintree tier: a project with Daintree MCP "off"
+      // still gets its plugin endpoints, in a file with no Daintree entry and no
+      // pane token. The grants are keyed by this terminal id, so every path that
+      // revokes the pane config (PTY exit, sync and async spawn failure, a
+      // re-prepare on restart) revokes them too. Every await — settings, the
+      // PluginService load, server readiness — happens before
+      // `preparePaneConfig` mints anything, per the binding rule above.
+      let preparedForThisLaunch = false;
+      // The sender is the launch view only when it is a view of this pane's
+      // workspace. `ctx.projectId` was resolved from the sender before any
+      // await, off the cross-window registry, never the global current project.
+      // The initial window's view registers after its renderer has loaded, so a
+      // launch that early falls back to the workspace its URL was opened with,
+      // as project hydration does. Either way this only names a preference:
+      // routing still checks the view belongs to the workspace on every call.
+      const hasSender = Number.isInteger(ctx.webContentsId) && ctx.webContentsId > 0;
+      const senderWorkspaceId = hasSender
+        ? (ctx.projectId ?? getProjectIdFromSenderUrl(ctx.event.sender))
+        : null;
+      const launchViewWebContentsId =
+        senderWorkspaceId === resolvedProject.id ? ctx.webContentsId : null;
+      // A snapshot naming another project would make every dispatch fail
+      // BINDING_STALE against the view it routes to, permanently; the pane is
+      // better served by that view's live context.
+      const launchActionContext =
+        validatedOptions.actionContext !== undefined &&
+        (validatedOptions.actionContext.projectId === undefined ||
+          validatedOptions.actionContext.projectId === resolvedProject.id)
+          ? validatedOptions.actionContext
+          : undefined;
       try {
         const projSettings = await projectStore.getProjectSettings(resolvedProject.id);
         const tier = resolveDaintreeMcpTier(projSettings);
-        if (tier !== "off") {
+        const pluginEndpoints = await resolveEnabledPluginMcpEndpoints(resolvedProject.id);
+        if (tier !== "off" || pluginEndpoints.length > 0) {
           const mcpServerService = await getMcpServerService();
           const ready = mcpServerService.isRunning || (await mcpServerService.ensureReady());
           if (!ready) {
@@ -655,16 +790,60 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           }
           const port = mcpServerService.currentPort;
           if (ready && port) {
-            const { configPath, token } = await mcpPaneConfigService.preparePaneConfig({
+            const prepared = await mcpPaneConfigService.preparePaneConfig({
               paneId: id,
               port,
               tier,
+              ...(pluginEndpoints.length > 0
+                ? {
+                    plugin: {
+                      projectId: resolvedProject.id,
+                      endpoints: pluginEndpoints,
+                      launchAgentIdHint: launchAgentId,
+                      isEligible: isPluginMcpEndpointStillEligible(resolvedProject.id),
+                    },
+                  }
+                : {}),
             });
-            safeCommand = `${safeCommand} --mcp-config ${quoteCommandArg(configPath, quotingShell)}`;
-            spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_MCP_TOKEN: token };
+            if (prepared) {
+              preparedForThisLaunch = true;
+              safeCommand = `${safeCommand} --mcp-config ${quoteCommandArg(prepared.configPath, quotingShell)}`;
+              if (prepared.token !== null) {
+                // Bind the bearer to the workspace this pane was launched in, so
+                // its MCP session acts there for its whole life instead of on
+                // whichever window has focus when a call lands (#12486). Same
+                // timing rule as the assistant's pin below: registered before
+                // this IPC resolves, because the CLI's first handshake can race
+                // ahead of anything later. Revoked with the token on PTY exit.
+                wirePaneTokenResolvers(mcpServerService);
+                mcpPaneConfigService.registerPaneWorkspaceBinding(prepared.token, {
+                  workspaceId: resolvedProject.id,
+                  ...(launchViewWebContentsId !== null
+                    ? { launchWebContentsId: launchViewWebContentsId }
+                    : {}),
+                  ...(launchActionContext !== undefined
+                    ? { actionContext: launchActionContext }
+                    : {}),
+                });
+                spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_MCP_TOKEN: prepared.token };
+              }
+            }
           }
         }
       } catch (mcpErr) {
+        // `preparePaneConfig` rolls back its own failures. What is left is a
+        // config it finished that this launch then failed to hand over: the
+        // terminal opens without MCP, so revoke it rather than leave its grants
+        // and token live until the PTY exits. Nothing else is touched — a
+        // failure before preparation must not reach a previous launch that
+        // still holds this id.
+        if (preparedForThisLaunch) {
+          try {
+            await mcpPaneConfigService.revokePaneConfig(id);
+          } catch {
+            // best-effort cleanup
+          }
+        }
         console.error(
           "[TerminalSpawn] Failed to prepare Daintree MCP config; continuing without MCP injection:",
           mcpErr
@@ -717,8 +896,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             // the fail-closed `getPinnedWebContents` → `SessionBindingError`
             // primitive, which is exactly the structured tool error we want —
             // revoking the token here would degrade that into a 401 instead.
+            // Wired whatever the sender: an unpinned assistant bearer is still a
+            // pane token whose ownership should follow it (#12487).
+            wirePaneTokenResolvers(mcpServerService);
             if (Number.isInteger(ctx.webContentsId) && ctx.webContentsId > 0) {
-              wireAssistantPaneResolvers(mcpServerService);
               mcpPaneConfigService.registerAssistantPaneBearer(
                 token,
                 ctx.webContentsId,
@@ -774,6 +955,21 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // intentionally leave `spawnShell` as the original undefined-when-unset
     // value (no `getDefaultShell()` fallback) so the PTY pool can match —
     // see `acquirePtyProcess` in `terminalSpawn.ts`.
+    let spawnAgentSessionId = validatedOptions.agentSessionId;
+    if (untouchedSessionId) {
+      const relaunch = relaunchResumeAsAssignedSession(safeCommand, launchAgentId);
+      if (relaunch?.sessionId === untouchedSessionId) {
+        safeCommand = relaunch.command;
+        // A caller that only had the command still gets the id on the record, so
+        // teardown hands it back like any other assigned launch.
+        spawnAgentSessionId ??= untouchedSessionId;
+        console.info(
+          `[TerminalSpawn] Terminal ${id.slice(0, 8)} has no Claude conversation to resume; ` +
+            "starting a fresh one under its assigned session id"
+        );
+      }
+    }
+
     const commandLaunchShell = buildCommandLaunchShell(safeCommand, quotingShell);
     const resolvedArgs = commandLaunchShell ? commandLaunchShell.args : projectArgs;
     const spawnShell = commandLaunchShell
@@ -827,17 +1023,22 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         isAssistantTerminal: isHelpLaunch || helpSessionService.isHelpTerminal(id),
         agentLaunchFlags: validatedOptions.agentLaunchFlags,
         agentModelId: validatedOptions.agentModelId,
-        agentSessionId: validatedOptions.agentSessionId,
+        agentSessionId: spawnAgentSessionId,
         worktreeId: spawnWorktreeId,
         agentPresetId: validatedOptions.agentPresetId,
         agentPresetColor: validatedOptions.agentPresetColor,
         originalAgentPresetId:
           validatedOptions.originalAgentPresetId ?? validatedOptions.agentPresetId,
+        handbackCode: validatedOptions.handbackCode,
         // Executed immediately by PtyClient after the spawn message (FIFO on the
         // same channel), so users don't stare at a blank prompt; the shell stays
         // the parent process and reclaims the foreground when the command exits.
         postSpawnInput,
       });
+      // What this launch resumes, if anything, decides whether the session a
+      // natural exit left on the pane survives it — once the host confirms the
+      // spawn (#12433).
+      noteTerminalLaunch(id, { command: safeCommand, agentSessionId: spawnAgentSessionId });
 
       return id;
     } catch (error) {
@@ -993,6 +1194,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
   const handleTerminalRestartService = async (): Promise<void> => {
     ptyClient.manualRestart();
   };
+
+  // Main's cached reading — never a host round-trip, which a host under memory
+  // pressure is the worst placed to answer.
+  const handleTerminalGetHostMemoryPause = async (): Promise<HostMemoryPauseSnapshot> =>
+    ptyClient.getHostMemoryPause();
 
   const handleAgentSessionList = async (payload: { worktreeId?: string; projectId?: string }) => {
     const { app } = await import("electron");
@@ -1270,6 +1476,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       trash: op(CHANNELS.TERMINAL_TRASH, handleTerminalTrash),
       restore: op(CHANNELS.TERMINAL_RESTORE, handleTerminalRestore),
       restartService: op(CHANNELS.TERMINAL_RESTART_SERVICE, handleTerminalRestartService),
+      getHostMemoryPause: op(
+        CHANNELS.TERMINAL_GET_HOST_MEMORY_PAUSE,
+        handleTerminalGetHostMemoryPause
+      ),
       agentSessionList: op(CHANNELS.AGENT_SESSION_LIST, handleAgentSessionList),
       agentSessionClear: op(CHANNELS.AGENT_SESSION_CLEAR, handleAgentSessionClear),
       agentSessionGetRetention: op(

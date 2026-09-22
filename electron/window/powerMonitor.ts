@@ -20,18 +20,47 @@ import {
 import { RESOURCE_PROFILE_CONFIGS } from "../../shared/types/resourceProfile.js";
 import { getResourceProfileService } from "./serviceRefs.js";
 import {
-  FOCUS_THROTTLE_MULTIPLIER,
-  isFocusThrottled,
-  setFocusThrottled,
-} from "./focusThrottleState.js";
+  ACTIVE_WORKSPACE_POLLING_POLICY,
+  deriveAgentObservationLevel,
+  deriveWorkspacePollingPolicy,
+  powerPolicyPollMultiplier,
+  workspacePollingCadence,
+  type PowerObservations,
+  type PowerPolicySnapshot,
+  type WorkspacePollingPolicy,
+} from "../../shared/types/powerPolicy.js";
+import { watchLinuxPowerSource, type LinuxPowerSourceWatch } from "../services/linuxPowerSource.js";
+import { setPollThrottle, setWorkspacePollingPolicy } from "./focusThrottleState.js";
+import { getPowerPolicy, subscribePowerPolicy, updatePowerObservations } from "./powerPolicy.js";
+import { publishPowerPolicy } from "./powerPolicyDelivery.js";
+
+/** Nothing observes anything while the machine sleeps. */
+const SUSPENDED_WORKSPACE_POLICY: WorkspacePollingPolicy = {
+  statusAllowed: false,
+  backgroundWorkAllowed: false,
+  attenuated: true,
+};
 
 let resumeTimeout: NodeJS.Timeout | null = null;
+// Only set on Linux, where it is the sole source of the battery observation.
+let linuxPowerSource: LinuxPowerSourceWatch | null = null;
+// One workspace refresh per wake, whichever of resume, unlock or focus lands
+// first. While the delayed resume handler has yet to decide, it owns the
+// refresh; if it finds nobody watching, the refresh is owed to whoever comes
+// back rather than run into a locked screen and then again on unlock.
+let wakeRecoveryPending = false;
+let wakeRefreshOwed = false;
+// Bumped by every suspend and resume. A recovery handler still awaiting the
+// workspace host when the machine sleeps again, or wakes again, is superseded:
+// it must not re-enable polling, refresh, or touch the flags above.
+let wakeGeneration = 0;
 
 export function clearResumeTimeout(): void {
   if (resumeTimeout) {
     clearTimeout(resumeTimeout);
     resumeTimeout = null;
   }
+  wakeRecoveryPending = false;
 }
 
 /** Fire-and-forget token-health re-probe across every registered forge provider. */
@@ -88,8 +117,38 @@ export interface PowerMonitorDeps {
 export function setupPowerMonitor(deps: PowerMonitorDeps): void {
   let suspendTime: number | null = null;
 
+  // Electron has no battery source on desktop Linux — `isOnBatteryPower()`
+  // answers false forever and neither event ever fires (#12516) — so sysfs
+  // reads it there, and reads it alone. Leaving the inert Electron path
+  // registered as a second writer would be worse than useless: the sysfs watch
+  // reports against its own last answer, so one stray `on-ac` would strand the
+  // policy on AC until the hardware genuinely changed.
+  if (process.platform === "linux") {
+    linuxPowerSource?.dispose();
+    linuxPowerSource = watchLinuxPowerSource((onBattery) => updatePowerObservations({ onBattery }));
+  } else {
+    try {
+      updatePowerObservations({ onBattery: powerMonitor.isOnBatteryPower() });
+    } catch {
+      // An unknown power source reads as AC.
+    }
+    powerMonitor.on("on-battery", () => updatePowerObservations({ onBattery: true }));
+    powerMonitor.on("on-ac", () => updatePowerObservations({ onBattery: false }));
+  }
+  // macOS and Windows only; Linux sessions usually never fire these, which is
+  // why hidden/minimized windows reach `deep` on their own. A locked screen
+  // fires no window blur, so without this a frontmost Daintree keeps polling
+  // at the foreground rate all night. Unlock re-reads the windows too — focus
+  // may have moved while the screen was locked.
+  powerMonitor.on("lock-screen", () => updatePowerObservations({ screenLocked: true }));
+  powerMonitor.on("unlock-screen", () => {
+    // One update, so a stale pre-lock focus reading never flashes `active`.
+    updatePowerObservations({ screenLocked: false, ...readWindowObservations() });
+  });
+
   powerMonitor.on("suspend", () => {
     clearResumeTimeout();
+    wakeGeneration += 1;
     const ptyClient = deps.getPtyClient();
     const workspaceClient = deps.getWorkspaceClient();
     const watchdog = deps.getMainProcessWatchdogClient?.() ?? null;
@@ -99,7 +158,9 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
     }
     if (workspaceClient) {
       workspaceClient.pauseHealthCheck();
-      workspaceClient.setPollingEnabled(false);
+      // Through the cache, so wake reconciles against what the hosts hold. A
+      // sleeping machine observes nothing worth watching for.
+      pushWorkspacePolicy(workspaceClient, SUSPENDED_WORKSPACE_POLICY, profilePollingBaseline());
     }
     if (watchdog) {
       // Suppresses kill-on-miss across suspend. Without this, a long sleep
@@ -111,9 +172,17 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
   });
 
   powerMonitor.on("resume", () => {
+    // The power source can change while the machine sleeps with nothing firing
+    // on wake to say so, and on Linux nothing fires either way — read it now
+    // rather than leaving the policy a poll interval behind.
+    void linuxPowerSource?.refresh();
     clearResumeTimeout();
+    wakeRecoveryPending = true;
+    const generation = ++wakeGeneration;
+    const superseded = () => generation !== wakeGeneration;
     resumeTimeout = setTimeout(async () => {
       resumeTimeout = null;
+      let refreshDecided = false;
       // Capture and clear suspendTime up front so a mid-handler exception
       // can't leak it into the next wake cycle's sleepDuration calculation.
       const sleepDuration = suspendTime ? Date.now() - suspendTime : 0;
@@ -133,15 +202,32 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
         }
         if (workspaceClient) {
           await workspaceClient.waitForReady();
-          // Only re-enable polling if a window is focused. If the app is
-          // still fully blurred (e.g. user suspended overnight, machine
-          // wakes before they return), leave polling paused —
-          // removeThrottle() will re-enable it on the next focus event.
-          if (BrowserWindow.getFocusedWindow()) {
-            workspaceClient.setPollingEnabled(true);
-          }
+          if (superseded()) return;
+          // Suspend pushed the suspended policy unconditionally, so recovery
+          // must reconcile explicitly: the usual post-wake observations are
+          // *unchanged* (still visible, still blurred), which means the policy
+          // subscription would never fire and polling would stay dead.
+          evaluateWindowObservations();
+          const snapshot = getPowerPolicy();
+          const observable = snapshot.canObserve;
+          wakeRecoveryPending = false;
+          refreshDecided = true;
+          pushWorkspacePolicy(
+            workspaceClient,
+            deriveWorkspacePollingPolicy(snapshot),
+            profilePollingBaseline()
+          );
           workspaceClient.resumeHealthCheck();
-          await workspaceClient.refreshOnWake();
+          // The network refresh is still owed to focus: only `canObserve`
+          // means someone is waiting on it. Status polling resumed above
+          // regardless, so the sidebar catches up without it.
+          if (observable) {
+            wakeRefreshOwed = false;
+            await workspaceClient.refreshOnWake();
+            if (superseded()) return;
+          } else {
+            wakeRefreshOwed = true;
+          }
         }
         // Force an immediate token-health probe on wake — a credential that
         // expired during a long laptop sleep would otherwise sit undetected
@@ -149,6 +235,11 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
         refreshForgeTokenHealth({ force: true });
       } catch (error) {
         console.error("[MAIN] Error during resume:", error);
+        // Recovery failed before deciding: keep the refresh owed rather than
+        // dropping it along with any focus that returned meanwhile.
+        if (!refreshDecided && !superseded()) wakeRefreshOwed = true;
+      } finally {
+        if (!superseded()) wakeRecoveryPending = false;
       }
       // Announced whether or not the recovery above succeeded. A failed or
       // partial recovery is exactly when a listener most needs to know the
@@ -162,7 +253,6 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
 
 // --- Window Focus Throttle ---
 
-const THROTTLE_MULTIPLIER = FOCUS_THROTTLE_MULTIPLIER;
 const BLUR_DEBOUNCE_MS = 100;
 
 const DISK_SPACE_NORMAL = 5 * 60 * 1000;
@@ -202,10 +292,57 @@ const focusThrottleState = {
 };
 
 let focusThrottleDeps: WindowFocusThrottleDeps | null = null;
+let unsubscribePowerPolicy: (() => void) | null = null;
+const trackedWindows = new Set<BrowserWindow>();
+// What applyPollingPolicy last pushed. Starts at the unthrottled state every
+// poller boots in, so the first transition is always a real change. The
+// workspace policy is tracked separately from `canObserve` because the two move
+// independently: visible→minimized→restored while blurred never changes
+// `canObserve`, and gating the workspace push on it would send neither leg.
+const appliedPolling = {
+  multiplier: 1,
+  canObserve: true,
+  workspace: { ...ACTIVE_WORKSPACE_POLLING_POLICY } as WorkspacePollingPolicy,
+};
+
+function workspacePolicyEquals(a: WorkspacePollingPolicy, b: WorkspacePollingPolicy): boolean {
+  return (
+    a.statusAllowed === b.statusAllowed &&
+    a.backgroundWorkAllowed === b.backgroundWorkAllowed &&
+    a.attenuated === b.attenuated
+  );
+}
+
+/**
+ * Push a workspace policy and record it, so every writer (policy change,
+ * suspend, wake recovery) leaves the cache describing what the hosts actually
+ * hold. Suspend used to bypass this cache entirely, which meant a machine that
+ * slept and woke while a window stayed visible-but-blurred saw no observation
+ * change on wake and so never re-enabled polling at all.
+ */
+function pushWorkspacePolicy(
+  workspaceClient: WorkspaceClient,
+  policy: WorkspacePollingPolicy,
+  baseline: { workspaceActive: number; workspaceBackground: number }
+): void {
+  const cadence = workspacePollingCadence(
+    {
+      pollIntervalActive: baseline.workspaceActive,
+      pollIntervalBackground: baseline.workspaceBackground,
+    },
+    policy
+  );
+  workspaceClient.updateMonitorConfig(cadence);
+  workspaceClient.setWorkspacePowerPolicy(policy);
+  appliedPolling.workspace = { ...policy };
+  // The other writer of these intervals derives them from the policy, not from
+  // the multiplier, so it has to see what was pushed.
+  setWorkspacePollingPolicy(policy);
+}
 
 /**
  * Polling baselines derive from the live resource profile, not hardcoded
- * balanced constants. removeThrottle() runs on every browser-window-focus;
+ * balanced constants. The unthrottle path runs on every focus return;
  * restoring balanced values there would silently revert profile-tuned
  * cadences (e.g. efficiency's slower polling) until the next profile
  * transition — which may never come while the profile is stable.
@@ -221,114 +358,195 @@ function profilePollingBaseline() {
   };
 }
 
-function applyThrottle(): void {
-  if (isFocusThrottled() || !focusThrottleDeps) return;
-  setFocusThrottled(true);
+/**
+ * The single place main's optional pollers are re-timed for the power policy.
+ * Every cadence is `profile baseline × multiplier`; workspace polling and PR
+ * cadence additionally stop while nobody can see a window. Returning to an
+ * observable state refreshes each poller once — the current state, never a
+ * replay of the ticks skipped while throttled.
+ */
+function applyPollingPolicy(snapshot: PowerPolicySnapshot): void {
+  if (!focusThrottleDeps) return;
+  const multiplier = powerPolicyPollMultiplier(snapshot);
+  const { canObserve } = snapshot;
+  const workspacePolicy = deriveWorkspacePollingPolicy(snapshot);
+  const workspaceChanged = !workspacePolicyEquals(workspacePolicy, appliedPolling.workspace);
+  if (
+    multiplier === appliedPolling.multiplier &&
+    canObserve === appliedPolling.canObserve &&
+    !workspaceChanged
+  ) {
+    return;
+  }
+  const observabilityChanged = canObserve !== appliedPolling.canObserve;
+  const regainedObserver = observabilityChanged && canObserve;
+  appliedPolling.multiplier = multiplier;
+  appliedPolling.canObserve = canObserve;
+  setPollThrottle({ throttled: !canObserve, multiplier });
 
   const baseline = profilePollingBaseline();
 
   const workspaceClient = focusThrottleDeps.getWorkspaceClient();
   if (workspaceClient) {
-    workspaceClient.updateMonitorConfig({
-      pollIntervalActive: baseline.workspaceActive * THROTTLE_MULTIPLIER,
-      pollIntervalBackground: baseline.workspaceBackground * THROTTLE_MULTIPLIER,
-    });
-    workspaceClient.setPollingEnabled(false);
-    workspaceClient.setPRPollCadence(false);
+    if (workspaceChanged) {
+      pushWorkspacePolicy(workspaceClient, workspacePolicy, baseline);
+    }
+    if (observabilityChanged) {
+      workspaceClient.setPRPollCadence(canObserve);
+    }
+    // A pending wake recovery refreshes on its own, settling any refresh an
+    // earlier wake left owed; otherwise pay that debt, or refresh plainly.
+    // Watchers stayed armed through the blur, so this is usually a cheap
+    // reconciliation rather than N cold status passes — but the throttle in
+    // the host still bounds it when the user cycles windows.
+    if (regainedObserver && !wakeRecoveryPending) {
+      if (wakeRefreshOwed) {
+        wakeRefreshOwed = false;
+        void workspaceClient.refreshOnWake();
+      } else {
+        void workspaceClient.refresh(undefined, "focus");
+      }
+    }
   }
 
   for (const poller of terminalPollers()) {
-    poller.updatePollInterval(baseline.stats * THROTTLE_MULTIPLIER);
+    poller.updatePollInterval(baseline.stats * multiplier);
+    if (regainedObserver) poller.refresh();
   }
 
   const ptyClient = focusThrottleDeps.getPtyClient();
   if (ptyClient) {
-    ptyClient.setProcessTreePollInterval(baseline.processTree * THROTTLE_MULTIPLIER);
+    ptyClient.setProcessTreePollInterval(baseline.processTree * multiplier);
   }
 
-  setDiskSpaceMonitorPollInterval(DISK_SPACE_NORMAL * THROTTLE_MULTIPLIER);
-  setAppMetricsMonitorPollInterval(APP_METRICS_NORMAL * THROTTLE_MULTIPLIER);
+  setDiskSpaceMonitorPollInterval(DISK_SPACE_NORMAL * multiplier);
+  setAppMetricsMonitorPollInterval(APP_METRICS_NORMAL * multiplier);
+  if (regainedObserver) {
+    refreshDiskSpaceMonitor();
+    refreshAppMetricsMonitor();
+  }
 
   const idleTerminalService = focusThrottleDeps.getIdleTerminalNotificationService?.() ?? null;
   if (idleTerminalService) {
-    idleTerminalService.updatePollInterval(IDLE_TERMINAL_NORMAL * THROTTLE_MULTIPLIER);
+    idleTerminalService.updatePollInterval(IDLE_TERMINAL_NORMAL * multiplier);
+  }
+
+  if (regainedObserver) {
+    // Opportunistic token-health re-check when the user comes back, gated by
+    // each provider's own cooldown so rapid window switching doesn't hammer APIs.
+    refreshForgeTokenHealth();
   }
 }
 
-function removeThrottle(): void {
-  if (!isFocusThrottled() || !focusThrottleDeps) return;
-  setFocusThrottled(false);
-
-  const baseline = profilePollingBaseline();
-
-  const workspaceClient = focusThrottleDeps.getWorkspaceClient();
-  if (workspaceClient) {
-    workspaceClient.updateMonitorConfig({
-      pollIntervalActive: baseline.workspaceActive,
-      pollIntervalBackground: baseline.workspaceBackground,
-    });
-    workspaceClient.setPollingEnabled(true);
-    workspaceClient.setPRPollCadence(true);
-    void workspaceClient.refresh();
+function isWindowVisible(win: BrowserWindow): boolean {
+  try {
+    if (win.isDestroyed()) return false;
+    return win.isVisible() && !win.isMinimized();
+  } catch {
+    return false;
   }
+}
 
-  for (const poller of terminalPollers()) {
-    poller.updatePollInterval(baseline.stats);
-    poller.refresh();
+/**
+ * Re-read focus and visibility from the windows themselves rather than
+ * inferring them from whichever event fired: `showInactive()` fires `show`
+ * with no `focus`, `restore` arrives before focus does, and a locked screen
+ * fires no blur at all.
+ */
+function readWindowObservations(): Pick<
+  PowerObservations,
+  "anyWindowFocused" | "anyWindowVisible"
+> {
+  let anyWindowVisible = false;
+  for (const win of trackedWindows) {
+    if (isWindowVisible(win)) {
+      anyWindowVisible = true;
+      break;
+    }
   }
+  return { anyWindowFocused: BrowserWindow.getFocusedWindow() !== null, anyWindowVisible };
+}
 
-  const ptyClient = focusThrottleDeps.getPtyClient();
-  if (ptyClient) {
-    ptyClient.setProcessTreePollInterval(baseline.processTree);
+function evaluateWindowObservations(): void {
+  updatePowerObservations(readWindowObservations());
+}
+
+function clearBlurTimeout(): void {
+  if (focusThrottleState.blurTimeout) {
+    clearTimeout(focusThrottleState.blurTimeout);
+    focusThrottleState.blurTimeout = null;
   }
-
-  setDiskSpaceMonitorPollInterval(DISK_SPACE_NORMAL);
-  setAppMetricsMonitorPollInterval(APP_METRICS_NORMAL);
-  refreshDiskSpaceMonitor();
-  refreshAppMetricsMonitor();
-
-  const idleTerminalService = focusThrottleDeps.getIdleTerminalNotificationService?.() ?? null;
-  if (idleTerminalService) {
-    idleTerminalService.updatePollInterval(IDLE_TERMINAL_NORMAL);
-  }
-
-  // Opportunistic token-health re-check on focus regain, gated by each
-  // provider's own cooldown so rapid window switching doesn't hammer APIs.
-  refreshForgeTokenHealth();
 }
 
 export function setupWindowFocusThrottle(deps: WindowFocusThrottleDeps): void {
   focusThrottleDeps = deps;
 
-  app.on("browser-window-blur", () => {
-    if (focusThrottleState.blurTimeout) {
-      clearTimeout(focusThrottleState.blurTimeout);
+  unsubscribePowerPolicy?.();
+  unsubscribePowerPolicy = subscribePowerPolicy((next, previous) => {
+    applyPollingPolicy(next);
+    // Both levels are compared: agent observation follows its own derivation,
+    // so a transition can move it while the raw level holds still.
+    if (
+      next.level !== previous.level ||
+      deriveAgentObservationLevel(next) !== deriveAgentObservationLevel(previous)
+    ) {
+      focusThrottleDeps
+        ?.getPtyClient()
+        ?.setPowerPolicy(next.level, deriveAgentObservationLevel(next));
     }
+    publishPowerPolicy(next);
+  });
+  // Observations recorded before this point (battery at launch) still apply —
+  // to main's pollers, and to a pty host or view that already came up assuming
+  // `active`.
+  const current = getPowerPolicy();
+  applyPollingPolicy(current);
+  if (current.level !== "active") {
+    deps.getPtyClient()?.setPowerPolicy(current.level, deriveAgentObservationLevel(current));
+    publishPowerPolicy(current);
+  }
+
+  app.on("browser-window-blur", () => {
+    clearBlurTimeout();
     focusThrottleState.blurTimeout = setTimeout(() => {
       focusThrottleState.blurTimeout = null;
-      if (!BrowserWindow.getFocusedWindow()) {
-        applyThrottle();
-      }
+      evaluateWindowObservations();
     }, BLUR_DEBOUNCE_MS);
   });
 
+  // The focus event is itself the observation: a window that just took focus
+  // is on screen. Reading getFocusedWindow() here could lag the event, and a
+  // window can focus before it is registered (a macOS reopen shows the window
+  // during setup), either of which would strand the policy throttled.
+  // Focus also reconciles `screenLocked`, the one observation with no source to
+  // re-read: a window taking focus is proof somebody is looking at the screen,
+  // so a missed or unbalanced `unlock-screen` can no longer pin the policy at
+  // `deep` until the app restarts.
   app.on("browser-window-focus", () => {
-    if (focusThrottleState.blurTimeout) {
-      clearTimeout(focusThrottleState.blurTimeout);
-      focusThrottleState.blurTimeout = null;
-    }
-    removeThrottle();
+    clearBlurTimeout();
+    updatePowerObservations({
+      screenLocked: false,
+      anyWindowFocused: true,
+      anyWindowVisible: true,
+    });
   });
 }
 
 export function registerWindowForFocusThrottle(win: BrowserWindow): void {
-  win.on("minimize", () => {
-    if (!BrowserWindow.getFocusedWindow()) {
-      applyThrottle();
-    }
+  if (win.isDestroyed()) return;
+  trackedWindows.add(win);
+  const evaluate = () => evaluateWindowObservations();
+  win.on("minimize", evaluate);
+  win.on("restore", evaluate);
+  win.on("hide", evaluate);
+  win.on("show", evaluate);
+  win.on("closed", () => {
+    trackedWindows.delete(win);
+    evaluateWindowObservations();
   });
-
-  win.on("restore", () => {
-    removeThrottle();
-  });
+  // Registration runs after async window setup, by which point the window may
+  // already be showing — reconcile, or a policy that went deep when the last
+  // window closed would sit there until the next window event. A window not
+  // yet shown is left to its own `show` event.
+  if (isWindowVisible(win)) evaluateWindowObservations();
 }

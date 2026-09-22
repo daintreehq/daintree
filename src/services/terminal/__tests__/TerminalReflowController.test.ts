@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   REFLOW_HEARTBEAT_MS,
   TerminalReflowController,
+  attemptRendererUnpause,
   forceXtermReflow,
   forceXtermRendererUnpause,
 } from "../TerminalReflowController";
+import { resumeXtermRender, suspendXtermRender } from "../xtermRenderSuspension";
 import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 import type { ManagedTerminal } from "../types";
 
@@ -752,5 +754,52 @@ describe("TerminalReflowController — cached project view (#11212)", () => {
     vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS * 10);
 
     expect(getInstances).not.toHaveBeenCalled();
+  });
+});
+
+describe("attemptRendererUnpause — deliberate cache suspension (#12514)", () => {
+  function makeSuspendable() {
+    const renderService = {
+      _isPaused: false,
+      _handleIntersectionChange(entry: { isIntersecting: boolean }) {
+        this._isPaused = !entry.isIntersecting;
+      },
+    };
+    const managed = makeManaged({
+      terminal: {
+        element: document.createElement("div"),
+        rows: 24,
+        refresh: vi.fn(),
+        _core: { _renderService: renderService },
+      } as unknown as ManagedTerminal["terminal"],
+    });
+    return { managed, renderService };
+  }
+
+  it("spends no repair budget on a pane suspended for a cached view", () => {
+    // Backend recovery and the project-switch reveal call resetRenderer's
+    // automatic branch with no cache gate; each call used to count an attempt
+    // that the suspension then answered with "still paused".
+    const { managed, renderService } = makeSuspendable();
+    suspendXtermRender(managed.terminal);
+
+    for (let i = 0; i < 5; i += 1) {
+      expect(attemptRendererUnpause(managed)).toBe("failed");
+    }
+
+    expect(managed.rendererUnpauseAttempts ?? 0).toBe(0);
+    expect(managed.rendererUnpauseGaveUp).not.toBe(true);
+    expect(renderService._isPaused).toBe(true);
+  });
+
+  it("repairs normally once the suspension is lifted", () => {
+    const { managed, renderService } = makeSuspendable();
+    suspendXtermRender(managed.terminal);
+    resumeXtermRender(managed.terminal);
+    // A genuine pause from xterm's own observer after reactivation.
+    renderService._isPaused = true;
+
+    expect(attemptRendererUnpause(managed)).toBe("issued");
+    expect(renderService._isPaused).toBe(false);
   });
 });

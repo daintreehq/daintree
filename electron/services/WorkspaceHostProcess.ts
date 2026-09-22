@@ -10,15 +10,18 @@ import type {
   WorkspaceHostEvent,
   WorkspaceClientConfig,
   MonitorConfig,
+  WorkspaceHostDisposePending,
+  WorkspaceHostDisposePhase,
 } from "../../shared/types/workspace-host.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { BrokerError, RequestResponseBroker } from "./rpc/RequestResponseBroker.js";
 import { dispatchForgeRpc } from "./forgeRpcServer.js";
-import { createLogger } from "../utils/logger.js";
+import { createLogger, ingestHostLogEvent } from "../utils/logger.js";
 import { mainBootAbsMs, markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { getForgeProviderImplEntries } from "./forgeProviderRegistry.js";
 import type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
+import type { WorkspacePollingPolicy } from "../../shared/types/powerPolicy.js";
 
 const logger = createLogger("main:WorkspaceHost");
 const logInfo = (msg: string, ctx?: Record<string, unknown>) =>
@@ -28,6 +31,51 @@ const logWarn = (msg: string, ctx?: Record<string, unknown>) =>
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// The host acks and exits ~500ms after `dispose` (its write-tail window) and
+// arms its own hard exit at 1s; the margin covers IPC delivery and a host
+// whose thread is briefly blocked in a native unsubscribe.
+const DISPOSE_KILL_TIMEOUT_MS = 1_500;
+// After `disposed` the host exits on its next turn, so the exit is expected
+// almost immediately — but an ack is a promise, not proof of death.
+const DISPOSE_EXIT_AFTER_ACK_GRACE_MS = 500;
+
+/** Why the pool (or anyone else) retired the host. Logged, never branched on. */
+export type WorkspaceHostDisposeReason =
+  | "idle-grace"
+  | "warm-cap"
+  | "memory-pressure"
+  | "evicted"
+  | "relocation"
+  | "ready-failed"
+  | "init-failed"
+  | "pool-dispose"
+  | "unspecified";
+
+type DisposeKillReason = "no-ack" | "no-exit-after-ack";
+
+interface DisposeTrace {
+  reason: WorkspaceHostDisposeReason;
+  startedAt: number;
+  lastProgress: {
+    phase: WorkspaceHostDisposePhase;
+    elapsedMs: number;
+    pending: WorkspaceHostDisposePending;
+  } | null;
+  ack: {
+    receivedAt: number;
+    elapsedMs: number;
+    settled: boolean;
+    pending: WorkspaceHostDisposePending;
+  } | null;
+  kill: { sentAt: number; reason: DisposeKillReason } | null;
+}
+
+// Caps on the raw stdout/stderr we mirror from the host. The buffer bound stops
+// a host that never emits a newline from growing without limit; the line bound
+// keeps one runaway line from dominating a log record.
+const HOST_LOG_BUFFER_LIMIT = 64 * 1024;
+const HOST_LOG_LINE_LIMIT = 4_000;
 
 const RESTART_FLOOR_MS = 100;
 const RESTART_CAP_BASE_MS = 1_000;
@@ -81,6 +129,13 @@ export class WorkspaceHostProcess extends EventEmitter {
   private healthCheckInterval: NodeJS.Timeout | null = null;
   private restartTimer: NodeJS.Timeout | null = null;
   private disposeTimer: NodeJS.Timeout | null = null;
+  /**
+   * What happened between sending `dispose` and the child's `exit`: the host's
+   * own reports and whether we had to signal it. The outcome is read from this
+   * state, never from the exit code, which does not reliably tell a SIGKILL
+   * from a clean exit across platforms.
+   */
+  private disposeTrace: DisposeTrace | null = null;
   /**
    * Sliding window of recent crash timestamps. Lazy-pruned to entries within
    * `CRASH_WINDOW_MS` on each crash — no proactive reset, no setTimeout.
@@ -151,12 +206,24 @@ export class WorkspaceHostProcess extends EventEmitter {
    * the first push. */
   private monitorConfigCache: MonitorConfig | null = null;
 
+  /** The app-wide workspace power policy, replayed on every `ready` alongside
+   * the monitor config. Without it a restarted or prewarmed host boots with
+   * every permission granted — watching, fetching, unattenuated — regardless
+   * of whether the screen is locked or every window is hidden, and stays that
+   * way until the next policy change happens to fire. `null` until the first
+   * push, which means nothing has ever narrowed it. */
+  private workspacePolicyCache: WorkspacePollingPolicy | null = null;
+
   /** Buffers for line-splitting stdout/stderr from the forked host. Forking
    * with `stdio:"pipe"` (instead of `"inherit"`) isolates the host from the
    * main process's fd 2 — critical on AppImage GUI launches where fd 2 points
    * to a dead pty that returns EIO on write. See issue #5588. */
-  private hostStdoutBuffer = "";
-  private hostStderrBuffer = "";
+  /**
+   * Drains the *current* child's stdout/stderr remainders. Replaced on every
+   * fork, so buffers belong to one child and one stream and can never be
+   * flushed into a successor's output.
+   */
+  private flushCurrentHostOutput: (() => void) | null = null;
 
   constructor(projectPath: string, config: Required<WorkspaceClientConfig>) {
     super();
@@ -331,6 +398,32 @@ export class WorkspaceHostProcess extends EventEmitter {
   }
 
   /**
+   * Record the workspace power policy for replay, and optionally deliver it
+   * now. The cache is written even when `deliver` is false: a dormant host
+   * that is skipped for a grant still has to come back from a restart holding
+   * the policy that is actually in force, not the all-permissions default.
+   */
+  setWorkspacePowerPolicy(policy: WorkspacePollingPolicy, deliver: boolean): void {
+    this.workspacePolicyCache = { ...policy };
+    if (deliver && this.isInitialized && this.child) {
+      this.send({ type: "set-workspace-power-policy", policy });
+    }
+  }
+
+  /**
+   * Deliver the cached policy now. For a host that was skipped for a grant
+   * while it sat dormant: it re-attaches holding a withdrawn policy it would
+   * otherwise keep reconciling against until an unrelated policy change fired.
+   * No-op before the first push — nothing has ever narrowed the default.
+   */
+  flushWorkspacePowerPolicy(): void {
+    if (this.workspacePolicyCache === null) return;
+    if (this.isInitialized && this.child) {
+      this.send({ type: "set-workspace-power-policy", policy: this.workspacePolicyCache });
+    }
+  }
+
+  /**
    * Update the cached forge provider-matcher table and push immediately if
    * initialized. On restart, `ready` replays the cached table automatically.
    */
@@ -450,7 +543,7 @@ export class WorkspaceHostProcess extends EventEmitter {
     return !this.isDisposed && this.child !== null && typeof this.child.pid === "number";
   }
 
-  dispose(): void {
+  dispose(reason: WorkspaceHostDisposeReason = "unspecified"): void {
     if (this.isDisposed) return;
     this.isDisposed = true;
 
@@ -491,114 +584,185 @@ export class WorkspaceHostProcess extends EventEmitter {
     );
 
     if (this.child) {
+      this.disposeTrace = {
+        reason,
+        startedAt: performance.now(),
+        lastProgress: null,
+        ack: null,
+        kill: null,
+      };
+      // Armed before the request goes out so any reply finds it in place.
+      this.armDisposeKill(DISPOSE_KILL_TIMEOUT_MS, "no-ack");
       this.send({ type: "dispose" });
-      // Unref'd so the pending backstop never holds the Electron event loop
-      // alive after app.quit when the host has already cooperated. Cleared by
-      // the `exit` handler, so a host that exits on the dispose message above
-      // never reaches the signal below.
-      this.disposeTimer = setTimeout(() => {
-        this.disposeTimer = null;
-        const pid = this.child?.pid;
-        if (!pid) return;
-        // Deliberately NOT `child.kill()` (#11069): Electron's
-        // `UtilityProcess.kill()` runs `Process::Terminate` +
-        // `base::EnsureProcessTerminated`, which on macOS blocks the calling
-        // thread — main — for up to 2s waiting for the child to die, freezing
-        // window input routing. A raw SIGKILL is non-blocking and cannot be
-        // trapped by the child. Matches the health watchdog's force-kill.
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch (error) {
-          // ESRCH — the child exited between the pid read and the signal.
-          const code =
-            typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-          if (code !== "ESRCH") {
-            console.warn(
-              `[WorkspaceHost:${this.serviceName}] Failed to kill host during dispose:`,
-              error
-            );
-          }
-        }
-        // `this.child` stays set — the `exit` event is the authority on process
-        // death and nulls it. Clearing it here would strand that handler.
-      }, 1000);
-      this.disposeTimer.unref?.();
     }
 
     this.removeAllListeners();
   }
 
-  private forwardHostOutput(kind: "stdout" | "stderr", chunk: Buffer): void {
-    const text = chunk.toString("utf8");
-    if (kind === "stdout") {
-      this.hostStdoutBuffer += text;
-    } else {
-      this.hostStderrBuffer += text;
-    }
-
-    const MAX_BUFFER = 64 * 1024;
-    if (this.hostStdoutBuffer.length > MAX_BUFFER)
-      this.hostStdoutBuffer = this.hostStdoutBuffer.slice(-MAX_BUFFER);
-    if (this.hostStderrBuffer.length > MAX_BUFFER)
-      this.hostStderrBuffer = this.hostStderrBuffer.slice(-MAX_BUFFER);
-
-    const current = kind === "stdout" ? this.hostStdoutBuffer : this.hostStderrBuffer;
-    const lines = current.split(/\r?\n/);
-    const remainder = lines.pop() ?? "";
-    if (kind === "stdout") {
-      this.hostStdoutBuffer = remainder;
-    } else {
-      this.hostStderrBuffer = remainder;
-    }
-
-    for (const line of lines) {
-      const trimmed = line.trimEnd();
-      if (!trimmed) continue;
-      const message = `[WorkspaceHost] ${trimmed.length > 4000 ? `${trimmed.slice(0, 4000)}…` : trimmed}`;
-      if (kind === "stderr") {
-        logWarn(message);
-      } else {
-        logInfo(message);
+  /**
+   * Force-kill backstop for a disposing host. Unref'd so it never holds the
+   * Electron event loop alive after app.quit; cleared by the `exit` handler,
+   * and replaced by a shorter one when the host acknowledges.
+   */
+  private armDisposeKill(delayMs: number, killReason: DisposeKillReason): void {
+    if (this.disposeTimer) clearTimeout(this.disposeTimer);
+    this.disposeTimer = setTimeout(() => {
+      this.disposeTimer = null;
+      const pid = this.child?.pid;
+      if (!pid) return;
+      // Deliberately NOT `child.kill()` (#11069): Electron's
+      // `UtilityProcess.kill()` runs `Process::Terminate` +
+      // `base::EnsureProcessTerminated`, which on macOS blocks the calling
+      // thread — main — for up to 2s waiting for the child to die, freezing
+      // window input routing. A raw SIGKILL is non-blocking and cannot be
+      // trapped by the child. Matches the health watchdog's force-kill.
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (error) {
+        // ESRCH — the child exited between the pid read and the signal.
+        const code =
+          typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+        if (code !== "ESRCH") {
+          console.warn(
+            `[WorkspaceHost:${this.serviceName}] Failed to kill host during dispose:`,
+            error
+          );
+        }
+        return;
       }
+      const trace = this.disposeTrace;
+      if (trace) {
+        trace.kill = { sentAt: performance.now(), reason: killReason };
+        logWarn(
+          `[WorkspaceHost:${this.serviceName}] Host did not exit ${Math.round(trace.kill.sentAt - trace.startedAt)}ms after dispose (${killReason}); sent SIGKILL`,
+          this.describeDisposeTrace(trace)
+        );
+      }
+      // `this.child` stays set — the `exit` event is the authority on process
+      // death and nulls it. Clearing it here would strand that handler.
+    }, delayMs);
+    this.disposeTimer.unref?.();
+  }
+
+  private handleDisposeReport(
+    event: Extract<WorkspaceHostEvent, { type: "dispose-progress" | "disposed" }>
+  ): void {
+    const trace = this.disposeTrace;
+    // Only reports answering our `dispose` count, and nothing the host says
+    // after the kill may rewrite why it died.
+    if (!trace || trace.kill || trace.ack) return;
+    if (event.type === "dispose-progress") {
+      trace.lastProgress = {
+        phase: event.phase,
+        elapsedMs: event.elapsedMs,
+        pending: event.pending,
+      };
+      return;
     }
+    trace.ack = {
+      receivedAt: performance.now(),
+      elapsedMs: event.elapsedMs,
+      settled: event.settled,
+      pending: event.pending,
+    };
+    this.armDisposeKill(DISPOSE_EXIT_AFTER_ACK_GRACE_MS, "no-exit-after-ack");
+  }
+
+  private describeDisposeTrace(trace: DisposeTrace): Record<string, unknown> {
+    const last = trace.ack ?? trace.lastProgress;
+    return {
+      reason: trace.reason,
+      lastPhase: trace.ack ? "disposed" : (trace.lastProgress?.phase ?? "no-report"),
+      ...(last ? { hostElapsedMs: last.elapsedMs, pending: last.pending } : {}),
+      ...(trace.ack
+        ? {
+            ackMs: Math.round(trace.ack.receivedAt - trace.startedAt),
+            settled: trace.ack.settled,
+          }
+        : {}),
+      ...(trace.kill ? { killReason: trace.kill.reason } : {}),
+    };
+  }
+
+  private logDisposeExit(code: number): void {
+    const trace = this.disposeTrace;
+    this.disposeTrace = null;
+    if (!trace) {
+      logInfo(`[WorkspaceHost:${this.serviceName}] Exited with code ${code} after dispose`);
+      return;
+    }
+    const outcome = trace.kill ? "kill" : trace.ack ? "ack" : "exit";
+    const durationMs = Math.round(performance.now() - trace.startedAt);
+    logInfo(
+      `[WorkspaceHost:${this.serviceName}] Exited with code ${code} after dispose (${outcome}, ${durationMs}ms)`,
+      { outcome, durationMs, exitCode: code, ...this.describeDisposeTrace(trace) }
+    );
   }
 
   private installHostLogForwarding(): void {
     if (!this.child) return;
-    this.hostStdoutBuffer = "";
-    this.hostStderrBuffer = "";
+
+    // Buffers live with the child that produced them. A restart installs a
+    // fresh pair, so a dead pipe draining late can neither be silently
+    // dropped nor flush its successor's partial line.
+    const buffers: Record<"stdout" | "stderr", string> = { stdout: "", stderr: "" };
+
+    const append = (kind: "stdout" | "stderr", chunk: Buffer): void => {
+      buffers[kind] += chunk.toString("utf8");
+      if (buffers[kind].length > HOST_LOG_BUFFER_LIMIT) {
+        buffers[kind] = buffers[kind].slice(-HOST_LOG_BUFFER_LIMIT);
+      }
+
+      const lines = buffers[kind].split(/\r?\n/);
+      buffers[kind] = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trimEnd();
+        if (!trimmed) continue;
+        this.logHostOutputLine(kind, trimmed);
+      }
+    };
+
+    // Flush one stream only: the other may still be mid-line, and clearing it
+    // here would split a crash trace across two records.
+    const flush = (kind: "stdout" | "stderr"): void => {
+      const remainder = buffers[kind].trim();
+      buffers[kind] = "";
+      if (remainder) this.logHostOutputLine(kind, remainder);
+    };
+
+    this.flushCurrentHostOutput = () => {
+      flush("stdout");
+      flush("stderr");
+    };
 
     const stdout = (this.child as unknown as { stdout?: NodeJS.ReadableStream }).stdout;
     const stderr = (this.child as unknown as { stderr?: NodeJS.ReadableStream }).stderr;
 
-    stdout?.on("data", (chunk: Buffer) => this.forwardHostOutput("stdout", chunk));
-    stderr?.on("data", (chunk: Buffer) => this.forwardHostOutput("stderr", chunk));
+    stdout?.on("data", (chunk: Buffer) => append("stdout", chunk));
+    stderr?.on("data", (chunk: Buffer) => append("stderr", chunk));
     // Swallow post-exit pipe errors so an unhandled Readable error can't
     // surface as an uncaughtException after the host is already shutting down.
     stdout?.on("error", () => {});
     stderr?.on("error", () => {});
-    // Flush any partial line buffered at close — 'exit' fires before pipes
-    // fully drain, so the tail of a crash stack trace can arrive after the
-    // exit-time flush would otherwise clear the buffer.
-    stdout?.on("close", () => this.flushHostOutputBuffers());
-    stderr?.on("close", () => this.flushHostOutputBuffers());
+    // 'exit' fires before the pipes fully drain, so the tail of a crash stack
+    // trace can arrive after the exit-time flush would otherwise clear it.
+    stdout?.on("close", () => flush("stdout"));
+    stderr?.on("close", () => flush("stderr"));
+  }
+
+  private logHostOutputLine(kind: "stdout" | "stderr", line: string): void {
+    const clamped =
+      line.length > HOST_LOG_LINE_LIMIT ? `${line.slice(0, HOST_LOG_LINE_LIMIT)}…` : line;
+    const message = `[WorkspaceHost] ${clamped}`;
+    if (kind === "stderr") {
+      logWarn(message);
+    } else {
+      logInfo(message);
+    }
   }
 
   private flushHostOutputBuffers(): void {
-    const stdoutRemainder = this.hostStdoutBuffer.trim();
-    if (stdoutRemainder) {
-      logInfo(
-        `[WorkspaceHost] ${stdoutRemainder.length > 4000 ? `${stdoutRemainder.slice(0, 4000)}…` : stdoutRemainder}`
-      );
-    }
-    const stderrRemainder = this.hostStderrBuffer.trim();
-    if (stderrRemainder) {
-      logWarn(
-        `[WorkspaceHost] ${stderrRemainder.length > 4000 ? `${stderrRemainder.slice(0, 4000)}…` : stderrRemainder}`
-      );
-    }
-    this.hostStdoutBuffer = "";
-    this.hostStderrBuffer = "";
+    this.flushCurrentHostOutput?.();
   }
 
   private startHost(): void {
@@ -703,7 +867,7 @@ export class WorkspaceHostProcess extends EventEmitter {
       // A disposed host exiting is the cooperative path, not a crash — every
       // eviction ends here, so warning on it would read as a fault.
       if (this.isDisposed) {
-        logInfo(`[WorkspaceHost:${this.serviceName}] Exited with code ${code} after dispose`);
+        this.logDisposeExit(code);
       } else {
         logWarn(`[WorkspaceHost:${this.serviceName}] Exited with code ${code}`);
       }
@@ -716,8 +880,8 @@ export class WorkspaceHostProcess extends EventEmitter {
         clearTimeout(this.handshakeTimeout);
         this.handshakeTimeout = null;
       }
-      // The host cooperated with `dispose` — retire the force-kill backstop so
-      // it cannot signal a pid the OS may have already recycled.
+      // The process is gone — retire the force-kill backstop so it cannot
+      // signal a pid the OS may have already recycled.
       if (this.disposeTimer) {
         clearTimeout(this.disposeTimer);
         this.disposeTimer = null;
@@ -915,6 +1079,19 @@ export class WorkspaceHostProcess extends EventEmitter {
   }
 
   private processHostEvent(event: WorkspaceHostEvent): void {
+    // The host already wrote this entry to the shared log file; Main only
+    // mirrors it into its buffer and the renderer's live view. Handled ahead
+    // of the dispose guard so a teardown's own logs still arrive, and ahead of
+    // the domain switch so a log can never reach the broker or the plugin bus.
+    if (event.type === "log") {
+      ingestHostLogEvent(event);
+      return;
+    }
+    // Teardown reports only exist after dispose, so they precede the guard.
+    if (event.type === "dispose-progress" || event.type === "disposed") {
+      this.handleDisposeReport(event);
+      return;
+    }
     if (this.isDisposed) return;
 
     switch (event.type) {
@@ -962,6 +1139,15 @@ export class WorkspaceHostProcess extends EventEmitter {
             type: "update-monitor-config",
             requestId: UNTRACKED_MONITOR_CONFIG_REQUEST_ID,
             config: this.monitorConfigCache,
+          });
+        }
+
+        // And the policy those cadences were derived for, or the host would
+        // watch and fetch at full permission behind a locked screen.
+        if (this.workspacePolicyCache !== null) {
+          this.send({
+            type: "set-workspace-power-policy",
+            policy: this.workspacePolicyCache,
           });
         }
 
@@ -1091,6 +1277,7 @@ export class WorkspaceHostProcess extends EventEmitter {
       case "forge-rate-limit-changed":
       case "forge-token-health-changed":
       case "forge-remote-changed":
+      case "switch-status-timing":
         this.emit("host-event", event);
         break;
 

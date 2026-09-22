@@ -1,6 +1,7 @@
 import { useCallback, useMemo, type ReactElement } from "react";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import { CheckIcon, MinusIcon, Search } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
 import { Kbd } from "@/components/ui/Kbd";
@@ -66,7 +67,6 @@ export function FleetPickerContent({
     query,
     setQuery,
     selectedIds,
-    focusedId,
     eligibleTerminals,
     visibleTerminals,
     groupedVisible,
@@ -74,8 +74,12 @@ export function FleetPickerContent({
     snippetMap,
     handleToggleId,
     handleListKeyDown,
+    handleConfirm,
+    focusFirstNode,
     setSelectedIds,
     clearSearch,
+    registerGroup,
+    rovingNavKey,
   } = picker;
 
   // First Esc clears the search query when non-empty; second Esc bubbles to
@@ -84,8 +88,33 @@ export function FleetPickerContent({
   useEscapeStack(query !== "", clearSearch);
 
   // Row refs live in the hook so its keydown handler can move DOM focus on
-  // ArrowUp/Down (matches the listbox roving-tabindex pattern).
+  // ArrowUp/Down (matches the tree's roving-tabindex pattern).
   const setRowRef = picker.registerRow;
+
+  /**
+   * The dialog opens with this input focused, so these two keys are the first
+   * thing a keyboard user reaches for — and both used to do nothing. ArrowDown
+   * hands off to the list the footer's own "↑↓ Move" hint advertises; Enter
+   * commits without a detour through the mouse.
+   */
+  const handleSearchKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      // An IME confirming a candidate also fires Enter (and ArrowDown moves
+      // through candidates). Acting on those would arm the pre-selected fleet
+      // and close the dialog while the user was still typing a character.
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        focusFirstNode();
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        handleConfirm();
+      }
+    },
+    [focusFirstNode, handleConfirm]
+  );
 
   const handleGroupHeaderToggle = useCallback(
     (group: PickerWorktreeGroup) => {
@@ -113,11 +142,12 @@ export function FleetPickerContent({
       <div className="px-3 pt-2 pb-2 border-b border-border-strong shrink-0">
         <AppPaletteDialog.Input
           inputPrefix={
-            <Search className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />
+            <Search className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
           }
           autoFocus={autoFocusSearch}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={handleSearchKeyDown}
           placeholder="Search terminals, worktrees, branches, or recent output"
           aria-label="Search terminals"
           data-testid={`${testIdPrefix}-search`}
@@ -128,17 +158,25 @@ export function FleetPickerContent({
       <div
         onKeyDown={handleListKeyDown}
         tabIndex={-1}
-        role="listbox"
-        aria-multiselectable="true"
+        // `tree`, not `listbox`: a listbox may contain only options and groups,
+        // and this one held interactive group headers with checkboxes inside
+        // them. APG's checkbox-treeview is the pattern this surface actually
+        // implements — two levels, every node checkable.
+        // No `aria-multiselectable`: that attribute describes `aria-selected`
+        // multi-selection, and this tree checks nodes rather than selecting
+        // them.
+        role="tree"
         aria-label="Terminals"
         className="flex-1 min-h-0 overflow-y-auto px-2 py-2 outline-hidden"
         data-testid={`${testIdPrefix}-list`}
       >
         {eligibleTerminals.length === 0 ? (
+          // Name the next action, not the absence. There is nothing to arm
+          // until a terminal is running in the grid, so say that.
           <EmptyState
             variant="zero-data"
             scale="popover"
-            title="No terminals available"
+            title="Open a terminal in the grid to arm it"
             className="h-full min-h-[120px]"
           />
         ) : visibleTerminals.length === 0 ? (
@@ -146,6 +184,20 @@ export function FleetPickerContent({
             variant="filtered-empty"
             scale="popover"
             title="No terminals match"
+            action={
+              <button
+                type="button"
+                onClick={clearSearch}
+                data-testid={`${testIdPrefix}-clear-search`}
+                className={cn(
+                  "rounded-sm px-2.5 py-1 text-xs leading-[inherit] text-text-secondary",
+                  "hover:bg-tint/[0.08] hover:text-text-primary transition-colors duration-150",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                )}
+              >
+                Clear search
+              </button>
+            }
             className="h-full min-h-[120px]"
           />
         ) : (
@@ -154,7 +206,8 @@ export function FleetPickerContent({
               key={group.worktreeId}
               group={group}
               selectedIds={selectedIds}
-              focusedId={focusedId}
+              rovingNavKey={rovingNavKey}
+              registerGroup={registerGroup}
               hideHeader={isSingleWorktree}
               snippetMap={snippetMap}
               onToggleId={handleToggleId}
@@ -165,6 +218,19 @@ export function FleetPickerContent({
           ))
         )}
       </div>
+
+      {/*
+        WCAG 2.2 SC 4.1.3. Typing rewrote the list silently — the only
+        `role="status"` on this surface was the eligibility-drift notice.
+        `query` is already deferred upstream, which is the debounce.
+      */}
+      <span className="sr-only" role="status" aria-live="polite">
+        {eligibleTerminals.length === 0
+          ? "No terminals to arm"
+          : query.trim() === ""
+            ? `${eligibleTerminals.length} terminals`
+            : `${visibleTerminals.length} of ${eligibleTerminals.length} terminals match`}
+      </span>
     </div>
   );
 }
@@ -207,7 +273,7 @@ export function FleetPickerFooterHint({
         <kbd className={KBD_CLASS}>↓</kbd>
         <span>Move</span>
       </span>
-      <span className="text-daintree-text/30">·</span>
+      <span className="text-text-secondary">·</span>
       <span className="inline-flex items-center gap-1">
         <kbd className={KBD_CLASS}>Space</kbd>
         <span>Toggle</span>
@@ -215,7 +281,7 @@ export function FleetPickerFooterHint({
       <ShortcutsPopover />
       {driftNotice && (
         <>
-          <span className="text-daintree-text/30">·</span>
+          <span className="text-text-secondary">·</span>
           {driftNotice}
         </>
       )}
@@ -231,7 +297,7 @@ function ShortcutsPopover(): ReactElement {
           type="button"
           aria-label="More keyboard shortcuts"
           className={cn(
-            "p-0.5 rounded transition-colors text-daintree-text/40 hover:text-daintree-text/70 cursor-pointer",
+            "p-0.5 rounded-sm transition-colors duration-150 text-text-secondary hover:text-text-primary cursor-pointer",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
           )}
         >
@@ -280,7 +346,8 @@ function deriveGroupCheckedState(
 interface WorktreeGroupSectionProps {
   group: PickerWorktreeGroup;
   selectedIds: ReadonlySet<string>;
-  focusedId: string | null;
+  rovingNavKey: string | null;
+  registerGroup: (worktreeId: string) => (el: HTMLElement | null) => void;
   hideHeader: boolean;
   snippetMap: ReadonlyMap<string, SemanticSearchMatch>;
   onToggleId: (id: string, event?: React.MouseEvent) => void;
@@ -292,7 +359,8 @@ interface WorktreeGroupSectionProps {
 function WorktreeGroupSection({
   group,
   selectedIds,
-  focusedId,
+  rovingNavKey,
+  registerGroup,
   hideHeader,
   snippetMap,
   onToggleId,
@@ -305,6 +373,22 @@ function WorktreeGroupSection({
     () => deriveGroupCheckedState(groupIds, selectedIds),
     [groupIds, selectedIds]
   );
+  // Two panes in one worktree routinely carry the same title ("Claude",
+  // "Terminal"), and the group heading only disambiguates BETWEEN worktrees —
+  // inside one, the rows were indistinguishable, so a user could not tell which
+  // of them they had just ticked.
+  const duplicateTitles = useMemo(() => {
+    const seen = new Set<string>();
+    const dupes = new Set<string>();
+    for (const t of group.terminals) {
+      if (seen.has(t.title)) dupes.add(t.title);
+      else seen.add(t.title);
+    }
+    return dupes;
+  }, [group.terminals]);
+
+  const childListId = `${testIdPrefix}-group-${group.worktreeId}-children`;
+
   const selectedInGroup = useMemo(() => {
     let n = 0;
     for (const id of groupIds) if (selectedIds.has(id)) n++;
@@ -312,37 +396,84 @@ function WorktreeGroupSection({
   }, [groupIds, selectedIds]);
 
   return (
-    <section className="mb-1" role="group" aria-label={group.worktreeName}>
+    <section className="mb-1">
       {!hideHeader && (
+        // ONE focusable control, not two. This was a Radix checkbox followed by
+        // a separate button around the name — both tabbable, both firing the
+        // same toggle — which put two extra tab stops per group inside a
+        // container that is meant to be a single roving-tabindex stop. The
+        // checkbox is now a non-focusable indicator and the row owns focus.
+        //
+        // `data-group-header` is what the list's key handler looks for: Space
+        // here used to bubble up and toggle whichever ROW `focusedId` pointed
+        // at instead of the group actually holding focus.
         <header
-          className="flex items-center gap-2 px-2 py-1.5 sticky top-0 bg-surface-panel z-[1]"
+          className="sticky top-0 z-[1] bg-surface-panel"
           data-testid={`${testIdPrefix}-group-${group.worktreeId}`}
         >
-          <PickerCheckbox
-            checked={groupState}
-            onCheckedChange={() => onToggleGroup(group)}
-            ariaLabel={`Select all ${group.terminals.length} terminals in ${group.worktreeName}`}
-          />
           <button
             type="button"
+            ref={registerGroup(group.worktreeId)}
+            data-group-header={group.worktreeId}
+            tabIndex={rovingNavKey === `g:${group.worktreeId}` ? 0 : -1}
+            role="treeitem"
+            aria-level={1}
+            // The group lives beside this node, not inside it — a button may
+            // not contain a list — so the parent/child edge has to be drawn
+            // explicitly. No `aria-expanded`: the children are always shown and
+            // there is nothing to collapse, and claiming otherwise would
+            // announce a disclosure control that does not exist.
+            aria-owns={childListId}
+            aria-checked={groupState === "indeterminate" ? "mixed" : groupState}
+            aria-label={`Select all ${group.terminals.length} terminals in ${group.worktreeName}`}
             onClick={() => onToggleGroup(group)}
-            className="flex flex-1 items-center justify-between gap-2 text-left text-xs leading-[inherit] font-medium text-daintree-text/80 hover:text-text-primary"
+            // `px-2` matches the row's own inset so the band, the counts and
+            // the rows below all share one right edge — the fill used to
+            // overhang the content by 20px.
+            className={cn(
+              "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left",
+              "bg-overlay-subtle hover:bg-tint/[0.08] transition-colors duration-150",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
+            )}
           >
-            <span className="truncate">{group.worktreeName}</span>
+            <PickerCheckbox
+              checked={groupState}
+              onCheckedChange={() => onToggleGroup(group)}
+              ariaLabel={`Select all ${group.terminals.length} terminals in ${group.worktreeName}`}
+              tabIndex={-1}
+              presentational
+            />
+            {/* `text-sm` + `font-medium` + primary text: the worktree name is
+                the only thing distinguishing a dozen rows all called "Claude",
+                and it used to be set smaller and dimmer than the generic child
+                title beneath it — the parent read as subordinate to its child. */}
+            <span className="flex-1 truncate text-sm leading-[inherit] font-medium text-text-primary">
+              {group.worktreeName}
+            </span>
             <span className="shrink-0 tabular-nums text-2xs text-text-secondary">
               {selectedInGroup} / {group.terminals.length}
             </span>
           </button>
         </header>
       )}
-      <ul className="flex flex-col" role="presentation">
+      {/* A tree's `group` holds a treeitem's CHILDREN only — the heading that
+          owns them stays outside it. With one worktree the headings are hidden
+          and the rows are the top level, so there is no group to speak of. */}
+      <ul
+        className="flex flex-col"
+        id={hideHeader ? undefined : childListId}
+        role={hideHeader ? "presentation" : "group"}
+        aria-label={hideHeader ? undefined : group.worktreeName}
+      >
         {group.terminals.map((t) => (
           <TerminalRow
             key={t.id}
             terminal={t}
             checked={selectedIds.has(t.id)}
             snippet={snippetMap.get(t.id)}
-            isFocused={focusedId === t.id}
+            isRovingStop={rovingNavKey === `t:${t.id}`}
+            hasHeading={!hideHeader}
+            disambiguator={duplicateTitles.has(t.title) ? shortId(t.id) : undefined}
             onToggleId={onToggleId}
             registerRow={registerRow}
             testIdPrefix={testIdPrefix}
@@ -357,7 +488,11 @@ interface TerminalRowProps {
   terminal: PickerTerminal;
   checked: boolean;
   snippet?: SemanticSearchMatch;
-  isFocused: boolean;
+  isRovingStop: boolean;
+  /** False when the group heading is hidden (single worktree), which makes rows the top level. */
+  hasHeading: boolean;
+  /** Rendered beside the title when a worktree holds two terminals of the same name. */
+  disambiguator?: string;
   onToggleId: (id: string, event?: React.MouseEvent) => void;
   registerRow: (id: string) => (el: HTMLLabelElement | null) => void;
   testIdPrefix: string;
@@ -367,7 +502,9 @@ function TerminalRow({
   terminal,
   checked,
   snippet,
-  isFocused,
+  isRovingStop,
+  hasHeading,
+  disambiguator,
   onToggleId,
   registerRow,
   testIdPrefix,
@@ -380,14 +517,24 @@ function TerminalRow({
   const handleCheckedChange = useCallback(() => onToggleId(terminal.id), [onToggleId, terminal.id]);
   const rowRefCallback = useMemo(() => registerRow(terminal.id), [registerRow, terminal.id]);
   return (
-    <li className="flex items-stretch">
+    <li className="flex items-stretch" role="none">
       <label
         ref={rowRefCallback}
-        tabIndex={isFocused ? 0 : -1}
-        role="option"
-        aria-selected={checked}
+        tabIndex={isRovingStop ? 0 : -1}
+        data-terminal-id={terminal.id}
+        // `aria-checked` on a treeitem, not `aria-selected` on an option —
+        // these rows carry a checkbox, and APG is explicit that the two
+        // selection vocabularies must not be mixed on one node.
+        role="treeitem"
+        aria-checked={checked}
+        // Level 2 only when there is a level-1 heading above it; with one
+        // worktree the headings are hidden and the rows are the top level.
+        aria-level={hasHeading ? 2 : 1}
         className={cn(
-          "flex flex-1 items-start gap-2 pl-5 pr-2 py-1.5 rounded text-sm leading-[inherit] text-text-primary cursor-pointer outline-hidden",
+          // `pl-8` puts the child control 20px right of the parent's, inside
+          // the 20–24px band where two-level nesting actually reads. It was
+          // 12px — barely more than the checkbox's own width.
+          "flex flex-1 items-start gap-2 pl-8 pr-2 py-1.5 rounded-sm text-sm leading-[inherit] text-text-primary cursor-pointer outline-hidden",
           "hover:bg-tint/[0.06]",
           "focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
         )}
@@ -403,7 +550,13 @@ function TerminalRow({
         />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="truncate flex-1">{terminal.title}</span>
+            <span className="truncate">{terminal.title}</span>
+            {disambiguator && (
+              <span className="shrink-0 font-mono text-2xs text-text-secondary">
+                {disambiguator}
+              </span>
+            )}
+            <span className="flex-1" />
             {stateBadge}
           </div>
           {snippet && <SnippetLine snippet={snippet} testIdPrefix={testIdPrefix} />}
@@ -446,18 +599,32 @@ function SnippetLine({
   );
 }
 
+/** Last six characters of the pane id — enough to tell two same-named panes apart. */
+function shortId(id: string): string {
+  return id.length <= 6 ? id : id.slice(-6);
+}
+
+/**
+ * The same `Badge` the arming ribbon uses, with the same waiting tone.
+ *
+ * This was a hand-rolled pill on a flat `text-text-secondary`, which rendered
+ * "Waiting" and "Working" in identical grey — so the one question a fleet scan
+ * is actually asking ("which of these is asking me for something?") could not
+ * be answered by looking. `renderPaneStateBadge` already had the answer; the
+ * picker just wasn't using it.
+ */
 function renderStateBadge(agentState: AgentState | undefined): ReactElement | null {
   if (agentState !== "waiting" && agentState !== "working") return null;
-  const label = agentState === "waiting" ? "Waiting" : "Working";
+  const waiting = agentState === "waiting";
   return (
-    <span
-      className={cn(
-        "shrink-0 rounded-full px-1.5 py-0.5 text-3xs font-medium tabular-nums",
-        "bg-tint/[0.08] text-text-secondary"
-      )}
+    <Badge
+      size="xs"
+      tone="outline"
+      className={cn("shrink-0", waiting ? "text-state-waiting" : "text-text-secondary")}
+      data-state={agentState}
     >
-      {label}
-    </span>
+      {waiting ? "Waiting" : "Working"}
+    </Badge>
   );
 }
 
@@ -467,6 +634,37 @@ interface PickerCheckboxProps {
   ariaLabel: string;
   enableShiftBubble?: boolean;
   tabIndex?: number;
+  /**
+   * Render as a pure glyph: no role, no accessible name, invisible to AT. Used
+   * where an ancestor already carries the checkbox semantics (the group header
+   * row), so the state is announced once instead of twice.
+   */
+  presentational?: boolean;
+}
+
+/** Shape, fill and border — shared so the glyph and the real control cannot drift apart. */
+const CHECKBOX_CLASS = cn(
+  // `rounded-xs`, never the repo's bare `rounded` — that resolves to the
+  // 10px `--radius-lg` value, which on a 16px box is a full circle and
+  // told every user this multi-select list was single-select.
+  "relative flex shrink-0 w-4 h-4 rounded-xs border transition-colors duration-150",
+  // `border-text-secondary`, not `border-border-strong`: the unchecked
+  // ring measured ~1.4:1 against the row, under the 3:1 non-text floor,
+  // so the un-picked rows — the ones the user has to act on — were the
+  // hardest things on the surface to find.
+  "bg-surface-canvas border-text-secondary",
+  "data-[state=checked]:bg-text-primary data-[state=checked]:border-text-primary",
+  "data-[state=indeterminate]:bg-text-primary data-[state=indeterminate]:border-text-primary",
+  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+);
+
+function CheckGlyph({ checked }: { checked: boolean | "indeterminate" }): ReactElement | null {
+  if (checked === false) return null;
+  return checked === "indeterminate" ? (
+    <MinusIcon className="w-3 h-3" />
+  ) : (
+    <CheckIcon className="w-3 h-3" />
+  );
 }
 
 function PickerCheckbox({
@@ -475,7 +673,25 @@ function PickerCheckbox({
   ariaLabel,
   enableShiftBubble = false,
   tabIndex,
+  presentational = false,
 }: PickerCheckboxProps): ReactElement {
+  // A Radix `Checkbox.Root` renders a <button>, which cannot be nested inside
+  // the group header's own button. Where an ancestor already owns the checkbox
+  // semantics, emit a plain span carrying the same geometry instead.
+  if (presentational) {
+    return (
+      <span
+        aria-hidden="true"
+        data-state={
+          checked === "indeterminate" ? "indeterminate" : checked ? "checked" : "unchecked"
+        }
+        className={cn(CHECKBOX_CLASS, "items-center justify-center text-text-inverse")}
+      >
+        <CheckGlyph checked={checked} />
+      </span>
+    );
+  }
+
   return (
     <Checkbox.Root
       checked={checked}
@@ -489,20 +705,10 @@ function PickerCheckbox({
           e.stopPropagation();
         }
       }}
-      className={cn(
-        "relative flex shrink-0 w-4 h-4 rounded border transition-colors duration-150",
-        "bg-surface-canvas border-border-strong",
-        "data-[state=checked]:bg-text-primary data-[state=checked]:border-text-primary",
-        "data-[state=indeterminate]:bg-text-primary data-[state=indeterminate]:border-text-primary",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
-      )}
+      className={CHECKBOX_CLASS}
     >
       <Checkbox.Indicator className="flex items-center justify-center w-full h-full text-text-inverse">
-        {checked === "indeterminate" ? (
-          <MinusIcon className="w-3 h-3" />
-        ) : (
-          <CheckIcon className="w-3 h-3" />
-        )}
+        <CheckGlyph checked={checked} />
       </Checkbox.Indicator>
     </Checkbox.Root>
   );

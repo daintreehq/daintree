@@ -15,7 +15,7 @@ import { type SyntaxNode } from "@lezer/common";
 import { search, openSearchPanel, gotoLine } from "@codemirror/search";
 import { getDaintreeEditorTheme } from "./editorTheme";
 import { useActiveAppScheme } from "@/hooks/useActiveAppScheme";
-import { editorSearchHighlightTheme } from "./editorSearchTheme";
+import { editorSearchHighlightTheme, editorSearchPanelTheme } from "./editorSearchTheme";
 import { CODEMIRROR_LANGUAGES } from "./codeMirrorLanguages";
 import { cn } from "@/lib/utils";
 
@@ -65,60 +65,13 @@ const highlightLineTheme = EditorView.baseTheme({
   },
 });
 
-const searchPanelTheme = EditorView.theme({
-  ".cm-panels": {
-    backgroundColor: "var(--theme-surface-sidebar)",
-    color: "var(--theme-text-primary)",
-    borderBottom: "1px solid var(--theme-border-default)",
-  },
-  ".cm-panel.cm-search": {
-    padding: "4px 8px",
-  },
-  ".cm-search .cm-textfield": {
-    backgroundColor: "var(--theme-surface-canvas)",
-    color: "var(--theme-text-primary)",
-    border: "1px solid var(--theme-border-default)",
-    borderRadius: "var(--radius-xs)",
-    outline: "none",
-  },
-  ".cm-search .cm-button": {
-    backgroundImage: "none",
-    backgroundColor: "var(--theme-surface-canvas)",
-    color: "var(--theme-text-primary)",
-    border: "1px solid var(--theme-border-default)",
-    borderRadius: "var(--radius-xs)",
-  },
-  ".cm-search .cm-button:hover": {
-    backgroundColor: "var(--theme-border-default)",
-  },
-  ".cm-search label": {
-    color: "var(--theme-text-primary)",
-  },
-  ".cm-panel.cm-search [name=close]": {
-    color: "var(--theme-text-primary)",
-  },
-  ".cm-dialog": {
-    backgroundColor: "var(--theme-surface-sidebar)",
-    color: "var(--theme-text-primary)",
-    borderBottom: "1px solid var(--theme-border-default)",
-    padding: "4px 8px",
-  },
-  ".cm-dialog .cm-textfield": {
-    backgroundColor: "var(--theme-surface-canvas)",
-    color: "var(--theme-text-primary)",
-    border: "1px solid var(--theme-border-default)",
-    borderRadius: "var(--radius-xs)",
-    outline: "none",
-  },
-});
-
 const BASE_EXTENSIONS: Extension[] = [
   highlightedLineField,
   highlightLineTheme,
   EditorState.readOnly.of(true),
   search({ top: true }),
   keymap.of([{ key: "Mod-l", run: gotoLine }]),
-  searchPanelTheme,
+  editorSearchPanelTheme,
   editorSearchHighlightTheme,
 ];
 

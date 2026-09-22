@@ -300,24 +300,27 @@ function latestToolbarProps(): MockToolbarProps {
 }
 
 const headerContentPointerDownSpy = vi.hoisted(() => vi.fn());
+const contentPanelPropsSpy = vi.hoisted(() => vi.fn());
 
 vi.mock("@/components/Panel", () => ({
-  ContentPanel: ({
-    children,
-    headerContent,
-  }: {
+  ContentPanel: (props: {
     children: React.ReactNode;
     headerContent?: React.ReactNode;
-  }) => (
-    <div data-testid="content-panel">
-      {headerContent && (
-        <div data-testid="panel-header-content" onPointerDown={headerContentPointerDownSpy}>
-          {headerContent}
-        </div>
-      )}
-      {children}
-    </div>
-  ),
+    showRestoreControl?: boolean;
+  }) => {
+    contentPanelPropsSpy(props);
+    const { children, headerContent } = props;
+    return (
+      <div data-testid="content-panel">
+        {headerContent && (
+          <div data-testid="panel-header-content" onPointerDown={headerContentPointerDownSpy}>
+            {headerContent}
+          </div>
+        )}
+        {children}
+      </div>
+    );
+  },
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -478,6 +481,14 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     document.createElement = originalCreateElement;
     vi.runOnlyPendingTimers();
     vi.useRealTimers();
+  });
+
+  it("forwards the single-panel dock restore control (#12397)", () => {
+    render(<DevPreviewPane {...baseProps} location="dock" showRestoreControl />);
+
+    expect(contentPanelPropsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ showRestoreControl: true })
+    );
   });
 
   it("renders webview with allowpopups attribute for target=_blank support", () => {
@@ -2016,6 +2027,101 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
   // #11114: the hook now exposes promotion failures; this covers the pane
   // actually rendering them, which is the half the hook's own tests can't see.
+  describe("toolbar action availability (#12395)", () => {
+    const seedHistory = (present: string) => {
+      terminalStoreState.getTerminal.mockImplementation(() => ({
+        kind: "dev-preview",
+        id: "dev-preview-panel-1",
+        browserHistory: { past: [], present, future: [] },
+        browserZoom: 1,
+        devPreviewConsoleOpen: false,
+        devCommand: "npm run dev",
+      }));
+    };
+
+    it("enables both actions while the server is running with a console", () => {
+      render(<DevPreviewPane {...baseProps} />);
+      expect(latestToolbarProps().canOpenExternal).toBe(true);
+      expect(latestToolbarProps().canToggleConsole).toBe(true);
+    });
+
+    it("disables both actions before any dev server has been started", () => {
+      seedHistory("");
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        status: "stopped",
+        url: null,
+        terminalId: null,
+      };
+      render(<DevPreviewPane {...baseProps} />);
+      expect(latestToolbarProps().canOpenExternal).toBe(false);
+      expect(latestToolbarProps().canToggleConsole).toBe(false);
+    });
+
+    it("offers the console but not Open in browser while the server is starting", () => {
+      seedHistory("");
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        status: "starting",
+        url: null,
+        terminalId: "dev-terminal-1",
+      };
+      render(<DevPreviewPane {...baseProps} />);
+      expect(latestToolbarProps().canOpenExternal).toBe(false);
+      expect(latestToolbarProps().canToggleConsole).toBe(true);
+    });
+
+    it("keeps the console available when the server errors with its terminal attached", () => {
+      seedHistory("");
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        status: "error",
+        url: null,
+        terminalId: "dev-terminal-1",
+        error: { type: "unknown", message: "Server never became ready" },
+      };
+      render(<DevPreviewPane {...baseProps} />);
+      expect(latestToolbarProps().canOpenExternal).toBe(false);
+      expect(latestToolbarProps().canToggleConsole).toBe(true);
+    });
+
+    it("keeps Open in browser available for a retained URL while the webview is not ready", () => {
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        status: "starting",
+        url: null,
+      };
+      render(<DevPreviewPane {...baseProps} />);
+      expect(latestToolbarProps().isWebviewReady).toBe(false);
+      expect(latestToolbarProps().canOpenExternal).toBe(true);
+    });
+
+    it("tracks the console terminal going away and coming back", async () => {
+      const { rerender } = render(<DevPreviewPane {...baseProps} />);
+      expect(latestToolbarProps().canToggleConsole).toBe(true);
+
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        status: "stopped",
+        terminalId: null,
+      };
+      await act(async () => {
+        rerender(<DevPreviewPane {...baseProps} />);
+      });
+      expect(latestToolbarProps().canToggleConsole).toBe(false);
+
+      devServerStateRef.current = {
+        ...devServerStateRef.current,
+        status: "running",
+        terminalId: "dev-terminal-2",
+      };
+      await act(async () => {
+        rerender(<DevPreviewPane {...baseProps} />);
+      });
+      expect(latestToolbarProps().canToggleConsole).toBe(true);
+    });
+  });
+
   describe("promote-to-portal failure banner (#11114)", () => {
     type DispatchResult = Awaited<ReturnType<typeof actionService.dispatch>>;
     const succeeded = (): DispatchResult => ({ ok: true, result: undefined });
@@ -3636,6 +3742,54 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       // be a second request for a single-use callback.
       expect(loadsAcrossGuests()).toEqual([]);
       expect(getWebviewElement(container).getAttribute("src")).toBe(expected);
+    });
+
+    it("seeds a forced replacement guest from the latest route, not the mount-time one", async () => {
+      // The key-bump replacement (#12296) never passes through `showEmptyState`, so the
+      // mount-edge adjustment above the JSX never fires for it. Key and seed have to move
+      // in one step or the fresh guest boots from the URL this session started on.
+      setSavedHistory({ past: [], present: `${PROXY}/start`, future: [] });
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      const firstGuest = getWebviewElement(container);
+      await act(async () => {
+        emitWebviewEvent(firstGuest, "did-navigate", { url: `${PROXY}/moved?q=1` });
+        await Promise.resolve();
+      });
+      await settle();
+
+      const guestsBefore = guestLog.length;
+      // Both in-place reload paths unavailable — a guest that never attached has no
+      // WebContents, which is what drops `performReload` through to the remount.
+      firstGuest.getWebContentsId.mockImplementation(() => {
+        throw new Error("detached");
+      });
+      firstGuest.reload.mockImplementation(() => {
+        throw new Error("detached");
+      });
+      await act(async () => {
+        emitWebviewEvent(firstGuest, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+        await Promise.resolve();
+      });
+      await settle();
+
+      expect(guestLog.length).toBe(guestsBefore + 1);
+      expect(guestLog.at(-1)!.srcWrites).toEqual([`${PROXY}/moved?q=1`]);
+      expect(getWebviewElement(container).getAttribute("src")).toBe(`${PROXY}/moved?q=1`);
+
+      // The seed navigates the replacement by itself. The `src` interceptor
+      // ignores writes made inside loadURL, so asserting the seed alone would
+      // also pass for a guest that was seeded and then imperatively sent to the
+      // same place — a second request for a route that may be single-use.
+      await act(async () => {
+        emitWebviewEvent(getWebviewElement(container), "dom-ready");
+        await Promise.resolve();
+      });
+      await settle();
+      expect(guestLog.at(-1)!.loadURLs).toEqual([]);
     });
 
     it("keeps a replacement guest's seed current across repeated origin crossings", async () => {

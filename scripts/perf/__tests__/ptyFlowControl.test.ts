@@ -284,8 +284,7 @@ describe("triage orderings are recomputed, not read back", () => {
  * against the real file below.
  */
 describe("pty-host IPC fallback drift guard", () => {
-  const block = (body: string): string =>
-    `      if (!visualWritten && !isBackgrounded && !isSuspended) {\n${body}\n      }\n`;
+  const block = (body: string): string => `      if (sendIpcFallback) {\n${body}\n      }\n`;
 
   const SHIPPED = block(`        if (ipcQueueManager.isAtCapacity(id, dataBytes)) {
           const utilization = ipcQueueManager.getUtilization(id);
@@ -329,7 +328,7 @@ describe("pty-host IPC fallback drift guard", () => {
   it("fails closed when the block cannot be found or its braces do not balance", () => {
     expect(extractIpcFallbackSequence("nothing here")).toBeNull();
     expect(ipcFallbackSequenceMissesIn("nothing here")).toBe(IPC_FALLBACK_HOST_SEQUENCE.length);
-    const unbalanced = "if (!visualWritten && !isBackgrounded && !isSuspended) {\n  foo(";
+    const unbalanced = "if (sendIpcFallback) {\n  foo(";
     expect(extractIpcFallbackSequence(unbalanced)).toBeNull();
   });
 

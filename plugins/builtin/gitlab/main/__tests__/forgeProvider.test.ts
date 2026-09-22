@@ -1332,6 +1332,10 @@ describe("URL builders", () => {
     );
   });
 
+  it("links the repository home page to the project root, subgroups included", () => {
+    expect(gitlabForgeProvider.buildRepoUrl?.(repo)).toBe("https://gitlab.com/group/sub/project");
+  });
+
   it("maps the open state to GitLab's 'opened' in list URLs", () => {
     expect(gitlabForgeProvider.buildIssuesUrl(repo, { state: "open" })).toContain("state=opened");
     expect(gitlabForgeProvider.buildPRsUrl(repo, { query: "search term" })).toContain(

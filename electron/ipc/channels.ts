@@ -18,6 +18,7 @@ export const CHANNELS = {
   WORKTREE_DETACH_ISSUE: "worktree:detach-issue",
   WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS: "worktree:get-all-issue-associations",
   WORKTREE_HOST_DISCONNECTED: "worktree:host-disconnected",
+  WORKTREE_PORT_ACK: "worktree:port-ack",
   WORKTREE_RESTART_SERVICE: "worktree:restart-service",
   WORKTREE_RETRY_PROJECT_LOAD: "worktree:retry-project-load",
   WORKTREE_RETRY_AUTH_FETCH: "worktree:retry-auth-fetch",
@@ -28,6 +29,7 @@ export const CHANNELS = {
   TERMINAL_INPUT: "terminal:input",
   TERMINAL_SUBMIT: "terminal:submit",
   TERMINAL_GET_SUBMISSIONS: "terminal:get-submissions",
+  TERMINAL_GET_OUTPUT_ACTIVITY: "terminal:get-output-activity",
   TERMINAL_RESIZE: "terminal:resize",
   TERMINAL_KILL: "terminal:kill",
   TERMINAL_ERROR: "terminal:error",
@@ -52,6 +54,7 @@ export const CHANNELS = {
   TERMINAL_GET_INFO: "terminal:get-info",
   TERMINAL_ACKNOWLEDGE_DATA: "terminal:acknowledge-data",
   TERMINAL_FORCE_RESUME: "terminal:force-resume",
+  TERMINAL_GET_HOST_MEMORY_PAUSE: "terminal:get-host-memory-pause",
   TERMINAL_REQUEST_WORKER_INGEST_PORT: "terminal:request-worker-ingest-port",
   TERMINAL_RELEASE_WORKER_INGEST_PORT: "terminal:release-worker-ingest-port",
   TERMINAL_GRACEFUL_KILL: "terminal:graceful-kill",
@@ -68,7 +71,6 @@ export const CHANNELS = {
   TERMINAL_RESTORE_SCROLLBACK: "terminal:restore-scrollback",
   TERMINAL_RESTART_SERVICE: "terminal:restart-service",
   WATCHDOG_RESTART: "watchdog:restart",
-  TERMINAL_FD_LEAK_WARNING: "terminal:fd-leak-warning",
   TERMINAL_RESOURCE_METRICS: "terminal:resource-metrics",
 
   AGENT_SESSION_LIST: "agent-session:list",
@@ -148,7 +150,6 @@ export const CHANNELS = {
   SYSTEM_GET_HARDWARE_INFO: "system:get-hardware-info",
   SYSTEM_GET_RESOURCE_PROFILE: "system:get-resource-profile",
   SYSTEM_GET_RESOURCE_PROFILE_SNAPSHOT: "system:get-resource-profile-snapshot",
-  SYSTEM_REQUEST_INTERACTIVE_OVERRIDE: "system:request-interactive-override",
   SYSTEM_GET_WHY_SLOW_SNAPSHOT: "system:get-why-slow-snapshot",
   SYSTEM_GET_MEMORY_SNAPSHOT: "system:get-memory-snapshot",
   SYSTEM_REPORT_TERMINAL_RENDERER_DIAGNOSTICS: "system:report-terminal-renderer-diagnostics",
@@ -387,6 +388,9 @@ export const CHANNELS = {
   SESSION_RESTORE_GET_CONFIG: "session-restore:get-config",
   SESSION_RESTORE_UPDATE_CONFIG: "session-restore:update-config",
   SESSION_RESTORE_VIEW_HYDRATED: "session-restore:view-hydrated",
+  KEEP_AWAKE_GET_STATE: "keep-awake:get-state",
+  KEEP_AWAKE_UPDATE_CONFIG: "keep-awake:update-config",
+  KEEP_AWAKE_STATE_CHANGED: "keep-awake:state-changed",
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
   HIBERNATION_UPDATE_CONFIG: "hibernation:update-config",
   HIBERNATION_PROJECT_HIBERNATED: "hibernation:project-hibernated",
@@ -538,6 +542,19 @@ export const CHANNELS = {
   DEV_PREVIEW_STATE_CHANGED: "dev-preview:state-changed",
   DEV_PREVIEW_ALL_SESSIONS_CHANGED: "dev-preview:all-sessions-changed",
 
+  // Site-preview bridge — binding a caller to a dev-preview guest and receiving
+  // validated observations back from the runtime installed inside it. There is
+  // deliberately no "evaluate in guest" channel; see handlers/sitePreview.ts.
+  SITE_PREVIEW_LIST_CANDIDATES: "site-preview:list-candidates",
+  SITE_PREVIEW_BIND: "site-preview:bind",
+  SITE_PREVIEW_DETACH: "site-preview:detach",
+  SITE_PREVIEW_SET_MODE: "site-preview:set-mode",
+  SITE_PREVIEW_RESELECT: "site-preview:reselect",
+  SITE_PREVIEW_CLEAR_SELECTION: "site-preview:clear-selection",
+  SITE_PREVIEW_CLEAR_HOVER: "site-preview:clear-hover",
+  SITE_PREVIEW_GET_STATE: "site-preview:get-state",
+  SITE_PREVIEW_EVENT: "site-preview:event",
+
   COMMANDS_LIST: "commands:list",
   COMMANDS_GET: "commands:get",
   COMMANDS_EXECUTE: "commands:execute",
@@ -581,6 +598,7 @@ export const CHANNELS = {
   CLIPBOARD_WRITE_TEXT: "clipboard:write-text",
   CLIPBOARD_WRITE_SELECTION: "clipboard:write-selection",
   CLIPBOARD_READ_SELECTION: "clipboard:read-selection",
+  CLIPBOARD_PICK_ATTACHMENTS: "clipboard:pick-attachments",
 
   APP_THEME_GET: "app-theme:get",
   APP_THEME_SET_COLOR_SCHEME: "app-theme:set-color-scheme",
@@ -748,6 +766,23 @@ export const CHANNELS = {
    * key rotation (revoke-all) stays a separate action (#8778).
    */
   MCP_SERVER_DISCONNECT_BEARER: "mcp-server:disconnect-bearer",
+  /** Whether terminal watches may wake the watching pane (#12491). */
+  MCP_SERVER_GET_PANE_WAKE_ENABLED: "mcp-server:get-pane-wake-enabled",
+  MCP_SERVER_SET_PANE_WAKE_ENABLED: "mcp-server:set-pane-wake-enabled",
+  /** One pane's terminal-watch state, for its chrome to hydrate on mount (#12491). */
+  MCP_SERVER_GET_PANE_WATCH_STATE: "mcp-server:get-pane-watch-state",
+  /** The pane chrome's "stop": every watch the pane holds goes (#12491). */
+  MCP_SERVER_STOP_PANE_WATCHES: "mcp-server:stop-pane-watches",
+  /**
+   * Hand a running terminal to an orchestrating agent pane, or take it back
+   * (#12490). Renderer-only by construction: no action or MCP tool reaches
+   * these, so a hand-over always starts with the user.
+   */
+  MCP_SERVER_ADOPT_TERMINAL: "mcp-server:adopt-terminal",
+  MCP_SERVER_RELEASE_TERMINAL_ADOPTION: "mcp-server:release-terminal-adoption",
+  MCP_SERVER_LIST_TERMINAL_ADOPTIONS: "mcp-server:list-terminal-adoptions",
+  /** Panes holding a live Daintree bearer, which a terminal can be handed to (#12490). */
+  MCP_SERVER_LIST_ORCHESTRATOR_PANES: "mcp-server:list-orchestrator-panes",
   /**
    * Push channel: a grant lifecycle event (`issued`, `expired`, `revoked`)
    * fired for the help-session pinned to this renderer. Targeted send —
@@ -909,8 +944,10 @@ export const CHANNELS = {
   FORGE_OPEN_ISSUES: "forge:open-issues",
   FORGE_OPEN_PRS: "forge:open-prs",
   FORGE_OPEN_COMMITS: "forge:open-commits",
+  FORGE_OPEN_REPO: "forge:open-repo",
   FORGE_OPEN_ISSUE: "forge:open-issue",
   FORGE_GET_ISSUE_URL: "forge:get-issue-url",
+  FORGE_GET_REPO_URL: "forge:get-repo-url",
   FORGE_ASSIGN_ISSUE: "forge:assign-issue",
   FORGE_UNASSIGN_ISSUE: "forge:unassign-issue",
   FORGE_APPROVE_PR: "forge:approve-pr",
@@ -928,6 +965,8 @@ export const CHANNELS = {
   FORGE_SET_CREDENTIAL: "forge:set-credential",
   FORGE_GET_CREDENTIAL_STATUS: "forge:get-credential-status",
   FORGE_CLEAR_CREDENTIAL: "forge:clear-credential",
+  FORGE_PREVIEW_CREDENTIAL_IMPORT: "forge:preview-credential-import",
+  FORGE_COMMIT_CREDENTIAL_IMPORT: "forge:commit-credential-import",
   FORGE_LIST_ISSUES: "forge:list-issues",
   FORGE_LIST_PRS: "forge:list-prs",
   FORGE_GET_ISSUE: "forge:get-issue",
@@ -1162,6 +1201,12 @@ export const CHANNELS = {
   // #11790 refused to grant it automatically.
   WORKSPACE_RESIDENCY_GET: "workspace-residency:get",
   WORKSPACE_RESIDENCY_SET: "workspace-residency:set",
+
+  // Per-project consent for plugin agent tools (`contributes.agentMcp`).
+  // Renderer-only by design: an action here would be on the MCP tool surface,
+  // and an agent must never be able to grant itself a plugin's tools.
+  PLUGIN_AGENT_MCP_LIST_PROJECT_ENDPOINTS: "plugin-agent-mcp:list-project-endpoints",
+  PLUGIN_AGENT_MCP_SET_PROJECT_ENDPOINT_ENABLED: "plugin-agent-mcp:set-project-endpoint-enabled",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

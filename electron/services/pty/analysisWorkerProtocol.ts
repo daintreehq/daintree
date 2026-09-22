@@ -2,6 +2,7 @@ import type { AgentState } from "../../../shared/types/agent.js";
 import type { ActivityStateMetadata } from "../ActivityMonitor.js";
 import type { AgentConfig } from "../../../shared/config/agentRegistry.js";
 import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
+import type { PowerPolicyLevel } from "../../../shared/types/powerPolicy.js";
 
 // Typed message protocol between the pty-host main thread and the analysis
 // worker_threads pool. All payloads must be structured-clone-safe.
@@ -72,6 +73,7 @@ export type HostToWorkerMessage =
   | { type: "set-scrollback"; terminalId: string; lines: number }
   | { type: "free"; terminalId: string }
   | { type: "plugin-agent-registry"; registry: Record<string, AgentConfig> }
+  | { type: "power-policy"; level: PowerPolicyLevel; observationLevel: PowerPolicyLevel }
   | {
       /**
        * `generation` is the pool slot's worker generation at post time (bumped

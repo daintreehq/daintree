@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { TerminalUnseenOutputTracker } from "../TerminalUnseenOutputTracker";
+import { TerminalUnseenOutputTracker, UNSEEN_THRESHOLD } from "../TerminalUnseenOutputTracker";
 
 describe("TerminalUnseenOutputTracker", () => {
   let tracker: TerminalUnseenOutputTracker;
@@ -38,6 +38,63 @@ describe("TerminalUnseenOutputTracker", () => {
       tracker.incrementUnseen(terminalId, true);
       expect(listener).toHaveBeenCalledTimes(2);
     });
+
+    it("shows the pill for a burst a hidden pane merged into fewer writes", () => {
+      const listener = vi.fn();
+      tracker.subscribe(terminalId, listener);
+
+      // A burst one write over the threshold, landing as a plain write plus one merged batch.
+      tracker.incrementUnseen(terminalId, true);
+      tracker.incrementUnseen(terminalId, true, UNSEEN_THRESHOLD);
+
+      expect(tracker.getSnapshot(terminalId).unseen).toBeGreaterThan(UNSEEN_THRESHOLD);
+      expect(listener).toHaveBeenCalledTimes(2);
+    });
+
+    it("publishes the crossing when one merged batch jumps straight over the threshold", () => {
+      const listener = vi.fn();
+      tracker.subscribe(terminalId, listener);
+
+      tracker.incrementUnseen(terminalId, true, UNSEEN_THRESHOLD + 5);
+      expect(tracker.getSnapshot(terminalId).unseen).toBe(UNSEEN_THRESHOLD + 5);
+      expect(listener).toHaveBeenCalledTimes(1);
+
+      tracker.incrementUnseen(terminalId, true, 4);
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it("holds weighted increments unpublished and releases back to the held count", () => {
+      const listener = vi.fn();
+      tracker.subscribe(terminalId, listener);
+      tracker.incrementUnseen(terminalId, true);
+      listener.mockClear();
+
+      const held = tracker.holdUnseen(terminalId);
+      tracker.incrementUnseen(terminalId, true, 40);
+      expect(listener).not.toHaveBeenCalled();
+      expect(tracker.getSnapshot(terminalId).unseen).toBe(1);
+      // Counted while held, not discarded: the raw count a second hold reads.
+      expect(tracker.holdUnseen(terminalId)).toBe(held + 40);
+
+      tracker.releaseUnseen(terminalId, held);
+      expect(tracker.getSnapshot(terminalId).unseen).toBe(1);
+
+      // Counting resumes from the released value, weights included.
+      tracker.incrementUnseen(terminalId, true, 2);
+      expect(tracker.getSnapshot(terminalId).unseen).toBe(3);
+    });
+
+    it.each([0, -3, Number.NaN, Number.POSITIVE_INFINITY])(
+      "counts a malformed batch size (%s) as one write and keeps counting",
+      (bad) => {
+        tracker.incrementUnseen(terminalId, true, bad);
+        tracker.incrementUnseen(terminalId, true, UNSEEN_THRESHOLD);
+        expect(tracker.getSnapshot(terminalId).unseen).toBe(1 + UNSEEN_THRESHOLD);
+
+        tracker.clearUnseen(terminalId, true);
+        expect(tracker.getSnapshot(terminalId).unseen).toBe(0);
+      }
+    );
 
     it("does not wake subscribers for further increments above the threshold", () => {
       const listener = vi.fn();
@@ -190,6 +247,74 @@ describe("TerminalUnseenOutputTracker", () => {
 
       tracker.incrementUnseen(terminalId, true);
       expect(listener).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("holdUnseen / releaseUnseen (#12398)", () => {
+    it("hands back the raw count, not the throttled snapshot", () => {
+      const beyond = UNSEEN_THRESHOLD + 3;
+      for (let i = 0; i < beyond; i++) tracker.incrementUnseen(terminalId, true);
+      expect(tracker.getSnapshot(terminalId).unseen).toBeLessThan(beyond);
+      expect(tracker.holdUnseen(terminalId)).toBe(beyond);
+    });
+
+    it("publishes nothing while held, then lowers back to the held count and counts on from there", () => {
+      const listener = vi.fn();
+      tracker.incrementUnseen(terminalId, true);
+      tracker.subscribe(terminalId, listener);
+      const held = tracker.holdUnseen(terminalId);
+
+      for (let i = 0; i <= UNSEEN_THRESHOLD; i++) tracker.incrementUnseen(terminalId, true);
+      expect(listener).not.toHaveBeenCalled();
+      expect(tracker.getSnapshot(terminalId).unseen).toBe(held);
+
+      tracker.releaseUnseen(terminalId, held);
+      expect(tracker.getSnapshot(terminalId)).toEqual({ isUserScrolledBack: true, unseen: held });
+      expect(listener).not.toHaveBeenCalled();
+
+      // Counting resumes from the lowered value: the next threshold crossing
+      // is exactly where it would have been without the redraw.
+      for (let i = held; i < UNSEEN_THRESHOLD; i++) tracker.incrementUnseen(terminalId, true);
+      expect(listener).not.toHaveBeenCalled();
+      tracker.incrementUnseen(terminalId, true);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(tracker.getSnapshot(terminalId).unseen).toBe(UNSEEN_THRESHOLD + 1);
+    });
+
+    it("never raises the count — a clear that landed meanwhile stays cleared", () => {
+      const listener = vi.fn();
+      for (let i = 0; i <= UNSEEN_THRESHOLD; i++) tracker.incrementUnseen(terminalId, true);
+      const held = tracker.holdUnseen(terminalId);
+      tracker.clearUnseen(terminalId, false);
+      tracker.subscribe(terminalId, listener);
+
+      tracker.releaseUnseen(terminalId, held);
+
+      expect(tracker.getSnapshot(terminalId).unseen).toBe(0);
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("release publishes the settled count when the snapshot had been throttled", () => {
+      const listener = vi.fn();
+      const beyond = UNSEEN_THRESHOLD + 3;
+      for (let i = 0; i < beyond; i++) tracker.incrementUnseen(terminalId, true);
+      const throttled = tracker.getSnapshot(terminalId).unseen;
+      expect(throttled).toBeLessThan(beyond);
+      tracker.subscribe(terminalId, listener);
+
+      const held = tracker.holdUnseen(terminalId);
+      tracker.releaseUnseen(terminalId, held);
+
+      expect(tracker.getSnapshot(terminalId).unseen).toBe(beyond);
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it("destroy forgets the hold", () => {
+      tracker.holdUnseen(terminalId);
+      tracker.destroy(terminalId);
+
+      tracker.incrementUnseen(terminalId, true);
+      expect(tracker.getSnapshot(terminalId).unseen).toBe(1);
     });
   });
 });

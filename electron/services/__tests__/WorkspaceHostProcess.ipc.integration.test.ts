@@ -31,6 +31,7 @@ vi.mock("../../utils/logger.js", () => ({
     warn: vi.fn(),
     error: vi.fn(),
   }),
+  ingestHostLogEvent: vi.fn(),
 }));
 
 let helpers: typeof import("./helpers/ipcContractTestUtils.js") | undefined;

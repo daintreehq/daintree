@@ -93,7 +93,7 @@ Return the disposer `registerForgeProvider` hands back. `descriptor.id` must mat
 | --- | --- | --- |
 | `getCredentials()` | `Promise<Credentials \| null>` | `null` when no token is stored. The host passes credentials through without inspecting them. |
 | `setCredentials?(creds)` | `void` | Optional. Accept an in-memory credential override; ignore kinds your forge doesn't support. |
-| `validateCredentials()` | `Promise<AuthValidation>` | Validate the stored token against the provider. Return `{ valid, scopes?, expiresAt?, error? }`. |
+| `validateCredentials()` | `Promise<AuthValidation>` | Validate the stored token against the provider. Return `{ valid, scopes?, expiresAt?, error?, account? }`. Set `account` to the login the token authenticates as when validation learns it — Settings shows it next to the saved credential. It is display-only. |
 | `parseRemote(url)` | `RepoRef \| null` | Return `null` for URLs that aren't yours — the registry only dispatches to you after a hostname match, but defensive `null` keeps you composable. |
 | `listIssues(repo, opts)` | `Promise<Page<Issue>>` | Page through the provider's native query. No client-side filtering across pages — push filters into `ListOptions`. |
 | `listPRs(repo, opts)` | `Promise<Page<PR>>` | Same paging contract as `listIssues`. |
@@ -107,6 +107,7 @@ Return the disposer `registerForgeProvider` hands back. `descriptor.id` must mat
 | `buildIssuesUrl(repo, opts?)` | `string` | Optional `{ query, state }` filter. |
 | `buildPRsUrl(repo, opts?)` | `string` | — |
 | `buildCommitsUrl(repo, branch?)` | `string` | — |
+| `buildRepoUrl?(repo)` | `string` | Optional. The repository's home page. Omit it and the host leaves "View repository" out of the toolbar's forge stats menu, and `forge.openRepo` rejects. |
 | `assignIssue(repo, n, user)` | `Promise<ForgeUser[]>` | Return the issue's resulting assignee list — a forge that silently drops an assignee it won't accept must report the list without them. Reject (throw) if your forge can't assign. |
 | `unassignIssue(repo, n, user)` | `Promise<ForgeUser[]>` | Base method, paired with `assignIssue`. Returns the resulting assignee list. Reject (throw) if your forge can't unassign. |
 | `validateToken(token)` | `Promise<AuthValidation>` | Validate an arbitrary token (used by the token-entry UI before storing it). |
@@ -173,6 +174,24 @@ The capability sub-interfaces are `ReviewCapability`, `IssueCommentCapability`, 
 
 `ChecksCapability.getChecks(repo, prN)` is the per-check counterpart to `getCIStatus`: it returns every check on a PR as a `CheckRun` (`name`, `status`, `conclusion?`, `required?`, `detailsUrl?`), so an agent diagnosing a red PR can name the failing check and follow `detailsUrl` to its log. Return the complete list or reject — a silently truncated list is a wrong answer, not a partial one — and page your forge's API to the end rather than serving only its first page. `null` means the PR doesn't exist; a PR with no checks is `{ checks: [] }`.
 
+### Credential import
+
+`credentialImport?: CredentialImportCapability` lets a user who is already signed in to your forge's CLI import that credential instead of pasting a token — the builtin GitHub provider reads `gh auth token`, and a GitLab provider could read `glab` the same way. It is a one-time copy, not a live dependency: after the import your provider authenticates with the saved credential exactly as if it had been pasted.
+
+| Method | Returns | Key behavior |
+| --- | --- | --- |
+| `preview(signal?)` | `Promise<CredentialImportPreview \| CredentialImportUnavailable>` | Read the credential, validate it live, discard it, and return `{ account, scopes, missingScopes, source }`. The host shows this in the confirm step. |
+| `commit(expected, signal?)` | `Promise<CredentialImportCandidate \| CredentialImportUnavailable>` | Read the credential again and validate it again. Return `{ unavailable: true, reason: "account-changed" }` when the account differs from `expected.account` — the CLI switched accounts after the preview, so the user never confirmed this one. Otherwise return `{ credentials, validation }`, with `credentials` keyed by your `credentialFields` ids. |
+
+The contract exists to keep the secret on one side of one boundary:
+
+- **Main only.** Both methods run in the main process and the host calls them only after an explicit user click (reading a CLI's store can raise an OS keychain prompt). `CredentialImportCandidate` carries the credential and never crosses to a renderer. The host builds the renderer's response field by field from your result, so an extra property on it goes nowhere.
+- **The host persists, you don't.** Never write credential storage yourself. The host saves the candidate through the same path a pasted credential takes: audit, store write, `setCredentials`, a token-health re-probe and the workspace sync. Your commit's validation is the audited one, so the host doesn't validate a second time.
+- **Fixed failure codes.** Catch every failure inside the capability and return one of the `CredentialImportFailureReason` codes. Reserve `"not-signed-in"` for a failure the CLI itself attributes to a missing login; any other non-zero exit is `"cli-failed"`. Never throw, and never put CLI output, stderr or an exec error's message anywhere: they can quote the credential. A code outside the set reaches the renderer as `"cli-failed"`.
+- **Honor `signal`.** The host aborts when the requesting window closes or its 30s deadline passes. It stops waiting on your method at that point rather than trusting it to return, and checks the signal again immediately before the store write, so an abandoned import never saves. Stop your own work when it fires: kill the CLI process, abort the request.
+- **Leave the configured credential's state alone.** The imported credential may belong to a different account from the saved one, so validate it without recording its rate-limit headers or auth metadata against the saved credential — the builtin GitHub provider validates with `detached: true`.
+- **Scopes.** Report the scopes your forge returned. An empty list means unknown, not none: GitHub's fine-grained PATs send no scope header. Compute `missingScopes` with your forge's scope implication rules (GitHub's `admin:org` and `write:org` satisfy `read:org`). Missing scopes are a warning in the confirm, never a refusal.
+
 **Probe with truthiness, not `in`.** The host checks capability presence with `if (provider.reviews)`, not `"reviews" in provider`. An optional property explicitly set to `undefined` still satisfies the `in` operator, so `in` would falsely report the capability as available. Do the same in any code that consumes a provider.
 
 The manifest's `capabilities` array is informational only — it drives the Preferences "supports: …" label. Actual behavior gates on whether the capability field is present at runtime, which keeps the displayed claim honest even if the manifest is stale.
@@ -212,6 +231,7 @@ Mirror the GitHub provider's `__tests__/` coverage. A new provider ships unit te
 - **Core CRUD** — `listIssues`, `listPRs`, `getIssue`, `getPR`, `findPRByBranch`, `getCIStatus`, `getRepoMetadata` against a mocked transport, including empty pages and not-found.
 - **`getRateLimit`** — if you implement it, the provider's rate-limit transport projects into `RateLimitInfo` correctly, including the `null`-per-dimension case.
 - **`validateCredentials` / `validateToken`** — valid, expired, and missing-token paths.
+- **`credentialImport`** — if you implement it: every failure maps to a fixed reason code with no credential in the result or any log, a commit whose account differs from `expected` returns `"account-changed"`, and scope implication doesn't report false gaps.
 
 Forge providers are built-in only, so their tests follow the existing `plugins/builtin/github/main/__tests__/` patterns and run in the main test suite — there's no worker-mock path to exercise here.
 

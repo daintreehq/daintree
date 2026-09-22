@@ -37,6 +37,7 @@ import { tryFleetBroadcastFromEditor } from "@/components/Fleet/fleetEnterBroadc
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
 import { Archive, Loader2 } from "lucide-react";
+import { Paperclip } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
@@ -53,6 +54,7 @@ import { resolveInputBarColors } from "@/utils/terminalTheme";
 import { useEditorCompartments } from "./hooks/useEditorCompartments";
 import { useAutocompleteItems } from "./hooks/useAutocompleteItems";
 import { useDragDrop } from "./hooks/useDragDrop";
+import { useAttachFiles } from "./hooks/useAttachFiles";
 import { useVoiceDecorations } from "./hooks/useVoiceDecorations";
 import { useContextDetection } from "./hooks/useContextDetection";
 import { useTokenResolution } from "./hooks/useTokenResolution";
@@ -61,6 +63,7 @@ import { useCompartmentDriver } from "./hooks/useCompartmentDriver";
 import { usePasteExtensions } from "./hooks/usePasteExtensions";
 import { useAutocompleteState } from "./hooks/useAutocompleteState";
 import { useAutocompletePositioning } from "./hooks/useAutocompletePositioning";
+import { useComposerMeasure } from "./hooks/useComposerMeasure";
 import { useAutocompleteApply } from "./hooks/useAutocompleteApply";
 import { useFleetMirror } from "./hooks/useFleetMirror";
 import { useEditorDomHandlers } from "./hooks/useEditorDomHandlers";
@@ -159,6 +162,23 @@ function editorOwnsDomFocus(view: EditorView): boolean {
   return view.contentDOM.contains(document.activeElement);
 }
 
+/**
+ * Drag feedback for both editor hosts — the compact bar and the Expanded
+ * Editor. Shared so the two drop targets cannot drift apart again (#12570).
+ */
+function FileDropOverlay({ className }: { className?: string }) {
+  return (
+    <div
+      className={cn(
+        "absolute inset-0 z-10 flex items-center justify-center bg-surface-canvas/80 pointer-events-none",
+        className
+      )}
+    >
+      <span className="text-xs font-medium text-accent-primary">Drop to attach</span>
+    </div>
+  );
+}
+
 const hybridInputE2EControllers = new Map<string, HybridInputE2EController>();
 
 function installHybridInputE2EBridge(): void {
@@ -226,6 +246,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const handledEnterRef = useRef(false);
     const historyPaletteOpenRef = useRef<(() => void) | null>(null);
     const inputShellRef = useRef<HTMLDivElement | null>(null);
+    const pickerRef = useRef<HTMLButtonElement | null>(null);
+    const trailingGroupRef = useRef<HTMLDivElement | null>(null);
     const menuRef = useRef<HTMLDivElement | null>(null);
     const rootRef = useRef<HTMLDivElement | null>(null);
     const lastEmittedValueRef = useRef<string>(value);
@@ -296,8 +318,27 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // bar would (#11809). Called with no argument, which is what keeps the
     // shift/cmd fleet gestures a click carries out of a drop. Absent for the
     // Assistant, whose input bar owns no selectable pane.
-    const { handleDragEnter, handleDragOver, handleDragLeave, handleDrop, isDragOverFiles } =
-      useDragDrop(editorViewRef, cwd, onActivate);
+    const {
+      handleDragEnter,
+      handleDragOver,
+      handleDragLeave,
+      handleDrop,
+      resetDragState,
+      isDragOverFiles,
+    } = useDragDrop(editorViewRef, cwd, onActivate);
+
+    // The dialog unmounts its body once its exit animation ends, and can close
+    // under a hovering file — a slow submission collapses it mid-drag. Chromium
+    // then fires the pending dragleave at the detached node, which React never
+    // sees, so the depth the body accumulated would pin the overlay on the
+    // compact bar. Stable identity, or every re-render would detach and reset.
+    const releaseModalDropTarget = useCallback(
+      (node: HTMLDivElement | null) => {
+        if (!node) resetDragState();
+      },
+      [resetDragState]
+    );
+    const handleAttachFiles = useAttachFiles(editorViewRef, cwd);
 
     const { imagePasteExtension, filePasteExtension, plainPasteKeymap } = usePasteExtensions(cwd);
 
@@ -440,6 +481,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         isExpanded,
       };
     });
+
+    useComposerMeasure({ editorViewRef, inputShellRef, pickerRef, trailingGroupRef });
 
     useAutocompletePositioning({
       editorViewRef,
@@ -875,7 +918,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       "--ib-accent": inputBarColors.accent,
     } as React.CSSProperties;
 
-    const isSpecialState = isVoiceActiveForPanel || isDragOverFiles || isFleetPrimary;
+    // One hook instance serves both hosts, so its hover state says a drag is
+    // over the editor, not which host. The compact bar stays visible through
+    // the dialog's scrim and must not light up for a drag over the modal.
+    const isDragOverCompact = isDragOverFiles && !isExpanded;
+    const isDragOverModal = isDragOverFiles && isExpanded;
+
+    const isSpecialState = isVoiceActiveForPanel || isDragOverCompact || isFleetPrimary;
 
     // Fleet-primary uses the same amber family as FleetDraftingPill so the
     // shell itself says "Enter broadcasts" at the point of typing.
@@ -885,7 +934,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           backgroundColor: `color-mix(in oklab, ${inputBarColors.accent} 12%, ${inputBarColors.background})`,
           boxShadow: `0 0 0 1px color-mix(in oklab, ${inputBarColors.accent} 35%, transparent), 0 0 16px color-mix(in oklab, ${inputBarColors.accent} 15%, transparent)`,
         }
-      : isDragOverFiles
+      : isDragOverCompact
         ? {
             borderColor: `color-mix(in oklab, ${inputBarColors.accent} 60%, transparent)`,
             backgroundColor: inputBarColors.shellBg,
@@ -914,7 +963,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             ref={inputShellRef}
             className={cn(
               "group/shell relative",
-              "flex w-full items-center gap-1.5 rounded-md border py-2 transition-[border-color,background-color,box-shadow] duration-150",
+              // `items-end`, not `items-center`: centred controls tracked the
+              // canvas midpoint, so the attach target sat at a different height
+              // for every draft length. `flex-wrap` is what lets the canvas take
+              // a row of its own once the draft wraps (see the track below).
+              "flex w-full flex-wrap items-end gap-x-1.5 gap-y-1 rounded-md border py-2 transition-[border-color,background-color,box-shadow] duration-150",
               !isSpecialState && [
                 "bg-[var(--ib-bg)] border-[var(--ib-border)] shadow-[var(--ib-shadow)]",
                 "hover:border-[var(--ib-border-hover)] hover:bg-[var(--ib-hover-bg)]",
@@ -982,11 +1035,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                       : "No matches"
               }
             />
-            {isDragOverFiles && (
-              <div className="absolute inset-0 z-10 flex items-center justify-center rounded-md bg-daintree-bg/80 pointer-events-none">
-                <span className="text-xs font-medium text-accent-primary">Drop to attach</span>
-              </div>
-            )}
+            {isDragOverCompact && <FileDropOverlay className="rounded-md" />}
             {isVoiceSubmitting && (
               <div
                 role="status"
@@ -998,17 +1047,41 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               </div>
             )}
             <button
+              ref={pickerRef}
               type="button"
               onClick={openPicker}
               disabled={disabled}
-              className="select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-daintree-accent/65 hover:text-daintree-accent/85 transition-colors cursor-pointer focus-visible:outline-hidden"
+              // `h-6` gives the picker a 24px target without changing the
+              // glyph: at `leading-5` alone the button was 20px tall, under the
+              // WCAG 2.5.8 floor, and its spacing circle overlaps the canvas.
+              className="flex h-6 shrink-0 items-center select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-daintree-accent/65 hover:text-daintree-accent/85 transition-colors cursor-pointer focus-visible:outline-hidden"
               aria-label="Open command picker"
             >
               ❯
             </button>
             <ContextMenu>
               <ContextMenuTrigger asChild onContextMenu={handleEditorContextMenu}>
-                <div className="relative flex-1">
+                {/* `min-w-0`: a flex item defaults to `min-width: auto`, so the
+                    canvas refused to shrink past its longest unbreakable token
+                    and pushed the trailing controls toward the shell edge.
+
+                    `min-h-6` + centring keeps the single-line case aligned. A
+                    one-line canvas is 20px against 24px controls, so bottom
+                    anchoring alone would sit it 2px low — the track holds the
+                    control height and centres the canvas inside it, and once
+                    the draft grows past 24px both are moot.
+
+                    The canvas shares its row with the picker in every state:
+                    the `❯` is a prompt marker and sits beside the line being
+                    typed, and the column it takes is paid on every line of a
+                    wrapped draft on purpose, the same way it is elsewhere in
+                    the app. When the trailing group moves to the rail beneath
+                    (see below), only it moves, so the text column never
+                    shifts. The `pr-2` on that state stands in for the inset the
+                    group provided while it was on the row — without it the
+                    text runs to within 4px of the shell edge. Same two
+                    conditions as the rail itself, so they cannot disagree. */}
+                <div className="relative flex min-h-6 min-w-0 flex-1 items-center group-[[data-composer-narrow]:has([data-composer-multiline])]/shell:pr-2">
                   <div
                     ref={(node) => {
                       editorHostRef.current = node;
@@ -1034,37 +1107,78 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 {selectionFilePath && <SelectedFileMenuItems absolutePath={selectionFilePath} />}
               </ContextMenuContent>
             </ContextMenu>
-            <div className="flex items-center pr-1.5">
-              {hasStash && (
+            {/* The trailing group takes a full basis — wrapping onto a rail
+                beneath the text, right-aligned — when BOTH hold: the draft has
+                wrapped, and the pane is narrow enough that the icon column
+                would push the text's measure under 45 characters
+                (`useComposerMeasure`). Either alone is wrong. Wrapped-only put
+                a rail under a three-line draft in an 1800px pane, where the
+                column costs 3% and the rail costs a whole row; narrow-only
+                would double the height of every one-line composer in a tiled
+                fleet. Inline, the column costs ~60px (~84px with the stash
+                button) beside every line, which is nothing at 1800px and
+                fourteen percent at 430px.
+
+                The inner group is what `useComposerMeasure` observes: it is
+                content-sized, so its width is the buttons' and nothing else,
+                in either arrangement. Measuring this wrapper would read the
+                whole rail once it had a full basis, and "narrow" would then
+                confirm itself. */}
+            <div className="flex items-center justify-end pr-1.5 group-[[data-composer-narrow]:has([data-composer-multiline])]/shell:basis-full">
+              <div ref={trailingGroupRef} className="flex shrink-0 items-center">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={handlePopStash}
-                      className="flex items-center justify-center h-5 w-5 rounded-sm text-daintree-accent/55 hover:text-daintree-accent/80 hover:bg-tint/[0.06] transition-colors cursor-pointer"
-                      aria-label="Restore stashed input"
+                      onClick={() => void handleAttachFiles()}
+                      disabled={disabled}
+                      className={cn(
+                        "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
+                        "text-text-secondary hover:text-text-primary hover:bg-tint/[0.06]",
+                        "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary",
+                        "disabled:pointer-events-none disabled:opacity-40"
+                      )}
+                      aria-label="Attach files"
                     >
-                      <Archive className="h-3.5 w-3.5" />
+                      <Paperclip className="h-3.5 w-3.5" />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {createTooltipContent("Restore stashed input", popStashShortcut)}
-                  </TooltipContent>
+                  <TooltipContent side="bottom">Attach files</TooltipContent>
                 </Tooltip>
-              )}
-              <VoiceInputButton
-                panelId={terminalId}
-                panelTitle={agentId ? getAgentConfig(agentId)?.name : undefined}
-                projectId={currentProject?.id}
-                projectName={currentProject?.name}
-                worktreeId={panelWorktreeId}
-                worktreeLabel={
-                  panelWorktree?.isMainWorktree
-                    ? panelWorktree?.name
-                    : panelWorktree?.branch || panelWorktree?.name
-                }
-                disabled={disabled}
-              />
+                {hasStash && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={handlePopStash}
+                        // 24px to clear the WCAG 2.5.8 floor. The spacing
+                        // exception cannot rescue a smaller one here — its circle
+                        // overlaps the attach and mic targets either side.
+                        className="flex items-center justify-center h-6 w-6 rounded-full text-daintree-accent/55 hover:text-daintree-accent/80 hover:bg-tint/[0.06] transition-colors cursor-pointer"
+                        aria-label="Restore stashed input"
+                      >
+                        <Archive className="h-3.5 w-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {createTooltipContent("Restore stashed input", popStashShortcut)}
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+                <VoiceInputButton
+                  panelId={terminalId}
+                  panelTitle={agentId ? getAgentConfig(agentId)?.name : undefined}
+                  projectId={currentProject?.id}
+                  projectName={currentProject?.name}
+                  worktreeId={panelWorktreeId}
+                  worktreeLabel={
+                    panelWorktree?.isMainWorktree
+                      ? panelWorktree?.name
+                      : panelWorktree?.branch || panelWorktree?.name
+                  }
+                  disabled={disabled}
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -1108,7 +1222,18 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             <AppDialog.Title>Expanded Editor</AppDialog.Title>
             <AppDialog.CloseButton />
           </AppDialog.Header>
-          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          {/* CodeMirror claims file drops to suppress its own text insertion
+              (#11710), so a drop only lands through these handlers (#12570).
+              Outside the scrolling host, so the overlay covers the visible
+              editor instead of scrolling away with a long draft. */}
+          <div
+            ref={releaseModalDropTarget}
+            className="relative flex-1 min-h-0 flex flex-col overflow-hidden"
+            onDragEnter={handleDragEnter}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
             <ContextMenu>
               <ContextMenuTrigger asChild onContextMenu={handleEditorContextMenu}>
                 <div
@@ -1133,6 +1258,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 {selectionFilePath && <SelectedFileMenuItems absolutePath={selectionFilePath} />}
               </ContextMenuContent>
             </ContextMenu>
+            {isDragOverModal && <FileDropOverlay />}
           </div>
         </AppDialog>
         {isFocusedTerminal && (

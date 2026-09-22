@@ -32,11 +32,18 @@ import type { ActionDispatchResult } from "../../../shared/types/actions.js";
  *    way to claim someone else's resource: the only way to reach it is to
  *    successfully create a resource under that id, which replaces whatever the
  *    id named before, so the authority always follows what actually exists.
- * 3. **It is session-scoped and dies with the session.** Cleared by every
+ * 3. **It dies with the credential that earned it.** A session authenticated
+ *    by an api key holds its records itself, and they are cleared by every
  *    teardown path in lockstep with the routing maps — see
- *    `SessionStore.clearSessionBinding` and `drain`. Clearing authority is not
- *    cleanup: the terminals and worktrees themselves stay exactly where they
- *    are, because a disconnect is not a decision to destroy the user's work.
+ *    `SessionStore.clearSessionBinding` and `drain`. A session authenticated
+ *    by a per-pane bearer is bound at handshake to that bearer's principal
+ *    (#12487), and its records are held by the principal instead: a reconnect,
+ *    an idle reap or a server restart replaces the session but not the bearer,
+ *    so the pane keeps authority over what it launched. The principal's
+ *    records go when the bearer is revoked ({@link revokePrincipal}), never
+ *    before. Clearing authority is not cleanup: the terminals and worktrees
+ *    themselves stay exactly where they are, because a disconnect is not a
+ *    decision to destroy the user's work.
  *
  * Recorded for every tier, not just `external`. "Owned" means *this session
  * created it*, which is a fact about the session rather than about its
@@ -69,39 +76,103 @@ function resourceKey(kind: OwnedResourceKind, id: string): string {
   return `${kind}\u0000${id}`;
 }
 
+// NUL-led like `resourceKey`, so no session id — a server-minted UUID — can
+// spell a principal's owner key and read or write its records.
+const PRINCIPAL_OWNER_PREFIX = "principal\u0000";
+
+/**
+ * The owner key a principal's authority is held under. Exported so the
+ * terminal adoption record (#12490) matches callers by the same value
+ * {@link ResourceOwnershipLedger.ownerOf} resolves.
+ */
+export function principalOwnerKey(principalId: string): string {
+  return `${PRINCIPAL_OWNER_PREFIX}${principalId}`;
+}
+
+function isPrincipalOwner(owner: string): boolean {
+  return owner.startsWith(PRINCIPAL_OWNER_PREFIX);
+}
+
+/**
+ * Records are held by an *owner*: a session's own id, or the principal a
+ * per-pane bearer session was bound to at handshake. Callers resolve one with
+ * {@link ResourceOwnershipLedger.ownerOf} and pass it to every read and write,
+ * so a session that was never bound is its own owner and behaves exactly as
+ * the session-scoped ledger always did.
+ */
 export class ResourceOwnershipLedger {
-  /** sessionId → resourceKey → record. */
-  private readonly bySession = new Map<string, Map<string, OwnedResourceRecord>>();
-  /** resourceKey → owning sessionId. The index that makes newest-creator-wins eviction O(1). */
+  /** owner → resourceKey → record. */
+  private readonly byOwner = new Map<string, Map<string, OwnedResourceRecord>>();
+  /** resourceKey → owner. The index that makes newest-creator-wins eviction O(1). */
   private readonly ownerByResource = new Map<string, string>();
+  /** sessionId → principal owner key, for sessions a per-pane bearer authenticated. */
+  private readonly principalBySession = new Map<string, string>();
+  /**
+   * Principal owner keys whose bearer has not been revoked. A principal id is
+   * minted per bearer, and the handshake resolves it only from a live token, so
+   * nothing binds a principal again once it has left this set.
+   */
+  private readonly livePrincipals = new Set<string>();
 
   /**
-   * Attribute freshly created resources to a session.
+   * Bind a session to the principal its bearer resolved to at handshake
+   * (#12487). Every session presenting the same bearer shares one set of
+   * records, and each ledger operation is synchronous, so two of them cannot
+   * interleave into disagreeing copies.
+   */
+  bindPrincipal(sessionId: string, principalId: string): void {
+    const owner = principalOwnerKey(principalId);
+    this.principalBySession.set(sessionId, owner);
+    this.livePrincipals.add(owner);
+  }
+
+  /**
+   * The owner a session's records are held under: its principal when a per-pane
+   * bearer bound it, otherwise the session itself.
+   *
+   * Captured once when a call is admitted and used for the whole call, so a
+   * creation that completes after the transport dropped still lands with the
+   * principal the call was authorized under.
+   */
+  ownerOf(sessionId: string): string {
+    return this.principalBySession.get(sessionId) ?? sessionId;
+  }
+
+  /** Whether `owner` is a bearer principal, whose records outlive any one session. */
+  isPrincipalOwner(owner: string): boolean {
+    return isPrincipalOwner(owner);
+  }
+
+  /**
+   * Attribute freshly created resources to an owner.
    *
    * A previous holder of the same id loses its record, because the id now names
-   * something new — see the class note on why the newest creation wins. Returns
+   * something new — see the class note on why the newest creation wins. A
+   * revoked principal records nothing: a creation admitted before its bearer was
+   * revoked must not resurrect authority the revocation just took away. Returns
    * the records added.
    */
   record(
-    sessionId: string,
+    owner: string,
     drafts: readonly OwnedResourceDraft[],
     workspaceId?: string
   ): OwnedResourceRecord[] {
     if (drafts.length === 0) return [];
+    if (isPrincipalOwner(owner) && !this.livePrincipals.has(owner)) return [];
     const added: OwnedResourceRecord[] = [];
     for (const draft of drafts) {
       if (draft.id.length === 0) continue;
       const key = resourceKey(draft.kind, draft.id);
       const previousOwner = this.ownerByResource.get(key);
-      if (previousOwner !== undefined && previousOwner !== sessionId) {
-        const previous = this.bySession.get(previousOwner);
+      if (previousOwner !== undefined && previousOwner !== owner) {
+        const previous = this.byOwner.get(previousOwner);
         previous?.delete(key);
-        if (previous?.size === 0) this.bySession.delete(previousOwner);
+        if (previous?.size === 0) this.byOwner.delete(previousOwner);
       }
-      let owned = this.bySession.get(sessionId);
+      let owned = this.byOwner.get(owner);
       if (owned === undefined) {
         owned = new Map();
-        this.bySession.set(sessionId, owned);
+        this.byOwner.set(owner, owned);
       }
       const record: OwnedResourceRecord = {
         kind: draft.kind,
@@ -109,67 +180,113 @@ export class ResourceOwnershipLedger {
         ...(workspaceId !== undefined ? { workspaceId } : {}),
       };
       owned.set(key, record);
-      this.ownerByResource.set(key, sessionId);
+      this.ownerByResource.set(key, owner);
       added.push(record);
     }
     return added;
   }
 
   /**
-   * The record this session holds for a resource, or `undefined`.
+   * The record this owner holds for a resource, or `undefined`.
    *
-   * Fails closed on an unknown session for the same reason
+   * Fails closed on an unknown owner for the same reason
    * `SessionStore.getOrigin` defaults to `external`: a session that never
    * handshook, or one already half torn down, owns nothing.
    */
-  get(sessionId: string, kind: OwnedResourceKind, id: string): OwnedResourceRecord | undefined {
-    return this.bySession.get(sessionId)?.get(resourceKey(kind, id));
+  get(owner: string, kind: OwnedResourceKind, id: string): OwnedResourceRecord | undefined {
+    return this.byOwner.get(owner)?.get(resourceKey(kind, id));
   }
 
-  owns(sessionId: string, kind: OwnedResourceKind, id: string): boolean {
-    return this.get(sessionId, kind, id) !== undefined;
+  owns(owner: string, kind: OwnedResourceKind, id: string): boolean {
+    return this.get(owner, kind, id) !== undefined;
+  }
+
+  /**
+   * Whoever holds the record for a resource, if anyone. Read by the terminal
+   * hand-over (#12490), which refuses to give a second pane a terminal another
+   * one launched and can already drive.
+   */
+  creatorOf(kind: OwnedResourceKind, id: string): string | undefined {
+    return this.ownerByResource.get(resourceKey(kind, id));
   }
 
   /**
    * Drop one record after its resource is gone.
    *
-   * Called on a successful cleanup so a long-lived session's ledger tracks what
+   * Called on a successful cleanup so a long-lived owner's ledger tracks what
    * still exists instead of growing for the life of the connection. Nothing
    * else prunes it: a terminal the *user* closed leaves a stale entry, which
    * costs two short strings and fails honestly at the delegated action ("no
    * panel with id …") rather than pretending to close something.
+   *
+   * With `expected`, only that record is dropped. Every creation writes a new
+   * record, so a cleanup that finishes after the id was recorded again — by
+   * another session on the same bearer — leaves the newer resource's record
+   * alone.
    */
-  release(sessionId: string, kind: OwnedResourceKind, id: string): void {
+  release(
+    owner: string,
+    kind: OwnedResourceKind,
+    id: string,
+    expected?: OwnedResourceRecord
+  ): void {
     const key = resourceKey(kind, id);
-    const owned = this.bySession.get(sessionId);
-    if (owned?.delete(key) !== true) return;
-    if (owned.size === 0) this.bySession.delete(sessionId);
-    if (this.ownerByResource.get(key) === sessionId) this.ownerByResource.delete(key);
+    const owned = this.byOwner.get(owner);
+    if (owned === undefined) return;
+    if (expected !== undefined && owned.get(key) !== expected) return;
+    if (!owned.delete(key)) return;
+    if (owned.size === 0) this.byOwner.delete(owner);
+    if (this.ownerByResource.get(key) === owner) this.ownerByResource.delete(key);
   }
 
-  /** Every resource this session still holds authority over. */
-  list(sessionId: string): OwnedResourceRecord[] {
-    const owned = this.bySession.get(sessionId);
+  /** Every resource this owner still holds authority over. */
+  list(owner: string): OwnedResourceRecord[] {
+    const owned = this.byOwner.get(owner);
     return owned === undefined ? [] : [...owned.values()];
   }
 
   /**
-   * Revoke a session's authority. The resources themselves are untouched — see
-   * the "clearing authority is not cleanup" note on this class.
+   * End a session. Its own records go; a principal it was bound to keeps
+   * everything, because the bearer that earned that authority is still live
+   * and the next session to present it is the same pane. The resources
+   * themselves are untouched — see the "clearing authority is not cleanup" note
+   * on this class.
    */
   clearSession(sessionId: string): void {
-    const owned = this.bySession.get(sessionId);
-    if (owned === undefined) return;
-    for (const key of owned.keys()) {
-      if (this.ownerByResource.get(key) === sessionId) this.ownerByResource.delete(key);
-    }
-    this.bySession.delete(sessionId);
+    this.principalBySession.delete(sessionId);
+    this.dropOwner(sessionId);
   }
 
-  /** Wholesale teardown, for `SessionStore.drain`. */
-  clear(): void {
-    this.bySession.clear();
-    this.ownerByResource.clear();
+  /**
+   * Revoke a bearer's authority, in the same step as the bearer itself
+   * (#12487). Sessions still bound to it stay bound to a principal that now
+   * owns nothing and records nothing, so they fail closed until they end.
+   */
+  revokePrincipal(principalId: string): void {
+    const owner = principalOwnerKey(principalId);
+    this.livePrincipals.delete(owner);
+    this.dropOwner(owner);
+  }
+
+  /**
+   * End every session at once, for `SessionStore.drain`. Principals keep their
+   * records: stopping the server revokes no pane bearer, so a pane that
+   * reconnects to the restarted server is still the pane that launched them.
+   */
+  clearAllSessions(): void {
+    this.principalBySession.clear();
+    for (const owner of [...this.byOwner.keys()]) {
+      if (!isPrincipalOwner(owner)) this.dropOwner(owner);
+    }
+  }
+
+  private dropOwner(owner: string): void {
+    const owned = this.byOwner.get(owner);
+    if (owned === undefined) return;
+    for (const key of owned.keys()) {
+      if (this.ownerByResource.get(key) === owner) this.ownerByResource.delete(key);
+    }
+    this.byOwner.delete(owner);
   }
 }
 
@@ -198,9 +315,10 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
  * What each creation tool's *successful* result contributes to the ledger.
  *
  * Keyed by action id rather than sniffing result shapes, so adding a creation
- * path to the external surface is a deliberate entry here and not something a
- * lucky field name turns on by accident. Every id listed is one an external
- * session can actually reach (`MCP_EXTERNAL_TIER_TOOLS`).
+ * path is a deliberate entry here and not something a lucky field name turns on
+ * by accident. Every id listed is one a session that is not the assistant can
+ * reach — on the external surface, or on a ladder tier through an agent pane's
+ * bearer, whose terminal input is limited to what it created (#12407).
  *
  * `agent.launch` returns a `worktreeId`, and it is deliberately NOT recorded:
  * that field names the worktree the agent was launched *into*, which the
@@ -219,6 +337,21 @@ const SUCCESS_EXTRACTORS: Record<
     // is sufficient — but read the flag too, so a future result shape that
     // reports a failed launch beside a stale id cannot leak an attribution.
     if (result.launched === false) return [];
+    const terminalId = readString(result, "terminalId");
+    return terminalId === undefined ? [] : [{ kind: "terminal", id: terminalId }];
+  },
+  // Both open a panel on a ladder tier and hand its id back (#12407). Without
+  // them a pane bearer that opened a shell or started work on an issue could
+  // not type into the terminal it had just opened.
+  "agent.terminal": (result) => {
+    const terminalId = readString(result, "terminalId");
+    return terminalId === undefined ? [] : [{ kind: "terminal", id: terminalId }];
+  },
+  // The agent terminal only. The worktree it creates and any recipe children
+  // are left unrecorded: children come back as a count that identifies nothing,
+  // and attributing the worktree would extend owned-delete authority, which is
+  // a separate decision from terminal input.
+  "workflow.startWorkOnIssue": (result) => {
     const terminalId = readString(result, "terminalId");
     return terminalId === undefined ? [] : [{ kind: "terminal", id: terminalId }];
   },

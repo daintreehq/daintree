@@ -1,0 +1,46 @@
+{
+  "name": "daintree.sveltekit-builder",
+  "version": "0.1.0",
+  "displayName": "SvelteKit Tools",
+  "description": "Work on your SvelteKit app from the live preview. Select elements, trace their source, and ask your coding agent to make changes.",
+  "tagline": "Point at your app. Ask your agent to change it.",
+  "category": "workspace",
+  "main": "main/index.js",
+  "engines": {
+    "daintree": ">=0.36.0"
+  },
+  "capabilities": ["fs:project-read"],
+  "scopes": {
+    "fs": {
+      "allowedPaths": ["${project}", "${worktree}"]
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "id": "toggle-builder",
+        "title": "Toggle SvelteKit Tools",
+        "description": "Switch SvelteKit Tools on or off in this worktree's dev preview, opening the preview if none is running.",
+        "category": "panels",
+        "kind": "command",
+        "danger": "safe",
+        "keywords": ["svelte", "sveltekit", "tools", "inspect", "inspector", "preview", "agent"],
+        "requires": []
+      }
+    ],
+    "previewTools": [
+      {
+        "id": "daintree.sveltekit-builder.builder",
+        "title": "SvelteKit Tools",
+        "iconId": "square-dashed-mouse-pointer",
+        "guestAdapter": "daintree.sveltekit-builder.guest"
+      }
+    ],
+    "guestAdapters": [
+      {
+        "id": "daintree.sveltekit-builder.guest",
+        "entry": "renderer/guest/entry.ts"
+      }
+    ]
+  }
+}

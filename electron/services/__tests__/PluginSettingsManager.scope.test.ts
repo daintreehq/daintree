@@ -31,6 +31,7 @@ function manifestWith(settings: SettingDefinition[]): PluginManifest {
       skills: [],
       forgeProviders: [],
       fileDecorationProviders: [],
+      fileEditors: [],
       agents: [],
       processTools: [],
       recipes: [],

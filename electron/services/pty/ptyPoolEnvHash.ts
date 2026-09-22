@@ -1,4 +1,4 @@
-import { filterSensitiveOnly } from "./EnvironmentFilter.js";
+import { filterSensitiveOnly, isSensitiveVar } from "./EnvironmentFilter.js";
 
 /**
  * Volatile env keys that change with shell session state but don't change the
@@ -23,6 +23,24 @@ const AUTO_INJECTED_DAINTREE_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 const EMPTY_HASH = "env-empty";
+
+/**
+ * True when the caller's intentional env carries a variable the pool strips
+ * from both the key and the warm shell. A pooled shell for such a spawn would
+ * silently lack the credential — the pooled return path never applies the
+ * freshly built env — so these spawns must take a fresh process instead. Uses
+ * the same predicate as `filterSensitiveOnly` so "pool-strippable" and
+ * "pool-ineligible" can never drift apart.
+ */
+export function carriesPoolStrippedEnv(
+  env: Record<string, string | undefined> | undefined
+): boolean {
+  if (!env) return false;
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined && isSensitiveVar(key)) return true;
+  }
+  return false;
+}
 
 /**
  * Stable identifier for a pool slot keyed by env. Two calls with the same

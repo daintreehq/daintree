@@ -200,24 +200,24 @@ describe("ProjectSwitcher loading affordance", () => {
     expect(trigger.querySelector(".lucide-chevrons-up-down")).not.toBeNull();
   });
 
-  it("'Select Project…' trigger shows spinner after the deferred-loading gate elapses", () => {
+  it("'Select project' trigger shows spinner after the deferred-loading gate elapses", () => {
     setStore({
       projects: [makeProject()],
       currentProject: null,
       isLoading: true,
     });
     const { getByRole } = render(<ProjectSwitcher />);
-    let trigger = getByRole("button", { name: /Select Project/ });
-    expect(within(trigger).getByText("Select Project...")).toBeTruthy();
+    let trigger = getByRole("button", { name: /Select project/ });
+    expect(within(trigger).getByText("Select project")).toBeTruthy();
     expect(trigger.querySelector(".animate-spin")).toBeNull();
 
     advanceDeferGate();
-    trigger = getByRole("button", { name: /Select Project/ });
+    trigger = getByRole("button", { name: /Select project/ });
     expect(trigger.querySelector(".animate-spin")).not.toBeNull();
     expect(trigger.querySelector(".lucide-chevrons-up-down")).toBeNull();
   });
 
-  it("'Select Project…' trigger shows chevron when isLoading is false", () => {
+  it("'Select project' trigger shows chevron when isLoading is false", () => {
     setStore({
       projects: [makeProject()],
       currentProject: null,
@@ -225,8 +225,8 @@ describe("ProjectSwitcher loading affordance", () => {
     });
     const { getByRole } = render(<ProjectSwitcher />);
     advanceDeferGate();
-    const trigger = getByRole("button", { name: /Select Project/ });
-    expect(within(trigger).getByText("Select Project...")).toBeTruthy();
+    const trigger = getByRole("button", { name: /Select project/ });
+    expect(within(trigger).getByText("Select project")).toBeTruthy();
     expect(trigger.querySelector(".animate-spin")).toBeNull();
     expect(trigger.querySelector(".lucide-chevrons-up-down")).not.toBeNull();
   });
@@ -259,8 +259,8 @@ describe("ProjectSwitcher loading affordance", () => {
     });
     const { getByRole } = render(<ProjectSwitcher />);
     advanceDeferGate();
-    const trigger = getByRole("button", { name: /Open Project/ });
-    expect(within(trigger).getByText("Open Project...")).toBeTruthy();
+    const trigger = getByRole("button", { name: /Open project/ });
+    expect(within(trigger).getByText("Open project…")).toBeTruthy();
     expect(trigger.querySelector(".lucide-plus")).not.toBeNull();
     expect(trigger.querySelector(".animate-spin")).toBeNull();
   });
@@ -320,7 +320,7 @@ describe("ProjectSwitcher loading affordance", () => {
       isLoading: true,
     });
     const { getByRole } = render(<ProjectSwitcher />);
-    const trigger = getByRole("button", { name: /Open Project/ }) as HTMLButtonElement;
+    const trigger = getByRole("button", { name: /Open project/ }) as HTMLButtonElement;
     // No spinner here, so disabling immediately can't be confused with a
     // warm-cache flash — keep the instant interaction guard.
     expect(trigger.disabled).toBe(true);

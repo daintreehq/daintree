@@ -108,12 +108,22 @@ export interface UseFleetPickerResult {
   snippetMap: ReadonlyMap<string, SemanticSearchMatch>;
   confirmedIds: string[];
   driftCount: number;
+  /** Total eligible terminals, ignoring the filter — the denominator of "N of M selected". */
+  eligibleCount: number;
+  /**
+   * Selected terminals the current filter is hiding. A selection survives
+   * filtering by design, so without this the footer can promise to arm a
+   * terminal the user cannot see and cannot name.
+   */
+  hiddenSelectedCount: number;
 
   // Handlers
   handleToggleId: (id: string, event?: React.MouseEvent) => void;
   handleListKeyDown: (e: ReactKeyboardEvent<HTMLDivElement>) => void;
   handleConfirm: () => void;
   clearSearch: () => void;
+  /** Move focus into the list. The search input calls this on ArrowDown. */
+  focusFirstNode: () => void;
   /**
    * Stable callback-ref factory. Consumers attach `registerRow(id)` to each
    * row's `ref` so the hook's keyboard handler can move DOM focus to match
@@ -122,6 +132,13 @@ export interface UseFleetPickerResult {
    * stuck on the previously-focused row while the highlight migrates).
    */
   registerRow: (id: string) => (el: HTMLLabelElement | null) => void;
+  /** Ref factory for group headings, so arrow navigation can move focus onto them. */
+  registerGroup: (worktreeId: string) => (el: HTMLElement | null) => void;
+  /**
+   * Which node carries `tabIndex={0}` — `t:<terminalId>` or `g:<worktreeId>`.
+   * Rows and headings share one roving tab stop for the whole tree.
+   */
+  rovingNavKey: string | null;
 }
 
 interface FuseItem {
@@ -201,11 +218,21 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState("");
   const [snippetMap, setSnippetMap] = useState<Map<string, SemanticSearchMatch>>(() => new Map());
+  // The query `snippetMap` was produced for. Semantic results arrive ~300ms
+  // behind the keystroke, so without this a terminal matched only by the
+  // PREVIOUS query keeps passing the filter under the new one — and can be
+  // swept into a bulk selection while it is visibly unrelated to what was typed.
+  const [snippetQuery, setSnippetQuery] = useState("");
   const [focusedId, setFocusedId] = useState<string | null>(null);
+  // Which tree node last held focus — `g:<worktreeId>` or `t:<terminalId>`.
+  // `focusedId` only ever names a row, so without this a heading could take
+  // DOM focus and still never become the roving tab stop.
+  const [focusedNavKey, setFocusedNavKey] = useState<string | null>(null);
   const deferredQuery = useDeferredValue(query);
   const rangeAnchorRef = useRef<string | null>(null);
   const currentRequestRef = useRef(0);
   const rowRefs = useRef<Map<string, HTMLLabelElement>>(new Map());
+  const groupRefs = useRef<Map<string, HTMLElement>>(new Map());
 
   // Acquire/release the single-active-picker session as the consumer opens
   // and closes. We do this in a layout-effect-ish window via a normal effect
@@ -278,6 +305,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     const trimmed = deferredQuery.trim();
     if (trimmed === "") {
       setSnippetMap(new Map());
+      setSnippetQuery("");
       nextSearchRequestId += 1;
       currentRequestRef.current = nextSearchRequestId;
       return;
@@ -295,6 +323,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
           const next = new Map<string, SemanticSearchMatch>();
           for (const m of matches) next.set(m.terminalId, m);
           setSnippetMap(next);
+          setSnippetQuery(trimmed);
         })
         .catch(() => {
           if (currentRequestRef.current !== issueId) return;
@@ -381,8 +410,12 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     // index can't see.
     const fuzzyIds = new Set<string>();
     for (const result of fuse.search(trimmed)) fuzzyIds.add(result.item.id);
-    return eligibleTerminals.filter((t) => snippetMap.has(t.id) || fuzzyIds.has(t.id));
-  }, [eligibleTerminals, deferredQuery, snippetMap, fuse]);
+    // Only honour semantic hits that belong to the query currently on screen.
+    const semanticFresh = snippetQuery === trimmed;
+    return eligibleTerminals.filter(
+      (t) => (semanticFresh && snippetMap.has(t.id)) || fuzzyIds.has(t.id)
+    );
+  }, [eligibleTerminals, deferredQuery, snippetMap, snippetQuery, fuse]);
 
   const visibleIds = useMemo(() => visibleTerminals.map((t) => t.id), [visibleTerminals]);
 
@@ -449,6 +482,26 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
 
   const driftCount = selectedIds.size - confirmedIds.length;
 
+  const eligibleCount = eligibleTerminals.length;
+
+  // Guarding membership was not enough: a terminal that fuzzy-matches the NEW
+  // query would still render the PREVIOUS query's excerpt underneath it until
+  // the next response landed, presenting obsolete evidence for its inclusion.
+  const freshSnippetMap = useMemo(
+    () => (snippetQuery === deferredQuery.trim() ? snippetMap : new Map()),
+    [snippetMap, snippetQuery, deferredQuery]
+  );
+
+  const hiddenSelectedCount = useMemo(() => {
+    if (deferredQuery.trim() === "") return 0;
+    const visible = new Set(visibleIds);
+    let n = 0;
+    for (const id of selectedIds) {
+      if (!visible.has(id) && eligibleIdSet.has(id)) n++;
+    }
+    return n;
+  }, [selectedIds, visibleIds, eligibleIdSet, deferredQuery]);
+
   const clearSearch = useCallback(() => setQuery(""), []);
 
   const handleToggleId = useCallback(
@@ -482,40 +535,135 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
       });
       rangeAnchorRef.current = id;
       setFocusedId(id);
+      setFocusedNavKey(`t:${id}`);
     },
     [flatVisibleIds]
   );
 
+  /**
+   * Headers and rows in one visual order. Arrowing through the list should walk
+   * what the eye walks — a keyboard user passing a worktree heading can toggle
+   * the whole worktree from there, which is the entire point of having headings
+   * that are themselves checkable.
+   */
+  const navKeys = useMemo(() => {
+    const out: string[] = [];
+    for (const group of groupedVisible) {
+      if (!isSingleWorktree) out.push(`g:${group.worktreeId}`);
+      for (const t of group.terminals) out.push(`t:${t.id}`);
+    }
+    return out;
+  }, [groupedVisible, isSingleWorktree]);
+
+  const navKeyForElement = useCallback((el: HTMLElement): string | null => {
+    const gid = el.getAttribute("data-group-header");
+    if (gid) return `g:${gid}`;
+    const tid = el.getAttribute("data-terminal-id");
+    return tid ? `t:${tid}` : null;
+  }, []);
+
+  const focusNavIndex = useCallback(
+    (index: number) => {
+      if (navKeys.length === 0) return;
+      const clamped = Math.max(0, Math.min(index, navKeys.length - 1));
+      const key = navKeys[clamped];
+      if (!key) return;
+      setFocusedNavKey(key);
+      if (key.startsWith("t:")) {
+        const id = key.slice(2);
+        setFocusedId(id);
+        rowRefs.current.get(id)?.focus();
+        return;
+      }
+      // A group heading takes DOM focus but leaves `focusedId` alone, so Space
+      // on a row later still targets a row rather than a stale heading.
+      groupRefs.current.get(key.slice(2))?.focus();
+    },
+    [navKeys]
+  );
+
+  /**
+   * The search input's ArrowDown hand-off. It enters at the same node the tree
+   * container's own ArrowDown does — the first heading when there is more than
+   * one worktree — so Up and Down walk one unbroken sequence and the first
+   * heading is not stranded above the only way into the list. The dialog
+   * autofocuses the input, so without this the footer's "↑↓ Move" hint does
+   * nothing at all from the state the user actually starts in.
+   */
+  const focusFirstNode = useCallback(() => focusNavIndex(0), [focusNavIndex]);
+
+  const handleConfirm = useCallback(() => {
+    if (confirmedIds.length === 0) return;
+    onCommit(confirmedIds);
+  }, [confirmedIds, onCommit]);
+
   const handleListKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      // Only tree nodes get tree keys. The container also hosts ordinary
+      // controls — the filtered-empty state's "Clear search" button sits inside
+      // it — and swallowing Enter there turned a recovery click into a commit
+      // of the very selection the filter was hiding.
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      if (!target) return;
+      const node = target.closest<HTMLElement>('[role="treeitem"]');
+      if (target !== e.currentTarget && !node) return;
+
+      const isGroupNode = node?.hasAttribute("data-group-header") ?? false;
+
+      if (e.key === "Enter") {
+        e.preventDefault();
+        // Enter on a group header toggles that group; the header is a control
+        // in its own right, and committing from it would be a surprise.
+        if (isGroupNode) {
+          node?.click();
+          return;
+        }
+        handleConfirm();
+        return;
+      }
+
+      if (e.key === " " && isGroupNode) {
+        // Let the header's own click handler own its toggle. Without this the
+        // key fell through and toggled whichever ROW `focusedId` pointed at.
+        e.preventDefault();
+        node?.click();
+        return;
+      }
+
+      if (e.key === "Home" || e.key === "End") {
+        if (navKeys.length === 0) return;
+        e.preventDefault();
+        focusNavIndex(e.key === "Home" ? 0 : navKeys.length - 1);
+        return;
+      }
+
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         if (e.metaKey) return;
-        if (flatVisibleIds.length === 0) return;
+        // Headers and rows are ONE ordered sequence: a keyboard user arrowing
+        // down the list passes through the worktree headings exactly as the eye
+        // does, and can toggle a whole worktree from there.
+        if (navKeys.length === 0) return;
         e.preventDefault();
-        const currentIdx = focusedId !== null ? flatVisibleIds.indexOf(focusedId) : -1;
-        const baseIdx = currentIdx === -1 ? 0 : currentIdx;
+        const currentNav = node ? navKeyForElement(node) : null;
+        const idx = currentNav ? navKeys.indexOf(currentNav) : -1;
+        // From the container itself (nothing focused yet) Down lands on the
+        // first node, matching what the search input's hand-off does.
         const nextIdx =
-          e.key === "ArrowDown"
-            ? Math.min(baseIdx + 1, flatVisibleIds.length - 1)
-            : Math.max(baseIdx - 1, 0);
-        const nextId = flatVisibleIds[nextIdx];
-        if (!nextId) return;
-        const moved = nextId !== focusedId;
-        if (moved) {
-          setFocusedId(nextId);
-          // Move DOM focus to match logical focus — without this, the
-          // visible focus ring stays on the previously-focused row while
-          // `tabIndex={isFocused ? 0 : -1}` shifts the keyboard target.
-          // This is the matching half of the dialog's roving-tabindex
-          // pattern (lifted into the hook so the consumer doesn't need
-          // to wire focus management itself).
-          rowRefs.current.get(nextId)?.focus();
-        }
-        if (e.shiftKey && moved && rangeAnchorRef.current !== null) {
+          idx === -1
+            ? 0
+            : Math.max(0, Math.min(navKeys.length - 1, idx + (e.key === "ArrowDown" ? 1 : -1)));
+        const nextKey = navKeys[nextIdx];
+        if (!nextKey) return;
+        focusNavIndex(nextIdx);
+        // Shift+Arrow extends the range from the anchor to the destination row.
+        // Headings are skipped over by the range, not selected by it — the
+        // range is a run of terminals, and `flatVisibleIds` is that run.
+        if (e.shiftKey && nextKey.startsWith("t:") && rangeAnchorRef.current !== null) {
           const anchorIdx = flatVisibleIds.indexOf(rangeAnchorRef.current);
-          if (anchorIdx !== -1) {
-            const lo = Math.min(anchorIdx, nextIdx);
-            const hi = Math.max(anchorIdx, nextIdx);
+          const destIdx = flatVisibleIds.indexOf(nextKey.slice(2));
+          if (anchorIdx !== -1 && destIdx !== -1) {
+            const lo = Math.min(anchorIdx, destIdx);
+            const hi = Math.max(anchorIdx, destIdx);
             setSelectedIds((prev) => {
               const next = new Set(prev);
               for (let i = lo; i <= hi; i++) {
@@ -546,32 +694,37 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
       if (!mod) return;
       const key = e.key.toLowerCase();
       if (key === "a" && !e.shiftKey) {
+        // Union, never replace. A filtered-out terminal the user already
+        // picked is still armed on commit, so dropping it here would silently
+        // change the broadcast set — the one thing this surface exists to let
+        // the user audit.
         e.preventDefault();
-        setSelectedIds(new Set(visibleIds));
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          for (const id of visibleIds) next.add(id);
+          return next;
+        });
         return;
       }
       if (key === "i" && e.shiftKey) {
-        // Scope to the listbox only — stopPropagation prevents the global
+        // Scope to the list only — stopPropagation prevents the global
         // Cmd+Shift+I "inject context" binding from firing while the picker
-        // has list focus.
+        // has list focus. Inverting is likewise scoped to what is visible:
+        // ids outside the filter keep whatever state the user gave them.
         e.preventDefault();
         e.stopPropagation();
         setSelectedIds((prev) => {
-          const next = new Set<string>();
+          const next = new Set(prev);
           for (const id of visibleIds) {
-            if (!prev.has(id)) next.add(id);
+            if (prev.has(id)) next.delete(id);
+            else next.add(id);
           }
           return next;
         });
       }
     },
-    [flatVisibleIds, focusedId, visibleIds]
+    [flatVisibleIds, focusedId, visibleIds, navKeys, navKeyForElement, focusNavIndex, handleConfirm]
   );
-
-  const handleConfirm = useCallback(() => {
-    if (confirmedIds.length === 0) return;
-    onCommit(confirmedIds);
-  }, [confirmedIds, onCommit]);
 
   // Stable callback-ref factory — `registerRow(id)` returns the same callback
   // identity for the same id, so memoized rows don't churn the ref Map on
@@ -583,6 +736,25 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     },
     []
   );
+
+  const registerGroup = useCallback(
+    (worktreeId: string) => (el: HTMLElement | null) => {
+      if (el) groupRefs.current.set(worktreeId, el);
+      else groupRefs.current.delete(worktreeId);
+    },
+    []
+  );
+
+  /**
+   * The node that owns the tree's single tab stop. Rows and headings share one
+   * roving tabindex, so Tab enters the list once and lands where the user left
+   * it — every group heading used to be its own tab stop.
+   */
+  const rovingNavKey = useMemo(() => {
+    if (focusedNavKey && navKeys.includes(focusedNavKey)) return focusedNavKey;
+    if (focusedId && navKeys.includes(`t:${focusedId}`)) return `t:${focusedId}`;
+    return navKeys[0] ?? null;
+  }, [focusedNavKey, focusedId, navKeys]);
 
   return {
     acquired,
@@ -598,13 +770,18 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
     flatVisibleIds,
     visibleIds,
     isSingleWorktree,
-    snippetMap,
+    snippetMap: freshSnippetMap,
     confirmedIds,
     driftCount,
+    eligibleCount,
+    hiddenSelectedCount,
     handleToggleId,
     handleListKeyDown,
     handleConfirm,
     clearSearch,
+    focusFirstNode,
     registerRow,
+    registerGroup,
+    rovingNavKey,
   };
 }

@@ -33,7 +33,7 @@ import type {
   DemoSendKeyToTerminalPayload,
 } from "../../../shared/types/ipc/demo.js";
 
-const CAPTURE_MIME_TYPE = "video/webm;codecs=vp9";
+const CAPTURE_MIME_TYPE = process.env.DAINTREE_DEMO_MIME ?? "video/webm;codecs=vp9";
 const PROJECT_SESSION_PARTITION = "persist:daintree";
 
 export function registerDemoHandlers(deps: HandlerDependencies): () => void {

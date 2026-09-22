@@ -1,0 +1,45 @@
+{
+  "name": "daintree.markdown-editor",
+  "version": "0.1.0",
+  "displayName": "Markdown editor",
+  "description": "Edit Markdown files in place: the file panel's Source view made writable, with syntax highlighting, explicit save, conflict detection against agents writing the same file, and draft recovery.",
+  "tagline": "Edit the plans, specs and notes your agents write, without leaving the panel",
+  "category": "workspace",
+  "main": "main/index.js",
+  "engines": {
+    "daintree": ">=0.11.0"
+  },
+  "capabilities": [
+    "fs:project-read",
+    "fs:project-write",
+    "fs:user-data-read",
+    "fs:user-data-write"
+  ],
+  "scopes": {
+    "fs": {
+      "allowedPaths": ["${project}", "${worktree}"]
+    }
+  },
+  "contributes": {
+    "fileEditors": [
+      {
+        "id": "markdown",
+        "slot": "markdown.editor",
+        "extensions": ["md", "markdown", "mkd"],
+        "maxBytes": 2097152
+      }
+    ],
+    "commands": [
+      {
+        "id": "recover-drafts",
+        "title": "Markdown: Recover drafts…",
+        "description": "List unsaved Markdown drafts whose panel is gone and reopen one in Edit mode in its own project and worktree.",
+        "category": "files",
+        "kind": "command",
+        "danger": "safe",
+        "keywords": ["markdown", "draft", "recover", "unsaved", "restore"],
+        "requires": ["fs:user-data-read"]
+      }
+    ]
+  }
+}

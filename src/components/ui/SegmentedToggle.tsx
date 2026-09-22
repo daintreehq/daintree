@@ -9,6 +9,11 @@ export interface SegmentedToggleOption<T extends string> {
   disabled?: boolean;
   /** Screen-reader name when the visible label is an abbreviation (S/M/L). */
   ariaLabel?: string;
+  /**
+   * Hover detail for an option whose label is a name rather than a description
+   * — a component's source file, say. Falls back to `ariaLabel`.
+   */
+  title?: string;
 }
 
 /**
@@ -28,10 +33,19 @@ export function SegmentedToggle<T extends string>({
   onChange,
   className,
   density = "default",
+  ariaLabel,
+  testId,
 }: {
   options: SegmentedToggleOption<T>[];
   value: T;
   onChange: (value: T) => void;
+  /**
+   * Names the control as a group. A toggle whose options are self-describing
+   * ("Split"/"Unified") needs no group name; one whose options only make sense
+   * together ("Working tree"/"vs main") does.
+   */
+  ariaLabel?: string;
+  testId?: string;
   /**
    * `compact` for a 32px host-chrome strip.
    *
@@ -61,6 +75,9 @@ export function SegmentedToggle<T extends string>({
 
   return (
     <div
+      role={ariaLabel ? "group" : undefined}
+      aria-label={ariaLabel}
+      data-testid={testId}
       className={cn(
         "relative isolate flex bg-surface-sidebar rounded-lg p-0.5 shrink-0",
         className
@@ -83,7 +100,7 @@ export function SegmentedToggle<T extends string>({
               "disabled:cursor-not-allowed disabled:pointer-events-none",
               isActive ? "text-text-primary" : "text-text-secondary hover:text-text-primary"
             )}
-            title={option.ariaLabel}
+            title={option.title ?? option.ariaLabel}
           >
             {isActive && (
               <m.div

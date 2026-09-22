@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Check,
   ExternalLink,
+  FolderTree,
   PanelLeft,
   RefreshCw,
   WrapText,
@@ -21,7 +22,8 @@ import {
 import { FileDiff as FileDiffIcon } from "lucide-react";
 import type { GitStatus } from "@shared/types/git";
 import type { DiffPanelData } from "@shared/types/panel";
-import { isAbsolute, join } from "@shared/utils/path";
+import { isAbsolute, join, resolveWorktreePathScope } from "@shared/utils/path";
+import { useShallow } from "zustand/react/shallow";
 import { FolderOpen } from "@/components/icons";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
@@ -90,7 +92,13 @@ type DiffPaneLayout = DiffViewType | "rendered";
 type DiffContentScope = "changes" | "full-file";
 
 /** Which external surface a toolbar action aims the current file at. */
-type ExternalTarget = "reveal" | "editor";
+type ExternalTarget = "reveal" | "editor" | "file-browser";
+
+const EXTERNAL_ACTIONS = {
+  reveal: "file.showItemInFolder",
+  editor: "file.openInEditor",
+  "file-browser": "worktree.openFileBrowser",
+} as const;
 
 const FULL_FILE_FALLBACK_MESSAGES: Record<FullFileUnavailableReason, string> = {
   "source-mismatch": "The file changed after this diff loaded, so only changed lines are shown",
@@ -245,6 +253,11 @@ export function DiffPane({
         ? join(worktreePath, filePath)
         : null;
   const fileStatus = panel?.fileStatus;
+  const browserScope = useWorktreeStore(
+    useShallow((state) =>
+      absolutePath ? resolveWorktreePathScope(absolutePath, state.worktrees.values()) : null
+    )
+  );
   const changeSet = panel?.changeSet;
   const diffSource = panel?.diffSource;
   const panelBaseBranch = panel?.baseBranch;
@@ -393,14 +406,21 @@ export function DiffPane({
   const handleExternalAction = useCallback(
     async (target: ExternalTarget) => {
       if (!absolutePath) return;
+      if (target === "file-browser" && (!browserScope || fileStatus === "deleted")) return;
       if (externalInFlightRef.current.has(target)) return;
       externalInFlightRef.current.add(target);
       const generation = externalGenerationRef.current;
       setPendingTargets((current) => (current.includes(target) ? current : [...current, target]));
       try {
         const result = await actionService.dispatch(
-          target === "reveal" ? "file.showItemInFolder" : "file.openInEditor",
-          { path: absolutePath },
+          EXTERNAL_ACTIONS[target],
+          target === "file-browser" && browserScope
+            ? {
+                worktreeId: browserScope.worktreeId,
+                revealPath: browserScope.relativePath,
+                revealKind: "file",
+              }
+            : { path: absolutePath },
           { source: "user" }
         );
         // The file (or its worktree) moved while this was in flight: the result
@@ -412,10 +432,7 @@ export function DiffPane({
           setExternalError((current) => (current?.target === target ? null : current));
           return;
         }
-        logError(
-          `[DiffPane] ${target === "reveal" ? "showItemInFolder" : "openInEditor"} failed`,
-          result.error
-        );
+        logError(`[DiffPane] ${EXTERNAL_ACTIONS[target]} failed`, result.error);
         setExternalError({ message: result.error.message, target });
       } finally {
         // Releasing in `finally` keeps a rejection from wedging the button for
@@ -426,7 +443,7 @@ export function DiffPane({
         }
       }
     },
-    [absolutePath]
+    [absolutePath, browserScope, fileStatus]
   );
 
   const isErrorTargetPending =
@@ -838,6 +855,24 @@ export function DiffPane({
   const displayTitle = panel?.titleMode === "user" ? title : (fileName ?? title);
 
   const reveal = revealCopy();
+  const externalErrorCopy =
+    externalError?.target === "reveal"
+      ? {
+          title: reveal.errorTitle,
+          retry: reveal.retryAriaLabel,
+          dismiss: "Dismiss file manager error",
+        }
+      : externalError?.target === "file-browser"
+        ? {
+            title: "Couldn't open file browser",
+            retry: "Retry opening file browser",
+            dismiss: "Dismiss file browser error",
+          }
+        : {
+            title: "Couldn't open in editor",
+            retry: "Retry opening in editor",
+            dismiss: "Dismiss editor error",
+          };
   const toolbar = filePath ? (
     <>
       <FileViewerToolbar.Root label="Diff viewer controls">
@@ -894,6 +929,14 @@ export function DiffPane({
           </FileViewerToolbar.IconButton>
           {absolutePath && (
             <>
+              {browserScope && fileStatus !== "deleted" && !isGitlink && (
+                <FileViewerToolbar.IconButton
+                  label="Open in file browser"
+                  onClick={() => void handleExternalAction("file-browser")}
+                >
+                  <FolderTree className={TOOLBAR_ICON_CLASS} />
+                </FileViewerToolbar.IconButton>
+              )}
               <FileViewerToolbar.IconButton
                 label={reveal.label}
                 onClick={() => void handleExternalAction("reveal")}
@@ -918,7 +961,7 @@ export function DiffPane({
         <InlineStatusBanner
           icon={XCircle}
           severity="error"
-          title={externalError.target === "reveal" ? reveal.errorTitle : "Couldn't open in editor"}
+          title={externalErrorCopy.title}
           description={externalError.message}
           action={{
             id: "retry-external-action",
@@ -928,15 +971,10 @@ export function DiffPane({
             loading: showRetrySpinner,
             disabled: isErrorTargetPending,
             onClick: () => void handleExternalAction(externalError.target),
-            ariaLabel:
-              externalError.target === "reveal" ? reveal.retryAriaLabel : "Retry opening in editor",
+            ariaLabel: externalErrorCopy.retry,
           }}
           onClose={() => setExternalError(null)}
-          closeAriaLabel={
-            externalError.target === "reveal"
-              ? "Dismiss file manager error"
-              : "Dismiss editor error"
-          }
+          closeAriaLabel={externalErrorCopy.dismiss}
         />
       ) : (
         <>

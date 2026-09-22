@@ -1,6 +1,6 @@
 import { Terminal, IBufferRange } from "@xterm/xterm";
 import { isMac } from "@/lib/platform";
-import { isProjectViewCached } from "@/lib/viewCacheState";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import type { AgentState } from "@/types";
@@ -40,6 +40,8 @@ import {
   forceXtermRendererUnpause,
   resetRendererUnpauseBreaker,
 } from "./TerminalReflowController";
+import { resumeXtermRender, suspendXtermRender } from "./xtermRenderSuspension";
+import { guardOverviewRulerRefresh } from "./xtermOverviewRulerGuard";
 import { TerminalReconciliationWatchdog } from "./TerminalReconciliationWatchdog";
 import { TerminalWriteController } from "./TerminalWriteController";
 import { TerminalSettleWaiterRegistry } from "./TerminalSettleWaiterRegistry";
@@ -54,7 +56,7 @@ import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackControl
 import { hasUsableRenderer } from "./xtermRendererProbe";
 import { DEFAULT_TERMINAL_FONT_FAMILY, onTerminalFontArrivedLate } from "@/config/terminalFont";
 import { isPtyPanel } from "@shared/types/panel";
-import { isValidTerminalGeometry, type TerminalGeometry } from "@shared/types/terminal";
+import { isUsableTerminalGeometry, type TerminalGeometry } from "@shared/types/terminal";
 import type { TerminalResizeResult } from "@shared/types/pty-host";
 import { applyXtermReflowFastpath } from "@shared/utils/xtermReflowFastpath";
 import { usePanelStore } from "@/store/panelStore";
@@ -103,6 +105,17 @@ function canAutoInitializeTerminalIngest(): boolean {
   );
 }
 
+/**
+ * How long a cached view keeps its WebGL contexts (#12514). Rendering stops the
+ * moment the view is cached, but the contexts are what make a switch back
+ * paint at full fidelity on the first frame; releasing them at once would make
+ * every quick A→B→A switch repaint on the DOM renderer while they re-attach.
+ * Past the dwell the view is unlikely to be the next target, and its GPU
+ * memory is worth more than the warm switch. Matches the first cached-view
+ * memory purge in main (`CACHED_VIEW_PURGE_DELAY_MS`) for the same reason.
+ */
+const CACHED_VIEW_WEBGL_RELEASE_DELAY_MS = 20_000;
+
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
 
@@ -122,7 +135,9 @@ class TerminalInstanceService {
   private cancelledCreations = new Set<string>();
   private dataBuffer = new TerminalOutputIngestService(
     (id, data, chunkCount) => this.writeToTerminal(id, data, chunkCount),
-    () => usePanelStore.getState().focusedId,
+    // Cached views retain their local focus id, but no pane there can receive
+    // input. Keeping that stale exemption defeats batching for single-pane projects.
+    () => (isProjectViewCached() ? null : usePanelStore.getState().focusedId),
     // Background drains are held both during an active wheel gesture and while
     // a keystroke echo is in flight — the same "focused feel beats background
     // throughput" contract, applied to the two sustained interactions.
@@ -133,7 +148,11 @@ class TerminalInstanceService {
       this.burstController.hasActiveWheelGesture() ||
       this.burstController.getEchoPendingHoldId() !== null,
     (id) =>
-      this.burstController.isWheelActive(id) || this.burstController.getEchoPendingHoldId() === id
+      this.burstController.isWheelActive(id) || this.burstController.getEchoPendingHoldId() === id,
+    (id) => {
+      const managed = this.instances.get(id);
+      return !!managed && !managed.isAttaching && (!managed.isVisible || isProjectViewCached());
+    }
   );
   private suppressedExitUntil = new Map<string, number>();
   private unseenTracker = new TerminalUnseenOutputTracker();
@@ -161,8 +180,24 @@ class TerminalInstanceService {
   private revealController: TerminalRevealController;
   private unsubTierChanged: (() => void) | null = null;
   private unsubResizeResult: (() => void) | null = null;
+  private offViewLifecycle: () => void;
+  private cachedWebGLReleaseTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
+    // Subscribed before the reflow controller and watchdog so it runs first:
+    // their `revealed` sweeps would otherwise find panes still suspended and
+    // spend renderer-unpause repair attempts on them. `active` and `revealed`
+    // both mean "back in the foreground" — a superseded switch only ever sends
+    // `active`, and a lone `revealed` is the defensive case viewCacheState also
+    // honours — and the reactivation pass is idempotent.
+    this.offViewLifecycle = subscribeProjectViewLifecycle((phase) => {
+      if (phase === "cached") {
+        this.handleViewCached();
+      } else {
+        this.handleViewReactivated();
+      }
+    });
+
     if (canAutoInitializeTerminalIngest()) {
       void this.dataBuffer.initialize();
     }
@@ -195,6 +230,8 @@ class TerminalInstanceService {
     this.burstController = new TerminalBurstController({
       getInstance: (id) => this.instances.get(id),
       applyRendererPolicy: (id, tier) => this.rendererPolicy.applyRendererPolicy(id, tier),
+      isViewCached: isProjectViewCached,
+      holdWebGLForScroll: (id, durationMs) => this.webGLManager.holdForScroll(id, durationMs),
     });
 
     this.resizePassScheduler = new TerminalResizePassScheduler({
@@ -218,8 +255,8 @@ class TerminalInstanceService {
         terminalClient.acknowledgePortData(id, bytes, chunkCount),
       acknowledgeData: (id, bytes) => terminalClient.acknowledgeData(id, bytes),
       notifyWriteComplete: (id, bytes) => this.dataBuffer.notifyWriteComplete(id, bytes),
-      incrementUnseen: (id, isScrolledBack) =>
-        this.unseenTracker.incrementUnseen(id, isScrolledBack),
+      incrementUnseen: (id, isScrolledBack, count) =>
+        this.unseenTracker.incrementUnseen(id, isScrolledBack, count),
       onWrite: (id) => this.burstController.onPtyWrite(id),
     });
 
@@ -231,6 +268,7 @@ class TerminalInstanceService {
       getMode: () => this.webGLManager.getMode(),
       getPinnedId: () => this.webGLManager.getPinnedId(),
       isAltBufferPinned: (id) => this.webGLManager.isAltBufferPinned(id),
+      isViewCached: isProjectViewCached,
     });
 
     this.rendererPolicy = new TerminalRendererPolicy({
@@ -238,6 +276,7 @@ class TerminalInstanceService {
       onPostWake: (id) => this.handlePostWake(id),
       onResumeFlush: (id) => this.dataBuffer.resumeFlush(id),
       applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
+      isViewCached: isProjectViewCached,
       onTierApplied: (id, tier, managed) => {
         // A backgrounded pane stays fully live in the renderer — it keeps full
         // scrollback, keeps its image/link addons, and is never suspended. The
@@ -250,8 +289,15 @@ class TerminalInstanceService {
           // a container that resized while hidden (e.g. window resize during
           // bulk worktree activity) can dedup-suppress the corrective resize
           // that re-syncs xterm and the PTY on wake (issue #7741).
-          managed.lastWidth = 0;
-          managed.lastHeight = 0;
+          //
+          // Not for a cache-driven demotion (#12514): background window
+          // resizes scale a cached view's panes from these measurements
+          // (`applyBackgroundWindowResize`), and its reveal reconciles
+          // geometry dedup-exempt anyway.
+          if (!isProjectViewCached()) {
+            managed.lastWidth = 0;
+            managed.lastHeight = 0;
+          }
         } else {
           // Tier upgrade path: clear the reduce cooldown so restoreScrollback
           // is unconditional and the next BACKGROUND drop isn't artificially
@@ -359,6 +405,70 @@ class TerminalInstanceService {
     onTerminalFontArrivedLate(() => this.repairFontGrid());
   }
 
+  /**
+   * The view was cached (#12514): stop painting and demote every terminal to
+   * BACKGROUND, which also moves the pty-host's activity polling to the
+   * background cadence. Parsing, acknowledgements and ledgers keep running —
+   * this view still receives its bytes over the project-scoped IPC fallback,
+   * so reactivation is a repaint of an already-current buffer, never a resync.
+   *
+   * That holds for a duplicate of a project open in another window too, but
+   * only since #12557: the host used to suppress the fallback as soon as the
+   * sibling window's MessagePort accepted a chunk, and a cached view has no
+   * port of its own, so it received neither path and went permanently silent.
+   */
+  private handleViewCached(): void {
+    for (const [id, managed] of this.instances) {
+      if (managed.isOpened) suspendXtermRender(managed.terminal);
+      if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
+        // Already background here, so the policy would send nothing — but the
+        // host keeps one cadence per terminal, and a sibling window showing
+        // this project may have raised it since (its cached-view demotions
+        // are dropped while it is visible). Now that this view is cached too,
+        // say so again.
+        this.rendererPolicy.reassertBackgroundTier(id);
+      } else {
+        this.rendererPolicy.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+      }
+    }
+    this.clearCachedWebGLReleaseTimer();
+    this.cachedWebGLReleaseTimer = setTimeout(() => {
+      this.cachedWebGLReleaseTimer = null;
+      // Guarded in the body: a timer the event loop already picked up survives
+      // the clearTimeout on reactivation.
+      if (!isProjectViewCached()) return;
+      for (const [id, managed] of this.instances) {
+        // The BACKGROUND demotion only releases off-screen panes, and a cached
+        // view's panes are all still laid out as visible.
+        this.cancelWebGLHideTimer(managed);
+        this.webGLManager.releaseContext(id);
+      }
+    }, CACHED_VIEW_WEBGL_RELEASE_DELAY_MS);
+  }
+
+  /**
+   * Resume painting and re-derive every tier from its provider. The tier
+   * upgrade runs the ordinary background→active path (deferred resize,
+   * repaint, resume flush, WebGL reacquire); the reveal controller still owns
+   * geometry reconciliation once the view is presented.
+   */
+  private handleViewReactivated(): void {
+    this.clearCachedWebGLReleaseTimer();
+    for (const [id, managed] of this.instances) {
+      resumeXtermRender(managed.terminal);
+      this.rendererPolicy.applyRendererPolicy(id, managed.getRefreshTier());
+      // Releasing a context drops the focus pin, and nothing re-fires focus
+      // for a pane that was already focused when the view was cached.
+      if (managed.isFocused) this.webGLManager.pinFocus(id, managed);
+    }
+  }
+
+  private clearCachedWebGLReleaseTimer(): void {
+    if (this.cachedWebGLReleaseTimer === null) return;
+    clearTimeout(this.cachedWebGLReleaseTimer);
+    this.cachedWebGLReleaseTimer = null;
+  }
+
   // Reconcile our renderer-side dedupe baseline when the PTY host rewrites a
   // terminal's tier on its own (window connect/disconnect/project switch).
   // initializeBackendTier updates lastBackendTier without echoing back to the
@@ -411,6 +521,8 @@ class TerminalInstanceService {
       updateScrollState: (id, isScrolledBack) =>
         this.unseenTracker.updateScrollState(id, isScrolledBack),
       clearUnseen: (id, fromUser) => this.unseenTracker.clearUnseen(id, fromUser),
+      holdUnseen: (id) => this.unseenTracker.holdUnseen(id),
+      releaseUnseen: (id, count) => this.unseenTracker.releaseUnseen(id, count),
       onWriteParsedReflow: (managed) => this.maybeReflowTerminal(managed),
       setCachedSelection: (id, selection) => this.cachedSelections.set(id, selection),
       deleteCachedSelection: (id) => this.cachedSelections.delete(id),
@@ -653,6 +765,15 @@ class TerminalInstanceService {
 
   setVisible(id: string, isVisible: boolean, expectedGeneration?: number): void {
     this.revealController.setVisible(id, isVisible, expectedGeneration);
+    const managed = this.instances.get(id);
+    if (
+      isVisible &&
+      managed?.isVisible &&
+      !managed.isAttaching &&
+      (expectedGeneration === undefined || managed.attachGeneration === expectedGeneration)
+    ) {
+      this.dataBuffer.resumeFlush(id);
+    }
   }
 
   lockResize(id: string, locked: boolean, customTtlMs?: number): void {
@@ -825,8 +946,12 @@ class TerminalInstanceService {
 
     // Shared ceiling, not a local 500: a restored pane that legitimately
     // exceeds it must not silently keep the previous target and boot the PTY at
-    // a geometry xterm never adopts (#11641).
-    if (isValidTerminalGeometry({ cols, rows })) {
+    // a geometry xterm never adopts (#11641). Shared FLOOR for the same reason
+    // one layer down — a parked target is what the attach rAF applies instead
+    // of measuring, so a collapsed grid parked here boots the pane into it
+    // (#12442). Only the collapse floor: hydration parks a surviving PTY's real
+    // geometry here, and a small pane's true size must reach the constructor.
+    if (isUsableTerminalGeometry({ cols, rows })) {
       instance.targetCols = cols;
       instance.targetRows = rows;
     }
@@ -1547,6 +1672,10 @@ class TerminalInstanceService {
     managed.isOpened = true;
     this.clearAttachError(id, managed);
     logDebug(`[TIS] Opened terminal ${id}`);
+    guardOverviewRulerRefresh(managed.terminal);
+    // Opened inside a cached view (background restore parks whole projects):
+    // suspend before xterm's observer delivers its first "visible" entry.
+    if (isProjectViewCached()) suspendXtermRender(managed.terminal);
     // Build the deferred Image/link addons now that the terminal is live.
     // EXPERIMENT (hibernation removal, Codex review fix — Finding 3): build them
     // unconditionally, even for a pane opened at BACKGROUND tier. Background
@@ -3458,6 +3587,8 @@ class TerminalInstanceService {
   }
 
   dispose(): void {
+    this.offViewLifecycle();
+    this.clearCachedWebGLReleaseTimer();
     this.stopPolling();
     this.unsubTierChanged?.();
     this.unsubTierChanged = null;
@@ -3647,6 +3778,9 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
     // scrolling node, so its own state is the only reading that means anything.
     scrollTop: number | null;
     maxScrollTop: number | null;
+    // Text on the viewport's top row — lets a spec assert the reader is on the
+    // same CONTENT after an ESC[3J redraw re-indexed every line (#12398).
+    topLineText: string;
   };
 
   type XtermScrollableForE2E = {
@@ -3691,6 +3825,7 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
       rows: managed.terminal.rows,
       scrollTop,
       maxScrollTop,
+      topLineText: buffer.getLine(buffer.viewportY)?.translateToString(true) ?? "",
     };
   };
 

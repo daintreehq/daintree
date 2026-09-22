@@ -109,7 +109,7 @@ describe("HelpPanelHeader", () => {
     // is read when the tab takes focus and not when the state changes.
     const { container, getByTestId } = renderHeader({ agentState: "working" });
 
-    expect(container.querySelector("svg.animate-spin-slow")).toBeNull();
+    expect(container.querySelector(".animate-spin-slow")).toBeNull();
     const announcer = getByTestId("assistant-header-state-announcer");
     expect(announcer.getAttribute("role")).toBe("status");
     expect(announcer.className).toContain("sr-only");

@@ -102,6 +102,21 @@ describe("binding state read (#12313)", () => {
     });
   });
 
+  it("reports an agent pane's route as available while its launch view is one of two (#12486)", () => {
+    // Routing prefers the launch view, so the read must too — or it would call
+    // ambiguous a route every call from that pane actually takes.
+    liveViewsByWorkspace.set(WORKSPACE, 2);
+
+    expect(readWorkspaceBindingState(WORKSPACE, 1)).toMatchObject({
+      routeState: "available",
+      liveViewCount: 2,
+    });
+    // A launch view that is gone stops mattering: the zero/one/many rule decides.
+    expect(readWorkspaceBindingState(WORKSPACE, 99).routeState).toBe("ambiguous");
+    liveViewsByWorkspace.set(WORKSPACE, 0);
+    expect(readWorkspaceBindingState(WORKSPACE, 1).routeState).toBe("not-found");
+  });
+
   it("reports the grant alongside the route", () => {
     setWorkspaceKeepResident(WORKSPACE, true);
     expect(readWorkspaceBindingState(WORKSPACE).keepResident).toBe(true);

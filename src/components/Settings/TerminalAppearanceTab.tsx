@@ -11,7 +11,7 @@ import { useTerminalFontStore } from "@/store";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 import { actionService } from "@/services/ActionService";
 import { SettingsSection } from "./SettingsSection";
-import { SettingsSubtabBar } from "./SettingsSubtabBar";
+import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { ColorSchemePicker } from "./ColorSchemePicker";
 import { AppThemePicker } from "./AppThemePicker";
@@ -145,9 +145,11 @@ export function TerminalAppearanceTab({
         subtabs={APPEARANCE_SUBTABS}
         activeId={effectiveSubtab}
         onChange={onSubtabChange}
+        group="appearance"
+        ariaLabel="Appearance settings sections"
       />
 
-      <div className="space-y-6">
+      <div {...subtabPanelProps("appearance", effectiveSubtab)} className="space-y-6">
         {effectiveSubtab === "app" && (
           <>
             <SettingsSection

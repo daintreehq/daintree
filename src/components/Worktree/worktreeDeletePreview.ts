@@ -44,6 +44,17 @@ export interface WorktreeDeletePreview extends WorktreeChangeSummary {
    * misreading {@link WorktreeSubmoduleRiskState} exists to make impossible.
    */
   submodules: WorktreeSubmoduleRiskState;
+  /**
+   * Commits ahead of upstream, from the same `git status --porcelain -b` that
+   * produced {@link changes} — so a caller that shows an unpushed-commit count
+   * beside the file list is reading one snapshot, not a cached number taken at
+   * a different time.
+   *
+   * `undefined` when the branch has no upstream (git reports nothing to be
+   * ahead OF), which is NOT the same as zero: every local commit on an
+   * untracked branch is unpushed. Callers must keep those two apart.
+   */
+  ahead?: number;
 }
 
 /**
@@ -236,6 +247,7 @@ export async function buildWorktreeDeletePreview(
     ...summarizeWorktreeChanges(changes),
     changes,
     rootPath: fresh.rootPath,
+    ...(fresh.ahead === undefined ? {} : { ahead: fresh.ahead }),
     submodules: await submodulePromise,
   };
 }

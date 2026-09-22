@@ -91,6 +91,39 @@ export const MIN_RECLAIMED_MB = 50;
  */
 export const TIER1_REPRIEVE_MS = 3 * POLL_INTERVAL_MS;
 
+/**
+ * Ceiling on a tier's backed-off cooldown (#12517).
+ *
+ * A pass that finds nothing to act on and reclaims nothing measurable doubles
+ * that tier's cooldown. Without it, pressure mitigation cannot relieve — a fleet
+ * that simply needs the RAM, a machine short for reasons outside Daintree — had
+ * the same empty pass re-run every 5 and 10 minutes for days. Capped so even a
+ * long episode retries hourly: what was empty an hour ago (every candidate view
+ * protected by a live assistant, every terminal already trimmed) need not be
+ * now. A productive pass or the end of the episode restores the base cooldown.
+ */
+export const MITIGATION_BACKOFF_MAX_MS = 60 * 60 * 1000;
+
+/**
+ * What a completed mitigation pass showed. `unknown` covers a pass whose
+ * evidence is incomplete — a failed measurement or lever, an incomplete pty
+ * fan-out — which neither earns the base cooldown back nor grows the backoff.
+ */
+type MitigationOutcome = "productive" | "unproductive" | "unknown";
+
+interface TierBackoff {
+  /** Consecutive unproductive passes; 0 while the tier runs on its base cooldown. */
+  unproductivePasses: number;
+  /** Earliest the tier may run again; 0 when not backed off. */
+  until: number;
+}
+
+function backoffDelayMs(baseMs: number, unproductivePasses: number): number {
+  if (unproductivePasses <= 0) return baseMs;
+  // Exponent clamped so a very long episode cannot overflow to Infinity.
+  return Math.min(baseMs * 2 ** Math.min(unproductivePasses, 16), MITIGATION_BACKOFF_MAX_MS);
+}
+
 interface PidTrendState {
   startedAt: number;
   tickInBucket: number;
@@ -310,9 +343,15 @@ export interface MemoryPressureActions {
    * implying it covers every webview this action tears down.
    */
   destroyHiddenWebviews: (tier: 1 | 2) => Promise<number>;
-  hibernateIdleProjects: () => Promise<void>;
+  /** Returns the number of terminals killed. */
+  hibernateIdleProjects: () => Promise<number>;
   /** Returns the number of cached project views evicted. */
   evictCachedProjectViews?: () => Promise<number> | number;
+  /**
+   * Disposes every workspace host no window holds, including ones kept only
+   * because their project's view is still cached (#12519). Returns how many.
+   */
+  reclaimDormantWorkspaceHosts?: () => number;
   /**
    * Asks the pty-host to trim the scrollback of terminals its governance policy
    * clears — never one with a live agent. Resolves with the trimmed/skipped
@@ -337,6 +376,12 @@ export interface MemoryPressureActions {
    * `recordEluSample`. Failures are non-critical observability.
    */
   sampleRendererElu?: () => void;
+  /**
+   * Optional system-memory observer (#12462): swap and, on Darwin, the
+   * `fseventsd` footprint. Called every poll, warmup included; it gates its own
+   * cadence and runs its probes asynchronously, so it never delays this poll.
+   */
+  sampleSystemHealth?: () => void;
 }
 
 // workingSetSize is the only memory field Electron guarantees on all three
@@ -349,8 +394,8 @@ function getProcessMemoryMb(proc: Electron.ProcessMetric): number {
 
 /**
  * Read system-wide available memory in MB. On macOS, "available" = free +
- * purgeable, because Darwin holds reclaimable pages as purgeable rather than
- * free — using `free` alone would fire false positives on every healthy mac.
+ * purgeable + fileBacked (see readSystemMemorySnapshot) — using `free` alone
+ * would fire false positives on every healthy mac.
  * On Windows/Linux, `free` alone is accurate. Returns null when the Chromium
  * API is unavailable (e.g., under test mocks). Mirrors the pattern in
  * ProjectViewManager.getAvailableMemoryMb so the two memory floors stay in
@@ -403,8 +448,86 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
   let lastTier1ReclaimMb = 0;
   let lastTier2At = 0;
   let mitigationInFlight = false;
+  // Kept apart from the action stamps above, which also time the tier-1
+  // reprieve: "when did this tier last run" and "when may it run again" are
+  // different questions once a backoff can stretch the second (#12517).
+  const tierBackoff: Record<1 | 2, TierBackoff> = {
+    1: { unproductivePasses: 0, until: 0 },
+    2: { unproductivePasses: 0, until: 0 },
+  };
+  /**
+   * Bumped whenever the backoff is cleared, so a pass still in flight across a
+   * suspend or the end of its episode cannot write its verdict into the next.
+   */
+  let backoffEpoch = 0;
   const thresholdExceededPids = new Set<number>();
   const trendWarnedPids = new Set<number>();
+
+  const clearBackoff = (reason: "pressure-cleared" | "suspend"): void => {
+    backoffEpoch++;
+    for (const tier of [1, 2] as const) {
+      const state = tierBackoff[tier];
+      if (reason !== "suspend" && state.unproductivePasses > 0) {
+        logInfo("memory-pressure-backoff-cleared", {
+          tier,
+          reason,
+          unproductivePasses: state.unproductivePasses,
+        });
+      }
+      state.unproductivePasses = 0;
+      state.until = 0;
+    }
+  };
+
+  /**
+   * Folds a completed pass into its tier's backoff and returns the fields its
+   * reclaim line reports. Logs only the transitions — into backoff, and back
+   * out through a productive pass — so a long episode reads as an episode.
+   */
+  const settleBackoff = (
+    tier: 1 | 2,
+    outcome: MitigationOutcome,
+    startedAt: number,
+    baseMs: number,
+    epoch: number
+  ): { outcome: MitigationOutcome; unproductivePasses: number; retryInMs: number } => {
+    const state = tierBackoff[tier];
+    // A pass whose episode ended while it ran reports its verdict but does not
+    // record it: the next episode starts from the base cooldown.
+    if (epoch !== backoffEpoch) {
+      return { outcome, unproductivePasses: 0, retryInMs: baseMs };
+    }
+    if (outcome === "productive") {
+      if (state.unproductivePasses > 0) {
+        logInfo("memory-pressure-backoff-cleared", {
+          tier,
+          reason: "productive",
+          unproductivePasses: state.unproductivePasses,
+        });
+      }
+      state.unproductivePasses = 0;
+      state.until = 0;
+    } else {
+      if (outcome === "unproductive") state.unproductivePasses++;
+      // An unknown pass holds the current delay rather than growing it — or
+      // letting a single failed measurement hand back the base cooldown.
+      state.until =
+        state.unproductivePasses > 0
+          ? startedAt + backoffDelayMs(baseMs, state.unproductivePasses)
+          : 0;
+      if (outcome === "unproductive" && state.unproductivePasses === 1) {
+        logInfo("memory-pressure-backoff", {
+          tier,
+          retryInMs: backoffDelayMs(baseMs, 1),
+        });
+      }
+    }
+    return {
+      outcome,
+      unproductivePasses: state.unproductivePasses,
+      retryInMs: backoffDelayMs(baseMs, state.unproductivePasses),
+    };
+  };
 
   const poll = () => {
     try {
@@ -416,6 +539,11 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       }
       try {
         actions?.sampleRendererElu?.();
+      } catch {
+        /* non-critical */
+      }
+      try {
+        actions?.sampleSystemHealth?.();
       } catch {
         /* non-critical */
       }
@@ -540,11 +668,10 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
 
       // System-wide signal uses the reclaim band's critical edge: RAM-relative
       // below ~10 GB, flat at 1 GB above it. Only the band's *warning* edge
-      // widens with RAM (#11926) — this one stays capped, because `availableMb`
-      // is `free + purgeable` and omits Darwin's `fileBacked` file cache, so a
-      // 64–128 GB machine reports far less "available" than it has headroom
-      // for. Raising this edge against that scale would read healthy file-cache
-      // occupancy as critical and hand tier 2 a machine that is fine.
+      // widens with RAM (#11926) — this one is the emergency edge that hands
+      // tier 2 a collapse, and `availableMb` counts Darwin's file cache
+      // (#12363), so on a large Mac it is crossed only once that cache is
+      // spent. See `getSystemMemoryThresholds`.
       const availableMb = readAvailableSystemMemoryMb();
       const systemPressureActive = availableMb !== null && availableMb < systemLowMemoryThresholdMb;
       if (systemPressureActive) {
@@ -575,19 +702,29 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
         consecutivePressureCount = 0;
         lastTier1At = 0;
         lastTier1ReclaimMb = 0;
+        clearBackoff("pressure-cleared");
         return;
       }
 
       if (mitigationInFlight) return;
 
+      // Backoff only ever withholds a pass; it never authorizes one. Checked
+      // before the IIFE so a backed-off poll skips its forced metrics sweeps
+      // and settle wait, not just the levers.
       const now = Date.now();
-      const shouldRunTier1 = lastTier1At === 0 || now - lastTier1At >= TIER1_MITIGATION_COOLDOWN_MS;
+      const shouldRunTier1 =
+        (lastTier1At === 0 || now - lastTier1At >= TIER1_MITIGATION_COOLDOWN_MS) &&
+        now >= tierBackoff[1].until;
       const shouldCheckTier2 =
         consecutivePressureCount >= PRESSURE_COUNT_TIER2 &&
-        now - lastTier2At >= MITIGATION_COOLDOWN_MS;
+        now - lastTier2At >= MITIGATION_COOLDOWN_MS &&
+        now >= tierBackoff[2].until;
       if (!shouldRunTier1 && !shouldCheckTier2) return;
 
       mitigationInFlight = true;
+      const epoch = backoffEpoch;
+      let tier1StartedAt = 0;
+      let tier1Settled = false;
       void (async () => {
         try {
           // Force-refresh (never read stale): these samples bracket a reclaim
@@ -637,18 +774,21 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
           };
 
           let beforeMb = 0;
+          let baselineFailed = false;
           try {
             beforeMb = sumMonitoredMb();
           } catch {
             // If pre-sample fails, beforeMb stays 0; delta will be 0 and we'll
             // err on the side of escalating if pressure persists.
+            baselineFailed = true;
           }
 
           let tier1TabsEvicted = 0;
           let tier1Trim: TrimStateSummary | null = null;
           let tier1TrimFailed = false;
           if (shouldRunTier1) {
-            lastTier1At = Date.now();
+            tier1StartedAt = Date.now();
+            lastTier1At = tier1StartedAt;
             // Retire the previous reclaim as the stamp it is paired with moves.
             // Without this, a lever throwing before the measurement below (an
             // un-caught destroyHiddenWebviews) would leave an old figure sitting
@@ -700,6 +840,31 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
           const deltaMb = resampleFailed ? 0 : Math.max(0, beforeMb - afterMb);
           if (shouldRunTier1) {
             lastTier1ReclaimMb = deltaMb;
+            // Counts first: a pass that tore something down or trimmed a
+            // terminal did work whatever the sampler saw (#11674). Only a pass
+            // with complete evidence that it found nothing is unproductive — a
+            // zero from a failed sample or an incomplete fan-out is not.
+            const tier1Trimmed = tier1Trim?.trimmed ?? 0;
+            const tier1Outcome: MitigationOutcome =
+              !pressureRemains ||
+              tier1TabsEvicted > 0 ||
+              tier1Trimmed > 0 ||
+              (!resampleFailed && !baselineFailed && deltaMb >= MIN_RECLAIMED_MB)
+                ? "productive"
+                : resampleFailed ||
+                    baselineFailed ||
+                    tier1TrimFailed ||
+                    (tier1Trim?.shardsFailed ?? 0) > 0
+                  ? "unknown"
+                  : "unproductive";
+            const tier1Backoff = settleBackoff(
+              1,
+              tier1Outcome,
+              tier1StartedAt,
+              TIER1_MITIGATION_COOLDOWN_MS,
+              epoch
+            );
+            tier1Settled = true;
             logInfo("memory-pressure-tier1-reclaim", {
               beforeMb: Math.round(beforeMb),
               afterMb: Math.round(afterMb),
@@ -723,6 +888,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               ptyTrimFailed: tier1TrimFailed,
               pressureRemains,
               resampleFailed,
+              ...tier1Backoff,
             });
           }
 
@@ -756,6 +922,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             // doesn't leave the cooldown unconsumed and let the next poll
             // re-fire destroyHiddenWebviews(2).
             lastTier2At = Date.now();
+            const tier2StartedAt = lastTier2At;
             // The escalation inputs, not a reclaim delta: on the common path
             // tier 1 ran polls earlier and its cooldown blocks a re-run, so
             // nothing has acted between `beforeMb` and `afterMb` here. This
@@ -796,9 +963,11 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             // is this tier's whole point. Previously a thrown
             // destroyHiddenWebviews(2) skipped both remaining levers.
             let tier2TabsEvicted = 0;
+            let tier2ActionFailed = false;
             try {
               tier2TabsEvicted = await actions.destroyHiddenWebviews(2);
             } catch (err) {
+              tier2ActionFailed = true;
               logWarn("memory-pressure-tier2-action-failed", {
                 action: "destroyHiddenWebviews",
                 error: String(err),
@@ -808,14 +977,30 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             try {
               tier2ViewsEvicted = (await actions.evictCachedProjectViews?.()) ?? 0;
             } catch (err) {
+              tier2ActionFailed = true;
               logWarn("memory-pressure-tier2-action-failed", {
                 action: "evictCachedProjectViews",
                 error: String(err),
               });
             }
+            // After evictCachedProjectViews: a cached view pins its workspace
+            // host, so reclaiming dormant hosts before the eviction would find
+            // nothing to release.
+            let tier2HostsReclaimed = 0;
             try {
-              await actions.hibernateIdleProjects();
+              tier2HostsReclaimed = actions.reclaimDormantWorkspaceHosts?.() ?? 0;
             } catch (err) {
+              tier2ActionFailed = true;
+              logWarn("memory-pressure-tier2-action-failed", {
+                action: "reclaimDormantWorkspaceHosts",
+                error: String(err),
+              });
+            }
+            let tier2TerminalsHibernated = 0;
+            try {
+              tier2TerminalsHibernated = await actions.hibernateIdleProjects();
+            } catch (err) {
+              tier2ActionFailed = true;
               logWarn("memory-pressure-tier2-action-failed", {
                 action: "hibernateIdleProjects",
                 error: String(err),
@@ -834,19 +1019,40 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               tier2MeasurementFailed = true;
             }
 
+            const tier2DeltaMb = tier2MeasurementFailed
+              ? 0
+              : Math.max(0, tier2BeforeMb - tier2AfterMb);
+            const tier2Outcome: MitigationOutcome =
+              !tier2PressureRemains ||
+              tier2TabsEvicted > 0 ||
+              tier2ViewsEvicted > 0 ||
+              tier2HostsReclaimed > 0 ||
+              tier2TerminalsHibernated > 0 ||
+              (!tier2MeasurementFailed && tier2DeltaMb >= MIN_RECLAIMED_MB)
+                ? "productive"
+                : tier2MeasurementFailed || tier2ActionFailed
+                  ? "unknown"
+                  : "unproductive";
             logInfo("memory-pressure-tier2-reclaim", {
               beforeMb: Math.round(tier2BeforeMb),
               afterMb: Math.round(tier2AfterMb),
-              deltaMb: tier2MeasurementFailed
-                ? 0
-                : Math.round(Math.max(0, tier2BeforeMb - tier2AfterMb)),
+              deltaMb: Math.round(tier2DeltaMb),
               portalTabsDestroyed: tier2TabsEvicted,
               viewsEvicted: tier2ViewsEvicted,
+              workspaceHostsReclaimed: tier2HostsReclaimed,
+              terminalsHibernated: tier2TerminalsHibernated,
               pressureRemains: tier2PressureRemains,
               resampleFailed: tier2MeasurementFailed,
+              ...settleBackoff(2, tier2Outcome, tier2StartedAt, MITIGATION_COOLDOWN_MS, epoch),
             });
           }
         } catch (err) {
+          // A tier-1 lever that threw ends the pass before its verdict. Hold the
+          // current delay rather than leave an expired deadline behind, which
+          // would hand a backed-off tier its base cooldown back.
+          if (tier1StartedAt !== 0 && !tier1Settled) {
+            settleBackoff(1, "unknown", tier1StartedAt, TIER1_MITIGATION_COOLDOWN_MS, epoch);
+          }
           logWarn("memory-pressure-mitigation-failed", { error: String(err) });
         } finally {
           mitigationInFlight = false;
@@ -879,6 +1085,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       lastTier1At = 0;
       lastTier1ReclaimMb = 0;
       lastTier2At = 0;
+      clearBackoff("suspend");
       mitigationInFlight = false;
     });
     removeWakeListener = getSystemSleepService().onWake(() => {

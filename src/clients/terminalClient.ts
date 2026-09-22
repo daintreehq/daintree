@@ -13,13 +13,16 @@ import type {
   SpawnResult,
   SerializedTerminalSnapshot,
 } from "@shared/types";
+import type { PaneWatchState } from "@shared/types/terminalWatch";
 import type {
+  HostMemoryPauseSnapshot,
   PtyHostToRendererMessage,
   TerminalReliabilityMetricPayload,
   TerminalResizeResult,
 } from "@shared/types/pty-host";
 import type { PanelTitleMode } from "@shared/types/panel";
 import type { TerminalSubmissionLookup } from "@shared/types/terminalSubmission";
+import type { TerminalOutputActivityLookup } from "@shared/types/terminalStatus";
 import { normalizeTerminalGridDimension } from "@shared/types/terminal";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { logDebug, logWarn } from "@/utils/logger";
@@ -368,9 +371,20 @@ export const terminalClient = {
    * that it was written — that has always been true and is the gap #12337
    * closes. Pass `submissionToken` to have the outcome tracked, then read it
    * back with {@link getSubmissions} or `terminal.getStatus`.
+   *
+   * `handbackCode` rides along when the caller asked for a handback (#12488);
+   * its instruction must already be in `text`. Passed only when present, so an
+   * ordinary submit crosses the bridge exactly as before.
    */
-  submit: (id: string, text: string, submissionToken?: string): Promise<void> => {
-    return window.electron.terminal.submit(id, text, submissionToken);
+  submit: (
+    id: string,
+    text: string,
+    submissionToken?: string,
+    handbackCode?: string
+  ): Promise<void> => {
+    return handbackCode === undefined
+      ? window.electron.terminal.submit(id, text, submissionToken)
+      : window.electron.terminal.submit(id, text, submissionToken, handbackCode);
   },
 
   /**
@@ -383,6 +397,17 @@ export const terminalClient = {
     submissionToken: string
   ): Promise<Record<string, TerminalSubmissionLookup>> => {
     return window.electron.terminal.getSubmissions(terminalIds, submissionToken);
+  },
+
+  /**
+   * Read `lastOutputChangeAt` across several terminals (#12495). Answers
+   * `read` / `unreadable` per id, so a terminal that could not be read is never
+   * mistaken for one whose screen has not changed.
+   */
+  getOutputActivity: (
+    terminalIds: string[]
+  ): Promise<Record<string, TerminalOutputActivityLookup>> => {
+    return window.electron.terminal.getOutputActivity(terminalIds);
   },
 
   /**
@@ -872,6 +897,14 @@ export const terminalClient = {
     window.electron.terminal.onSubmitStatus(callback),
 
   /**
+   * Listen for a pane's terminal-watch state (#12491): whether an agent in it
+   * holds watches that may wake it, and where its next wake stands. Sent only
+   * to the owning project's views. Callers filter by `terminalId`.
+   */
+  onWatchState: (callback: (data: PaneWatchState) => void): (() => void) =>
+    window.electron.terminal.onWatchState(callback),
+
+  /**
    * Listen for terminal reliability metrics (pause-start/end, suspend,
    * pending-bytes-gauge, throughput-rate, pause-duration-gauge,
    * queue-depth-gauge, data-loss-count). Emitted by the host's
@@ -938,5 +971,18 @@ export const terminalClient = {
 
   restartService: (): Promise<void> => {
     return window.electron.terminal.restartService();
+  },
+
+  /** Main's current terminal-host memory pause snapshot (#12375). */
+  getHostMemoryPause: (): Promise<HostMemoryPauseSnapshot> => {
+    return window.electron.terminal.getHostMemoryPause();
+  },
+
+  /**
+   * Listen for terminal-host memory pause changes. Main pushes only to each
+   * window's active view, so pair this with `getHostMemoryPause`.
+   */
+  onHostMemoryPause: (callback: (snapshot: HostMemoryPauseSnapshot) => void): (() => void) => {
+    return window.electron.terminal.onHostMemoryPause(callback);
   },
 } as const;

@@ -27,6 +27,12 @@ The plain interactive entries in that selector are load-bearing, not padding: a 
 
 The flags live on the overlay **root** and reset on every open. The content wrapper outlives each close, so a close that skips `onCloseAutoFocus` would otherwise strand them onto the next opening.
 
+## The hover half
+
+Radix also focuses a **row** on mouse hover, and Chromium rings that script focus or not depending on whether the user last typed or last clicked something focusable — nothing about opening a menu updates the heuristic (#12383). `menuRowPointerMove` in `src/components/ui/menu-row-hover-focus.ts` is wired into all nine row wrappers (`DropdownMenu`, `ContextMenu` and `Select` items, sub-triggers, checkbox and radio rows), so again **no per-site wiring**.
+
+It decorates the row's own `focus` for the length of the pointer event rather than focusing the row itself. That is not fussiness: Radix deliberately skips its focus when the pointer is crossing a sibling into an open submenu's grace area, and pre-empting it there closes the submenu. Re-focusing afterwards is inert — Blink bails out early once the element is already `activeElement`, which is also what keeps a keyboard ring alive when the mouse drifts over the focused row.
+
 ## The tooltip half
 
 Element-scoped, in `src/lib/tooltipFocusSuppression.ts`: the close arms a one-shot **capture** `focusin` listener, marks whichever element focus lands on, and `Tooltip` refuses a focus-driven open for its own trigger while that mark stands. A genuine `pointerenter` clears it. React listens on the root container, below `document`, so the capture listener always wins the race.
@@ -51,4 +57,4 @@ A `PopoverAnchor` without a `Trigger` has no focus target, so the shared policy 
 
 `AppDialog`'s `stopPropagation` kills Radix 1.1.15+ deferred dismissal — see `docs/themes/interaction-state-recipes.md`.
 
-Canonical: `src/components/ui/overlay-focus-restore.ts`, `src/components/ui/tooltip.tsx`.
+Canonical: `src/components/ui/overlay-focus-restore.ts`, `src/components/ui/menu-row-hover-focus.ts`, `src/components/ui/tooltip.tsx`.

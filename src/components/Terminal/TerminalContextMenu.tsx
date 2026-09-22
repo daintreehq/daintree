@@ -5,7 +5,8 @@ import { type PanelLocation } from "@/types";
 import { usePanelStore } from "@/store";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 
-import { useWorktrees } from "@/hooks/useWorktrees";
+import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
+import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import {
@@ -39,6 +40,11 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import { KILL_RUNNING_AGENT_DIALOG_COPY } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
+import {
+  TerminalHandOverDialog,
+  TerminalHandOverMenuItems,
+  useOrchestratorCandidates,
+} from "./TerminalHandOver";
 import {
   ArrowDownFromLine,
   Bell,
@@ -81,8 +87,28 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { MenuActionSourceContext, type MenuActionSourceValue } from "@/components/ui/menu-source";
+import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
+import { PopoverAnchor } from "@/components/ui/popover";
+import { MoveToWorktreePicker } from "@/components/Panel/MoveToWorktreePicker";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
+
+// Main, the pins and the most recent few: what a hover submenu is good for.
+// Anything past that is found by searching the picker.
+const MOVE_TO_WORKTREE_SUBMENU_LIMIT = 10;
+
+/** A pending hand-over consent (#12490): which terminal, to which pane. */
+interface HandOverRequest {
+  id: number;
+  terminalId: string;
+  orchestratorPaneId: string;
+}
+
+/** A zero-size point the picker hangs off, tracking the pane it sits in. */
+interface MovePickerAnchor {
+  contextElement: HTMLElement;
+  getBoundingClientRect: () => DOMRect;
+}
 
 interface TerminalContextMenuProps {
   terminalId: string;
@@ -113,7 +139,129 @@ export function TerminalContextMenu({
     }
   }, [maximizeTarget, terminalId, getPanelGroup]);
 
-  const { worktrees } = useWorktrees();
+  const worktrees = useSidebarWorktreeOrder();
+
+  // Which panel the picker was opened for, not a bare flag: the dock's tab
+  // group hands this menu a new terminal when its active tab changes, and the
+  // picker must not quietly retarget. Dropped during render so switching back
+  // can't reopen it.
+  const [movePickerPanelId, setMovePickerPanelId] = useState<string | null>(null);
+  if (movePickerPanelId !== null && movePickerPanelId !== terminalId) {
+    setMovePickerPanelId(null);
+  }
+  const isMovePickerOpen = movePickerPanelId !== null;
+  // Mounted from the first opening on, not with the menu: every pane has one,
+  // and the content carries its own positioning observers. Kept after that so
+  // the picker still gets its exit animation.
+  const [hasOpenedMovePicker, setHasOpenedMovePicker] = useState(false);
+  const [movePickerAnchor, setMovePickerAnchor] = useState<MovePickerAnchor | null>(null);
+  // Selecting "More worktrees…" records the intent and the root content's
+  // close hook spends it — the only one that runs, since Radix pins the
+  // submenu's own. Opening straight from `onSelect` would raise the picker while
+  // the menu still holds the focus trap, and the menu's focus return would then
+  // land after the picker had focused its search field.
+  const pendingMovePickerRef = useRef<string | null>(null);
+  // Captured on every gesture that can open the menu. A context menu has no
+  // trigger to hang the picker off or hand a keyboard dismissal back to, so the
+  // pane stands in.
+  const capturedMovePickerAnchorRef = useRef<MovePickerAnchor | null>(null);
+  const movePickerReturnFocusRef = useRef<HTMLElement | null>(null);
+
+  const handleMovePickerOpenChange = useCallback(
+    (open: boolean) => setMovePickerPanelId(open ? terminalId : null),
+    [terminalId]
+  );
+
+  const handleMoveToWorktreeMore = useCallback(() => {
+    pendingMovePickerRef.current = terminalId;
+  }, [terminalId]);
+
+  const { candidateIds: orchestratorCandidateIds, refresh: refreshOrchestratorCandidates } =
+    useOrchestratorCandidates(terminalId);
+  // The consent dialog's request, carrying the terminal it is for: the dock
+  // hands this menu a new terminal when its active tab changes, and a consent
+  // must never quietly retarget. Dropped during render so switching back
+  // can't reopen it, the way the move picker is.
+  const [handOverRequest, setHandOverRequest] = useState<HandOverRequest | null>(null);
+  if (handOverRequest !== null && handOverRequest.terminalId !== terminalId) {
+    setHandOverRequest(null);
+  }
+  // Picking a pane records the request and the root content's close hook
+  // opens the dialog — the same handoff as the move picker, so the menu's own
+  // focus return can't land after the dialog has taken focus.
+  const pendingHandOverRef = useRef<HandOverRequest | null>(null);
+  const nextHandOverIdRef = useRef(0);
+  const handleRequestHandOver = useCallback(
+    (orchestratorPaneId: string) => {
+      pendingHandOverRef.current = {
+        id: ++nextHandOverIdRef.current,
+        terminalId,
+        orchestratorPaneId,
+      };
+    },
+    [terminalId]
+  );
+  // Closes only the request it was handed: a confirm that resolves after the
+  // user dismissed its dialog and opened another must not close the new one.
+  const closeHandOverRequest = useCallback((request: HandOverRequest) => {
+    setHandOverRequest((current) => (current?.id === request.id ? null : current));
+  }, []);
+
+  const handleMenuOpenChange = useCallback(
+    (open: boolean) => {
+      // A menu reopened inside its exit animation never unmounts, so the close
+      // hook never runs for that close; drop the intent rather than let it open
+      // the picker on some later, unrelated close.
+      if (open) {
+        pendingMovePickerRef.current = null;
+        pendingHandOverRef.current = null;
+        // Only a PTY can be handed over; the other kinds' menus never ask.
+        if (terminal !== undefined && panelKindHasPty(terminal.kind ?? "terminal")) {
+          refreshOrchestratorCandidates();
+        }
+      }
+    },
+    [refreshOrchestratorCandidates, terminal]
+  );
+
+  const captureMovePickerAnchor = useCallback((event: React.MouseEvent<HTMLElement>) => {
+    // The trigger wrapper is `display: contents` and has no box of its own.
+    const pane = event.currentTarget.firstElementChild;
+    if (!(pane instanceof HTMLElement)) {
+      capturedMovePickerAnchorRef.current = null;
+      movePickerReturnFocusRef.current = null;
+      return;
+    }
+    // Where the menu opened, kept relative to the pane: the picker takes the
+    // menu's place. Hung off the pane's own rect, it would have to sit outside
+    // a box that usually fills the window's height, with no room either side.
+    const bounds = pane.getBoundingClientRect();
+    const offsetX = Math.min(Math.max(event.clientX - bounds.left, 0), bounds.width);
+    const offsetY = Math.min(Math.max(event.clientY - bounds.top, 0), bounds.height);
+    movePickerReturnFocusRef.current = pane;
+    capturedMovePickerAnchorRef.current = {
+      // Lets Floating UI follow the pane itself when it moves or resizes.
+      contextElement: pane,
+      getBoundingClientRect: () => {
+        const rect = pane.getBoundingClientRect();
+        return DOMRect.fromRect({
+          x: rect.left + Math.min(offsetX, rect.width),
+          y: rect.top + Math.min(offsetY, rect.height),
+          width: 0,
+          height: 0,
+        });
+      },
+    };
+  }, []);
+
+  // Radix also opens the menu from a touch or pen long-press, which never
+  // raises the contextmenu event the capture above hangs off.
+  const captureMovePickerAnchorOnPress = useCallback(
+    (event: React.PointerEvent<HTMLElement>) => {
+      if (event.pointerType !== "mouse") captureMovePickerAnchor(event);
+    },
+    [captureMovePickerAnchor]
+  );
 
   const isWatched = usePanelStore((state) => state.watchedPanels.has(terminalId));
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(terminalId));
@@ -197,7 +345,8 @@ export function TerminalContextMenu({
   >([]);
 
   const handleContextMenu = useCallback(
-    (_e: React.MouseEvent) => {
+    (e: React.MouseEvent<HTMLElement>) => {
+      captureMovePickerAnchor(e);
       const { panelsById } = usePanelStore.getState();
       const resolved: Array<{ panelId: string; label: string }> = [];
       const seenIds = new Set<string>([terminalId]);
@@ -244,7 +393,7 @@ export function TerminalContextMenu({
       setHoveredFilePath(terminalInstanceService.getHoveredFilePath(terminalId));
       setHoveredFileKind(terminalInstanceService.getHoveredFileKind(terminalId));
     },
-    [terminalId, recentVoiceTargets]
+    [captureMovePickerAnchor, terminalId, recentVoiceTargets]
   );
 
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
@@ -528,11 +677,34 @@ export function TerminalContextMenu({
     [terminal, terminalId, terminalPty, terminalBrowser]
   );
 
-  const handleCloseAutoFocus = useCallback((event: Event) => {
-    if (!suppressNextCloseAutoFocusRef.current) return;
-    suppressNextCloseAutoFocusRef.current = false;
-    event.preventDefault();
-  }, []);
+  const handleCloseAutoFocus = useCallback(
+    (event: Event) => {
+      if (suppressNextCloseAutoFocusRef.current) {
+        suppressNextCloseAutoFocusRef.current = false;
+        event.preventDefault();
+      }
+      const pendingHandOver = pendingHandOverRef.current;
+      pendingHandOverRef.current = null;
+      if (pendingHandOver !== null && pendingHandOver.terminalId === terminalId) {
+        // Restoration is left to run: focus goes back to the pane before the
+        // dialog mounts, so the dialog records the pane as where to return it.
+        setHandOverRequest(pendingHandOver);
+        return;
+      }
+      const pendingPanelId = pendingMovePickerRef.current;
+      pendingMovePickerRef.current = null;
+      if (pendingPanelId === null || pendingPanelId !== terminalId) return;
+      const anchor = capturedMovePickerAnchorRef.current;
+      if (!anchor?.contextElement.isConnected) return;
+      // The picker takes focus into its search field; handing it back to the
+      // pane first would only flash a ring on the way.
+      event.preventDefault();
+      setMovePickerAnchor(anchor);
+      setHasOpenedMovePicker(true);
+      setMovePickerPanelId(terminalId);
+    },
+    [terminalId]
+  );
 
   const handleDestructiveConfirm = useCallback(() => {
     if (!destructiveConfirm) return;
@@ -584,6 +756,9 @@ export function TerminalContextMenu({
   // and must keep copy/paste, redraw, restart, and the rest of the PTY menu.
   const isPlugin = Boolean(terminal.pluginId) && !hasPty;
 
+  const submenuWorktrees = worktrees.slice(0, MOVE_TO_WORKTREE_SUBMENU_LIMIT);
+  const hasMoreWorktrees = worktrees.length > submenuWorktrees.length;
+
   const layoutSection = (
     <>
       {worktrees.length > 1 && (
@@ -592,11 +767,12 @@ export function TerminalContextMenu({
             <FolderGit2 className={ICON_CLASS} />
             Move to worktree
           </ContextMenuSubTrigger>
+          {/* No search field in here: Radix's typeahead claims printable keys
+              inside a submenu, so finding a worktree past the cap is the
+              picker's job. */}
           <ContextMenuSubContent>
-            {worktrees.map((wt) => {
+            {submenuWorktrees.map((wt) => {
               const isCurrent = wt.id === terminal.worktreeId;
-              const label =
-                (wt.isMainWorktree ? wt.name : wt.branch || wt.name).trim() || "Untitled worktree";
               return (
                 <ContextMenuItem
                   key={wt.id}
@@ -604,10 +780,19 @@ export function TerminalContextMenu({
                   onSelect={() => handleAction(`move-to-worktree:${wt.id}`)}
                 >
                   <FolderGit2 className={ICON_CLASS} />
-                  {label}
+                  {getWorktreeHeadline(wt).label}
                 </ContextMenuItem>
               );
             })}
+            {hasMoreWorktrees && (
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuItem aria-haspopup="dialog" onSelect={handleMoveToWorktreeMore}>
+                  <FolderGit2 className={ICON_CLASS} />
+                  More worktrees…
+                </ContextMenuItem>
+              </>
+            )}
           </ContextMenuSubContent>
         </ContextMenuSub>
       )}
@@ -652,10 +837,34 @@ export function TerminalContextMenu({
     </>
   );
 
+  const movePicker = hasOpenedMovePicker && (
+    // Beside the trigger in every branch, never wrapped around `children`: in
+    // the dock those are the dock's own popover trigger, which the nearest
+    // popover root would claim.
+    <AppPalettePopover
+      isOpen={isMovePickerOpen}
+      onOpenChange={handleMovePickerOpenChange}
+      // Modal like the header's: Tab cycles inside, and the outside press that
+      // dismisses it doesn't also land on what it hit.
+      modal={true}
+    >
+      <PopoverAnchor virtualRef={{ current: movePickerAnchor }} />
+      <MoveToWorktreePicker
+        panelId={terminalId}
+        currentWorktreeId={terminal.worktreeId}
+        isOpen={isMovePickerOpen}
+        onOpenChange={handleMovePickerOpenChange}
+        returnFocusRef={movePickerReturnFocusRef}
+        // Opens from the point the way the menu did.
+        align="start"
+      />
+    </AppPalettePopover>
+  );
+
   if (isBrowser) {
     const hasUrl = Boolean(terminal.browserUrl && isValidBrowserUrl(terminal.browserUrl));
     return (
-      <ContextMenu>
+      <ContextMenu onOpenChange={handleMenuOpenChange}>
         <MenuActionSourceContext.Consumer>
           {(value) => {
             sourceRef.current = value ?? "user";
@@ -663,7 +872,12 @@ export function TerminalContextMenu({
           }}
         </MenuActionSourceContext.Consumer>
         <ContextMenuTrigger asChild>
-          <div className="contents" data-context-trigger={terminalId}>
+          <div
+            className="contents"
+            data-context-trigger={terminalId}
+            onContextMenu={captureMovePickerAnchor}
+            onPointerDown={captureMovePickerAnchorOnPress}
+          >
             {children}
           </div>
         </ContextMenuTrigger>
@@ -705,6 +919,7 @@ export function TerminalContextMenu({
             Remove browser
           </ContextMenuItem>
         </ContextMenuContent>
+        {movePicker}
       </ContextMenu>
     );
   }
@@ -712,7 +927,7 @@ export function TerminalContextMenu({
   if (isDevPreview) {
     const hasUrl = Boolean(terminal.browserUrl && isValidBrowserUrl(terminal.browserUrl));
     return (
-      <ContextMenu>
+      <ContextMenu onOpenChange={handleMenuOpenChange}>
         <MenuActionSourceContext.Consumer>
           {(value) => {
             sourceRef.current = value ?? "user";
@@ -720,7 +935,12 @@ export function TerminalContextMenu({
           }}
         </MenuActionSourceContext.Consumer>
         <ContextMenuTrigger asChild>
-          <div className="contents" data-context-trigger={terminalId}>
+          <div
+            className="contents"
+            data-context-trigger={terminalId}
+            onContextMenu={captureMovePickerAnchor}
+            onPointerDown={captureMovePickerAnchorOnPress}
+          >
             {children}
           </div>
         </ContextMenuTrigger>
@@ -762,13 +982,14 @@ export function TerminalContextMenu({
             Stop dev server
           </ContextMenuItem>
         </ContextMenuContent>
+        {movePicker}
       </ContextMenu>
     );
   }
 
   if (isReview) {
     return (
-      <ContextMenu>
+      <ContextMenu onOpenChange={handleMenuOpenChange}>
         <MenuActionSourceContext.Consumer>
           {(value) => {
             sourceRef.current = value ?? "user";
@@ -776,7 +997,12 @@ export function TerminalContextMenu({
           }}
         </MenuActionSourceContext.Consumer>
         <ContextMenuTrigger asChild>
-          <div className="contents" data-context-trigger={terminalId}>
+          <div
+            className="contents"
+            data-context-trigger={terminalId}
+            onContextMenu={captureMovePickerAnchor}
+            onPointerDown={captureMovePickerAnchorOnPress}
+          >
             {children}
           </div>
         </ContextMenuTrigger>
@@ -805,6 +1031,7 @@ export function TerminalContextMenu({
             Remove review
           </ContextMenuItem>
         </ContextMenuContent>
+        {movePicker}
       </ContextMenu>
     );
   }
@@ -814,7 +1041,7 @@ export function TerminalContextMenu({
   // menu below would narrow against DiffPanelData and lose `isInputLocked`.
   if (isFile || isFileBrowser || isDiff || isPlugin) {
     return (
-      <ContextMenu>
+      <ContextMenu onOpenChange={handleMenuOpenChange}>
         <MenuActionSourceContext.Consumer>
           {(value) => {
             sourceRef.current = value ?? "user";
@@ -822,7 +1049,12 @@ export function TerminalContextMenu({
           }}
         </MenuActionSourceContext.Consumer>
         <ContextMenuTrigger asChild>
-          <div className="contents" data-context-trigger={terminalId}>
+          <div
+            className="contents"
+            data-context-trigger={terminalId}
+            onContextMenu={captureMovePickerAnchor}
+            onPointerDown={captureMovePickerAnchorOnPress}
+          >
             {children}
           </div>
         </ContextMenuTrigger>
@@ -847,6 +1079,7 @@ export function TerminalContextMenu({
             Remove panel
           </ContextMenuItem>
         </ContextMenuContent>
+        {movePicker}
       </ContextMenu>
     );
   }
@@ -854,7 +1087,16 @@ export function TerminalContextMenu({
   return (
     <>
       {destructiveConfirmDialog}
-      <ContextMenu>
+      {handOverRequest !== null && (
+        <TerminalHandOverDialog
+          key={handOverRequest.id}
+          terminalId={handOverRequest.terminalId}
+          orchestratorPaneId={handOverRequest.orchestratorPaneId}
+          onClose={() => closeHandOverRequest(handOverRequest)}
+          restoreFocusTo={movePickerReturnFocusRef}
+        />
+      )}
+      <ContextMenu onOpenChange={handleMenuOpenChange}>
         <MenuActionSourceContext.Consumer>
           {(value) => {
             sourceRef.current = value ?? "user";
@@ -866,6 +1108,7 @@ export function TerminalContextMenu({
             className="contents"
             data-context-trigger={terminalId}
             onContextMenu={handleContextMenu}
+            onPointerDown={captureMovePickerAnchorOnPress}
           >
             {children}
           </div>
@@ -1087,6 +1330,13 @@ export function TerminalContextMenu({
               <ContextMenuShortcut>{mac ? "⌘⇧W" : "Ctrl+⇧W"}</ContextMenuShortcut>
             </ContextMenuItem>
           )}
+          {hasPty && (
+            <TerminalHandOverMenuItems
+              terminalId={terminalId}
+              candidateIds={orchestratorCandidateIds}
+              onRequestHandOver={handleRequestHandOver}
+            />
+          )}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("duplicate")}>
             <CopyPlus className={ICON_CLASS} aria-hidden="true" />
@@ -1116,6 +1366,7 @@ export function TerminalContextMenu({
           </ContextMenuItem>
           <PluginContextMenuSection items={pluginItems} />
         </ContextMenuContent>
+        {movePicker}
       </ContextMenu>
     </>
   );

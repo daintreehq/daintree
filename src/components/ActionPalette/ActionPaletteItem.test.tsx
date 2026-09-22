@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { ActionPaletteItem } from "./ActionPaletteItem";
+import { ActionPaletteItem, HIDE_SHORTCUT, PIN_SHORTCUT } from "./ActionPaletteItem";
+import { createTooltipWithShortcut } from "@/lib/platform";
 import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
 
 vi.mock("@/lib/utils", () => ({
@@ -270,6 +271,29 @@ describe("ActionPaletteItem", () => {
 
       expect(onPin).toHaveBeenCalledTimes(1);
       expect(screen.getByText("Can't pin destructive actions")).toBeTruthy();
+    });
+
+    it("names the keyboard chord on both controls, since nothing else teaches it", () => {
+      render(
+        <ActionPaletteItem
+          item={makeItem()}
+          index={0}
+          isSelected
+          onSelect={onSelect}
+          onPin={() => true}
+          onHide={() => {}}
+        />
+      );
+
+      // Derived from the same constants the handler matches on, so a chord
+      // change can't leave the tooltip advertising the old one.
+      for (const [testId, shortcut] of [
+        ["action-palette-pin", PIN_SHORTCUT],
+        ["action-palette-hide", HIDE_SHORTCUT],
+      ] as const) {
+        const title = screen.getByTestId(testId).getAttribute("title") ?? "";
+        expect(title).toBe(createTooltipWithShortcut(title.split(" (")[0]!, shortcut));
+      }
     });
 
     it("uses 'Unpin' label and routes click to onUnpin when isPinned", () => {

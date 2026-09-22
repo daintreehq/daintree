@@ -7,6 +7,7 @@ What this root buys is the one gate that does apply: `npm run check:plugin-manif
 | Sample | What it is for |
 | --- | --- |
 | [`acme.tour`](./acme.tour/) | The canonical one. Zero build, hand-written ESM, and one working example of each thing [the agent brief](../../docs/plugins/agent-brief.md) tells an agent to build: an argument-taking channel, a targeted push, `panel.openPluginPanel` on itself, `file.openPanel`, a `daintree-file://` media fetch, `persistState`, and a panel badge. It does not cover the typed (schema) `registerHandler` overload or broadcast pushes. |
+| [`acme.ledger`](./acme.ledger/) | The canonical `contributes.agentMcp` endpoint. Zero build, no view: three tools registered with `host.mcp.registerTools` that let agents in the project read and append to a SQLite ledger the project owns, through Node's built-in `node:sqlite`. Shows argument validation the host does not do, parameterised SQL, size-bounded results, cancellation, memo text kept as data, and an honest account of the trust ceiling. The endpoint serves nothing until the user enables it for the project. |
 
 Not to be confused with two neighbours that look similar and are not:
 

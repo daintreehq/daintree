@@ -18,7 +18,7 @@ export function registerWorkflowUtilityActions(actions: ActionRegistry): void {
       // The id is stable (keybindings, plugins, and MCP clients reference it),
       // but the old "Prep" title promised work this never did — it reads git
       // status and detected runners and changes nothing (#11548).
-      title: "Inspect Branch for Review",
+      title: "Inspect branch for review",
       description:
         "Inspect a worktree and report a go/no-go verdict on whether review checks can start, naming what is blocking if not. Despite the name it prepares nothing and runs nothing — it is read-only, and running a detected check is a separate step. Use it to avoid launching checks against a dirty or conflicted tree.",
       category: "worktree",
@@ -113,7 +113,7 @@ export function registerWorkflowUtilityActions(actions: ActionRegistry): void {
   actions.set("workflow.focusNextAttention", () =>
     defineAction({
       id: "workflow.focusNextAttention",
-      title: "Focus Next Attention",
+      title: "Focus next attention",
       description:
         "Move keyboard focus to the agent most in need of attention, preferring one blocked on the user over one merely working. Use this to triage a fleet by hand. It changes what the user sees, and reports whether anything was focused, which state that agent was in, and how many are waiting or working — read an agent status snapshot for the state of each terminal.",
       category: "worktree",

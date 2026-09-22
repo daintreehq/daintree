@@ -749,7 +749,7 @@ describe("WorkspaceService.createWorktree", () => {
           completedAt: Date.now(),
           error: "npm ci exited 1",
         });
-        return { shouldProvision: false };
+        return { shouldProvision: false, needsApproval: false };
       }
     );
 
@@ -766,6 +766,36 @@ describe("WorkspaceService.createWorktree", () => {
     expect(status?.error).toContain("npm ci exited 1");
   });
 
+  it("settles on needs-approval, not ready, when the setup commands are unapproved", async () => {
+    vi.spyOn(
+      service as unknown as {
+        initWorktreeSubmodules: (...args: unknown[]) => Promise<unknown>;
+      },
+      "initWorktreeSubmodules"
+    ).mockResolvedValue({ ok: true });
+    vi.spyOn(service["lifecycleService"], "runLifecycleSetup").mockResolvedValue({
+      shouldProvision: false,
+      needsApproval: true,
+    });
+    (service as unknown as { projectRootPath: string }).projectRootPath = "/test/root";
+    const provisionSpy = vi.spyOn(service, "runResourceAction");
+
+    await service.createWorktree("req-setup-needs-approval", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/setup-needs-approval",
+      path: "/test/worktree-setup-needs-approval",
+      provisionResource: true,
+    });
+    await flushAsyncTail();
+
+    const status = service["monitors"].get(
+      path.resolve("/test/worktree-setup-needs-approval")
+    )?.setupStatus;
+    expect(status?.state).toBe("needs-approval");
+    expect(status?.stage).toBe("setup-script");
+    expect(provisionSpy).not.toHaveBeenCalled();
+  });
+
   it("does not report ready when auto-provisioning fails", async () => {
     // Provisioning resolves `{ success: false }` rather than throwing, and it
     // overwrites `lifecycleStatus` with its own `resource-provision` phase — so
@@ -780,6 +810,7 @@ describe("WorkspaceService.createWorktree", () => {
 
     vi.spyOn(service["lifecycleService"], "runLifecycleSetup").mockResolvedValue({
       shouldProvision: true,
+      needsApproval: false,
     });
     // Auto-provision is guarded on the host having a loaded project.
     (service as unknown as { projectRootPath: string }).projectRootPath = "/test/root";
@@ -871,6 +902,7 @@ describe("WorkspaceService.createWorktree", () => {
     // The no-setup-commands path: returns without writing a lifecycle status.
     vi.spyOn(service["lifecycleService"], "runLifecycleSetup").mockResolvedValue({
       shouldProvision: false,
+      needsApproval: false,
     });
 
     await service.retryLifecycleSetup(worktreeId);

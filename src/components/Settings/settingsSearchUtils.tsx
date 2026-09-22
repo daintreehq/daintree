@@ -185,6 +185,39 @@ export function filterSettings(
     results = results.filter((entry) => entry.scope !== "project");
   }
 
+  // Relevance gate — LAST, after the hard eligibility filters above. Run
+  // earlier, a literal hit that was about to be filtered out (a project-scope
+  // row with no project open, an unmodified tab under `@modified`) still
+  // counted as "a literal match exists", evicted the eligible fuzzy rows, and
+  // was then removed itself, leaving nothing.
+  //
+  // Fuse's fuzziness is what lets a typo still find a setting,
+  // but with a well-spelled query it also returns rows that contain the term
+  // nowhere at all — searching "theme" surfaced the MCP server port, with
+  // nothing on the row to explain why it was there. A result the user has to
+  // interpret costs more than the one it displaced.
+  //
+  // So: when ANY result contains the query literally, keep only those. When
+  // none does, the query was probably mistyped and the fuzzy set is the whole
+  // value of the feature, so it survives untouched. Every indexed field counts
+  // as evidence, not just the title — a literal hit in a description is a real
+  // reason to be in the list, and it is visible to the reader.
+  const containsEveryToken = (entry: SettingsSearchEntry): boolean =>
+    tokens.every((token) => {
+      const haystacks = [
+        entry.title,
+        entry.tabLabel,
+        entry.description ?? "",
+        entry.section ?? "",
+        entry.subtabLabel ?? "",
+        ...(entry.keywords ?? []),
+      ];
+      return haystacks.some((h) => h.toLowerCase().includes(token));
+    });
+
+  const literal = results.filter(containsEveryToken);
+  if (literal.length > 0) results = literal;
+
   return results;
 }
 
@@ -219,7 +252,11 @@ export function HighlightText({ text, query }: HighlightTextProps) {
       <span>
         {parts.map((part, i) =>
           lowerTokens.some((t) => part.toLowerCase() === t) ? (
-            <span key={i} className="text-search-highlight-text">
+            // Neutral band, matching `HighlightedText` — a query matching four
+            // rows painted four accent runs across the results list. Not bold:
+            // weight was removed here deliberately so the row does not reflow
+            // as the user types.
+            <span key={i} className="bg-overlay-medium text-text-primary">
               {part}
             </span>
           ) : (

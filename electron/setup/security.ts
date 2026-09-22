@@ -180,7 +180,10 @@ export function enforceIpcSenderValidation(): void {
       }
       try {
         validateIpcInvokeEnvelope(channel, args);
-        if (FAULT_MODE_ENABLED) await applyInvokeFault(channel);
+        if (FAULT_MODE_ENABLED) {
+          const stub = await applyInvokeFault(channel);
+          if (stub) return wrapSuccess(stub.value);
+        }
         const result = await listener(event, ...args);
         return wrapSuccess(result);
       } catch (error) {
@@ -223,7 +226,10 @@ export function enforceIpcSenderValidation(): void {
         }
         try {
           validateIpcInvokeEnvelope(channel, args);
-          if (FAULT_MODE_ENABLED) await applyInvokeFault(channel);
+          if (FAULT_MODE_ENABLED) {
+            const stub = await applyInvokeFault(channel);
+            if (stub) return wrapSuccess(stub.value);
+          }
           const result = await listener(event, ...args);
           return wrapSuccess(result);
         } catch (error) {

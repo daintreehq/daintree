@@ -171,11 +171,11 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
   purgeMemoryWebContents: vi.fn().mockResolvedValue(undefined),
   freezeWebContents: vi.fn().mockResolvedValue(undefined),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
-  throttleCpuWebContents: vi.fn().mockResolvedValue(undefined),
   unthrottleCpuWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../utils/logger.js", () => ({
+  logDebug: vi.fn(),
   logInfo: vi.fn(),
   logWarn: vi.fn(),
   createLogger: vi.fn(() => ({
@@ -224,14 +224,17 @@ const isTerminalLive = (terminalId: string): boolean => liveTerminals.has(termin
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { events } from "../../services/events.js";
-import { logInfo } from "../../utils/logger.js";
+import { logDebug, logInfo } from "../../utils/logger.js";
 import { forgetBlinkSample, forgetEluSample } from "../../services/ProcessMemoryMonitor.js";
 import { detachRendererConsoleCapture } from "../rendererConsoleCapture.js";
 import {
-  throttleCpuWebContents,
+  freezeWebContents,
+  unfreezeWebContents,
+  purgeMemoryWebContents,
   unthrottleCpuWebContents,
 } from "../../utils/webContentsLifecycle.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
+import { MIN_PRESSURE_EVICTION_AGE_MS } from "../ProjectViewEvictionController.js";
 
 // The shared snapshot is module-level state; without a reset, a test could be
 // served metrics cached by the previous test's differently-mocked sweep.
@@ -247,6 +250,30 @@ beforeEach(() => {
 });
 
 const flushImmediates = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+/**
+ * Backdate every view past the pressure ladder's minimum age, keeping their
+ * relative LRU order. These fixtures switch milliseconds apart, so without it
+ * every gradual pass would defer on a view the user "just left" (#12363).
+ */
+function ageViewsPastPressureFloor(mgr: ProjectViewManager): void {
+  for (const entry of mgr.views.values()) entry.lastUsed -= MIN_PRESSURE_EVICTION_AGE_MS;
+}
+
+/**
+ * Age the cache and take the one low reading that on its own confirms nothing
+ * (#12363), asserting it destroyed nothing — so the ticks that follow exercise a
+ * confirmed pass. Call with memory already reading low.
+ */
+function armPressureLadder(mgr: ProjectViewManager): void {
+  ageViewsPastPressureFloor(mgr);
+  // From a clean count: the manager's own randomly-phased sampler is live, and
+  // may already have taken a low reading while the fixture awaited its switches.
+  mgr.pressureSampleStreak = 0;
+  const before = mgr.views.size;
+  mgr.maybeEvictUnderPressure();
+  expect(mgr.views.size).toBe(before);
+}
 
 function createMockWindow() {
   return {
@@ -1710,12 +1737,12 @@ describe("ProjectViewManager — telemetry", () => {
     // during the awaits above, and the 5s snapshot TTL would otherwise shadow
     // the mock this test just set.
     resetAppMetricsSnapshotForTesting();
-    vi.mocked(logInfo).mockClear();
+    vi.mocked(logDebug).mockClear();
 
     (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
 
     const memoryCalls = vi
-      .mocked(logInfo)
+      .mocked(logDebug)
       .mock.calls.filter(([event]) => event === "projectview.cached-memory");
     // proj-b is the active view; only proj-a (cached) should be sampled
     expect(memoryCalls.length).toBe(1);
@@ -1761,12 +1788,12 @@ describe("ProjectViewManager — telemetry", () => {
     // during the awaits above, and the 5s snapshot TTL would otherwise shadow
     // the mock this test just set.
     resetAppMetricsSnapshotForTesting();
-    vi.mocked(logInfo).mockClear();
+    vi.mocked(logDebug).mockClear();
 
     (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
 
     const memoryCalls = vi
-      .mocked(logInfo)
+      .mocked(logDebug)
       .mock.calls.filter(([event]) => event === "projectview.cached-memory");
     expect(memoryCalls.length).toBe(1);
     expect(memoryCalls[0][1]).toMatchObject({
@@ -1794,12 +1821,12 @@ describe("ProjectViewManager — telemetry", () => {
       { pid: wcA.osPid, memory: { workingSetSize: 250 * 1024, privateBytes: 0 } },
     ] as unknown as Electron.ProcessMetric[]);
 
-    vi.mocked(logInfo).mockClear();
+    vi.mocked(logDebug).mockClear();
 
     (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
 
     const memoryCalls = vi
-      .mocked(logInfo)
+      .mocked(logDebug)
       .mock.calls.filter(([event]) => event === "projectview.cached-memory");
     expect(memoryCalls.length).toBe(0);
   });
@@ -1824,12 +1851,12 @@ describe("ProjectViewManager — telemetry", () => {
     // Metrics return nothing for proj-a's pid — sampler must skip silently.
     mockGetAppMetrics.mockReturnValue([]);
 
-    vi.mocked(logInfo).mockClear();
+    vi.mocked(logDebug).mockClear();
 
     (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
 
     const memoryCalls = vi
-      .mocked(logInfo)
+      .mocked(logDebug)
       .mock.calls.filter(([event]) => event === "projectview.cached-memory");
     expect(memoryCalls.length).toBe(0);
   });
@@ -1871,7 +1898,7 @@ describe("ProjectViewManager — telemetry", () => {
     // during the awaits above, and the 5s snapshot TTL would otherwise shadow
     // the mock this test just set.
     resetAppMetricsSnapshotForTesting();
-    vi.mocked(logInfo).mockClear();
+    vi.mocked(logDebug).mockClear();
     resetAppMetricsSnapshotForTesting();
 
     expect(() =>
@@ -1879,7 +1906,7 @@ describe("ProjectViewManager — telemetry", () => {
     ).not.toThrow();
 
     const memoryCalls = vi
-      .mocked(logInfo)
+      .mocked(logDebug)
       .mock.calls.filter(([event]) => event === "projectview.cached-memory");
     expect(memoryCalls.length).toBe(1);
     expect(memoryCalls[0][1]).toMatchObject({
@@ -1914,7 +1941,7 @@ describe("ProjectViewManager — telemetry", () => {
     ).not.toThrow();
 
     const memoryCalls = vi
-      .mocked(logInfo)
+      .mocked(logDebug)
       .mock.calls.filter(([event]) => event === "projectview.cached-memory");
     expect(memoryCalls.length).toBe(0);
   });
@@ -1942,14 +1969,14 @@ describe("ProjectViewManager — telemetry", () => {
 
     manager.dispose();
 
-    vi.mocked(logInfo).mockClear();
+    vi.mocked(logDebug).mockClear();
 
     // Manually invoke the sampler post-dispose — even if a stale interval tick
     // were to fire, the sampler must not emit because views were cleared.
     (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
 
     const memoryCalls = vi
-      .mocked(logInfo)
+      .mocked(logDebug)
       .mock.calls.filter(([event]) => event === "projectview.cached-memory");
     expect(memoryCalls.length).toBe(0);
   });
@@ -1995,7 +2022,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     expect(onViewCached).not.toHaveBeenCalledWith(wcB.id);
   });
 
-  it("fires onViewCached BEFORE CPU throttle so ports close before freeze becomes possible", async () => {
+  it("fires onViewCached BEFORE freezing the outgoing view so ports close first", async () => {
     const onViewCached = vi.fn();
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -2010,23 +2037,22 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     const wcA = createMockWebContents();
     const viewA = { webContents: wcA, setBounds: vi.fn() };
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+    // Efficiency on: deactivation freezes the outgoing view inline.
+    manager.setEfficiencyFreeze(true);
 
-    const throttleMock = vi.mocked(throttleCpuWebContents);
-    throttleMock.mockClear();
+    const freezeMock = vi.mocked(freezeWebContents);
+    freezeMock.mockClear();
 
     await manager.switchTo("proj-b", "/path/b");
     await flushImmediates();
 
     const cachedOrder = onViewCached.mock.invocationCallOrder[0];
-    const throttleCall = throttleMock.mock.calls.findIndex((args) => {
-      const arg = args[0] as unknown;
-      return arg instanceof Object && "id" in arg && (arg as { id: number }).id === wcA.id;
-    });
-    const throttleOrder = throttleMock.mock.invocationCallOrder[throttleCall];
+    const freezeCall = freezeMock.mock.calls.findIndex((args) => (args[0] as unknown) === wcA);
+    const freezeOrder = freezeMock.mock.invocationCallOrder[freezeCall];
     expect(cachedOrder).toBeDefined();
-    expect(throttleOrder).toBeDefined();
-    expect(cachedOrder!).toBeLessThan(throttleOrder);
-    expect(throttleMock).toHaveBeenCalledWith(wcA);
+    expect(freezeOrder).toBeDefined();
+    expect(cachedOrder!).toBeLessThan(freezeOrder!);
+    manager.dispose();
   });
 
   it("invokes onViewCached for each cached view across rapid switches A→B→C (never for the active C)", async () => {
@@ -2151,9 +2177,10 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     await flushImmediates();
     expect(manager.getActiveProjectId()).toBe("proj-b");
     expect(onViewCached).toHaveBeenCalledWith(wcA.id);
-    // CPU throttle must still happen even if the callback throws — the catch
-    // is around onViewCached only, not the surrounding deactivate flow.
-    expect(vi.mocked(throttleCpuWebContents)).toHaveBeenCalledWith(wcA);
+    // The rest of deactivation must still run even if the callback throws —
+    // the catch is around onViewCached only, not the surrounding flow.
+    expect(wcA.session.flushStorageData).toHaveBeenCalled();
+    expect(manager.getAllViews().find((v) => v.projectId === "proj-a")?.state).toBe("cached");
   });
 
   it("manager works without onViewCached configured (option is optional)", async () => {
@@ -2172,10 +2199,10 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
 
     await expect(manager.switchTo("proj-b", "/path/b")).resolves.toMatchObject({ isNew: true });
     await flushImmediates();
-    expect(vi.mocked(throttleCpuWebContents)).toHaveBeenCalledWith(wcA);
+    expect(manager.getAllViews().find((v) => v.projectId === "proj-a")?.state).toBe("cached");
   });
 
-  it("throttles <webview> guests when their host view is cached and unthrottles on reactivation", async () => {
+  it("never CPU-throttles <webview> guests when their host is cached, and resets them on reactivation", async () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
@@ -2198,10 +2225,18 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     await manager.switchTo("proj-b", "/path/b");
     await flushImmediates();
 
-    expect(vi.mocked(throttleCpuWebContents)).toHaveBeenCalledWith(guest);
-    expect(vi.mocked(throttleCpuWebContents)).not.toHaveBeenCalledWith(unrelated);
+    // CDP CPU throttling busy-spins the renderer it "slows" (#12456): caching
+    // the host hands its guests to no lifecycle helper at all.
+    for (const helper of [
+      unthrottleCpuWebContents,
+      freezeWebContents,
+      unfreezeWebContents,
+      purgeMemoryWebContents,
+    ]) {
+      expect(vi.mocked(helper)).not.toHaveBeenCalledWith(guest);
+    }
 
-    // Reactivate proj-a — its guest must be unthrottled along with the host.
+    // Reactivate proj-a — its guest's rate is reset along with the host's.
     await manager.switchTo("proj-a", "/path/a");
     await flushImmediates();
 
@@ -2447,7 +2482,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
 
   // Helper for mocking process.getSystemMemoryInfo. Chromium-extended API not in
   // the default Node typings, so spy via a cast and restore in afterEach.
-  type MemInfo = { free: number; purgeable?: number; total: number };
+  type MemInfo = { free: number; purgeable?: number; fileBacked?: number; total: number };
   function stubSystemMemoryInfo(info: MemInfo | (() => MemInfo) | "throw" | "missing") {
     const proc = process as unknown as { getSystemMemoryInfo?: () => MemInfo };
     if (info === "missing") {
@@ -2498,6 +2533,9 @@ describe("ProjectViewManager — low-memory eviction", () => {
   });
 
   afterEach(() => {
+    // Stops this manager's randomly-phased sampler from ticking into a later
+    // test's memory stub and the shared logInfo mock.
+    manager.dispose();
     Object.defineProperty(process, "getSystemMemoryInfo", {
       configurable: true,
       value: originalSystemMemoryInfo,
@@ -2558,6 +2596,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
     // The switches themselves hold the user's cap of 3 — an LRU pass no longer
     // inherits pressure (#11477). The sampler is what converges on 1.
     expect(manager.getAllViews().length).toBe(3);
+    armPressureLadder(manager);
     tickPressureCheck(manager);
     tickPressureCheck(manager);
 
@@ -2620,6 +2659,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
     // tick's pressure check must reclaim without waiting for a switch — one
     // view per tick, converging on the active view (#11477).
     freeKb = 128 * 1024;
+    armPressureLadder(manager);
     tickPressureCheck(manager);
     expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c"]);
     expect(wcA.close).toHaveBeenCalled();
@@ -2637,14 +2677,18 @@ describe("ProjectViewManager — low-memory eviction", () => {
     await manager.switchTo("proj-b", "/path/b");
     await flushImmediates();
 
+    // Aged, and ticked past confirmation, so neither case can pass merely
+    // because a single sample never evicts (#12363).
+    ageViewsPastPressureFloor(manager);
+
     // Null threshold (performance profile): pressure check must not run.
-    (manager as unknown as { maybeEvictUnderPressure(): void }).maybeEvictUnderPressure();
+    for (let tick = 0; tick < 3; tick++) tickPressureCheck(manager);
     expect(manager.getAllViews().length).toBe(2);
 
     // Threshold set but memory healthy: still a no-op.
     stubSystemMemoryInfo({ free: 2 * 1024 * 1024, purgeable: 0, total: 8 * 1024 * 1024 });
     manager.setLowMemoryFreeThresholdMb(768);
-    (manager as unknown as { maybeEvictUnderPressure(): void }).maybeEvictUnderPressure();
+    for (let tick = 0; tick < 3; tick++) tickPressureCheck(manager);
     expect(manager.getAllViews().length).toBe(2);
     expect(wcA.close).not.toHaveBeenCalled();
   });
@@ -2668,9 +2712,45 @@ describe("ProjectViewManager — low-memory eviction", () => {
     await manager.switchTo("proj-c", "/path/c");
     await flushImmediates();
 
-    // 50 + 2*1024*1024 KB ≈ 2050 MB > 768 → no override.
+    // 50 + 2*1024*1024 KB ≈ 2050 MB > 768 → no override, however long it holds.
+    ageViewsPastPressureFloor(manager);
+    for (let tick = 0; tick < 3; tick++) tickPressureCheck(manager);
     expect(manager.getAllViews().length).toBe(3);
     expect(wcA.close).not.toHaveBeenCalled();
+  });
+
+  it("counts the file cache as available on macOS, so a warm-cache Mac keeps its views (#12363)", async () => {
+    // The issue's 64 GB machine and band: ~600 MB free and ~1 GB purgeable
+    // beside ~24 GB of file cache. Free + purgeable alone reads inside the band.
+    let fileBackedKb = 24 * 1024 * 1024;
+    stubSystemMemoryInfo(() => ({
+      free: 600 * 1024,
+      purgeable: 1024 * 1024,
+      fileBacked: fileBackedKb,
+      total: 64 * 1024 * 1024,
+    }));
+    manager.setMemoryPressurePolicy({ criticalMb: 1024, warningMb: 3072 });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+    await manager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
+    await manager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
+    ageViewsPastPressureFloor(manager);
+
+    for (let tick = 0; tick < 3; tick++) tickPressureCheck(manager);
+    expect(manager.getAllViews().length).toBe(3);
+
+    // The same machine with its cache spent is genuinely short, and the ladder
+    // still answers — the fix moved the measurement, not the band. Spent, not
+    // zero: a reported zero is an unreadable reading, never a low one (#12517).
+    fileBackedKb = 64 * 1024;
+    tickPressureCheck(manager);
+    tickPressureCheck(manager);
+    expect(manager.getAllViews().length).toBe(2);
+    expect(wcA.close).toHaveBeenCalled();
   });
 
   it("does not mutate maxCachedViews — user limit returns when pressure subsides", async () => {
@@ -2686,6 +2766,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
     await manager.switchTo("proj-c", "/path/c");
     await flushImmediates();
     // Sampler ticks converge on 1 (the switches hold the user's cap, #11477).
+    armPressureLadder(manager);
     tickPressureCheck(manager);
     tickPressureCheck(manager);
     expect(manager.getAllViews().length).toBe(1);
@@ -2715,6 +2796,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
     await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
     await flushImmediates();
+    armPressureLadder(manager);
     tickPressureCheck(manager);
 
     expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
@@ -2786,6 +2868,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
       "projectview.eviction",
       expect.objectContaining({ projectId: "proj-a", reason: "lru" })
     );
+    managerWithLimit.dispose();
   });
 
   it("falls back to normal LRU behavior when getSystemMemoryInfo throws", async () => {
@@ -2840,6 +2923,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
 
     // The reading is what's under test, so drive the sampler — the switches
     // above no longer inherit pressure themselves (#11477).
+    armPressureLadder(manager);
     tickPressureCheck(manager);
     expect(manager.getAllViews().length).toBe(2);
     expect(wcA.close).toHaveBeenCalled();
@@ -2860,6 +2944,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
 
     // Driven to its settled target one view per tick, and then some — however
     // long pressure lasts, the active view is never a candidate.
+    armPressureLadder(manager);
     tickPressureCheck(manager);
     tickPressureCheck(manager);
     tickPressureCheck(manager);
@@ -2896,11 +2981,13 @@ describe("ProjectViewManager — low-memory eviction", () => {
 
     // 4 views, override targets 1 → 3 evictions, callback fires for each. One
     // per sampler tick since #11477, so drive it to the settled target.
+    armPressureLadder(pressureManager);
     tickPressureCheck(pressureManager);
     tickPressureCheck(pressureManager);
     tickPressureCheck(pressureManager);
     expect(pressureManager.getAllViews().length).toBe(1);
     expect(onViewEvicted).toHaveBeenCalledTimes(3);
+    pressureManager.dispose();
   });
 
   it("setLowMemoryFreeThresholdMb(null) clears a previously set threshold", async () => {
@@ -2973,8 +3060,11 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
   const tickPressureCheck = (mgr: ProjectViewManager) =>
     (mgr as unknown as { maybeEvictUnderPressure(): void }).maybeEvictUnderPressure();
 
+  /** Every manager built here, so the randomly-phased sampler each one starts is torn down. */
+  const managers: ProjectViewManager[] = [];
+
   function makeManager(cachedProjectViews: number) {
-    return new ProjectViewManager(win as never, {
+    const mgr = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
@@ -2984,6 +3074,8 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
       assistantBackendsForProject,
       isTerminalLive,
     });
+    managers.push(mgr);
+    return mgr;
   }
 
   /** Three views (proj-a, proj-b oldest-first; proj-c active). */
@@ -3012,6 +3104,7 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
   });
 
   afterEach(() => {
+    for (const mgr of managers.splice(0)) mgr.dispose();
     Object.defineProperty(process, "getSystemMemoryInfo", {
       configurable: true,
       value: originalSystemMemoryInfo,
@@ -3024,8 +3117,11 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     expect(manager.getAllViews().length).toBe(3);
 
     // Deep in the soft band the settled target is 1, but a single pass must
-    // still take only one view — this is the whole point of #11469.
+    // still take only one view — this is the whole point of #11469. Once
+    // confirmed the streak holds, so it is one per tick rather than one per
+    // confirmation (#12363).
     setAvailableMb(1200);
+    armPressureLadder(manager);
     tickPressureCheck(manager);
     expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c"]);
 
@@ -3042,6 +3138,7 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     await seedThreeViews(manager);
 
     setAvailableMb(1200);
+    armPressureLadder(manager);
     tickPressureCheck(manager);
     expect(manager.getAllViews().length).toBe(2);
 
@@ -3057,9 +3154,11 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     await seedThreeViews(manager);
 
     // A critical reading targets the active view alone — but the sampler is
-    // per-window and ungated, so it walks there a view at a time rather than
-    // pre-empting ProcessMemoryMonitor's cooldown-gated ladder in one pass.
+    // per-window and holds no cooldown, so it walks there a view at a time
+    // rather than pre-empting ProcessMemoryMonitor's cooldown-gated ladder in
+    // one pass.
     setAvailableMb(BAND.criticalMb - 1);
+    armPressureLadder(manager);
     tickPressureCheck(manager);
     expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c"]);
     tickPressureCheck(manager);
@@ -3075,7 +3174,9 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     setAvailableMb(2500);
     await seedThreeViews(mgr);
 
-    // Ample memory: `forcePressure` alone drives it, not the sampled band.
+    // Ample memory: `forcePressure` alone drives it, not the sampled band. The
+    // views are seconds old and no tick has confirmed anything, so neither the
+    // sampler's streak nor its age floor reaches this path (#12363).
     expect(mgr.reclaimCachedViewsUnderPressure()).toBe(2);
     expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
   });
@@ -3132,6 +3233,7 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     liveTerminals.add("t-help-a");
 
     setAvailableMb(1200);
+    armPressureLadder(mgr);
     tickPressureCheck(mgr);
 
     expect(mgr.getAllViews().length).toBe(3);
@@ -3139,6 +3241,76 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
       "projectview.eviction-skipped",
       expect.anything()
     );
+  });
+
+  it("reports an assistant-pinned overflow once per episode, not on every tick (#12517)", async () => {
+    setAvailableMb(2500);
+    await seedThreeViews(manager);
+    // Both cached views back a live assistant, so no pressure pass may take either.
+    for (const [projectId, terminalId] of [
+      ["proj-a", "t-help-a"],
+      ["proj-b", "t-help-b"],
+    ] as const) {
+      const wc = manager.getAllViews().find((v) => v.projectId === projectId)!.view.webContents;
+      assistantBackends.set(projectId, { terminalId, webContentsId: wc.id });
+      liveTerminals.add(terminalId);
+    }
+    const logged = (event: string) =>
+      vi
+        .mocked(logInfo)
+        .mock.calls.filter(([name]) => name === event)
+        .map(([, ctx]) => ctx as Record<string, unknown>);
+
+    setAvailableMb(1200);
+    armPressureLadder(manager);
+    // The reading moves every tick, as a real one does, without leaving the band.
+    for (const availableMb of [1200, 1350, 1100, 1400, 1250]) {
+      setAvailableMb(availableMb);
+      tickPressureCheck(manager);
+    }
+
+    // Five confirmed passes that can take nothing: one override, reported after
+    // the pass found that out, and one account of what is holding the cache.
+    expect(manager.getAllViews().length).toBe(3);
+    expect(logged("projectview.pressure-override")).toEqual([
+      expect.objectContaining({ pressureLevel: "soft", evictedCount: 0 }),
+    ]);
+    expect(logged("projectview.eviction-skipped")).toEqual([
+      expect.objectContaining({ viewCount: 3, protectedProjectIds: ["proj-a", "proj-b"] }),
+    ]);
+
+    // proj-b's assistant exits, so the next pass takes its view and says so;
+    // what still holds the cache over has changed too.
+    liveTerminals.delete("t-help-b");
+    tickPressureCheck(manager);
+    tickPressureCheck(manager);
+    expect(evictedProjectIds()).toEqual(["proj-b"]);
+    expect(logged("projectview.pressure-override").map((ctx) => ctx.evictedCount)).toEqual([0, 1]);
+    expect(logged("projectview.eviction-skipped").map((ctx) => ctx.protectedProjectIds)).toEqual([
+      ["proj-a", "proj-b"],
+      ["proj-a"],
+    ]);
+
+    // Memory recovers and then runs short again: a new episode, reported afresh.
+    setAvailableMb(2500);
+    tickPressureCheck(manager);
+    setAvailableMb(1200);
+    tickPressureCheck(manager);
+    tickPressureCheck(manager);
+    expect(logged("projectview.pressure-override")).toHaveLength(3);
+    expect(logged("projectview.eviction-skipped")).toHaveLength(3);
+
+    // A forced tier-2 reclaim is a different override from the gradual one, so
+    // it reports even though it cannot take proj-a either — once.
+    manager.reclaimCachedViewsUnderPressure();
+    manager.reclaimCachedViewsUnderPressure();
+    expect(logged("projectview.pressure-override").at(-1)).toMatchObject({
+      forced: true,
+      evictedCount: 0,
+    });
+    expect(logged("projectview.pressure-override")).toHaveLength(4);
+    expect(logged("projectview.eviction-skipped")).toHaveLength(4);
+    expect(logged("projectview.eviction-skipped").at(-1)).toMatchObject({ forced: true });
   });
 
   it("takes only one view per pass even when the cache sits above its cap", async () => {
@@ -3163,6 +3335,7 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     (mgr as unknown as { maxCachedViews: number }).maxCachedViews = 2;
 
     setAvailableMb(1200);
+    armPressureLadder(mgr);
     tickPressureCheck(mgr);
 
     expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c", "proj-d"]);
@@ -3184,6 +3357,7 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     }
 
     setAvailableMb(1200);
+    armPressureLadder(mgr);
     tickPressureCheck(mgr);
 
     expect(mgr.getAllViews().length).toBe(3);
@@ -3205,11 +3379,14 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     setAvailableMb(2500);
     await seedThreeViews(manager);
 
+    ageViewsPastPressureFloor(manager);
     setAvailableMb(BAND.warningMb);
+    tickPressureCheck(manager);
     tickPressureCheck(manager);
     expect(manager.getAllViews().length).toBe(3);
 
     setAvailableMb(BAND.warningMb - 1);
+    armPressureLadder(manager);
     tickPressureCheck(manager);
     expect(manager.getAllViews().length).toBe(2);
   });
@@ -3219,6 +3396,7 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     await seedThreeViews(manager);
 
     setAvailableMb(1200);
+    armPressureLadder(manager);
     tickPressureCheck(manager);
 
     expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
@@ -3246,6 +3424,7 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     expect(manager.getAllViews().length).toBe(3);
 
     setAvailableMb(1499);
+    armPressureLadder(manager);
     tickPressureCheck(manager);
     expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c"]);
 
@@ -3266,6 +3445,7 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
 
     // Far below the critical edge — the old code took everything here.
     setAvailableMb(1);
+    armPressureLadder(manager);
     tickPressureCheck(manager);
     expect(manager.getAllViews().length).toBe(2);
 
@@ -3300,8 +3480,10 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     manager.setMemoryPressurePolicy(null);
     setAvailableMb(50);
     await seedThreeViews(manager);
+    ageViewsPastPressureFloor(manager);
 
-    tickPressureCheck(manager);
+    // However long the pressure lasts: a null policy is the E2E escape hatch.
+    for (let tick = 0; tick < 3; tick++) tickPressureCheck(manager);
     expect(manager.getAllViews().length).toBe(3);
     expect(manager.getLowMemoryFreeThresholdMb()).toBeNull();
   });
@@ -3339,6 +3521,240 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
 
     expect(manager.reclaimCachedViewsUnderPressure()).toBe(2);
     expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+  });
+
+  describe("sustained pressure and the minimum age (#12363)", () => {
+    const viewOf = (projectId: string) => manager.views.get(projectId)!;
+
+    const deferredLogs = () =>
+      vi
+        .mocked(logInfo)
+        .mock.calls.filter(([event]) => event === "projectview.eviction-deferred")
+        .map(([, ctx]) => ctx as Record<string, unknown>);
+
+    it("destroys nothing on one low reading, however low — it has to hold to the next tick", async () => {
+      setAvailableMb(2500);
+      await seedThreeViews(manager);
+      ageViewsPastPressureFloor(manager);
+
+      setAvailableMb(1);
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().length).toBe(3);
+      expect(evictedProjectIds()).toEqual([]);
+
+      tickPressureCheck(manager);
+      expect(evictedProjectIds()).toEqual(["proj-a"]);
+    });
+
+    it("starts the count over on a reading at the edge, or one it cannot read", async () => {
+      setAvailableMb(2500);
+      await seedThreeViews(manager);
+      ageViewsPastPressureFloor(manager);
+
+      // Low, then exactly at the edge: the next low reading is a first again.
+      setAvailableMb(1200);
+      tickPressureCheck(manager);
+      setAvailableMb(BAND.warningMb);
+      tickPressureCheck(manager);
+      setAvailableMb(1200);
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().length).toBe(3);
+
+      // Low, then unreadable — which is no evidence the pressure persisted.
+      Object.defineProperty(process, "getSystemMemoryInfo", {
+        configurable: true,
+        value: undefined,
+      });
+      tickPressureCheck(manager);
+      setAvailableMb(1200);
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().length).toBe(3);
+
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().length).toBe(2);
+
+      // And from confirmed pressure, not only a pending count: recovery wipes
+      // the streak, so the next dip needs two readings of its own.
+      setAvailableMb(BAND.warningMb);
+      tickPressureCheck(manager);
+      setAvailableMb(1200);
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().length).toBe(2);
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().length).toBe(1);
+    });
+
+    it("needs fresh confirmation once the cache has held only the active view", async () => {
+      // With nothing cached to take, a tick has no reading to count, so it
+      // cannot carry an old confirmation over to a view cached afterwards.
+      setAvailableMb(2500);
+      await seedThreeViews(manager);
+      setAvailableMb(1200);
+      armPressureLadder(manager);
+      tickPressureCheck(manager);
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+      tickPressureCheck(manager);
+      // Checked here, before any await: a live sampler tick during the switch
+      // below would reset the count too, and hide a tick that failed to.
+      expect(manager.pressureSampleStreak).toBe(0);
+
+      // Healthy while switching, so a live sampler tick can only reset the count.
+      setAvailableMb(2500);
+      await manager.switchTo("proj-d", "/path/d");
+      await flushImmediates();
+      ageViewsPastPressureFloor(manager);
+
+      setAvailableMb(1200);
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().length).toBe(2);
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-d"]);
+    });
+
+    it("starts the count over when either setter re-arms the band", async () => {
+      setAvailableMb(2500);
+      await seedThreeViews(manager);
+      ageViewsPastPressureFloor(manager);
+      setAvailableMb(1200);
+
+      tickPressureCheck(manager);
+      manager.setMemoryPressurePolicy(BAND);
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().length).toBe(3);
+
+      manager.setLowMemoryFreeThresholdMb(BAND.warningMb);
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().length).toBe(3);
+
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().length).toBe(2);
+    });
+
+    it("will not take a view the user left under a minute ago, and takes it once it has aged", async () => {
+      setAvailableMb(2500);
+      await seedThreeViews(manager);
+      // proj-a went cold long ago; proj-b was left moments before pressure hit.
+      viewOf("proj-a").lastUsed -= MIN_PRESSURE_EVICTION_AGE_MS;
+
+      setAvailableMb(1200);
+      tickPressureCheck(manager);
+      tickPressureCheck(manager);
+      expect(evictedProjectIds()).toEqual(["proj-a"]);
+
+      tickPressureCheck(manager);
+      expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c"]);
+      const deferred = deferredLogs();
+      expect(deferred.map((ctx) => ctx.projectId)).toEqual(["proj-b"]);
+      expect(deferred[0].ageMs as number).toBeLessThan(MIN_PRESSURE_EVICTION_AGE_MS);
+      // Held back by age, not by protection — reporting it as the latter would
+      // misattribute the over-target cache.
+      expect(vi.mocked(logInfo)).not.toHaveBeenCalledWith(
+        "projectview.eviction-skipped",
+        expect.anything()
+      );
+
+      // The boundary, on a pinned clock: a millisecond short still defers, and
+      // exactly a minute unused is old enough.
+      const leftAt = viewOf("proj-b").lastUsed;
+      const clock = vi.spyOn(Date, "now");
+      try {
+        clock.mockReturnValue(leftAt + MIN_PRESSURE_EVICTION_AGE_MS - 1);
+        tickPressureCheck(manager);
+        expect(manager.getAllViews().length).toBe(2);
+        expect(deferredLogs().at(-1)).toEqual({
+          projectId: "proj-b",
+          reason: "pressure",
+          ageMs: MIN_PRESSURE_EVICTION_AGE_MS - 1,
+          minimumAgeMs: MIN_PRESSURE_EVICTION_AGE_MS,
+        });
+
+        clock.mockReturnValue(leftAt + MIN_PRESSURE_EVICTION_AGE_MS);
+        tickPressureCheck(manager);
+        expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    it("spares the view the user just left while pressure stays confirmed", async () => {
+      // The issue's symptom end to end: a real switch stamps the outgoing view,
+      // and a confirmed ladder must not take it on the very next tick.
+      setAvailableMb(2500);
+      await seedThreeViews(manager);
+      setAvailableMb(1200);
+      armPressureLadder(manager);
+      tickPressureCheck(manager);
+      expect(evictedProjectIds()).toEqual(["proj-a"]);
+
+      await manager.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      tickPressureCheck(manager);
+
+      expect(
+        manager
+          .getAllViews()
+          .map((v) => v.projectId)
+          .sort()
+      ).toEqual(["proj-b", "proj-c"]);
+      expect(evictedProjectIds()).toEqual(["proj-a"]);
+      expect(deferredLogs().at(-1)).toMatchObject({ projectId: "proj-c", reason: "pressure" });
+    });
+
+    it("acts on the reading that confirmed the pass, not a second read that crossed back", async () => {
+      // Over its cap, a pass that re-read memory and landed above the edge would
+      // stop being gradual: an unbudgeted trim to the cap that skips the minimum
+      // age. The confirming reading is the one the pass has to act on.
+      const mgr = makeManager(4);
+      mgr.setMemoryPressurePolicy(BAND);
+      setAvailableMb(2500);
+      const wcA = createMockWebContents();
+      mgr.registerInitialView(
+        { webContents: wcA, setBounds: vi.fn() } as never,
+        "proj-a",
+        "/path/a"
+      );
+      for (const id of ["proj-b", "proj-c", "proj-d"]) {
+        await mgr.switchTo(id, `/path/${id}`);
+        await flushImmediates();
+      }
+      (mgr as unknown as { maxCachedViews: number }).maxCachedViews = 2;
+      ageViewsPastPressureFloor(mgr);
+
+      const readingsMb = [1200, 1200, 2500];
+      Object.defineProperty(process, "getSystemMemoryInfo", {
+        configurable: true,
+        value: () => ({
+          free: (readingsMb.shift() ?? 2500) * 1024,
+          purgeable: 0,
+          total: 8 * 1024 * 1024,
+        }),
+      });
+      tickPressureCheck(mgr);
+      tickPressureCheck(mgr);
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c", "proj-d"]);
+    });
+
+    it("holds the pass rather than handing a young view's eviction to an older, costlier one", async () => {
+      // An agent's view ranks after ordinary ones. Skipping past a young
+      // ordinary view would evict the older agent view in its place, turning
+      // the age floor into a way around the tier order.
+      setAvailableMb(2500);
+      await seedThreeViews(manager);
+      mockGetAllTerminals.mockResolvedValue([
+        { id: "t-a", projectId: "proj-a", agentState: "working" },
+      ]);
+      await manager.initAgentStateCache(mockPtyClient as never);
+      viewOf("proj-a").lastUsed -= MIN_PRESSURE_EVICTION_AGE_MS;
+
+      setAvailableMb(1200);
+      for (let tick = 0; tick < 3; tick++) tickPressureCheck(manager);
+
+      expect(manager.getAllViews().length).toBe(3);
+      expect(evictedProjectIds()).toEqual([]);
+      expect(deferredLogs().map((ctx) => ctx.projectId)).toEqual(["proj-b", "proj-b"]);
+    });
   });
 });
 
@@ -3618,6 +4034,7 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
       boundWorkspaces.add("proj-a");
 
       setAvailableMb(1200);
+      armPressureLadder(mgr);
       tickPressureCheck(mgr);
       expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
 

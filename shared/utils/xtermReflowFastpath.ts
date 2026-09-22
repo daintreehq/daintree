@@ -38,7 +38,8 @@ interface BufferLineLike {
   _data: Uint32Array;
   _combined: SparseMap;
   _extendedAttrs: SparseMap;
-  _invalidateStringCache(): void;
+  _cacheValid: boolean;
+  _cache: string;
   _copySparseMapsFrom(src: BufferLineLike): void;
   setCell(index: number, cell: unknown): void;
   setCellFromCodepoint(index: number, codePoint: number, width: number, attrs: unknown): void;
@@ -54,7 +55,7 @@ interface BufferLineLike {
   replaceCells(start: number, end: number, fillCellData: unknown, respectProtect?: boolean): void;
   getTrimmedLength(): number;
   cleanupMemory(): number;
-  copyFrom(line: BufferLineLike): void;
+  copyFrom(line: BufferLineLike, blank?: boolean): void;
 }
 
 interface FillCellLike {
@@ -63,7 +64,7 @@ interface FillCellLike {
   bg: number;
 }
 
-// Mirrors of const-enum values inlined into the pinned 6.1.0-beta.288
+// Mirrors of const-enum values inlined into the pinned 6.1.0-beta.304
 // bundles (src/common/buffer/{BufferLine,Constants}.ts upstream). The
 // equivalence suite catches drift on version bumps.
 const CELL_SIZE = 3;
@@ -83,7 +84,6 @@ const REQUIRED_METHODS = [
   "setCell",
   "setCellFromCodepoint",
   "getWidth",
-  "_invalidateStringCache",
   "_copySparseMapsFrom",
 ] as const;
 
@@ -135,7 +135,7 @@ function makeCopyCellsFrom(original: BufferLineLike["copyCellsFrom"]) {
       original.call(this, src, srcCol, destCol, length, applyInReverse);
       return;
     }
-    this._invalidateStringCache();
+    this._cacheValid = false;
     const span = srcEnd - srcStart;
     if (srcData === destData) {
       destData.copyWithin(destCol * CELL_SIZE, srcStart, srcEnd);
@@ -181,7 +181,7 @@ function makeResize(original: BufferLineLike["resize"]) {
     ) {
       return original.call(this, cols, fillCellData);
     }
-    this._invalidateStringCache();
+    this._cacheValid = false;
     const uint32Cells = cols * CELL_SIZE;
     if (cols > this.length) {
       let data = this._data;
@@ -231,13 +231,16 @@ function makeCleanupMemory(original: BufferLineLike["cleanupMemory"]) {
 }
 
 function makeCopyFrom(original: BufferLineLike["copyFrom"]) {
-  return function copyFromFast(this: BufferLineLike, line: BufferLineLike): void {
+  return function copyFromFast(this: BufferLineLike, line: BufferLineLike, blank?: boolean): void {
     const src = line?._data;
     if (!(src instanceof Uint32Array) || !(this._data instanceof Uint32Array)) {
-      original.call(this, line);
+      original.call(this, line, blank);
       return;
     }
-    this._invalidateStringCache();
+    // Upstream drops the text with the cells; holding it would pin a whole
+    // recycled line's string for as long as the object lives.
+    this._cache = "";
+    this._cacheValid = false;
     const needed = line.length * CELL_SIZE;
     if (this._data.length === src.length) {
       this._data.set(src);
@@ -247,9 +250,10 @@ function makeCopyFrom(original: BufferLineLike["copyFrom"]) {
       this._data = new Uint32Array(src);
     }
     this.length = line.length;
-    if (isEmptySparse(line._combined) && isEmptySparse(line._extendedAttrs)) {
+    if (blank || (isEmptySparse(line._combined) && isEmptySparse(line._extendedAttrs))) {
       // _copySparseMapsFrom resets both maps then scans every cell's flags;
-      // with empty source maps the scan can never transfer anything.
+      // with empty source maps the scan can never transfer anything, and a
+      // blank source is upstream's own reason for skipping it.
       this._combined = {};
       this._extendedAttrs = {};
     } else {
@@ -283,7 +287,7 @@ function makeReplaceCells(original: BufferLineLike["replaceCells"]) {
       original.call(this, start, end, fillCellData, respectProtect);
       return;
     }
-    this._invalidateStringCache();
+    this._cacheValid = false;
     if (start && this.getWidth(start - 1) === 2) {
       this.setCellFromCodepoint(start - 1, 0, 1, fillCellData);
     }
@@ -344,7 +348,6 @@ interface BufferLike {
   scrollBottom: number;
   _cols: number;
   _rows: number;
-  _stringCache: { clear(): void };
   _optionsService: {
     rawOptions: {
       windowsPty?: { backend?: unknown; buildNumber?: unknown };
@@ -366,7 +369,6 @@ interface BufferLike {
 }
 
 type BufferLineCtor = new (
-  stringCache: unknown,
   cols: number,
   fillCellData: unknown,
   isWrapped: boolean
@@ -522,7 +524,6 @@ function makeBufferResize(original: BufferLike["resize"]) {
       return;
     }
 
-    this._stringCache.clear();
     let dirtyMemoryLines = 0;
 
     const newMaxLength = this._getCorrectBufferLength(newRows);
@@ -550,7 +551,7 @@ function makeBufferResize(original: BufferLike["resize"]) {
           ) {
             // Capacity-stable grow (see makeResize): reuse the existing view
             // when it already spans the new width, fill only the new cells.
-            line._invalidateStringCache();
+            line._cacheValid = false;
             let data = line._data;
             if (data.length < newCells) {
               const capacityCells = Math.floor(data.buffer.byteLength / 4);
@@ -582,7 +583,7 @@ function makeBufferResize(original: BufferLike["resize"]) {
           if (this.lines.length < newRows + this.ybase) {
             const windowsPty = this._optionsService.rawOptions.windowsPty;
             if (windowsPty?.backend !== undefined || windowsPty?.buildNumber !== undefined) {
-              this.lines.push(new lineCtor(this._stringCache, newCols, nullCell, false));
+              this.lines.push(new lineCtor(newCols, nullCell, false));
             } else {
               if (this.ybase > 0 && this.lines.length <= this.ybase + this.y + addToY + 1) {
                 this.ybase -= 1;
@@ -591,7 +592,7 @@ function makeBufferResize(original: BufferLike["resize"]) {
                   this.ydisp -= 1;
                 }
               } else {
-                this.lines.push(new lineCtor(this._stringCache, newCols, nullCell, false));
+                this.lines.push(new lineCtor(newCols, nullCell, false));
               }
             }
           }
@@ -650,7 +651,7 @@ function makeBufferResize(original: BufferLike["resize"]) {
           ) {
             // Capacity-stable shrink (see makeResize): the logical width
             // drops, the view keeps its slack for the next grow.
-            line._invalidateStringCache();
+            line._cacheValid = false;
             line.length = newCols;
             dirtyMemoryLines += +(newCells * 4 * CLEANUP_THRESHOLD < line._data.buffer.byteLength);
           } else {
@@ -1080,6 +1081,11 @@ function patchLinePrototype(line: BufferLineLike): boolean {
   }
   if (typeof line._combined !== "object" || line._combined === null) return false;
   if (typeof line._extendedAttrs !== "object" || line._extendedAttrs === null) return false;
+  // Upstream #6114 replaced `_invalidateStringCache()` with these two fields;
+  // the fast paths write them directly, so their absence is shape drift like
+  // any missing method.
+  if (typeof line._cacheValid !== "boolean") return false;
+  if (typeof line._cache !== "string") return false;
   for (const method of REQUIRED_METHODS) {
     if (typeof proto[method] !== "function") return false;
   }
@@ -1107,7 +1113,6 @@ function patchBufferPrototype(buffer: BufferLike, line: BufferLineLike): boolean
   if (typeof isReflowEnabled?.get !== "function") return false;
   if (!Array.isArray(buffer.lines?._array)) return false;
   if (typeof buffer.lines._startIndex !== "number") return false;
-  if (typeof buffer._stringCache?.clear !== "function") return false;
   if (typeof buffer._optionsService?.rawOptions !== "object") return false;
   if (typeof buffer._memoryCleanupQueue?.clear !== "function") return false;
   if (typeof buffer._memoryCleanupQueue?.enqueue !== "function") return false;

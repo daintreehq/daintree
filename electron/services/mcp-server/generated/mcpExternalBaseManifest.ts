@@ -25,7 +25,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     mcpVisibility: "core",
     name: "actions.getContext",
     requiresArgs: false,
-    title: "Get Action Context",
+    title: "Get action context",
   },
   {
     band: "reversible",
@@ -61,7 +61,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     mcpVisibility: "core",
     name: "actions.getSchema",
     requiresArgs: true,
-    title: "Get Action Schema",
+    title: "Get action schema",
   },
   {
     band: "reversible",
@@ -107,7 +107,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     mcpVisibility: "core",
     name: "actions.list",
     requiresArgs: false,
-    title: "List Actions",
+    title: "List actions",
   },
   {
     band: "reversible",
@@ -155,7 +155,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     mcpVisibility: "core",
     name: "actions.search",
     requiresArgs: true,
-    title: "Search Actions",
+    title: "Search actions",
   },
   {
     band: "reversible",
@@ -226,6 +226,17 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             "Initial text submitted to the agent once it starts, as its first turn. Omit to leave the agent waiting for input.",
           type: "string",
         },
+        handback: {
+          description:
+            "Ask the agent to end its reply to `prompt` with a Daintree marker, read back as `lastHandback`. Needs `prompt` and an agent.",
+          type: "boolean",
+        },
+        systemPrompt: {
+          description:
+            "Standing instruction of at most 2000 characters, appended to the agent's system prompt and kept on resume. Claude and Codex only; others refuse it.",
+          type: "string",
+          maxLength: 2000,
+        },
         interactive: {
           description:
             "Whether the agent runs as a conversation the user can continue, rather than a single non-interactive pass.",
@@ -250,7 +261,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         activateDockOnCreate: {
           description:
-            "Whether to open the sidebar dock when the agent is placed there. Only meaningful for a dock placement; it changes what the user sees.",
+            "Whether to open the sidebar dock when the agent is placed there, which changes what the user sees.",
           type: "boolean",
         },
         env: {
@@ -266,7 +277,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         excludeFromPersistence: {
           description:
-            "Keeps the terminal out of the saved session, so it does not return after a restart. It also hides the panel from listings, status snapshots and agent-state reads, and spares it from bulk close and kill, so the caller cannot find or poll it afterwards. Use for throwaway work.",
+            "Keeps the terminal out of the saved session, so it does not return after a restart. Listings, status snapshots, agent-state reads and bulk close or kill all skip it, so the caller cannot find or poll it later. Use for throwaway work.",
           type: "boolean",
         },
         removeOnExit: {
@@ -301,7 +312,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         force: {
           description:
-            "Skips the check that the agent's CLI can actually run. Without it an unlaunchable CLI opens a setup diagnostic instead of failing; with it the process is started anyway and simply fails. Leave it off unless the check itself is known to be wrong.",
+            "Skips the check that the agent's CLI can run, so an unlaunchable CLI is started and fails rather than opening a setup diagnostic. Leave off unless that check is known to be wrong.",
           type: "boolean",
         },
         name: {
@@ -313,6 +324,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       },
       required: ["agentId"],
     },
+    keywords: ["spawn", "start", "run", "new", "agents", "task"],
     kind: "command",
     name: "agent.launch",
     outputSchema: {
@@ -408,7 +420,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Launch Agent",
+    title: "Launch agent",
   },
   {
     band: "reversible",
@@ -472,7 +484,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "List Available Agents",
+    title: "List available agents",
   },
   {
     band: "reversible",
@@ -576,7 +588,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "List Agent Presets",
+    title: "List agent presets",
   },
   {
     band: "destructive-local",
@@ -791,7 +803,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "Generate And Copy Context",
+    title: "Generate and copy context",
   },
   {
     band: "reversible",
@@ -1032,7 +1044,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "Fleet: Get run status",
+    title: "Fleet: get run status",
   },
   {
     band: "reversible",
@@ -1120,7 +1132,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "Get MCP Surface",
+    title: "Get MCP surface",
   },
   {
     band: "reversible",
@@ -1144,7 +1156,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     kind: "query",
     name: "recipe.list",
     requiresArgs: false,
-    title: "List Recipes",
+    title: "List recipes",
   },
   {
     band: "destructive-local",
@@ -1232,7 +1244,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Run Recipe",
+    title: "Run recipe",
   },
   {
     band: "reversible",
@@ -1341,7 +1353,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Close Owned Terminal",
+    title: "Close owned terminal",
   },
   {
     band: "reversible",
@@ -1416,6 +1428,8 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         truncated: {
           type: "boolean",
+          description:
+            "True when older output was left out, by `maxLines` or the 50 KiB response budget; the newest lines are kept.",
         },
         error: {
           type: "string",
@@ -1425,7 +1439,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Get Terminal Output",
+    title: "Get terminal output",
   },
   {
     band: "reversible",
@@ -1468,7 +1482,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         includeOutput: {
           description:
-            "Opt-in. When set, each entry includes `recentOutput` with the last N lines of scrollback. Off by default to keep responses small.",
+            "Opt-in. Adds `recentOutput` (last N scrollback lines) and `lastOutputChangeAt` when observed. Off by default to keep responses small.",
           type: "object",
           properties: {
             lines: {
@@ -1528,6 +1542,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               lastTransitionAt: {
                 type: "number",
               },
+              lastOutputChangeAt: {
+                description:
+                  "Epoch ms the visible screen last changed, ignoring recognized spinner/timer redraws. Absent if unobserved. Not a hang verdict.",
+                type: "number",
+              },
               exitCode: {
                 description:
                   "Present once the process has exited, so its absence means still running — unless listed in `unavailableFields`. Null means the process was terminated by a signal and produced no numeric code — tell a clean finish from a failure with this rather than by scraping output.",
@@ -1546,6 +1565,13 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 description:
                   "Wall-clock spawn time in epoch milliseconds, for run-duration and staleness checks.",
                 type: "number",
+              },
+              agentIncarnation: {
+                description:
+                  "Times a new agent was seen taking over this PTY after one exited — the relaunch `spawnedAt` cannot see. 0 is none observed; absent is unobserved, not 0.",
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
               },
               lastCheckResult: {
                 description:
@@ -1585,6 +1611,36 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 required: ["command", "passed", "ranAt", "failureSummary", "truncated"],
                 additionalProperties: false,
               },
+              lastHandback: {
+                description:
+                  "The handback marker the agent printed: an observation, not a finish verdict; `message` is its own untrusted summary. Absence never means still working.",
+                type: "object",
+                properties: {
+                  message: {
+                    anyOf: [
+                      {
+                        type: "string",
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
+                    description:
+                      "Rows rejoined, so lossy — never data. Null for a bare marker. Read the agent's last message for exact text.",
+                  },
+                  observedAt: {
+                    type: "number",
+                  },
+                  submissionToken: {
+                    type: "string",
+                  },
+                  truncated: {
+                    type: "boolean",
+                  },
+                },
+                required: ["message", "observedAt", "truncated"],
+                additionalProperties: false,
+              },
               recentOutput: {
                 anyOf: [
                   {
@@ -1594,6 +1650,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                     type: "null",
                   },
                 ],
+              },
+              recentOutputTruncated: {
+                description:
+                  "Set when older output was left out, by `lines` or the 50 KiB response budget the terminals share; the newest lines are kept.",
+                type: "boolean",
               },
               armed: {
                 description:
@@ -1623,6 +1684,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                     description: "Epoch ms the phase was entered. Absent for `unknown`.",
                     type: "number",
                   },
+                  outputChangeAfterWriteAt: {
+                    description:
+                      "For pty_written only: epoch ms of the latest screen change stamped >200ms after the Enter. Ordering, not attribution; absent means no such change seen.",
+                    type: "number",
+                  },
                 },
                 required: ["token", "phase"],
                 additionalProperties: false,
@@ -1647,7 +1713,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "array",
           items: {
             type: "string",
-            enum: ["armed", "lastCheckResult", "exitCode", "hasPty"],
+            enum: ["armed", "lastCheckResult", "exitCode", "hasPty", "lastOutputChangeAt"],
           },
           description:
             "Fields the answering surface could not observe at all. Absent from every entry, and unknown rather than false.",
@@ -1657,39 +1723,41 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "Get Terminal Status",
+    title: "Get terminal status",
   },
   {
     band: "reversible",
     category: "terminal",
     danger: "safe",
     description:
-      "Write the active worktree's prepared context into a terminal, which is how an agent is handed a large codebase context. Name the target terminal explicitly — focus can drift between the call and its execution, and a mistarget types a multi-kilobyte dump into whatever pane happened to be focused. Target an idle terminal.",
+      "Write the active worktree's prepared context into a terminal this connection created or was handed, which is how an agent it drives is given a large codebase context. Any other panel is refused. Target an idle terminal.",
     enabled: true,
-    id: "terminal.inject",
+    id: "terminal.injectOwned",
     inputSchema: {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       type: "object",
       properties: {
         terminalId: {
-          description:
-            "Identifies the terminal to inject into, using a panel id from the terminal-listing capability. An automated caller must name it: focus can drift between the call and its execution, so relying on the focused terminal can land a large context dump in the wrong pane.",
           type: "string",
           minLength: 1,
+          description:
+            "The terminal to inject into, as an `id` this session created or the user handed it. Required: there is no focus fallback.",
         },
       },
+      required: ["terminalId"],
     },
+    keywords: ["context", "inject", "owned"],
     kind: "command",
-    name: "terminal.inject",
-    requiresArgs: false,
-    title: "Inject Context",
+    name: "terminal.injectOwned",
+    requiresArgs: true,
+    title: "Inject context to owned terminal",
   },
   {
     band: "reversible",
     category: "terminal",
     danger: "safe",
     description:
-      "Stop the turn an agent is running in a panel this connection created, keeping the panel and its conversation. Sends cancel keystrokes, not prompt text an agent mid-turn would not read, and disposes of nothing. An idle agent, or one that binds a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
+      "Stop the turn an agent is running in a panel this connection created or was handed, keeping the panel and its conversation. Sends cancel keystrokes, not prompt text an agent mid-turn would not read, and disposes of nothing. An idle agent, or one that binds a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
     enabled: true,
     id: "terminal.interruptOwned",
     inputSchema: {
@@ -1700,7 +1768,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           minLength: 1,
           description:
-            "The agent panel to interrupt, as an `id` this session got when it created the panel. Required: there is no focus fallback.",
+            "The agent panel to interrupt, as an `id` this session created or the user handed it. Required: there is no focus fallback.",
         },
       },
       required: ["terminalId"],
@@ -1737,7 +1805,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Interrupt Owned Agent",
+    title: "Interrupt owned agent",
   },
   {
     band: "reversible",
@@ -1764,7 +1832,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         owned: {
           description:
-            "MCP only: true keeps just the terminals this session created; false or omitted applies no ownership filter. A session that reconnected owns none.",
+            "MCP only: true keeps only the terminals you created or were handed; false or omitted applies no ownership filter. An agent pane keeps them across reconnects.",
           type: "boolean",
         },
         terminalId: {
@@ -1889,7 +1957,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "List Terminals",
+    title: "List terminals",
   },
   {
     band: "reversible",
@@ -1932,14 +2000,231 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     kind: "command",
     name: "terminal.new",
     requiresArgs: false,
-    title: "New Terminal",
+    title: "New terminal",
   },
   {
     band: "reversible",
     category: "terminal",
     danger: "safe",
     description:
-      "Bring the user to a panel this session created, switching workspace and raising the window when it is somewhere they are not looking. Only panels this connection created can be revealed. Call it when the user asked to be taken to the agent, not to report progress.",
+      "Read what the agent in a panel this connection created or was handed last wrote to its own transcript: that reply's text, plus any tool calls left unanswered since, such as a question and its options. Claude Code only for now. This reports what the file holds, not whether the agent is waiting; a permission prompt never appears there, so read the terminal for the live screen.",
+    enabled: true,
+    examples: [
+      {
+        args: {
+          terminalId: "term-abc123",
+        },
+        description:
+          "An agent you launched stopped, and you need its hand-off or the exact question it asked before replying.",
+      },
+    ],
+    id: "terminal.readLastMessageOwned",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          minLength: 1,
+          description:
+            "The agent panel to read, as an `id` this session created or the user handed it. Required: there is no focus fallback.",
+        },
+        maxBytes: {
+          description: "Text budget in escaped bytes, 1024 to 49152; default 24576.",
+          type: "integer",
+          minimum: 1024,
+          maximum: 49152,
+        },
+        messageIndex: {
+          description:
+            "Replies back from the latest with text: 0 (default) to 20. Not with `cursor`.",
+          type: "integer",
+          minimum: 0,
+          maximum: 20,
+        },
+        cursor: {
+          description: "A result's `message.nextCursor`, unchanged, for the text before that page.",
+          type: "string",
+          minLength: 1,
+          maxLength: 256,
+        },
+      },
+      required: ["terminalId"],
+    },
+    keywords: ["transcript", "reply", "question", "owned"],
+    kind: "query",
+    name: "terminal.readLastMessageOwned",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      oneOf: [
+        {
+          type: "object",
+          properties: {
+            status: {
+              type: "string",
+              const: "ok",
+            },
+            provider: {
+              type: "string",
+              enum: ["claude", "codex"],
+            },
+            message: {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: {
+                    id: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "null",
+                        },
+                      ],
+                    },
+                    text: {
+                      type: "string",
+                      description:
+                        "Its text blocks in order, cut to `maxBytes` once escaped, keeping the end.",
+                    },
+                    truncated: {
+                      type: "boolean",
+                      description: "The start of the message was cut to fit.",
+                    },
+                    recordedAt: {
+                      anyOf: [
+                        {
+                          type: "number",
+                        },
+                        {
+                          type: "null",
+                        },
+                      ],
+                    },
+                    stopReason: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "null",
+                        },
+                      ],
+                      description:
+                        "Raw from the transcript, not a verdict on whether the turn ended.",
+                    },
+                    nextCursor: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "null",
+                        },
+                      ],
+                      description:
+                        "Pass as `cursor` for the text before this. Null once nothing earlier is in reach.",
+                    },
+                  },
+                  required: ["id", "text", "truncated", "recordedAt", "stopReason", "nextCursor"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "null",
+                },
+              ],
+              description:
+                "The selected reply with text. Null when only an unanswered tool call is on record.",
+            },
+            unansweredToolUses: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  id: {
+                    type: "string",
+                  },
+                  name: {
+                    type: "string",
+                  },
+                  input: {
+                    description:
+                      "Only on a question to the user; omitted whole when too large or deep.",
+                    type: "object",
+                    propertyNames: {
+                      type: "string",
+                    },
+                    additionalProperties: {},
+                  },
+                },
+                required: ["id", "name"],
+                additionalProperties: false,
+              },
+              description:
+                "Calls made in or after the message with no result later in the file, oldest first, at most 8. Not proof the agent is waiting on one now.",
+            },
+            newerRecordsFollow: {
+              type: "boolean",
+              description:
+                "A prompt, tool result or later message follows the text, or a line is still being written.",
+            },
+            fileUpdatedAt: {
+              type: "number",
+            },
+          },
+          required: [
+            "status",
+            "provider",
+            "message",
+            "unansweredToolUses",
+            "newerRecordsFollow",
+            "fileUpdatedAt",
+          ],
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          properties: {
+            status: {
+              type: "string",
+              const: "unavailable",
+            },
+            reason: {
+              type: "string",
+              enum: [
+                "provider-mismatch",
+                "terminal-unknown",
+                "no-session",
+                "cli-missing",
+                "ambiguous-session",
+                "timeout",
+                "protocol-error",
+                "store-unreadable",
+                "store-unknown",
+                "no-message",
+                "search-cap-reached",
+                "message-not-found",
+              ],
+              description:
+                "'provider-mismatch': an agent this cannot read yet. 'store-unknown': the pane's own store is uncertain, so nothing was read. 'search-cap-reached': no reply within the bounded read; an older one is not substituted. 'message-not-found': no reply at that index, or the cursor's message changed.",
+            },
+          },
+          required: ["status", "reason"],
+          additionalProperties: false,
+        },
+      ],
+      type: "object",
+    },
+    requiresArgs: true,
+    title: "Read owned agent's last message",
+  },
+  {
+    band: "reversible",
+    category: "terminal",
+    danger: "safe",
+    description:
+      "Bring the user to a panel this session created or was handed, switching workspace and raising the window when it is somewhere they are not looking. No other panel can be revealed. Call it when the user asked to be taken to the agent, not to report progress.",
     enabled: true,
     id: "terminal.revealOwned",
     inputSchema: {
@@ -1950,7 +2235,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           minLength: 1,
           description:
-            "The panel to reveal, as an `id` this session received when it created the panel.",
+            "The panel to reveal, as an `id` this session created or the user handed it.",
         },
       },
       required: ["terminalId"],
@@ -1959,16 +2244,16 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     kind: "command",
     name: "terminal.revealOwned",
     requiresArgs: true,
-    title: "Reveal Owned Terminal",
+    title: "Reveal owned terminal",
   },
   {
     band: "reversible",
     category: "terminal",
     danger: "safe",
     description:
-      "Queue text as one submission to a terminal: a shell runs it as a command, an agent pane receives it as the next prompt. Embedded newlines become line breaks rather than firing a partial message. This returns once the submission is queued, not once it was delivered or run: pass the returned `submissionToken` to the status capability to find out. Runs with the terminal's privileges.",
+      "Queue text as one submission to a terminal this connection created or was handed: a shell runs it as a command, an agent pane takes it as the next prompt. Any other panel is refused. Returns once queued, not delivered or run: pass the returned `submissionToken` to the status capability to find out.",
     enabled: true,
-    id: "terminal.sendCommand",
+    id: "terminal.sendCommandOwned",
     inputSchema: {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       type: "object",
@@ -1978,19 +2263,25 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           minLength: 1,
           maxLength: 512,
           description:
-            "Identifies the terminal to submit to, using a panel id from the terminal-listing capability.",
+            "The terminal to submit to, as an `id` this session created or the user handed it.",
         },
         command: {
           type: "string",
           minLength: 1,
           description:
-            "Text to submit. Runs as a shell command in a plain terminal, or is submitted as the next prompt/turn in an agent pane. Multi-line is delivered atomically and submitted with a single Enter, so interior newlines never prematurely submit.",
+            "Text to submit. Multi-line is delivered atomically and submitted with a single Enter, so interior newlines never prematurely submit.",
+        },
+        handback: {
+          description:
+            "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panes only; a shell refuses it.",
+          type: "boolean",
         },
       },
       required: ["terminalId", "command"],
     },
+    keywords: ["submit", "prompt", "command", "owned"],
     kind: "command",
-    name: "terminal.sendCommand",
+    name: "terminal.sendCommandOwned",
     outputSchema: {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       type: "object",
@@ -2021,7 +2312,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Submit text to terminal",
+    title: "Submit text to owned terminal",
   },
   {
     band: "reversible",
@@ -2103,14 +2394,14 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Set Terminal Client Metadata",
+    title: "Set terminal client metadata",
   },
   {
     band: "reversible",
     category: "terminal",
     danger: "safe",
     description:
-      "Block until the agent in one terminal stops working, so the next step sees finished output. Use the batched wait for several terminals, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out is normal and means still working. A closed terminal also reads as idle, so check `trackingState` before trusting it.",
+      "Block until the agent in one terminal stops working, so the next step sees finished output. Use the batched wait for several terminals, or a status snapshot with `includeOutput` to poll without blocking; all three can report `lastOutputChangeAt`, not a hang verdict. Timing out is normal and means still working. A closed terminal also reads as idle, so check `trackingState`.",
     enabled: true,
     id: "terminal.waitUntilIdle",
     inputSchema: {
@@ -2169,7 +2460,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           enum: ["prompt", "question", "approval", "error"],
           description:
-            "Present only when idleReason is 'waiting_for_user'. 'prompt' = empty input prompt (safe to auto-drive); 'question' = agent is asking the user a question; 'approval' = a permission/approval selector needs a specific choice; 'error' = agent stopped after a blocking error (auth/rate limit/network/failed command).",
+            "Present only when idleReason is 'waiting_for_user'. 'prompt' = empty input prompt, or the fallback when nothing else matched — confirm before driving; 'question' = agent is asking the user a question; 'approval' = a permission/approval selector needs a specific choice; 'error' = agent stopped after a blocking error (auth/rate limit/network/failed command).",
         },
         previousBusyState: {
           type: "string",
@@ -2177,6 +2468,31 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         lastTransitionAt: {
           type: "number",
+        },
+        lastOutputChangeAt: {
+          type: "number",
+          description:
+            "Epoch ms the visible screen last changed, ignoring recognized spinner/timer redraws. Absent if unobserved. Not a hang verdict.",
+        },
+        lastHandback: {
+          type: "object",
+          description:
+            "The handback marker the agent printed: an observation, not a finish verdict; `message` is its own untrusted summary. Absence never means still working.",
+          properties: {
+            message: {
+              type: ["string", "null"],
+            },
+            observedAt: {
+              type: "number",
+            },
+            submissionToken: {
+              type: "string",
+            },
+            truncated: {
+              type: "boolean",
+            },
+          },
+          required: ["message", "observedAt", "truncated"],
         },
         exitCode: {
           type: ["number", "null"],
@@ -2204,7 +2520,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Block until the first of several agents stops working, or until all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each terminal in turn, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out means not met yet; a gone terminal settles too, so read `trackingState`.",
+      "Block until the first of several agents stops working, or all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each in turn, or a status snapshot with `includeOutput` to poll without blocking; both can report `lastOutputChangeAt`, not a hang verdict. Timing out means not met yet; a gone terminal settles too, so read `trackingState`.",
     enabled: true,
     id: "terminal.waitUntilIdleBatch",
     inputSchema: {
@@ -2288,6 +2604,31 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               lastTransitionAt: {
                 type: "number",
               },
+              lastOutputChangeAt: {
+                type: "number",
+                description:
+                  "Epoch ms the visible screen last changed, ignoring recognized spinner/timer redraws. Absent if unobserved. Not a hang verdict.",
+              },
+              lastHandback: {
+                type: "object",
+                description:
+                  "The handback marker the agent printed: an observation, not a finish verdict; `message` is its own untrusted summary. Absence never means still working.",
+                properties: {
+                  message: {
+                    type: ["string", "null"],
+                  },
+                  observedAt: {
+                    type: "number",
+                  },
+                  submissionToken: {
+                    type: "string",
+                  },
+                  truncated: {
+                    type: "boolean",
+                  },
+                },
+                required: ["message", "observedAt", "truncated"],
+              },
               exitCode: {
                 type: ["number", "null"],
               },
@@ -2363,7 +2704,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "List Workspaces",
+    title: "List workspaces",
   },
   {
     band: "reversible",
@@ -2502,7 +2843,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     kind: "command",
     name: "worktree.createWithRecipe",
     requiresArgs: true,
-    title: "Create Managed Worktree",
+    title: "Create managed worktree",
   },
   {
     band: "destructive-local",
@@ -2530,7 +2871,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     kind: "command",
     name: "worktree.deleteOwned",
     requiresArgs: true,
-    title: "Delete Owned Worktree",
+    title: "Delete owned worktree",
   },
   {
     band: "reversible",
@@ -2543,7 +2884,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     kind: "query",
     name: "worktree.getCurrent",
     requiresArgs: false,
-    title: "Get Current Worktree",
+    title: "Get current worktree",
   },
   {
     band: "reversible",
@@ -2556,7 +2897,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     kind: "query",
     name: "worktree.list",
     requiresArgs: false,
-    title: "List Worktrees",
+    title: "List worktrees",
   },
   {
     band: "reversible",
@@ -2581,6 +2922,6 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     kind: "command",
     name: "worktree.setActive",
     requiresArgs: true,
-    title: "Set Active Worktree",
+    title: "Set active worktree",
   },
 ];

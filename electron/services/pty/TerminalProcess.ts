@@ -10,6 +10,7 @@ import unicode11 from "@xterm/addon-unicode11";
 const { Unicode11Addon } = unicode11;
 import type {
   TerminalResizeResult,
+  TerminalSubmitGuard,
   TerminalSubmitStatusState,
 } from "../../../shared/types/pty-host.js";
 import type { PanelTitleMode } from "../../../shared/types/panel.js";
@@ -24,6 +25,7 @@ import { AgentStateService } from "./AgentStateService.js";
 import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 import {
   type ExitReason,
+  type GracefulCaptureLease,
   type PtySpawnOptions,
   type TerminalInfo,
   type TerminalPublicState,
@@ -34,6 +36,7 @@ import { WriteQueue, type SubmitExecutionContext } from "./WriteQueue.js";
 import type { TerminalSubmissionRecord } from "../../../shared/types/terminalSubmission.js";
 import { AgentOutputForwarder } from "./AgentOutputForwarder.js";
 import { TerminalInputController } from "./TerminalInputController.js";
+import { HandbackTracker } from "./HandbackTracker.js";
 import { PtyDataPipeline } from "./PtyDataPipeline.js";
 import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
@@ -68,7 +71,10 @@ import {
   serializeTerminalAsync,
   serializeForPersistence,
 } from "./terminalSerialization.js";
-import { ForegroundProcessGroupProbe } from "./ForegroundProcessGroupProbe.js";
+import {
+  ForegroundProcessGroupProbe,
+  type ForegroundSnapshot,
+} from "./ForegroundProcessGroupProbe.js";
 import type { AnalysisBackend, MonitorStartOptions } from "./analysis/AnalysisBackend.js";
 import {
   InThreadAnalysisBackend,
@@ -79,9 +85,11 @@ import type { AnalysisWorkerPool } from "./analysis/AnalysisWorkerPool.js";
 import {
   readCursorLine,
   readLastNLines,
+  readViewportNonEmptyLines,
   readVisibleActivityLines,
   ViewportSnapshotCache,
 } from "./analysis/headlessViewport.js";
+import { OUTPUT_PROGRESS_SAMPLE_MS, OutputProgressTracker } from "./OutputProgressTracker.js";
 import type { AnalysisFinalCapture } from "./analysis/AnalysisBackend.js";
 import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
 import { TerminalExitObservers, type TerminalExitArgs } from "./TerminalExitObservers.js";
@@ -126,6 +134,12 @@ export interface TerminalProcessCallbacks {
    * submits, which complete well inside the threshold and report nothing.
    */
   onSubmitStatus?: (id: string, state: TerminalSubmitStatusState) => void;
+  /**
+   * Opens this terminal's graceful-shutdown capture window (#12432), at most
+   * once per teardown. The owner keeps the PTY's reads flowing past its memory
+   * and backpressure holds until the lease is closed.
+   */
+  openGracefulCapture?: (id: string) => GracefulCaptureLease | null;
 }
 
 export interface TerminalProcessDependencies {
@@ -190,6 +204,7 @@ export class TerminalProcess {
   private identityWatcher!: IdentityWatcher;
 
   private gracefulShutdownInFlight: Promise<string | null> | null = null;
+  private gracefulCaptureLease: GracefulCaptureLease | null = null;
   private writeQueue!: WriteQueue;
   private inputController!: TerminalInputController;
   private ptyDataPipeline!: PtyDataPipeline;
@@ -222,6 +237,8 @@ export class TerminalProcess {
   // the clock starts (fake test clocks sit at 0).
   private lastAgentOutputNoteAt = Number.NEGATIVE_INFINITY;
   private agentOutputNoteTimer: NodeJS.Timeout | null = null;
+  private readonly outputProgress = new OutputProgressTracker();
+  private outputProgressTimer: NodeJS.Timeout | null = null;
 
   private agentOutputForwarder!: AgentOutputForwarder;
 
@@ -404,6 +421,7 @@ export class TerminalProcess {
       lastCheckTime: spawnedAt,
       contentEpoch: 0,
       semanticBuffer: [],
+      agentIncarnation: 0,
       restartCount: 0,
       // Analysis is enabled whenever an agent is expected or live. Plain
       // terminals enable it on the fly when the process detector promotes.
@@ -442,6 +460,9 @@ export class TerminalProcess {
         )
       : null;
     this.analysis = workerBackend ?? this.setupInThreadAnalysis(options);
+    if (options.handbackCode !== undefined) {
+      this.ensureHandbackTracker().registerDelivered(options.handbackCode);
+    }
 
     // NOTE: The headless responder is intentionally NOT installed for agent
     // terminals. It would forward query responses (CSI 6n cursor position,
@@ -478,6 +499,7 @@ export class TerminalProcess {
     this.writeQueue = new WriteQueue({
       isExited: () => !this.lifecycle.isAlive,
       lastOutputTime: () => this.terminalInfo.lastOutputTime,
+      lastOutputChangeAt: () => this.terminalInfo.lastOutputChangeAt,
       performSubmit: (text, ctx) => this.performSubmit(text, ctx),
       onWriteError: (error, context) => this.logWriteError(error, context),
       onSubmitStatus: (state) => this.callbacks.onSubmitStatus?.(this.id, state),
@@ -529,6 +551,7 @@ export class TerminalProcess {
       },
       emitData: (data) => self.emitData(data),
       queueAgentOutput: (agentId, data) => self.queueAgentOutput(agentId, data),
+      shouldDiscardCapturedChunk: (data) => self.gracefulCaptureLease?.shouldDiscard(data) ?? false,
     });
     this.preservedSnapshotCapture = new PreservedSnapshotCapture({
       get id() {
@@ -792,6 +815,7 @@ export class TerminalProcess {
       }),
       onMirrorGeometry: (cols, rows, replayInFlight) =>
         this.checkMirrorGeometry(cols, rows, replayInFlight),
+      onViewport: (lines) => this.noteOutputProgress(lines),
     };
   }
 
@@ -991,6 +1015,10 @@ export class TerminalProcess {
   }
 
   private disposeHeadless(): void {
+    // Settle a pending sample against the mirror before it goes: a preserved
+    // exit drains its final output first, and that frame is the last change
+    // this terminal will ever show.
+    this.flushOutputProgressSample();
     this.analysis.release();
   }
 
@@ -1167,14 +1195,17 @@ export class TerminalProcess {
       agentState: t.agentState,
       waitingReason: t.waitingReason,
       lastStateChange: t.lastStateChange,
+      lastOutputChangeAt: t.lastOutputChangeAt,
       traceId: t.traceId,
       analysisEnabled: t.analysisEnabled,
       lastInputTime: t.lastInputTime,
+      lastTypedInputAt: t.lastTypedInputAt,
       lastOutputTime: t.lastOutputTime,
       lastCheckTime: t.lastCheckTime,
       detectedAgentId: t.detectedAgentId,
       detectedProcessIconId: t.detectedProcessIconId,
       everDetectedAgent: t.everDetectedAgent,
+      agentIncarnation: t.agentIncarnation,
       restartCount: t.restartCount,
       activityTier: this._activityTier,
       hasPty,
@@ -1185,6 +1216,7 @@ export class TerminalProcess {
       exitCode: t.exitCode,
       exitSignal: t.exitSignal,
       lastCheckResult: t.lastCheckResult,
+      lastHandback: t.lastHandback,
       worktreeId: t.worktreeId,
       lastObservedTitle: t.lastObservedTitle,
       agentPresetId: t.agentPresetId,
@@ -1272,14 +1304,34 @@ export class TerminalProcess {
     this.inputController.write(data, traceId);
   }
 
-  submit(text: string, token?: string): void {
-    this.inputController.submit(text, token);
+  /**
+   * `handbackCode` is the code minted for a submission that asked for a
+   * handback (#12488); its instruction is already in `text`. A terminal that
+   * never asked keeps no tracker, so its submits pay one property read.
+   */
+  submit(text: string, token?: string, handbackCode?: string, guard?: TerminalSubmitGuard): void {
+    const tracker =
+      handbackCode !== undefined ? this.ensureHandbackTracker() : this.terminalInfo.handbackTracker;
+    const onPtyWritten = tracker?.noteSubmission(handbackCode, token);
+    this.inputController.submit(text, token, onPtyWritten, guard);
+  }
+
+  private ensureHandbackTracker(): HandbackTracker {
+    this.terminalInfo.handbackTracker ??= new HandbackTracker((rows) =>
+      this.analysis.getViewportLines(rows)
+    );
+    return this.terminalInfo.handbackTracker;
   }
 
   /**
    * One tracked submission's correlation record, by the token its caller minted
    * (#12337). `undefined` means this incarnation holds no record for it.
    */
+  /** Withdraw a guarded submission this terminal holds (#12491). */
+  withdrawGuardedSubmission(token: string): void {
+    this.writeQueue.withdrawGuardedSubmission(token);
+  }
+
   getSubmission(token: string): TerminalSubmissionRecord | undefined {
     return this.writeQueue.getSubmission(token);
   }
@@ -1346,7 +1398,9 @@ export class TerminalProcess {
     const terminal = this.terminalInfo;
     if (terminal.isExited) {
       try {
+        this.outputProgress.noteResize(Date.now());
         this.analysis.resize(cols, rows);
+        this.scheduleOutputProgressSample();
         if (this.analysis.kind === "worker") {
           // Reflow rewraps the buffer — invalidate any wake no-change skip.
           // (The in-thread path bumps the epoch itself, gated on a live buffer.)
@@ -1420,7 +1474,12 @@ export class TerminalProcess {
     const confirmed = appliedCols === cols && appliedRows === rows;
 
     try {
+      this.outputProgress.noteResize(Date.now());
       this.analysis.resize(cols, rows);
+      // Baseline the reflowed frame inside the quiet window. The worker's
+      // session schedules its own digest on resize; this is the in-thread
+      // counterpart, and a no-op without a local mirror.
+      this.scheduleOutputProgressSample();
       if (this.analysis.kind === "worker") {
         terminal.contentEpoch++;
       }
@@ -1459,6 +1518,7 @@ export class TerminalProcess {
         return self.isAgentLive;
       },
       acquireInputLock: () => this.inputController.acquireShutdownInputLock(),
+      enterCaptureMode: () => this.enterGracefulCapture(),
       kill: (reason) => this.kill(reason),
     });
     this.gracefulShutdownInFlight = inFlight;
@@ -1477,6 +1537,19 @@ export class TerminalProcess {
     };
     void inFlight.then(clear, clear);
     return inFlight;
+  }
+
+  private enterGracefulCapture(): () => void {
+    const lease = this.callbacks.openGracefulCapture?.(this.id) ?? null;
+    if (!lease) return () => {};
+    this.gracefulCaptureLease = lease;
+    let closed = false;
+    return () => {
+      if (closed) return;
+      closed = true;
+      if (this.gracefulCaptureLease === lease) this.gracefulCaptureLease = null;
+      lease.close();
+    };
   }
 
   kill(
@@ -1615,10 +1688,7 @@ export class TerminalProcess {
   // a method on TerminalProcess so test suites that override the foreground
   // snapshot via instance-method replacement (`agentDetection.test.ts`) keep
   // working without rewiring the probe.
-  private readForegroundProcessGroupSnapshot(): {
-    shellPgid: number;
-    foregroundPgid: number;
-  } | null {
+  private readForegroundProcessGroupSnapshot(): ForegroundSnapshot | null {
     return this.foregroundProbe.readSnapshot();
   }
 
@@ -1969,12 +2039,45 @@ export class TerminalProcess {
     this.semanticBufferManager.onData(prelude);
   }
 
+  private noteOutputProgress(lines: readonly string[]): void {
+    const now = Date.now();
+    if (this.outputProgress.observe(lines, now)) {
+      this.terminalInfo.lastOutputChangeAt = now;
+    }
+  }
+
+  // In-thread counterpart of the worker's viewport digest: one trailing read
+  // per burst, so the last frame before the output stops is always observed.
+  private scheduleOutputProgressSample(): void {
+    if (this.outputProgressTimer || !this.terminalInfo.headlessTerminal) return;
+    this.outputProgressTimer = setTimeout(() => {
+      this.outputProgressTimer = null;
+      this.sampleOutputProgress();
+    }, OUTPUT_PROGRESS_SAMPLE_MS);
+    this.outputProgressTimer.unref?.();
+  }
+
+  private flushOutputProgressSample(): void {
+    if (!this.outputProgressTimer) return;
+    clearTimeout(this.outputProgressTimer);
+    this.outputProgressTimer = null;
+    this.sampleOutputProgress();
+  }
+
+  private sampleOutputProgress(): void {
+    const mirror = this.terminalInfo.headlessTerminal;
+    // No mirror is no reading, not an empty screen.
+    if (!mirror) return;
+    this.noteOutputProgress(readViewportNonEmptyLines(mirror));
+  }
+
   private feedPreludeInThread(prelude: string): void {
     const terminal = this.terminalInfo;
     if (terminal.headlessTerminal) {
       terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
       headlessMirrorScheduler.enqueue(this.id, terminal.headlessTerminal, prelude, () => {
         terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
+        this.scheduleOutputProgressSample();
       });
     }
   }
@@ -2020,6 +2123,7 @@ export class TerminalProcess {
         // subscribes to, and a stale hit here would diff a pre-parse snapshot.
         this.viewportSnapshotCache.invalidate();
         this.noteAgentOutputActivity();
+        this.scheduleOutputProgressSample();
       });
     } else {
       this.noteAgentOutputActivity();

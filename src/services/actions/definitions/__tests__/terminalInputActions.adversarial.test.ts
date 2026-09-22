@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
+import { BRACKETED_PASTE_END, BRACKETED_PASTE_START } from "@shared/utils/terminalInputProtocol";
 
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const contextMenuMock = vi.hoisted(() => ({ openPanelContextMenu: vi.fn() }));
@@ -8,9 +9,6 @@ const terminalInstanceMock = vi.hoisted(() => ({
   notifyUserInput: vi.fn(),
 }));
 const terminalClientMock = vi.hoisted(() => ({ write: vi.fn() }));
-const bracketedMock = vi.hoisted(() => ({
-  formatWithBracketedPaste: vi.fn((t: string) => `<BP>${t}</BP>`),
-}));
 const sendToAgentMock = vi.hoisted(() => ({ openSendToAgentPalette: vi.fn() }));
 const terminalInputStoreMock = vi.hoisted(() => ({
   triggerStashInput: vi.fn(),
@@ -37,7 +35,6 @@ vi.mock("@/services/terminal/TerminalInstanceService", () => ({
   terminalInstanceService: terminalInstanceMock,
 }));
 vi.mock("@/clients", () => ({ terminalClient: terminalClientMock }));
-vi.mock("@shared/utils/terminalInputProtocol", () => bracketedMock);
 vi.mock("@/hooks/useSendToAgentPalette", () => sendToAgentMock);
 vi.mock("@/store/terminalInputStore", () => terminalInputStoreMock);
 vi.mock("@/store/fleetArmingStore", () => fleetArmingMock);
@@ -58,6 +55,7 @@ type ManagedStub = {
 function setupActions(): {
   run: (id: string, args?: unknown, ctx?: unknown) => Promise<unknown>;
   callbacks: ActionCallbacks;
+  actions: ActionRegistry;
 } {
   const actions: ActionRegistry = new Map();
   const callbacks: ActionCallbacks = {
@@ -73,6 +71,7 @@ function setupActions(): {
       return def.run(args, (ctx ?? {}) as never);
     },
     callbacks,
+    actions,
   };
 }
 
@@ -107,7 +106,6 @@ beforeEach(() => {
     },
     configurable: true,
   });
-  bracketedMock.formatWithBracketedPaste.mockImplementation((t: string) => `<BP>${t}</BP>`);
 });
 
 afterEach(() => {
@@ -183,9 +181,39 @@ describe("terminalInputActions adversarial", () => {
     const { run } = setupActions();
     await run("terminal.paste");
 
-    expect(bracketedMock.formatWithBracketedPaste).toHaveBeenCalledWith("hello\nworld");
-    expect(terminalClientMock.write).toHaveBeenCalledWith("t1", "<BP>hello\nworld</BP>");
+    // Real delimiter bytes rather than a stub: what the wrapped branch hands the
+    // parser is the thing under test, exactly as it is for the unwrapped one.
+    expect(terminalClientMock.write).toHaveBeenCalledWith(
+      "t1",
+      `${BRACKETED_PASTE_START}hello\nworld${BRACKETED_PASTE_END}`
+    );
+    expect(terminalClientMock.write).toHaveBeenCalledTimes(1);
     expect(terminalInstanceMock.notifyUserInput).toHaveBeenCalledWith("t1");
+  });
+
+  it("paste in bracketed-paste mode neutralises the body before wrapping it", async () => {
+    // A clipboard carrying the END sequence twice. Wrapping text that was never
+    // sanitised closes the paste at the first one and hands everything after it
+    // over as typed input — and a sanitiser that replaced only the first
+    // occurrence would leave the second doing the same job.
+    clipboardText = `ls${BRACKETED_PASTE_END}rm -rf /${BRACKETED_PASTE_END}\x03`;
+    setPanelState({
+      focusedId: "t1",
+      panelsById: { t1: { isInputLocked: false, kind: "terminal" } },
+    });
+    terminalInstanceMock.get.mockReturnValue({
+      terminal: { getSelection: () => "", modes: { bracketedPasteMode: true } },
+      isInputLocked: false,
+    });
+
+    const { run } = setupActions();
+    await run("terminal.paste");
+
+    expect(terminalClientMock.write).toHaveBeenCalledWith(
+      "t1",
+      `${BRACKETED_PASTE_START}ls␛[201~rm -rf /␛[201~␃${BRACKETED_PASTE_END}`
+    );
+    expect(terminalClientMock.write).toHaveBeenCalledTimes(1);
   });
 
   it("paste without bracketed mode normalizes CRLF/LF to CR", async () => {
@@ -203,6 +231,45 @@ describe("terminalInputActions adversarial", () => {
     await run("terminal.paste");
 
     expect(terminalClientMock.write).toHaveBeenCalledWith("t1", "a\rb\rc");
+    expect(terminalClientMock.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("paste without bracketed mode neutralises control characters", async () => {
+    // A clipboard off a web page. ESC starts a sequence, \x03 interrupts and
+    // \x15 clears the line — all three reach a parser, not a text field.
+    clipboardText = "ls\x1b[201~\x03rm -rf /\x15";
+    setPanelState({
+      focusedId: "t1",
+      panelsById: { t1: { isInputLocked: false, kind: "terminal" } },
+    });
+    terminalInstanceMock.get.mockReturnValue({
+      terminal: { getSelection: () => "", modes: { bracketedPasteMode: false } },
+      isInputLocked: false,
+    });
+
+    const { run } = setupActions();
+    await run("terminal.paste");
+
+    expect(terminalClientMock.write).toHaveBeenCalledWith("t1", "ls␛[201~␃rm -rf /␕");
+  });
+
+  it("paste without bracketed mode keeps a bare CR a submit, not a glyph", async () => {
+    // The one character this branch means: folded to \n before neutralisation
+    // and re-encoded after, so line structure survives the sanitiser.
+    clipboardText = "one\rtwo";
+    setPanelState({
+      focusedId: "t1",
+      panelsById: { t1: { isInputLocked: false, kind: "terminal" } },
+    });
+    terminalInstanceMock.get.mockReturnValue({
+      terminal: { getSelection: () => "", modes: { bracketedPasteMode: false } },
+      isInputLocked: false,
+    });
+
+    const { run } = setupActions();
+    await run("terminal.paste");
+
+    expect(terminalClientMock.write).toHaveBeenCalledWith("t1", "one\rtwo");
   });
 
   it("paste with empty clipboard does not call write or notifyUserInput", async () => {
@@ -416,6 +483,40 @@ describe("terminalInputActions adversarial", () => {
       await run("terminal.inject", undefined, { dispatchSource: "keybinding" });
 
       expect(callbacks.onInject).toHaveBeenCalledWith("wt-1", undefined);
+    });
+  });
+
+  // Ownership is main-process state keyed by MCP session id, so the renderer
+  // can never be the one to honour this tool (#12407).
+  describe("terminal.injectOwned (#12407)", () => {
+    function definition(): AnyActionDefinition {
+      const factory = setupActions().actions.get("terminal.injectOwned");
+      if (!factory) throw new Error("terminal.injectOwned not registered");
+      return factory();
+    }
+
+    it("refuses renderer dispatch and never injects", async () => {
+      const { run, callbacks } = setupActions();
+      vi.mocked(callbacks.getActiveWorktreeId).mockReturnValue("wt-1");
+
+      await expect(
+        run("terminal.injectOwned", { terminalId: "term-9" }, { dispatchSource: "agent" })
+      ).rejects.toThrow(/main-process path/);
+      expect(callbacks.onInject).not.toHaveBeenCalled();
+    });
+
+    it("requires a target, since there is no focus fallback to fall back to", () => {
+      const schema = definition().argsSchema!;
+      expect(schema.safeParse(undefined).success).toBe(false);
+      expect(schema.safeParse({}).success).toBe(false);
+      expect(schema.safeParse({ terminalId: "" }).success).toBe(false);
+      expect(schema.safeParse({ terminalId: "term-9" }).success).toBe(true);
+    });
+
+    it("stays off plugin dispatch and the palette", () => {
+      const def = definition();
+      expect(def.denyPluginDispatch).toBe(true);
+      expect(def.palette?.mode).toBe("hidden");
     });
   });
 

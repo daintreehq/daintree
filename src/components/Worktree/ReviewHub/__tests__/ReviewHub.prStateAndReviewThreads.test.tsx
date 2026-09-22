@@ -14,6 +14,7 @@ const {
   compareWorktreesMock,
   openExternalMock,
   classifyPushErrorMock,
+  getChecksMock,
   abortRepositoryOperationMock,
   continueRepositoryOperationMock,
   scanConflictMarkersMock,
@@ -51,6 +52,7 @@ const {
       classification: match ? { code: match[0] } : null,
     };
   }),
+  getChecksMock: vi.fn().mockResolvedValue({ checks: [] }),
   abortRepositoryOperationMock: vi.fn().mockResolvedValue(undefined),
   continueRepositoryOperationMock: vi.fn().mockResolvedValue(undefined),
   scanConflictMarkersMock: vi.fn().mockResolvedValue([]),
@@ -114,7 +116,7 @@ vi.mock("@/clients/systemClient", () => ({
 }));
 
 vi.mock("@/clients/forgeClient", () => ({
-  forgeClient: { classifyPushError: classifyPushErrorMock },
+  forgeClient: { classifyPushError: classifyPushErrorMock, getChecks: getChecksMock },
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -605,6 +607,94 @@ describe("ReviewHub", () => {
       expect(screen.queryByText("passing")).toBeNull();
       expect(screen.queryByText("failing")).toBeNull();
       expect(screen.queryByText("pending")).toBeNull();
+    });
+
+    // #12417: the per-check read is reachable from the GUI, not only over MCP.
+    // The hub owns one thing here — handing its own worktree path down to the
+    // chip — so that is what this layer proves; the disclosure's own states are
+    // covered in `PrChecksPopover.test.tsx`.
+    it("reads the checks for the hub's own worktree when the chip is opened", async () => {
+      setWorktreePR({
+        prNumber: 42,
+        prUrl: "https://github.com/test/repo/pull/42",
+        prState: "open",
+        prCiStatus: "failure",
+      });
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByText("#42"));
+      expect(getChecksMock).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByText("#42"));
+      await waitFor(() => expect(getChecksMock).toHaveBeenCalledWith(WORKTREE_PATH, 42));
+      // Opening the disclosure is not a hand-off to the browser.
+      expect(openExternalMock).not.toHaveBeenCalled();
+    });
+
+    // The hub's Escape listener is on the document in the capture phase and
+    // stops propagation, so without the disclosure claiming Escape first it
+    // would close the whole hub instead of the thing the user is looking at.
+    it("gives Escape to the open checks disclosure, then back to the hub", async () => {
+      setWorktreePR({
+        prNumber: 42,
+        prUrl: "https://github.com/test/repo/pull/42",
+        prState: "open",
+        prCiStatus: "failure",
+      });
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+      getChecksMock.mockResolvedValue({
+        checks: [{ name: "build", status: "completed", conclusion: "failure" }],
+      });
+      const onClose = vi.fn();
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
+      await waitFor(() => screen.getByText("#42"));
+
+      fireEvent.click(screen.getByText("#42"));
+      const list = await screen.findByTestId("pr-checks-list");
+      expect(list.textContent).toContain("build");
+
+      // First Escape dismisses the disclosure and leaves the hub standing.
+      fireEvent.keyDown(document, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByTestId("pr-checks-list")).toBeNull());
+      expect(onClose).not.toHaveBeenCalled();
+
+      // Second one reaches the hub as normal.
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops a previous PR's checks when the chip switches PRs", async () => {
+      setWorktreePR({
+        prNumber: 42,
+        prUrl: "https://github.com/test/repo/pull/42",
+        prState: "open",
+      });
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+      getChecksMock.mockResolvedValue({
+        checks: [{ name: "pr-42-check", status: "completed", conclusion: "failure" }],
+      });
+
+      const { rerender } = render(
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
+      await waitFor(() => screen.getByText("#42"));
+      fireEvent.click(screen.getByText("#42"));
+      await screen.findByText("pr-42-check");
+
+      // The linked PR changes underneath an open disclosure. Its snapshot must
+      // not survive to be read — or sent to an agent — under the new number.
+      setWorktreePR({
+        prNumber: 77,
+        prUrl: "https://github.com/test/repo/pull/77",
+        prState: "open",
+      });
+      rerender(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByText("#77"));
+      expect(screen.queryByText("pr-42-check")).toBeNull();
     });
   });
 

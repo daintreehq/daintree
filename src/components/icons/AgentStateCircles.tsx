@@ -1,29 +1,26 @@
-import type { SVGProps } from "react";
+import type { HTMLAttributes, SVGProps } from "react";
+import { cn } from "@/lib/utils";
 
 type CircleProps = SVGProps<SVGSVGElement> & { className?: string };
 
 // r=6, strokeWidth=1.333 → ~13.33px diameter in 16x16 viewBox. The 1.333 stroke
 // (= 2 × 16/24) normalizes these icons to Lucide's 24-viewBox / strokeWidth-2 grid
 // so they render the same line weight as adjacent Lucide icons (e.g. CheckCircle2).
-// Circumference = 2π × 6 = 37.699
-const DASH = "28.274"; // 270° arc (C × 0.75)
-const GAP = "9.425"; // 90° gap (C × 0.25)
-const OFFSET = "28.274"; // positions gap at bottom-right (3:00 to 6:00)
 
-export function SpinnerCircle({ className, ...props }: CircleProps) {
+// Drawn in CSS (`.spinner-circle` in index.css), not as an <svg>: Chromium will
+// not run a transform animation on the compositor when its target is an svg
+// (trace: compositeFailed 1024, "transform-related property cannot be
+// accelerated on target"), so `animate-spin-slow` on the old svg re-ran style on
+// the main thread at display rate for a glyph that moves 17 times a second.
+// The geometry mirrors the 16-unit grid above: r=6, 1.333 stroke, round caps.
+export function SpinnerCircle({ className, ...props }: HTMLAttributes<HTMLSpanElement>) {
   return (
-    <svg viewBox="0 0 16 16" fill="none" className={className} aria-hidden="true" {...props}>
-      <circle
-        cx="8"
-        cy="8"
-        r="6"
-        stroke="currentColor"
-        strokeWidth="1.333"
-        strokeLinecap="round"
-        strokeDasharray={`${DASH} ${GAP}`}
-        strokeDashoffset={OFFSET}
-      />
-    </svg>
+    <span
+      data-glyph-box="spinner"
+      aria-hidden="true"
+      className={cn("spinner-circle", className)}
+      {...props}
+    />
   );
 }
 

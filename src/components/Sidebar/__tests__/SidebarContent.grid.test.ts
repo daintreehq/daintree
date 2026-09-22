@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
+import { DROP_INDICATOR_LINE } from "@/components/DragDrop/dropIndicator";
 
 const SIDEBAR_CONTENT_PATH = path.resolve(__dirname, "../SidebarContent.tsx");
 const STATIC_ROW_PATH = path.resolve(__dirname, "../StaticWorktreeRow.tsx");
@@ -560,9 +561,10 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
         expect(source).toContain('className="relative"');
       });
 
-      it("uses neutral bg-border-strong (no accent tokens) for the indicator", () => {
-        expect(source).toContain("bg-border-strong");
+      it("uses the shared neutral drop-indicator ink (no accent tokens) for the indicator", () => {
+        expect(source).toContain("DROP_INDICATOR_LINE");
         expect(source).not.toMatch(/daintree-accent|accent-primary/);
+        expect(DROP_INDICATOR_LINE).not.toMatch(/daintree-accent|accent-primary/);
       });
 
       it("renders the indicator above (-top-px) or below (-bottom-px) based on drop direction", () => {
@@ -571,7 +573,7 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
       });
 
       it("marks the indicator pointer-events-none so it never blocks the drop target", () => {
-        expect(source).toContain("pointer-events-none");
+        expect(DROP_INDICATOR_LINE).toContain("pointer-events-none");
       });
 
       it("exposes the indicator via data-worktree-drop-indicator for E2E and DOM assertions", () => {

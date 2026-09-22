@@ -46,6 +46,7 @@ import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
+import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { basename, join } from "@shared/utils/path";
 import {
@@ -65,6 +66,7 @@ import {
 } from "./useReviewHubStagingActions";
 import { PushErrorBanner } from "./PushErrorBanner";
 import { PrStatusChip } from "./PrStatusChip";
+import { PR_CHECKS_OPEN_ATTR } from "./PrChecksPopover";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
 import { ReadinessRail } from "./ReadinessRail";
@@ -1623,6 +1625,11 @@ export function ReviewHubContent({
 
   const handleKeyDown = useEffectEvent((e: KeyboardEvent) => {
     if (e.key === "Escape") {
+      // Backstop. The checks disclosure claims Escape for itself on a
+      // window-capture listener, which runs ahead of this one — but this
+      // listener closes the entire hub, so it stands aside on the trigger's own
+      // open marker rather than relying on that ordering alone.
+      if (document.querySelector(`[${PR_CHECKS_OPEN_ATTR}="true"]`)) return;
       e.preventDefault();
       e.stopPropagation();
       if (selectedFile) {
@@ -1821,7 +1828,7 @@ export function ReviewHubContent({
                 id="review-hub-title"
                 className="text-text-primary font-semibold text-sm tracking-wide shrink-0"
               >
-                Review & Commit
+                Review & commit
               </h2>
             )}
             {status?.currentBranch && (
@@ -1844,46 +1851,33 @@ export function ReviewHubContent({
             <PrStatusChip
               hasRemote={status?.hasRemote}
               worktreePR={worktreePR}
+              worktreePath={worktreePath}
               onOpenExternal={(url) => void systemClient.openExternal(url)}
             />
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {/* Diff mode toggle */}
-            <div
-              className="flex items-center rounded border border-tint/[0.08] overflow-hidden text-2xs"
-              role="group"
-              aria-label="Diff mode"
-              data-testid="review-hub-diff-mode"
-            >
-              <button
-                onClick={() => handleDiffModeChange("working-tree")}
-                className={cn(
-                  "px-2 py-1 transition-colors",
-                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
-                  diffMode === "working-tree"
-                    ? "bg-filter-selected-bg-strong text-text-primary"
-                    : "text-text-secondary hover:text-text-primary hover:bg-tint/[0.06]"
-                )}
-                aria-pressed={diffMode === "working-tree"}
-              >
-                Working tree
-              </button>
-              <button
-                onClick={() => handleDiffModeChange("base-branch")}
-                disabled={!status?.currentBranch || status.currentBranch === mainBranch}
-                className={cn(
-                  "px-2 py-1 transition-colors border-l border-tint/[0.08]",
-                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
-                  "disabled:opacity-40 disabled:cursor-not-allowed",
-                  diffMode === "base-branch"
-                    ? "bg-filter-selected-bg-strong text-text-primary"
-                    : "text-text-secondary hover:text-text-primary hover:bg-tint/[0.06]"
-                )}
-                aria-pressed={diffMode === "base-branch"}
-              >
-                vs {mainBranch}
-              </button>
-            </div>
+            {/* Diff mode toggle. Uses the shared SegmentedToggle rather than a
+                local pair of buttons: this was the only segmented control in the
+                app still drawing its selection as a filled block, while the diff,
+                file and file-browser surfaces all use the primitive's thumb. It
+                also drops a bare `rounded` and a restated focus ring — the global
+                `*:focus-visible` rule owns that, and a box-shadow ring vanishes
+                under forced-colors. */}
+            <SegmentedToggle
+              density="compact"
+              ariaLabel="Diff mode"
+              testId="review-hub-diff-mode"
+              value={diffMode}
+              onChange={handleDiffModeChange}
+              options={[
+                { value: "working-tree" as const, label: "Working tree" },
+                {
+                  value: "base-branch" as const,
+                  label: `vs ${mainBranch}`,
+                  disabled: !status?.currentBranch || status.currentBranch === mainBranch,
+                },
+              ]}
+            />
 
             {diffMode === "working-tree" && (
               <button

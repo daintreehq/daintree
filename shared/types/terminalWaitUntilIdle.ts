@@ -1,4 +1,6 @@
 import type { WaitingReason } from "./agent.js";
+import { LAST_OUTPUT_CHANGE_AT_DESCRIPTION } from "./terminalStatus.js";
+import { LAST_HANDBACK_DESCRIPTION, type TerminalHandback } from "./handback.js";
 
 /**
  * Default wait is a bounded long-poll, not an open-ended block. A tool call
@@ -81,6 +83,19 @@ export const WAIT_UNTIL_IDLE_TRACKING_STATES: readonly WaitUntilIdleTrackingStat
 const TRACKING_STATE_DESCRIPTION =
   "Separates an idle agent from a session that is gone: 'tracked' = a mapping is held, which is not proof of liveness or completion; 'closed' = a kill was observed; 'unknown' = no record kept (a plain shell, a poll that raced the spawn, or evicted history).";
 
+/** `lastHandback` for the hand-written wait output schemas (#12488). */
+const LAST_HANDBACK_OUTPUT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  description: LAST_HANDBACK_DESCRIPTION,
+  properties: {
+    message: { type: ["string", "null"] },
+    observedAt: { type: "number" },
+    submissionToken: { type: "string" },
+    truncated: { type: "boolean" },
+  },
+  required: ["message", "observedAt", "truncated"],
+};
+
 export type WaitUntilIdleResult = {
   terminalId: string;
   agentId?: string;
@@ -92,13 +107,28 @@ export type WaitUntilIdleResult = {
    */
   trackingState: WaitUntilIdleTrackingState;
   /**
-   * Only present when `idleReason === "waiting_for_user"`. Distinguishes a safe
-   * auto-drive moment (`"prompt"` — empty input prompt) from an agent actively
-   * asking the user a question (`"question"`).
+   * Only present when `idleReason === "waiting_for_user"`. Distinguishes an
+   * ordinary wait (`"prompt"` — usually an empty input prompt, but also the
+   * classifier's fallback when nothing more specific matched, so confirm it
+   * against output before driving) from an agent actively asking the user a
+   * question (`"question"`).
    */
   waitingReason?: WaitingReason;
   previousBusyState?: "working" | "idle";
   lastTransitionAt?: number;
+  /**
+   * When the terminal's visible content last changed, ignoring recognised
+   * spinner and timer redraws (#12428). Read from the pty-host once the wait
+   * has resolved, for tracked terminals only; absent when that read found
+   * nothing or did not answer in time.
+   */
+  lastOutputChangeAt?: number;
+  /**
+   * The handback marker this terminal last printed for a submission that asked
+   * for one (#12488), read from the pty-host with `lastOutputChangeAt`. Strictly
+   * additive to `busyState`: absence never means still working.
+   */
+  lastHandback?: TerminalHandback;
   /**
    * Numeric process exit code, present only when `idleReason` is `"completed"`
    * or `"exited"`. `null` when the process was terminated by a signal without a
@@ -154,10 +184,12 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
       type: "string",
       enum: ["prompt", "question", "approval", "error"],
       description:
-        "Present only when idleReason is 'waiting_for_user'. 'prompt' = empty input prompt (safe to auto-drive); 'question' = agent is asking the user a question; 'approval' = a permission/approval selector needs a specific choice; 'error' = agent stopped after a blocking error (auth/rate limit/network/failed command).",
+        "Present only when idleReason is 'waiting_for_user'. 'prompt' = empty input prompt, or the fallback when nothing else matched — confirm before driving; 'question' = agent is asking the user a question; 'approval' = a permission/approval selector needs a specific choice; 'error' = agent stopped after a blocking error (auth/rate limit/network/failed command).",
     },
     previousBusyState: { type: "string", enum: ["working", "idle"] },
     lastTransitionAt: { type: "number" },
+    lastOutputChangeAt: { type: "number", description: LAST_OUTPUT_CHANGE_AT_DESCRIPTION },
+    lastHandback: LAST_HANDBACK_OUTPUT_SCHEMA,
     exitCode: {
       type: ["number", "null"],
       description:
@@ -179,7 +211,7 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
 
 export const WAIT_UNTIL_IDLE_DESCRIPTION =
   // Kept under the 400-byte tool-description budget (mcpWireBudget.test.ts).
-  "Block until the agent in one terminal stops working, so the next step sees finished output. Use the batched wait for several terminals, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out is normal and means still working. A closed terminal also reads as idle, so check `trackingState` before trusting it.";
+  "Block until the agent in one terminal stops working, so the next step sees finished output. Use the batched wait for several terminals, or a status snapshot with `includeOutput` to poll without blocking; all three can report `lastOutputChangeAt`, not a hang verdict. Timing out is normal and means still working. A closed terminal also reads as idle, so check `trackingState`.";
 
 // === Batched wait (fan-out orchestration) ===
 
@@ -209,6 +241,10 @@ export type WaitUntilIdleBatchEntry = {
   waitingReason?: WaitingReason;
   previousBusyState?: "working" | "idle";
   lastTransitionAt?: number;
+  /** See {@link WaitUntilIdleResult.lastOutputChangeAt}. */
+  lastOutputChangeAt?: number;
+  /** See {@link WaitUntilIdleResult.lastHandback}. */
+  lastHandback?: TerminalHandback;
   exitCode?: number | null;
   exitSignal?: number;
   /**
@@ -257,6 +293,8 @@ export const WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA: Record<string, unknown> = {
           waitingReason: { type: "string", enum: ["prompt", "question", "approval", "error"] },
           previousBusyState: { type: "string", enum: ["working", "idle"] },
           lastTransitionAt: { type: "number" },
+          lastOutputChangeAt: { type: "number", description: LAST_OUTPUT_CHANGE_AT_DESCRIPTION },
+          lastHandback: LAST_HANDBACK_OUTPUT_SCHEMA,
           exitCode: { type: ["number", "null"] },
           exitSignal: { type: "number" },
           settled: {
@@ -275,4 +313,5 @@ export const WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA: Record<string, unknown> = {
 };
 
 export const WAIT_UNTIL_IDLE_BATCH_DESCRIPTION =
-  "Block until the first of several agents stops working, or until all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each terminal in turn, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out means not met yet; a gone terminal settles too, so read `trackingState`.";
+  // Kept under the 400-byte tool-description budget (mcpWireBudget.test.ts).
+  "Block until the first of several agents stops working, or all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each in turn, or a status snapshot with `includeOutput` to poll without blocking; both can report `lastOutputChangeAt`, not a hang verdict. Timing out means not met yet; a gone terminal settles too, so read `trackingState`.";

@@ -76,7 +76,14 @@ export function startLongTaskMonitor(thresholdMs = 100): () => void {
 
         const now = performance.now();
         const elapsed = now - RENDERER_T0;
-        if (elapsed > STARTUP_SUPPRESSION_MS && now - lastWarnTime >= WARN_RATE_LIMIT_MS) {
+        // Blink has no per-observer duration filter for long-animation-frame, so the
+        // threshold has to be enforced here. The capture block below stays outside this
+        // guard on purpose: it is opt-in and wants every frame the browser reported.
+        if (
+          entry.duration >= thresholdMs &&
+          elapsed > STARTUP_SUPPRESSION_MS &&
+          now - lastWarnTime >= WARN_RATE_LIMIT_MS
+        ) {
           lastWarnTime = now;
           logWarn("Renderer long animation frame detected", {
             durationMs: Number(entry.duration.toFixed(3)),
@@ -110,7 +117,7 @@ export function startLongTaskMonitor(thresholdMs = 100): () => void {
       }
     });
 
-    observer.observe({ type: "long-animation-frame", durationThreshold: thresholdMs });
+    observer.observe({ type: "long-animation-frame" });
   } catch {
     observer?.disconnect();
     return () => {};

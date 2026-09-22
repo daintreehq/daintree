@@ -3,11 +3,13 @@ import type { Terminal as HeadlessTerminal } from "@xterm/headless";
 import type { SerializeAddon } from "@xterm/addon-serialize";
 import type { AgentState, AgentId, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
+import type { TerminalHandback } from "../../../shared/types/handback.js";
 import type { PanelKind, PanelTitleMode } from "../../../shared/types/panel.js";
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { PtyHostSpawnOptions, TerminalResizeResult } from "../../../shared/types/pty-host.js";
 import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
+import type { HandbackTracker } from "./HandbackTracker.js";
 
 // Re-export PtyHostSpawnOptions as PtySpawnOptions for backward compatibility/internal usage
 export type PtySpawnOptions = PtyHostSpawnOptions;
@@ -57,9 +59,21 @@ export interface TerminalPublicState {
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;
+  /**
+   * When the visible content last changed, ignoring recognised spinner and
+   * timer redraws (#12428). Absent until a change has been observed.
+   */
+  lastOutputChangeAt?: number;
   traceId?: string;
   analysisEnabled: boolean;
   lastInputTime: number;
+  /**
+   * Last raw input that could have put text in the composer (#12491): typing,
+   * pasting, staging. Unlike `lastInputTime` it ignores the submit lane's own
+   * writes and the focus, mouse and query reports xterm sends by itself, so a
+   * click on the pane does not read as a draft.
+   */
+  lastTypedInputAt?: number;
   lastOutputTime: number;
   lastCheckTime: number;
   /**
@@ -75,6 +89,20 @@ export interface TerminalPublicState {
    * even if no agent is currently detected. Not persisted.
    */
   everDetectedAgent?: boolean;
+  /**
+   * How many times a new agent session has been observed taking over this PTY
+   * after a prior one exited — the `respawn` the detector already fires when a
+   * user relaunches a CLI in the shell their last agent left behind (#12535).
+   *
+   * `spawnedAt` is the PTY generation, so it cannot move for a relaunch inside
+   * an unchanged PTY; neither can `ptyPid` or `restartCount`. This counts the
+   * boundaries the detector did see, which is what lets a queued request tell
+   * the session it bound to from its successor. It is an observation, not proof
+   * of process identity: a relaunch the detector never classified is still
+   * invisible here. Zero is a real reading — no respawn observed in this PTY
+   * generation — not "unknown". Reset with the record when the PTY is replaced.
+   */
+  agentIncarnation: number;
   restartCount: number;
   isTrashed?: boolean;
   trashExpiresAt?: number;
@@ -101,6 +129,13 @@ export interface TerminalPublicState {
    * transitions; ephemeral (not persisted).
    */
   lastCheckResult?: TerminalCheckResult;
+  /**
+   * The most recent handback marker seen for a request this terminal held
+   * (#12488). Set in `AgentStateService` at a settle out of `working`; cleared
+   * on respawn; ephemeral (not persisted). An observation of printed text, not
+   * a completion verdict — see `TerminalHandback`.
+   */
+  lastHandback?: TerminalHandback;
   /** Worktree the terminal was spawned in; used when persisting agent session history */
   worktreeId?: string;
   /** Last non-useless title observed from xterm OSC updates (renderer-synced) */
@@ -161,6 +196,11 @@ export interface TerminalInfo extends TerminalPublicState {
    */
   hysteresisLockedUntil?: number;
   /**
+   * Runtime-only handback requests (#12488), absent until something on this
+   * terminal asks for one. Not persisted, not crossed over IPC.
+   */
+  handbackTracker?: HandbackTracker;
+  /**
    * Final serialized buffer captured when a preserved terminal exits and its
    * headless xterm is disposed to reclaim memory. Served by
    * `serializeTerminal`/`serializeTerminalAsync` in place of the live buffer.
@@ -206,8 +246,30 @@ export interface TerminalInfo extends TerminalPublicState {
   pendingHeadlessWrites?: number;
 }
 
+/** Per-chunk delivery hints from the pty-host; see {@link PtyManagerEvents.data}. */
+export interface PtyDataRouting {
+  portDeliveredWebContentsIds?: number[];
+  portRecoveryWebContentsId?: number;
+}
+
 export interface PtyManagerEvents {
-  data: (id: string, data: string | Uint8Array) => void;
+  /**
+   * `routing` is present only when the chunk needs more than a project-scoped
+   * broadcast (#12557):
+   *
+   * - `portDeliveredWebContentsIds` — the host kept the IPC fallback open for a
+   *   view that holds no MessagePort, so these views already have the chunk and
+   *   must be dropped from the fan-out.
+   * - `portRecoveryWebContentsId` — this view's port threw mid-flush and every
+   *   other destination already has the chunk, so it goes to that view alone.
+   *
+   * Both are WebContents ids the host echoes back from the `connect-port` that
+   * brokered the connection, so they name the actual recipient even when the
+   * window's holder has changed since the chunk was sent.
+   */
+  data: (id: string, data: string | Uint8Array, routing?: PtyDataRouting) => void;
+  /** A window's renderer MessagePort connection was torn down in the host (#12557). */
+  "port-disconnected": (windowId: number, reason: string, holderWebContentsId?: number) => void;
   exit: (id: string, exitCode: number, signal?: number, launchGeneration?: number) => void;
   error: (id: string, error: string) => void;
   "resize-result": (id: string, result: TerminalResizeResult) => void;
@@ -281,6 +343,8 @@ export interface TerminalSnapshot {
 export const OUTPUT_BUFFER_SIZE = 2000;
 export const SEMANTIC_BUFFER_MAX_LINES = 50;
 export const SEMANTIC_BUFFER_MAX_LINE_LENGTH = 1000;
+/** Appended where a semantic-buffer line was cut; the text beyond it is gone. */
+export const SEMANTIC_BUFFER_TRUNCATION_MARKER = "... [truncated]";
 export const SEMANTIC_FLUSH_INTERVAL_MS = 100;
 
 // Scrollback configuration
@@ -342,6 +406,22 @@ export const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 3000;
 // shutdown.ts` with its RPC round-trip still covered.
 export const GRACEFUL_KILL_TERMINAL_BUDGET_MS = GRACEFUL_SHUTDOWN_TIMEOUT_MS + 250;
 export const GRACEFUL_SHUTDOWN_BUFFER_SIZE = 8 * 1024;
+
+/**
+ * One graceful-shutdown capture window (#12432), handed out by the pty-host
+ * that owns the terminal's pause holds. While open, those holds no longer stop
+ * the PTY's reads — the quit handshake needs the output — and `shouldDiscard`
+ * names the chunks they would still have kept unread.
+ */
+export interface GracefulCaptureLease {
+  shouldDiscard(data: string | Uint8Array): boolean;
+  close(): void;
+}
+
+export interface GracefulCaptureHost {
+  /** Null when there is nothing to exempt, or a window is already open. */
+  open(terminalId: string): GracefulCaptureLease | null;
+}
 // Delay between writing the input-clear prelude and the quit command. Without this gap,
 // the target CLI's async event loop can drop or corrupt the quit command bytes under load.
 export const GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS = 100;
@@ -394,3 +474,11 @@ export const PORT_BATCH_THROUGHPUT_DELAY_MS = 16; // ~60Hz frame — setTimeout 
 // keystroke echo: the batcher swaps its throughput timer for an immediate so
 // typing into a flooding terminal isn't delayed by the 16ms batch window.
 export const PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS = 50;
+// Longer tail for the same signal: output within this window of the terminal's
+// last input keeps the base 16ms batch window even when the resource profile
+// has stretched it (efficiency: 40ms). This is the terminal-scoped form of the
+// old global "no efficiency while scrolling" override — a mouse-reporting TUI's
+// redraws after a wheel report often land past the 50ms echo window (#12518).
+// Matches the renderer's input/wheel BURST decay, so both sides agree on when
+// an interaction is over.
+export const PORT_BATCH_RECENT_INPUT_WINDOW_MS = 1000;

@@ -4,15 +4,31 @@ import {
   TerminalSummarySchema,
   TerminalStatusResultSchema,
   TerminalSendCommandResultSchema,
+  TerminalLastMessageResultSchema,
 } from "./schemas";
 import { tailCapturedOutput } from "@shared/utils/artifactParser";
+import {
+  boundTerminalStatusOutput,
+  fitTerminalOutputResult,
+} from "@shared/utils/terminalOutputBudget";
+import { MCP_RESPONSE_TEXT_MAX_BYTES } from "@shared/config/mcpLimits";
+import {
+  LAST_MESSAGE_CURSOR_MAX_CHARS,
+  LAST_MESSAGE_INDEX_MAX,
+  LAST_MESSAGE_TEXT_REQUEST_MAX_BYTES,
+  LAST_MESSAGE_TEXT_REQUEST_MIN_BYTES,
+} from "@shared/types/agentLastMessage";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalClient } from "@/clients";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
-import type { TerminalStatusEntry } from "@shared/types/terminalStatus";
+import type {
+  TerminalOutputActivityLookup,
+  TerminalStatusEntry,
+  TerminalStatusUnavailableField,
+} from "@shared/types/terminalStatus";
 import type { TerminalSubmissionLookup } from "@shared/types/terminalSubmission";
 import type { SerializedTerminalSnapshot } from "@shared/types/terminal";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -29,6 +45,20 @@ import {
   isClientMetadataEligible,
 } from "@/store/slices/panelRegistry/panelCount";
 import { readClientMetadata } from "@shared/utils/mcpClientMetadata";
+import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
+import { isAgentTerminal } from "@/utils/terminalType";
+import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
+
+/**
+ * The `handback` argument, shared by both submit tools so the two descriptions
+ * cannot drift (#12488).
+ */
+const HANDBACK_ARG_SCHEMA = z
+  .boolean()
+  .optional()
+  .describe(
+    "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panes only; a shell refuses it."
+  );
 
 /**
  * Cap on the command text echoed back by `terminal.sendCommand` (#12337).
@@ -46,7 +76,7 @@ export function registerTerminalQueryActions(
 ): void {
   actions.set("terminal.list", () => ({
     id: "terminal.list",
-    title: "List Terminals",
+    title: "List terminals",
     description:
       "Enumerate the open terminals and panels, with just enough metadata to pick one. Start here to discover terminal ids, then read status or output for the ones that matter: this is a cheap inventory, not a polling path; the status snapshot carries richer agent state for a fleet in one call. Ephemeral and internal panels are left out; an empty result means nothing matched, not a failure.",
     category: "terminal",
@@ -71,7 +101,7 @@ export function registerTerminalQueryActions(
           .boolean()
           .optional()
           .describe(
-            "MCP only: true keeps just the terminals this session created; false or omitted applies no ownership filter. A session that reconnected owns none."
+            "MCP only: true keeps only the terminals you created or were handed; false or omitted applies no ownership filter. An agent pane keeps them across reconnects."
           ),
         terminalId: z
           .string()
@@ -175,7 +205,7 @@ export function registerTerminalQueryActions(
 
   actions.set("terminal.getOutput", () => ({
     id: "terminal.getOutput",
-    title: "Get Terminal Output",
+    title: "Get terminal output",
     description:
       "Read the trailing scrollback of one terminal, to inspect what an agent or command printed. Use the status snapshot when watching several terminals: it fetches tails for a whole fleet in one call, and reading one at a time is the common mistake. ANSI codes are stripped by default; output may be truncated to the requested tail, and a missing terminal returns an error field, not a failed call.",
     category: "terminal",
@@ -215,7 +245,11 @@ export function registerTerminalQueryActions(
       terminalId: z.string(),
       content: z.string().nullable(),
       lineCount: z.number(),
-      truncated: z.boolean(),
+      truncated: z
+        .boolean()
+        .describe(
+          "True when older output was left out, by `maxLines` or the 50 KiB response budget; the newest lines are kept."
+        ),
       error: z.string().optional(),
     }),
     mcpOutputSchema: true,
@@ -256,18 +290,19 @@ export function registerTerminalQueryActions(
         stripAnsi
       );
 
-      return {
-        terminalId,
-        content,
-        lineCount,
-        truncated,
-      };
+      // Fit under the response cap here, keeping the newest lines (#12450).
+      // Left to the transport, an oversized tail is cut from the end — the
+      // newest lines — into JSON that will not parse, and reported as an error.
+      return fitTerminalOutputResult(
+        { terminalId, content, lineCount, truncated },
+        MCP_RESPONSE_TEXT_MAX_BYTES
+      );
     },
   }));
 
   actions.set("terminal.getStatus", () => ({
     id: "terminal.getStatus",
-    title: "Get Terminal Status",
+    title: "Get terminal status",
     description:
       "Snapshot agent and process state across many terminals, with optional output tails, and confirm a submission landed. The batched polling path: prefer it over listing terminals for agent state, or reading each one's output. It never blocks or fails as a whole; an entry's error can mean that terminal was missing or the fetch failed. Use the blocking wait to catch an agent finishing.",
     category: "terminal",
@@ -320,7 +355,7 @@ export function registerTerminalQueryActions(
           })
           .optional()
           .describe(
-            "Opt-in. When set, each entry includes `recentOutput` with the last N lines of scrollback. Off by default to keep responses small."
+            "Opt-in. Adds `recentOutput` (last N scrollback lines) and `lastOutputChangeAt` when observed. Off by default to keep responses small."
           ),
       })
       .optional(),
@@ -389,16 +424,42 @@ export function registerTerminalQueryActions(
 
       let outputs: Record<string, SerializedTerminalSnapshot | null> | null = null;
       let outputError: string | undefined;
+      // `lastOutputChangeAt` lives on the pty-host's viewport tracker, so it is
+      // read only when output was asked for (#12495): that call already pays
+      // for a batched hop, and the default poll still issues none.
+      let activity: Record<string, TerminalOutputActivityLookup> | null = null;
+      let activityError: string | undefined;
       if (includeOutput) {
         const idsToFetch = resolved.filter((r) => r.terminal !== undefined).map((r) => r.id);
-        if (idsToFetch.length > 0) {
-          try {
-            outputs = await window.electron.terminal.getSerializedStates(idsToFetch);
-          } catch (err) {
-            outputError = formatErrorMessage(err, "Failed to fetch terminal output");
-          }
+        // Only a PTY panel has a tracker to read.
+        const activityIds = resolved
+          .filter((r) => r.terminal !== undefined && isPtyPanel(r.terminal))
+          .map((r) => r.id);
+        // Async wrappers so a bridge that throws synchronously settles as a
+        // rejection like any other failure, rather than escaping the call.
+        const readOutputs = async (): Promise<Record<string, SerializedTerminalSnapshot | null>> =>
+          idsToFetch.length > 0 ? window.electron.terminal.getSerializedStates(idsToFetch) : {};
+        const readActivity = async (): Promise<Record<string, TerminalOutputActivityLookup>> =>
+          activityIds.length > 0 ? terminalClient.getOutputActivity(activityIds) : {};
+        // Independent reads, run side by side so the activity hop adds no
+        // latency on top of serialization, and settled separately so either
+        // can fail without costing the caller the other.
+        const [outputRead, activityRead] = await Promise.allSettled([
+          readOutputs(),
+          readActivity(),
+        ]);
+        if (outputRead.status === "fulfilled") {
+          outputs = outputRead.value;
         } else {
-          outputs = {};
+          outputError = formatErrorMessage(outputRead.reason, "Failed to fetch terminal output");
+        }
+        if (activityRead.status === "fulfilled") {
+          activity = activityRead.value;
+        } else {
+          activityError = formatErrorMessage(
+            activityRead.reason,
+            "Failed to fetch output activity"
+          );
         }
       }
 
@@ -441,9 +502,19 @@ export function registerTerminalQueryActions(
           // running); spawnedAt comes from the panel's creation timestamp.
           exitCode: isPtyPanel(terminal) ? (terminal.exitCode ?? null) : undefined,
           spawnedAt: isPtyPanel(terminal) ? terminal.startedAt : undefined,
+          // Observed respawns inside an unchanged PTY (#12535). Defaulted to
+          // zero for a PTY panel rather than left absent: the panel row is born
+          // with the PTY and the count only ever moves on a detection event
+          // this surface subscribes to, so "none recorded" *is* "none observed"
+          // here. Absent would be read as unobservable and refuse every
+          // delivery this surface answers for, which is the whole of them.
+          agentIncarnation: isPtyPanel(terminal) ? (terminal.agentIncarnation ?? 0) : undefined,
           // Parsed test/lint/check result (issue #10682). Best-effort, not
           // authoritative — see TerminalCheckResult / the schema doc above.
           lastCheckResult: isPtyPanel(terminal) ? terminal.lastCheckResult : undefined,
+          // Handback marker the agent printed for a request (#12488). Set from
+          // agent:state-changed; an observation of printed text, not a verdict.
+          lastHandback: isPtyPanel(terminal) ? terminal.lastHandback : undefined,
           // Whether this terminal is in the fleet arming/broadcast set (#10695).
           armed: armedIds.has(terminal.id),
         };
@@ -503,11 +574,24 @@ export function registerTerminalQueryActions(
               // Normalize before tailing (#10763) — see terminal.getOutput.
               // Without this, a bottom-padding TUI's blank rows fill the small
               // last-N window and recentOutput reads as empty even when idle.
-              entry.recentOutput = tailCapturedOutput(
-                serialized.data,
-                effectiveLines,
-                stripAnsi
-              ).content;
+              const tail = tailCapturedOutput(serialized.data, effectiveLines, stripAnsi);
+              entry.recentOutput = tail.content;
+              if (tail.truncated) entry.recentOutputTruncated = true;
+            }
+          }
+
+          if (isPtyPanel(terminal)) {
+            if (activityError !== undefined) {
+              appendError(activityError);
+            } else if (activity !== null) {
+              const lookup = activity[terminal.id] ?? { status: "unreadable" as const };
+              if (lookup.status === "unreadable") {
+                // Nothing was read. Left silent, the missing timestamp would
+                // pass for a terminal whose screen has not changed yet.
+                appendError("Output activity unavailable for this terminal");
+              } else if (lookup.lastOutputChangeAt !== undefined) {
+                entry.lastOutputChangeAt = lookup.lastOutputChangeAt;
+              }
             }
           }
         }
@@ -519,7 +603,7 @@ export function registerTerminalQueryActions(
       // fallback answers in (#12316), so a client reads one shape whether or not
       // its workspace had a live view.
       //
-      // `hasPty` is the one field this richer surface cannot observe (#12336).
+      // `hasPty` is a field this richer surface cannot observe (#12336).
       // `PtyPanelData.hasPty` exists on the type but nothing in the renderer
       // ever writes it — not `addPanel`, not `statePatcher` on restore or
       // reconnect, and not the `onExit` listener in `store/listeners/panel/
@@ -528,12 +612,25 @@ export function registerTerminalQueryActions(
       // nothing while claiming a view saw everything; deriving it from
       // `runtimeStatus` would publish an interpretation as a process fact. The
       // pty-host computes it, so the reduced answer reports it and this one
-      // says it could not look.
-      return {
-        terminals: entries,
-        source: "renderer" as const,
-        unavailableFields: ["hasPty" as const],
-      };
+      // says it could not look. `lastOutputChangeAt` is also read off the
+      // pty-host (#12428), but only on calls that asked for output (#12495), so
+      // it is unobservable on the default poll and on a call whose activity
+      // read failed outright.
+      //
+      // Tails are fitted last, once every other field is in place, so the
+      // budget they split is what the rest of the snapshot leaves (#12450).
+      const unavailableFields: TerminalStatusUnavailableField[] =
+        includeOutput && activityError === undefined
+          ? ["hasPty"]
+          : ["hasPty", "lastOutputChangeAt"];
+      return boundTerminalStatusOutput(
+        {
+          terminals: entries,
+          source: "renderer" as const,
+          unavailableFields,
+        },
+        MCP_RESPONSE_TEXT_MAX_BYTES
+      );
     },
   }));
 
@@ -635,6 +732,69 @@ export function registerTerminalQueryActions(
     },
   }));
 
+  // Registered here for manifest metadata only — schema, description, tier and
+  // audit registration. Execution lives in the MCP CallTool handler
+  // (electron/services/mcp-server/sessionServer.ts): the ownership ledger it
+  // authorizes against is keyed by MCP session id, which the renderer never
+  // sees, and the transcript it reads is a file only main can open. Main checks
+  // ownership, then reads the agent's session from host state alone (#12479).
+  // `run()` throws if the renderer ever invokes it directly.
+  actions.set("terminal.readLastMessageOwned", () => ({
+    id: "terminal.readLastMessageOwned",
+    title: "Read owned agent's last message",
+    description:
+      "Read what the agent in a panel this connection created or was handed last wrote to its own transcript: that reply's text, plus any tool calls left unanswered since, such as a question and its options. Claude Code only for now. This reports what the file holds, not whether the agent is waiting; a permission prompt never appears there, so read the terminal for the live screen.",
+    category: "terminal",
+    kind: "query",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["transcript", "reply", "question", "owned"],
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      terminalId: z
+        .string()
+        .min(1)
+        .describe(
+          "The agent panel to read, as an `id` this session created or the user handed it. Required: there is no focus fallback."
+        ),
+      maxBytes: z
+        .number()
+        .int()
+        .min(LAST_MESSAGE_TEXT_REQUEST_MIN_BYTES)
+        .max(LAST_MESSAGE_TEXT_REQUEST_MAX_BYTES)
+        .optional()
+        .describe("Text budget in escaped bytes, 1024 to 49152; default 24576."),
+      messageIndex: z
+        .number()
+        .int()
+        .min(0)
+        .max(LAST_MESSAGE_INDEX_MAX)
+        .optional()
+        .describe("Replies back from the latest with text: 0 (default) to 20. Not with `cursor`."),
+      cursor: z
+        .string()
+        .min(1)
+        .max(LAST_MESSAGE_CURSOR_MAX_CHARS)
+        .optional()
+        .describe("A result's `message.nextCursor`, unchanged, for the text before that page."),
+    }),
+    resultSchema: TerminalLastMessageResultSchema,
+    mcpOutputSchema: true,
+    examples: [
+      {
+        args: { terminalId: "term-abc123" },
+        description:
+          "An agent you launched stopped, and you need its hand-off or the exact question it asked before replying.",
+      },
+    ],
+    run: async () => {
+      throw new Error(
+        "terminal.readLastMessageOwned must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
+
   actions.set("terminal.sendCommand", () => ({
     id: "terminal.sendCommand",
     title: "Submit text to terminal",
@@ -676,11 +836,16 @@ export function registerTerminalQueryActions(
         .describe(
           "Text to submit. Runs as a shell command in a plain terminal, or is submitted as the next prompt/turn in an agent pane. Multi-line is delivered atomically and submitted with a single Enter, so interior newlines never prematurely submit."
         ),
+      handback: HANDBACK_ARG_SCHEMA,
     }),
     resultSchema: TerminalSendCommandResultSchema,
     mcpOutputSchema: true,
     run: async (args: unknown) => {
-      const { terminalId, command } = args as { terminalId: string; command: string };
+      const { terminalId, command, handback } = args as {
+        terminalId: string;
+        command: string;
+        handback?: boolean;
+      };
 
       // Verify terminal exists and is valid for command execution
       const terminal = usePanelStore.getState().panelsById[terminalId];
@@ -705,6 +870,14 @@ export function registerTerminalQueryActions(
         throw new Error("Terminal does not have PTY capability");
       }
 
+      // Refused rather than sent: a shell would run the instruction as a
+      // command, and nothing there will ever print the marker (#12488).
+      if (handback === true && !(isPtyPanel(terminal) && isAgentTerminal(terminal))) {
+        throw new UnactionableTargetError(
+          `handback needs an agent pane, and terminal '${terminalId}' has no agent running. Send without handback.`
+        );
+      }
+
       // Minted here rather than in main so the caller gets a correlator even if
       // the submit itself rejects — and minted after validation, so a token is
       // only ever handed out for a submission that was actually dispatched
@@ -714,7 +887,19 @@ export function registerTerminalQueryActions(
 
       // Send command via submit (handles bracketed paste). Resolving means
       // queued, not written — which is exactly why the token exists.
-      await terminalClient.submit(terminalId, command, submissionToken);
+      if (handback === true) {
+        // The code never leaves Daintree: the caller reads the marker back as
+        // `lastHandback`, so the receipt below still echoes its own text.
+        const handbackCode = mintHandbackCode();
+        await terminalClient.submit(
+          terminalId,
+          appendHandbackInstruction(command, handbackCode),
+          submissionToken,
+          handbackCode
+        );
+      } else {
+        await terminalClient.submit(terminalId, command, submissionToken);
+      }
 
       // Return a clear message so the AI model knows not to repeat this action
       return {
@@ -730,6 +915,52 @@ export function registerTerminalQueryActions(
         submissionToken,
         message: `Submission queued. Do not send this command again; check delivery with the terminal-status capability using this submissionToken.`,
       };
+    },
+  }));
+
+  // Registered here for manifest metadata only — schema, description, tier and
+  // audit registration. Execution lives in the MCP CallTool handler
+  // (electron/services/mcp-server/sessionServer.ts): the ownership ledger it
+  // authorizes against is keyed by MCP session id, which the renderer cannot
+  // see and must never be told. Main checks ownership, then delegates to
+  // `terminal.sendCommand` above with only the id and the text, so the
+  // submission path and its receipt are the ones already shipped (#12407).
+  actions.set("terminal.sendCommandOwned", () => ({
+    id: "terminal.sendCommandOwned",
+    title: "Submit text to owned terminal",
+    description:
+      "Queue text as one submission to a terminal this connection created or was handed: a shell runs it as a command, an agent pane takes it as the next prompt. Any other panel is refused. Returns once queued, not delivered or run: pass the returned `submissionToken` to the status capability to find out.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    // Same reason as `terminal.sendCommand`: a replay would submit the text twice.
+    nonRepeatable: true,
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["submit", "prompt", "command", "owned"],
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      terminalId: z
+        .string()
+        .min(1)
+        .max(512)
+        .describe(
+          "The terminal to submit to, as an `id` this session created or the user handed it."
+        ),
+      command: z
+        .string()
+        .min(1)
+        .describe(
+          "Text to submit. Multi-line is delivered atomically and submitted with a single Enter, so interior newlines never prematurely submit."
+        ),
+      handback: HANDBACK_ARG_SCHEMA,
+    }),
+    resultSchema: TerminalSendCommandResultSchema,
+    mcpOutputSchema: true,
+    run: async () => {
+      throw new Error(
+        "terminal.sendCommandOwned must be invoked through the MCP main-process path, not renderer dispatch."
+      );
     },
   }));
 }

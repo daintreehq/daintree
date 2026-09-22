@@ -4,7 +4,9 @@ import {
   BRACKETED_PASTE_START,
   PASTE_THRESHOLD_CHARS,
   containsFullBracketedPaste,
+  formatForTerminalPaste,
   formatWithBracketedPaste,
+  neutralizeControlCharacters,
   getSoftNewlineSequence,
   shouldUseBracketedPaste,
 } from "../terminalInputProtocol.js";
@@ -102,5 +104,152 @@ describe("terminalInputProtocol", () => {
     expect(formatWithBracketedPaste(plain)).toBe(
       `${BRACKETED_PASTE_START}${plain}${BRACKETED_PASTE_END}`
     );
+  });
+});
+
+describe("neutralizeControlCharacters", () => {
+  const ESC = String.fromCharCode(0x1b);
+  const ETX = String.fromCharCode(0x03);
+
+  it("turns every C0 action character into its picture", () => {
+    // The pair the audit reproduced reaching a pty intact: a cursor-movement
+    // sequence and an interrupt, both carried in a DOM-derived label.
+    const payload = `button#x${ESC}[D${ETX}`;
+    const safe = neutralizeControlCharacters(payload);
+
+    expect(safe).toBe("button#x\u241b[D\u2403");
+    expect(safe).not.toContain(ESC);
+    expect(safe).not.toContain(ETX);
+    // Still legible: the text around the controls is untouched.
+    expect(safe).toContain("button#x");
+  });
+
+  it("neutralizes DEL and the rest of the C0 block", () => {
+    for (let code = 0; code < 0x20; code++) {
+      if (code === 0x09 || code === 0x0a) continue;
+      const safe = neutralizeControlCharacters(String.fromCharCode(code));
+      expect(safe, `code ${code}`).toBe(String.fromCharCode(0x2400 + code));
+    }
+    expect(neutralizeControlCharacters(String.fromCharCode(0x7f))).toBe("\u2421");
+  });
+
+  it("keeps tabs and newlines, which are structure rather than action", () => {
+    expect(neutralizeControlCharacters("a\tb\nc")).toBe("a\tb\nc");
+  });
+
+  it("neutralizes a bare carriage return but keeps it inside a paste", () => {
+    // Bare, it submits the line. Between paste delimiters it is the line
+    // separator the program reads as data.
+    expect(neutralizeControlCharacters("a\rb")).toBe("a\u240db");
+    expect(neutralizeControlCharacters("a\rb", { insideBracketedPaste: true })).toBe("a\rb");
+  });
+
+  it("returns the same string when there is nothing to neutralize", () => {
+    const plain = "select the pricing card";
+    expect(neutralizeControlCharacters(plain)).toBe(plain);
+  });
+
+  it("carries multi-line paste bodies through the wrapper unbroken", () => {
+    // `performSubmit` converts newlines to `\r` before wrapping; neutralisation
+    // must not eat the separators that conversion exists to produce.
+    const wrapped = formatWithBracketedPaste("one\rtwo\rthree");
+    const body = wrapped.slice(BRACKETED_PASTE_START.length, -BRACKETED_PASTE_END.length);
+    expect(body).toBe("one\rtwo\rthree");
+  });
+});
+
+describe("formatForTerminalPaste", () => {
+  const ESC = String.fromCharCode(0x1b);
+  const ETX = String.fromCharCode(0x03);
+  const DEL = String.fromCharCode(0x7f);
+  const unwrapped = { bracketedPasteMode: false };
+  const wrapped = { bracketedPasteMode: true };
+
+  describe("unwrapped", () => {
+    it("passes through text with nothing to fold or neutralize", () => {
+      expect(formatForTerminalPaste("", unwrapped)).toBe("");
+      expect(formatForTerminalPaste("npm run dev", unwrapped)).toBe("npm run dev");
+    });
+
+    it("keeps a tab, which is indentation rather than an action", () => {
+      expect(formatForTerminalPaste("a\tb", unwrapped)).toBe("a\tb");
+    });
+
+    it("submits each line for every line ending in use", () => {
+      // The reason the fold runs before neutralisation: a bare CR is a line
+      // ending here, not an action character, so it has to survive as one.
+      expect(formatForTerminalPaste("one\ntwo", unwrapped)).toBe("one\rtwo");
+      expect(formatForTerminalPaste("one\r\ntwo", unwrapped)).toBe("one\rtwo");
+      expect(formatForTerminalPaste("one\rtwo", unwrapped)).toBe("one\rtwo");
+    });
+
+    it("folds a mixture of line endings to one CR each", () => {
+      expect(formatForTerminalPaste("one\r\ntwo\rthree\nfour", unwrapped)).toBe(
+        "one\rtwo\rthree\rfour"
+      );
+    });
+
+    it("preserves blank lines and edge newlines rather than trimming them", () => {
+      // A dropped trailing newline is a command that does not run; an added one
+      // is a command that runs twice.
+      expect(formatForTerminalPaste("\na\n\nb\n", unwrapped)).toBe("\ra\r\rb\r");
+    });
+
+    it("neutralizes the control characters around the line structure", () => {
+      const safe = formatForTerminalPaste(`ls${ESC}[201~${ETX}\nrm${DEL}`, unwrapped);
+
+      expect(safe).toBe("ls␛[201~␃\rrm␡");
+      expect(safe).not.toContain(ESC);
+      expect(safe).not.toContain(ETX);
+    });
+
+    it("adds no wrapper, whatever the length", () => {
+      const long = "x".repeat(PASTE_THRESHOLD_CHARS + 1);
+
+      expect(formatForTerminalPaste(long, unwrapped)).toBe(long);
+      expect(formatForTerminalPaste(long, unwrapped)).not.toContain(ESC);
+    });
+  });
+
+  describe("wrapped", () => {
+    it("produces the same bytes as the wrapper it delegates to", () => {
+      expect(formatForTerminalPaste("hello", wrapped)).toBe(formatWithBracketedPaste("hello"));
+      expect(formatForTerminalPaste("", wrapped)).toBe(
+        `${BRACKETED_PASTE_START}${BRACKETED_PASTE_END}`
+      );
+    });
+
+    it("leaves the caller's line endings alone inside the wrapper", () => {
+      // Unwrapped, these become submits. Wrapped, `\r` is the separator the
+      // program reads as data, so the mode has to decide and not the caller.
+      const out = formatForTerminalPaste("one\r\ntwo\rthree\nfour", wrapped);
+      const body = out.slice(BRACKETED_PASTE_START.length, -BRACKETED_PASTE_END.length);
+
+      expect(body).toBe("one\r\ntwo\rthree\nfour");
+    });
+
+    it("neutralizes every embedded terminator, not just the first", () => {
+      // A sanitiser that replaced one occurrence would leave the second free to
+      // close the paste early and hand the remainder over as typed input.
+      const out = formatForTerminalPaste(
+        `before${BRACKETED_PASTE_END}${ETX}mid${BRACKETED_PASTE_END}after`,
+        wrapped
+      );
+
+      expect(out.split(BRACKETED_PASTE_END).length - 1).toBe(1);
+      expect(out).toBe(`${BRACKETED_PASTE_START}before␛[201~␃mid␛[201~after${BRACKETED_PASTE_END}`);
+    });
+
+    it("neutralizes an embedded terminator so the wrapper cannot be escaped", () => {
+      const out = formatForTerminalPaste(`before${BRACKETED_PASTE_END}${ETX}after`, wrapped);
+
+      expect(out.split(BRACKETED_PASTE_END).length - 1).toBe(1);
+      expect(out.endsWith(BRACKETED_PASTE_END)).toBe(true);
+      const body = out.slice(BRACKETED_PASTE_START.length, -BRACKETED_PASTE_END.length);
+      expect(body).not.toContain(ESC);
+      expect(body).not.toContain(ETX);
+      expect(body).toContain("before");
+      expect(body).toContain("after");
+    });
   });
 });

@@ -12,7 +12,7 @@ export function registerWorktreeForgeActions(
   actions.set("worktree.openIssue", () =>
     defineAction({
       id: "worktree.openIssue",
-      title: "Open Worktree Issue",
+      title: "Open worktree issue",
       description: "Open the issue associated with a worktree",
       category: "worktree",
       kind: "command",
@@ -34,7 +34,7 @@ export function registerWorktreeForgeActions(
   actions.set("worktree.openPR", () =>
     defineAction({
       id: "worktree.openPR",
-      title: "Open Worktree Pull Request",
+      title: "Open worktree pull request",
       description: "Open the pull request associated with a worktree",
       category: "worktree",
       kind: "command",

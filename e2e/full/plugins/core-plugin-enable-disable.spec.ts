@@ -11,8 +11,8 @@ import {
 /**
  * Plugin enable/disable lifecycle + restart gating (#9284, #9558). Toggling a
  * plugin is built in, so disabling it transitions the live plugin registry in
- * place (#9304): the row dims in place and gains a "Disabled" badge, but no
- * restart gate is needed.
+ * place (#9304): the switch carries disabled state without moving the row or
+ * requiring a restart.
  */
 test.describe.serial("Core: Plugin enable/disable", () => {
   let ctx: AppContext;
@@ -29,33 +29,39 @@ test.describe.serial("Core: Plugin enable/disable", () => {
     fixtureCleanup?.();
   });
 
-  test("disabling a built-in plugin dims the row in place without a restart banner", async () => {
+  test("disabling a built-in plugin keeps its row stable and updates live state without a restart", async () => {
     const { window } = ctx;
     await openPluginManager(window);
 
     const toggle = window.getByRole("switch", { name: `Enable ${SAMPLE_PLUGIN_LABEL}` });
     await expect(toggle).toBeChecked();
 
-    // No restart pending and no Disabled badge on a clean start.
     const sampleRow = window.locator(SEL.plugin.option).filter({ hasText: SAMPLE_PLUGIN_LABEL });
-    await expect(sampleRow.getByText("Disabled", { exact: true })).toHaveCount(0);
+    const initialBounds = await sampleRow.boundingBox();
+    expect(initialBounds).not.toBeNull();
+
+    const isDisabled = () =>
+      window.evaluate(async () => {
+        const plugins = await window.electron.plugin.list();
+        return (
+          plugins.find((plugin) => plugin.manifest.name === "daintree.hello")?.disabled === true
+        );
+      });
 
     await toggle.click();
 
-    // Desired state flips: the row stays in its category section (disabled
-    // plugins dim in place, never relocate) and gains the Disabled badge.
-    await expect(sampleRow.getByText("Disabled", { exact: true })).toBeVisible({
-      timeout: T_MEDIUM,
-    });
     await expect(toggle).not.toBeChecked();
+    await expect.poll(isDisabled, { timeout: T_MEDIUM }).toBe(true);
+    await expect(sampleRow).toBeVisible();
+    await expect.poll(() => sampleRow.boundingBox()).toEqual(initialBounds);
 
     await expect(window.getByText("Restart required to apply plugin changes")).not.toBeVisible({
       timeout: T_MEDIUM,
     });
 
-    // Re-enabling clears the desired/running mismatch and the banner with it.
     await toggle.click();
     await expect(toggle).toBeChecked();
+    await expect.poll(isDisabled, { timeout: T_MEDIUM }).toBe(false);
     await expect(window.getByText("Restart required to apply plugin changes")).not.toBeVisible({
       timeout: T_MEDIUM,
     });

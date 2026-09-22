@@ -100,6 +100,15 @@ export interface StoreSchema {
   sessionRestore: {
     enabled: boolean;
   };
+  /**
+   * Whether the power save blocker is held while agents work, and whether that
+   * extends to battery power (#12516). `PowerSaveBlockerService` is the sole
+   * reader and writer.
+   */
+  keepAwake: {
+    enabled: boolean;
+    onBattery: boolean;
+  };
   idleTerminalNotify: {
     enabled: boolean;
     thresholdMinutes: number;
@@ -320,6 +329,12 @@ export interface StoreSchema {
     abusePolicyEnabled: boolean;
     abusePolicyMaxDenials: number;
     abusePolicyWindowMs: number;
+    /**
+     * Let terminal watches wake the watching agent's pane by typing one line
+     * into its prompt (#12491). Optional because stores written before it
+     * lack the key; anything but `true` reads as off.
+     */
+    paneWakeEnabled?: boolean;
   };
   /**
    * Help-assistant settings. Includes audit/permission configuration plus
@@ -452,6 +467,8 @@ export interface StoreSchema {
    */
   plugins: {
     disabled: string[];
+    /** Explicit enable choices, including opt-in built-ins. Missing means no choice yet. */
+    enabled?: string[];
     /** @deprecated Merged into `disabled` by migration021 (#9284). Read-only carryover. */
     disabledBuiltins?: string[];
     /** Master switch for the plugin-action audit log. Defaults to true. */
@@ -601,6 +618,15 @@ export interface StoreSchema {
   projectSurfaceChoices?: Record<string, ProjectSurfaceChoices>;
 
   /**
+   * Plugin MCP endpoints the user turned on per project, keyed
+   * `projectId → pluginInstanceId → endpointId → { decidedAt }`; presence means on.
+   * Read and written only through `services/pluginAgentMcp/projectEnablement.ts`.
+   * Out of the repository for the same reason as `projectPluginVisibility`.
+   * Same additive-key convention as `projectPluginTrust` above.
+   */
+  projectAgentMcpEnablement?: Record<string, Record<string, Record<string, { decidedAt: number }>>>;
+
+  /**
    * Workspaces the user asked to keep resident in the project-view cache
    * (#12313), keyed by workspace id — a project's 64-hex id or a scratch
    * workspace's UUID, the same vocabulary `ProjectViewManager.views` and an MCP
@@ -648,6 +674,12 @@ const storeOptions = {
     // the user has.
     sessionRestore: {
       enabled: true,
+    },
+    // On while plugged in, which is how it always behaved; off on battery, where
+    // an unattended laptop that never idle-sleeps drains itself.
+    keepAwake: {
+      enabled: true,
+      onBattery: false,
     },
     idleTerminalNotify: {
       enabled: true,
@@ -757,6 +789,7 @@ const storeOptions = {
       abusePolicyEnabled: false,
       abusePolicyMaxDenials: 5,
       abusePolicyWindowMs: 60_000,
+      paneWakeEnabled: false,
     },
     helpAssistant: {
       docSearch: true,
@@ -825,6 +858,7 @@ const storeOptions = {
     pluginCapabilityConsent: {},
     projectPluginTrust: {},
     projectSurfaceChoices: {},
+    projectAgentMcpEnablement: {},
     workspaceKeepResident: {},
   },
   cwd: process.env.DAINTREE_USER_DATA,

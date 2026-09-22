@@ -12,7 +12,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Command Palette",
+    "title": "Open command palette",
   },
   {
     "category": "app",
@@ -24,7 +24,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Repeat Last Action",
+    "title": "Repeat last action",
   },
   {
     "category": "introspection",
@@ -36,7 +36,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Action Context",
+    "title": "Get action context",
   },
   {
     "category": "introspection",
@@ -55,7 +55,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Get Action Schema",
+    "title": "Get action schema",
   },
   {
     "category": "introspection",
@@ -67,7 +67,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "List Actions",
+    "title": "List actions",
   },
   {
     "category": "introspection",
@@ -79,7 +79,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "List Persisted Stores",
+    "title": "List persisted stores",
   },
   {
     "category": "introspection",
@@ -105,7 +105,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Search Actions",
+    "title": "Search actions",
   },
   {
     "category": "agent",
@@ -153,7 +153,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Launch Browser",
+    "title": "Launch browser",
   },
   {
     "category": "agent",
@@ -225,7 +225,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Next Agent",
+    "title": "Focus next agent",
   },
   {
     "category": "agent",
@@ -237,7 +237,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Next Waiting Agent",
+    "title": "Focus next waiting agent",
   },
   {
     "category": "agent",
@@ -249,7 +249,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Next Waiting Agent (All Projects)",
+    "title": "Focus next waiting agent (all projects)",
   },
   {
     "category": "agent",
@@ -261,7 +261,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Next Working Agent",
+    "title": "Focus next working agent",
   },
   {
     "category": "agent",
@@ -273,7 +273,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Previous Agent",
+    "title": "Focus previous agent",
   },
   {
     "category": "agent",
@@ -304,7 +304,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Get Agent State",
+    "title": "Get agent state",
   },
   {
     "category": "agent",
@@ -373,10 +373,17 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "description": "Start an AI agent in a new terminal and report where it landed, so parallel launches can be told apart without re-resolving the target. Success means the panel was created and its process is starting, not that the agent is ready; poll its state or a terminal status snapshot for that. A missing CLI opens a setup diagnostic panel instead. Keep concurrent launches modest.",
     "examples": undefined,
     "id": "agent.launch",
-    "keywords": undefined,
+    "keywords": [
+      "spawn",
+      "start",
+      "run",
+      "new",
+      "agents",
+      "task",
+    ],
     "kind": "command",
     "requiresArgs": true,
-    "title": "Launch Agent",
+    "title": "Launch agent",
   },
   {
     "category": "agent",
@@ -388,7 +395,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "List Available Agents",
+    "title": "List available agents",
   },
   {
     "category": "agent",
@@ -407,7 +414,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "List Agent Presets",
+    "title": "List agent presets",
   },
   {
     "category": "agent",
@@ -419,7 +426,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "List Toolbar Agents",
+    "title": "List toolbar agents",
   },
   {
     "category": "agent",
@@ -455,7 +462,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Quick Switcher",
+    "title": "Open quick switcher",
   },
   {
     "category": "agent",
@@ -479,7 +486,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Launch Terminal",
+    "title": "Launch terminal",
   },
   {
     "category": "agent",
@@ -505,7 +512,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "List Resumable Sessions",
+    "title": "List resumable sessions",
   },
   {
     "category": "agent",
@@ -525,7 +532,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Resume Agent Session",
+    "title": "Resume agent session",
   },
   {
     "category": "settings",
@@ -537,7 +544,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Agent Settings",
+    "title": "Get agent settings",
   },
   {
     "category": "settings",
@@ -554,7 +561,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Reset Agent Settings",
+    "title": "Reset agent settings",
   },
   {
     "category": "settings",
@@ -566,7 +573,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Update Agent Settings",
+    "title": "Update agent settings",
   },
   {
     "category": "app",
@@ -578,7 +585,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Developer Mode",
+    "title": "Set developer mode",
   },
   {
     "category": "app",
@@ -597,7 +604,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Export Configuration…",
+    "title": "Export configuration…",
   },
   {
     "category": "app",
@@ -614,7 +621,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Force Quit App",
+    "title": "Force quit app",
   },
   {
     "category": "app",
@@ -633,7 +640,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Import Configuration…",
+    "title": "Import configuration…",
   },
   {
     "category": "app",
@@ -645,7 +652,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "New Window",
+    "title": "New window",
   },
   {
     "category": "app",
@@ -663,7 +670,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Plugin Manager",
+    "title": "Open plugin manager",
   },
   {
     "category": "app",
@@ -680,7 +687,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Quit App",
+    "title": "Quit app",
   },
   {
     "category": "app",
@@ -692,7 +699,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Reload Configuration",
+    "title": "Reload configuration",
   },
   {
     "category": "app",
@@ -709,7 +716,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Settings",
+    "title": "Open settings",
   },
   {
     "category": "app",
@@ -721,7 +728,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Open Settings Tab",
+    "title": "Open settings tab",
   },
   {
     "category": "app",
@@ -739,7 +746,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Browse Themes…",
+    "title": "Browse themes…",
   },
   {
     "category": "app",
@@ -756,7 +763,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Pick Theme…",
+    "title": "Pick theme…",
   },
   {
     "category": "app",
@@ -773,7 +780,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Dark/Light Theme",
+    "title": "Toggle dark/light theme",
   },
   {
     "category": "artifacts",
@@ -785,7 +792,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Apply Patch",
+    "title": "Apply patch",
   },
   {
     "category": "artifacts",
@@ -797,7 +804,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Save Artifact To File",
+    "title": "Save artifact to file",
   },
   {
     "category": "browser",
@@ -809,7 +816,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Browser Back",
+    "title": "Browser back",
   },
   {
     "category": "browser",
@@ -821,7 +828,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Capture Browser Screenshot",
+    "title": "Capture browser screenshot",
   },
   {
     "category": "browser",
@@ -833,7 +840,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Clear Browser Console",
+    "title": "Clear browser console",
   },
   {
     "category": "browser",
@@ -857,7 +864,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Browser Forward",
+    "title": "Browser forward",
   },
   {
     "category": "browser",
@@ -869,7 +876,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Browser Console Messages",
+    "title": "Get browser console messages",
   },
   {
     "category": "browser",
@@ -881,7 +888,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Hard Reload Browser",
+    "title": "Hard reload browser",
   },
   {
     "category": "browser",
@@ -893,7 +900,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Navigate Browser",
+    "title": "Navigate browser",
   },
   {
     "category": "browser",
@@ -905,7 +912,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open in External Browser",
+    "title": "Open in external browser",
   },
   {
     "category": "browser",
@@ -922,7 +929,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": true,
-    "title": "Open URL in Browser",
+    "title": "Open URL in browser",
   },
   {
     "category": "browser",
@@ -934,7 +941,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Reload Browser",
+    "title": "Reload browser",
   },
   {
     "category": "browser",
@@ -946,7 +953,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Browser Zoom Level",
+    "title": "Set browser zoom level",
   },
   {
     "category": "browser",
@@ -958,7 +965,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Browser Console",
+    "title": "Toggle browser console",
   },
   {
     "category": "browser",
@@ -970,7 +977,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Browser DevTools",
+    "title": "Toggle browser DevTools",
   },
   {
     "category": "system",
@@ -982,7 +989,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get CLI Availability",
+    "title": "Get CLI availability",
   },
   {
     "category": "system",
@@ -994,7 +1001,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Refresh CLI Availability",
+    "title": "Refresh CLI availability",
   },
   {
     "category": "copyTree",
@@ -1023,7 +1030,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "query",
     "requiresArgs": false,
-    "title": "Generate CopyTree Context",
+    "title": "Generate CopyTree context",
   },
   {
     "category": "copyTree",
@@ -1035,7 +1042,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Generate And Copy Context",
+    "title": "Generate and copy context",
   },
   {
     "category": "copyTree",
@@ -1047,7 +1054,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Get File Tree",
+    "title": "Get file tree",
   },
   {
     "category": "copyTree",
@@ -1063,7 +1070,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": true,
-    "title": "Inject Context To Terminal",
+    "title": "Inject context to terminal",
   },
   {
     "category": "copyTree",
@@ -1075,7 +1082,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "CopyTree Availability",
+    "title": "CopyTree availability",
   },
   {
     "category": "devServer",
@@ -1093,7 +1100,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open in Portal",
+    "title": "Open in portal",
   },
   {
     "category": "devServer",
@@ -1153,7 +1160,19 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Stop Dev Server",
+    "title": "Stop dev server",
+  },
+  {
+    "category": "devServer",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Switch a plugin-contributed dev preview tool on or off in a dev preview of the active worktree — the focused one, else the first open one — opening a dev preview when the worktree has none. Returns the panel it acted on.",
+    "examples": undefined,
+    "id": "devPreview.toggleTool",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Toggle dev preview tool",
   },
   {
     "category": "devServer",
@@ -1165,7 +1184,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Dev Preview",
+    "title": "Open dev preview",
   },
   {
     "category": "diagnostics",
@@ -1201,7 +1220,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Next Blocked Dock Agent",
+    "title": "Focus next blocked dock agent",
   },
   {
     "category": "settings",
@@ -1213,7 +1232,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Global Environment Variables",
+    "title": "Get global environment variables",
   },
   {
     "category": "settings",
@@ -1225,7 +1244,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Global Environment Variables",
+    "title": "Set global environment variables",
   },
   {
     "category": "settings",
@@ -1237,7 +1256,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Get Project Environment Variables",
+    "title": "Get project environment variables",
   },
   {
     "category": "settings",
@@ -1249,7 +1268,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Project Environment Variables",
+    "title": "Set project environment variables",
   },
   {
     "category": "errors",
@@ -1261,7 +1280,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Clear All Errors",
+    "title": "Clear all errors",
   },
   {
     "category": "errors",
@@ -1273,7 +1292,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Error Logs",
+    "title": "Open error logs",
   },
   {
     "category": "errors",
@@ -1285,7 +1304,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Recent Errors",
+    "title": "Recent errors",
   },
   {
     "category": "diagnostics",
@@ -1297,7 +1316,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Clear Event Inspector",
+    "title": "Clear event inspector",
   },
   {
     "category": "diagnostics",
@@ -1309,7 +1328,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Events",
+    "title": "Get events",
   },
   {
     "category": "diagnostics",
@@ -1321,7 +1340,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Filtered Events",
+    "title": "Get filtered events",
   },
   {
     "category": "diagnostics",
@@ -1333,7 +1352,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Subscribe to Events",
+    "title": "Subscribe to events",
   },
   {
     "category": "diagnostics",
@@ -1345,7 +1364,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Unsubscribe from Events",
+    "title": "Unsubscribe from events",
   },
   {
     "category": "files",
@@ -1364,7 +1383,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Open Diff",
+    "title": "Open diff",
   },
   {
     "category": "files",
@@ -1376,7 +1395,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Open in Image Viewer",
+    "title": "Open in image viewer",
   },
   {
     "category": "files",
@@ -1388,7 +1407,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Open in Browser",
+    "title": "Open in browser",
   },
   {
     "category": "files",
@@ -1400,7 +1419,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Open in Editor",
+    "title": "Open in editor",
   },
   {
     "category": "files",
@@ -1443,7 +1462,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": true,
-    "title": "Open File Panel",
+    "title": "Open file panel",
   },
   {
     "category": "files",
@@ -1462,7 +1481,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Read File",
+    "title": "Read file",
   },
   {
     "category": "files",
@@ -1474,7 +1493,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Reveal in File Manager",
+    "title": "Reveal in file manager",
   },
   {
     "category": "files",
@@ -1500,7 +1519,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "View File",
+    "title": "View file",
   },
   {
     "category": "files",
@@ -1526,7 +1545,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Search Files",
+    "title": "Search files",
   },
   {
     "category": "navigation",
@@ -1538,7 +1557,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Find in Focused Panel",
+    "title": "Find in focused panel",
   },
   {
     "category": "terminal",
@@ -1550,7 +1569,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Fleet: Accept",
+    "title": "Fleet: accept",
   },
   {
     "category": "terminal",
@@ -1562,7 +1581,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Fleet: Arm All Eligible",
+    "title": "Fleet: arm all eligible",
   },
   {
     "category": "terminal",
@@ -1574,7 +1593,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Fleet: Toggle Arm Focused Pane",
+    "title": "Fleet: toggle arm focused pane",
   },
   {
     "category": "terminal",
@@ -1586,7 +1605,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Fleet: Arm Agents Matching Filter",
+    "title": "Fleet: arm agents matching filter",
   },
   {
     "category": "terminal",
@@ -1598,7 +1617,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Fleet: Delete named fleet",
+    "title": "Fleet: delete named fleet",
   },
   {
     "category": "terminal",
@@ -1610,7 +1629,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Fleet: Get run status",
+    "title": "Fleet: get run status",
   },
   {
     "category": "terminal",
@@ -1622,7 +1641,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Fleet: Interrupt",
+    "title": "Fleet: interrupt",
   },
   {
     "category": "terminal",
@@ -1634,7 +1653,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Fleet: Kill",
+    "title": "Fleet: kill",
   },
   {
     "category": "terminal",
@@ -1646,7 +1665,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Fleet: Recall named fleet",
+    "title": "Fleet: recall named fleet",
   },
   {
     "category": "terminal",
@@ -1658,7 +1677,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Fleet: Reject",
+    "title": "Fleet: reject",
   },
   {
     "category": "terminal",
@@ -1670,7 +1689,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Fleet: Restart",
+    "title": "Fleet: restart",
   },
   {
     "category": "terminal",
@@ -1682,7 +1701,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Fleet: Retry failed broadcast",
+    "title": "Fleet: retry failed broadcast",
   },
   {
     "category": "terminal",
@@ -1694,7 +1713,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Fleet: Save named fleet",
+    "title": "Fleet: save named fleet",
   },
   {
     "category": "terminal",
@@ -1706,7 +1725,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Fleet: Enter Scope Mode",
+    "title": "Fleet: enter scope mode",
   },
   {
     "category": "terminal",
@@ -1718,7 +1737,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Fleet: Exit Scope Mode",
+    "title": "Fleet: exit scope mode",
   },
   {
     "category": "terminal",
@@ -1730,7 +1749,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Fleet: Trash",
+    "title": "Fleet: trash",
   },
   {
     "category": "forge",
@@ -1742,7 +1761,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Add Issue Comment",
+    "title": "Add issue comment",
   },
   {
     "category": "forge",
@@ -1754,7 +1773,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Add Issue Label",
+    "title": "Add issue label",
   },
   {
     "category": "forge",
@@ -1766,7 +1785,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Approve Pull Request",
+    "title": "Approve pull request",
   },
   {
     "category": "forge",
@@ -1778,7 +1797,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Assign Issue",
+    "title": "Assign issue",
   },
   {
     "category": "forge",
@@ -1790,7 +1809,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Close Issue",
+    "title": "Close issue",
   },
   {
     "category": "forge",
@@ -1846,7 +1865,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Create Issue",
+    "title": "Create issue",
   },
   {
     "category": "forge",
@@ -1870,7 +1889,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Dismiss Pull Request Review",
+    "title": "Dismiss pull request review",
   },
   {
     "category": "forge",
@@ -1882,7 +1901,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Edit Issue",
+    "title": "Edit issue",
   },
   {
     "category": "forge",
@@ -1913,7 +1932,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Get CI Checks",
+    "title": "Get CI checks",
   },
   {
     "category": "forge",
@@ -1932,7 +1951,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Get CI Status",
+    "title": "Get CI status",
   },
   {
     "category": "forge",
@@ -1958,7 +1977,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Get Issue",
+    "title": "Get issue",
   },
   {
     "category": "forge",
@@ -1970,7 +1989,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Get Pull Request",
+    "title": "Get pull request",
   },
   {
     "category": "forge",
@@ -1993,7 +2012,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Get Pull Requests",
+    "title": "Get pull requests",
   },
   {
     "category": "forge",
@@ -2005,7 +2024,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Repo Stats",
+    "title": "Get repo stats",
   },
   {
     "category": "forge",
@@ -2032,7 +2051,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "List Issue Comments",
+    "title": "List issue comments",
   },
   {
     "category": "forge",
@@ -2044,7 +2063,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "List Issues",
+    "title": "List issues",
   },
   {
     "category": "forge",
@@ -2056,7 +2075,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "List Pull Requests",
+    "title": "List pull requests",
   },
   {
     "category": "forge",
@@ -2092,7 +2111,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Commits",
+    "title": "Open commits",
   },
   {
     "category": "forge",
@@ -2104,7 +2123,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Open Issue",
+    "title": "Open issue",
   },
   {
     "category": "forge",
@@ -2116,7 +2135,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Issues",
+    "title": "Open issues",
   },
   {
     "category": "forge",
@@ -2140,7 +2159,19 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Pull Requests",
+    "title": "Open pull requests",
+  },
+  {
+    "category": "forge",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Open this project's repository home page on the forge in the system browser, for a human to read; it returns no data. Fails when the forge provider doesn't link to one.",
+    "examples": undefined,
+    "id": "forge.openRepo",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": false,
+    "title": "Open repository",
   },
   {
     "category": "forge",
@@ -2152,7 +2183,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Remove Issue Label",
+    "title": "Remove issue label",
   },
   {
     "category": "forge",
@@ -2164,7 +2195,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Reopen Issue",
+    "title": "Reopen issue",
   },
   {
     "category": "forge",
@@ -2188,7 +2219,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Request Changes on Pull Request",
+    "title": "Request changes on pull request",
   },
   {
     "category": "forge",
@@ -2200,7 +2231,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Request Pull Request Reviewers",
+    "title": "Request pull request reviewers",
   },
   {
     "category": "forge",
@@ -2212,7 +2243,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Unassign Issue",
+    "title": "Unassign issue",
   },
   {
     "category": "forge",
@@ -2224,7 +2255,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Validate Forge Token",
+    "title": "Validate forge token",
   },
   {
     "category": "git",
@@ -2236,7 +2267,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Abort Git Operation",
+    "title": "Abort Git operation",
   },
   {
     "category": "git",
@@ -2265,7 +2296,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Continue Git Operation",
+    "title": "Continue Git operation",
   },
   {
     "category": "git",
@@ -2289,7 +2320,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Force Push with Lease",
+    "title": "Force push with lease",
   },
   {
     "category": "git",
@@ -2317,7 +2348,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Get File Diff",
+    "title": "Get file diff",
   },
   {
     "category": "git",
@@ -2329,7 +2360,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Project Pulse",
+    "title": "Get project pulse",
   },
   {
     "category": "git",
@@ -2341,7 +2372,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Staging Status",
+    "title": "Get staging status",
   },
   {
     "category": "git",
@@ -2353,7 +2384,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "List Commits",
+    "title": "List commits",
   },
   {
     "category": "git",
@@ -2365,7 +2396,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Trust Repository",
+    "title": "Trust repository",
   },
   {
     "category": "git",
@@ -2377,7 +2408,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Merge Base Branch In",
+    "title": "Merge base branch in",
   },
   {
     "category": "git",
@@ -2389,7 +2420,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Pull and Rebase",
+    "title": "Pull and rebase",
   },
   {
     "category": "git",
@@ -2413,7 +2444,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Rebase onto Base Branch",
+    "title": "Rebase onto base branch",
   },
   {
     "category": "git",
@@ -2425,7 +2456,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Stage All Files",
+    "title": "Stage all files",
   },
   {
     "category": "git",
@@ -2437,7 +2468,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Stage File",
+    "title": "Stage file",
   },
   {
     "category": "git",
@@ -2449,7 +2480,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Unstage All Files",
+    "title": "Unstage all files",
   },
   {
     "category": "git",
@@ -2461,7 +2492,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Unstage File",
+    "title": "Unstage file",
   },
   {
     "category": "help",
@@ -2504,7 +2535,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Getting Started",
+    "title": "Getting started",
   },
   {
     "category": "help",
@@ -2521,7 +2552,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Launch Help Agent",
+    "title": "Launch help agent",
   },
   {
     "category": "help",
@@ -2540,7 +2571,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Assistant Commands Folder",
+    "title": "Open assistant commands folder",
   },
   {
     "category": "help",
@@ -2557,7 +2588,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Keyboard Shortcuts",
+    "title": "Keyboard shortcuts",
   },
   {
     "category": "help",
@@ -2574,7 +2605,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Keyboard Shortcuts (Alt)",
+    "title": "Keyboard shortcuts (Alt)",
   },
   {
     "category": "help",
@@ -2591,7 +2622,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Help Panel",
+    "title": "Toggle help panel",
   },
   {
     "category": "settings",
@@ -2603,7 +2634,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Hibernation Config",
+    "title": "Get hibernation config",
   },
   {
     "category": "settings",
@@ -2615,7 +2646,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Update Hibernation Config",
+    "title": "Update hibernation config",
   },
   {
     "category": "settings",
@@ -2627,7 +2658,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Idle Background Auto-Close Config",
+    "title": "Get idle background auto-close config",
   },
   {
     "category": "settings",
@@ -2639,7 +2670,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Update Idle Background Auto-Close Config",
+    "title": "Update idle background auto-close config",
   },
   {
     "category": "terminal",
@@ -2651,7 +2682,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Close Idle Terminals",
+    "title": "Close idle terminals",
   },
   {
     "category": "settings",
@@ -2663,7 +2694,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Idle Terminal Notification Config",
+    "title": "Get idle terminal notification config",
   },
   {
     "category": "terminal",
@@ -2675,7 +2706,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Mute Idle Terminal Notifications",
+    "title": "Mute idle terminal notifications",
   },
   {
     "category": "settings",
@@ -2687,7 +2718,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Update Idle Terminal Notification Config",
+    "title": "Update idle terminal notification config",
   },
   {
     "category": "settings",
@@ -2699,7 +2730,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Keybinding Overrides",
+    "title": "Get keybinding overrides",
   },
   {
     "category": "settings",
@@ -2711,7 +2742,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Remove Keybinding Override",
+    "title": "Remove keybinding override",
   },
   {
     "category": "settings",
@@ -2728,7 +2759,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Reset All Keybinding Overrides",
+    "title": "Reset all keybinding overrides",
   },
   {
     "category": "settings",
@@ -2740,7 +2771,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Keybinding Override",
+    "title": "Set keybinding override",
   },
   {
     "category": "terminal",
@@ -2752,7 +2783,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Redo Layout Change",
+    "title": "Redo layout change",
   },
   {
     "category": "terminal",
@@ -2764,7 +2795,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Undo Layout Change",
+    "title": "Undo layout change",
   },
   {
     "category": "logs",
@@ -2776,7 +2807,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Clear Logs",
+    "title": "Clear logs",
   },
   {
     "category": "logs",
@@ -2788,7 +2819,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Clear Log Level Overrides",
+    "title": "Clear log level overrides",
   },
   {
     "category": "logs",
@@ -2800,7 +2831,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Logs",
+    "title": "Get logs",
   },
   {
     "category": "logs",
@@ -2812,7 +2843,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Log Level Overrides",
+    "title": "Get log level overrides",
   },
   {
     "category": "logs",
@@ -2824,7 +2855,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Logger Registry",
+    "title": "Get logger registry",
   },
   {
     "category": "logs",
@@ -2836,7 +2867,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Log Sources",
+    "title": "Get log sources",
   },
   {
     "category": "logs",
@@ -2848,7 +2879,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Verbose Logging",
+    "title": "Get verbose logging",
   },
   {
     "category": "logs",
@@ -2860,7 +2891,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Logs File",
+    "title": "Open logs file",
   },
   {
     "category": "logs",
@@ -2872,7 +2903,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Log Level Overrides",
+    "title": "Set log level overrides",
   },
   {
     "category": "logs",
@@ -2884,7 +2915,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Set Log Level…",
+    "title": "Set log level…",
   },
   {
     "category": "logs",
@@ -2896,7 +2927,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Verbose Logging",
+    "title": "Set verbose logging",
   },
   {
     "category": "introspection",
@@ -2908,7 +2939,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get MCP Surface",
+    "title": "Get MCP surface",
   },
   {
     "category": "app",
@@ -2925,7 +2956,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Close Modal",
+    "title": "Close modal",
   },
   {
     "category": "navigation",
@@ -2937,7 +2968,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Next Region",
+    "title": "Focus next region",
   },
   {
     "category": "navigation",
@@ -2949,7 +2980,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Previous Region",
+    "title": "Focus previous region",
   },
   {
     "category": "navigation",
@@ -2961,7 +2992,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Quick Switcher",
+    "title": "Quick switcher",
   },
   {
     "category": "navigation",
@@ -2977,7 +3008,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Focus Mode",
+    "title": "Toggle focus mode",
   },
   {
     "category": "navigation",
@@ -2989,7 +3020,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Sidebar",
+    "title": "Toggle sidebar",
   },
   {
     "category": "diagnostics",
@@ -3001,7 +3032,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Recent Notifications",
+    "title": "Recent notifications",
   },
   {
     "category": "panel",
@@ -3018,7 +3049,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Notification Inbox",
+    "title": "Toggle notification inbox",
   },
   {
     "category": "panel",
@@ -3035,7 +3066,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Show Events",
+    "title": "Show events",
   },
   {
     "category": "panel",
@@ -3052,7 +3083,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Show Logs",
+    "title": "Show logs",
   },
   {
     "category": "panel",
@@ -3069,7 +3100,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Show Problems",
+    "title": "Show problems",
   },
   {
     "category": "panel",
@@ -3081,7 +3112,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Focus Panel",
+    "title": "Focus panel",
   },
   {
     "category": "panel",
@@ -3093,7 +3124,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Focus Panel by Index",
+    "title": "Focus panel by index",
   },
   {
     "category": "terminal",
@@ -3105,7 +3136,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Grid Layout Strategy",
+    "title": "Set grid layout strategy",
   },
   {
     "category": "terminal",
@@ -3117,7 +3148,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Grid Layout Value",
+    "title": "Set grid layout value",
   },
   {
     "category": "panel",
@@ -3129,7 +3160,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "List Panels",
+    "title": "List panels",
   },
   {
     "category": "panel",
@@ -3141,7 +3172,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Open Plugin Panel",
+    "title": "Open plugin panel",
   },
   {
     "category": "panel",
@@ -3158,7 +3189,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Panel Palette",
+    "title": "Panel palette",
   },
   {
     "category": "panel",
@@ -3175,7 +3206,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Diagnostics",
+    "title": "Toggle diagnostics",
   },
   {
     "category": "panel",
@@ -3192,7 +3223,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Portal",
+    "title": "Toggle portal",
   },
   {
     "category": "project",
@@ -3315,7 +3346,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Activate Portal Tab",
+    "title": "Activate portal tab",
   },
   {
     "category": "portal",
@@ -3332,7 +3363,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Close All Portal Tabs",
+    "title": "Close all portal tabs",
   },
   {
     "category": "portal",
@@ -3344,7 +3375,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Close Other Portal Tabs",
+    "title": "Close other portal tabs",
   },
   {
     "category": "portal",
@@ -3356,7 +3387,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Close Portal Tab",
+    "title": "Close portal tab",
   },
   {
     "category": "portal",
@@ -3368,7 +3399,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Close Tabs to the Right",
+    "title": "Close tabs to the right",
   },
   {
     "category": "portal",
@@ -3380,7 +3411,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Copy Portal Tab URL",
+    "title": "Copy portal tab URL",
   },
   {
     "category": "portal",
@@ -3392,7 +3423,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Copy Portal URL",
+    "title": "Copy portal URL",
   },
   {
     "category": "portal",
@@ -3404,7 +3435,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Duplicate Portal Tab",
+    "title": "Duplicate portal tab",
   },
   {
     "category": "portal",
@@ -3416,7 +3447,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Portal Back",
+    "title": "Portal back",
   },
   {
     "category": "portal",
@@ -3428,7 +3459,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Portal Forward",
+    "title": "Portal forward",
   },
   {
     "category": "portal",
@@ -3440,7 +3471,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Add Portal Link",
+    "title": "Add portal link",
   },
   {
     "category": "portal",
@@ -3452,7 +3483,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Remove Portal Link",
+    "title": "Remove portal link",
   },
   {
     "category": "portal",
@@ -3464,7 +3495,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Reorder Portal Links",
+    "title": "Reorder portal links",
   },
   {
     "category": "portal",
@@ -3476,7 +3507,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Toggle Portal Link",
+    "title": "Toggle portal link",
   },
   {
     "category": "portal",
@@ -3488,7 +3519,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Update Portal Link",
+    "title": "Update portal link",
   },
   {
     "category": "portal",
@@ -3500,7 +3531,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "List Portal Tabs",
+    "title": "List portal tabs",
   },
   {
     "category": "portal",
@@ -3517,7 +3548,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "New Portal Tab",
+    "title": "New portal tab",
   },
   {
     "category": "portal",
@@ -3534,7 +3565,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Next Portal Tab",
+    "title": "Next portal tab",
   },
   {
     "category": "portal",
@@ -3546,7 +3577,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Portal URL Externally",
+    "title": "Open portal URL externally",
   },
   {
     "category": "portal",
@@ -3563,7 +3594,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Portal Launchpad",
+    "title": "Open portal launchpad",
   },
   {
     "category": "portal",
@@ -3575,7 +3606,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Portal Tab Externally",
+    "title": "Open portal tab externally",
   },
   {
     "category": "portal",
@@ -3587,7 +3618,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Open URL in Portal",
+    "title": "Open URL in portal",
   },
   {
     "category": "portal",
@@ -3604,7 +3635,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Previous Portal Tab",
+    "title": "Previous portal tab",
   },
   {
     "category": "portal",
@@ -3616,7 +3647,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Reload Portal",
+    "title": "Reload portal",
   },
   {
     "category": "portal",
@@ -3628,7 +3659,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Reload Portal Tab",
+    "title": "Reload portal tab",
   },
   {
     "category": "portal",
@@ -3645,7 +3676,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Reset Portal Width",
+    "title": "Reset portal width",
   },
   {
     "category": "portal",
@@ -3657,7 +3688,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Default New Tab",
+    "title": "Set default new tab",
   },
   {
     "category": "portal",
@@ -3669,7 +3700,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Reorder Portal Tabs",
+    "title": "Reorder portal tabs",
   },
   {
     "category": "portal",
@@ -3686,7 +3717,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Portal",
+    "title": "Toggle portal",
   },
   {
     "category": "portal",
@@ -3705,7 +3736,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Dev Server Dashboard",
+    "title": "Toggle dev server dashboard",
   },
   {
     "category": "portal",
@@ -3717,7 +3748,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Portal Width",
+    "title": "Set portal width",
   },
   {
     "category": "preferences",
@@ -3729,7 +3760,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Reduce UI Animations",
+    "title": "Set reduce UI animations",
   },
   {
     "category": "preferences",
@@ -3741,7 +3772,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Agent Task Titles Visibility",
+    "title": "Set agent task titles visibility",
   },
   {
     "category": "preferences",
@@ -3753,7 +3784,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Developer Tools Visibility",
+    "title": "Set developer tools visibility",
   },
   {
     "category": "preferences",
@@ -3765,7 +3796,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Dock Agent Highlights Visibility",
+    "title": "Set dock agent highlights visibility",
   },
   {
     "category": "preferences",
@@ -3777,7 +3808,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Grid Agent Highlights Visibility",
+    "title": "Set grid agent highlights visibility",
   },
   {
     "category": "preferences",
@@ -3789,19 +3820,19 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Project Pulse Visibility",
+    "title": "Set project pulse visibility",
   },
   {
     "category": "project",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Add a project (optionally by path)",
+    "description": "Open a project (optionally by path)",
     "examples": undefined,
     "id": "project.add",
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Add Project",
+    "title": "Open project",
   },
   {
     "category": "project",
@@ -3813,7 +3844,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Clone Repository",
+    "title": "Clone repository",
   },
   {
     "category": "project",
@@ -3825,7 +3856,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Close Project",
+    "title": "Close project",
   },
   {
     "category": "project",
@@ -3837,7 +3868,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Close Project",
+    "title": "Close project",
   },
   {
     "category": "project",
@@ -3849,7 +3880,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Detect Runners",
+    "title": "Detect runners",
   },
   {
     "category": "project",
@@ -3861,7 +3892,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "List Projects",
+    "title": "List projects",
   },
   {
     "category": "project",
@@ -3873,7 +3904,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Current Project",
+    "title": "Get current project",
   },
   {
     "category": "project",
@@ -3885,7 +3916,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Project Settings",
+    "title": "Get project settings",
   },
   {
     "category": "project",
@@ -3897,7 +3928,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Project Stats",
+    "title": "Get project stats",
   },
   {
     "category": "project",
@@ -3909,7 +3940,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Switch to Last Workspace",
+    "title": "Switch to last workspace",
   },
   {
     "category": "project",
@@ -3921,7 +3952,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Mute Project Notifications",
+    "title": "Mute project notifications",
   },
   {
     "category": "project",
@@ -3933,7 +3964,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Pick Directory",
+    "title": "Pick directory",
   },
   {
     "category": "project",
@@ -3945,7 +3976,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Remove Project",
+    "title": "Remove project",
   },
   {
     "category": "project",
@@ -3957,7 +3988,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Run Project Check",
+    "title": "Run project check",
   },
   {
     "category": "project",
@@ -3969,7 +4000,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Save Project Settings",
+    "title": "Save project settings",
   },
   {
     "category": "project",
@@ -3981,7 +4012,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Project Settings",
+    "title": "Open project settings",
   },
   {
     "category": "project",
@@ -3993,7 +4024,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Silence Notification Kind",
+    "title": "Silence notification kind",
   },
   {
     "category": "project",
@@ -4005,7 +4036,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Switch Project",
+    "title": "Switch project",
   },
   {
     "category": "project",
@@ -4017,7 +4048,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Project Switcher",
+    "title": "Open project switcher",
   },
   {
     "category": "project",
@@ -4029,7 +4060,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Update Project",
+    "title": "Update project",
   },
   {
     "category": "recipes",
@@ -4041,7 +4072,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Delete Recipe",
+    "title": "Delete recipe",
   },
   {
     "category": "recipes",
@@ -4060,7 +4091,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Recipe Editor",
+    "title": "Open recipe editor",
   },
   {
     "category": "recipes",
@@ -4079,7 +4110,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Open Recipe Editor From Layout",
+    "title": "Open recipe editor from layout",
   },
   {
     "category": "recipes",
@@ -4091,7 +4122,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "List Recipes",
+    "title": "List recipes",
   },
   {
     "category": "recipes",
@@ -4103,7 +4134,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Manage Recipes",
+    "title": "Manage recipes",
   },
   {
     "category": "recipes",
@@ -4115,7 +4146,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Run Recipe",
+    "title": "Run recipe",
   },
   {
     "category": "recipes",
@@ -4127,7 +4158,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Save Recipe to Repository",
+    "title": "Save recipe to repository",
   },
   {
     "category": "agent",
@@ -4199,7 +4230,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Session Restore Config",
+    "title": "Get session restore config",
   },
   {
     "category": "settings",
@@ -4211,7 +4242,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Update Session Restore Config",
+    "title": "Update session restore config",
   },
   {
     "category": "agent",
@@ -4247,7 +4278,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "List Slash Commands",
+    "title": "List slash commands",
   },
   {
     "category": "system",
@@ -4272,7 +4303,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Check Command Availability",
+    "title": "Check command availability",
   },
   {
     "category": "system",
@@ -4291,7 +4322,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Check Directory",
+    "title": "Check directory",
   },
   {
     "category": "system",
@@ -4303,7 +4334,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Home Directory",
+    "title": "Get home directory",
   },
   {
     "category": "system",
@@ -4315,7 +4346,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Resource Profile Snapshot",
+    "title": "Get resource profile snapshot",
   },
   {
     "category": "system",
@@ -4327,7 +4358,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Open External URL",
+    "title": "Open external URL",
   },
   {
     "category": "system",
@@ -4339,7 +4370,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Open Path",
+    "title": "Open path",
   },
   {
     "category": "terminal",
@@ -4351,7 +4382,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Next Tab",
+    "title": "Next tab",
   },
   {
     "category": "terminal",
@@ -4363,7 +4394,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Previous Tab",
+    "title": "Previous tab",
   },
   {
     "category": "diagnostics",
@@ -4375,7 +4406,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Clear Telemetry Preview",
+    "title": "Clear telemetry preview",
   },
   {
     "category": "diagnostics",
@@ -4387,7 +4418,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Preview Outbound Telemetry",
+    "title": "Preview outbound telemetry",
   },
   {
     "category": "terminal",
@@ -4399,7 +4430,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Arm Terminal",
+    "title": "Arm terminal",
   },
   {
     "category": "terminal",
@@ -4411,7 +4442,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Arm All Eligible",
+    "title": "Arm all eligible",
   },
   {
     "category": "terminal",
@@ -4423,7 +4454,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Arm by State",
+    "title": "Arm by state",
   },
   {
     "category": "terminal",
@@ -4435,7 +4466,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Arm Current Worktree",
+    "title": "Arm current worktree",
   },
   {
     "category": "terminal",
@@ -4452,7 +4483,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Send to Background",
+    "title": "Send to background",
   },
   {
     "category": "terminal",
@@ -4468,7 +4499,23 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Fleet: Broadcast",
+    "title": "Fleet: broadcast",
+  },
+  {
+    "category": "terminal",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Stop one terminal watch this pane holds and discard its unread observations, so nothing more is typed into your prompt on its behalf. The pane's other watches keep running.",
+    "examples": undefined,
+    "id": "terminal.cancelWatch",
+    "keywords": [
+      "watch",
+      "wake",
+      "cancel",
+    ],
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Cancel terminal watch",
   },
   {
     "category": "terminal",
@@ -4485,7 +4532,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Close Terminal",
+    "title": "Close terminal",
   },
   {
     "category": "terminal",
@@ -4502,7 +4549,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Close All Terminals",
+    "title": "Close all terminals",
   },
   {
     "category": "terminal",
@@ -4519,7 +4566,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": true,
-    "title": "Close Owned Terminal",
+    "title": "Close owned terminal",
   },
   {
     "category": "terminal",
@@ -4531,7 +4578,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Context Menu",
+    "title": "Open context menu",
   },
   {
     "category": "terminal",
@@ -4543,7 +4590,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Copy Selection",
+    "title": "Copy selection",
   },
   {
     "category": "terminal",
@@ -4555,7 +4602,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Copy Link Address",
+    "title": "Copy link address",
   },
   {
     "category": "terminal",
@@ -4567,7 +4614,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Disarm Terminal",
+    "title": "Disarm terminal",
   },
   {
     "category": "terminal",
@@ -4579,7 +4626,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Disarm All",
+    "title": "Disarm all",
   },
   {
     "category": "terminal",
@@ -4591,7 +4638,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Duplicate Panel",
+    "title": "Duplicate panel",
   },
   {
     "category": "terminal",
@@ -4610,7 +4657,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Alternate Panel",
+    "title": "Focus alternate panel",
   },
   {
     "category": "terminal",
@@ -4622,7 +4669,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Dock",
+    "title": "Focus dock",
   },
   {
     "category": "terminal",
@@ -4634,7 +4681,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Terminal Down",
+    "title": "Focus terminal down",
   },
   {
     "category": "terminal",
@@ -4646,7 +4693,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Terminal 1",
+    "title": "Focus terminal 1",
   },
   {
     "category": "terminal",
@@ -4658,7 +4705,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Terminal 2",
+    "title": "Focus terminal 2",
   },
   {
     "category": "terminal",
@@ -4670,7 +4717,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Terminal 3",
+    "title": "Focus terminal 3",
   },
   {
     "category": "terminal",
@@ -4682,7 +4729,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Terminal 4",
+    "title": "Focus terminal 4",
   },
   {
     "category": "terminal",
@@ -4694,7 +4741,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Terminal 5",
+    "title": "Focus terminal 5",
   },
   {
     "category": "terminal",
@@ -4706,7 +4753,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Terminal 6",
+    "title": "Focus terminal 6",
   },
   {
     "category": "terminal",
@@ -4718,7 +4765,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Terminal 7",
+    "title": "Focus terminal 7",
   },
   {
     "category": "terminal",
@@ -4730,7 +4777,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Terminal 8",
+    "title": "Focus terminal 8",
   },
   {
     "category": "terminal",
@@ -4742,7 +4789,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Terminal 9",
+    "title": "Focus terminal 9",
   },
   {
     "category": "terminal",
@@ -4754,7 +4801,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Terminal Left",
+    "title": "Focus terminal left",
   },
   {
     "category": "terminal",
@@ -4766,7 +4813,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Next Terminal",
+    "title": "Focus next terminal",
   },
   {
     "category": "terminal",
@@ -4778,7 +4825,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Previous Terminal",
+    "title": "Focus previous terminal",
   },
   {
     "category": "terminal",
@@ -4790,7 +4837,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Terminal Right",
+    "title": "Focus terminal right",
   },
   {
     "category": "terminal",
@@ -4802,7 +4849,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Terminal Up",
+    "title": "Focus terminal up",
   },
   {
     "category": "terminal",
@@ -4819,7 +4866,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Force Resume",
+    "title": "Force resume",
   },
   {
     "category": "terminal",
@@ -4846,7 +4893,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Get Terminal Output",
+    "title": "Get terminal output",
   },
   {
     "category": "terminal",
@@ -4858,7 +4905,23 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Terminal Status",
+    "title": "Get terminal status",
+  },
+  {
+    "category": "terminal",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Read what your terminal watches observed, as data: state changes with the detector's trigger and confidence, handbacks, exits and closes. Anything read never wakes you again, and reading lets the next wake go out. These are observations, not verdicts; check the status capability before acting on one.",
+    "examples": undefined,
+    "id": "terminal.getWatchEvents",
+    "keywords": [
+      "watch",
+      "wake",
+      "events",
+    ],
+    "kind": "query",
+    "requiresArgs": false,
+    "title": "Read terminal watch events",
   },
   {
     "category": "terminal",
@@ -4870,7 +4933,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Grid Layout Strategy",
+    "title": "Set grid layout strategy",
   },
   {
     "category": "terminal",
@@ -4882,7 +4945,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Grid Layout Value",
+    "title": "Set grid layout value",
   },
   {
     "category": "terminal",
@@ -4894,7 +4957,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Terminal Info",
+    "title": "Get terminal info",
   },
   {
     "category": "terminal",
@@ -4911,7 +4974,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Terminal Info",
+    "title": "Open terminal info",
   },
   {
     "category": "terminal",
@@ -4923,7 +4986,23 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Inject Context",
+    "title": "Inject context",
+  },
+  {
+    "category": "terminal",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Write the active worktree's prepared context into a terminal this connection created or was handed, which is how an agent it drives is given a large codebase context. Any other panel is refused. Target an idle terminal.",
+    "examples": undefined,
+    "id": "terminal.injectOwned",
+    "keywords": [
+      "context",
+      "inject",
+      "owned",
+    ],
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Inject context to owned terminal",
   },
   {
     "category": "terminal",
@@ -4935,13 +5014,13 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Interrupt Agent",
+    "title": "Interrupt agent",
   },
   {
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Stop the turn an agent is running in a panel this connection created, keeping the panel and its conversation. Sends cancel keystrokes, not prompt text an agent mid-turn would not read, and disposes of nothing. An idle agent, or one that binds a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
+    "description": "Stop the turn an agent is running in a panel this connection created or was handed, keeping the panel and its conversation. Sends cancel keystrokes, not prompt text an agent mid-turn would not read, and disposes of nothing. An idle agent, or one that binds a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
     "examples": undefined,
     "id": "terminal.interruptOwned",
     "keywords": [
@@ -4952,7 +5031,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": true,
-    "title": "Interrupt Owned Agent",
+    "title": "Interrupt owned agent",
   },
   {
     "category": "terminal",
@@ -4969,7 +5048,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Kill Terminal",
+    "title": "Kill terminal",
   },
   {
     "category": "terminal",
@@ -4986,7 +5065,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Kill All Terminals",
+    "title": "Kill all terminals",
   },
   {
     "category": "terminal",
@@ -5017,7 +5096,22 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "List Terminals",
+    "title": "List terminals",
+  },
+  {
+    "category": "terminal",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "List the terminal watches this pane holds: what each watches, how many wakes it has used, and whether it has stopped. Also says how many observations are waiting and where the next wake stands — held while you work, blocked at an approval or question, or outstanding until you read them.",
+    "examples": undefined,
+    "id": "terminal.listWatches",
+    "keywords": [
+      "watch",
+      "wake",
+    ],
+    "kind": "query",
+    "requiresArgs": false,
+    "title": "List terminal watches",
   },
   {
     "category": "terminal",
@@ -5029,7 +5123,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Maximize Terminal",
+    "title": "Maximize terminal",
   },
   {
     "category": "terminal",
@@ -5041,7 +5135,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Move Terminal Down",
+    "title": "Move terminal down",
   },
   {
     "category": "terminal",
@@ -5053,7 +5147,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Move Terminal Left",
+    "title": "Move terminal left",
   },
   {
     "category": "terminal",
@@ -5065,7 +5159,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Move Terminal Right",
+    "title": "Move terminal right",
   },
   {
     "category": "terminal",
@@ -5077,7 +5171,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Move to Dock",
+    "title": "Move to dock",
   },
   {
     "category": "terminal",
@@ -5089,7 +5183,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Move to Grid",
+    "title": "Move to grid",
   },
   {
     "category": "terminal",
@@ -5101,7 +5195,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Move to New Worktree…",
+    "title": "Move to new worktree…",
   },
   {
     "category": "terminal",
@@ -5113,7 +5207,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Move to Worktree",
+    "title": "Move to worktree",
   },
   {
     "category": "terminal",
@@ -5125,7 +5219,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Move Terminal Up",
+    "title": "Move terminal up",
   },
   {
     "category": "terminal",
@@ -5137,7 +5231,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "New Terminal",
+    "title": "New terminal",
   },
   {
     "category": "terminal",
@@ -5149,7 +5243,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Focused Terminal's Worktree Folder",
+    "title": "Open focused terminal's worktree folder",
   },
   {
     "category": "terminal",
@@ -5161,7 +5255,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Focused Terminal's Worktree Issue",
+    "title": "Open focused terminal's worktree issue",
   },
   {
     "category": "terminal",
@@ -5173,7 +5267,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Focused Terminal's Worktree Pull Request",
+    "title": "Open focused terminal's worktree pull request",
   },
   {
     "category": "terminal",
@@ -5201,7 +5295,31 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Restore Stashed Input",
+    "title": "Restore stashed input",
+  },
+  {
+    "category": "terminal",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Read what the agent in a panel this connection created or was handed last wrote to its own transcript: that reply's text, plus any tool calls left unanswered since, such as a question and its options. Claude Code only for now. This reports what the file holds, not whether the agent is waiting; a permission prompt never appears there, so read the terminal for the live screen.",
+    "examples": [
+      {
+        "args": {
+          "terminalId": "term-abc123",
+        },
+        "description": "An agent you launched stopped, and you need its hand-off or the exact question it asked before replying.",
+      },
+    ],
+    "id": "terminal.readLastMessageOwned",
+    "keywords": [
+      "transcript",
+      "reply",
+      "question",
+      "owned",
+    ],
+    "kind": "query",
+    "requiresArgs": true,
+    "title": "Read owned agent's last message",
   },
   {
     "category": "terminal",
@@ -5218,7 +5336,24 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Redraw Terminal",
+    "title": "Redraw terminal",
+  },
+  {
+    "category": "terminal",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Be woken instead of polling. When a watched terminal changes agent state, prints a handback, exits or closes, Daintree types one pointer line into your own prompt once you are idle there; read what happened with the watch-events capability. Works only while the user has pane wakes turned on, and grants nothing over the watched terminals.",
+    "examples": undefined,
+    "id": "terminal.registerWatch",
+    "keywords": [
+      "watch",
+      "wake",
+      "notify",
+      "orchestrate",
+    ],
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Watch terminals",
   },
   {
     "category": "terminal",
@@ -5235,7 +5370,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Rename Terminal",
+    "title": "Rename terminal",
   },
   {
     "category": "terminal",
@@ -5247,7 +5382,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Reopen Last Closed",
+    "title": "Reopen last closed",
   },
   {
     "category": "terminal",
@@ -5264,7 +5399,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Restart Terminal",
+    "title": "Restart terminal",
   },
   {
     "category": "terminal",
@@ -5281,7 +5416,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Restart All Terminals",
+    "title": "Restart all terminals",
   },
   {
     "category": "terminal",
@@ -5298,7 +5433,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Restart Terminal Service",
+    "title": "Restart terminal service",
   },
   {
     "category": "terminal",
@@ -5317,13 +5452,13 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Resume Session…",
+    "title": "Resume session…",
   },
   {
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Bring the user to a panel this session created, switching workspace and raising the window when it is somewhere they are not looking. Only panels this connection created can be revealed. Call it when the user asked to be taken to the agent, not to report progress.",
+    "description": "Bring the user to a panel this session created or was handed, switching workspace and raising the window when it is somewhere they are not looking. No other panel can be revealed. Call it when the user asked to be taken to the agent, not to report progress.",
     "examples": undefined,
     "id": "terminal.revealOwned",
     "keywords": [
@@ -5334,7 +5469,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": true,
-    "title": "Reveal Owned Terminal",
+    "title": "Reveal owned terminal",
   },
   {
     "category": "terminal",
@@ -5346,7 +5481,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Scroll to Last Activity",
+    "title": "Scroll to last activity",
   },
   {
     "category": "terminal",
@@ -5364,13 +5499,30 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
+    "description": "Queue text as one submission to a terminal this connection created or was handed: a shell runs it as a command, an agent pane takes it as the next prompt. Any other panel is refused. Returns once queued, not delivered or run: pass the returned \`submissionToken\` to the status capability to find out.",
+    "examples": undefined,
+    "id": "terminal.sendCommandOwned",
+    "keywords": [
+      "submit",
+      "prompt",
+      "command",
+      "owned",
+    ],
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Submit text to owned terminal",
+  },
+  {
+    "category": "terminal",
+    "danger": "safe",
+    "dangerRationale": undefined,
     "description": "Send terminal selection to another agent or terminal panel",
     "examples": undefined,
     "id": "terminal.sendToAgent",
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Send to Agent",
+    "title": "Send to agent",
   },
   {
     "category": "terminal",
@@ -5400,7 +5552,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Terminal Client Metadata",
+    "title": "Set terminal client metadata",
   },
   {
     "category": "terminal",
@@ -5417,7 +5569,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Stash Input",
+    "title": "Stash input",
   },
   {
     "category": "terminal",
@@ -5429,7 +5581,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Dock",
+    "title": "Toggle dock",
   },
   {
     "category": "terminal",
@@ -5441,7 +5593,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle All Dock",
+    "title": "Toggle all dock",
   },
   {
     "category": "terminal",
@@ -5458,7 +5610,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Input Lock",
+    "title": "Toggle input lock",
   },
   {
     "category": "terminal",
@@ -5470,7 +5622,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Maximize",
+    "title": "Toggle maximize",
   },
   {
     "category": "terminal",
@@ -5482,7 +5634,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Trash Terminal",
+    "title": "Trash terminal",
   },
   {
     "category": "terminal",
@@ -5499,13 +5651,13 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "View Terminal Info",
+    "title": "View terminal info",
   },
   {
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Block until the agent in one terminal stops working, so the next step sees finished output. Use the batched wait for several terminals, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out is normal and means still working. A closed terminal also reads as idle, so check \`trackingState\` before trusting it.",
+    "description": "Block until the agent in one terminal stops working, so the next step sees finished output. Use the batched wait for several terminals, or a status snapshot with \`includeOutput\` to poll without blocking; all three can report \`lastOutputChangeAt\`, not a hang verdict. Timing out is normal and means still working. A closed terminal also reads as idle, so check \`trackingState\`.",
     "examples": undefined,
     "id": "terminal.waitUntilIdle",
     "keywords": undefined,
@@ -5517,7 +5669,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Block until the first of several agents stops working, or until all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each terminal in turn, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out means not met yet; a gone terminal settles too, so read \`trackingState\`.",
+    "description": "Block until the first of several agents stops working, or all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each in turn, or a status snapshot with \`includeOutput\` to poll without blocking; both can report \`lastOutputChangeAt\`, not a hang verdict. Timing out means not met yet; a gone terminal settles too, so read \`trackingState\`.",
     "examples": undefined,
     "id": "terminal.waitUntilIdleBatch",
     "keywords": undefined,
@@ -5540,7 +5692,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Watch This Terminal",
+    "title": "Watch this terminal",
   },
   {
     "category": "settings",
@@ -5552,7 +5704,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Terminal Config",
+    "title": "Get terminal config",
   },
   {
     "category": "settings",
@@ -5564,7 +5716,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Cached Project Views",
+    "title": "Set cached project views",
   },
   {
     "category": "settings",
@@ -5576,7 +5728,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Terminal Font Family",
+    "title": "Set terminal font family",
   },
   {
     "category": "settings",
@@ -5588,7 +5740,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Terminal Font Size",
+    "title": "Set terminal font size",
   },
   {
     "category": "settings",
@@ -5600,7 +5752,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Default Focus Target",
+    "title": "Set default focus target",
   },
   {
     "category": "settings",
@@ -5612,7 +5764,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Hybrid Input Enabled",
+    "title": "Set hybrid input enabled",
   },
   {
     "category": "settings",
@@ -5624,7 +5776,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Performance Mode",
+    "title": "Set performance mode",
   },
   {
     "category": "settings",
@@ -5636,7 +5788,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Screen Reader Mode",
+    "title": "Set screen reader mode",
   },
   {
     "category": "settings",
@@ -5648,7 +5800,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Scrollback",
+    "title": "Set scrollback",
   },
   {
     "category": "ui",
@@ -5660,7 +5812,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Reload Application",
+    "title": "Reload application",
   },
   {
     "category": "ui",
@@ -5672,7 +5824,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Reset Sidebar Width",
+    "title": "Reset sidebar width",
   },
   {
     "category": "voice",
@@ -5690,7 +5842,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Lock Voice Dictation to Panel",
+    "title": "Lock voice dictation to panel",
   },
   {
     "category": "voice",
@@ -5707,7 +5859,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": true,
-    "title": "Toggle Voice Dictation on Recent Target",
+    "title": "Toggle voice dictation on recent target",
   },
   {
     "category": "voice",
@@ -5723,7 +5875,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Voice Dictation",
+    "title": "Toggle voice dictation",
   },
   {
     "category": "voice",
@@ -5740,7 +5892,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Voice Dictation in Assistant",
+    "title": "Toggle voice dictation in assistant",
   },
   {
     "category": "voice",
@@ -5775,7 +5927,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Unlock Voice Dictation",
+    "title": "Unlock voice dictation",
   },
   {
     "category": "system",
@@ -5810,7 +5962,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Close Window",
+    "title": "Close window",
   },
   {
     "category": "ui",
@@ -5827,7 +5979,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Force Reload Window",
+    "title": "Force reload window",
   },
   {
     "category": "ui",
@@ -5844,7 +5996,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Reload Window",
+    "title": "Reload window",
   },
   {
     "category": "ui",
@@ -5878,7 +6030,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Fullscreen",
+    "title": "Toggle fullscreen",
   },
   {
     "category": "ui",
@@ -5895,7 +6047,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Zoom In",
+    "title": "Zoom in",
   },
   {
     "category": "ui",
@@ -5912,7 +6064,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Zoom Out",
+    "title": "Zoom out",
   },
   {
     "category": "ui",
@@ -5929,7 +6081,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Reset Zoom",
+    "title": "Reset zoom",
   },
   {
     "category": "worktree",
@@ -5941,7 +6093,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Focus Next Attention",
+    "title": "Focus next attention",
   },
   {
     "category": "worktree",
@@ -5953,7 +6105,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Inspect Branch for Review",
+    "title": "Inspect branch for review",
   },
   {
     "category": "worktree",
@@ -5965,7 +6117,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Start Work on Issue",
+    "title": "Start work on issue",
   },
   {
     "category": "workspace",
@@ -5977,7 +6129,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "List Workspaces",
+    "title": "List workspaces",
   },
   {
     "category": "worktree",
@@ -5989,7 +6141,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Close Sessions for Selected Worktrees",
+    "title": "Close sessions for selected worktrees",
   },
   {
     "category": "worktree",
@@ -6001,7 +6153,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Remove Selected Worktrees",
+    "title": "Remove selected worktrees",
   },
   {
     "category": "worktree",
@@ -6013,7 +6165,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Compare Worktree Diff",
+    "title": "Compare worktree diff",
   },
   {
     "category": "worktree",
@@ -6025,7 +6177,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Copy Worktree Context (Alias)",
+    "title": "Copy worktree context (alias)",
   },
   {
     "category": "worktree",
@@ -6037,7 +6189,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Copy Worktree Context",
+    "title": "Copy worktree context",
   },
   {
     "category": "worktree",
@@ -6049,7 +6201,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Create Worktree",
+    "title": "Create worktree",
   },
   {
     "category": "worktree",
@@ -6066,7 +6218,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "New Worktree",
+    "title": "New worktree",
   },
   {
     "category": "worktree",
@@ -6078,7 +6230,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Create Managed Worktree",
+    "title": "Create managed worktree",
   },
   {
     "category": "worktree",
@@ -6090,7 +6242,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Delete Worktree",
+    "title": "Delete worktree",
   },
   {
     "category": "worktree",
@@ -6102,7 +6254,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Delete Owned Worktree",
+    "title": "Delete owned worktree",
   },
   {
     "category": "worktree",
@@ -6114,7 +6266,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Worktree Down",
+    "title": "Worktree down",
   },
   {
     "category": "worktree",
@@ -6126,7 +6278,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Worktree Down (Vim)",
+    "title": "Worktree down (Vim)",
   },
   {
     "category": "worktree",
@@ -6138,7 +6290,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Worktree End",
+    "title": "Worktree end",
   },
   {
     "category": "worktree",
@@ -6158,7 +6310,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Get Available Branch Name",
+    "title": "Get available branch name",
   },
   {
     "category": "worktree",
@@ -6170,7 +6322,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Current Worktree",
+    "title": "Get current worktree",
   },
   {
     "category": "worktree",
@@ -6190,7 +6342,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Get Default Worktree Path",
+    "title": "Get default worktree path",
   },
   {
     "category": "worktree",
@@ -6202,7 +6354,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Worktree Home",
+    "title": "Worktree home",
   },
   {
     "category": "worktree",
@@ -6214,7 +6366,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Inject Worktree Context into Focused Terminal",
+    "title": "Inject worktree context into focused terminal",
   },
   {
     "category": "worktree",
@@ -6238,7 +6390,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "List Worktrees",
+    "title": "List worktrees",
   },
   {
     "category": "worktree",
@@ -6257,7 +6409,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "List Branches",
+    "title": "List branches",
   },
   {
     "category": "worktree",
@@ -6274,7 +6426,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Next Worktree",
+    "title": "Next worktree",
   },
   {
     "category": "worktree",
@@ -6298,7 +6450,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open in Editor",
+    "title": "Open in editor",
   },
   {
     "category": "worktree",
@@ -6343,7 +6495,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Worktree Issue",
+    "title": "Open worktree issue",
   },
   {
     "category": "worktree",
@@ -6360,7 +6512,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Worktree Palette",
+    "title": "Open worktree palette",
   },
   {
     "category": "worktree",
@@ -6372,7 +6524,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Worktree Pull Request",
+    "title": "Open worktree pull request",
   },
   {
     "category": "worktree",
@@ -6384,7 +6536,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Review Hub",
+    "title": "Open review hub",
   },
   {
     "category": "worktree",
@@ -6401,7 +6553,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Toggle Worktree Overview",
+    "title": "Toggle worktree overview",
   },
   {
     "category": "worktree",
@@ -6418,7 +6570,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Close Worktree Overview",
+    "title": "Close worktree overview",
   },
   {
     "category": "worktree",
@@ -6435,7 +6587,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Worktree Overview",
+    "title": "Open worktree overview",
   },
   {
     "category": "worktree",
@@ -6452,7 +6604,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Open Worktree Panel",
+    "title": "Open worktree panel",
   },
   {
     "category": "worktree",
@@ -6469,7 +6621,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Previous Worktree",
+    "title": "Previous worktree",
   },
   {
     "category": "worktree",
@@ -6486,7 +6638,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Quick Create Worktree",
+    "title": "Quick create worktree",
   },
   {
     "category": "worktree",
@@ -6522,7 +6674,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Refresh Sidebar",
+    "title": "Refresh sidebar",
   },
   {
     "category": "worktree",
@@ -6539,7 +6691,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Refresh Pull Requests",
+    "title": "Refresh pull requests",
   },
   {
     "category": "worktree",
@@ -6551,7 +6703,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
-    "title": "Get Resource Environments Config",
+    "title": "Get resource environments config",
   },
   {
     "category": "worktree",
@@ -6563,7 +6715,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Resource Environments Config",
+    "title": "Set resource environments config",
   },
   {
     "category": "worktree",
@@ -6575,7 +6727,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Connect to Resource",
+    "title": "Connect to resource",
   },
   {
     "category": "worktree",
@@ -6587,7 +6739,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Pause Resource",
+    "title": "Pause resource",
   },
   {
     "category": "worktree",
@@ -6599,7 +6751,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Provision Resource",
+    "title": "Provision resource",
   },
   {
     "category": "worktree",
@@ -6611,7 +6763,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Resume Resource",
+    "title": "Resume resource",
   },
   {
     "category": "worktree",
@@ -6623,7 +6775,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Check Resource Status",
+    "title": "Check resource status",
   },
   {
     "category": "worktree",
@@ -6635,7 +6787,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Teardown Resource",
+    "title": "Teardown resource",
   },
   {
     "category": "worktree",
@@ -6652,7 +6804,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Restart Workspace Service",
+    "title": "Restart workspace service",
   },
   {
     "category": "worktree",
@@ -6681,7 +6833,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Reveal Worktree",
+    "title": "Reveal worktree",
   },
   {
     "category": "worktree",
@@ -6693,7 +6845,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Review Readiness",
+    "title": "Review readiness",
   },
   {
     "category": "worktree",
@@ -6710,7 +6862,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Select Worktree",
+    "title": "Select worktree",
   },
   {
     "category": "worktree",
@@ -6722,7 +6874,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Select Worktree (Space)",
+    "title": "Select worktree (Space)",
   },
   {
     "category": "worktree",
@@ -6734,7 +6886,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Clear Session History",
+    "title": "Clear session history",
   },
   {
     "category": "worktree",
@@ -6746,7 +6898,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Close Completed Sessions",
+    "title": "Close completed sessions",
   },
   {
     "category": "worktree",
@@ -6758,7 +6910,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "End All Sessions",
+    "title": "End all sessions",
   },
   {
     "category": "worktree",
@@ -6770,7 +6922,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Move All Sessions To Grid",
+    "title": "Move all sessions to grid",
   },
   {
     "category": "worktree",
@@ -6787,7 +6939,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     ],
     "kind": "command",
     "requiresArgs": false,
-    "title": "Dock All Sessions",
+    "title": "Dock all sessions",
   },
   {
     "category": "worktree",
@@ -6799,7 +6951,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Reset Session Renderers",
+    "title": "Reset session renderers",
   },
   {
     "category": "worktree",
@@ -6811,7 +6963,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Restart All Sessions",
+    "title": "Restart all sessions",
   },
   {
     "category": "worktree",
@@ -6823,7 +6975,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Trash All Sessions",
+    "title": "Trash all sessions",
   },
   {
     "category": "worktree",
@@ -6835,7 +6987,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Active Worktree",
+    "title": "Set active worktree",
   },
   {
     "category": "worktree",
@@ -6847,7 +6999,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Switch to Worktree 1",
+    "title": "Switch to worktree 1",
   },
   {
     "category": "worktree",
@@ -6859,7 +7011,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Switch to Worktree 2",
+    "title": "Switch to worktree 2",
   },
   {
     "category": "worktree",
@@ -6871,7 +7023,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Switch to Worktree 3",
+    "title": "Switch to worktree 3",
   },
   {
     "category": "worktree",
@@ -6883,7 +7035,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Switch to Worktree 4",
+    "title": "Switch to worktree 4",
   },
   {
     "category": "worktree",
@@ -6895,7 +7047,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Switch to Worktree 5",
+    "title": "Switch to worktree 5",
   },
   {
     "category": "worktree",
@@ -6907,7 +7059,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Switch to Worktree 6",
+    "title": "Switch to worktree 6",
   },
   {
     "category": "worktree",
@@ -6919,7 +7071,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Switch to Worktree 7",
+    "title": "Switch to worktree 7",
   },
   {
     "category": "worktree",
@@ -6931,7 +7083,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Switch to Worktree 8",
+    "title": "Switch to worktree 8",
   },
   {
     "category": "worktree",
@@ -6943,7 +7095,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Switch to Worktree 9",
+    "title": "Switch to worktree 9",
   },
   {
     "category": "worktree",
@@ -6955,7 +7107,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Switch to Worktree by Index",
+    "title": "Switch to worktree by index",
   },
   {
     "category": "worktree",
@@ -6967,7 +7119,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Worktree Up",
+    "title": "Worktree up",
   },
   {
     "category": "worktree",
@@ -6979,7 +7131,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": false,
-    "title": "Worktree Up (Vim)",
+    "title": "Worktree up (Vim)",
   },
   {
     "category": "worktree",
@@ -6991,7 +7143,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Wait Until Worktree Ready",
+    "title": "Wait until worktree ready",
   },
   {
     "category": "settings",
@@ -7003,7 +7155,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": false,
-    "title": "Get Worktree Config",
+    "title": "Get worktree config",
   },
   {
     "category": "settings",
@@ -7015,7 +7167,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Set Worktree Path Pattern",
+    "title": "Set worktree path pattern",
   },
 ]
 `;

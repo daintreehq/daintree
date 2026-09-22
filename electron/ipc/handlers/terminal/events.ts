@@ -3,17 +3,28 @@
  */
 
 import { CHANNELS } from "../../channels.js";
-import { broadcastToProjectRenderers, broadcastToRenderer } from "../../utils.js";
+import {
+  broadcastToProjectRenderers,
+  broadcastToProjectRenderersExcept,
+  broadcastToRenderer,
+} from "../../utils.js";
+import { resolveLiveWebContents } from "../../../window/webContentsRegistry.js";
+import { logInfo, logWarn } from "../../../utils/logger.js";
 import { events, type DaintreeEventMap } from "../../../services/events.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
-import { journalAgentSession } from "../../../services/pty/agentSessionJournal.js";
+import { getMcpServerServiceRef } from "../../../window/serviceRefs.js";
+import {
+  acceptCapturedAgentSession,
+  releaseSupersededCapturedSession,
+} from "../../../services/pty/agentSessionCapturePersistence.js";
 import type {
   SpawnResult,
   TerminalResizeResult,
   BroadcastWriteResultPayload,
-  FdLeakWarningPayload,
+  FdGrowthPayload,
   TerminalSubmitStatusPayload,
 } from "../../../../shared/types/pty-host.js";
+import type { PtyDataRouting } from "../../../services/pty/types.js";
 import type { HandlerDependencies } from "../../types.js";
 
 export function registerTerminalEventHandlers(deps: HandlerDependencies): () => void {
@@ -25,9 +36,41 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
 
   // PTY data/exit/error events. `terminal:data` stays on its dedicated channel
   // (high-frequency binary — keeping it off the event bus avoids envelope overhead
-  // and JSON/base64 churn; see lessons #4899/#4862/#4639).
-  const handlePtyData = (id: string, data: string | Uint8Array) => {
-    broadcastToRenderer(CHANNELS.TERMINAL_DATA, id, data);
+  // and JSON/base64 churn; see lessons #4899/#4862/#4639). Project-scoped: only
+  // the owning project's views host a panel for the terminal, and its cached
+  // views must still get every byte, since there is no resync on reactivation.
+  const handlePtyData = (id: string, data: string | Uint8Array, routing?: PtyDataRouting) => {
+    // Recovery for one view whose port threw mid-flush (#12557). Every other
+    // destination already has these bytes, so this goes to that view alone — a
+    // re-broadcast would double-deliver to the siblings that took it on their
+    // own ports and to the port-less views the supplementary fallback already
+    // fed. The host names the view by the identity Main gave it at connect
+    // time, so a project switch completing in between cannot redirect it.
+    if (routing?.portRecoveryWebContentsId !== undefined) {
+      const holder = resolveLiveWebContents(routing.portRecoveryWebContentsId);
+      if (!holder) return;
+      try {
+        holder.send(CHANNELS.TERMINAL_DATA, id, data);
+      } catch {
+        // Renderer disposed mid-send; the port teardown already ran.
+      }
+      return;
+    }
+
+    // The host only sends this list when it deliberately kept the fallback open
+    // for a view its MessagePort routing cannot reach (#12557). These views
+    // already have the chunk; every other view of the project — cached and
+    // mid-handoff ones included — still needs it. The ids are the recipients
+    // the host actually wrote to, so no re-derivation can go stale here.
+    const delivered = routing?.portDeliveredWebContentsIds;
+    const exclude = delivered && delivered.length > 0 ? new Set(delivered) : null;
+    broadcastToProjectRenderersExcept(
+      ptyClient.getTerminalProjectId(id),
+      exclude,
+      CHANNELS.TERMINAL_DATA,
+      id,
+      data
+    );
   };
   ptyClient.on("data", handlePtyData);
   handlers.push(() => ptyClient.off("data", handlePtyData));
@@ -38,6 +81,10 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     mcpPaneConfigService.revokePaneConfig(id).catch((err) => {
       console.error("[MCP] Failed to revoke pane config on exit:", err);
     });
+    // A hand-over ends with the terminal that was handed over (#12490). The
+    // orchestrator's side ends with its bearer, which the revocation above
+    // covers. Unloaded means nothing was ever handed over.
+    getMcpServerServiceRef()?.handleTerminalExit(id);
     broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
       name: "terminal:exit",
       payload: [id, exitCode],
@@ -66,7 +113,14 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
 
   // Spawn result events (success or failure)
   const handleSpawnResult = (id: string, result: SpawnResult) => {
-    if (!result.success) {
+    // A hand-over is of one process (#12490): a later launch under the id, or
+    // the handed-over launch failing to start, ends it.
+    getMcpServerServiceRef()?.handleTerminalSpawnResult(id, result);
+    if (result.success) {
+      // A confirmed relaunch may supersede a session a natural exit left on
+      // the pane (#12433); a refused one leaves the running process's id alone.
+      releaseSupersededCapturedSession(id, result.launchGeneration);
+    } else {
       // Async pty-host spawn rejection (PENDING_SPAWNS_CAPPED, bad shell path,
       // etc.) doesn't throw from ptyClient.spawn(). Revoke any minted pane
       // config so the token doesn't outlive the never-running PTY.
@@ -143,13 +197,20 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   ptyClient.on("resource-metrics", handleResourceMetrics);
   handlers.push(() => ptyClient.off("resource-metrics", handleResourceMetrics));
 
-  // FD leak warning — forwarded to renderer as a diagnostic-only event.
-  // Deduplication is handled renderer-side with a 5-min log cooldown.
-  const handleFdLeakWarning = (payload: FdLeakWarningPayload) => {
-    broadcastToRenderer(CHANNELS.TERMINAL_FD_LEAK_WARNING, payload);
+  // FD growth — the pty-host already emits once per episode transition, so
+  // this writes exactly one record each. It is logged here, not relayed: every
+  // project view is its own renderer, and a renderer-side log line repeated
+  // once per open view (#12520).
+  const handleFdGrowth = (payload: FdGrowthPayload) => {
+    const message = formatFdGrowth(payload);
+    if (payload.state === "elevated") {
+      logWarn(message, { ...payload });
+    } else {
+      logInfo(message, { ...payload });
+    }
   };
-  ptyClient.on("fd-leak-warning", handleFdLeakWarning);
-  handlers.push(() => ptyClient.off("fd-leak-warning", handleFdLeakWarning));
+  ptyClient.on("fd-growth", handleFdGrowth);
+  handlers.push(() => ptyClient.off("fd-growth", handleFdGrowth));
 
   // Terminal activity — per-terminal headline updates, project-scoped like
   // the status pulses above.
@@ -180,23 +241,55 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   handlers.push(unsubTerminalRestored);
 
   // Resume records captured by the pty-host (trash expiry, natural agent
-  // exit, `/quit` demotion). Main is the
-  // journal's single writer — the pty-host writing the file itself would race
-  // main's own close-path writes (two processes, two write queues, one file)
-  // — so persist here through the exactly-once journal funnel, keyed by the
-  // capture's terminal generation, then signal renderers.
+  // exit, `/quit` demotion). Main is the single writer of both the journal and
+  // the saved pane — the pty-host writing either itself would race main's own
+  // close-path writes (two processes, two write queues, one file). Accepted
+  // synchronously so a quit can drain what is already in flight (#12433).
   const unsubSessionCaptured = events.on(
     "agent-session:captured",
     (payload: DaintreeEventMap["agent-session:captured"]) => {
-      void journalAgentSession(payload.record, {
-        terminalId: payload.terminalId,
-        generation: payload.launchGeneration,
-      }).catch((err) => {
-        console.error("[TerminalEvents] Failed to persist captured agent session:", err);
-      });
+      acceptCapturedAgentSession(payload);
     }
   );
   handlers.push(unsubSessionCaptured);
 
   return () => handlers.forEach((cleanup) => cleanup());
+}
+
+function formatFdGrowth(payload: FdGrowthPayload): string {
+  const owners =
+    `${payload.terminals} terminals, ${payload.pooledPtys} pooled PTYs, ` +
+    `${payload.pluginPtys} plugin PTYs, ${payload.analysisWorkers} analysis workers`;
+  // The configured cadence, not a measured spacing: the monitor guarantees the
+  // samples were consecutive, not that they were evenly spread — the level can
+  // change mid-streak, and pressure overrides it outright.
+  const span =
+    `for ${payload.sustainedSamples} samples at the current ` +
+    `${Math.round(payload.sampleIntervalMs / 1000)}s sample interval`;
+  const counts =
+    `${payload.fdCount} open descriptors, ${payload.expectedFds} expected for ${owners}; ` +
+    `growth ${payload.growth} over the post-restore baseline of ${payload.baselineFds}`;
+
+  if (payload.state === "recovered") {
+    // An episode outlives a clock stepped backwards, which would otherwise
+    // date its recovery before it started.
+    const elapsedMs = payload.timestamp - payload.episodeStartedAt;
+    const since = elapsedMs >= 0 ? `, ${Math.round(elapsedMs / 60000)} min after it rose` : "";
+    return (
+      `[TerminalDiagnostics] pty-host ${payload.hostPid} FD count back near baseline: ` +
+      `${counts} ${span}${since}.`
+    );
+  }
+
+  const types = payload.descriptorTypes
+    ? Object.entries(payload.descriptorTypes)
+        .filter(([, count]) => count > 0)
+        .map(([type, count]) => `${type} ${count}`)
+        .join(", ")
+    : "";
+  return (
+    `[TerminalDiagnostics] pty-host ${payload.hostPid} FD count elevated: ` +
+    `${counts} ${span}.` +
+    (types ? ` Descriptor types: ${types}.` : "")
+  );
 }

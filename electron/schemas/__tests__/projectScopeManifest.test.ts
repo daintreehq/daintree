@@ -194,6 +194,7 @@ const UNSCOPED_SAMPLES: Record<UnscopedGroup, unknown[]> = {
   skills: [{ id: "skill", name: "Skill", path: "skills/skill.md" }],
   recipes: [{ id: "boot", name: "Boot", terminals: [{ type: "shell" }] }],
   fileDecorationProviders: [{ id: "dec", scopes: ["file"] }],
+  fileEditors: [{ id: "md", slot: "acme.editor", extensions: ["md"] }],
   processTools: [{ command: "acmetool", iconId: "sparkles" }],
   mcpServers: [{ id: "srv", name: "Srv", command: "node" }],
 };

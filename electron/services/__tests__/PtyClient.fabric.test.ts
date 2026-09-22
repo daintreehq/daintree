@@ -728,6 +728,104 @@ describe("PtyClient fabric", () => {
       expect(events).toEqual([true, false]);
       client.dispose();
     });
+
+    it("reads the memory pause per shard, so a sibling's hold can't hide a forced resume", () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      type Snapshot = { active: boolean; paused: boolean; stalled: boolean };
+      const snapshots: Snapshot[] = [];
+      client.on("host-memory-pause-changed", (snapshot: Snapshot) => {
+        snapshots.push(snapshot);
+      });
+
+      shardA.child.emit("message", {
+        type: "host-memory-warning",
+        isWarning: true,
+        utilizationPercent: 96,
+        timestamp: 1,
+      });
+      shardA.child.emit("message", { type: "host-throttled", isThrottled: true, timestamp: 2 });
+      defaultShard().child.emit("message", {
+        type: "host-throttled",
+        isThrottled: true,
+        timestamp: 3,
+      });
+      // Shard A hits its pause bound still warning. Main still holds, so the
+      // aggregate never flips and this transition never leaves the aggregator.
+      shardA.child.emit("message", {
+        type: "host-throttled",
+        isThrottled: false,
+        forced: true,
+        timestamp: 4,
+      });
+      defaultShard().child.emit("message", {
+        type: "host-throttled",
+        isThrottled: false,
+        forced: false,
+        timestamp: 5,
+      });
+
+      expect(client.getHostMemoryPause()).toEqual({ active: true, paused: false, stalled: false });
+      expect(snapshots).toEqual([
+        { active: true, paused: true, stalled: false },
+        { active: true, paused: false, stalled: false },
+      ]);
+      client.dispose();
+    });
+
+    it("publishes the release when a paused shard's host exits", () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      type Snapshot = { active: boolean; paused: boolean; stalled: boolean };
+      const snapshots: Snapshot[] = [];
+      client.on("host-memory-pause-changed", (snapshot: Snapshot) => {
+        snapshots.push(snapshot);
+      });
+
+      shardA.child.emit("message", { type: "host-throttled", isThrottled: true, timestamp: 1 });
+      expect(client.getHostMemoryPause().active).toBe(true);
+
+      shardA.child.emit("exit", 1);
+
+      expect(snapshots.at(-1)).toEqual({ active: false, paused: false, stalled: false });
+      expect(client.getHostMemoryPause()).toEqual({ active: false, paused: false, stalled: false });
+      client.dispose();
+    });
+
+    it("keeps a replacement shard's memory pause when the retired shard's exit lands late", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const retired = projectShard("project-a");
+      retired.child.emit("message", { type: "ready" });
+
+      retired.child.emit("message", { type: "exit", id: "t1", exitCode: 0 });
+      await vi.advanceTimersByTimeAsync(fabricConfig.PTY_SHARD_IDLE_LINGER_MS + 1);
+      expect(messagesOfType(retired.child, "dispose")).toHaveLength(1);
+
+      // Same project, same shard key, new process — up before the old one's
+      // exit has arrived.
+      client.spawn("t2", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const replacement = forks.at(-1)!;
+      expect(replacement).not.toBe(retired);
+      replacement.child.emit("message", { type: "ready" });
+      replacement.child.emit("message", {
+        type: "host-throttled",
+        isThrottled: true,
+        timestamp: 1,
+      });
+      expect(client.getHostMemoryPause().active).toBe(true);
+
+      retired.child.emit("exit", 0);
+
+      expect(client.getHostMemoryPause()).toEqual({ active: true, paused: true, stalled: false });
+      client.dispose();
+    });
   });
 
   describe("cross-shard aggregation", () => {
@@ -873,6 +971,56 @@ describe("PtyClient fabric", () => {
     });
   });
 
+  describe("fallback-eligible projects (#12557)", () => {
+    it("replays the set to a shard that booted after it was published", () => {
+      // A shard forked later would otherwise suppress the IPC fallback for
+      // every project whose only remaining consumer holds no port — the
+      // starvation, reintroduced for as long as the shard stays unaware.
+      const client = createFabricClient();
+      client.setFallbackEligibleProjects(["project-a"]);
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.postMessage.mockClear();
+
+      shardA.child.emit("message", { type: "ready" });
+
+      expect(messagesOfType(shardA.child, "set-fallback-eligible-projects")).toEqual([
+        { type: "set-fallback-eligible-projects", projectIds: ["project-a"] },
+      ]);
+      client.dispose();
+    });
+
+    it("does not replay an empty set to a fresh shard", () => {
+      // Nothing is eligible, and a shard boots with an empty set already.
+      const client = createFabricClient();
+      client.setFallbackEligibleProjects([]);
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.postMessage.mockClear();
+
+      shardA.child.emit("message", { type: "ready" });
+
+      expect(messagesOfType(shardA.child, "set-fallback-eligible-projects")).toHaveLength(0);
+      client.dispose();
+    });
+
+    it("replays the LATEST set, not every update", () => {
+      const client = createFabricClient();
+      client.setFallbackEligibleProjects(["project-a"]);
+      client.setFallbackEligibleProjects(["project-b"]);
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.postMessage.mockClear();
+
+      shardA.child.emit("message", { type: "ready" });
+
+      expect(messagesOfType(shardA.child, "set-fallback-eligible-projects")).toEqual([
+        { type: "set-fallback-eligible-projects", projectIds: ["project-b"] },
+      ]);
+      client.dispose();
+    });
+  });
+
   describe("fan-out control messages", () => {
     it("sends pause-all/resume-all and trim-state to every shard", () => {
       const client = createFabricClient();
@@ -885,11 +1033,18 @@ describe("PtyClient fabric", () => {
 
       client.pauseAll();
       client.resumeAll();
+      client.setFallbackEligibleProjects(["project-a"]);
       void client.trimState(1000, "idle-only").catch(() => {});
 
       for (const child of [defaultShard().child, shardA.child]) {
         expect(messagesOfType(child, "pause-all")).toHaveLength(1);
         expect(messagesOfType(child, "resume-all")).toHaveLength(1);
+        // A project's terminals can live on any shard, so a shard that does not
+        // host the port-less view's project must still learn the set — else it
+        // suppresses the fallback for a terminal it does own (#12557).
+        expect(messagesOfType(child, "set-fallback-eligible-projects")).toEqual([
+          { type: "set-fallback-eligible-projects", projectIds: ["project-a"] },
+        ]);
         const trims = messagesOfType(child, "trim-state");
         expect(trims).toHaveLength(1);
         expect(trims[0]).toEqual({
@@ -984,6 +1139,109 @@ describe("PtyClient fabric", () => {
         shardsTotal: 2,
         shardsFailed: 1,
       });
+      client.dispose();
+    });
+  });
+
+  describe("quit-time capture barrier (#12433)", () => {
+    it("asks every shard to deliver, and hears each capture before the reply", async () => {
+      const { events } = await import("../events.js");
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      const seen: string[] = [];
+      const off = events.on("agent-session:captured", (payload) => {
+        seen.push(payload.terminalId);
+      });
+
+      const promise = client.finishAgentSessionCaptures(750).then((result) => {
+        seen.push("finished");
+        return result;
+      });
+      const defaultReq = messagesOfType(defaultShard().child, "finish-session-captures")[0];
+      const shardAReq = messagesOfType(shardA.child, "finish-session-captures")[0];
+      expect(defaultReq).toEqual({
+        type: "finish-session-captures",
+        requestId: expect.any(String),
+        budgetMs: 750,
+      });
+      defaultShard().child.emit("message", {
+        type: "session-captures-finished",
+        requestId: defaultReq.requestId,
+        result: { complete: true, pending: 0 },
+      });
+      // One shard answering is not the barrier: the other still owes captures.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(seen).toEqual([]);
+
+      // The host sends its last capture, then its acknowledgement, on one port.
+      shardA.child.emit("message", {
+        type: "agent-session-captured",
+        terminalId: "t1",
+        launchGeneration: 1,
+        boundary: "exit",
+        record: {
+          sessionId: "synthetic",
+          agentId: "codex",
+          worktreeId: null,
+          title: null,
+          projectId: "project-a",
+        },
+      });
+      shardA.child.emit("message", {
+        type: "session-captures-finished",
+        requestId: shardAReq.requestId,
+        result: { complete: true, pending: 0 },
+      });
+
+      expect(await promise).toEqual({ complete: true, pending: 0 });
+      expect(seen).toEqual(["t1", "finished"]);
+      off();
+      client.dispose();
+    });
+
+    it("reports incomplete for a shard it cannot ask, even when the rest finished", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      // Deliberately never ready.
+
+      const promise = client.finishAgentSessionCaptures(750);
+      const defaultReq = messagesOfType(defaultShard().child, "finish-session-captures")[0];
+      defaultShard().child.emit("message", {
+        type: "session-captures-finished",
+        requestId: defaultReq.requestId,
+        result: { complete: true, pending: 0 },
+      });
+
+      expect(messagesOfType(shardA.child, "finish-session-captures")).toHaveLength(0);
+      expect(await promise).toEqual({ complete: false, pending: 0 });
+      client.dispose();
+    });
+
+    it("carries a shard's own shortfall through", async () => {
+      const client = createFabricClient();
+
+      const promise = client.finishAgentSessionCaptures(750);
+      const defaultReq = messagesOfType(defaultShard().child, "finish-session-captures")[0];
+      defaultShard().child.emit("message", {
+        type: "session-captures-finished",
+        requestId: defaultReq.requestId,
+        result: { complete: false, pending: 2 },
+      });
+
+      expect(await promise).toEqual({ complete: false, pending: 2 });
+      client.dispose();
+    });
+
+    it("never rejects when a shard stops answering", async () => {
+      const client = createFabricClient();
+
+      const promise = client.finishAgentSessionCaptures(750);
+      await vi.advanceTimersByTimeAsync(1_250);
+
+      expect(await promise).toEqual({ complete: false, pending: 0 });
       client.dispose();
     });
   });

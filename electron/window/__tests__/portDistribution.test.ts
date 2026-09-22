@@ -32,6 +32,11 @@ vi.mock("electron", () => ({
     madeChannels.push(channel);
     return channel;
   },
+  // Pulled in by `webContentsRegistry`, which now owns the port-holder
+  // bookkeeping. A vi.mock factory throws on any import it does not define,
+  // so these have to be present even though this suite never exercises them.
+  WebContentsView: class {},
+  webContents: { fromId: () => null },
 }));
 
 import {
@@ -39,6 +44,7 @@ import {
   distributeTerminalWorkerPortToView,
   releaseTerminalWorkerPort,
 } from "../portDistribution.js";
+import { getPortHolderWebContentsId } from "../webContentsRegistry.js";
 import type { WindowContext } from "../WindowRegistry.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import type { BrowserWindow } from "electron";
@@ -49,8 +55,10 @@ function makeMockWin(destroyed = false) {
   } as unknown as BrowserWindow;
 }
 
+let nextWcId = 1;
 function makeMockWc(destroyed = false) {
   return {
+    id: nextWcId++,
     isDestroyed: vi.fn(() => destroyed),
     postMessage: vi.fn(),
   };
@@ -97,7 +105,9 @@ describe("distributePortsToView", () => {
     const { port1, port2 } = madeChannels[0];
     expect(ctx.services.activeRendererPort).toBe(port1);
     expect(ctx.services.activePtyHostPort).toBe(port2);
-    expect(pty.connectMessagePort).toHaveBeenCalledWith(ctx.windowId, port2);
+    // The receiving view's id rides along so the host can echo it back on every
+    // chunk this port accepts, letting Main address the exact recipient (#12557).
+    expect(pty.connectMessagePort).toHaveBeenCalledWith(ctx.windowId, port2, wc.id);
 
     expect(wc.postMessage).toHaveBeenCalledTimes(2);
     const [first, second] = wc.postMessage.mock.calls;
@@ -105,6 +115,64 @@ describe("distributePortsToView", () => {
     expect(second[0]).toBe("terminal-port");
     expect(second[2]).toEqual([port1]);
     expect((first[1] as { token: string }).token).toBe((second[1] as { token: string }).token);
+  });
+
+  it("records the receiving view as the window's port holder (#12557)", () => {
+    // Main needs this to drop the view that already read a chunk off its port
+    // from the `terminal:data` fan-out, without dropping the window's other
+    // (port-less) views along with it.
+    const ctx = makeCtx(4);
+    const wc = makeMockWc();
+
+    distributePortsToView(makeMockWin(), ctx, asWc(wc), asPty(makeMockPtyClient()));
+
+    expect(getPortHolderWebContentsId(4)).toBe(wc.id);
+  });
+
+  it("moves the port holder to the new view on a project switch (#12557)", () => {
+    const ctx = makeCtx(4);
+    const outgoing = makeMockWc();
+    const incoming = makeMockWc();
+    const pty = makeMockPtyClient();
+
+    distributePortsToView(makeMockWin(), ctx, asWc(outgoing), asPty(pty));
+    distributePortsToView(makeMockWin(), ctx, asWc(incoming), asPty(pty));
+
+    // The outgoing view is now a port-less duplicate, so it must NOT still be
+    // excluded from the IPC fallback that is now its only transport.
+    expect(getPortHolderWebContentsId(4)).toBe(incoming.id);
+  });
+
+  it("leaves the window with NO holder when delivery throws (#12557)", () => {
+    // The renderer never received its end of the pair, so it cannot have read
+    // the chunk off a port. Recording it anyway would exclude a view that is
+    // relying on the IPC fallback — fail toward over-delivery instead.
+    const ctx = makeCtx(4);
+    const first = makeMockWc();
+    const pty = makeMockPtyClient();
+    distributePortsToView(makeMockWin(), ctx, asWc(first), asPty(pty));
+
+    const throwing = makeMockWc();
+    throwing.postMessage.mockImplementation(() => {
+      throw new Error("frame disposed");
+    });
+    distributePortsToView(makeMockWin(), ctx, asWc(throwing), asPty(pty));
+
+    expect(getPortHolderWebContentsId(4)).toBeUndefined();
+  });
+
+  it("leaves the window with NO holder while the pair is being replaced (#12557)", () => {
+    // During the swap the outgoing view may still be draining the old pair and
+    // the incoming one has nothing yet. Neither may be excluded from the
+    // fallback on the strength of a port neither holds.
+    const ctx = makeCtx(4);
+    const pty = makeMockPtyClient();
+    distributePortsToView(makeMockWin(), ctx, asWc(makeMockWc()), asPty(pty));
+
+    const undeliverable = makeMockWc(true); // isDestroyed → delivery block skipped
+    distributePortsToView(makeMockWin(), ctx, asWc(undeliverable), asPty(pty));
+
+    expect(getPortHolderWebContentsId(4)).toBeUndefined();
   });
 
   it("closes the previous pair before minting a replacement", () => {
@@ -154,7 +222,7 @@ describe("distributePortsToView", () => {
     expect(() => distributePortsToView(makeMockWin(), ctx, asWc(wc), asPty(pty))).not.toThrow();
 
     const { port1, port2 } = madeChannels[0];
-    expect(pty.connectMessagePort).toHaveBeenCalledWith(ctx.windowId, port2);
+    expect(pty.connectMessagePort).toHaveBeenCalledWith(ctx.windowId, port2, wc.id);
     expect(ctx.services.activeRendererPort).toBe(port1);
     expect(ctx.services.activePtyHostPort).toBe(port2);
     expect(port1.close).not.toHaveBeenCalled();

@@ -1,5 +1,6 @@
 import type { AgentId, AgentState, AgentStateChangeTrigger, WaitingReason } from "../agent.js";
 import type { TerminalCheckResult } from "../checkResult.js";
+import type { TerminalHandback } from "../handback.js";
 
 export type { AgentState, AgentStateChangeTrigger };
 
@@ -35,6 +36,14 @@ export interface AgentStateChangePayload {
   previousState: AgentState;
   /** Timestamp of state change */
   timestamp: number;
+  /**
+   * How many new agent sessions this PTY has been observed taking on after a
+   * prior one exited (#12535). The PTY generation (`startedAt`) cannot move for
+   * a relaunch inside an unchanged PTY, so this is the only thing that tells a
+   * bound session from its successor. Absent means the producer could not
+   * report it — never read absence as zero.
+   */
+  agentIncarnation?: number;
   /** Optional trace ID to track event chains */
   traceId?: string;
   /** What caused this state change */
@@ -69,6 +78,13 @@ export interface AgentStateChangePayload {
    * pass/fail on the event rather than scraping output.
    */
   lastCheckResult?: TerminalCheckResult;
+  /**
+   * Handback marker the agent printed for a prompt that asked for one
+   * (#12488), present only on the settle where it was first seen. An
+   * observation of printed text, not a completion verdict; `message` is the
+   * agent's own untrusted claim.
+   */
+  lastHandback?: TerminalHandback;
   /**
    * Live activity-temperature reading at the moment the transition was
    * committed. Present only on transitions that flow through the activity
@@ -136,6 +152,14 @@ export interface AgentDetectedPayload {
   processName: string;
   /** Timestamp when detected */
   timestamp: number;
+  /**
+   * How many new agent sessions this PTY has been observed taking on after a
+   * prior one exited (#12535). The PTY generation (`startedAt`) cannot move for
+   * a relaunch inside an unchanged PTY, so this is the only thing that tells a
+   * bound session from its successor. Absent means the producer could not
+   * report it — never read absence as zero.
+   */
+  agentIncarnation?: number;
 }
 
 /** Payload for agent exited events */

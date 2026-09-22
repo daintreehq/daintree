@@ -310,6 +310,8 @@ const PRESSURE_POLICY = { criticalMb: 500, warningMb: 2000 };
 const PRESSURE_SAMPLE_AVAILABLE_MB = 600;
 /** Comfortably above `warningMb`, so the ladder must decline to act. */
 const HEALTHY_AVAILABLE_MB = 8_000;
+/** Well past the ladder's one-minute floor on how recently a view was used. */
+const PRESSURE_VIEW_AGE_MS = 5 * 60_000;
 
 /** Includes a return to a project already in the burst, so the queue has to
  *  resolve both a cold start and a cache hit without draining in between. */
@@ -526,6 +528,7 @@ const projectViewScenarios: PerfScenario[] = [
     warmups: 1,
     correctness: [
       "pressureLadderMisses",
+      "pressureConfirmationMisses",
       "pressureBudgetMisses",
       "healthyBandMisses",
       "forcedConvergenceMisses",
@@ -557,22 +560,43 @@ const projectViewScenarios: PerfScenario[] = [
         const evictedWcIds: number[] = [];
         const evictedProjects: string[] = [];
 
+        // The ladder takes nothing used within the last minute, and a scenario
+        // cannot wait that out — so the prefill is aged past it, in order
+        // (#12363). Done first, so no pass below can pass on recency alone.
+        harness.ageViews(PRESSURE_VIEW_AGE_MS);
+
+        // A reading deep in the band only starts the count, and a healthy one
+        // has to wipe it, so neither low pass around the healthy one may take
+        // anything (#12363). Anything taken means the sampler is acting on a
+        // single reading again, or carried the first one across the recovery.
+        let pressureConfirmationMisses = harness.pressurePass(PRESSURE_SAMPLE_AVAILABLE_MB).evicted
+          .length;
+
         // A healthy reading must move nothing. Without this the whole ladder
         // could be firing unconditionally and every other number here would
-        // still look correct.
-        const healthyPass = harness.pressurePass(HEALTHY_AVAILABLE_MB);
-        const healthyBandMisses = healthyPass.evicted.length;
+        // still look correct. It also has to wipe the count the low reading
+        // started: a sampler that took it for another low one would confirm and
+        // take a view on the next low pass, which `pressureConfirmationMisses`
+        // reports.
+        const healthyBandMisses = harness.pressurePass(HEALTHY_AVAILABLE_MB).evicted.length;
+
+        pressureConfirmationMisses += harness.pressurePass(PRESSURE_SAMPLE_AVAILABLE_MB).evicted
+          .length;
 
         // Two sampler ticks deep in the band. The settled target is ONE view,
         // but a periodic pass may only shed one per tick (#11477) — a pass
-        // that collapses the cache instead is the regression this counts.
+        // that collapses the cache instead is the regression this counts. Each
+        // pass must also shed one: a ladder that paused between evictions would
+        // still have shed something overall.
         let pressureBudgetMisses = 0;
+        let pressureLadderMisses = 0;
         let pressureEvictionCount = 0;
         const gradualEvicted: string[] = [];
         for (let pass = 0; pass < 2; pass++) {
           const result = harness.pressurePass(PRESSURE_SAMPLE_AVAILABLE_MB);
           pressureEvictionCount += result.evicted.length;
           pressureBudgetMisses += Math.max(0, result.evicted.length - 1);
+          if (result.evicted.length === 0) pressureLadderMisses++;
           gradualEvicted.push(...result.evicted);
           evictedWcIds.push(...result.wcIds);
           evictedProjects.push(...result.evicted);
@@ -608,10 +632,11 @@ const projectViewScenarios: PerfScenario[] = [
           durationMs: 0,
           metrics: {
             pressureEvictionCount,
-            // Zero here means the graduated ladder shed nothing at a reading
-            // deep inside the band — the #11469/#11926 failure mode, where
-            // reclaim quietly becomes emergency-only.
-            pressureLadderMisses: pressureEvictionCount > 0 ? 0 : 1,
+            // Counts gradual passes that shed nothing at a reading deep inside
+            // the band — the #11469/#11926 failure mode, where reclaim quietly
+            // becomes emergency-only.
+            pressureLadderMisses,
+            pressureConfirmationMisses,
             pressureBudgetMisses,
             healthyBandMisses,
             forcedEvictionCount: forced.evicted.length,

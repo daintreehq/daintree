@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { computePoolEnvHash, POOL_ENV_EMPTY_HASH, VOLATILE_ENV_KEYS } from "../ptyPoolEnvHash.js";
+import {
+  carriesPoolStrippedEnv,
+  computePoolEnvHash,
+  POOL_ENV_EMPTY_HASH,
+  VOLATILE_ENV_KEYS,
+} from "../ptyPoolEnvHash.js";
+import { filterSensitiveOnly } from "../EnvironmentFilter.js";
 
 describe("computePoolEnvHash", () => {
   it("returns the empty sentinel for undefined input", () => {
@@ -104,5 +110,43 @@ describe("computePoolEnvHash", () => {
     const hash = computePoolEnvHash({ FOO: "1", BAR: "2" });
     expect(hash).toMatch(/^env-/);
     expect(hash).not.toBe(POOL_ENV_EMPTY_HASH);
+  });
+});
+
+describe("carriesPoolStrippedEnv", () => {
+  it("is false for missing or empty env", () => {
+    expect(carriesPoolStrippedEnv(undefined)).toBe(false);
+    expect(carriesPoolStrippedEnv({})).toBe(false);
+  });
+
+  it("flags secret-named variables whether matched by exact name or by pattern", () => {
+    expect(carriesPoolStrippedEnv({ FOO: "1", ANTHROPIC_API_KEY: "sk" })).toBe(true);
+    expect(carriesPoolStrippedEnv({ DAINTREE_MCP_TOKEN: "t" })).toBe(true);
+    expect(carriesPoolStrippedEnv({ my_service_token: "t" })).toBe(true);
+  });
+
+  it("ignores undefined values, which never reach the spawned shell", () => {
+    expect(carriesPoolStrippedEnv({ FOO: "1", GITHUB_TOKEN: undefined })).toBe(false);
+  });
+
+  it("does not flag names that merely contain a sensitive word mid-token", () => {
+    expect(carriesPoolStrippedEnv({ TOKENIZER_PATH: "/x", DAINTREE_E2E_AGENT_COLOR: "#fff" })).toBe(
+      false
+    );
+  });
+
+  it("agrees with the pool's filter: false exactly when filtering drops no defined key", () => {
+    const samples: Array<Record<string, string | undefined>> = [
+      { FOO: "1" },
+      { FOO: "1", GITHUB_TOKEN: "x" },
+      { DATABASE_URL: "postgres://" },
+      { TOKENIZER_PATH: "/x", EMPTY: undefined },
+      { MY_CLIENT_SECRET: "s", PATH: "/usr/bin" },
+    ];
+    for (const env of samples) {
+      const definedKeys = Object.keys(env).filter((key) => env[key] !== undefined);
+      const keptAll = Object.keys(filterSensitiveOnly(env)).length === definedKeys.length;
+      expect(carriesPoolStrippedEnv(env)).toBe(!keptAll);
+    }
   });
 });

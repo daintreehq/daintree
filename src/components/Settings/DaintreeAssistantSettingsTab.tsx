@@ -1382,7 +1382,7 @@ function GrantCountdown({ expiresAt }: { expiresAt: number }) {
   useVisibilityAwareInterval(() => setNow(Date.now()), 1000);
   const remainingMs = expiresAt - now;
   return (
-    <span className="font-mono text-text-secondary tabular-nums shrink-0">
+    <span role="timer" className="font-mono text-text-secondary tabular-nums shrink-0">
       {remainingMs <= 0 ? "expiring" : `expires in ${formatGrantRemaining(remainingMs / 1000)}`}
     </span>
   );

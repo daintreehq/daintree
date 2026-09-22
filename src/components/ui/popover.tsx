@@ -207,8 +207,13 @@ const PopoverAnchor = React.forwardRef<
 >((props, ref) => {
   const radix = useRadixPrimitives();
   if (!radix) {
+    // Through a Slot rather than returning the child bare: an anchor composed
+    // inside another trigger's `asChild` chain receives that trigger's
+    // handlers and ref as props, and dropping them would leave the shared
+    // element inert until the Radix chunk lands.
     if (props.asChild && React.isValidElement(props.children)) {
-      return props.children as React.ReactElement;
+      const { asChild: _asChild, ...slotProps } = props;
+      return <Slot ref={ref} {...slotProps} />;
     }
     return null;
   }

@@ -32,6 +32,12 @@ vi.mock("../fileSearchCacheInvalidation.js", () => ({
   fileSearchCacheInvalidator: fileSearchCacheInvalidatorMock,
 }));
 
+const statusTimingMock = vi.hoisted(() => ({ complete: vi.fn() }));
+
+vi.mock("../../ProjectSwitchStatusTiming.js", () => ({
+  projectSwitchStatusTiming: statusTimingMock,
+}));
+
 import { broadcastToRenderer } from "../../../ipc/utils.js";
 import { events } from "../../events.js";
 import { gitServiceCache } from "../../GitServiceCache.js";
@@ -209,6 +215,36 @@ describe("WorkspaceHostEventRouter", () => {
       router.routeHostEvent(entryB, { type: "emfile-limit-reached" });
 
       expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("switch-status-timing (#12461)", () => {
+    it("hands the view's report to the switch timing without relaying it anywhere", () => {
+      const emit = vi.fn();
+      const localRouter = new WorkspaceHostEventRouter({
+        emit,
+        worktreePathToProject: new Map(),
+        copyTreeProgressCallbacks: new Map(),
+      });
+      const entry = makeEntry();
+      const event: Extract<WorkspaceHostEvent, { type: "switch-status-timing" }> = {
+        type: "switch-status-timing",
+        switchId: "switch-1",
+        rendererAppliedAt: 2_000,
+        rendererStatusCount: 1,
+        host: {
+          loadStartedAt: 100,
+          enumeratedAt: 200,
+          firstSnapshotAt: 210,
+          firstStatusAt: [1_900],
+          monitorCount: 1,
+        },
+      };
+      localRouter.routeHostEvent(entry, event);
+
+      expect(statusTimingMock.complete).toHaveBeenCalledWith(event);
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
+      expect(emit).not.toHaveBeenCalled();
     });
   });
 
@@ -602,6 +638,37 @@ describe("WorkspaceHostEventRouter", () => {
         CHANNELS.NOTIFICATION_SHOW_TOAST,
         expectedToast
       );
+    });
+
+    it("fires when resource teardown is skipped because its commands were not approved", () => {
+      const entry = makeEntry();
+      const event = makeWorktreeUpdateEvent({
+        lifecycleStatus: lifecycleStatus("resource-teardown", "needs-approval", 1000),
+      });
+
+      router.routeHostEvent(entry, event);
+
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      const [channel, payload] = vi.mocked(broadcastToRenderer).mock.calls[0]!;
+      expect(channel).toBe(CHANNELS.NOTIFICATION_SHOW_TOAST);
+      expect(payload).toMatchObject({
+        type: "error",
+        title: expectedToast.title,
+        rateLimitKey: expectedToast.rateLimitKey,
+      });
+      expect((payload as { message: string }).message).toMatch(/weren't approved/);
+    });
+
+    it("does not fire when a local teardown is skipped for approval", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(
+        entry,
+        makeWorktreeUpdateEvent({
+          lifecycleStatus: lifecycleStatus("teardown", "needs-approval", 1000),
+        })
+      );
+
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
     });
 
     it("still emits the normal worktree-update side-effects when a toast fires", () => {

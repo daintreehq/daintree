@@ -1,14 +1,21 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 import { useWorktrees } from "@/hooks";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store";
 import { useScratchStore } from "@/store/scratchStore";
 import { useHomeDir } from "@/hooks/app/useHomeDir";
 import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
+import {
+  RENDERER_ACTIVATION_ORIGIN,
+  clearHostAppliedActivation,
+  consumeHostAppliedActivation,
+  markActivationRequested,
+} from "@/store/worktreeActivationOrigin";
 
 export function useActiveWorktreeSync() {
   const { worktrees, isInitialized } = useWorktrees();
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
+  const restoreWorktreeId = useWorktreeSelectionStore((s) => s.restoreWorktreeId);
   const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
   const setActiveWorktree = useWorktreeSelectionStore((s) => s.setActiveWorktree);
   const deletedWorktrees = useWorktreeSelectionStore((s) => s.deletedWorktrees);
@@ -19,6 +26,12 @@ export function useActiveWorktreeSync() {
   const lastSyncedActiveRef = useRef<{ projectId: string | null; worktreeId: string | null }>({
     projectId: null,
     worktreeId: null,
+  });
+  // Whether the pick was the durable restore target is captured at send time,
+  // non-reactively: a change to the restore target alone must not re-run the
+  // sync effect, and a ref written during render is a compiler bailout.
+  const recordActivationRequest = useEffectEvent((worktreeId: string) => {
+    markActivationRequested(worktreeId, restoreWorktreeId === worktreeId);
   });
 
   const activeWorktree = useMemo(
@@ -74,6 +87,15 @@ export function useActiveWorktreeSync() {
 
     if (!projectId || !selectedWorktreeId) {
       lastSyncedActiveRef.current = { projectId, worktreeId: null };
+      clearHostAppliedActivation();
+      return;
+    }
+
+    // A selection the host pushed to us (auto-switch, another window) is
+    // already the host's active id — answering with a `set-active` would only
+    // start another round of activations for every attached view (#12370).
+    if (consumeHostAppliedActivation(selectedWorktreeId)) {
+      lastSyncedActiveRef.current = { projectId, worktreeId: selectedWorktreeId };
       return;
     }
 
@@ -90,8 +112,17 @@ export function useActiveWorktreeSync() {
     }
 
     lastSyncedActiveRef.current = { projectId, worktreeId: selectedWorktreeId };
+    // The selection is already applied locally; the origin tag lets the
+    // `worktree-activated` echo be skipped instead of re-selecting an id this
+    // view may have moved past by the time it lands (#12370). Whether it was
+    // the durable pick is captured now, so a later catch-up re-apply can keep
+    // the source it was made with.
+    recordActivationRequest(selectedWorktreeId);
     window.electron.worktreePort
-      .request("set-active", { worktreeId: selectedWorktreeId })
+      .request("set-active", {
+        worktreeId: selectedWorktreeId,
+        origin: RENDERER_ACTIVATION_ORIGIN,
+      })
       .catch(() => {
         if (
           lastSyncedActiveRef.current.projectId === projectId &&

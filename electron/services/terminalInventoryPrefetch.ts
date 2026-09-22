@@ -74,6 +74,7 @@ export async function buildTerminalInventory(
         agentPresetColor: terminal.agentPresetColor,
         originalAgentPresetId: terminal.originalAgentPresetId,
         everDetectedAgent: terminal.everDetectedAgent,
+        agentIncarnation: terminal.agentIncarnation,
         detectedAgentId: terminal.detectedAgentId,
         detectedProcessId: terminal.detectedProcessId,
       });

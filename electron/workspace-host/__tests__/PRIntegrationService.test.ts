@@ -301,12 +301,33 @@ describe("PRIntegrationService", () => {
       expect(prServiceMock.stop).toHaveBeenCalledTimes(1);
     });
 
-    it("resume() starts the underlying service with no startup jitter", () => {
+    it("resume() starts the underlying service with no startup jitter", async () => {
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
+      await service.initialize("/repo", "test-project-id", () => []);
+      vi.mocked(prServiceMock.start).mockClear();
+
       service.resume();
       expect(prServiceMock.start).toHaveBeenCalledTimes(1);
       // Focus-restore is not a crash-recovery path — jitter is skipped.
       expect(prServiceMock.start).toHaveBeenCalledWith(0);
+    });
+
+    it("resume() before initialize() starts nothing (#12519)", () => {
+      // A non-git workspace never initializes, and a foreground can land while
+      // a load is still enumerating: starting would only log "not initialized".
+      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
+      service.resume();
+      expect(prServiceMock.start).not.toHaveBeenCalled();
+    });
+
+    it("resume() after cleanup() starts nothing", async () => {
+      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
+      await service.initialize("/repo", "test-project-id", () => []);
+      service.cleanup();
+      vi.mocked(prServiceMock.start).mockClear();
+
+      service.resume();
+      expect(prServiceMock.start).not.toHaveBeenCalled();
     });
   });
 

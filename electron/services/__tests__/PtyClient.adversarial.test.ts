@@ -53,6 +53,7 @@ vi.mock("../../utils/logger.js", () => ({
   logInfo,
   logWarn,
   isValidLogOverrideLevel: vi.fn(() => true),
+  ingestHostLogEvent: vi.fn(),
 }));
 
 interface MockUtilityProcess extends EventEmitter {

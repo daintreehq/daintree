@@ -100,7 +100,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
       {
         id: "open-folder",
         icon: FolderOpen,
-        title: "Open folder",
+        title: "Open project",
         description: "Open an existing project on your machine",
         onClick: () => void addProject(),
         primary: true,
@@ -139,148 +139,157 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   const progressTotal = CHECKLIST_ITEMS.length + 1; // real items + endowed "Install Daintree"
   const progressDone = 1 + completedCount; // endowed item always complete
 
+  // The welcome surface scales on its own width, not the viewport's: the
+  // Assistant panel takes a variable share of the window (#12438). The query
+  // container wraps the scroller rather than being it, so a scrollbar coming or
+  // going never moves the measured width and can't flip a tier, and it sits
+  // outside the capped column so it can measure past it. From 1800px (above the
+  // default width of every MacBook display) the layout gets more room; from
+  // 1920px the type steps up as well.
   return (
-    <div
-      className="flex flex-col items-center h-full w-full overflow-y-auto animate-in fade-in duration-500"
-      // Theme-authored wash layered over the existing canvas; `none` = today.
-      style={{ background: "var(--welcome-field-wash, none)" }}
-    >
-      <div className="max-w-2xl w-full flex flex-col items-center px-8 py-12 gap-10">
-        {/* Hero — suppressed for returning users; their recent projects are the relevant first thing */}
-        {!hasProjects && (
-          <div className="flex flex-col items-center text-center">
-            <DaintreeIcon
-              className="h-16 w-16 mb-6"
-              // Fallback replicates the former `text-tint/50` utility exactly.
-              style={{
-                color:
-                  "var(--welcome-mark-color, color-mix(in oklab, var(--theme-tint) 50%, transparent))",
-              }}
-            />
-            <h1 className="text-2xl font-semibold text-text-primary tracking-tight mb-2">
-              Welcome to Daintree
-            </h1>
-            <p className="text-sm text-text-secondary leading-relaxed font-medium">
-              A habitat for your AI agents.
-            </p>
-          </div>
-        )}
-
-        {hasProjects && <TopProjects projects={topProjects} onSelect={switchProject} />}
-
-        <NudgeSequencer
-          showChecklist={!!showChecklist}
-          checklist={checklist}
-          progressDone={progressDone}
-          progressTotal={progressTotal}
-        />
-
-        {/* Quick Actions */}
-        <div className="w-full">
-          {hasProjects && (
-            <h3
-              id="quick-actions-heading"
-              className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-3"
-            >
-              Quick actions
-            </h3>
+    <div className="@container/welcome h-full w-full">
+      <div
+        className="flex flex-col items-center h-full w-full overflow-y-auto animate-in fade-in duration-500"
+        // Theme-authored wash layered over the existing canvas; `none` = today.
+        style={{ background: "var(--welcome-field-wash, none)" }}
+      >
+        <div className="max-w-2xl w-full flex flex-col items-center px-8 py-12 gap-10 @min-[1800px]/welcome:max-w-3xl @min-[1800px]/welcome:gap-12 @min-[1920px]/welcome:max-w-4xl">
+          {/* Hero — suppressed for returning users; their recent projects are the relevant first thing */}
+          {!hasProjects && (
+            <div className="flex flex-col items-center text-center">
+              <DaintreeIcon
+                className="h-16 w-16 mb-6"
+                // Fallback replicates the former `text-tint/50` utility exactly.
+                style={{
+                  color:
+                    "var(--welcome-mark-color, color-mix(in oklab, var(--theme-tint) 50%, transparent))",
+                }}
+              />
+              <h1 className="text-2xl font-semibold text-text-primary tracking-tight mb-2 @min-[1920px]/welcome:text-3xl">
+                Welcome to Daintree
+              </h1>
+              <p className="text-sm text-text-secondary leading-relaxed font-medium @min-[1920px]/welcome:text-base">
+                A habitat for your AI agents.
+              </p>
+            </div>
           )}
-          <div
-            role="group"
-            aria-label={hasProjects ? undefined : "Quick actions"}
-            aria-labelledby={hasProjects ? "quick-actions-heading" : undefined}
-            data-testid="quick-actions"
-            className="grid grid-cols-2 gap-3"
-          >
-            {quickActions.map(({ id, icon: Icon, title, description, onClick, primary }) => {
-              // Subtle surface lift marks the recommended first step for new
-              // users only; once recents exist the list owns the primary path,
-              // so every card drops to equal, demoted weight. Not the accent
-              // color — that load-bearing signal is owned by the checklist.
-              const lifted = primary && !hasProjects;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={onClick}
-                  // Title is the accessible name; the description is announced
-                  // once via aria-describedby. aria-label keeps the name clean
-                  // so the in-button description text isn't double-announced.
-                  aria-label={title}
-                  aria-describedby={`qa-desc-${id}`}
-                  className={cn(
-                    "flex flex-col items-start gap-1 rounded-[var(--radius-md)] p-3 text-left",
-                    "transition-colors duration-150",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                    lifted
-                      ? // Correct elevate-to-select inversion (ring-border-strong
-                        // + elevated fill). Dark keeps its /95 wash; on light the
-                        // alpha makes the elevated lift translucency-inert (RC-9),
-                        // so .light forces the fully opaque elevated surface to
-                        // preserve the real ~0.03-0.04 dL lift over the panel.
-                        "ring-1 ring-border-strong bg-surface-panel-elevated/95 [.light_&]:bg-surface-panel-elevated hover:bg-surface-panel-elevated"
-                      : // Idle hover: overlay-soft already clears the JND on dark
-                        // but composites sub-JND over the light panel, so .light
-                        // steps it up to overlay-medium.
-                        "ring-1 ring-border-strong/40 hover:bg-overlay-soft [.light_&]:hover:bg-overlay-medium"
-                  )}
-                >
-                  <span className="flex items-center gap-2 text-sm font-medium text-text-primary">
-                    <Icon className="h-4 w-4 shrink-0 text-daintree-text/70" />
-                    {title}
-                  </span>
-                  <span
-                    id={`qa-desc-${id}`}
-                    className="text-xs text-text-secondary leading-relaxed"
-                  >
-                    {description}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
 
-        {/* Keyboard Shortcuts */}
-        {visibleShortcutTips.length > 0 && (
+          {hasProjects && <TopProjects projects={topProjects} onSelect={switchProject} />}
+
+          <NudgeSequencer
+            showChecklist={!!showChecklist}
+            checklist={checklist}
+            progressDone={progressDone}
+            progressTotal={progressTotal}
+          />
+
+          {/* Quick Actions */}
           <div className="w-full">
-            <h3 className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-3">
-              Keyboard shortcuts
-            </h3>
-            <div className="grid grid-cols-2 gap-x-8 gap-y-2">
-              {visibleShortcutTips.map(({ label, actionId }) => {
-                const combo = keybindingService.getDisplayCombo(actionId);
+            {hasProjects && (
+              <h3
+                id="quick-actions-heading"
+                className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-3"
+              >
+                Quick actions
+              </h3>
+            )}
+            <div
+              role="group"
+              aria-label={hasProjects ? undefined : "Quick actions"}
+              aria-labelledby={hasProjects ? "quick-actions-heading" : undefined}
+              data-testid="quick-actions"
+              className="grid grid-cols-2 gap-3 @min-[1800px]/welcome:gap-4"
+            >
+              {quickActions.map(({ id, icon: Icon, title, description, onClick, primary }) => {
+                // Subtle surface lift marks the recommended first step for new
+                // users only; once recents exist the list owns the primary path,
+                // so every card drops to equal, demoted weight. Not the accent
+                // color — that load-bearing signal is owned by the checklist.
+                const lifted = primary && !hasProjects;
                 return (
-                  <div key={actionId} className="flex items-center justify-between gap-3">
-                    <span className="text-sm text-text-secondary">{label}</span>
-                    <kbd className="shrink-0 bg-surface-canvas border border-border-default rounded px-1.5 py-0.5 text-xs font-mono text-text-primary shadow-sm">
-                      {combo}
-                    </kbd>
-                  </div>
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={onClick}
+                    // Title is the accessible name; the description is announced
+                    // once via aria-describedby. aria-label keeps the name clean
+                    // so the in-button description text isn't double-announced.
+                    aria-label={title}
+                    aria-describedby={`qa-desc-${id}`}
+                    className={cn(
+                      "flex flex-col items-start gap-1 rounded-[var(--radius-md)] p-3 text-left @min-[1800px]/welcome:p-4",
+                      "transition-colors duration-150",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+                      lifted
+                        ? // Correct elevate-to-select inversion (ring-border-strong
+                          // + elevated fill). Dark keeps its /95 wash; on light the
+                          // alpha makes the elevated lift translucency-inert (RC-9),
+                          // so .light forces the fully opaque elevated surface to
+                          // preserve the real ~0.03-0.04 dL lift over the panel.
+                          "ring-1 ring-border-strong bg-surface-panel-elevated/95 [.light_&]:bg-surface-panel-elevated hover:bg-surface-panel-elevated"
+                        : // Idle hover: overlay-soft already clears the JND on dark
+                          // but composites sub-JND over the light panel, so .light
+                          // steps it up to overlay-medium.
+                          "ring-1 ring-border-strong/40 hover:bg-overlay-soft [.light_&]:hover:bg-overlay-medium"
+                    )}
+                  >
+                    <span className="flex items-center gap-2 text-sm font-medium text-text-primary @min-[1920px]/welcome:text-base">
+                      <Icon className="h-4 w-4 shrink-0 text-daintree-text/70 @min-[1920px]/welcome:h-5 @min-[1920px]/welcome:w-5" />
+                      {title}
+                    </span>
+                    <span
+                      id={`qa-desc-${id}`}
+                      className="text-xs text-text-secondary leading-relaxed @min-[1920px]/welcome:text-sm"
+                    >
+                      {description}
+                    </span>
+                  </button>
                 );
               })}
             </div>
           </div>
-        )}
 
-        {/* Footer */}
-        <div className="flex items-center gap-4 text-xs text-daintree-text/40 pt-2">
-          <button
-            type="button"
-            onClick={() => {
-              const promise = window.electron?.system?.openExternal(
-                "https://daintree.org/newsletter"
-              );
-              if (promise) {
-                safeFireAndForget(promise, { context: "Opening newsletter link" });
-              }
-            }}
-            className="flex items-center gap-1.5 hover:text-text-secondary transition-colors"
-          >
-            <Newspaper className="h-3 w-3" />
-            Newsletter
-            <ExternalLink className="h-2.5 w-2.5" />
-          </button>
+          {/* Keyboard Shortcuts */}
+          {visibleShortcutTips.length > 0 && (
+            <div className="w-full">
+              <h3 className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-3">
+                Keyboard shortcuts
+              </h3>
+              <div className="grid grid-cols-2 gap-x-8 gap-y-2 @min-[1800px]/welcome:gap-x-10">
+                {visibleShortcutTips.map(({ label, actionId }) => {
+                  const combo = keybindingService.getDisplayCombo(actionId);
+                  return (
+                    <div key={actionId} className="flex items-center justify-between gap-3">
+                      <span className="text-sm text-text-secondary">{label}</span>
+                      <kbd className="shrink-0 bg-surface-canvas border border-border-default rounded px-1.5 py-0.5 text-xs font-mono text-text-primary shadow-sm">
+                        {combo}
+                      </kbd>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Footer */}
+          <div className="flex items-center gap-4 text-xs text-daintree-text/40 pt-2">
+            <button
+              type="button"
+              onClick={() => {
+                const promise = window.electron?.system?.openExternal(
+                  "https://daintree.org/newsletter"
+                );
+                if (promise) {
+                  safeFireAndForget(promise, { context: "Opening newsletter link" });
+                }
+              }}
+              className="flex items-center gap-1.5 hover:text-text-secondary transition-colors"
+            >
+              <Newspaper className="h-3 w-3" />
+              Newsletter
+              <ExternalLink className="h-2.5 w-2.5" />
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -380,14 +389,14 @@ function TopProjects({
             type="button"
             onClick={() => void onSelect(project.id)}
             className={cn(
-              "w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-left transition-colors",
+              "w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-left transition-colors @min-[1800px]/welcome:px-4 @min-[1800px]/welcome:py-3",
               "hover:bg-overlay-soft",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             )}
           >
             <div
               // Wash/shadow var fallbacks keep themes without the overrides byte-identical.
-              className="flex items-center justify-center rounded-[var(--radius-lg)] shadow-[var(--project-tile-shadow,inset_0_1px_2px_rgba(0,0,0,0.3))] shrink-0 h-8 w-8 text-base"
+              className="flex items-center justify-center rounded-[var(--radius-lg)] shadow-[var(--project-tile-shadow,inset_0_1px_2px_rgba(0,0,0,0.3))] shrink-0 h-8 w-8 text-base @min-[1920px]/welcome:h-10 @min-[1920px]/welcome:w-10 @min-[1920px]/welcome:text-lg"
               style={{
                 background: project.color
                   ? `var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), ${getProjectGradient(project.color)}`
@@ -399,15 +408,18 @@ function TopProjects({
               </span>
             </div>
             <div className="flex-1 min-w-0">
-              <span className="text-sm font-semibold text-text-primary truncate block">
+              <span className="text-sm font-semibold text-text-primary truncate block @min-[1920px]/welcome:text-base">
                 {project.name}
               </span>
-              <span className="text-xs text-text-secondary truncate block" title={project.path}>
+              <span
+                className="text-xs text-text-secondary truncate block @min-[1920px]/welcome:text-sm"
+                title={project.path}
+              >
                 {middleTruncate(project.path, 48)}
               </span>
             </div>
             <span
-              className="text-xs text-text-secondary shrink-0"
+              className="text-xs text-text-secondary shrink-0 @min-[1920px]/welcome:text-sm"
               title={new Date(project.lastOpened).toLocaleString()}
             >
               {formatTimeAgo(project.lastOpened)}
@@ -441,7 +453,7 @@ function AgentSetupBannerCard() {
 
   return (
     <div className="w-full" data-testid="agent-setup-banner">
-      <div className="relative w-full rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-sidebar/40 px-4 py-3.5">
+      <div className="relative w-full rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-sidebar/40 px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4">
         <button
           type="button"
           onClick={handleDismiss}
@@ -452,22 +464,32 @@ function AgentSetupBannerCard() {
           <X className="h-3.5 w-3.5" />
         </button>
         <div className="flex items-start gap-3 pr-6">
-          <Sparkles className="h-4 w-4 text-daintree-text/50 mt-0.5 shrink-0" aria-hidden="true" />
+          <Sparkles
+            className="h-4 w-4 text-daintree-text/50 mt-0.5 shrink-0 @min-[1920px]/welcome:h-5 @min-[1920px]/welcome:w-5"
+            aria-hidden="true"
+          />
           <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-semibold text-text-primary">Set up your AI agents</h3>
-            <p className="text-xs text-text-secondary mt-1 leading-relaxed">
+            <h3 className="text-sm font-semibold text-text-primary @min-[1920px]/welcome:text-base">
+              Set up your AI agents
+            </h3>
+            <p className="text-xs text-text-secondary mt-1 leading-relaxed @min-[1920px]/welcome:text-sm">
               Pick a theme, opt into telemetry, and choose which agents to install. You can skip
               this and come back anytime.
             </p>
             <div className="mt-4 flex items-center gap-2">
-              <Button size="sm" onClick={handleStartSetup} data-testid="agent-setup-banner-cta">
+              <Button
+                size="sm"
+                onClick={handleStartSetup}
+                className="@min-[1920px]/welcome:h-8 @min-[1920px]/welcome:text-sm"
+                data-testid="agent-setup-banner-cta"
+              >
                 <Sparkles className="h-3.5 w-3.5" />
                 Set up agents
               </Button>
               <button
                 type="button"
                 onClick={handleDismiss}
-                className="text-xs text-text-secondary hover:text-text-primary transition-colors"
+                className="text-xs text-text-secondary hover:text-text-primary transition-colors @min-[1920px]/welcome:text-sm"
               >
                 Not now
               </button>
@@ -533,7 +555,7 @@ function AgentWelcomeCard() {
 
   return (
     <div className="w-full">
-      <div className="relative w-full rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-sidebar/40 px-4 py-3.5">
+      <div className="relative w-full rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-sidebar/40 px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4">
         <button
           type="button"
           onClick={handleDismiss}
@@ -543,10 +565,15 @@ function AgentWelcomeCard() {
           <X className="h-3.5 w-3.5" />
         </button>
         <div className="flex items-start gap-3 pr-6">
-          <Plug className="h-4 w-4 text-daintree-text/50 mt-0.5 shrink-0" aria-hidden="true" />
+          <Plug
+            className="h-4 w-4 text-daintree-text/50 mt-0.5 shrink-0 @min-[1920px]/welcome:h-5 @min-[1920px]/welcome:w-5"
+            aria-hidden="true"
+          />
           <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-semibold text-text-primary">Installed agents found</h3>
-            <p className="text-xs text-text-secondary mt-1 leading-relaxed">
+            <h3 className="text-sm font-semibold text-text-primary @min-[1920px]/welcome:text-base">
+              Installed agents found
+            </h3>
+            <p className="text-xs text-text-secondary mt-1 leading-relaxed @min-[1920px]/welcome:text-sm">
               Pin them to your toolbar for one-click launching.
             </p>
             <ul className="mt-3 flex flex-wrap gap-2">
@@ -574,6 +601,7 @@ function AgentWelcomeCard() {
                 size="sm"
                 onClick={() => void handlePinAll()}
                 disabled={busy}
+                className="@min-[1920px]/welcome:h-8 @min-[1920px]/welcome:text-sm"
                 data-testid="welcome-card-pin-all"
               >
                 <Pin className="h-3.5 w-3.5" />
@@ -582,7 +610,7 @@ function AgentWelcomeCard() {
               <button
                 type="button"
                 onClick={handleDismiss}
-                className="text-xs text-text-secondary hover:text-text-primary transition-colors"
+                className="text-xs text-text-secondary hover:text-text-primary transition-colors @min-[1920px]/welcome:text-sm"
               >
                 Not now
               </button>
@@ -591,7 +619,7 @@ function AgentWelcomeCard() {
               <p
                 role="alert"
                 data-testid="welcome-card-pin-error"
-                className="mt-2 text-xs text-status-error"
+                className="mt-2 text-xs text-status-error @min-[1920px]/welcome:text-sm"
               >
                 Couldn&apos;t pin all agents. Please try again.
               </p>
@@ -618,7 +646,7 @@ function InlineChecklist({
         <h3 className="text-xs font-medium text-text-secondary uppercase tracking-wider">
           Getting started
         </h3>
-        <span className="text-3xs text-text-secondary font-mono">
+        <span className="text-3xs text-text-secondary font-mono @min-[1920px]/welcome:text-xs">
           {progressDone}/{progressTotal}
         </span>
       </div>
@@ -638,12 +666,14 @@ function InlineChecklist({
 
           return (
             <>
-              <div className="flex items-start gap-2.5 px-2 py-1.5 opacity-60">
-                <div className="h-4 w-4 rounded-full bg-accent-primary border border-accent-primary flex items-center justify-center shrink-0">
+              <div className="flex items-start gap-2.5 px-2 py-1.5 opacity-60 @min-[1800px]/welcome:gap-3 @min-[1800px]/welcome:px-3 @min-[1800px]/welcome:py-2">
+                <div className="h-4 w-4 rounded-full bg-accent-primary border border-accent-primary flex items-center justify-center shrink-0 @min-[1920px]/welcome:mt-0.5">
                   <Check className="h-2.5 w-2.5 text-accent-primary-foreground" />
                 </div>
-                <Download className="h-3.5 w-3.5 text-daintree-text/40 shrink-0" />
-                <span className="text-xs leading-snug text-daintree-text/40">Install Daintree</span>
+                <Download className="h-3.5 w-3.5 text-daintree-text/40 shrink-0 @min-[1920px]/welcome:mt-0.5 @min-[1920px]/welcome:h-4 @min-[1920px]/welcome:w-4" />
+                <span className="text-xs leading-snug text-daintree-text/40 @min-[1920px]/welcome:text-sm">
+                  Install Daintree
+                </span>
               </div>
 
               {/* Real checklist items */}
@@ -654,7 +684,7 @@ function InlineChecklist({
                   <>
                     <div
                       className={cn(
-                        "h-4 w-4 rounded-full border flex items-center justify-center shrink-0 transition-colors duration-150",
+                        "h-4 w-4 rounded-full border flex items-center justify-center shrink-0 transition-colors duration-150 @min-[1920px]/welcome:mt-0.5",
                         done ? "bg-accent-primary border-accent-primary" : "border-daintree-text/30"
                       )}
                     >
@@ -662,14 +692,14 @@ function InlineChecklist({
                     </div>
                     <Icon
                       className={cn(
-                        "h-3.5 w-3.5 shrink-0",
+                        "h-3.5 w-3.5 shrink-0 @min-[1920px]/welcome:mt-0.5 @min-[1920px]/welcome:h-4 @min-[1920px]/welcome:w-4",
                         done ? "text-daintree-text/40" : "text-daintree-text/70"
                       )}
                     />
                     <div className="flex flex-col min-w-0 flex-1">
                       <span
                         className={cn(
-                          "text-xs leading-snug",
+                          "text-xs leading-snug @min-[1920px]/welcome:text-sm",
                           done ? "line-through text-daintree-text/40" : "text-text-primary"
                         )}
                       >
@@ -678,7 +708,7 @@ function InlineChecklist({
                       {description && (
                         <span
                           className={cn(
-                            "text-3xs leading-snug",
+                            "text-3xs leading-snug @min-[1920px]/welcome:text-xs",
                             done ? "text-text-placeholder" : "text-text-secondary"
                           )}
                         >
@@ -690,7 +720,7 @@ function InlineChecklist({
                 );
 
                 const sharedClasses = cn(
-                  "flex items-start gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5",
+                  "flex items-start gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5 @min-[1800px]/welcome:gap-3 @min-[1800px]/welcome:px-3 @min-[1800px]/welcome:py-2",
                   "transition-colors duration-150",
                   done ? "opacity-60" : "opacity-100"
                 );

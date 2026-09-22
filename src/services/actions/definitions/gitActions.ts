@@ -274,7 +274,7 @@ function reportGitFailure(
 export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("git.getProjectPulse", () => ({
     id: "git.getProjectPulse",
-    title: "Get Project Pulse",
+    title: "Get project pulse",
     description:
       "Summarise a worktree's historical git activity — a commit heatmap, counts over a window, and the current streak. Use this for trends and momentum, not for what is changed right now: read the staging status for the current working tree. Widening the window or asking for the delta against the main branch costs more history to walk, so request those only when needed.",
     category: "git",
@@ -409,7 +409,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("git.getFileDiff", () => ({
     id: "git.getFileDiff",
-    title: "Get File Diff",
+    title: "Get file diff",
     description:
       "Read one file's git diff as a byte-bounded window, so a large diff cannot flood the response. When the result is flagged truncated, call again from the offset it hands back to continue: a single call is not guaranteed to be the whole diff. Some files have no diff text at all, and binary, unchanged and oversized files come back as a marker instead, which is a valid result rather than a failure.",
     category: "git",
@@ -505,7 +505,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("git.listCommits", () => ({
     id: "git.listCommits",
-    title: "List Commits",
+    title: "List commits",
     description:
       "List a repository's commit history, oldest changes last, with optional filtering by message, author or branch. Use this for history; read the staging status for uncommitted work. Commit bodies are cut off at roughly a kilobyte and flagged when that happens, so treat a truncated body as partial. Page onward with the cursor it returns while more results remain.",
     category: "git",
@@ -609,7 +609,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("git.stageFile", () => ({
     id: "git.stageFile",
-    title: "Stage File",
+    title: "Stage file",
     description:
       "Stage one file's changes for the next commit. Reversible by unstaging, and staging an already-staged file is harmless. This changes the index only — nothing is committed or pushed until you do so explicitly.",
     category: "git",
@@ -629,7 +629,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("git.unstageFile", () => ({
     id: "git.unstageFile",
-    title: "Unstage File",
+    title: "Unstage file",
     description:
       "Remove one file from the staging area, leaving its working-tree changes untouched. This is the inverse of staging and discards no edits.",
     category: "git",
@@ -647,7 +647,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("git.stageAll", () => ({
     id: "git.stageAll",
-    title: "Stage All Files",
+    title: "Stage all files",
     description:
       "Stage every change in the worktree for the next commit — modifications, new files, deletions and renames alike. This is broader than it looks — it sweeps in unrelated edits — so read the staging status first when the commit is meant to be scoped. Reversible by unstaging everything.",
     category: "git",
@@ -669,7 +669,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("git.unstageAll", () => ({
     id: "git.unstageAll",
-    title: "Unstage All Files",
+    title: "Unstage all files",
     description:
       "Clear the staging area entirely, leaving all working-tree changes untouched. This is the inverse of staging everything and discards no edits.",
     category: "git",
@@ -789,7 +789,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("git.pullRebase", () => ({
     id: "git.pullRebase",
-    title: "Pull and Rebase",
+    title: "Pull and rebase",
     description: "Pull remote changes and rebase local commits",
     category: "git",
     kind: "command",
@@ -905,7 +905,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
    */
   actions.set("git.rebaseOntoBase", () => ({
     id: "git.rebaseOntoBase",
-    title: "Rebase onto Base Branch",
+    title: "Rebase onto base branch",
     description: "Replay this worktree's commits on top of its base branch",
     category: "git",
     kind: "command",
@@ -939,7 +939,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("git.mergeBaseIntoBranch", () => ({
     id: "git.mergeBaseIntoBranch",
-    title: "Merge Base Branch In",
+    title: "Merge base branch in",
     description: "Merge this worktree's base branch into its current branch",
     category: "git",
     kind: "command",
@@ -982,7 +982,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
    */
   actions.set("git.abortRepositoryOperation", () => ({
     id: "git.abortRepositoryOperation",
-    title: "Abort Git Operation",
+    title: "Abort Git operation",
     description: "Abort the merge, rebase, cherry-pick, or revert this worktree is halted on",
     category: "git",
     kind: "command",
@@ -1019,7 +1019,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("git.continueRepositoryOperation", () => ({
     id: "git.continueRepositoryOperation",
-    title: "Continue Git Operation",
+    title: "Continue Git operation",
     description: "Continue the merge, rebase, cherry-pick, or revert this worktree is halted on",
     category: "git",
     kind: "command",
@@ -1054,7 +1054,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("git.forcePushWithLease", () => ({
     id: "git.forcePushWithLease",
-    title: "Force Push with Lease",
+    title: "Force push with lease",
     description:
       "Complete a rebase on a published branch by overwriting the remote with the local one, but only while the remote still matches the state a rejected push observed. Available only after a push has actually been rejected for a diverged remote — the lease it overwrites against is captured from that rejection and cannot be recomputed.",
     category: "git",
@@ -1135,7 +1135,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("git.markSafeDirectory", () => ({
     id: "git.markSafeDirectory",
-    title: "Trust Repository",
+    title: "Trust repository",
     description: "Mark a repository directory as safe for git operations",
     category: "git",
     kind: "command",
@@ -1151,7 +1151,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("git.getStagingStatus", () => ({
     id: "git.getStagingStatus",
-    title: "Get Staging Status",
+    title: "Get staging status",
     description:
       "Read the current working-tree state of a repository: what is staged, what is modified but unstaged, what is conflicted, and which branch is checked out. Read this before committing. Use the activity pulse for historical trends instead — it reports past activity, not current changes. Long file lists are paged, so a partial page is normal; continue from the offset it hands back while more remain.",
     category: "git",

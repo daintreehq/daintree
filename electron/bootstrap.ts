@@ -14,6 +14,13 @@ import { isSafeModeActive } from "./services/CrashLoopGuardService.js";
 import { setCompileCacheEnableStatus } from "./utils/hostPerformance.js";
 import { initializeStore, _peekStoreInstance, runDeferredStoreBackup } from "./store.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
+import { installSpawnCensusFromEnv } from "./utils/spawnCensus.js";
+import { getIsIdleHarness } from "./setup/runtimeFlags.js";
+
+// Idle harness spawn census (#12521). Needs both the runner's variable and an
+// unpackaged idle-harness launch; anything else drops the variable before a
+// host can inherit it. Before main.js loads, so every launch main makes is seen.
+installSpawnCensusFromEnv("main", { allowed: getIsIdleHarness() });
 
 const cacheDir = path.join(app.getPath("userData"), "compile-cache");
 {

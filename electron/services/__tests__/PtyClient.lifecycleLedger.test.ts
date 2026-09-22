@@ -17,6 +17,7 @@ const shared = vi.hoisted(() => {
       clearAll: vi.fn(),
     },
     appMock,
+    ingestHostLogEvent: vi.fn(),
   };
 });
 
@@ -43,6 +44,7 @@ vi.mock("../../utils/logger.js", () => ({
   logInfo: vi.fn(),
   logWarn: vi.fn(),
   isValidLogOverrideLevel: vi.fn(() => true),
+  ingestHostLogEvent: shared.ingestHostLogEvent,
 }));
 
 interface MockUtilityProcess extends EventEmitter {
@@ -124,6 +126,27 @@ describe("PtyClient lifecycle ledger", () => {
     env: { ANTHROPIC_BASE_URL: "https://proxy.example" },
   };
 
+  it("delivers a host log event all the way to the logger's ingest path (#12544)", () => {
+    const client = createReadyClient();
+    const logEvent = {
+      type: "log" as const,
+      timestamp: 1_700_000_000_000,
+      level: "warn" as const,
+      source: "pty-host:Graceful",
+      message: "Graceful capture drain ended",
+      contextJson: '{"drained":true}',
+    };
+
+    mockChild.emit("message", logEvent);
+
+    // Proves the whole chain — PtyHostLifecycle intercept, the PtyShard
+    // callback, and PtyClient's wiring — not just the interception.
+    expect(shared.ingestHostLogEvent).toHaveBeenCalledTimes(1);
+    expect(shared.ingestHostLogEvent).toHaveBeenCalledWith(logEvent);
+
+    client.dispose();
+  });
+
   it("mints and stamps launchGeneration on every spawn of an id", () => {
     const client = createReadyClient();
 
@@ -200,6 +223,25 @@ describe("PtyClient lifecycle ledger", () => {
     // its command (here a resume), not a bare prompt. No separate Main write.
     expect(replayed[0]!.options.postSpawnInput).toBe("claude --resume s-1\r");
     expect(writeMessages(restartedChild)).toEqual([]);
+  });
+
+  it("delivers a launch's handback code once, never on a crash respawn (#12488)", () => {
+    const client = createReadyClient();
+    client.spawn("t1", { ...baseOptions, handbackCode: "k7f3qa" });
+
+    expect(spawnMessages(mockChild)[0]!.options.handbackCode).toBe("k7f3qa");
+
+    const restartedChild = createMockChild();
+    shared.forkMock.mockReturnValue(restartedChild);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(200);
+    restartedChild.emit("message", { type: "ready" });
+
+    const replayed = spawnMessages(restartedChild);
+    expect(replayed).toHaveLength(1);
+    // The request died with its host, so the replayed launch carries none.
+    expect(replayed[0]!.options).not.toHaveProperty("handbackCode");
   });
 
   it("replays wrapper args verbatim on crash respawn — a resume survives (#11339)", () => {
@@ -316,6 +358,84 @@ describe("PtyClient lifecycle ledger", () => {
     expect(entry?.generation).toBe(2);
     expect(entry?.closedAt).toBeUndefined();
     expect(entry?.spawnOk).toBeUndefined();
+  });
+
+  describe("a spawn refused because the id is still live (#11341, #12498)", () => {
+    function refuseAsLive(launchGeneration: number) {
+      mockChild.emit("message", {
+        type: "spawn-result",
+        id: "t1",
+        result: {
+          success: false,
+          id: "t1",
+          launchGeneration,
+          error: { code: "TERMINAL_ALREADY_LIVE", message: "live owner" },
+        },
+      });
+    }
+
+    it("keeps the live terminal registered under its original spawn", () => {
+      // The refusal deleted the entry the duplicate had just overwritten, so a
+      // running terminal read as gone — and the power blocker prunes on that.
+      const client = createReadyClient();
+      client.spawn("t1", { ...baseOptions, projectId: "p-live" }); // generation 1
+      mockChild.emit("message", {
+        type: "spawn-result",
+        id: "t1",
+        result: { success: true, id: "t1", launchGeneration: 1 },
+      });
+
+      client.spawn("t1", { ...baseOptions, projectId: "p-duplicate" }); // generation 2
+      refuseAsLive(2);
+
+      expect(client.hasTerminal("t1")).toBe(true);
+      expect(client.getTerminalProjectId("t1")).toBe("p-live");
+    });
+
+    it("restores the running spawn, not an earlier refused one, when duplicates overlap", () => {
+      const client = createReadyClient();
+      client.spawn("t1", { ...baseOptions, projectId: "p-live" }); // generation 1
+      client.spawn("t1", { ...baseOptions, projectId: "p-first-duplicate" }); // generation 2
+      client.spawn("t1", { ...baseOptions, projectId: "p-second-duplicate" }); // generation 3
+
+      refuseAsLive(2);
+      refuseAsLive(3);
+
+      expect(client.hasTerminal("t1")).toBe(true);
+      expect(client.getTerminalProjectId("t1")).toBe("p-live");
+    });
+
+    it("does not resurrect a terminal killed before the refusal arrives", () => {
+      const client = createReadyClient();
+      client.spawn("t1", baseOptions);
+      client.spawn("t1", baseOptions);
+      client.kill("t1");
+
+      refuseAsLive(2);
+
+      expect(client.hasTerminal("t1")).toBe(false);
+    });
+
+    it("still drops the entry when the replacing spawn genuinely fails", () => {
+      // Any other failure means the host killed the prior incarnation to make
+      // room, so nothing is left running under the id.
+      const client = createReadyClient();
+      client.spawn("t1", baseOptions);
+      client.spawn("t1", baseOptions);
+
+      mockChild.emit("message", {
+        type: "spawn-result",
+        id: "t1",
+        result: {
+          success: false,
+          id: "t1",
+          launchGeneration: 2,
+          error: { code: "ENOENT", message: "no shell" },
+        },
+      });
+
+      expect(client.hasTerminal("t1")).toBe(false);
+    });
   });
 
   it("records successful spawn resolution", () => {

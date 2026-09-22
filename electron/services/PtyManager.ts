@@ -36,21 +36,39 @@ import {
 // From ./pty/types.js rather than the ./pty/index.js barrel above: the
 // PtyManager unit tests mock that barrel wholesale, which would leave this
 // undefined and fire the budget timer on the next tick.
-import { GRACEFUL_KILL_TERMINAL_BUDGET_MS } from "./pty/types.js";
+import { GRACEFUL_KILL_TERMINAL_BUDGET_MS, type GracefulCaptureHost } from "./pty/types.js";
 import { computeSpawnContext, acquirePtyProcess } from "./pty/terminalSpawn.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
 import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
 import { ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
 import { AgentTerminalLifecycleLedger } from "../../shared/utils/agentLifecycleLedger.js";
 import { events } from "./events.js";
-import { getGitBranch } from "../utils/gitUtils.js";
-import type { GracefulKillResult, TerminalResizeResult } from "../../shared/types/pty-host.js";
 import {
+  resolveCaptureBranch,
+  trackAgentSessionCapture,
+} from "./pty/agentSessionCaptureDelivery.js";
+import type {
+  GracefulKillResult,
+  TerminalResizeResult,
+  TerminalSubmitGuard,
+} from "../../shared/types/pty-host.js";
+import {
+  isUsableTerminalGeometry,
   isValidTerminalGeometry,
   type SerializedTerminalSnapshot,
 } from "../../shared/types/terminal.js";
 import { SCROLLBACK_MIN } from "../../shared/config/scrollback.js";
+
 import { shouldTrimAnalysisSession } from "../../shared/utils/workerGovernancePolicy.js";
+
+/**
+ * The grid a PTY boots at when its requested geometry is unusable — xterm's own
+ * default, and the same pair the Main spawn handler falls back to. A pane that
+ * boots here is re-sized by its first real fit; one that boots collapsed has no
+ * such correction, because nothing later disagrees with it.
+ */
+const DEFAULT_SPAWN_COLS = 80;
+const DEFAULT_SPAWN_ROWS = 24;
 
 /**
  * PtyManager - Facade for terminal process management.
@@ -81,6 +99,7 @@ export class PtyManager extends EventEmitter {
   private processTreeCache: ProcessTreeCache | null = null;
   private lineageLedger: LineageKillSource | null = null;
   private imagePathProbe: ImagePathProbe | null = null;
+  private gracefulCaptureHost: GracefulCaptureHost | null = null;
   private analysisWorkerPool: AnalysisWorkerPool | null = null;
   private activeProjectId: string | null = null;
   private sabModeEnabled = false;
@@ -125,6 +144,14 @@ export class PtyManager extends EventEmitter {
 
   setImagePathProbe(probe: ImagePathProbe): void {
     this.imagePathProbe = probe;
+  }
+
+  /**
+   * The pty-host's pause-hold owner, which opens a terminal's graceful-shutdown
+   * capture window (#12432). Without one, teardowns run under ordinary holds.
+   */
+  setGracefulCaptureHost(host: GracefulCaptureHost | null): void {
+    this.gracefulCaptureHost = host;
   }
 
   /**
@@ -450,6 +477,21 @@ export class PtyManager extends EventEmitter {
       }
     }
 
+    // Boot geometry gets the same floor a resize does. A buffered resize can no
+    // longer be collapsed — `resize` refuses one before it is buffered — but the
+    // spawn options are a separate door: the Main handler normalizes them with
+    // `Math.floor(cols) || 80`, which leaves a caller-supplied 2 intact, and
+    // from here they size the native PTY, the pooled process, and both headless
+    // mirrors with no resize to correct them afterwards (#12442). Replaced with
+    // the ordinary default rather than refused: a spawn cannot be declined over
+    // its geometry, and the first real fit re-sizes the pane either way.
+    if (!isUsableTerminalGeometry({ cols: options.cols, rows: options.rows })) {
+      logWarn(
+        `Terminal ${id} spawn geometry ${options.cols}x${options.rows} is collapsed; booting at ${DEFAULT_SPAWN_COLS}x${DEFAULT_SPAWN_ROWS}`
+      );
+      options = { ...options, cols: DEFAULT_SPAWN_COLS, rows: DEFAULT_SPAWN_ROWS };
+    }
+
     const spawnContext = computeSpawnContext(id, options);
     const acquired = acquirePtyProcess(
       id,
@@ -492,6 +534,14 @@ export class PtyManager extends EventEmitter {
               return;
             }
             this.emit("submit-status", termId, state);
+          },
+          openGracefulCapture: (termId) => {
+            // Same staleness guard: a replaced incarnation must not open a
+            // window on the id its successor now owns.
+            if (this.registry.get(termId) !== terminalProcess) {
+              return null;
+            }
+            return this.gracefulCaptureHost?.open(termId) ?? null;
           },
           onPreserved: (termId) => {
             // Preserved terminals retain their full scrollback snapshot in
@@ -596,7 +646,13 @@ export class PtyManager extends EventEmitter {
    * Submit text as a command to the terminal.
    * Handles bracketed paste and CR timing on the backend for reliable execution.
    */
-  submit(id: string, text: string, submissionToken?: string): void {
+  submit(
+    id: string,
+    text: string,
+    submissionToken?: string,
+    handbackCode?: string,
+    guard?: TerminalSubmitGuard
+  ): void {
     const terminal = this.registry.get(id);
     if (!terminal) {
       logWarn(`Terminal ${id} not found, cannot submit`);
@@ -606,7 +662,7 @@ export class PtyManager extends EventEmitter {
       // that would answer for tokens this host never accepted.
       return;
     }
-    terminal.submit(text, submissionToken);
+    terminal.submit(text, submissionToken, handbackCode, guard);
   }
 
   /**
@@ -614,6 +670,11 @@ export class PtyManager extends EventEmitter {
    * both "no such terminal" and "this terminal has no record" — the read
    * surfaces already distinguish those, having resolved the terminal first.
    */
+  /** Withdraw a guarded submission (#12491); a terminal that is gone has nothing to withdraw. */
+  withdrawGuardedSubmission(id: string, submissionToken: string): void {
+    this.registry.get(id)?.withdrawGuardedSubmission(submissionToken);
+  }
+
   getSubmission(id: string, submissionToken: string): TerminalSubmissionRecord | undefined {
     return this.registry.get(id)?.getSubmission(submissionToken);
   }
@@ -649,11 +710,34 @@ export class PtyManager extends EventEmitter {
    * enforcement cannot live in the Main IPC handler alone — a fractional or
    * absurd grid arriving there would otherwise be buffered as spawn dims,
    * skipping `TerminalProcess.resize`'s own validation entirely.
+   *
+   * Structural validity is not enough: it starts at 1x1, and a hidden pane's
+   * zero-size box divides to FitAddon's 2x1 floor, which every layer then
+   * records as a real measurement (#12442). A collapsed grid is refused here
+   * too — the PTY keeps the size it has, which is the last grid something
+   * actually measured.
+   *
+   * The floor is `isUsableTerminalGeometry`, not the stricter plausibility
+   * one, because a request arrives here with no provenance: a genuinely small
+   * visible pane's measurement is indistinguishable from an extrapolated one,
+   * and refusing the former would leave xterm and the PTY split at every size
+   * the renderer can legitimately reach. The renderer applies the strict floor
+   * on the paths where it knows nothing measured the grid.
+   *
+   * `transport` names the delivery path in the rejection log; the renderer logs
+   * its own call site before sending, so between the two the next occurrence
+   * names its origin.
    */
-  resize(id: string, cols: number, rows: number): void {
+  resize(id: string, cols: number, rows: number, transport = "unknown"): void {
     const terminal = this.registry.get(id);
-    if (!isValidTerminalGeometry({ cols, rows })) {
-      logWarn(`Terminal ${id} resize rejected: invalid dims ${cols}x${rows}`);
+    if (!isUsableTerminalGeometry({ cols, rows })) {
+      const reason = isValidTerminalGeometry({ cols, rows })
+        ? `collapsed dims ${cols}x${rows}`
+        : `invalid dims ${cols}x${rows}`;
+      const held = terminal?.readPtyGeometry();
+      logWarn(
+        `Terminal ${id} resize rejected via ${transport}: ${reason}; holding ${held ? `${held.cols}x${held.rows}` : "unspawned"}`
+      );
       if (terminal) {
         this.emitResizeResult(id, {
           requestedCols: cols,
@@ -748,7 +832,9 @@ export class PtyManager extends EventEmitter {
       const terminal = this.registry.get(termId);
       const info = terminal?.getInfo();
 
-      void (async () => {
+      // Registered with the quit barrier as a whole: the id isn't known until
+      // the graceful kill returns, and a quit must still wait for it (#12433).
+      const expiry = (async () => {
         try {
           const { sessionId } = await this.gracefulKill(termId);
           // The assistant's overlay terminal must never produce a resume
@@ -759,7 +845,7 @@ export class PtyManager extends EventEmitter {
             // Best-effort branch stamp for resume sanity checks. The pty-host
             // has FS access but no WorkspaceClient, so resolve directly from
             // git with a short timeout; never let it block or fail the close.
-            const branch = info.cwd ? await getGitBranch(info.cwd) : null;
+            const branch = await resolveCaptureBranch(info.cwd);
             // Ship the captured record to Main rather than writing the journal
             // here — Main is the journal's single writer (two processes with
             // separate write queues doing read-modify-write on one file can
@@ -769,6 +855,7 @@ export class PtyManager extends EventEmitter {
             events.emit("agent-session:captured", {
               terminalId: termId,
               launchGeneration: info.launchGeneration,
+              boundary: "trash-expiry",
               record: {
                 sessionId,
                 agentId: info.launchAgentId,
@@ -797,6 +884,7 @@ export class PtyManager extends EventEmitter {
           }
         }
       })();
+      trackAgentSessionCapture(expiry);
     });
   }
 
@@ -836,6 +924,18 @@ export class PtyManager extends EventEmitter {
    */
   getActiveTerminalIds(): string[] {
     return this.registry.getAllIds();
+  }
+
+  /**
+   * Terminals whose PTY is still open. Exited terminals kept for their output
+   * stay registered but hold no PTY descriptors.
+   */
+  getLivePtyCount(): number {
+    let count = 0;
+    for (const terminal of this.registry.getAll()) {
+      if (terminal.getPublicState().hasPty) count++;
+    }
+    return count;
   }
 
   /**
@@ -937,6 +1037,7 @@ export class PtyManager extends EventEmitter {
       outputBufferSize: terminalInfo.outputBuffer.length,
       semanticBufferLines: terminalInfo.semanticBuffer.length,
       restartCount: terminalInfo.restartCount,
+      agentIncarnation: terminalInfo.agentIncarnation,
       hasPty,
       agentSessionId: terminalInfo.agentSessionId,
       detectedAgentId: terminalInfo.detectedAgentId,

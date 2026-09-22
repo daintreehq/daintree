@@ -348,7 +348,13 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // `closeOwned` to come back with it has misread the ownership ledger, which
   // is written from dispatch results and cannot be reached from here. Dropping
   // either clause buys ~90 B and costs a caller one of those two mistakes.
-  const MAX_EXTERNAL_TOTAL_BYTES = 11_452;
+  // 11_452 → 11_647 for #12479's `terminal.readLastMessageOwned`, a 363 B
+  // description of which 168 B fit the existing headroom. Its last sentence is
+  // the one a caller cannot do without: the tool reports what the transcript
+  // holds, not whether the agent is waiting, and a permission prompt is never
+  // in it — without that, "no unanswered question" reads as "nothing to answer"
+  // while the pane sits on an approval dialog.
+  const MAX_EXTERNAL_TOTAL_BYTES = 11_647;
 
   // Raised from 48_000 by #11908, which put seven tools on the in-app surface
   // (a deterministic session resume, the four bookmark mutations, and the two
@@ -401,7 +407,34 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // of the same description the external ceiling above pays for: the tool sits
   // on the action tier as well, so the in-app cohort is advertised the identical
   // prose rather than a second wording of it.
-  const MAX_COHORT_TOTAL_BYTES = 53_887;
+  // 53_887 → 54_036 for #12354's `forge.openRepo`. Every forge action has to be
+  // reachable by the in-app assistant (`tierAuth.test.ts`), so the action behind
+  // the toolbar's "View repository" entry lands on the system tier rather than
+  // staying UI-only. The surface had 19 B spare, so its 168 B description could
+  // not have fit at any wording above the 120 B floor; this is the measured
+  // total. What the prose has to carry is that the call opens a browser and
+  // returns nothing, and that a provider with no repository page refuses it.
+  // 54_036 → 54_593 for #12407's `terminal.sendCommandOwned` (317 B) and
+  // `terminal.injectOwned` (240 B). They sit on the action tier beside the
+  // unscoped pair the assistant keeps, so the in-app cohort carries both, and
+  // the 557 B is exactly their two descriptions. What the prose has to carry is
+  // the refusal — any panel this connection did not create is turned away, the
+  // user's own shells included — because a caller that misses it hands the
+  // tools ids from a listing and reads every refusal as a bug. The external
+  // total above falls instead: there the owned pair replaced the unscoped one,
+  // at 149 B less than the 706 B it removed.
+  // 54_593 → 54_956 for #12479's `terminal.readLastMessageOwned`, carried at the
+  // workbench floor for the same subset invariant. Its 363 B is the whole of the
+  // increase, so this stays the measured total rather than an allowance.
+  // 54_956 → 56_057 for #12491's terminal watches — `terminal.registerWatch` (339 B),
+  // `terminal.listWatches` (289 B), `terminal.getWatchEvents` (301 B) and
+  // `terminal.cancelWatch` (172 B) on the action tier, and off the external
+  // surface, so the external total does not move. What the prose has to carry
+  // is that the wake is a line typed into the caller's own prompt, that it
+  // needs the user's setting, and that a read is what lets the next one go
+  // out; a caller missing any of those reads the silence as a bug. The 1_101 B
+  // is exactly their four descriptions.
+  const MAX_COHORT_TOTAL_BYTES = 56_057;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1305,14 +1338,17 @@ describe("plugin-dispatch injection guard (#10558)", () => {
     }
     // Valid args so dispatch reaches the plugin-dispatch gate rather than
     // short-circuiting on VALIDATION_ERROR (terminal.sendCommand requires both;
-    // project.runCheck requires projectId + runnerId). Schemas are non-strict,
-    // so the union satisfies every denied action.
+    // project.runCheck requires projectId + runnerId; the terminal-watch tools
+    // take terminalIds or a watchId). Schemas are non-strict, so the union
+    // satisfies every denied action.
     const args = {
       terminalId: "t-placeholder",
       command: "noop",
       url: "https://example.com",
       projectId: "p-placeholder",
       runnerId: "r-placeholder",
+      terminalIds: ["t-placeholder"],
+      watchId: "w-placeholder",
     };
     // ...except where a schema is strict, which the union above cannot satisfy:
     // the extra keys are themselves a VALIDATION_ERROR, so dispatch would never

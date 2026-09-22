@@ -7,6 +7,7 @@ const forgeClientMock = vi.hoisted(() => ({
   openIssues: vi.fn(),
   openPRs: vi.fn(),
   openCommits: vi.fn(),
+  openRepo: vi.fn(),
   openIssue: vi.fn(),
   openPR: vi.fn(),
   getIssueUrl: vi.fn(),
@@ -262,6 +263,27 @@ describe("forge.* navigation adversarial", () => {
     setCurrentProject(null);
     const def = setupActions()("forge.openCommits");
     await expect(def.run({}, {} as never)).rejects.toThrow(/No project path/);
+  });
+
+  it("openRepo falls back to the current project path when no arg is given", async () => {
+    setCurrentProject({ path: "/repo" });
+    const def = setupActions()("forge.openRepo");
+    await def.run({}, {} as never);
+    expect(forgeClientMock.openRepo).toHaveBeenCalledWith("/repo");
+  });
+
+  it("openRepo also throws loudly without a path", async () => {
+    setCurrentProject(null);
+    const def = setupActions()("forge.openRepo");
+    await expect(def.run({}, {} as never)).rejects.toThrow(/No project path/);
+    expect(forgeClientMock.openRepo).not.toHaveBeenCalled();
+  });
+
+  it("openRepo: explicit projectPath takes precedence over current project", async () => {
+    setCurrentProject({ path: "/stale" });
+    const def = setupActions()("forge.openRepo");
+    await def.run({ projectPath: "/explicit" }, {} as never);
+    expect(forgeClientMock.openRepo).toHaveBeenCalledWith("/explicit");
   });
 
   it("openIssues: explicit projectPath takes precedence over current project", async () => {

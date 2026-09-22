@@ -6,6 +6,8 @@ export interface TerminalWebGLPolicyDeps {
   getMode: () => "webgl" | "dom";
   getPinnedId: () => string | null;
   isAltBufferPinned: (id: string) => boolean;
+  /** Whether this project view is cached — vetoes every want (#12514). */
+  isViewCached?: () => boolean;
 }
 
 /**
@@ -36,6 +38,9 @@ export class TerminalWebGLPolicy {
     opts?: { trustDomVisibility?: boolean }
   ): boolean {
     if (!isWebGLEligibleTier(tier)) return false;
+    // A cached view is on nobody's screen, so no pane in it wants a context —
+    // checked before trustDomVisibility, which a cached view's DOM would pass.
+    if (this.deps.isViewCached?.() === true) return false;
     // Visibility gates every case: an off-screen pane never wants WebGL, even
     // an agent (or plain shell) streaming at BURST. The want set is fleet-wide
     // per project view, so hidden streaming terminals would otherwise accumulate

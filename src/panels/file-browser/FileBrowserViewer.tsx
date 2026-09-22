@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ExternalLink,
   FileText,
@@ -11,6 +11,7 @@ import {
 import { CircleCheck, FolderOpen } from "@/components/icons";
 import { actionService } from "@/services/ActionService";
 import { CodeViewer } from "@/components/FileViewer/CodeViewer";
+import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
 import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -57,12 +58,17 @@ import type { FolderListingStatus } from "./useFileBrowserTree";
 import { filesClient } from "@/clients/filesClient";
 import { isClientAppError } from "@/utils/clientAppError";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
+import { useFileEditor } from "@/registry/fileEditorRegistry";
+import { useFileDocumentDraftText } from "@/store/fileDocumentStore";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import type { FileRenderMode } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
 import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { FileBrowserChangeSummary } from "./FileBrowserChangeSummary";
 
 export interface FileBrowserViewerProps {
+  /** A governed project/worktree identity for plugin-contributed editor views. */
+  editorContext?: { projectId: string; worktreePath: string | null; isFocused: boolean };
   /** Owning panel's id, so a mode chosen in one panel stays in that panel. */
   panelId: string;
   /** Absolute path of the selected file; null when nothing is selected. */
@@ -200,7 +206,7 @@ const FILE_RENDER_MODE_OPTIONS: Array<{ value: FileRenderMode; label: string }> 
 ];
 
 /**
- * Read-only viewer beside the tree.
+ * File viewer beside the tree, with optional plugin-contributed editing.
  *
  * Deliberately not a reuse of `FilePane`: that component renders its own
  * `ContentPanel` — header, controls, tabs — and nesting it inside the browser
@@ -209,6 +215,7 @@ const FILE_RENDER_MODE_OPTIONS: Array<{ value: FileRenderMode; label: string }> 
  * copy, so a file looks identical in either surface.
  */
 export function FileBrowserViewer({
+  editorContext,
   panelId,
   filePath,
   rootPath,
@@ -252,11 +259,57 @@ export function FileBrowserViewer({
   // in source keeps source, mirroring FilePane (whose per-panel mode also
   // survives a file swap). Files that are neither simply hide the toggle, so a
   // stale mode never applies where it can't be honoured.
-  const [explicitRenderMode, setExplicitRenderMode] = useState<FileRenderMode | null>(null);
+  const [explicitRenderMode, setExplicitRenderMode] = useState<FileRenderMode | "edit" | null>(
+    null
+  );
   const isMarkdown = filePath !== null && isMarkdownFilePath(filePath);
   const isHtml = filePath !== null && isHtmlFilePath(filePath);
   const isRenderable = isMarkdown || isHtml;
-  const renderMode: FileRenderMode = explicitRenderMode ?? (isHtml ? "source" : "rendered");
+  const editor = useFileEditor(filePath ?? undefined);
+  const pluginKnown = usePluginRuntimeStore((state) =>
+    editor ? state.pluginMetaById.has(editor.registration.pluginId) : false
+  );
+  const draftText = useFileDocumentDraftText(panelId);
+  const wrapLines = usePreferencesStore((state) => state.markdownWrapLines);
+  const contentBytes = useMemo(
+    () => (state.status === "text" ? new TextEncoder().encode(state.content).byteLength : null),
+    [state]
+  );
+  const canEdit =
+    !!editorContext &&
+    !!editor &&
+    pluginKnown &&
+    (explicitRenderMode === "edit" ||
+      draftText !== null ||
+      (contentBytes !== null && contentBytes <= editor.registration.maxBytes));
+  const renderMode =
+    explicitRenderMode === "edit"
+      ? canEdit
+        ? "edit"
+        : "source"
+      : (explicitRenderMode ?? (isMarkdown ? "rendered" : "source"));
+  const readerOptions = isRenderable
+    ? FILE_RENDER_MODE_OPTIONS
+    : [{ value: "source" as const, label: "Source" }];
+  const renderOptions = canEdit
+    ? [...readerOptions, { value: "edit" as const, label: "Edit" }]
+    : readerOptions;
+  const modeToggleRef = useRef<HTMLDivElement>(null);
+  const previousMode = useRef(renderMode);
+  useEffect(() => {
+    if (
+      previousMode.current === "edit" &&
+      renderMode !== "edit" &&
+      document.activeElement === document.body
+    ) {
+      modeToggleRef.current
+        ?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')
+        ?.focus({ preventScroll: true });
+    }
+    previousMode.current = renderMode;
+  }, [renderMode]);
+  const [changeTick, setChangeTick] = useState(0);
+  useEffect(() => setChangeTick((value) => value + 1), [revision]);
   // The panel id rides a sentinel because this component is not remounted per
   // panel: a tab group renders one unkeyed GridPanel for whichever tab is
   // active, so switching between two file browsers reuses this instance —
@@ -504,12 +557,14 @@ export function FileBrowserViewer({
         </FileViewerToolbar.IconButton>
         {filePath && (
           <>
-            {isRenderable && (
-              <SegmentedToggle<FileRenderMode>
-                options={FILE_RENDER_MODE_OPTIONS}
-                value={renderMode}
-                onChange={setExplicitRenderMode}
-              />
+            {(isRenderable || canEdit) && (
+              <div ref={modeToggleRef} className="contents">
+                <SegmentedToggle<FileRenderMode | "edit">
+                  options={renderOptions}
+                  value={renderMode}
+                  onChange={setExplicitRenderMode}
+                />
+              </div>
             )}
             <FileViewerToolbar.Path
               path={relativePath ?? fileName}
@@ -588,6 +643,14 @@ export function FileBrowserViewer({
           )}
         </FileViewerToolbar.Actions>
       </FileViewerToolbar.Root>
+      {filePath && editorContext && renderMode !== "edit" && state.status === "text" && (
+        <FileEditorBanner
+          key={`${panelId}:${filePath}`}
+          filePath={filePath}
+          content={state.content}
+          onEdit={() => setExplicitRenderMode("edit")}
+        />
+      )}
       {filePath && externalError && (
         <InlineStatusBanner
           icon={XCircle}
@@ -780,6 +843,36 @@ export function FileBrowserViewer({
     // the truthy `filePath` branch above, but that narrowing doesn't flow into a
     // nested function.
     if (!filePath) return null;
+    if (renderMode === "edit") {
+      if (!canEdit || !editor || !editorContext) return null;
+      return (
+        <div className="h-full min-h-0 overflow-auto">
+          <Suspense
+            fallback={
+              <div className="p-4">
+                <Skeleton label="Loading editor">
+                  <SkeletonText lines={10} />
+                </Skeleton>
+              </div>
+            }
+          >
+            <editor.Component
+              key={`${panelId}:${filePath}`}
+              panelId={panelId}
+              filePath={filePath}
+              fileName={fileName}
+              rootPath={rootPath}
+              worktreePath={editorContext.worktreePath}
+              projectId={editorContext.projectId}
+              wrapLines={wrapLines}
+              isFocused={editorContext.isFocused}
+              changeTick={changeTick}
+              onOpenExternalEditor={() => void handleExternalAction("editor")}
+            />
+          </Suspense>
+        </div>
+      );
+    }
     switch (state.status) {
       case "idle":
       case "loading":
@@ -949,7 +1042,7 @@ export function FileBrowserViewer({
                 bytes in place. Unlike video/audio/pdf there is no playback to
                 interrupt (#11587). */}
             <MarkdownViewer
-              content={state.content}
+              content={draftText ?? state.content}
               filePath={filePath}
               rootPath={rootPath}
               viewMode={renderMode}

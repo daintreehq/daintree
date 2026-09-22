@@ -1,70 +1,28 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Pause, Cpu, Hourglass, Lock, CheckCircle2, Moon } from "lucide-react";
-import type { AgentState, PanelKind, AgentStateChangeTrigger, TerminalFlowStatus } from "@/types";
+import { useEffect, useRef, useState } from "react";
+import { Lock, CheckCircle2, Moon } from "lucide-react";
+import type { AgentState, PanelKind } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  getEffectiveStateIcon,
-  getEffectiveStateColor,
-  getEffectiveStateLabel,
-} from "@/components/Worktree/terminalStateConfig";
-import type { ActivityState } from "./TerminalPane";
 import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
-import {
-  actionableWaitingReason,
-  WAITING_REASON_BADGE_LABEL,
-} from "@shared/utils/waitingReasonDisplay";
 import { useShallow } from "zustand/react/shallow";
-import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { formatTokenCount } from "@/utils/formatTokenCount";
-import { formatTimeAgo } from "@/utils/timeAgo";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
-import { useErrorStore } from "@/store/errorStore";
-import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { TerminalResourceSparkline } from "./TerminalResourceSparkline";
 import { SubagentChip } from "./SubagentChip";
+import { TerminalDrivenByBadge } from "./TerminalHandOver";
+import { TerminalWatchChip } from "./TerminalWatchChip";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-
-// FUTURE_SAB: the `flowStatus` prop is widened to `TerminalFlowStatus` (not
-// `PersistableFlowStatus`) so the Suspended pill below remains type-safe
-// while `suspended` is a skeleton value with no production producer (#9900).
-// Callers in practice only pass `PersistableFlowStatus` values; the wider
-// type is purely so the future-sab branch is reachable. When the SAB
-// transport path is revived, restore the narrow prop type.
-
-function ElapsedTime({ startedAt, now }: { startedAt: number; now: number }) {
-  return <> · {formatElapsedDuration(now - startedAt)}</>;
-}
-
-const TRIGGER_LABELS: Record<AgentStateChangeTrigger, string> = {
-  input: "Input",
-  output: "Output",
-  heuristic: "Heuristic",
-  "ai-classification": "AI classification",
-  timeout: "Timeout",
-  exit: "Exit",
-  activity: "Activity",
-  title: "Title",
-};
 
 export interface TerminalHeaderContentProps {
   id: string;
   kind?: PanelKind;
   agentState?: AgentState;
-  activity?: ActivityState | null;
   activityStatus?: "working" | "waiting" | "success" | "failure";
   lastCommand?: string;
   isExited?: boolean;
   exitCode?: number | null;
   queueCount?: number;
-  flowStatus?: TerminalFlowStatus;
-  /**
-   * Submit-lane state for this terminal (#11875). Only `"slow"` renders here —
-   * it is the Tier-1 ambient half of the signal. `"stalled"`/`"failed"` escalate
-   * to `TerminalSubmitStatusBanner` in the pane, which owns the recovery action.
-   */
-  submitStatus?: "slow" | "stalled" | "failed";
   /**
    * True when the agent transitioned to `completed` and the worktree's
    * changed-file count is zero. Drives the "Finished, no changes" pill
@@ -107,14 +65,11 @@ export function TerminalHeaderContent({
   id,
   kind,
   agentState,
-  activity,
   activityStatus,
   lastCommand,
   isExited = false,
   exitCode = null,
   queueCount = 0,
-  flowStatus,
-  submitStatus,
   completedWithNoChanges = false,
   isHibernated = false,
 }: TerminalHeaderContentProps) {
@@ -164,67 +119,46 @@ export function TerminalHeaderContent({
     });
   }, [resourceState, showResource]);
 
-  const {
-    isInputLocked,
-    startedAt,
-    lastStateChange,
-    stateChangeTrigger,
-    stateChangeConfidence,
-    waitingReason,
-    sessionCost,
-    sessionTokens,
-    heldDurationMs,
-  } = usePanelStore(
+  const { isInputLocked, sessionCost, sessionTokens } = usePanelStore(
     useShallow((state) => {
       const t = state.panelsById[id];
       const pty = t && isPtyPanel(t) ? t : undefined;
       return {
         isInputLocked: pty?.isInputLocked ?? false,
-        startedAt: pty?.startedAt,
-        lastStateChange: pty?.lastStateChange,
-        stateChangeTrigger: pty?.stateChangeTrigger,
-        stateChangeConfidence: pty?.stateChangeConfidence,
-        waitingReason: pty?.waitingReason,
         sessionCost: pty?.sessionCost,
         sessionTokens: pty?.sessionTokens,
-        heldDurationMs: pty?.heldDurationMs,
       };
     })
   );
-
-  const errorCount = useErrorStore(
-    useCallback(
-      (s) => s.errors.filter((e) => e.context?.terminalId === id && !e.dismissed).length,
-      [id]
-    )
-  );
-
-  // Shared visibility-aware ticker — drives the elapsed-duration displays
-  // that update at minute granularity. The tick value itself is unused;
-  // its identity changes ~every 30 s, which is what re-derives `now`.
-  useGlobalMinuteTicker();
-  const now = Date.now();
-
-  const showStateDuration =
-    (agentState === "working" || agentState === "waiting" || agentState === "directing") &&
-    lastStateChange != null &&
-    lastStateChange > 0 &&
-    now - lastStateChange > 10_000;
 
   // Show command pill only for plain terminals (not agent terminals)
   const isPlainTerminal = kind == null || kind === "terminal";
   const showCommandPill =
     isPlainTerminal && !agentState && activityStatus === "working" && !!lastCommand;
 
-  const renderAgentStateChip = () => {
-    if (!agentState || agentState === "idle") {
-      return null;
+  // The agent state glyph itself is not here: PanelHeader keeps it in its own
+  // reserved box past the close button (TerminalAgentIndicator). This row only
+  // carries the settled agent's trace — a cost readout, or a quiet "finished,
+  // no changes" pill when there is no cost to show.
+  const renderSettledPill = () => {
+    if (agentState !== "completed" && agentState !== "exited") return null;
+
+    if (sessionCost != null) {
+      return (
+        <span
+          className="text-2xs text-text-secondary font-mono shrink-0"
+          style={{ fontVariantNumeric: "tabular-nums" }}
+        >
+          ${sessionCost.toFixed(2)}
+          {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)}`}
+        </span>
+      );
     }
 
     // Zero-change confirmation: agent finished without touching the working
-    // tree. Show a quiet pill instead of letting the chip disappear, so the
-    // user has a clear signal that the run ended cleanly.
-    if (agentState === "completed" && sessionCost == null && completedWithNoChanges) {
+    // tree. Show a quiet pill instead of letting the glyph vanish silently, so
+    // the user has a clear signal that the run ended cleanly.
+    if (agentState === "completed" && completedWithNoChanges) {
       return (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -242,131 +176,17 @@ export function TerminalHeaderContent({
       );
     }
 
-    // Show completed/exited chip only when there's a cost to display
-    if ((agentState === "completed" || agentState === "exited") && sessionCost == null) {
-      return null;
-    }
-
-    const StateIcon = getEffectiveStateIcon(agentState);
-    if (!StateIcon) return null;
-
-    const effectiveColor = getEffectiveStateColor(agentState);
-
-    const chipStyle =
-      agentState === "working"
-        ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-state-working/40"
-        : agentState === "directing"
-          ? "bg-[color-mix(in_oklab,var(--color-category-blue)_15%,transparent)] border-category-blue/40"
-          : // Settled: finished and exited share one neutral chip. Completion is
-            // not asking for anything, so it does not get a hue of its own
-            // (#12002) — and the two stay apart on the channels that survive
-            // without one, `CheckCircle2` against `ExitedCircle` in slate
-            // against secondary.
-            agentState === "completed" || agentState === "exited"
-            ? "bg-overlay-soft border-divider"
-            : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
-
-    const headline = activity?.headline?.trim() || `Agent ${agentState}`;
-    const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;
-    const stateLabel = getEffectiveStateLabel(agentState);
-    // Specific reasons only — the classifier's `prompt` fallback stays a
-    // plain "waiting" so the chip never overclaims.
-    const chipWaitingReason =
-      agentState === "waiting" ? actionableWaitingReason(waitingReason) : null;
-    const chipAriaLabel = chipWaitingReason
-      ? `Agent state: ${stateLabel} (${WAITING_REASON_BADGE_LABEL[chipWaitingReason].toLowerCase()})`
-      : `Agent state: ${stateLabel}`;
-
-    return (
-      <Tooltip autoDismiss={false}>
-        <TooltipTrigger asChild>
-          <div className="inline-flex items-center gap-1.5 shrink-0">
-            <div className="relative inline-flex items-center shrink-0">
-              <div
-                className={cn(
-                  "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
-                  chipStyle,
-                  effectiveColor
-                )}
-                role="status"
-                aria-label={chipAriaLabel}
-              >
-                <StateIcon
-                  className={cn(
-                    "w-3 h-3",
-                    agentState === "working" && "animate-spin-slow",
-                    "motion-reduce:animate-none"
-                  )}
-                  aria-hidden="true"
-                />
-              </div>
-              {errorCount > 0 && (
-                <span
-                  className="status-mark absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-status-error"
-                  aria-label={`${errorCount} error${errorCount > 1 ? "s" : ""}`}
-                />
-              )}
-            </div>
-            {(agentState === "completed" || agentState === "exited") && sessionCost != null && (
-              <span
-                className="text-2xs text-text-secondary font-mono shrink-0"
-                style={{ fontVariantNumeric: "tabular-nums" }}
-              >
-                ${sessionCost.toFixed(2)}
-                {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)}`}
-              </span>
-            )}
-          </div>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" className="max-w-xs">
-          <div className="flex flex-col gap-0.5">
-            <span className="font-medium">
-              {headline}
-              {startedAt != null && <ElapsedTime startedAt={startedAt} now={now} />}
-            </span>
-            {isExited && exitCode != null && (
-              <span className="text-status-error tabular-nums">Exit code: {exitCode}</span>
-            )}
-            <span>
-              State: {stateLabel}
-              {chipWaitingReason && (
-                <> ({WAITING_REASON_BADGE_LABEL[chipWaitingReason].toLowerCase()})</>
-              )}
-              {showStateDuration && (
-                <span className="motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150">
-                  {" · "}
-                  {formatElapsedDuration(now - lastStateChange!)}
-                </span>
-              )}
-              {stateChangeTrigger && <> · {TRIGGER_LABELS[stateChangeTrigger]}</>}
-              {showConfidence && <> ({Math.round(stateChangeConfidence * 100)}%)</>}
-            </span>
-            {lastStateChange != null && lastStateChange > 0 && (
-              <span className="text-text-secondary">Since: {formatTimeAgo(lastStateChange)}</span>
-            )}
-            {sessionCost != null && (
-              <span className="text-text-secondary tabular-nums">
-                Cost: ${sessionCost.toFixed(2)}
-                {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)} tokens`}
-              </span>
-            )}
-            {errorCount > 0 && (
-              <span className="text-status-error">
-                {errorCount} error{errorCount > 1 ? "s" : ""}
-              </span>
-            )}
-          </div>
-        </TooltipContent>
-      </Tooltip>
-    );
+    return null;
   };
 
   return (
     <>
-      {/* Agent state chip — the macro pane-state signal leads the row per the
-          runtime-signals tier table: macro state → pane-local error/flow →
-          diagnostic text → ambient state → telemetry last. */}
-      {renderAgentStateChip()}
+      {/* Settled-agent trace leads the row per the runtime-signals tier table:
+          macro state → pane-local error → diagnostic text → ambient state →
+          telemetry last. Transient flow and submit status sit outside this row,
+          in TerminalStatusSlot's reserved box ahead of the window controls
+          (#12374). */}
+      {renderSettledPill()}
 
       {/* Exit code badge — aria-live="off" overrides role="status"'s implicit
           polite live region. The global announcer in useAccessibilityAnnouncements
@@ -378,133 +198,11 @@ export function TerminalHeaderContent({
         </span>
       )}
 
-      {/* Prompt-still-sending badge — Tier-1 ambient (#11875). Self-clearing:
-          the submit reports `settled` when it finally lands. Deliberately no
-          action here — the original Enter is still armed, so any "send again"
-          affordance would double-submit. If it stops progressing entirely the
-          pane escalates to a banner and this pill gives way to it. */}
-      {submitStatus === "slow" && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded border border-divider"
-              role="status"
-              aria-live="off"
-            >
-              <Hourglass className="w-3 h-3" aria-hidden="true" />
-              Prompt still sending
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="max-w-xs">
-            <div className="flex flex-col gap-0.5">
-              <span className="font-medium">Still sending</span>
-              <span>Later prompts stay queued so they can&apos;t merge into this one.</span>
-            </div>
-          </TooltipContent>
-        </Tooltip>
-      )}
-
-      {/* Paused-backpressure badge — Tier-1 ambient (auto-recovering).
-          Demoted off `status-warning/15` per docs/architecture/resource-governance.md#173;
-          distinct from the other two flow pills by its `Pause` icon. */}
-      {flowStatus === "paused-backpressure" && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded border border-divider"
-              role="status"
-              aria-live="off"
-            >
-              <Pause className="w-3 h-3" aria-hidden="true" />
-              Paused
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="max-w-xs">
-            <div className="flex flex-col gap-0.5">
-              <span className="font-medium">Buffer overflow</span>
-              <span>Output paused to prevent data loss.</span>
-              {heldDurationMs != null && heldDurationMs > 0 && (
-                <span className="text-text-secondary tabular-nums">
-                  Paused for {formatElapsedDuration(heldDurationMs)}
-                </span>
-              )}
-            </div>
-          </TooltipContent>
-        </Tooltip>
-      )}
-
-      {/* Resource-governor pause badge — Tier-1 ambient. Distinguished from
-          the other two flow pills by its `Cpu` icon (memory pressure). */}
-      {flowStatus === "paused-resource-governor" && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded border border-divider"
-              role="status"
-              aria-live="off"
-            >
-              <Cpu className="w-3 h-3" aria-hidden="true" />
-              Paused (memory)
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="max-w-xs">
-            <div className="flex flex-col gap-0.5">
-              <span className="font-medium">System memory pressure</span>
-              <span>Paused to reduce memory pressure. Recovers automatically.</span>
-              {/* Held-duration gauge intentionally omitted: ResourceGovernor
-                  pauses via the coordinator but does not emit `pause-start`
-                  / `pause-end` reliability metrics, so the
-                  `pause-duration-gauge` funnel never tracks it. Showing
-                  a frozen "Paused for Xs" line would be a lie. */}
-            </div>
-          </TooltipContent>
-        </Tooltip>
-      )}
-
-      {/* FUTURE_SAB: Suspended badge — Tier-1 ambient. The `suspended` flowStatus
-          is only emitted by the SharedArrayBuffer transport path in the PTY host
-          (`BackpressureManager.suspendVisualStream`, see
-          `electron/pty-host/backpressure.ts:277`). That path is unreachable in
-          production — SharedArrayBuffer is not supported in Electron
-          UtilityProcess (PR #7724, issue #7653). The badge is kept as a
-          forward-looking skeleton for a potential Worker-thread migration
-          that could revive the SAB zero-copy data path. Mirror of the
-          // FUTURE_SAB: annotation in the producer. When the SAB transport
-          is revived, this branch is reachable again; until then it never
-          renders in production. See issue #9900. Distinguished by its
-          `Hourglass` icon (time-based wait, recovers on focus). */}
-      {flowStatus === "suspended" && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded border border-divider"
-              role="status"
-              aria-live="off"
-            >
-              <Hourglass className="w-3 h-3" aria-hidden="true" />
-              Suspended
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="max-w-xs">
-            <div className="flex flex-col gap-0.5">
-              <span className="font-medium">Output suspended</span>
-              <span>Streaming stalled. Recovers automatically on focus.</span>
-              {heldDurationMs != null && heldDurationMs > 0 && (
-                <span className="text-text-secondary tabular-nums">
-                  Paused for {formatElapsedDuration(heldDurationMs)}
-                </span>
-              )}
-            </div>
-          </TooltipContent>
-        </Tooltip>
-      )}
-
       {/* Hibernated badge — ambient cue that the pane's renderer is asleep.
-          Rounded-full + dashed border separates its silhouette from the three
-          transient flow pills (which stay `rounded` + solid border) without
-          escalating weight. Renders after Paused/Suspended so higher-urgency
-          flow-control states lead visually when both apply. The PTY survives;
-          focus wakes it. */}
+          Rounded-full + dashed border keeps its silhouette apart from the
+          other metadata chips without escalating weight. Transient flow and
+          submit status live in TerminalStatusSlot's reserved box instead
+          (#12374). The PTY survives; focus wakes it. */}
       {isHibernated && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -526,6 +224,10 @@ export function TerminalHeaderContent({
           </TooltipContent>
         </Tooltip>
       )}
+
+      {/* Driven-by badge — ambient cue that the user handed this terminal to
+          an orchestrating pane (#12490), naming which one. Self-gating. */}
+      {hasPtyKind && <TerminalDrivenByBadge terminalId={id} />}
 
       {/* Command Pill - shows currently running command (inline with title).
           Slimmed to px-2 py-0.5 to match the row's other small badges. */}
@@ -556,6 +258,29 @@ export function TerminalHeaderContent({
           <TooltipContent side="bottom">
             {`${queueCount} command${queueCount > 1 ? "s" : ""} queued`}
           </TooltipContent>
+        </Tooltip>
+      )}
+
+      {/* Subagent count — self-gating, renders nothing unless this terminal's
+          agent actually spawned children. The row's only pointer entry point,
+          so it sits ahead of the ambient glyph and telemetry that a narrow
+          pane's header clips first (#12374). */}
+      <SubagentChip terminalId={id} />
+
+      {/* Terminal watches (#12491) — self-gating; shown only while an agent in
+          this pane holds watches that may wake it, and the one place the user
+          can stop them. */}
+      {hasPtyKind && <TerminalWatchChip terminalId={id} />}
+
+      {/* Input locked indicator — bare ambient glyph. */}
+      {isInputLocked && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="flex items-center text-daintree-text/50 shrink-0" role="status">
+              <Lock className="w-3.5 h-3.5" aria-hidden="true" />
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Input locked (read-only monitor mode)</TooltipContent>
         </Tooltip>
       )}
 
@@ -615,22 +340,6 @@ export function TerminalHeaderContent({
           </TooltipContent>
         </Tooltip>
       )}
-
-      {/* Input locked indicator — bare ambient glyph. */}
-      {isInputLocked && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div className="flex items-center text-daintree-text/50 shrink-0" role="status">
-              <Lock className="w-3.5 h-3.5" aria-hidden="true" />
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Input locked (read-only monitor mode)</TooltipContent>
-        </Tooltip>
-      )}
-
-      {/* Subagent count — self-gating, renders nothing unless this terminal's
-          agent actually spawned children. */}
-      <SubagentChip terminalId={id} />
     </>
   );
 }

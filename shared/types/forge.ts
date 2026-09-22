@@ -188,6 +188,12 @@ export interface AuthValidation {
   /** Epoch milliseconds, or `null` when the token does not expire. */
   expiresAt?: number | null;
   error?: string;
+  /**
+   * Login of the account the credential authenticates as, when the provider
+   * learns it during validation. Display-only: the host shows it next to a
+   * saved credential and never derives behavior from it.
+   */
+  account?: string;
 }
 
 /**
@@ -1086,6 +1092,94 @@ export interface CloneCapability {
 }
 
 /**
+ * Why a credential import could not produce a credential. A closed set on
+ * purpose: the raw material behind a failure (CLI stdout, stderr, exec errors)
+ * can carry the credential itself, so nothing but one of these codes may cross
+ * back to the host.
+ */
+export type CredentialImportFailureReason =
+  /** The provider's CLI is not installed or not on PATH. */
+  | "cli-not-found"
+  /** The CLI did not answer in time — e.g. waiting on an OS keychain prompt. */
+  | "cli-timeout"
+  /** The CLI ran but holds no credential for the forge's host. */
+  | "not-signed-in"
+  /** The CLI printed something that is not a credential. */
+  | "invalid-output"
+  /** Any other failure launching or running the CLI. */
+  | "cli-failed"
+  /** The forge rejected the credential, or could not be reached to check it. */
+  | "validation-failed"
+  /** The CLI's active account changed between preview and commit. */
+  | "account-changed"
+  /** The host's signal aborted the operation. */
+  | "cancelled";
+
+/** Failure result shared by {@link CredentialImportCapability} methods. */
+export interface CredentialImportUnavailable {
+  unavailable: true;
+  reason: CredentialImportFailureReason;
+}
+
+/**
+ * What an import would save, without the credential itself. Safe to show the
+ * user: this is everything the confirm step displays.
+ */
+export interface CredentialImportPreview {
+  unavailable?: false;
+  /** Login the credential authenticates as, from a live validation. */
+  account: string;
+  /** Scopes the forge reported for the credential; empty means unknown. */
+  scopes: string[];
+  /** Required scopes the credential lacks. Never populated when `scopes` is empty. */
+  missingScopes: string[];
+  /** The tool the credential came from, e.g. `"gh"`. */
+  source: string;
+}
+
+/** What the user confirmed, bound into {@link CredentialImportCapability.commit}. */
+export interface CredentialImportExpected {
+  /** Account shown in the preview. A different active account aborts the commit. */
+  account: string;
+}
+
+/**
+ * Secret-bearing commit result. Main-process only: the host persists it
+ * through the same path a pasted credential takes and never forwards it to a
+ * renderer, a log, or an action result.
+ */
+export interface CredentialImportCandidate {
+  unavailable?: false;
+  /** Credential record keyed by the provider's declared `credentialFields` ids. */
+  credentials: Record<string, string>;
+  /** The live validation the commit just ran; `valid` is always `true`. */
+  validation: AuthValidation;
+}
+
+/**
+ * Optional one-time import of a credential a local tool already holds (e.g.
+ * the GitHub CLI's login), so a user who is signed in there does not have to
+ * copy a token by hand. It is an import, not a live dependency: after commit
+ * the provider authenticates with the saved copy like any pasted credential.
+ *
+ * Both methods run in main and must catch every failure internally, returning
+ * a {@link CredentialImportUnavailable} rather than throwing. {@link preview}
+ * reads and validates the credential, then discards it. {@link commit} reads
+ * it again, validates again, and refuses with `"account-changed"` when the
+ * account differs from `expected`; the host then persists the result — the
+ * provider never writes credential storage itself. Reading may trigger an OS
+ * keychain prompt, so the host only calls either method on an explicit user
+ * action. Both must honor `signal`.
+ */
+export interface CredentialImportCapability {
+  preview(signal?: AbortSignal): Promise<CredentialImportPreview | CredentialImportUnavailable>;
+  commit(
+    expected: CredentialImportExpected,
+    signal?: AbortSignal
+  ): Promise<CredentialImportCandidate | CredentialImportUnavailable>;
+}
+
+/**
  * Runtime contract a forge plugin implements and registers via
  * `host.registerForgeProvider`. Every provider implements the base methods;
  * optional capabilities are sibling fields the host probes at runtime.
@@ -1132,6 +1226,14 @@ export interface ForgeProviderImpl {
   buildIssuesUrl(repo: RepoRef, options?: { query?: string; state?: string }): string;
   buildPRsUrl(repo: RepoRef, options?: { query?: string; state?: string }): string;
   buildCommitsUrl(repo: RepoRef, branch?: string): string;
+  /**
+   * Optional. Build the repository's home page on the forge — what "View
+   * repository" in the toolbar's forge stats menu and the `forge.openRepo`
+   * action open. Omit the field when the forge has no page for the repository
+   * as a whole; the host then hides that menu entry and `forge.openRepo`
+   * rejects rather than guessing a URL.
+   */
+  buildRepoUrl?(repo: RepoRef): string;
   /**
    * Optional. Build a deep-link to a specific file's entry on a PR's
    * "Files changed" view. The provider knows its own anchor algorithm
@@ -1324,6 +1426,7 @@ export interface ForgeProviderImpl {
   avatars?: AvatarCapability;
   healthEvents?: HealthEventsCapability;
   clone?: CloneCapability;
+  credentialImport?: CredentialImportCapability;
 }
 
 /**

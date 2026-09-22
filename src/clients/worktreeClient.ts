@@ -6,7 +6,7 @@ import type {
   AttachIssuePayload,
   IssueAssociation,
 } from "@shared/types";
-import type { WorktreeCreateResult } from "@shared/types/worktree";
+import type { LifecycleCommandReview, WorktreeCreateResult } from "@shared/types/worktree";
 import type { PRServiceStatus } from "@shared/types/workspace-host";
 import type { WorktreeChanges } from "@shared/types/git";
 import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
@@ -201,6 +201,21 @@ export const worktreeClient = {
 
   retrySetup: async (worktreeId: string): Promise<void> => {
     await window.electron.worktreePort.request("run-lifecycle-setup", { worktreeId });
+  },
+
+  getLifecycleCommandReview: async (worktreeId: string): Promise<LifecycleCommandReview | null> => {
+    const { review } = await window.electron.worktreePort.request(
+      "get-lifecycle-command-approval",
+      { worktreeId }
+    );
+    return review;
+  },
+
+  approveLifecycleCommands: async (worktreeId: string, fingerprint: string): Promise<void> => {
+    await window.electron.worktreePort.request("approve-lifecycle-commands", {
+      worktreeId,
+      fingerprint,
+    });
   },
 
   switchEnvironment: async (worktreeId: string, envKey: string): Promise<void> => {

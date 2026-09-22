@@ -195,7 +195,7 @@ test.describe.serial("Core: Panel Tab Groups", () => {
 
       await test.step("Verify expected menu items are present and removed item is absent", async () => {
         // Verify expected menu items are visible (scoped to window since Radix portals to body)
-        const expectedItems = ["Restart Session", "Rename", "Duplicate", "Lock Input", "Trash"];
+        const expectedItems = ["Restart session", "Rename", "Duplicate", "Lock input", "Trash"];
 
         for (const itemName of expectedItems) {
           await expect(window.getByRole("menuitem", { name: itemName })).toBeVisible({
@@ -230,7 +230,7 @@ test.describe.serial("Core: Panel Tab Groups", () => {
         await waitForTerminalText(panel, "PRE_RESTART", T_LONG);
       });
 
-      await test.step("Open overflow menu and arm Restart Session", async () => {
+      await test.step("Open overflow menu and arm Restart session", async () => {
         await panel.hover();
         const overflowBtn = panel.locator(SEL.panel.overflowMenu).first();
         await overflowBtn.click();
@@ -308,7 +308,7 @@ test.describe.serial("Split-mode crash regression (issue #10438)", () => {
   });
 
   // The two-pane split layout container; present only while split mode is
-  // active (TwoPaneSplitLayout renders `data-split-mode="true"`).
+  // active (ContentGridDefault marks the grid `data-split-mode="true"`).
   const splitLayout = '[data-split-mode="true"]';
 
   test("split mode activates for two independent panels but duplicate-as-tab does not crash", async () => {

@@ -84,10 +84,9 @@ test.describe.serial("Resilience: adaptive resource-profile recovery", () => {
   });
 
   test("the floor never moves across profile transitions", async () => {
-    // Before #11469 each profile pushed its own floor, so efficiency→balanced —
-    // the exact redirect the interactive override performs — loosened reclaim
-    // from 1024 to 768 at the moment memory was lowest, and performance cleared
-    // it entirely. The floor is a property of the machine's RAM now, so it must
+    // Before #11469 each profile pushed its own floor, so efficiency→balanced
+    // loosened reclaim from 1024 to 768 at the moment memory was lowest, and
+    // performance cleared it entirely. The floor is a property of the machine's RAM now, so it must
     // survive every transition unchanged.
     await forceProfile(ctx.app, "efficiency");
     const armed = await readLowMemoryFloor(ctx.app);

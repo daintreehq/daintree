@@ -2,6 +2,7 @@ import type { Terminal } from "@xterm/xterm";
 import type { ManagedTerminal } from "./types";
 import { logWarn } from "@/utils/logger";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
+import { isXtermRenderSuspended } from "./xtermRenderSuspension";
 
 type XtermRenderServicePause = {
   _isPaused?: boolean;
@@ -136,6 +137,10 @@ export function attemptRendererUnpause(managed: ManagedTerminal): RendererUnpaus
     resetRendererUnpauseBreaker(managed);
   }
   if (managed.rendererUnpauseGaveUp === true) return "capped";
+  // A cached view's deliberate suspension is not a fault (#12514). Its handler
+  // answers any unpause with "still paused", so an attempt here would only
+  // spend the budget a genuine pause needs after reactivation.
+  if (isXtermRenderSuspended(managed.terminal)) return "failed";
 
   const attempts = managed.rendererUnpauseAttempts ?? 0;
   if (attempts >= MAX_RENDERER_UNPAUSE_ATTEMPTS) {

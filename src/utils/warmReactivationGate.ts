@@ -21,7 +21,9 @@ import { markSwitch } from "./switchTrace";
  * switch with terminal panes ran into the gate's 1.5 s hard timeout. The wake's
  * repair work is synchronous (`terminal.refresh` etc.), and the post-reveal
  * repaint pass (#10362) re-runs the paint at full frame rate once the view is
- * on top, so the gate can release as soon as the synchronous repair is done.
+ * on top. This signal is readiness only: main confirms a drawn frame after it
+ * before detaching the bridge (#12394), since a view with no frame reveals as a
+ * blank canvas.
  */
 export function notifyWarmReactivationComplete(): void {
   markSwitch(PERF_MARKS.PROJECT_SWITCH_WARM_PAINT_SIGNALLED);

@@ -1,5 +1,12 @@
 import type { ComponentType, SVGProps } from "react";
-import { GitHubIcon, GitPullRequest, LayoutPanelTop, Plug } from "@/components/icons";
+import {
+  GitHubIcon,
+  GitPullRequest,
+  LayoutPanelTop,
+  MarkdownIcon,
+  Plug,
+  SvelteIcon,
+} from "@/components/icons";
 import { DEFAULT_PLUGIN_ICON } from "@/components/icons/pluginIconRegistry";
 import { isPluginCategoryId, resolvePluginCategory } from "@shared/config/pluginCategoryRegistry";
 import type { PluginCategoryId, PluginManifest } from "@shared/types/plugin";
@@ -16,6 +23,8 @@ type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
  */
 const BRAND_PLUGIN_ICONS: Record<string, IconComponent> = {
   "daintree.github": GitHubIcon,
+  "daintree.markdown-editor": MarkdownIcon,
+  "daintree.sveltekit-builder": SvelteIcon,
 };
 
 const CATEGORY_FALLBACK_ICONS: Record<PluginCategoryId, IconComponent> = {
@@ -106,9 +115,9 @@ export function PluginGlyphTile({
     <span
       aria-hidden="true"
       className={cn(
-        "flex items-center justify-center shrink-0 rounded-[var(--radius-md)] bg-overlay-subtle border border-daintree-border/50",
+        "flex items-center justify-center shrink-0 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default/50",
         TILE_SIZE_CLASS[size],
-        dimmed ? "text-daintree-text/30" : "text-daintree-text/70",
+        dimmed ? "text-text-placeholder" : "text-text-secondary",
         className
       )}
     >

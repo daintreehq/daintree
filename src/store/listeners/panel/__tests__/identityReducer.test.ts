@@ -25,6 +25,7 @@ describe("reduceAgentDetected", () => {
       nextDetectedAgentId: undefined,
       nextDetectedProcessId: "npm",
       nextEverDetectedAgent: undefined,
+      nextAgentIncarnation: undefined,
       timestamp: 1000,
     });
     expect(result).toBeNull();
@@ -36,6 +37,7 @@ describe("reduceAgentDetected", () => {
       nextDetectedAgentId: undefined,
       nextDetectedProcessId: "npm",
       nextEverDetectedAgent: undefined,
+      nextAgentIncarnation: undefined,
       timestamp: 1000,
     });
     expect(result).not.toBeNull();
@@ -50,6 +52,7 @@ describe("reduceAgentDetected", () => {
       nextDetectedAgentId: "claude",
       nextDetectedProcessId: "claude",
       nextEverDetectedAgent: true,
+      nextAgentIncarnation: undefined,
       timestamp: 5000,
     });
     expect(result).not.toBeNull();
@@ -78,6 +81,7 @@ describe("reduceAgentDetected", () => {
       nextDetectedAgentId: "claude",
       nextDetectedProcessId: "claude",
       nextEverDetectedAgent: true,
+      nextAgentIncarnation: undefined,
       timestamp: 5000,
     });
     expect(result).not.toBeNull();
@@ -95,6 +99,7 @@ describe("reduceAgentDetected", () => {
       nextDetectedAgentId: "claude",
       nextDetectedProcessId: "claude",
       nextEverDetectedAgent: true,
+      nextAgentIncarnation: undefined,
       timestamp: 5000,
     });
     expect(result).not.toBeNull();
@@ -110,6 +115,7 @@ describe("reduceAgentDetected", () => {
       nextDetectedAgentId: "claude",
       nextDetectedProcessId: "claude",
       nextEverDetectedAgent: true,
+      nextAgentIncarnation: undefined,
       timestamp: 5000,
     });
     expect(result).not.toBeNull();
@@ -123,6 +129,7 @@ describe("reduceAgentDetected", () => {
       nextDetectedAgentId: "claude",
       nextDetectedProcessId: "claude",
       nextEverDetectedAgent: true,
+      nextAgentIncarnation: undefined,
       timestamp: 5000,
     });
     expect(result).not.toBeNull();
@@ -136,6 +143,7 @@ describe("reduceAgentDetected", () => {
       nextDetectedAgentId: "claude",
       nextDetectedProcessId: "claude",
       nextEverDetectedAgent: true,
+      nextAgentIncarnation: undefined,
       timestamp: 5000,
     });
     expect(result).not.toBeNull();
@@ -149,6 +157,7 @@ describe("reduceAgentDetected", () => {
       nextDetectedAgentId: "claude",
       nextDetectedProcessId: "claude",
       nextEverDetectedAgent: true,
+      nextAgentIncarnation: undefined,
       timestamp: 5000,
     });
     expect(result).not.toBeNull();
@@ -161,6 +170,7 @@ describe("reduceAgentDetected", () => {
       nextDetectedAgentId: "claude",
       nextDetectedProcessId: "claude",
       nextEverDetectedAgent: true,
+      nextAgentIncarnation: undefined,
       timestamp: 5000,
     });
     expect(result).not.toBeNull();
@@ -176,6 +186,7 @@ describe("reduceAgentDetected", () => {
       nextDetectedAgentId: "codex",
       nextDetectedProcessId: "codex",
       nextEverDetectedAgent: true,
+      nextAgentIncarnation: undefined,
       timestamp: 5000,
     });
     expect(result).not.toBeNull();
@@ -193,6 +204,7 @@ describe("reduceAgentDetected", () => {
       nextDetectedAgentId: "claude",
       nextDetectedProcessId: "claude",
       nextEverDetectedAgent: true,
+      nextAgentIncarnation: undefined,
       timestamp: 5000,
     });
     expect(result).not.toBeNull();
@@ -220,6 +232,7 @@ describe("reduceAgentDetected", () => {
       nextDetectedAgentId: "claude",
       nextDetectedProcessId: "claude",
       nextEverDetectedAgent: true,
+      nextAgentIncarnation: undefined,
       timestamp: 5000,
     });
     // Title recompute may patch, but the observed task must survive.
@@ -246,7 +259,109 @@ describe("reduceAgentDetected", () => {
       nextDetectedAgentId: "claude",
       nextDetectedProcessId: "claude",
       nextEverDetectedAgent: true,
+      nextAgentIncarnation: undefined,
       timestamp: 5000,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("adopts the host's session count when the panel has none", () => {
+    const terminal = makeTerminal({ detectedAgentId: "claude", detectedProcessId: "claude" });
+    const result = reduceAgentDetected(terminal, {
+      nextDetectedAgentId: "claude",
+      nextDetectedProcessId: "claude",
+      nextEverDetectedAgent: true,
+      nextAgentIncarnation: 0,
+      timestamp: 1000,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.patch.agentIncarnation).toBe(0);
+  });
+
+  it("applies a relaunch that changes nothing else about the identity", () => {
+    // #12535: the same agent running again in the same pty. Every other field
+    // the reducer looks at is unchanged, so the count alone has to defeat the
+    // no-op check or the panel never learns the session was replaced.
+    const terminal = makeTerminal({
+      detectedAgentId: "claude",
+      detectedProcessId: "claude",
+      everDetectedAgent: true,
+      agentState: "waiting",
+      agentIncarnation: 0,
+      runtimeIdentity: {
+        kind: "agent",
+        id: "claude",
+        iconId: "claude",
+        agentId: "claude",
+        processId: "claude",
+      },
+      title: "Claude",
+    });
+    const result = reduceAgentDetected(terminal, {
+      nextDetectedAgentId: "claude",
+      nextDetectedProcessId: "claude",
+      nextEverDetectedAgent: true,
+      nextAgentIncarnation: 1,
+      timestamp: 2000,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.patch.agentIncarnation).toBe(1);
+  });
+
+  it("follows the host down when a replayed pty starts counting again", () => {
+    // A pty-host crash replays the pty under the same terminal id against a
+    // fresh record that starts over at zero. A panel that refused to follow the
+    // count down would go on naming a session that no longer exists, and the
+    // replacement would climb back to that number — a request bound to it would
+    // then match the session that replaced the one it was for (#12535).
+    const terminal = makeTerminal({
+      detectedAgentId: "claude",
+      detectedProcessId: "claude",
+      everDetectedAgent: true,
+      agentState: "waiting",
+      agentIncarnation: 2,
+      runtimeIdentity: {
+        kind: "agent",
+        id: "claude",
+        iconId: "claude",
+        agentId: "claude",
+        processId: "claude",
+      },
+      title: "Claude",
+    });
+    const result = reduceAgentDetected(terminal, {
+      nextDetectedAgentId: "claude",
+      nextDetectedProcessId: "claude",
+      nextEverDetectedAgent: true,
+      nextAgentIncarnation: 1,
+      timestamp: 3000,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.patch.agentIncarnation).toBe(1);
+  });
+
+  it("leaves the count alone when the producer did not report one", () => {
+    const terminal = makeTerminal({
+      detectedAgentId: "claude",
+      detectedProcessId: "claude",
+      everDetectedAgent: true,
+      agentState: "waiting",
+      agentIncarnation: 3,
+      runtimeIdentity: {
+        kind: "agent",
+        id: "claude",
+        iconId: "claude",
+        agentId: "claude",
+        processId: "claude",
+      },
+      title: "Claude",
+    });
+    const result = reduceAgentDetected(terminal, {
+      nextDetectedAgentId: "claude",
+      nextDetectedProcessId: "claude",
+      nextEverDetectedAgent: true,
+      nextAgentIncarnation: undefined,
+      timestamp: 4000,
     });
     expect(result).toBeNull();
   });

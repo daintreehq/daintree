@@ -36,6 +36,8 @@ import {
   startAppMetricsMonitor,
   hasSustainedRendererSaturation,
 } from "../services/ProcessMemoryMonitor.js";
+import { createDefaultSystemMemoryPressureMonitor } from "../services/SystemMemoryPressureMonitor.js";
+import { publishSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
 
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
 import { runScratchCleanup } from "../services/ScratchCleanupService.js";
@@ -45,6 +47,7 @@ import {
 } from "../services/AgentCompileCacheCleanupService.js";
 import { runAssistantScratchCleanup } from "../services/AssistantScratchService.js";
 import { getPeriodicCleanupService } from "../services/PeriodicCleanupService.js";
+import { requestNativeCrashDumpPrune } from "../services/CrashDumpRetentionService.js";
 import {
   pruneOldLogs,
   pruneOldLogsAsync,
@@ -75,7 +78,7 @@ import {
 import { registerDeferredTask } from "./deferredInitQueue.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { setPluginDirResolver } from "../setup/protocols.js";
-import { isE2EFaultMode } from "../setup/runtimeFlags.js";
+import { isE2EFaultMode, isE2EMode } from "../setup/runtimeFlags.js";
 import { activateOpenFileInstaller } from "../setup/openFileInstall.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { scratchStore } from "../services/ScratchStore.js";
@@ -535,6 +538,9 @@ export async function initGlobalServices(
               requestAgentCompileCacheCleanup().catch((err) => {
                 logError("[DiskSpaceMonitor] agent compile cache cleanup threw", err);
               });
+              requestNativeCrashDumpPrune().catch((err) => {
+                logError("[DiskSpaceMonitor] native crash-dump prune threw", err);
+              });
               try {
                 const retentionDays = store.get("privacy")?.logRetentionDays ?? 30;
                 if (retentionDays > 0) {
@@ -581,6 +587,16 @@ export async function initGlobalServices(
     name: "app-metrics-monitor",
     run: () => {
       if (getStopAppMetricsMonitor()) return;
+      // Off under E2E so a loaded runner's swap cannot drop a grid-bar notice
+      // into an unrelated spec.
+      const systemMemoryPressure = isE2EMode
+        ? null
+        : createDefaultSystemMemoryPressureMonitor((payload) => {
+            publishSystemMemoryPressure(
+              payload,
+              windowRegistry ? windowRegistry.all().map((wCtx) => wCtx.browserWindow) : []
+            );
+          });
       setStopAppMetricsMonitor(
         startAppMetricsMonitor({
           destroyHiddenWebviews: async (tier) => {
@@ -613,9 +629,7 @@ export async function initGlobalServices(
             }
             return tabsEvicted;
           },
-          hibernateIdleProjects: async () => {
-            await getHibernationService().hibernateUnderMemoryPressure();
-          },
+          hibernateIdleProjects: () => getHibernationService().hibernateUnderMemoryPressure(),
           evictCachedProjectViews: () => {
             if (!windowRegistry) return 0;
             let viewsEvicted = 0;
@@ -625,6 +639,10 @@ export async function initGlobalServices(
             }
             return viewsEvicted;
           },
+          // After the view collapse above: a dormant host is otherwise kept for
+          // as long as its project's view is cached (#12519), and views the
+          // collapse spares (a live assistant's, say) would keep theirs.
+          reclaimDormantWorkspaceHosts: () => getWorkspaceClientRef()?.reclaimDormantHosts() ?? 0,
           trimPtyHostState: async () => {
             const client = getPtyClient();
             if (!client) return { trimmed: 0, skipped: 0, shardsTotal: 0, shardsFailed: 0 };
@@ -657,16 +675,21 @@ export async function initGlobalServices(
               }
             }
           },
+          sampleSystemHealth: systemMemoryPressure
+            ? () => {
+                void systemMemoryPressure.sample();
+              }
+            : undefined,
           sampleRendererElu: () => {
             if (!windowRegistry) return;
             const requestId = `elu-${Date.now().toString(36)}`;
             for (const wCtx of windowRegistry.all()) {
               const w = wCtx.browserWindow;
               if (w.isDestroyed()) continue;
-              // Cached/loading views are CPU-throttled (Emulation.setCPUThrottlingRate)
-              // or Efficiency-frozen (Page.setWebLifecycleState) which slows
-              // JS timers and the LoAF observer, producing burst signal that
-              // doesn't reflect user-visible lag. Only sample active views;
+              // Cached views are hidden, demote their own periodic work and may
+              // be Efficiency-frozen (Page.setWebLifecycleState); loading views
+              // are still booting. Either produces burst signal that doesn't
+              // reflect user-visible lag. Only sample active views;
               // fall back to the app webContents for windows still on the
               // bootstrap shell (no PVM yet).
               const pvm = wCtx.services.projectViewManager;
@@ -1263,6 +1286,19 @@ export async function initGlobalServices(
       // Heap snapshots land in app.getPath("logs") (a separate dir from
       // userData/logs) and are bounded by count, not age — see pruneHeapSnapshots.
       await pruneHeapSnapshotsAsync(app.getPath("logs"), MAX_HEAP_SNAPSHOTS);
+    },
+  });
+
+  registerDeferredTask({
+    name: "prune-native-crash-dumps",
+    // Fire-and-forget: nothing downstream reads the result, so a large dump
+    // backlog must not serialize the rest of the queue. CrashRecoveryService
+    // classified the previous session against these dumps synchronously in
+    // main.ts, and the prune refuses to run until it has.
+    run: () => {
+      requestNativeCrashDumpPrune().catch((err) => {
+        logError("[MAIN] native crash-dump prune threw", err);
+      });
     },
   });
 

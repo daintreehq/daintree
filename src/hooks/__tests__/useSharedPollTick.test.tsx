@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { logError } from "@/utils/logger";
+import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 import { useSharedPollTick, sharedPollTickerCount } from "../useSharedPollTick";
 
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
@@ -325,5 +326,148 @@ describe("useSharedPollTick", () => {
       expect(sharedPollTickerCount()).toBe(0);
       expect(vi.getTimerCount()).toBe(0);
     }
+  });
+  describe("in a cached project view (#12514)", () => {
+    // Drives the real `viewCacheState` singleton through its preload boundary.
+    // A cached view's document stays "visible", so only main's lifecycle IPC
+    // can stop the ticker — which is exactly what these cases pin.
+    let handlers: { cached: Set<() => void>; warm: Set<() => void>; revealed: Set<() => void> };
+    let latchedCached: boolean;
+
+    beforeEach(() => {
+      handlers = { cached: new Set(), warm: new Set(), revealed: new Set() };
+      latchedCached = false;
+      vi.stubGlobal("electron", {
+        app: {
+          onViewCached: (cb: () => void) => {
+            handlers.cached.add(cb);
+            return () => handlers.cached.delete(cb);
+          },
+          onViewWarmActivated: (cb: () => void) => {
+            handlers.warm.add(cb);
+            return () => handlers.warm.delete(cb);
+          },
+          onViewRevealed: (cb: () => void) => {
+            handlers.revealed.add(cb);
+            return () => handlers.revealed.delete(cb);
+          },
+          // Preload's latch — the view was cached before the module armed.
+          isViewCached: () => latchedCached,
+        },
+      });
+      // The singleton stays armed for the module's life; re-arm on this bridge.
+      __resetProjectViewCacheStateForTests();
+    });
+
+    afterEach(() => {
+      __resetProjectViewCacheStateForTests();
+      vi.unstubAllGlobals();
+    });
+
+    function emit(set: Set<() => void>) {
+      act(() => {
+        set.forEach((handler) => handler());
+      });
+    }
+
+    it("stops the interval while cached even though the document stays visible", () => {
+      const callback = vi.fn();
+      const { unmount } = renderHook(() => useSharedPollTick(callback, 2_000));
+
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(callback).toHaveBeenCalledTimes(1);
+
+      emit(handlers.cached);
+      expect(vi.getTimerCount()).toBe(0);
+      act(() => {
+        vi.advanceTimersByTime(20_000);
+      });
+      expect(callback).toHaveBeenCalledTimes(1);
+
+      unmount();
+    });
+
+    it("resumes exactly once on warm activation and not again on reveal", () => {
+      const callback = vi.fn();
+      const { unmount } = renderHook(() => useSharedPollTick(callback, 2_000));
+
+      emit(handlers.cached);
+      emit(handlers.warm);
+      // One immediate sample, then back on the interval.
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
+
+      emit(handlers.revealed);
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
+
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(callback).toHaveBeenCalledTimes(2);
+
+      unmount();
+    });
+
+    it("starts no interval when a subscriber mounts inside a cached view", () => {
+      latchedCached = true;
+      const callback = vi.fn();
+      const { unmount } = renderHook(() => useSharedPollTick(callback, 2_000));
+
+      expect(vi.getTimerCount()).toBe(0);
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(callback).not.toHaveBeenCalled();
+
+      emit(handlers.warm);
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
+
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("stays stopped when the window is restored underneath a cached view", () => {
+      const callback = vi.fn();
+      const { unmount } = renderHook(() => useSharedPollTick(callback, 2_000));
+
+      emit(handlers.cached);
+      setVisibility("hidden");
+      setVisibility("visible");
+
+      expect(callback).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+
+      unmount();
+    });
+
+    it("leaves no interval running when the last subscriber unmounts during activation", () => {
+      let unmountSelf: () => void = () => {};
+      const callback = vi.fn(() => unmountSelf());
+      const view = renderHook(() => useSharedPollTick(callback, 2_000));
+      unmountSelf = view.unmount;
+
+      emit(handlers.cached);
+      emit(handlers.warm);
+
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(sharedPollTickerCount()).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("stops listening to the view lifecycle once the ticker is torn down", () => {
+      const callback = vi.fn();
+      const { unmount } = renderHook(() => useSharedPollTick(callback, 2_000));
+      emit(handlers.cached);
+      unmount();
+
+      emit(handlers.warm);
+
+      expect(callback).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
 });

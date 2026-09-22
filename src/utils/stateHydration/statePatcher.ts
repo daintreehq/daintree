@@ -8,8 +8,11 @@ import type {
   FileBrowserSortKey,
   FileBrowserTreeSnapshot,
   PanelExitBehavior,
+  PanelRestoreRecovery,
   PanelTitleMode,
+  RestoreRecoveryReason,
   SessionLostReason,
+  TerminalSpawnSource,
 } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
@@ -18,6 +21,7 @@ import { getAgentConfig, sanitizeAgentEnv } from "@/config/agents";
 import type { AgentPreset } from "@/config/agents";
 import {
   generateAgentCommand,
+  buildAgentLaunchFlags,
   buildResumeCommand,
   buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
@@ -30,6 +34,7 @@ import {
   resolveKeepDecorations,
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
+import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 // Re-exported rather than defined here: main counts the agent panels a project
 // would restore (#11801) and has to resolve identity by the same rule this
 // respawn path does, so the rule lives somewhere both processes can reach.
@@ -49,6 +54,7 @@ import { restoredExtensionStateVersion } from "@shared/utils/panelExtensionState
 import { getDeserializer } from "@/config/panelKindSerialisers";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { resolveAgentRuntimeSettings } from "@/utils/agentRuntimeSettings";
+import { sanitizeConversationCwd, sanitizeRestoreRecovery } from "@/utils/restoreRecovery";
 
 /**
  * Args for building addPanel options from hydration data.
@@ -168,6 +174,14 @@ export interface SavedTerminalData {
   agentPresetColor?: string;
   originalPresetId?: string;
   /**
+   * Surface that spawned this terminal, stamped once at creation (#12419).
+   * Both hydration ingresses normalize it against the union before it reaches
+   * the renderer — `TerminalSnapshotSchema` for per-project state and
+   * `AppStateTerminalEntrySchema` for the legacy global migration/fallback —
+   * so it is trusted here the same way `titleMode` is.
+   */
+  spawnedBy?: TerminalSpawnSource;
+  /**
    * Caller-resolved launch env captured at launch time (#10922). Preferred over
    * live preset re-resolution on respawn so a restored session replays the same
    * provider environment it launched with. Typed as `unknown`-valued because it
@@ -177,6 +191,9 @@ export interface SavedTerminalData {
   env?: Record<string, unknown>;
   isUsingFallback?: boolean;
   fallbackChainIndex?: number;
+  /** Untrusted on-disk values (#12434) — sanitized in `restoreRecovery.ts`. */
+  conversationCwd?: unknown;
+  restoreRecovery?: unknown;
   /** @deprecated pre-#5459 legacy key; read-only fallback, never written. */
   agentFlavorId?: string;
   /** @deprecated pre-#5459 legacy key; read-only fallback, never written. */
@@ -242,6 +259,11 @@ interface BackendTerminalData {
   agentPresetColor?: string;
   originalAgentPresetId?: string;
   everDetectedAgent?: boolean;
+  /**
+   * Observed respawn count for the live PTY (#12535). Absent when unobserved —
+   * never read absence as zero.
+   */
+  agentIncarnation?: number;
   detectedAgentId?: BuiltInAgentId;
   detectedProcessId?: string;
 }
@@ -264,6 +286,11 @@ interface ReconnectedTerminalData {
   agentPresetColor?: string;
   originalAgentPresetId?: string;
   everDetectedAgent?: boolean;
+  /**
+   * Observed respawn count for the live PTY (#12535). Absent when unobserved —
+   * never read absence as zero.
+   */
+  agentIncarnation?: number;
   detectedAgentId?: BuiltInAgentId;
   detectedProcessId?: string;
 }
@@ -362,7 +389,11 @@ export function buildArgsForBackendTerminal(
     agentSessionId: backendTerminal.agentSessionId ?? saved.agentSessionId,
     agentLaunchFlags: backendTerminal.agentLaunchFlags ?? saved.agentLaunchFlags,
     agentModelId: backendTerminal.agentModelId ?? saved.agentModelId,
+    // Snapshot-only: Main never tracks provenance, so there is no live value
+    // to prefer here the way `agentModelId` does (#12419).
+    spawnedBy: saved.spawnedBy,
     everDetectedAgent: backendTerminal.everDetectedAgent,
+    agentIncarnation: backendTerminal.agentIncarnation,
     detectedAgentId: backendTerminal.detectedAgentId,
     detectedProcessId: backendTerminal.detectedProcessId,
     agentPresetId: readPresetId(saved) ?? backendTerminal.agentPresetId,
@@ -372,6 +403,9 @@ export function buildArgsForBackendTerminal(
       backendTerminal.originalAgentPresetId ??
       readPresetId(saved) ??
       backendTerminal.agentPresetId,
+    // A live pane that was already relaunched away from its conversation's
+    // folder keeps pointing lookups at that folder (#12434).
+    conversationCwd: sanitizeConversationCwd(saved.conversationCwd),
     // Carry the captured launch env forward so a reconnect (project switch /
     // renderer reload to a still-live PTY) re-serializes the snapshot WITH env,
     // instead of dropping it and reintroducing the provider swap on the next
@@ -439,7 +473,11 @@ export function buildArgsForReconnectedFallback(
     agentSessionId: reconnectedTerminal.agentSessionId ?? saved.agentSessionId,
     agentLaunchFlags: reconnectedTerminal.agentLaunchFlags ?? saved.agentLaunchFlags,
     agentModelId: reconnectedTerminal.agentModelId ?? saved.agentModelId,
+    // Snapshot-only: Main never tracks provenance, so there is no live value
+    // to prefer here the way `agentModelId` does (#12419).
+    spawnedBy: saved.spawnedBy,
     everDetectedAgent: reconnectedTerminal.everDetectedAgent,
+    agentIncarnation: reconnectedTerminal.agentIncarnation,
     detectedAgentId: reconnectedTerminal.detectedAgentId,
     detectedProcessId: reconnectedTerminal.detectedProcessId,
     agentPresetId: readPresetId(saved) ?? reconnectedTerminal.agentPresetId,
@@ -449,6 +487,7 @@ export function buildArgsForReconnectedFallback(
       reconnectedTerminal.originalAgentPresetId ??
       readPresetId(saved) ??
       reconnectedTerminal.agentPresetId,
+    conversationCwd: sanitizeConversationCwd(saved.conversationCwd),
     // Carry the captured launch env forward so a reconnect re-serializes the
     // snapshot WITH env rather than dropping it and reintroducing the provider
     // swap on the next full restart (#10922). Not used to spawn — PTY has it.
@@ -489,6 +528,26 @@ export interface BuildArgsForRespawnOptions {
    * the fallback then runs exactly as it does today.
    */
   resolvedResumeLatestSessionId?: string;
+  /**
+   * The cold-launch decision for an agent that resumes across directories
+   * (#12434), made by the caller from the pane's worktree filing. Present means
+   * a conversation restore can't name safely is HELD for recovery rather than
+   * started fresh; absent keeps today's behaviour for every other agent.
+   */
+  coldLaunch?: {
+    /** Where the process starts — the destination worktree for a moved pane. */
+    cwd: string;
+    /**
+     * Where the conversation began, when that is not `cwd`. Resume-latest is
+     * scoped to the launch directory, so it is never used while this is set:
+     * in a fresh worktree it finds nothing, or someone else's conversation.
+     */
+    conversationCwd?: string;
+    /** No verified directory to run in — hold even an uncontested exact id. */
+    awaitingDestination?: boolean;
+    /** The worktree list's own spelling of the filing, when it differs from the snapshot's. */
+    worktreeId?: string;
+  };
 }
 
 export function buildArgsForRespawn(
@@ -516,6 +575,11 @@ export function buildArgsForRespawn(
   // the suppression exists to prevent.
   const resumeWithheld = Boolean(saved.agentSessionId) && !allowSessionIdResume;
   const effectiveAgentId = resolveRespawnAgentId(saved, kind);
+  const coldLaunch = effectiveAgentId ? options?.coldLaunch : undefined;
+  // A pane already held on a previous restore stays held until the user picks —
+  // re-running the election could hand it a conversation it never chose.
+  const savedRecovery = coldLaunch ? sanitizeRestoreRecovery(saved.restoreRecovery) : undefined;
+  let restoreRecovery: PanelRestoreRecovery | undefined;
 
   const isAgentPanel = Boolean(effectiveAgentId);
   const agentId = effectiveAgentId;
@@ -570,6 +634,12 @@ export function buildArgsForRespawn(
     const effectiveInline = resolveEffectiveInlineMode(effectiveEntry, agentId, globalUseAltScreen);
     const dangerousArgs = effectiveEntry.dangerousArgs as string | undefined;
     const rawPersistedFlags = presetWasStale ? undefined : saved.agentLaunchFlags;
+    // A stale preset voids the captured flags, but not the caller's standing
+    // instruction (#12431), which no setting can rebuild. It is carried into
+    // every command the settings-derived branches below build.
+    const staleSystemPromptArgs = presetWasStale
+      ? extractSystemPromptArgs(saved.agentLaunchFlags, agentId)
+      : [];
     const hasPersistedFlags = Boolean(rawPersistedFlags && rawPersistedFlags.length > 0);
     // Reconcile the persisted snapshot against both live resolutions (#10432 the
     // bypass token, #10876 the `--no-alt-screen` inline flag): a snapshot must
@@ -592,11 +662,25 @@ export function buildArgsForRespawn(
       ? reconcileFlags(rawPersistedFlags as string[])
       : rawPersistedFlags;
     reconciledLaunchFlags = persistedFlags;
+    // Stored in place of the voided snapshot so the next restart still has the
+    // instruction to replay: the same settings-derived set the fresh command
+    // below is built from.
+    if (staleSystemPromptArgs.length > 0) {
+      reconciledLaunchFlags = reconcileFlags(
+        buildAgentLaunchFlags(effectiveEntry, agentId, {
+          modelId: saved.agentModelId,
+          systemPromptArgs: staleSystemPromptArgs,
+          globalSkipPermissions,
+          globalUseAltScreen,
+        })
+      );
+    }
     // Resume commands prepend launch flags, so the bypass / inline tokens must be
     // injected even when no flags were captured — a session launched before
     // either feature existed should honour the current resolution (#10432, #10876).
-    // Only diverges from persistedFlags in that inject-from-empty case.
-    const injectedFromEmpty = reconcileFlags([]);
+    // Only diverges from persistedFlags in that inject-from-empty case, which is
+    // also where a stale preset's standing instruction rides.
+    const injectedFromEmpty = reconcileFlags([...staleSystemPromptArgs]);
     const resumeFlags =
       !hasPersistedFlags && injectedFromEmpty.length > 0 ? injectedFromEmpty : persistedFlags;
 
@@ -618,7 +702,42 @@ export function buildArgsForRespawn(
         shareClipboardDirectory,
       });
 
-    if (saved.agentSessionId && allowSessionIdResume) {
+    // The durable command a held pane keeps: what "Start new" launches. Always
+    // rebuilt — `saved.command` is itself a resume command whenever an earlier
+    // restore built one — and assigns no id, since nothing launches yet.
+    const buildHeldCommand = (): string =>
+      hasPersistedFlags
+        ? buildFromPersistedFlags()
+        : agentSettings
+          ? generateAgentCommand(baseCommand, effectiveEntry, agentId, {
+              clipboardDirectory,
+              modelId: saved.agentModelId,
+              systemPromptArgs: staleSystemPromptArgs,
+              presetArgs: preset?.args?.join(" "),
+              globalSkipPermissions,
+              globalUseAltScreen,
+            })
+          : buildLaunchCommandFromFlags(baseCommand, agentId, injectedFromEmpty, {
+              clipboardDirectory,
+              shareClipboardDirectory,
+            });
+
+    if (savedRecovery) {
+      restoreRecovery = coldLaunch?.awaitingDestination
+        ? { ...savedRecovery, awaitingDestination: true }
+        : savedRecovery;
+    } else if (coldLaunch?.awaitingDestination) {
+      const heldReason: RestoreRecoveryReason = resumeWithheld
+        ? "sibling-owns-session-id"
+        : !saved.agentSessionId && !allowResumeLatest
+          ? "sibling-owns-resume-latest-slot"
+          : "destination-unavailable";
+      restoreRecovery = {
+        reason: heldReason,
+        ...(saved.agentSessionId && !resumeWithheld && { sessionId: saved.agentSessionId }),
+        awaitingDestination: true,
+      };
+    } else if (saved.agentSessionId && allowSessionIdResume) {
       const resumeCmd = resolvedAgentBaseCommand
         ? buildResumeCommand(agentId, saved.agentSessionId, resumeFlags, baseCommand)
         : buildResumeCommand(agentId, saved.agentSessionId, resumeFlags);
@@ -637,6 +756,7 @@ export function buildArgsForRespawn(
         command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
           clipboardDirectory,
           modelId: saved.agentModelId,
+          systemPromptArgs: staleSystemPromptArgs,
           presetArgs: preset?.args?.join(" "),
           globalSkipPermissions,
           globalUseAltScreen,
@@ -673,9 +793,21 @@ export function buildArgsForRespawn(
             respawnSessionId = namedResumeLatestId;
           }
         }
-        resumeLatestCmd ??= resolvedAgentBaseCommand
-          ? buildResumeLatestCommand(agentId, resumeFlags, baseCommand)
-          : buildResumeLatestCommand(agentId, resumeFlags);
+        if (coldLaunch?.conversationCwd === undefined) {
+          resumeLatestCmd ??= resolvedAgentBaseCommand
+            ? buildResumeLatestCommand(agentId, resumeFlags, baseCommand)
+            : buildResumeLatestCommand(agentId, resumeFlags);
+        }
+      }
+      if (coldLaunch && !resumeLatestCmd) {
+        const heldReason: RestoreRecoveryReason | undefined = resumeWithheld
+          ? "sibling-owns-session-id"
+          : !allowResumeLatest && buildResumeLatestCommand(agentId) !== undefined
+            ? "sibling-owns-resume-latest-slot"
+            : coldLaunch.conversationCwd !== undefined
+              ? "session-unresolved"
+              : undefined;
+        if (heldReason) restoreRecovery = { reason: heldReason };
       }
       // Why resume-latest didn't run, or didn't help — lazy and memoized so the
       // capability probe below runs at most once, and never at all when
@@ -703,6 +835,7 @@ export function buildArgsForRespawn(
         command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
           clipboardDirectory,
           modelId: saved.agentModelId,
+          systemPromptArgs: staleSystemPromptArgs,
           presetArgs: preset?.args?.join(" "),
           globalSkipPermissions,
           globalUseAltScreen,
@@ -720,6 +853,12 @@ export function buildArgsForRespawn(
         });
         sessionLostOnRestore = getElseReason();
       }
+    }
+
+    if (restoreRecovery) {
+      command = buildHeldCommand();
+      respawnSessionId = undefined;
+      sessionLostOnRestore = undefined;
     }
   }
 
@@ -757,8 +896,8 @@ export function buildArgsForRespawn(
     // A stale preset's pinned title was just stripped — drop the pin with it
     // (unless the user locked the title, which the strip above exempts).
     titleMode: presetWasStale && !userLockedTitle ? undefined : saved.titleMode,
-    cwd: saved.cwd || projectRoot || "",
-    worktreeId: saved.worktreeId,
+    cwd: coldLaunch?.cwd || saved.cwd || projectRoot || "",
+    worktreeId: coldLaunch?.worktreeId ?? saved.worktreeId,
     location,
     requestedId: mintFreshTerminalId ? undefined : saved.id,
     command: isAgentPanel ? command : saved.command?.trim() || undefined,
@@ -770,9 +909,10 @@ export function buildArgsForRespawn(
     devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
     exitBehavior: isAgentPanel ? undefined : saved.exitBehavior,
     agentLaunchFlags: presetWasStale
-      ? undefined
+      ? reconciledLaunchFlags
       : (reconciledLaunchFlags ?? saved.agentLaunchFlags),
     agentModelId: saved.agentModelId,
+    spawnedBy: saved.spawnedBy,
     agentSessionId: respawnSessionId,
     agentPresetId: respawnAgentPresetId,
     agentPresetColor: respawnAgentPresetColor,
@@ -780,6 +920,10 @@ export function buildArgsForRespawn(
     isUsingFallback: presetWasStale ? undefined : saved.isUsingFallback,
     fallbackChainIndex: presetWasStale ? undefined : saved.fallbackChainIndex,
     sessionLostOnRestore,
+    conversationCwd: coldLaunch
+      ? coldLaunch.conversationCwd
+      : sanitizeConversationCwd(saved.conversationCwd),
+    restoreRecovery,
     // Prefer the launch env captured in the snapshot (#10922) so the restored
     // session replays the same provider environment (e.g. a Z.AI/GLM preset or a
     // recipe's inline env) even when that preset/recipe no longer resolves in the
@@ -875,6 +1019,7 @@ export function buildArgsForOrphanedTerminal(
     agentLaunchFlags: terminal.agentLaunchFlags,
     agentModelId: terminal.agentModelId,
     everDetectedAgent: terminal.everDetectedAgent,
+    agentIncarnation: terminal.agentIncarnation,
     detectedAgentId: terminal.detectedAgentId,
     detectedProcessId: terminal.detectedProcessId,
     agentPresetId: terminal.agentPresetId,

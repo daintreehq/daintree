@@ -6,12 +6,18 @@ export const config: AgentConfig = {
   name: "Claude",
   command: "claude",
   // Anthropic's native installer places the symlink at ~/.local/bin/claude
-  // on macOS/Linux and a versioned binary under ~/.local/share/claude.
-  // Windows native installer places the binary under
-  // %LOCALAPPDATA%\claude-code\bin\claude.exe. Detect both so users who
-  // install via the native installer are not mis-reported as "missing"
-  // when ~/.local/bin isn't inherited by the Electron process PATH.
-  nativePaths: ["~/.local/bin/claude", "%LOCALAPPDATA%\\claude-code\\bin\\claude.exe"],
+  // on macOS/Linux (with a versioned binary under ~/.local/share/claude) and
+  // the binary at %USERPROFILE%\.local\bin\claude.exe on Windows. The first
+  // entry covers both: `~` is the user profile on Windows and the probe
+  // appends executable extensions there. WinGet links claude.exe into its
+  // user-scope or machine-scope Links directory instead. Probing these keeps
+  // users from being reported "missing" when none of them is on the Electron
+  // process PATH.
+  nativePaths: [
+    "~/.local/bin/claude",
+    "%LOCALAPPDATA%\\Microsoft\\WinGet\\Links\\claude.exe",
+    "%ProgramFiles%\\WinGet\\Links\\claude.exe",
+  ],
   npmGlobalPackage: "@anthropic-ai/claude-code",
   color: "#CC785C",
   iconId: "claude",
@@ -104,6 +110,9 @@ export const config: AgentConfig = {
     // Prints "esc to interrupt" in its own working footer — the same hint the
     // primary patterns below match on.
     interrupt: "double-escape",
+    // Not reliably carried by `--resume`, so it rides the persisted launch
+    // flags and is re-passed on every relaunch.
+    appendSystemPrompt: { flag: "--append-system-prompt" },
   },
   detection: {
     primaryPatterns: [
@@ -149,7 +158,9 @@ export const config: AgentConfig = {
     // #11782: Claude Code accepts the session id up front, so we mint it at
     // launch instead of scraping it back out at teardown. `--resume` reuses
     // that same id on every later relaunch (only `--fork-session` mints a new
-    // one), which makes the id stable for the life of the conversation.
+    // one), which makes the id stable for the life of the conversation. Until
+    // the first message there is no conversation to resume, but the CLI accepts
+    // the same id again, which is how spawn restores an untouched pane (#12371).
     assignSessionIdArgs: (sessionId: string) => ["--session-id", sessionId],
   },
   env: {

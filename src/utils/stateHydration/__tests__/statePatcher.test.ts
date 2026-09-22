@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { serializePtyPanel } from "@/panels/terminal/serializer";
+import { TERMINAL_SPAWN_SOURCES, type PtyPanelData } from "@shared/types/panel";
+
+type SavedSnapshot = Parameters<typeof buildArgsForRespawn>[0];
 
 vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
@@ -1528,6 +1532,119 @@ describe("buildArgsForRespawn", () => {
     expect(result.title).not.toContain("Deleted");
   });
 
+  // #12431: the stale-preset strip voids the captured flags, but the caller's
+  // standing instruction has no setting to be rebuilt from, so it is kept.
+  it("keeps a standing instruction through a stale-preset strip", () => {
+    getMergedPresetMock.mockReturnValue(undefined);
+    const pair = ["--append-system-prompt", "Infer the best option"];
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-deleted",
+        agentSessionId: "sess-1",
+        agentLaunchFlags: ["--provider", "gone", ...pair],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(buildResumeCommandMock).toHaveBeenLastCalledWith("claude", "sess-1", pair);
+    expect(result.agentLaunchFlags).toEqual(pair);
+    expect(result.agentPresetId).toBeUndefined();
+  });
+
+  // A fresh conversation still gets its assigned id (#11782) when the
+  // instruction is carried: it rides the settings-derived command.
+  it("carries a stale-preset pane's instruction into a fresh settings-derived launch", () => {
+    getMergedPresetMock.mockReturnValue(undefined);
+    const pair = ["--append-system-prompt", "Infer the best option"];
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-deleted",
+        agentLaunchFlags: ["--provider", "gone", ...pair],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined,
+      undefined,
+      { allowResumeLatest: false }
+    );
+    expect(result.agentSessionId).toBeTruthy();
+    expect(generateAgentCommandMock.mock.lastCall?.[3]).toMatchObject({
+      systemPromptArgs: pair,
+      sessionId: result.agentSessionId,
+    });
+    expect(result.agentLaunchFlags).toEqual(pair);
+  });
+
+  // A pane held for recovery (#12434) keeps the fresh command "Start new" runs;
+  // under a stale preset that is settings-derived and must carry it too.
+  it("carries a stale-preset pane's instruction into a held pane's fresh command", () => {
+    getMergedPresetMock.mockReturnValue(undefined);
+    const pair = ["--append-system-prompt", "Infer the best option"];
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-deleted",
+        agentSessionId: "sess-1",
+        agentLaunchFlags: ["--provider", "gone", ...pair],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined,
+      undefined,
+      { coldLaunch: { cwd: "/p", awaitingDestination: true } }
+    );
+    expect(result.restoreRecovery?.awaitingDestination).toBe(true);
+    expect(generateAgentCommandMock.mock.lastCall?.[3]).toMatchObject({
+      systemPromptArgs: pair,
+    });
+    expect(result.agentLaunchFlags).toEqual(pair);
+  });
+
+  it("still drops the captured flags on a stale-preset strip with no instruction", () => {
+    getMergedPresetMock.mockReturnValue(undefined);
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-deleted",
+        agentLaunchFlags: ["--provider", "gone"],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined,
+      undefined,
+      { allowResumeLatest: false }
+    );
+    expect(result.agentLaunchFlags).toBeUndefined();
+    expect(generateAgentCommandMock.mock.lastCall?.[3]).toMatchObject({ systemPromptArgs: [] });
+  });
+
   // Regression: the inverse — when the preset still resolves, everything is preserved.
   it("preserves agentPresetId/color/title when preset still resolves", () => {
     getMergedPresetMock.mockReturnValueOnce({
@@ -1587,6 +1704,147 @@ describe("agentModelId propagation", () => {
       "/p"
     );
     expect(result.agentModelId).toBe("gemini-2.5-pro");
+  });
+});
+
+// Regression for #12419: the spawn source is stamped once at creation and can
+// never be re-derived, so every builder that reads a saved snapshot has to carry
+// it forward. Missing it in any one of them half-fixes the bug — cold boot works
+// while a renderer reload against a live PTY (or vice versa) still shows
+// "Spawn source: Unknown" and drops QuickRun panes out of Running Tasks.
+describe("spawnedBy propagation", () => {
+  const savedQuickRun = {
+    id: "t1",
+    kind: "terminal" as const,
+    cwd: "/p",
+    location: "grid",
+    spawnedBy: "quickrun" as const,
+  };
+
+  it("buildArgsForBackendTerminal carries the saved spawn source", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
+      savedQuickRun,
+      "/p"
+    );
+    expect(result.spawnedBy).toBe("quickrun");
+  });
+
+  it("buildArgsForReconnectedFallback carries the saved spawn source", () => {
+    const result = buildArgsForReconnectedFallback({ id: "t1", cwd: "/p" }, savedQuickRun, "/p");
+    expect(result.spawnedBy).toBe("quickrun");
+  });
+
+  it.each([true, false])(
+    "buildArgsForRespawn carries the saved spawn source (fresh id: %s)",
+    (mintFreshTerminalId) => {
+      const result = buildArgsForRespawn(
+        { ...savedQuickRun, agentId: "claude" },
+        "agent",
+        "/p",
+        { agents: { claude: {} } },
+        mintFreshTerminalId,
+        undefined
+      );
+      expect(result.spawnedBy).toBe("quickrun");
+    }
+  );
+
+  it.each(TERMINAL_SPAWN_SOURCES)("respawn carries every spawn source (%s)", (source) => {
+    const result = buildArgsForRespawn(
+      { ...savedQuickRun, spawnedBy: source },
+      "terminal",
+      "/p",
+      {},
+      false,
+      undefined
+    );
+    expect(result.spawnedBy).toBe(source);
+  });
+
+  // A pre-#12419 snapshot has no spawn source and there is nothing to infer one
+  // from, so restore must leave it unset rather than guessing a plausible origin.
+  it("leaves the spawn source unset for a legacy snapshot", () => {
+    const legacy = { id: "t1", kind: "terminal" as const, cwd: "/p", location: "grid" };
+    expect(
+      buildArgsForBackendTerminal({ id: "t1", cwd: "/p", kind: "terminal" }, legacy, "/p").spawnedBy
+    ).toBeUndefined();
+    expect(
+      buildArgsForReconnectedFallback({ id: "t1", cwd: "/p" }, legacy, "/p").spawnedBy
+    ).toBeUndefined();
+    expect(
+      buildArgsForRespawn(legacy, "terminal", "/p", {}, false, undefined).spawnedBy
+    ).toBeUndefined();
+  });
+
+  // The two builders that deliberately do NOT carry a source: an orphan has no
+  // saved snapshot to read one from, and a non-PTY recreation is a kind the field
+  // does not exist on. Pinned so neither grows a guessed attribution later.
+  it("does not invent a spawn source for an orphaned backend terminal", () => {
+    const result = buildArgsForOrphanedTerminal(
+      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
+      "/p"
+    );
+    expect(result.spawnedBy).toBeUndefined();
+  });
+
+  it("does not carry a spawn source onto a non-PTY recreation", () => {
+    const result = buildArgsForNonPtyRecreation(
+      { ...savedQuickRun, kind: "browser" as const },
+      "browser",
+      "/p"
+    );
+    expect(result.spawnedBy).toBeUndefined();
+  });
+
+  // The write side is what closes the cycle: a builder that forgot the field
+  // would produce a live panel whose very next save strips it again, so the
+  // second serialize is the assertion that matters. The restored panel is built
+  // from the builder's own output rather than by spreading the original, so a
+  // missing assignment cannot be masked.
+  it.each([
+    [
+      "backend match",
+      (saved: SavedSnapshot) =>
+        buildArgsForBackendTerminal({ id: "t1", cwd: "/p", kind: "terminal" }, saved, "/p"),
+    ],
+    [
+      "reconnect fallback",
+      (saved: SavedSnapshot) =>
+        buildArgsForReconnectedFallback({ id: "t1", cwd: "/p" }, saved, "/p"),
+    ],
+    [
+      "respawn",
+      (saved: SavedSnapshot) => buildArgsForRespawn(saved, "terminal", "/p", {}, false, undefined),
+    ],
+  ])("survives save -> disk -> %s -> save", (_label, build) => {
+    const snapshot = serializePtyPanel({
+      id: "t1",
+      title: "Task",
+      kind: "terminal",
+      cwd: "/p",
+      location: "grid",
+      cols: 80,
+      rows: 24,
+      spawnedBy: "quickrun",
+    } as PtyPanelData);
+    expect(snapshot.spawnedBy).toBe("quickrun");
+
+    const onDisk = JSON.parse(JSON.stringify({ ...snapshot, id: "t1", location: "grid" }));
+    const args = build(onDisk);
+
+    const restored = {
+      id: "t1",
+      title: args.title ?? "Task",
+      kind: "terminal",
+      cwd: args.cwd,
+      location: "grid",
+      cols: 80,
+      rows: 24,
+      spawnedBy: args.spawnedBy,
+    } as PtyPanelData;
+
+    expect(serializePtyPanel(restored).spawnedBy).toBe("quickrun");
   });
 });
 
@@ -1869,13 +2127,35 @@ describe("buildArgsForNonPtyRecreation", () => {
       expect(result.worktreeId).toBeUndefined();
     });
 
-    it("rescues a non-dockable dock panel to the grid and adopts the active worktree", () => {
-      // `dev-preview` is a non-dockable built-in. A persisted global dock
-      // dev-preview must land visibly in the active worktree's grid, not
-      // worktree-less in the global-only bucket.
+    it("keeps a persisted dock dev-preview in the dock (#12397)", () => {
       const result = buildArgsForNonPtyRecreation(
-        { id: "d1", kind: "dev-preview", title: "Dev", location: "dock" },
+        { id: "d1", kind: "dev-preview", title: "Dev", location: "dock", worktreeId: "wt-1" },
         "dev-preview",
+        "/project",
+        "wt-active"
+      );
+      expect(result.location).toBe("dock");
+      expect(result.worktreeId).toBe("wt-1");
+    });
+
+    it("keeps a global dock dev-preview global rather than adopting the active worktree", () => {
+      const result = buildArgsForNonPtyRecreation(
+        { id: "d2", kind: "dev-preview", title: "Dev", location: "dock", command: "npm run dev" },
+        "dev-preview",
+        "/project",
+        "wt-active"
+      );
+      expect(result.location).toBe("dock");
+      expect(result.worktreeId).toBeUndefined();
+    });
+
+    it("rescues a non-dockable dock panel to the grid and adopts the active worktree", () => {
+      // `review` is a non-dockable built-in. A persisted global dock review
+      // must land visibly in the active worktree's grid, not worktree-less in
+      // the global-only bucket.
+      const result = buildArgsForNonPtyRecreation(
+        { id: "r1", kind: "review", title: "Review", location: "dock" },
+        "review",
         "/project",
         "wt-active"
       );
@@ -1899,8 +2179,8 @@ describe("buildArgsForNonPtyRecreation", () => {
 
     it("does not override an explicit saved worktree when rescuing", () => {
       const result = buildArgsForNonPtyRecreation(
-        { id: "d1", kind: "dev-preview", title: "Dev", location: "dock", worktreeId: "wt-saved" },
-        "dev-preview",
+        { id: "r1", kind: "review", title: "Review", location: "dock", worktreeId: "wt-saved" },
+        "review",
         "/project",
         "wt-active"
       );
@@ -1910,8 +2190,8 @@ describe("buildArgsForNonPtyRecreation", () => {
 
     it("rescues to the grid worktree-less when no active worktree is known", () => {
       const result = buildArgsForNonPtyRecreation(
-        { id: "d1", kind: "dev-preview", title: "Dev", location: "dock" },
-        "dev-preview",
+        { id: "r1", kind: "review", title: "Review", location: "dock" },
+        "review",
         "/project",
         null
       );
@@ -3523,6 +3803,260 @@ describe("buildArgsForRespawn — a named resume-latest session (#12178)", () =>
 
     expect(result.command).toBe("codex resume saved-1");
     expect(result.agentSessionId).toBe("saved-1");
+  });
+});
+
+describe("buildArgsForRespawn — cold launch for an agent that resumes across directories (#12434)", () => {
+  // A Codex pane that began in /repo and was moved onto the task-a worktree.
+  const movedPane = {
+    id: "pane-a",
+    kind: "terminal" as const,
+    launchAgentId: "codex",
+    cwd: "/repo",
+    worktreeId: "/worktrees/task-a",
+    location: "grid" as const,
+    title: "Task A",
+  };
+  const moved = { cwd: "/worktrees/task-a", conversationCwd: "/repo" };
+  const settings = { agents: { codex: {} } };
+  const respawn = (
+    snapshot: SavedSnapshot,
+    options: Parameters<typeof buildArgsForRespawn>[7]
+  ): AddTerminalArgs =>
+    buildArgsForRespawn(snapshot, "terminal", "/repo", settings, false, "/tmp", undefined, options);
+
+  it("resumes an uncontested exact id in the destination worktree", () => {
+    buildResumeCommandMock.mockImplementation(
+      (_agentId: string, sessionId: string) => `codex resume ${sessionId} -C '.'`
+    );
+
+    const result = respawn({ ...movedPane, agentSessionId: "sess-a" }, { coldLaunch: moved });
+
+    expect(result.command).toBe("codex resume sess-a -C '.'");
+    expect(result.cwd).toBe("/worktrees/task-a");
+    expect(result.worktreeId).toBe("/worktrees/task-a");
+    expect(result.agentSessionId).toBe("sess-a");
+    expect(result.conversationCwd).toBe("/repo");
+    expect(result.restoreRecovery).toBeUndefined();
+    expect(result.sessionLostOnRestore).toBeUndefined();
+  });
+
+  it("resumes a conversation the origin folder's lookup named, in the destination", () => {
+    buildResumeCommandMock.mockImplementation(
+      (_agentId: string, sessionId: string) => `codex resume ${sessionId} -C '.'`
+    );
+
+    const result = respawn(movedPane, {
+      coldLaunch: moved,
+      resolvedResumeLatestSessionId: "sess-named",
+    });
+
+    expect(result.command).toBe("codex resume sess-named -C '.'");
+    expect(result.cwd).toBe("/worktrees/task-a");
+    expect(result.agentSessionId).toBe("sess-named");
+    expect(result.restoreRecovery).toBeUndefined();
+  });
+
+  it("holds a moved pane whose conversation couldn't be named, rather than running --last there", () => {
+    buildResumeLatestCommandMock.mockReturnValue("codex resume --last");
+
+    const result = respawn(movedPane, { coldLaunch: moved });
+
+    expect(result.restoreRecovery).toEqual({ reason: "session-unresolved" });
+    expect(result.command).not.toContain("resume");
+    expect(result.agentSessionId).toBeUndefined();
+    expect(result.sessionLostOnRestore).toBeUndefined();
+    expect(result.cwd).toBe("/worktrees/task-a");
+    expect(result.conversationCwd).toBe("/repo");
+    expect(buildResumeLatestCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("holds an election loser instead of starting a blank conversation", () => {
+    buildResumeLatestCommandMock.mockReturnValue("codex resume --last");
+
+    const result = respawn(movedPane, { coldLaunch: moved, allowResumeLatest: false });
+
+    expect(result.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
+    expect(result.command).toBe("codex --generated");
+    expect(result.sessionLostOnRestore).toBeUndefined();
+    expect(result.agentSessionId).toBeUndefined();
+  });
+
+  it("holds a loser even when it never moved", () => {
+    buildResumeLatestCommandMock.mockReturnValue("codex resume --last");
+
+    const result = respawn(
+      { ...movedPane, worktreeId: "/repo" },
+      { coldLaunch: { cwd: "/repo" }, allowResumeLatest: false }
+    );
+
+    expect(result.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
+    expect(result.cwd).toBe("/repo");
+    expect(result.conversationCwd).toBeUndefined();
+  });
+
+  it("holds a pane denied the id it carries, and drops that id and its old resume command", () => {
+    const result = respawn(
+      { ...movedPane, agentSessionId: "sess-dup", command: "codex resume sess-dup" },
+      { coldLaunch: moved, allowSessionIdResume: false }
+    );
+
+    expect(result.restoreRecovery).toEqual({ reason: "sibling-owns-session-id" });
+    expect(result.agentSessionId).toBeUndefined();
+    expect(result.command).toBe("codex --generated");
+    expect(buildResumeCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps today's --last for a winner that runs where its conversation began", () => {
+    buildResumeLatestCommandMock.mockReturnValue("codex resume --last");
+
+    const result = respawn({ ...movedPane, worktreeId: "/repo" }, { coldLaunch: { cwd: "/repo" } });
+
+    expect(result.command).toBe("codex resume --last");
+    expect(result.restoreRecovery).toBeUndefined();
+  });
+
+  it("holds an exact id without launching it while the destination is unresolved", () => {
+    const result = respawn(
+      { ...movedPane, agentSessionId: "sess-a" },
+      { coldLaunch: { cwd: "/repo", awaitingDestination: true } }
+    );
+
+    expect(result.restoreRecovery).toEqual({
+      reason: "destination-unavailable",
+      sessionId: "sess-a",
+      awaitingDestination: true,
+    });
+    expect(result.agentSessionId).toBeUndefined();
+    expect(result.cwd).toBe("/repo");
+    expect(buildResumeCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("offers no candidate an unresolved pane lost to a sibling", () => {
+    const result = respawn(
+      { ...movedPane, agentSessionId: "sess-dup" },
+      {
+        coldLaunch: { cwd: "/repo", awaitingDestination: true },
+        allowSessionIdResume: false,
+      }
+    );
+
+    expect(result.restoreRecovery).toEqual({
+      reason: "sibling-owns-session-id",
+      awaitingDestination: true,
+    });
+  });
+
+  it("holds a pane held last time again as-is, whatever id the snapshot carries", () => {
+    const result = respawn(
+      {
+        ...movedPane,
+        cwd: "/worktrees/task-a",
+        conversationCwd: "/repo",
+        agentSessionId: "sess-stale",
+        command: "codex resume sess-stale",
+        restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
+      },
+      { coldLaunch: moved, resolvedResumeLatestSessionId: "sess-named" }
+    );
+
+    expect(result.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
+    expect(result.agentSessionId).toBeUndefined();
+    expect(result.command).toBe("codex --generated");
+    expect(result.conversationCwd).toBe("/repo");
+    expect(buildResumeCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("puts a held pane back to waiting when restore says its destination is gone", () => {
+    const result = respawn(
+      {
+        ...movedPane,
+        restoreRecovery: { reason: "sibling-owns-session-id" },
+      },
+      { coldLaunch: { cwd: "/repo", awaitingDestination: true } }
+    );
+
+    expect(result.restoreRecovery).toEqual({
+      reason: "sibling-owns-session-id",
+      awaitingDestination: true,
+    });
+    expect(result.cwd).toBe("/repo");
+  });
+
+  it("still holds a pane whose saved marker it can't read", () => {
+    const result = respawn(
+      { ...movedPane, agentSessionId: "sess-a", restoreRecovery: { reason: "unknown" } },
+      { coldLaunch: moved }
+    );
+
+    expect(result.restoreRecovery).toEqual({ reason: "session-unresolved" });
+    expect(result.agentSessionId).toBeUndefined();
+  });
+
+  it("builds the held command from captured flags, never from a stored resume", () => {
+    buildResumeLatestCommandMock.mockReturnValue("codex resume --last");
+    const result = buildArgsForRespawn(
+      {
+        ...movedPane,
+        agentLaunchFlags: ["--model", "gpt-5"],
+        command: "codex --model gpt-5 resume --last",
+      },
+      "terminal",
+      "/repo",
+      undefined,
+      false,
+      "/tmp",
+      undefined,
+      { coldLaunch: moved, allowResumeLatest: false }
+    );
+
+    expect(result.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
+    expect(result.command).toMatch(/^codex --model ['"]gpt-5['"]/);
+    expect(result.command).not.toContain("resume");
+  });
+
+  it("ignores a recovery marker for an agent restore has no cold-launch decision for", () => {
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal",
+        launchAgentId: "claude",
+        cwd: "/repo",
+        location: "grid",
+        agentSessionId: "sess-c",
+        restoreRecovery: { reason: "sibling-owns-session-id" },
+      },
+      "terminal",
+      "/repo",
+      { agents: { claude: {} } },
+      false,
+      "/tmp"
+    );
+
+    expect(result.restoreRecovery).toBeUndefined();
+    expect(result.command).toBe("claude --resume sess-c");
+  });
+});
+
+describe("reconnect builders keep a pane's conversation folder (#12434)", () => {
+  it("carries a valid folder and drops a malformed one", () => {
+    const backend = { id: "t1", cwd: "/worktrees/task-a", kind: "terminal" as const };
+    const withOrigin = {
+      id: "t1",
+      kind: "terminal" as const,
+      cwd: "/worktrees/task-a",
+      conversationCwd: "/repo",
+    };
+
+    expect(buildArgsForBackendTerminal(backend, withOrigin, "/repo").conversationCwd).toBe("/repo");
+    expect(
+      buildArgsForReconnectedFallback({ id: "t1", cwd: "/worktrees/task-a" }, withOrigin, "/repo")
+        .conversationCwd
+    ).toBe("/repo");
+    expect(
+      buildArgsForBackendTerminal(backend, { ...withOrigin, conversationCwd: 42 }, "/repo")
+        .conversationCwd
+    ).toBeUndefined();
   });
 });
 

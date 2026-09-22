@@ -8,11 +8,8 @@ import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
 
 import { useDroppable } from "@dnd-kit/core";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
-import {
-  useDndPlaceholder,
-  useIsWorktreeSortDragging,
-  type WorktreeDragData,
-} from "../DragDrop/DndProvider";
+import type { WorktreeDragData } from "../DragDrop/DndProvider";
+import { useDndPlaceholder, useIsWorktreeSortDragging } from "../DragDrop/dndPlaceholderContext";
 import { getWorktreeSortDragId } from "../DragDrop/SortableWorktreeCard";
 import { Check, GripVertical } from "lucide-react";
 import { useErrorStore, usePanelStore, type RetryAction } from "../../store";

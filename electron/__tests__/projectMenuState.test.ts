@@ -31,8 +31,12 @@ vi.mock("electron", () => ({
   Menu: { getApplicationMenu: getApplicationMenuMock },
 }));
 
-const { PROJECT_MENU_ITEM_IDS, refreshProjectMenuState, resolveProjectIdForApplicationMenu } =
-  await import("../projectMenuState.js");
+const {
+  CLOSE_WINDOW_MENU_ITEM_ID,
+  PROJECT_MENU_ITEM_IDS,
+  refreshProjectMenuState,
+  resolveProjectIdForApplicationMenu,
+} = await import("../projectMenuState.js");
 
 const [SETTINGS_ID, CLOSE_ID] = PROJECT_MENU_ITEM_IDS;
 
@@ -73,6 +77,7 @@ beforeEach(() => {
   menuItems.clear();
   menuItems.set(SETTINGS_ID, { enabled: false });
   menuItems.set(CLOSE_ID, { enabled: false });
+  menuItems.set(CLOSE_WINDOW_MENU_ITEM_ID, { enabled: false });
   getApplicationMenuMock.mockReturnValue(applicationMenu);
 });
 
@@ -220,6 +225,30 @@ describe("refreshProjectMenuState", () => {
     windowRefMock.getWindowRegistry.mockReturnValue(registryWith(pvmWindow("project-2")));
     refreshProjectMenuState();
     expect(menuItems.get(CLOSE_ID)!.enabled).toBe(true);
+  });
+
+  it("keeps Close Window enabled for any open window, project or not, and disables it windowless", () => {
+    // Close Window is gated on "is a window open", not "is a project open": a
+    // welcome window has nothing to close project-wise but is still closable.
+    windowRefMock.getWindowRegistry.mockReturnValue(registryWith(pvmWindow(null)));
+    refreshProjectMenuState();
+    expect(menuItems.get(CLOSE_ID)!.enabled).toBe(false);
+    expect(menuItems.get(CLOSE_WINDOW_MENU_ITEM_ID)!.enabled).toBe(true);
+
+    windowRefMock.getWindowRegistry.mockReturnValue(registryWith(undefined));
+    refreshProjectMenuState();
+    expect(menuItems.get(CLOSE_WINDOW_MENU_ITEM_ID)!.enabled).toBe(false);
+
+    // Reopening a window from the windowless state must bring it back.
+    windowRefMock.getWindowRegistry.mockReturnValue(registryWith(pvmWindow(null)));
+    refreshProjectMenuState();
+    expect(menuItems.get(CLOSE_WINDOW_MENU_ITEM_ID)!.enabled).toBe(true);
+  });
+
+  it("leaves Close Window enabled when there is no window layer to ask", () => {
+    windowRefMock.getWindowRegistry.mockReturnValue(undefined);
+    refreshProjectMenuState();
+    expect(menuItems.get(CLOSE_WINDOW_MENU_ITEM_ID)!.enabled).toBe(true);
   });
 
   it("does not throw when no application menu has been built yet", () => {

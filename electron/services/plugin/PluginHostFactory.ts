@@ -1,5 +1,8 @@
 import fs from "fs/promises";
 import path from "path";
+import { createHash } from "node:crypto";
+import { resilientAtomicWriteFile } from "../../utils/fs.js";
+import { runExclusive } from "../../utils/keyedMutex.js";
 import { watchShared } from "../FileObservationService.js";
 import { fileTreeService } from "../FileTreeService.js";
 import { clipboard, shell } from "electron";
@@ -28,6 +31,10 @@ import {
 } from "./PluginStorageManager.js";
 import { createListenerFailureState, invokeTrackedListener } from "./pluginCallbackUtils.js";
 import { isChannelSchema } from "./PluginChannelRegistry.js";
+import { abortErrorFor } from "./pluginAbortError.js";
+import { agentMcpEndpointRegistry } from "../pluginAgentMcp/endpointRegistry.js";
+import { validateAgentMcpTools } from "../pluginAgentMcp/validateTools.js";
+import type { AgentMcpToolInvoker } from "../pluginAgentMcp/types.js";
 
 import { events } from "../events.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
@@ -43,6 +50,7 @@ import {
 } from "../fileDecorationRegistry.js";
 import { broadcastToRenderer, broadcastToProjectRenderers } from "../../ipc/utils.js";
 import { isAppError } from "../../utils/errorTypes.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getPluginActionAuditService } from "../PluginActionAuditService.js";
 import { PluginPanelBadgeSchema, PluginToastOptionsSchema } from "../../schemas/plugin.js";
@@ -86,8 +94,10 @@ import type {
   PluginDuplexProcessSpawnOptions,
   PluginPtyProcessHandle,
   PluginPtyProcessSpawnOptions,
-  PluginFsApi,
+  BuiltinPluginFsApi,
+  PluginWorkspaceScope,
   PluginFsDirEntry,
+  PluginFsWriteErrorCode,
   PluginFsStat,
   PluginGitApi,
   PluginClipboardApi,
@@ -97,6 +107,8 @@ import type {
   PluginGitCommitResult,
   PluginPanelBadge,
   PluginHostBinding,
+  PluginMcpCaller,
+  PluginMcpToolDefinition,
 } from "../../../shared/types/plugin.js";
 import type {
   LoadedPlugin,
@@ -319,9 +331,17 @@ export interface PluginHostFactoryDeps {
   pluginDisplayName: (pluginId: string) => string;
   pluginDataDir: (pluginId: string) => string;
   isPathUnder: (root: string, candidate: string) => boolean;
+  /**
+   * `scope` pins the `${project}` / `${worktree}` tokens to one named project
+   * and worktree instead of resolving them from the plugin's binding (or, for
+   * an unbound plugin, the focused window) — the expansion behind
+   * a built-in host's `fsForWorkspace`. It only ever replaces the
+   * token resolution: a scope naming a project or worktree that is not live
+   * contributes no token root, so containment denies.
+   */
   expandAllowedPathEntries: (
     pluginId: string,
-    options: { includeDataDir: boolean }
+    options: { includeDataDir: boolean; scope?: PluginWorkspaceScope }
   ) => Promise<ExpandedFsPath[]>;
   subscribeWorktreeEvent: (
     pluginId: string,
@@ -372,6 +392,47 @@ function trackPluginDisposer(
   }
   list.push(dispose);
   return dispose;
+}
+
+/**
+ * Run one agent MCP tool the way {@link AgentMcpToolInvoker} promises: a sync
+ * throw and a sync return both become a promise, and the promise rejects the
+ * moment `signal` aborts even if `execute` never looks at it — a plugin that
+ * ignores its signal must not be able to hold a call open past its budget.
+ * Called as a method on the plugin's own definition so an `execute` written
+ * with `this` behaves as it would in the worker, where it is called that way.
+ */
+function runAgentMcpTool(
+  definition: PluginMcpToolDefinition,
+  execute: PluginMcpToolDefinition["execute"],
+  args: Record<string, unknown>,
+  caller: PluginMcpCaller,
+  signal: AbortSignal
+): Promise<unknown> {
+  if (signal.aborted) return Promise.reject(abortErrorFor(signal));
+  return new Promise<unknown>((resolve, reject) => {
+    const onAbort = (): void => reject(abortErrorFor(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    const detach = (): void => signal.removeEventListener("abort", onAbort);
+    let result: unknown;
+    try {
+      result = Reflect.apply(execute, definition, [args, caller, signal]);
+    } catch (err) {
+      detach();
+      reject(err);
+      return;
+    }
+    Promise.resolve(result).then(
+      (value) => {
+        detach();
+        resolve(value);
+      },
+      (err: unknown) => {
+        detach();
+        reject(err);
+      }
+    );
+  });
 }
 
 /**
@@ -609,6 +670,10 @@ export function createHost(
     scope === "worktree"
       ? { projectRoot: boundScopeRoot, worktreePath: await resolveBoundWorktreeTarget() }
       : { projectRoot: boundScopeRoot };
+
+  // The live disposer per `agentMcp` endpoint, so a replaced roster is released
+  // rather than kept reachable from the unload cascade for the host's lifetime.
+  const mcpRosterDisposers = new Map<string, () => void>();
 
   const host: PluginHostApi = {
     get pluginId() {
@@ -1184,6 +1249,89 @@ export function createHost(
         unregisterFileDecorationProviderImpl(pluginId, contributionId, impl)
       );
       return Promise.resolve(dispose);
+    },
+    mcp: {
+      registerTools: (endpointId, tools) => {
+        if (revoked) {
+          throw new Error(
+            `Plugin "${pluginId}" host revoked: mcp.registerTools called after activate() returned or timed out`
+          );
+        }
+        if (!deps.declaredCapabilities(pluginId).has("mcp:expose")) {
+          throw new Error(
+            `PERMISSION_REQUIRED: plugin "${pluginId}" mcp.registerTools requires "mcp:expose", which is not declared in manifest.capabilities`
+          );
+        }
+        if (typeof endpointId !== "string" || endpointId.length === 0) {
+          throw new Error(
+            `Plugin "${pluginId}" mcp.registerTools: endpointId must be a non-empty string`
+          );
+        }
+        // Same reason as forge and decoration providers: per-project enablement,
+        // grants and the route are all driven by the manifest's declarations, so
+        // a roster for an undeclared endpoint could never be reached — reject it
+        // rather than hold an orphan.
+        const declared = deps.plugins
+          .get(pluginId)
+          ?.manifest.contributes.agentMcp?.some((endpoint) => endpoint.id === endpointId);
+        if (!declared) {
+          throw new Error(
+            `Plugin "${pluginId}" mcp.registerTools: endpoint "${endpointId}" is not declared in contributes.agentMcp`
+          );
+        }
+        let descriptors: ReturnType<typeof validateAgentMcpTools>;
+        try {
+          descriptors = validateAgentMcpTools(tools);
+        } catch (err) {
+          throw new Error(
+            `Plugin "${pluginId}" mcp.registerTools("${endpointId}"): ${formatErrorMessage(err, "invalid tool roster")}`,
+            { cause: err }
+          );
+        }
+        // Capture each definition and its `execute` now. The registry advertises
+        // the validated snapshot, so dispatch must run exactly those tools too —
+        // not whatever the plugin's roster object holds by the time a call lands.
+        const roster = tools as Record<string, PluginMcpToolDefinition>;
+        const executors = new Map<
+          string,
+          { definition: PluginMcpToolDefinition; execute: PluginMcpToolDefinition["execute"] }
+        >();
+        for (const { name } of descriptors) {
+          const definition = roster[name];
+          executors.set(name, { definition, execute: definition.execute });
+        }
+        const invoke: AgentMcpToolInvoker = (toolName, args, caller, signal) => {
+          // A route that looked the roster up before an unload landed may still
+          // call through it; the instance it belonged to is gone, so refuse.
+          if (!isBound()) {
+            return Promise.reject(new Error(`Plugin "${pluginId}" is not loaded`));
+          }
+          const entry = executors.get(toolName);
+          if (!entry) {
+            return Promise.reject(
+              new Error(`Plugin "${pluginId}" endpoint "${endpointId}" has no tool "${toolName}"`)
+            );
+          }
+          return runAgentMcpTool(entry.definition, entry.execute, args, caller, signal);
+        };
+        const unregister = agentMcpEndpointRegistry.register({
+          pluginInstanceId: pluginId,
+          endpointId,
+          tools: descriptors,
+          invoke,
+        });
+        const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => {
+          unregister();
+          if (mcpRosterDisposers.get(endpointId) === dispose) mcpRosterDisposers.delete(endpointId);
+        });
+        // Released after the replacement is bound. The registry's disposer is
+        // identity-guarded, so this drops the old roster's tracking and closures
+        // without the endpoint ever going empty in between.
+        const prior = mcpRosterDisposers.get(endpointId);
+        mcpRosterDisposers.set(endpointId, dispose);
+        prior?.();
+        return Promise.resolve(dispose);
+      },
     },
     // NOT revoke-guarded: called from the plugin's own post-activation
     // subscription callbacks (worktree changes, polling timers). The
@@ -1929,14 +2077,38 @@ async function resolveActiveAgentTerminalId(boundProjectId: string | null): Prom
   return candidates[0].id;
 }
 
+function sha256Hex(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/**
+ * A checked-write refusal (#12323). The code rides on the error object for
+ * in-process callers and prefixes the message for callers behind a boundary
+ * that keeps only the message.
+ */
+function fsWriteError(code: PluginFsWriteErrorCode, message: string): Error & { code: string } {
+  const error = new Error(`${code}: ${message}`) as Error & { code: string };
+  error.code = code;
+  return error;
+}
+
 /**
  * Build the host-mediated `host.fs` surface for one plugin. Every path
  * argument is realpath-contained to the declared `scopes.fs.allowedPaths`
  * (traversal/symlink-escape rejected), and reads/writes are capability-gated
  * (`fs:*-read` / `fs:*-write`). This is the first runtime enforcement of
  * `scopes.fs.allowedPaths` — formerly advisory-only. Writes are audited.
+ *
+ * `workspaceScope`, when given, pins the `${project}` / `${worktree}` roots to
+ * one named project and worktree for the life of the returned handle — see
+ * {@link buildScopedFsApi}. Nothing else about the surface changes: it is the
+ * same closures, the same gates, and the same watcher registry.
  */
-function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi {
+function buildFsApi(
+  deps: PluginHostFactoryDeps,
+  pluginId: string,
+  workspaceScope?: PluginWorkspaceScope
+): BuiltinPluginFsApi {
   const requireLoaded = (op: string): void => {
     if (!deps.plugins.has(pluginId)) {
       throw new Error(`PLUGIN_UNLOADED: plugin "${pluginId}" fs.${op}: plugin is no longer loaded`);
@@ -1987,7 +2159,7 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
     }
   };
   const containWithClass = (targetPath: string) =>
-    containToDeclaredRoots(deps, pluginId, targetPath);
+    containToDeclaredRoots(deps, pluginId, targetPath, workspaceScope);
 
   return {
     readFile: async (filePath, options) => {
@@ -2015,11 +2187,79 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
       // to a plugin would expose whatever else the pool holds.
       return new Uint8Array(buffer);
     },
-    writeFile: async (filePath, contents) => {
+    readFileBounded: async (filePath, options) => {
+      options?.signal?.throwIfAborted();
+      requireLoaded("readFileBounded");
+      requireAnyReadCap("readFileBounded");
+      const limit = options?.limitBytes;
+      if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 0) {
+        throw new Error(
+          `VALIDATION: plugin "${pluginId}" fs.readFileBounded requires an integer limitBytes`
+        );
+      }
+      const { resolved, rootClass } = await containWithClass(filePath);
+      options?.signal?.throwIfAborted();
+      requireLoaded("readFileBounded");
+      requireReadCapForClass("readFileBounded", rootClass);
+      // O_NONBLOCK (undefined on Windows) so a FIFO standing where a regular
+      // file was cannot leave the open pending with no writer, and O_NOFOLLOW
+      // so the leaf cannot be swapped for a symlink after containment
+      // realpathed it. The regular-file check below is on the descriptor this
+      // open returned, not on a path that could since have become something
+      // else — a path stat is evidence about a name, not about an fd.
+      //
+      // What this does not close, and neither does any other read here: the
+      // open is still by pathname, so an ANCESTOR directory swapped for a
+      // symlink between containment and this line resolves somewhere else —
+      // O_NOFOLLOW covers only the last component. Closing that needs the
+      // whole walk opened directory by directory, which is a change to
+      // containment rather than to one read. On Windows neither flag exists,
+      // so the descriptor check is the only guard there.
+      const handle = await fs.open(
+        resolved,
+        fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0)
+      );
+      try {
+        const opened = await handle.stat();
+        if (!opened.isFile()) return { status: "not-a-file" as const };
+        // limit + 1: the extra byte is how an oversized file is recognised
+        // without ever holding more than the cap plus one byte of it.
+        const buffer = Buffer.allocUnsafe(limit + 1);
+        let filled = 0;
+        while (filled <= limit) {
+          options?.signal?.throwIfAborted();
+          const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, null);
+          if (bytesRead === 0) break;
+          filled += bytesRead;
+        }
+        if (filled > limit) return { status: "too-large" as const };
+        // Copied out of the pooled allocator for the same reason
+        // `readFileBytes` copies: the pool's backing store holds other reads.
+        return { status: "ok" as const, bytes: new Uint8Array(buffer.subarray(0, filled)) };
+      } finally {
+        await handle.close();
+      }
+    },
+    writeFile: async (filePath, contents, options) => {
       requireLoaded("writeFile");
       const writeCap = requireWriteCap("writeFile");
       if (typeof contents !== "string") {
         throw new Error(`Plugin "${pluginId}" fs.writeFile: contents must be a string`);
+      }
+      // The presence of an options object — even `{}` — selects the checked
+      // write (#12323); a malformed one is an authoring error, not a plain
+      // write in disguise.
+      const checked = options !== undefined;
+      if (checked) {
+        if (options === null || typeof options !== "object") {
+          throw new Error(`Plugin "${pluginId}" fs.writeFile: options must be an object`);
+        }
+        const expected = options.expectedRevision;
+        if (expected !== undefined && expected !== null && !/^[0-9a-f]{64}$/.test(expected)) {
+          throw new Error(
+            `Plugin "${pluginId}" fs.writeFile: expectedRevision must be a sha256 hex string or null`
+          );
+        }
       }
       // Lazily materialize the implicit per-plugin data dir before containment
       // when the target (lexically) lands inside it — resolveContainedPath
@@ -2055,7 +2295,111 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
       // anyway never banks a grant (#10524). Re-check liveness after the await.
       await ensureCapabilityConsent(deps, pluginId, writeCap);
       requireLoaded("writeFile");
-      await fs.writeFile(resolved, contents, "utf-8");
+      // One writer per resolved path at a time, plain and checked alike, so a
+      // checked write's hash-compare-and-replace cannot interleave with any
+      // other host-mediated writer to the same file. Distinct paths never wait
+      // on each other.
+      const revision = await runExclusive(resolved, async () => {
+        if (!checked) {
+          // The plain write, exactly as before: no further liveness check, so
+          // a plugin unloading while its write was queued still lands it, as
+          // it did when the write started immediately after consent.
+          await fs.writeFile(resolved, contents, "utf-8");
+          return sha256Hex(Buffer.from(contents, "utf-8"));
+        }
+        // Containment resolved before the consent prompt and the queue wait;
+        // both can take long enough for the path to change underneath, so the
+        // checked path proves it again inside the critical section.
+        const recheck = await containWithClass(filePath);
+        if (recheck.resolved !== resolved) {
+          throw fsWriteError(
+            "TARGET_UNAVAILABLE",
+            `Plugin "${pluginId}" fs.writeFile: the target moved while the write was waiting`
+          );
+        }
+        // Symlinks are refused on the checked path: containment realpaths the
+        // leaf, so `resolved` is already the link's destination and a bare
+        // lstat there sees a regular file. Inspect the requested leaf itself.
+        // Every ancestor was validated by containment; only the leaf can be a
+        // link the caller did not ask to write through.
+        const requestedLeaf = path.resolve(filePath);
+        const leafStat = await fs.lstat(requestedLeaf).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        if (leafStat?.isSymbolicLink()) {
+          throw fsWriteError(
+            "TARGET_IS_SYMLINK",
+            `Plugin "${pluginId}" fs.writeFile: refusing to write through a symlink`
+          );
+        }
+        const expected = options.expectedRevision;
+        const bytes = Buffer.from(contents, "utf-8");
+        if (expected === null) {
+          // Create-new is an exclusive create at the filesystem, not a check
+          // followed by a replace: two writers racing on names that only
+          // differ in case would otherwise both see "absent" and both win on
+          // a case-insensitive volume. A directory or any other entry at the
+          // leaf reads as "exists" without being opened.
+          if (leafStat !== null) {
+            throw fsWriteError(
+              "TARGET_EXISTS",
+              `Plugin "${pluginId}" fs.writeFile: the target already exists`
+            );
+          }
+          requireLoaded("writeFile");
+          try {
+            await fs.writeFile(resolved, bytes, { flag: "wx" });
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+              throw fsWriteError(
+                "TARGET_EXISTS",
+                `Plugin "${pluginId}" fs.writeFile: the target already exists`
+              );
+            }
+            throw error;
+          }
+          return sha256Hex(bytes);
+        }
+        if (expected !== undefined) {
+          // Only a revision compare needs the current bytes; a bare `{}`
+          // never reads the target, so an unreadable or oversized file still
+          // gets its atomic replace.
+          const current = await fs.readFile(resolved).catch((error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return null;
+            throw error;
+          });
+          if (current === null) {
+            throw fsWriteError(
+              "TARGET_UNAVAILABLE",
+              `Plugin "${pluginId}" fs.writeFile: the target no longer exists`
+            );
+          }
+          const currentRevision = sha256Hex(current);
+          if (currentRevision !== expected) {
+            throw Object.assign(
+              fsWriteError(
+                "REVISION_MISMATCH",
+                `Plugin "${pluginId}" fs.writeFile: the file changed since it was read`
+              ),
+              { currentRevision }
+            );
+          }
+        }
+        // Preserve the file's mode across the replace so an executable script
+        // or a read-only note keeps its bits; a new file takes the umask.
+        const mode = leafStat && !leafStat.isSymbolicLink() ? leafStat.mode & 0o777 : undefined;
+        // Last liveness check before the bytes land: the consent prompt and the
+        // queue wait above can outlive the plugin.
+        requireLoaded("writeFile");
+        await resilientAtomicWriteFile(
+          resolved,
+          bytes,
+          "utf-8",
+          mode === undefined ? undefined : { mode }
+        );
+        return sha256Hex(bytes);
+      });
       // Audit every write so host-mediated filesystem mutation is observable.
       deps.safeAppendAudit({
         pluginId,
@@ -2067,6 +2411,7 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
         argsHash: deps.safeArgsHash([{ path: resolved, bytes: Buffer.byteLength(contents) }]),
         durationMs: 0,
       });
+      return { revision };
     },
     readdir: async (dirPath, options) => {
       options?.signal?.throwIfAborted();
@@ -2360,6 +2705,33 @@ function buildGitApi(deps: PluginHostFactoryDeps, pluginId: string): PluginGitAp
 }
 
 /**
+ * A `host.fs` for one named project and worktree — the implementation behind a
+ * built-in host's `fsForWorkspace` (`shared/types/plugin.ts`).
+ *
+ * Built-ins are app-global, so their token roots otherwise track the focused
+ * window; a built-in holding long-lived state about a worktree needs roots that
+ * do not move when the user looks elsewhere. It repoints the tokens rather than
+ * relaxing anything: the declared `allowedPaths`, capability classes, realpath
+ * containment and write audit are untouched, and the roots it names are ones
+ * the same manifest already reaches when that project is focused — reaching
+ * them while it is NOT focused is the point, and is why the caller must
+ * validate the scope against its own invocation context. A project that is not
+ * open expands to no token root at all, and an unresolvable worktree drops
+ * `${worktree}` alone, both following #9492's fail-closed posture.
+ *
+ * Whether the caller may name this scope is the CALLER's check, made against
+ * the invoking renderer's `PluginIpcContext` before it asks — nothing about a
+ * scope object is authenticated here.
+ */
+export function buildScopedFsApi(
+  deps: PluginHostFactoryDeps,
+  pluginId: string,
+  scope: PluginWorkspaceScope
+): BuiltinPluginFsApi {
+  return buildFsApi(deps, pluginId, scope);
+}
+
+/**
  * Contain a plugin-supplied path against the plugin's call-time-expanded
  * allowed roots and report which root class matched.
  *
@@ -2376,9 +2748,13 @@ function buildGitApi(deps: PluginHostFactoryDeps, pluginId: string): PluginGitAp
 async function containToDeclaredRoots(
   deps: PluginHostFactoryDeps,
   pluginId: string,
-  targetPath: string
+  targetPath: string,
+  scope?: PluginWorkspaceScope
 ): Promise<{ resolved: string; rootClass: FsRootClass; root: string }> {
-  const entries = await deps.expandAllowedPathEntries(pluginId, { includeDataDir: true });
+  const entries = await deps.expandAllowedPathEntries(pluginId, {
+    includeDataDir: true,
+    scope,
+  });
   let lastErr: unknown;
   for (const entry of entries) {
     try {

@@ -22,6 +22,11 @@ const waitForRateLimitSlotMock = vi.hoisted(() => vi.fn().mockResolvedValue(unde
 const waitForBurstRateLimitSlotMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const consumeRestoreQuotaMock = vi.hoisted(() => vi.fn(() => false));
 
+const noteTerminalLaunchMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../../services/pty/agentSessionCapturePersistence.js", () => ({
+  noteTerminalLaunch: noteTerminalLaunchMock,
+}));
+
 vi.mock("../../../../services/ProjectStore.js", () => ({
   projectStore: {
     getCurrentProject: mockGetCurrentProject,
@@ -63,6 +68,30 @@ vi.mock("../../../../setup/windowsPath.js", () => ({
 
 vi.mock("../../../../services/pty/agentSessionRetention.js", () => ({
   getAgentSessionRetentionDays: vi.fn(() => 30),
+}));
+
+// The real lookup reads the developer's own Claude store; no case here should
+// depend on what happens to be on this machine.
+const findUntouchedClaudeSessionMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => Promise<string | undefined>>(async () => undefined)
+);
+const claudeStoreMocks = vi.hoisted(() => ({
+  resolvePaneClaudeProjectsRoot: vi.fn<(...args: unknown[]) => string | null>(
+    () => "/claude-store/projects"
+  ),
+  rememberClaudePaneStore: vi.fn(),
+}));
+// Full surface: the real session journal imports this module too, and a factory
+// that omits an export throws for every consumer that reaches it.
+vi.mock("../../../../services/claude/ClaudeSessionStore.js", () => ({
+  CLAUDE_TRANSCRIPT_LOOKUP_TIMEOUT_MS: 1_500,
+  CLAUDE_STORE_UNREACHABLE_COOLDOWN_MS: 60_000,
+  resolvePaneClaudeProjectsRoot: claudeStoreMocks.resolvePaneClaudeProjectsRoot,
+  rememberClaudePaneStore: claudeStoreMocks.rememberClaudePaneStore,
+  __resetClaudeSessionStoreForTests: vi.fn(),
+  observeClaudeTranscript: vi.fn(async () => "unknown"),
+  findUntouchedClaudeSession: findUntouchedClaudeSessionMock,
+  isClaudeSessionWithoutTranscript: vi.fn(async () => false),
 }));
 
 type SafeParseable = {
@@ -142,8 +171,16 @@ const {
   mockPreparePaneConfig,
   mockRevokePaneConfig,
   mockRegisterAssistantPaneBearer,
+  mockRegisterPaneWorkspaceBinding,
   mockSetAssistantPaneWebContentsResolver,
   mockSetAssistantPaneActionContextResolver,
+  mockSetPaneWorkspaceBindingResolver,
+  mockSetPaneOwnershipPrincipalResolver,
+  mockRevokeOwnershipPrincipal,
+  mockGetOwnershipPrincipalForToken,
+  mockSetOwnershipPrincipalRevokedListener,
+  mockSetPaneTerminalResolver,
+  mockGetPaneIdForToken,
   mockEnsureReady,
 } = vi.hoisted(() => ({
   mockValidateToken: vi.fn<(token: string) => "workbench" | "action" | "system" | false>(),
@@ -153,8 +190,19 @@ const {
   mockRevokePaneConfig: vi.fn<(paneId: string) => Promise<void>>(),
   mockRegisterAssistantPaneBearer:
     vi.fn<(token: string, webContentsId: number, actionContext?: unknown) => void>(),
+  mockRegisterPaneWorkspaceBinding: vi.fn<(token: string, binding: unknown) => void>(),
   mockSetAssistantPaneWebContentsResolver: vi.fn(),
   mockSetAssistantPaneActionContextResolver: vi.fn(),
+  mockSetPaneWorkspaceBindingResolver: vi.fn(),
+  mockSetPaneOwnershipPrincipalResolver:
+    vi.fn<(resolver: ((token: string) => string | null) | null) => void>(),
+  mockRevokeOwnershipPrincipal: vi.fn<(principal: string) => void>(),
+  mockGetOwnershipPrincipalForToken: vi.fn<(token: string) => string | null>(),
+  mockSetOwnershipPrincipalRevokedListener:
+    vi.fn<(listener: ((principal: string) => void) | null) => void>(),
+  mockSetPaneTerminalResolver:
+    vi.fn<(resolver: ((token: string) => string | null) | null) => void>(),
+  mockGetPaneIdForToken: vi.fn<(token: string) => string | null>(),
   mockEnsureReady: vi.fn<() => Promise<boolean>>(),
 }));
 
@@ -221,6 +269,13 @@ vi.mock("../../../../services/McpServerService.js", () => ({
       mockSetAssistantPaneWebContentsResolver(...args),
     setAssistantPaneActionContextResolver: (...args: unknown[]) =>
       mockSetAssistantPaneActionContextResolver(...args),
+    setPaneWorkspaceBindingResolver: (...args: unknown[]) =>
+      mockSetPaneWorkspaceBindingResolver(...args),
+    setPaneOwnershipPrincipalResolver: (resolver: ((token: string) => string | null) | null) =>
+      mockSetPaneOwnershipPrincipalResolver(resolver),
+    setPaneTerminalResolver: (resolver: ((token: string) => string | null) | null) =>
+      mockSetPaneTerminalResolver(resolver),
+    revokeOwnershipPrincipal: (principal: string) => mockRevokeOwnershipPrincipal(principal),
   },
 }));
 
@@ -230,6 +285,12 @@ vi.mock("../../../../services/McpPaneConfigService.js", () => ({
     revokePaneConfig: (paneId: string) => mockRevokePaneConfig(paneId),
     registerAssistantPaneBearer: (token: string, webContentsId: number, actionContext?: unknown) =>
       mockRegisterAssistantPaneBearer(token, webContentsId, actionContext),
+    registerPaneWorkspaceBinding: (token: string, binding: unknown) =>
+      mockRegisterPaneWorkspaceBinding(token, binding),
+    getOwnershipPrincipalForToken: (token: string) => mockGetOwnershipPrincipalForToken(token),
+    getPaneIdForToken: (token: string) => mockGetPaneIdForToken(token),
+    setOwnershipPrincipalRevokedListener: (listener: ((principal: string) => void) | null) =>
+      mockSetOwnershipPrincipalRevokedListener(listener),
   },
 }));
 
@@ -309,6 +370,47 @@ describe("terminal spawn handler - projectId resolution", () => {
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.projectId).toBe("project-a-id");
+  });
+
+  it("records each spawned launch's resume intent (#12433)", async () => {
+    mockGetProjectById.mockReturnValue(projectA);
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+
+    const id = await getSpawnHandler()({} as Electron.IpcMainInvokeEvent, {
+      projectId: "project-a-id",
+      cols: 80,
+      rows: 24,
+      command: "codex",
+    });
+
+    // After the spawn, whose generation the intent is keyed to.
+    expect(noteTerminalLaunchMock).toHaveBeenCalledTimes(1);
+    expect(noteTerminalLaunchMock).toHaveBeenCalledWith(id, {
+      command: ptyClient.spawn.mock.calls[0][1].command,
+      agentSessionId: undefined,
+    });
+    expect(ptyClient.spawn.mock.invocationCallOrder[0]).toBeLessThan(
+      noteTerminalLaunchMock.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("records nothing when the spawn itself throws", async () => {
+    mockGetProjectById.mockReturnValue(projectA);
+    mockRevokePaneConfig.mockResolvedValue(undefined);
+    ptyClient.spawn.mockImplementation(() => {
+      throw new Error("host gone");
+    });
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+
+    await expect(
+      getSpawnHandler()({} as Electron.IpcMainInvokeEvent, {
+        projectId: "project-a-id",
+        cols: 80,
+        rows: 24,
+        command: "codex",
+      })
+    ).rejects.toThrow(/Failed to spawn terminal/);
+    expect(noteTerminalLaunchMock).not.toHaveBeenCalled();
   });
 
   it("falls back to current project when projectId is not provided", async () => {
@@ -867,6 +969,102 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
       expect(spawnArgs.args?.join(" ")).toContain("claude --resume s-1");
     }
   );
+
+  describe("untouched Claude sessions (#12371)", () => {
+    const SESSION = "006fdfc0-67bf-4df0-ad82-48ebfe4df184";
+    const CLAUDE_STORE = "/claude-store/projects";
+
+    async function spawnClaude(options: Record<string, unknown>) {
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalLifecycleHandlers(deps);
+      const handler = getSpawnHandler();
+      const os = await import("os");
+      await handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cwd: os.homedir(),
+          cols: 80,
+          rows: 24,
+          launchAgentId: "claude",
+          command: `claude --resume ${SESSION}`,
+          ...options,
+        } as unknown as Parameters<typeof handler>[1]
+      );
+      return { spawnArgs: ptyClient.spawn.mock.calls[0][1], cwd: os.homedir() };
+    }
+
+    it("starts a fresh conversation under the same id instead of a resume that can't open", async () => {
+      findUntouchedClaudeSessionMock.mockResolvedValueOnce(SESSION);
+
+      const { spawnArgs, cwd } = await spawnClaude({
+        shell: "/usr/bin/nu",
+        agentSessionId: SESSION,
+      });
+
+      expect(findUntouchedClaudeSessionMock).toHaveBeenCalledWith(
+        `claude --resume ${SESSION}`,
+        "claude",
+        expect.objectContaining({ cwd, agentSessionId: SESSION, projectsRoot: CLAUDE_STORE })
+      );
+      expect(claudeStoreMocks.resolvePaneClaudeProjectsRoot).toHaveBeenCalledWith(
+        expect.objectContaining({ shell: "/usr/bin/nu" })
+      );
+      expect(claudeStoreMocks.rememberClaudePaneStore).toHaveBeenCalledWith(
+        expect.any(String),
+        CLAUDE_STORE
+      );
+      expect(spawnArgs.command).toContain(`--session-id ${SESSION}`);
+      expect(spawnArgs.command).not.toContain("--resume");
+      expect(spawnArgs.postSpawnInput).toBe(`${spawnArgs.command}\r`);
+      expect(spawnArgs.agentSessionId).toBe(SESSION);
+    });
+
+    it.skipIf(process.platform === "win32")(
+      "rebuilds the shell wrapper from the swapped command",
+      async () => {
+        findUntouchedClaudeSessionMock.mockResolvedValueOnce(SESSION);
+
+        const { spawnArgs } = await spawnClaude({ shell: "/bin/bash", agentSessionId: SESSION });
+
+        const wrapped = spawnArgs.args?.join(" ") ?? "";
+        expect(wrapped).toContain(`--session-id ${SESSION}`);
+        expect(wrapped).not.toContain(`--resume ${SESSION}`);
+      }
+    );
+
+    it("records the assigned id for a caller that only had the command", async () => {
+      findUntouchedClaudeSessionMock.mockResolvedValueOnce(SESSION);
+
+      const { spawnArgs } = await spawnClaude({ shell: "/usr/bin/nu" });
+
+      expect(spawnArgs.command).toContain(`--session-id ${SESSION}`);
+      expect(spawnArgs.agentSessionId).toBe(SESSION);
+    });
+
+    it("leaves the resume untouched when the conversation exists or can't be checked", async () => {
+      const { spawnArgs } = await spawnClaude({ shell: "/usr/bin/nu", agentSessionId: SESSION });
+
+      expect(spawnArgs.command).toContain(`--resume ${SESSION}`);
+      expect(spawnArgs.command).not.toContain("--session-id");
+      expect(spawnArgs.agentSessionId).toBe(SESSION);
+    });
+
+    it("still spawns the resume when the lookup throws", async () => {
+      findUntouchedClaudeSessionMock.mockRejectedValueOnce(new Error("store unreadable"));
+
+      const { spawnArgs } = await spawnClaude({ shell: "/usr/bin/nu", agentSessionId: SESSION });
+
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+      expect(spawnArgs.command).toContain(`--resume ${SESSION}`);
+    });
+
+    it("resolves and remembers no Claude store for a launch that isn't Claude", async () => {
+      await spawnClaude({ launchAgentId: "codex", command: "codex", shell: "/usr/bin/nu" });
+
+      expect(claudeStoreMocks.resolvePaneClaudeProjectsRoot).not.toHaveBeenCalled();
+      expect(claudeStoreMocks.rememberClaudePaneStore).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("terminal spawn shell-injection hardening (#6065)", () => {
@@ -1577,6 +1775,35 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     // Canonical flag is present as a standalone token.
     expect(spawnArgs.command).toMatch(/(^|\s)--dangerously-skip-permissions(\s|$)/);
     expect(spawnArgs.command).toContain("--resume abc");
+  });
+
+  it("keeps a help launch's enrichment when an untouched session starts fresh (#12371)", async () => {
+    mockValidateToken.mockImplementation((token) => (token === "bypass-token" ? "action" : false));
+    mockGetBypassPermissions.mockImplementation((token) => token === "bypass-token");
+    const session = "006fdfc0-67bf-4df0-ad82-48ebfe4df184";
+    findUntouchedClaudeSessionMock.mockResolvedValueOnce(session);
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: `claude --resume ${session}`,
+        launchAgentId: "claude",
+        env: { DAINTREE_MCP_TOKEN: "bypass-token" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.command).toMatch(/(^|\s)--dangerously-skip-permissions(\s|$)/);
+    expect(spawnArgs.command).toContain(`--session-id ${session}`);
+    expect(spawnArgs.command).not.toContain("--resume");
+    expect(spawnArgs.agentSessionId).toBe(session);
   });
 
   it("refuses to spawn when DAINTREE_MCP_TOKEN is present but invalid for an assistant-supported launch (#7509)", async () => {
@@ -2378,6 +2605,9 @@ describe("terminal spawn handler - daintree-assistant MCP env injection (#10639)
 
     // Degrade to generic pane-token behaviour rather than pinning to nothing.
     expect(mockRegisterAssistantPaneBearer).not.toHaveBeenCalled();
+    // Ownership still follows the unpinned bearer (#12487).
+    expect(mockSetPaneOwnershipPrincipalResolver).toHaveBeenCalled();
+    expect(mockSetOwnershipPrincipalRevokedListener).toHaveBeenCalled();
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBe("assistant-token");
     expect(spawnArgs.env?.DAINTREE_MCP_URL).toBe("http://127.0.0.1:45454/mcp");
@@ -2558,6 +2788,191 @@ describe("terminal spawn handler - daintree-assistant MCP env injection (#10639)
     expect(mockPreparePaneConfig).not.toHaveBeenCalled();
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBeUndefined();
+  });
+});
+
+describe("terminal spawn handler - Claude pane launch-workspace binding (#12486)", () => {
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const os = await import("os");
+    tmpDir = os.tmpdir();
+    ptyClient = {
+      spawn: vi.fn(),
+      hasTerminal: vi.fn(() => false),
+      write: vi.fn(),
+    };
+    mockGetCurrentProject.mockReturnValue({ id: "p1", path: tmpDir, name: "p" });
+    mockGetProjectById.mockImplementation((id: string) =>
+      id === "p1" || id === "p2" ? { id, path: tmpDir, name: id } : null
+    );
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "action" });
+    mockValidateToken.mockReturnValue(false);
+    mockIsRunning.mockReturnValue(true);
+    mockCurrentPort.mockReturnValue(45454);
+    mockPreparePaneConfig.mockReset();
+    mockPreparePaneConfig.mockResolvedValue({
+      configPath: "/tmp/pane-config.json",
+      token: "pane-token",
+      pluginServerKeys: [],
+    });
+    mockRevokePaneConfig.mockReset();
+    mockRevokePaneConfig.mockResolvedValue(undefined);
+  });
+
+  async function launchClaude(
+    event: Record<string, unknown>,
+    options: Record<string, unknown> = {}
+  ): Promise<void> {
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+    await getSpawnHandler()(event as unknown as Electron.IpcMainInvokeEvent, {
+      id: "claude-pane",
+      cols: 80,
+      rows: 24,
+      cwd: tmpDir,
+      command: "claude",
+      launchAgentId: "claude",
+      projectId: "p1",
+      ...options,
+    });
+  }
+
+  it("binds the pane bearer to its launch workspace, launch view, and launch context", async () => {
+    const launchContext = { projectId: "p1", activeWorktreeId: "wt-7", focusedTerminalId: "x" };
+
+    await launchClaude({ sender: { id: 42 }, projectId: "p1" }, { actionContext: launchContext });
+
+    expect(mockRegisterPaneWorkspaceBinding).toHaveBeenCalledWith("pane-token", {
+      workspaceId: "p1",
+      launchWebContentsId: 42,
+      actionContext: launchContext,
+    });
+    // Wired so the handshake can reach the binding, and registered before the
+    // PTY starts — the CLI's first handshake can race anything later.
+    expect(mockSetPaneWorkspaceBindingResolver).toHaveBeenCalled();
+    expect(mockRegisterPaneWorkspaceBinding.mock.invocationCallOrder[0]).toBeLessThan(
+      ptyClient.spawn.mock.invocationCallOrder[0]!
+    );
+    // An ordinary pane is never promoted to the assistant's renderer-owned pin.
+    expect(mockRegisterAssistantPaneBearer).not.toHaveBeenCalled();
+    expect(ptyClient.spawn.mock.calls[0][1].env?.DAINTREE_MCP_TOKEN).toBe("pane-token");
+  });
+
+  it("wires ownership to the pane bearer's principal before the PTY starts (#12487)", async () => {
+    await launchClaude({ sender: { id: 42 }, projectId: "p1" });
+
+    const resolver = mockSetPaneOwnershipPrincipalResolver.mock.calls.at(-1)?.[0];
+    const listener = mockSetOwnershipPrincipalRevokedListener.mock.calls.at(-1)?.[0];
+    expect(resolver).toBeTypeOf("function");
+    expect(listener).toBeTypeOf("function");
+    // Wired before the CLI can handshake, like the workspace binding.
+    expect(mockSetPaneOwnershipPrincipalResolver.mock.invocationCallOrder[0]).toBeLessThan(
+      ptyClient.spawn.mock.invocationCallOrder[0]!
+    );
+    expect(mockSetOwnershipPrincipalRevokedListener.mock.invocationCallOrder[0]).toBeLessThan(
+      ptyClient.spawn.mock.invocationCallOrder[0]!
+    );
+
+    // The handshake resolves the principal from the pane service, and a
+    // revocation there reaches the MCP server's ledger.
+    mockGetOwnershipPrincipalForToken.mockReturnValueOnce("principal-1");
+    expect(resolver!("pane-token")).toBe("principal-1");
+    expect(mockGetOwnershipPrincipalForToken).toHaveBeenCalledWith("pane-token");
+    listener!("principal-1");
+    expect(mockRevokeOwnershipPrincipal).toHaveBeenCalledWith("principal-1");
+  });
+
+  it("wires the pane bearer's own terminal before the PTY starts (#12491)", async () => {
+    await launchClaude({ sender: { id: 42 }, projectId: "p1" });
+
+    // The pane a terminal watch may wake is resolved from the bearer at
+    // handshake, so it has to be reachable before the CLI can connect.
+    const resolver = mockSetPaneTerminalResolver.mock.calls.at(-1)?.[0];
+    expect(resolver).toBeTypeOf("function");
+    expect(mockSetPaneTerminalResolver.mock.invocationCallOrder[0]).toBeLessThan(
+      ptyClient.spawn.mock.invocationCallOrder[0]!
+    );
+    mockGetPaneIdForToken.mockReturnValueOnce("pane-7");
+    expect(resolver!("pane-token")).toBe("pane-7");
+    expect(mockGetPaneIdForToken).toHaveBeenCalledWith("pane-token");
+  });
+
+  it("binds to the pane's own project even when another project is globally current", async () => {
+    // The global current project belongs to whichever window switched last —
+    // the retargeting this binding removes (#6016).
+    mockGetCurrentProject.mockReturnValue({ id: "p2", path: tmpDir, name: "p2" });
+
+    await launchClaude({ sender: { id: 42 }, projectId: "p1" });
+
+    expect(mockRegisterPaneWorkspaceBinding).toHaveBeenCalledWith(
+      "pane-token",
+      expect.objectContaining({ workspaceId: "p1", launchWebContentsId: 42 })
+    );
+  });
+
+  it("names no launch view when the sender is not a view of the pane's workspace", async () => {
+    // A sender showing another workspace, or one whose workspace is unknown,
+    // is not "the view that launched it" — the workspace route decides alone.
+    await launchClaude({ sender: { id: 42 }, projectId: "p2" });
+    await launchClaude({ sender: { id: 43 } }, { id: "claude-pane-2" });
+    await launchClaude({}, { id: "claude-pane-3" });
+
+    expect(mockRegisterPaneWorkspaceBinding.mock.calls.map(([, binding]) => binding)).toEqual([
+      { workspaceId: "p1" },
+      { workspaceId: "p1" },
+      { workspaceId: "p1" },
+    ]);
+  });
+
+  it("takes the launch view from the sender's URL before its view has registered", async () => {
+    // The initial window loads before its view is registered, so the registry
+    // has no workspace for it yet; hydration reads the URL for the same reason.
+    await launchClaude({
+      sender: { id: 42, getURL: () => "app://daintree/index.html?projectId=p1" },
+    });
+    await launchClaude(
+      { sender: { id: 43, getURL: () => "app://daintree/index.html?projectId=p2" } },
+      { id: "claude-pane-2" }
+    );
+
+    expect(mockRegisterPaneWorkspaceBinding.mock.calls.map(([, binding]) => binding)).toEqual([
+      { workspaceId: "p1", launchWebContentsId: 42 },
+      { workspaceId: "p1" },
+    ]);
+  });
+
+  it("drops a launch context that names another project", async () => {
+    // Replayed against p1's view, a p2 snapshot would fail every dispatch as
+    // BINDING_STALE — permanently. The live context is the better answer.
+    await launchClaude(
+      { sender: { id: 42 }, projectId: "p1" },
+      { actionContext: { projectId: "p2", activeWorktreeId: "wt-other" } }
+    );
+
+    expect(mockRegisterPaneWorkspaceBinding).toHaveBeenCalledWith("pane-token", {
+      workspaceId: "p1",
+      launchWebContentsId: 42,
+    });
+  });
+
+  it("registers no binding when the project's Daintree tier mints no bearer", async () => {
+    // Plugin-only config: a file with no Daintree entry and no pane token.
+    mockPreparePaneConfig.mockResolvedValue({
+      configPath: "/tmp/pane-config.json",
+      token: null,
+      pluginServerKeys: ["daintree-plugin"],
+    });
+
+    await launchClaude({ sender: { id: 42 }, projectId: "p1" });
+
+    expect(mockRegisterPaneWorkspaceBinding).not.toHaveBeenCalled();
+    expect(ptyClient.spawn.mock.calls[0][1].env?.DAINTREE_MCP_TOKEN).toBeUndefined();
   });
 });
 

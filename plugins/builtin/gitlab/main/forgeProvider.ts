@@ -274,6 +274,10 @@ export const gitlabForgeProvider: ForgeProviderImpl = {
     return branch ? `${base}/${encodeURIComponent(branch)}` : base;
   },
 
+  buildRepoUrl(repo: RepoRef): string {
+    return repoWebUrl(repo);
+  },
+
   /**
    * GitLab publishes merge-request heads under `refs/merge-requests/<iid>/head`,
    * not GitHub's `pull/<n>/head`, so without this the host's default refspec

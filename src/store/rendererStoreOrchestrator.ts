@@ -37,8 +37,11 @@ import { getCurrentViewStoreOrNull } from "./createWorktreeStore";
 import { setActiveContextAccessors } from "@/lib/notify";
 import { debounce } from "@/utils/debounce";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
+import { logDebug, logInfo, logWarn } from "@/utils/logger";
 import { isPtyPanel } from "@shared/types/panel";
 import { terminalClient } from "@/clients";
+import { createFocusFollowBreaker } from "./focusFollowBreaker";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 
 // Thunk form: read the live mruList at fire time, not at schedule time. A
 // snapshot captured at schedule time could be stale by the time the debounce
@@ -145,25 +148,149 @@ export function initStoreOrchestrator(): () => void {
   );
 
   // 1b. Active worktree switch: focusing a terminal that lives in a
-  //     different worktree promotes that worktree to active.
+  //     different worktree promotes that worktree to active. Rate-limited by
+  //     a breaker: two `focusedId` writers that disagree would otherwise
+  //     ping-pong the whole workspace through here at whatever cadence they
+  //     run, and focus-sourced switches leave no trace in persisted state
+  //     (#12370). One breaker per orchestrator lifetime, disposed with the
+  //     subscriptions.
+  //
+  //     While held, focus can sit on a terminal in a worktree that is not
+  //     active — hidden by the terminal policy — and nothing rewrites
+  //     `focusedId` just because time passed, so re-activating that same
+  //     panel is invisible to the subscription. The release timer re-runs the
+  //     promotion for whatever is focused once the hold lapses, so a burst of
+  //     deliberate cross-worktree navigation costs a short stall, not a stuck
+  //     grid. A view nobody can see (window hidden, or the view cached by
+  //     ProjectViewManager — which keeps reporting `visible`) holds the
+  //     release until it is shown again: switching a parked workspace would
+  //     re-run the terminal policy and push a `set-active` for nothing.
+  const focusFollowBreaker = createFocusFollowBreaker();
+  let focusFollowLive = true;
+  let focusFollowReleasePending = false;
+  let focusFollowReleaseTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearFocusFollowReleaseTimer = () => {
+    if (focusFollowReleaseTimer !== null) clearTimeout(focusFollowReleaseTimer);
+    focusFollowReleaseTimer = null;
+  };
+  const isViewUnobservable = () =>
+    (typeof document !== "undefined" && document.hidden) || isProjectViewCached();
+  const releaseFocusFollow = () => {
+    if (!focusFollowLive) return;
+    if (isViewUnobservable()) {
+      focusFollowReleasePending = true;
+      return;
+    }
+    focusFollowReleasePending = false;
+    const focusedId = usePanelStore.getState().focusedId;
+    if (focusedId) followFocusedWorktree(focusedId);
+  };
+  const armFocusFollowRelease = () => {
+    clearFocusFollowReleaseTimer();
+    focusFollowReleasePending = false;
+    focusFollowReleaseTimer = setTimeout(() => {
+      focusFollowReleaseTimer = null;
+      // Guarded in the callback: a timer the event loop already picked up
+      // survives the clearTimeout in dispose.
+      releaseFocusFollow();
+    }, focusFollowBreaker.holdRemainingMs() + 1);
+  };
+  const runPendingFocusFollowRelease = () => {
+    if (focusFollowReleasePending) releaseFocusFollow();
+  };
+  function followFocusedWorktree(focusedId: string): void {
+    const terminal = usePanelStore.getState().panelsById[focusedId];
+    if (!terminal?.worktreeId) return;
+    const worktreeState = useWorktreeSelectionStore.getState();
+    const from = worktreeState.activeWorktreeId;
+    const to = terminal.worktreeId;
+    if (to === from) return;
+
+    // Recorded before the switch so a synchronous nested promotion sees the
+    // updated count. The stack is captured inside Zustand's synchronous
+    // dispatch, so the frames above this listener are the writer that moved
+    // focus — the thing an incident log needs.
+    const outcome = focusFollowBreaker.record({
+      from,
+      to,
+      panelId: focusedId,
+      stack: new Error().stack,
+    });
+    if (outcome === "tripped") {
+      const { holdMs, history } = focusFollowBreaker.snapshot();
+      logWarn("[StoreOrchestrator] focus-follow oscillation detected — breaker tripped", {
+        from,
+        to,
+        panelId: focusedId,
+        holdMs,
+        promotions: history,
+      });
+      armFocusFollowRelease();
+      return;
+    }
+    if (outcome === "suppressed") {
+      logDebug("[StoreOrchestrator] focus promotion suppressed by breaker", {
+        from,
+        to,
+        panelId: focusedId,
+        suppressedCount: focusFollowBreaker.snapshot().suppressedCount,
+      });
+      armFocusFollowRelease();
+      return;
+    }
+    if (outcome === "recovered") {
+      logInfo("[StoreOrchestrator] focus-follow breaker released", {
+        suppressedCount: focusFollowBreaker.snapshot().suppressedCount,
+      });
+    }
+    // Focus promotion is incidental, not a deliberate selection: mark it so
+    // it doesn't become the persisted restore target (#9512).
+    worktreeState.selectWorktree(to, { source: "focus", focusedPanelId: focusedId });
+  }
+  disposables.add(
+    toDisposable(() => {
+      focusFollowLive = false;
+      focusFollowReleasePending = false;
+      clearFocusFollowReleaseTimer();
+    })
+  );
   disposables.add(
     toDisposable(
       usePanelStore.subscribe(
         (state) => state.focusedId,
         (focusedId) => {
-          if (!focusedId) return;
-          const terminal = usePanelStore.getState().panelsById[focusedId];
-          if (!terminal?.worktreeId) return;
-          const worktreeState = useWorktreeSelectionStore.getState();
-          if (terminal.worktreeId !== worktreeState.activeWorktreeId) {
-            // Focus promotion is incidental, not a deliberate selection: mark it
-            // so it doesn't become the persisted restore target (#9512).
-            worktreeState.selectWorktree(terminal.worktreeId, { source: "focus" });
-          }
+          if (focusedId) followFocusedWorktree(focusedId);
         }
       )
     )
   );
+  disposables.add(
+    toDisposable(
+      subscribeProjectViewLifecycle((phase) => {
+        if (!focusFollowReleasePending) return;
+        if (phase === "revealed") {
+          runPendingFocusFollowRelease();
+        } else if (phase === "active") {
+          // Re-attached but possibly still behind the anti-flash bridge, and
+          // a switch rollback restores a view with only this signal. Re-arm
+          // rather than run, so the release lands once the view is
+          // observable (the callback re-checks).
+          armFocusFollowRelease();
+        }
+      })
+    )
+  );
+  if (typeof document !== "undefined") {
+    const handleFocusFollowVisibility = () => {
+      if (!document.hidden) runPendingFocusFollowRelease();
+    };
+    document.addEventListener("visibilitychange", handleFocusFollowVisibility);
+    disposables.add(
+      toDisposable(() =>
+        document.removeEventListener("visibilitychange", handleFocusFollowVisibility)
+      )
+    );
+  }
 
   // 1c. Terminal MRU recording: append the newly focused terminal to the
   //     MRU list and persist it (debounced) unless suppressed. Only PTY

@@ -23,8 +23,13 @@ export function buildMirrorApplyPayload(serialized: string): string {
   return `${SYNC_OUTPUT_START}${MIRROR_RESET}${CLEAR_ALL}${serialized}${SYNC_OUTPUT_END}`;
 }
 
+// A snapshot apply carries Daintree's own ESC[3J. The target tags it so the
+// viewport anchor never mistakes that clear for an agent replaying its
+// transcript; live chunks arrive untagged.
+export type MirrorWriteSource = "live" | "snapshot";
+
 export interface MirrorTarget {
-  write(data: string | Uint8Array, callback?: () => void): void;
+  write(data: string | Uint8Array, callback?: () => void, source?: MirrorWriteSource): void;
 }
 
 export function applySnapshotToMirror(
@@ -32,5 +37,5 @@ export function applySnapshotToMirror(
   serialized: string,
   callback?: () => void
 ): void {
-  mirror.write(buildMirrorApplyPayload(serialized), callback);
+  mirror.write(buildMirrorApplyPayload(serialized), callback, "snapshot");
 }

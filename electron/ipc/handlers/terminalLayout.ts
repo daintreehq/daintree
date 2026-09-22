@@ -1,5 +1,6 @@
 import { projectStore } from "../../services/ProjectStore.js";
-import { isValidTerminalGeometry } from "../../../shared/types/terminal.js";
+import { noteRendererSessionIdentityEdits } from "../../services/pty/agentSessionCapturePersistence.js";
+import { isUsableTerminalGeometry } from "../../../shared/types/terminal.js";
 import {
   TerminalSnapshotSchema,
   filterValidTerminalEntries,
@@ -76,9 +77,45 @@ export function sanitizeFieldEdits(value: unknown): IdArrayFieldEdit[] | undefin
 }
 
 /**
+ * Panes whose `agentSessionId` claim a delta merge will actually apply: changed,
+ * not removed, and present in the incoming snapshot. Only those are the
+ * renderer's word on a pane's identity (#12433) — a claim `mergeIdArray`
+ * ignores must not fence off a captured session either.
+ */
+export function appliedSessionIdentityClaims(
+  incoming: readonly TerminalSnapshot[],
+  changedIds: readonly string[],
+  removedIds: readonly string[],
+  fieldEdits: readonly IdArrayFieldEdit[] | undefined
+): string[] {
+  if (!fieldEdits) return [];
+  const changed = new Set(changedIds);
+  const removed = new Set(removedIds);
+  const present = new Set(incoming.map((terminal) => terminal.id));
+  return fieldEdits
+    .filter(
+      (edit) =>
+        edit.fields.includes("agentSessionId") &&
+        changed.has(edit.id) &&
+        !removed.has(edit.id) &&
+        present.has(edit.id)
+    )
+    .map((edit) => edit.id);
+}
+
+/**
  * Validate and sanitize terminal size records.
- * Entries whose geometry a terminal could not actually have been captured at
- * are dropped.
+ * Entries whose geometry no real pane could be showing are dropped.
+ *
+ * The floor catches a collapsed grid rather than only a structurally invalid
+ * one: this map is the grid a restored pane is BORN on, so a `2x1` entry — what
+ * a hidden pane's zero-size box divides to (#12442) — rebuilds that pane into
+ * the collapse on the next eviction or restart.
+ *
+ * It stops there deliberately. These entries are a RECORD of what a pane
+ * measured, so a stricter floor would drop the real grid of a genuinely small
+ * pane — and because the merge keeps whatever it already had, that pane would
+ * then restore at an older, wronger size rather than at no size at all.
  */
 export function sanitizeTerminalSizes(
   sizes: Record<string, unknown>
@@ -94,7 +131,7 @@ export function sanitizeTerminalSizes(
       typeof (size as { rows: unknown }).rows === "number"
     ) {
       const { cols, rows } = size as { cols: number; rows: number };
-      if (isValidTerminalGeometry({ cols, rows })) {
+      if (isUsableTerminalGeometry({ cols, rows })) {
         sanitized[terminalId] = { cols, rows };
       }
     }
@@ -156,6 +193,13 @@ export const terminalLayoutNamespace = defineIpcNamespace({
         const changedIds = sanitizeIdList(payload.changedIds);
         const removedIds = sanitizeIdList(payload.removedIds);
         const fieldEdits = sanitizeFieldEdits(payload.fieldEdits);
+        if (changedIds !== undefined) {
+          // Taken when the save is accepted, ahead of any capture writeback the
+          // queue has yet to run, so that writeback can't undo the edit (#12433).
+          noteRendererSessionIdentityEdits(
+            appliedSessionIdentityClaims(validTerminals, changedIds, removedIds ?? [], fieldEdits)
+          );
+        }
 
         await projectStore.enqueueProjectStateUpdate(projectId, (existingState) => ({
           projectId,

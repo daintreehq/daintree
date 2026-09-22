@@ -107,13 +107,24 @@ describe("StatPrecheck", () => {
     expect(await precheck.shouldSkip("/repo/.git", false)).toBe(false);
   });
 
-  it("stays trustworthy under recursive coverage even once the full-status budget expires", async () => {
+  it("gives recursive coverage a longer budget, not an exemption from one", async () => {
     vi.mocked(stat).mockResolvedValue(makeStatResult(1_000));
     const precheck = new StatPrecheck(makeHost());
     await precheck.recordFullPass("/repo/.git");
 
+    // A recursive watcher observes every working-tree write, so its skips stay
+    // trustworthy far longer than an unwatched worktree's.
     precheck.fullStatusCapturedAt = Date.now() - 120_001;
     expect(await precheck.shouldSkip("/repo/.git", true)).toBe(true);
+
+    // But only for as long as it is genuinely reporting. A watcher that has
+    // silently gone dark perturbs nothing we stat, so an unbounded skip would
+    // never reconcile — and because a skip stamps lastGitStatusCompletedAt,
+    // the heartbeat-gap detector cannot see the staleness either. Bounding the
+    // skip at the recursive tier's own 5-minute heartbeat is what makes that
+    // heartbeat the safety net it is documented to be.
+    precheck.fullStatusCapturedAt = Date.now() - 300_001;
+    expect(await precheck.shouldSkip("/repo/.git", true)).toBe(false);
   });
 
   it("drops the baseline on request so the next check falls through", async () => {

@@ -877,6 +877,14 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Base-branch diff insertion count",
     },
   ],
+  "src/components/Worktree/ReviewHub/prChecks.ts": [
+    {
+      category: "outcome",
+      signature: "text-status-success",
+      expectedOccurrences: 1,
+      rationale: "Recorded result of one named CI check on the pull request",
+    },
+  ],
   "src/components/Worktree/ReviewHub/reviewHubUtils.ts": [
     {
       category: "domain",
@@ -1049,5 +1057,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 126;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 147;
+export const EXPECTED_STATUS_SUCCESS_SITES = 127;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 148;

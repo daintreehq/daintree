@@ -22,7 +22,12 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import { AGENT_REGISTRY, getAgentDisplayTitle, getMergedPresetIdentities } from "@/config/agents";
+import {
+  AGENT_REGISTRY,
+  getAgentDisplayTitle,
+  getMergedPresetIdentities,
+  isRegisteredAgent,
+} from "@/config/agents";
 import { agentCapabilitiesClient, agentSettingsClient, cliAvailabilityClient } from "@/clients";
 import { userAgentRegistryClient } from "@/clients/userAgentRegistryClient";
 import {
@@ -32,6 +37,13 @@ import {
 } from "@shared/config/agentIds";
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
+import {
+  hasSystemPromptOverride,
+  resolveSystemPromptArgs,
+  SYSTEM_PROMPT_MAX_LENGTH,
+} from "@shared/utils/agentSystemPrompt";
+import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
+import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
 import type { ActionContext, ActionId } from "@shared/types/actions";
 import type { AgentPreset } from "@shared/config/agentRegistry";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
@@ -311,15 +323,19 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     }
   };
 
+  /** Launch ids the launcher always turns into a panel, never an agent. */
+  const HANDBACK_PANEL_LAUNCH_IDS: ReadonlySet<string> = new Set(["browser", "dev-preview"]);
+
   actions.set("agent.launch", () => ({
     id: "agent.launch",
-    title: "Launch Agent",
+    title: "Launch agent",
     description:
       "Start an AI agent in a new terminal and report where it landed, so parallel launches can be told apart without re-resolving the target. Success means the panel was created and its process is starting, not that the agent is ready; poll its state or a terminal status snapshot for that. A missing CLI opens a setup diagnostic panel instead. Keep concurrent launches modest.",
     category: "agent",
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["spawn", "start", "run", "new", "agents", "task"],
     argsSchema: z.object({
       agentId: AgentIdSchema,
       location: LaunchLocationSchema.optional(),
@@ -340,6 +356,19 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .optional()
         .describe(
           "Initial text submitted to the agent once it starts, as its first turn. Omit to leave the agent waiting for input."
+        ),
+      handback: z
+        .boolean()
+        .optional()
+        .describe(
+          "Ask the agent to end its reply to `prompt` with a Daintree marker, read back as `lastHandback`. Needs `prompt` and an agent."
+        ),
+      systemPrompt: z
+        .string()
+        .max(SYSTEM_PROMPT_MAX_LENGTH)
+        .optional()
+        .describe(
+          "Standing instruction of at most 2000 characters, appended to the agent's system prompt and kept on resume. Claude and Codex only; others refuse it."
         ),
       interactive: z
         .boolean()
@@ -364,7 +393,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .boolean()
         .optional()
         .describe(
-          "Whether to open the sidebar dock when the agent is placed there. Only meaningful for a dock placement; it changes what the user sees."
+          "Whether to open the sidebar dock when the agent is placed there, which changes what the user sees."
         ),
       env: z
         .record(z.string(), z.string())
@@ -376,7 +405,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .boolean()
         .optional()
         .describe(
-          "Keeps the terminal out of the saved session, so it does not return after a restart. It also hides the panel from listings, status snapshots and agent-state reads, and spares it from bulk close and kill, so the caller cannot find or poll it afterwards. Use for throwaway work."
+          "Keeps the terminal out of the saved session, so it does not return after a restart. Listings, status snapshots, agent-state reads and bulk close or kill all skip it, so the caller cannot find or poll it later. Use for throwaway work."
         ),
       removeOnExit: z
         .boolean()
@@ -402,7 +431,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .boolean()
         .optional()
         .describe(
-          "Skips the check that the agent's CLI can actually run. Without it an unlaunchable CLI opens a setup diagnostic instead of failing; with it the process is started anyway and simply fails. Leave it off unless the check itself is known to be wrong."
+          "Skips the check that the agent's CLI can run, so an unlaunchable CLI is started and fails rather than opening a setup diagnostic. Leave off unless that check is known to be wrong."
         ),
       name: z
         .string()
@@ -437,6 +466,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         cwd,
         worktreeId,
         prompt,
+        handback,
+        systemPrompt,
         interactive,
         model,
         presetId,
@@ -456,6 +487,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         cwd?: string;
         worktreeId?: string;
         prompt?: string;
+        handback?: boolean;
+        systemPrompt?: string;
         interactive?: boolean;
         model?: string;
         presetId?: string | null;
@@ -470,11 +503,60 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         force?: boolean;
         name?: string;
       };
+      // A requested id asks for a NEW panel. One this view already holds is
+      // refused here rather than handed to the launcher, whose in-place update
+      // would overwrite the live panel's record while its spawn is refused with
+      // the original process still running — and an MCP caller would then be
+      // recorded as having created it (#12407). Checked against the store a
+      // listing reads, so any id a caller could have learned is already in it.
+      if (
+        requestedId !== undefined &&
+        Object.hasOwn(usePanelStore.getState().panelsById, requestedId)
+      ) {
+        throw new Error(
+          `A panel with id '${requestedId}' already exists. Omit the requested id, or choose one no panel is using.`
+        );
+      }
+      // Refused here, before anything launches: the launcher swallows its own
+      // failures into `launched:false`, which a caller would read as a
+      // transient miss rather than an instruction this agent can never take.
+      const systemPromptArgs = resolveSystemPromptArgs(agentId, systemPrompt);
+      if (!systemPromptArgs.ok) throw new UnactionableTargetError(systemPromptArgs.reason);
+      if (systemPromptArgs.args.length > 0 && hasSystemPromptOverride(agentLaunchFlags, agentId)) {
+        throw new UnactionableTargetError(
+          "agentLaunchFlags already sets this agent's system-prompt instruction. Pass it in systemPrompt or agentLaunchFlags, not both."
+        );
+      }
+      // The handback instruction rides the prompt, so there is nothing to attach
+      // it to without one — and a blank prompt is dropped by the launcher
+      // (#12488).
+      if (handback === true && (prompt === undefined || prompt.trim() === "")) {
+        throw new UnactionableTargetError(
+          "handback asks the agent to mark the end of its reply to `prompt`, so it needs a non-empty `prompt`. Pass one, or launch without handback."
+        );
+      }
+      // A plain shell, a non-terminal panel or an unknown id has no agent to
+      // answer it. The panel ids are checked by name: the launcher opens their
+      // panel even when a registry entry happens to share the id.
+      if (
+        handback === true &&
+        (HANDBACK_PANEL_LAUNCH_IDS.has(agentId) || !isRegisteredAgent(agentId))
+      ) {
+        throw new UnactionableTargetError(
+          "handback needs an agent to answer it, and this id is not a registered agent: a plain shell or panel never prints the marker. Launch a registered agent, or launch without handback."
+        );
+      }
+      const handbackCode = handback === true ? mintHandbackCode() : undefined;
       const result = await callbacks.onLaunchAgent(agentId, {
         location,
         cwd,
         worktreeId,
-        prompt,
+        prompt:
+          handbackCode !== undefined && prompt !== undefined
+            ? appendHandbackInstruction(prompt, handbackCode)
+            : prompt,
+        ...(handbackCode !== undefined ? { handbackCode } : {}),
+        systemPromptArgs: systemPromptArgs.args.length > 0 ? systemPromptArgs.args : undefined,
         interactive,
         modelId: model,
         presetId,
@@ -524,7 +606,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.palette", () => ({
     id: "agent.palette",
-    title: "Open Quick Switcher",
+    title: "Open quick switcher",
     description: "Open the quick switcher to find panels",
     category: "agent",
     kind: "command",
@@ -589,7 +671,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.terminal", () => ({
     id: "agent.terminal",
-    title: "Launch Terminal",
+    title: "Launch terminal",
     description:
       "Open a plain shell terminal with no agent attached, for running ordinary commands. Use an agent launch instead when the intent is to start an AI CLI. This creates a visible panel and starts a shell process, so it consumes resources until closed.",
     category: "agent",
@@ -616,7 +698,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.browser", () => ({
     id: "agent.browser",
-    title: "Launch Browser",
+    title: "Launch browser",
     description: "Launch a browser panel",
     category: "agent",
     kind: "command",
@@ -640,7 +722,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.focusNextWaiting", () => ({
     id: "agent.focusNextWaiting",
-    title: "Focus Next Waiting Agent",
+    title: "Focus next waiting agent",
     description:
       "Move keyboard focus to the next agent that is blocked waiting on the user, so it can be answered. This changes what the user sees and is a navigation aid only — it reports no agent state. Use an agent status snapshot to find out which agents are waiting and why.",
     category: "agent",
@@ -661,7 +743,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.focusNextWaitingGlobal", () => ({
     id: "agent.focusNextWaitingGlobal",
-    title: "Focus Next Waiting Agent (All Projects)",
+    title: "Focus next waiting agent (all projects)",
     description:
       "Jump to the next project with a waiting agent. Cycles across all projects in sidebar order, wrapping around.",
     category: "agent",
@@ -724,7 +806,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.focusNextWorking", () => ({
     id: "agent.focusNextWorking",
-    title: "Focus Next Working Agent",
+    title: "Focus next working agent",
     description:
       "Move keyboard focus to the next agent that is currently working, to watch its progress. This changes what the user sees and is a navigation aid only — it reports no agent state. Use an agent status snapshot to find out which agents are working.",
     category: "agent",
@@ -745,7 +827,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.focusNextAgent", () => ({
     id: "agent.focusNextAgent",
-    title: "Focus Next Agent",
+    title: "Focus next agent",
     description:
       "Move keyboard focus to the next agent panel in order, cycling back to the first at the end. This changes what the user sees and reports no agent state; use a terminal listing to enumerate panels instead.",
     category: "agent",
@@ -766,7 +848,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("dock.focusNextWaiting", () => ({
     id: "dock.focusNextWaiting",
-    title: "Focus Next Blocked Dock Agent",
+    title: "Focus next blocked dock agent",
     description: "Jump to the next waiting agent in the dock",
     category: "agent",
     kind: "command",
@@ -781,7 +863,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.getState", () => ({
     id: "agent.getState",
-    title: "Get Agent State",
+    title: "Get agent state",
     description:
       "Look up one agent's live state by its agent id, to tell whether it is working, waiting on the user, or finished. Use a terminal listing or status snapshot to enumerate terminals — this answers about a single agent only. It never fails: with no matching panel the result is flagged not found with empty fields, while a panel whose agent has exited stays found and carries its exit code.",
     category: "agent",
@@ -853,7 +935,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agentSessionHistory.list", () => ({
     id: "agentSessionHistory.list",
-    title: "List Resumable Sessions",
+    title: "List resumable sessions",
     description:
       "List closed agent sessions that can be relaunched, read from the on-disk journal. This is a faithful record of which sessions exist, not a summary of what happened in them: it carries no transcript text. It must be scoped to a worktree or project and fails rather than listing every project when no scope resolves. Old sessions are pruned by retention, so absence does not prove one never existed.",
     category: "agent",
@@ -929,7 +1011,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agentSessionHistory.resume", () => ({
     id: "agentSessionHistory.resume",
-    title: "Resume Agent Session",
+    title: "Resume agent session",
     description:
       "Relaunch one closed agent session by its exact id and hand back the pane carrying it. Resume is directory-coupled: it relaunches in the worktree the session was recorded in, so the worktree you name scopes the lookup and one recorded elsewhere is refused. Calling twice brings the live pane forward rather than a second agent on one transcript. It opens off-screen unless that worktree is active.",
     category: "agent",
@@ -1281,7 +1363,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.listToolbar", () => ({
     id: "agent.listToolbar",
-    title: "List Toolbar Agents",
+    title: "List toolbar agents",
     description:
       "List the built-in agents together with whether each one currently shows in the toolbar. Use this to see what the user has surfaced without reading full agent settings. Visibility is resolved for you: an agent can be explicitly pinned, explicitly hidden, or left to follow whether its CLI is installed, so read the resolved visibility rather than inferring it from pinning alone.",
     category: "agent",
@@ -1323,7 +1405,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.listAvailable", () => ({
     id: "agent.listAvailable",
-    title: "List Available Agents",
+    title: "List available agents",
     description:
       "List every registered agent, built-in, user-defined and plugin-contributed, from the authoritative registry, including ones not currently launchable. Use this before launching so an id is known to exist, and read each entry's launchability rather than assuming membership implies it. Those fields appear only once a live probe of each CLI finishes, and the result says so while that is incomplete.",
     category: "agent",
@@ -1474,7 +1556,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.listPresets", () => ({
     id: "agent.listPresets",
-    title: "List Agent Presets",
+    title: "List agent presets",
     description:
       "List the launch presets for one agent, merged across user settings, repository preset files and CCR discovery in the precedence the launcher applies, so every id returned is one a launch will accept. Identity only: no environment values or flags. While the completeness flag is false a source is still loading.",
     category: "agent",
@@ -1524,7 +1606,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.focusPreviousAgent", () => ({
     id: "agent.focusPreviousAgent",
-    title: "Focus Previous Agent",
+    title: "Focus previous agent",
     description:
       "Move keyboard focus to the previous agent panel in order, cycling to the last at the beginning. This changes what the user sees and reports no agent state; use a terminal listing to enumerate panels instead.",
     category: "agent",

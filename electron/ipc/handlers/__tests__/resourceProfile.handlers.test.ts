@@ -130,42 +130,18 @@ describe("registerResourceProfileHandlers — getResourceProfile", () => {
   });
 });
 
-describe("registerResourceProfileHandlers — requestInteractiveOverride", () => {
+describe("registerResourceProfileHandlers — renderer cannot move the profile (#12518)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("forwards a validated duration to the live service", async () => {
-    const requestInteractiveOverride = vi.fn();
-    serviceRefsMock.getResourceProfileService.mockReturnValue({
-      requestInteractiveOverride,
-    });
-
+  it("registers only the read-only profile pulls", () => {
     registerResourceProfileHandlers({} as never);
-    await getHandler("system:request-interactive-override")(1500);
 
-    expect(requestInteractiveOverride).toHaveBeenCalledWith(1500);
-  });
-
-  it("no-ops when the service is unavailable", async () => {
-    serviceRefsMock.getResourceProfileService.mockReturnValue(null);
-
-    registerResourceProfileHandlers({} as never);
-    await expect(getHandler("system:request-interactive-override")(1500)).resolves.toBeUndefined();
-  });
-
-  it("rejects malformed durations at the IPC boundary", async () => {
-    const requestInteractiveOverride = vi.fn();
-    serviceRefsMock.getResourceProfileService.mockReturnValue({
-      requestInteractiveOverride,
-    });
-
-    registerResourceProfileHandlers({} as never);
-    await expect(getHandler("system:request-interactive-override")(Number.NaN)).rejects.toThrow();
-    await expect(getHandler("system:request-interactive-override")(Infinity)).rejects.toThrow();
-    await expect(getHandler("system:request-interactive-override")(-1)).rejects.toThrow();
-    await expect(getHandler("system:request-interactive-override")(5001)).rejects.toThrow();
-
-    expect(requestInteractiveOverride).not.toHaveBeenCalled();
+    const channels = ipcMainMock.handle.mock.calls.map(([channel]) => channel).sort();
+    expect(channels).toEqual([
+      "system:get-resource-profile",
+      "system:get-resource-profile-snapshot",
+    ]);
   });
 });

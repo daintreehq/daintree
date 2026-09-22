@@ -33,7 +33,6 @@ import type {
   AnyToolbarButtonId,
   LauncherItemToolbarButtonId,
   LauncherPanelButtonId,
-  PluginToolbarButtonId,
 } from "@/../../shared/types/toolbar";
 // `@shared/...` because these are value imports — the type-only spelling above
 // is erased at compile time and never has to resolve at runtime.
@@ -42,7 +41,6 @@ import {
   isLauncherItemOnToolbar,
   isLauncherItemToolbarButtonId,
   isPanelButtonOnToolbar,
-  isLauncherPanelButtonId,
 } from "@shared/types/toolbar";
 import {
   subscribeToPanelKindRegistry,
@@ -55,7 +53,7 @@ import {
 import { useRecipeStore } from "@/store/recipeStore";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { resolveLauncherItemMetadata } from "@/components/Layout/launcherToolbarCatalog";
-import { LAUNCHABLE_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
+import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import { isAgentButtonOnToolbar } from "../../../shared/utils/agentPinned";
 import {
   TOOLBAR_BUTTON_METADATA,
@@ -73,7 +71,11 @@ import { DEFAULT_PLUGIN_ICON } from "@/components/icons/pluginIconRegistry";
 import { buildPluginToolbarMeta } from "@/components/Layout/pluginToolbarMeta";
 import { cn } from "@/lib/utils";
 import { DRAG_GHOST_OPACITY, EASE_OUT_EXPO, UI_ANIMATION_DURATION } from "@/lib/animationUtils";
-import { dispatchToolbarVisibility } from "@/lib/toolbarVisibilityDispatch";
+import {
+  isToolbarButtonOnToolbar,
+  setToolbarButtonOnToolbar,
+  type ToolbarButtonPlacementState,
+} from "@/lib/toolbarVisibilityDispatch";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitch } from "./SettingsSwitch";
@@ -92,12 +94,6 @@ interface SideLists {
 // a string subset. Narrow in one place so the unavoidable assertion lives here.
 function toButtonId(id: UniqueIdentifier): AnyToolbarButtonId {
   return id as AnyToolbarButtonId;
-}
-
-// Plugin button ids are namespaced `{pluginId}.{buttonId}` by main, so the dot
-// is structural — this narrows without an unsafe assertion.
-function isPluginToolbarButtonId(id: AnyToolbarButtonId): id is PluginToolbarButtonId {
-  return id.includes(".");
 }
 
 interface ToolbarButtonCardProps {
@@ -657,51 +653,30 @@ export function ToolbarSettingsTab() {
     clearDrag();
   };
 
+  // Routed through the same helper as the toolbar's own right-click menu
+  // (#12355), so the two surfaces cannot disagree about which setter owns an id.
   const handleToggle = (buttonId: AnyToolbarButtonId, side: ToolbarSide) => {
-    // A plugin id can still sit in a persisted side array (the v9 migration
-    // deliberately keeps ids a user dragged there). Its switch has to route
-    // through the promotion action: the generic toggle only alternates
-    // `false`/absent, and under tray-default neither of those is promoted, so
-    // the switch could never turn the button on (#11304).
-    if (pluginConfigs.has(buttonId) && isPluginToolbarButtonId(buttonId)) {
-      setPluginButtonPromoted(buttonId, !isVisible(buttonId));
-      return;
-    }
-    // Before the plugin check would have been wrong and after the panel check
-    // would be unreachable: a launcher item's id can carry a dot (a
-    // plugin-contributed recipe is `publisher.name`), and only the registry
-    // membership test above keeps that from reading as a plugin button here.
-    if (isLauncherItemToolbarButtonId(buttonId)) {
-      setLauncherItemOnToolbar(buttonId, !isLauncherItemOn(buttonId));
-      return;
-    }
-    // Launcher panel buttons need the same treatment for a different reason
-    // (#11667). `browser` and `dev-server` are not defaults, so the generic
-    // toggle's "delete the key to show" leaves nothing recording that the user
-    // wants them — and a stale sibling view's write, which replaces the position
-    // arrays wholesale, would then silently un-promote them with nothing left to
-    // rebuild from. `setPanelButtonOnToolbar` writes the explicit `true` that
-    // survives, and positions the button if it has no slot yet.
-    if (isLauncherPanelButtonId(buttonId)) {
-      setPanelButtonOnToolbar(buttonId, !isPanelOnToolbar(buttonId));
-      return;
-    }
-    // The explicit next state comes from the array-aware resolver, not the
-    // dispatcher's own `isAgentToolbarVisible` fallback: since #11680 an
-    // installed-but-unpositioned agent reads as visible to that fallback while
-    // rendering nothing, so the toggle would write `false` on a button the user
-    // is trying to turn on. Non-agent ids ignore the argument.
-    dispatchToolbarVisibility(
+    const placement: ToolbarButtonPlacementState = {
+      pinnedButtons: layout.pinnedButtons,
+      leftButtons: layout.leftButtons,
+      rightButtons: layout.rightButtons,
+      agentSettings,
+      agentAvailability,
+      isPluginContribution: (id) => pluginConfigs.has(id),
+    };
+    setToolbarButtonOnToolbar(
       buttonId,
       side,
+      !isToolbarButtonOnToolbar(buttonId, placement),
+      placement,
       {
-        agentSettings,
-        agentAvailability,
         setAgentPinned,
         toggleButtonVisibility,
         positionAgentButton,
-      },
-      isBuiltInAgentId(buttonId) ? !isAgentOnToolbar(buttonId) : undefined
+        setPluginButtonPromoted,
+        setPanelButtonOnToolbar,
+        setLauncherItemOnToolbar,
+      }
     );
   };
 

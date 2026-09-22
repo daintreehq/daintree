@@ -28,6 +28,17 @@ There are three discovery roots, and which one a manifest was found under is its
 
 `discoverProjectPlugins` (`electron/services/plugin/projectPluginDiscovery.ts`) is the project-root scan. It deliberately does not compare the directory name against the manifest `name`: identity comes from the manifest, and the shipping `plugins/builtin/github` directory already declares `daintree.github`, so making the rule hard for one root alone would leave the roots disagreeing about what a plugin folder is.
 
+### Built-in plugins
+
+A built-in plugin is Daintree code that happens to use the plugin contract. It differs from an installed plugin in ways that decide what it can do:
+
+- **Discovery is a build-time glob, not a registry.** `scripts/build-main.mjs` bundles every `plugins/builtin/*/main/index.ts`, and `src/registry/builtinPluginRenderers.ts` eagerly globs every `plugins/builtin/*/renderer/index.{ts,tsx}` for its registration side effects. The renderer glob only survives tree-shaking because `package.json` lists that path under `sideEffects`. Adding a built-in needs no registry edit.
+- **It loads in-process.** Main code runs inside Electron main, not in a worker. That is why built-ins can offer synchronous host methods, and why a built-in must never execute code it did not ship — see [Dependencies a built-in plugin owns](#dependencies-a-built-in-plugin-owns).
+- **The `daintree.*` namespace is reserved to it.** A manifest outside `plugins/builtin/` may not claim that namespace. There is currently no shipping path for a first-party _installed_ plugin, so a plugin Daintree ships is a built-in.
+- **It can be off by default.** `shared/config/pluginDefaults.ts` lists built-ins that need an explicit enable choice before their first activation.
+- **Its renderer lives in the host bundle.** There is no `plugin://` module for it, which changes how its panel views resolve — see [Built-in plugin views](#built-in-plugin-views).
+- **Activation failures are swallowed.** Main reports a built-in's activation as successful even when `activate()` throws, so a built-in's panel can still render against handlers that never registered. Handle missing handlers in the view rather than assuming activation succeeded.
+
 ### Manifest validation
 
 Validation is strict. The manifest is parsed by `PluginManifestSchema` (Zod) in strict mode, which rejects unknown top-level keys and unknown keys inside `contributes` (both the inner object itself and contributions whose individual entry schemas opt into `.strict()`). The reason is conservative: unknown keys are almost always typos, and silently dropping typo'd contributions is a bad debugging experience.
@@ -45,7 +56,7 @@ The `engines.daintree` semver range is validated and compared against the runnin
 
 ### Registration
 
-The manifest `contributes` object has 16 contribution points (`electron/schemas/plugin.ts`): fifteen arrays — `panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes` — each with a per-array cap in `MANIFEST_CONTRIBUTION_CAPS`, plus the non-array `surfaces` object. Most register eagerly at plugin-load time so the UI reflects them immediately — the command palette, toolbars, menus, keybindings, and context menus populate before any plugin code runs:
+The manifest `contributes` object has 17 contribution points (`electron/schemas/plugin.ts`): sixteen arrays — `panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes` — each with a per-array cap in `MANIFEST_CONTRIBUTION_CAPS`, plus the non-array `surfaces` object. Most register eagerly at plugin-load time so the UI reflects them immediately — the command palette, toolbars, menus, keybindings, and context menus populate before any plugin code runs:
 
 - `panels` → `registerPanelKind()` in `shared/config/panelKindRegistry.ts`
 - `toolbarButtons` → `registerToolbarButton()` in `shared/config/toolbarButtonRegistry.ts`
@@ -57,7 +68,7 @@ The manifest `contributes` object has 16 contribution points (`electron/schemas/
 
 Commands have two registration paths. They MAY be declared in `contributes.commands` — these are registered eagerly at load as `PluginActionDescriptor`s so they appear in the palette before any plugin code runs, with their handler lazily bound to `src/{id}.{ext}` on first dispatch. Or they register imperatively via `host.registerAction()` during `activate()`. The manifest stays a static shape contract; the action system resolves handlers at runtime.
 
-`forgeProviders` and `fileDecorationProviders` register their manifest-declared descriptors eagerly (`registerForgeProviders` / `registerFileDecorationProviders`), but their runtime implementations bind imperatively in `activate()` via `host.registerForgeProvider()` / `host.registerFileDecorationProvider()` against a declared descriptor id.
+`forgeProviders` and `fileDecorationProviders` register their manifest-declared descriptors eagerly (`registerForgeProviders` / `registerFileDecorationProviders`), but their runtime implementations bind imperatively in `activate()` via `host.registerForgeProvider()` / `host.registerFileDecorationProvider()` against a declared descriptor id. `agentMcp` follows the same split with nothing registered at load: the manifest entry is what per-project enablement, launch grants and the route read, and the tool roster binds in `activate()` via `host.mcp.registerTools()` against a declared endpoint id (see [Agent MCP endpoints](#agent-mcp-endpoints)).
 
 Contributions that require code are registered as **resolvers** — thunks that import the actual code when first needed. `views` are resolved lazily when their panel is first opened (#10523), and `mcpServers` are resolved lazily on first tool enumeration (#9235), not at activation. These two are the contribution points whose runtime never loads until used.
 
@@ -69,6 +80,7 @@ A plugin's `activate(host)` function runs when something first needs the plugin'
 - User opens a plugin-contributed panel (`activatePluginForView` runs before the view module imports — see [Activation failures](#activation-failures))
 - A forge operation reaches one of the plugin's declared providers (`activatePluginForForgeProvider`, `forgeRpcServer.ts`)
 - A file-decoration pull matches one of the plugin's declared scopes (`activatePluginsForFileDecorationScope`)
+- An agent lists or calls tools on one of the plugin's `agentMcp` endpoints (the plugin route calls `PluginService.activatePlugin`)
 - The plugin lists `"onStartupFinished"` in `activationEvents` — the one eager trigger, fired once startup settles rather than on demand
 
 **User-installed plugins activate out-of-process.** Every sideloaded, `.dntr`/URL-installed, or `dev`-linked plugin runs inside a `utilityProcess.fork` worker (#10526): its `main` executes in a child process with its own module realm, and the host bridges every `host.*` call and registration over a MessagePort. This gives clean teardown (unload kills the worker, reclaiming the whole module realm — no ESM-cache leak, no module-scope state surviving a reload) plus OS-level crash isolation. **Built-in plugins are the exception** — they stay on the in-process `import()` loader because they're trusted, app-bundled, and never unloaded, and because the GitHub built-in's forge provider exposes synchronous host methods (`parseRemote`, URL builders) that can't cross the worker's async port.
@@ -101,7 +113,7 @@ store.add(someResource);
 store.dispose(); // runs cleanups in reverse order
 ```
 
-On plugin unload, `PluginService.unloadPlugin()` runs these cleanups in order:
+On plugin unload, `PluginService.unloadPlugin()` first revokes every agent MCP credential issued for the instance and only then drops its tool rosters, so no live grant can resolve to an empty endpoint or to the next generation's tools. It then runs these cleanups in order:
 
 1. Plugin-returned cleanup function (if any)
 2. Worktree event subscriptions registered during activate
@@ -113,6 +125,19 @@ On plugin unload, `PluginService.unloadPlugin()` runs these cleanups in order:
 8. MCP subprocess lifecycle (`PluginMcpSupervisor.shutdown({ pluginId })`, with execa's kill escalation — see [MCP supervisor → Process lifecycle](#process-lifecycle))
 
 For a user-installed plugin the disposal cascade is followed by killing its worker, which reclaims the plugin's entire module realm — module-scope state never survives a reload. For a built-in (which runs in-process) the module is merely orphaned: Node's module cache still holds it but no live references point to it, and since built-ins are never uninstalled that residue never accumulates.
+
+## Dependencies a built-in plugin owns
+
+An installed plugin is its own npm package: it declares dependencies in its own `package.json` and `@daintreehq/plugin-vite` bundles them into a self-contained `dist/`. A built-in plugin has no such boundary — its main code is bundled by `scripts/build-main.mjs` and its renderer by the host Vite build — so where a dependency lives needs a deliberate choice.
+
+**Put it in a workspace package under `packages/`.** The package declares the dependency; the built-in imports the package. This is the repo's existing mechanism, and it keeps the dependency out of Daintree's root manifest. Adding a package means appending it to `typecheck:projects` and `packages:build` in the root `package.json`, and giving it the house `tsconfig.json` and `tsup.config.ts`. Mark a large dependency `external` in the package's `tsup` config and `await import()` it from the plugin, so it never sits on the eager main-process path — activation has a 5-second budget. npm still hoists the dependency physically into the root `node_modules` and records it in the root lockfile; what moves is ownership of the declaration.
+
+Two approaches that look reasonable and are not:
+
+- **A `package.json` directly under `plugins/builtin/<name>/`.** The root `workspaces` array does not include it, so a root `npm install` — and CI's `npm ci` — never installs it, and tests that depend on it cannot run in CI. Worse, `build-main.mjs` copies the built-in's directory into the app, `node_modules` included, and the packaging allowlist lets it through: the dependency ships inside the packaged app by accident.
+- **Resolving the user's own copy at runtime** — for example `createRequire(projectRoot)("svelte/compiler")` to parse a project with the exact compiler it uses. Built-ins run in-process in Electron main, so this executes project-controlled JavaScript inside the trusted process. Pin and bundle your own copy, and handle version skew with an explicit support check against the project's installed version instead.
+
+**A workspace package's `dist/` goes stale locally.** Its `prepare` script builds `dist/` when `npm install` runs, and imports by package name resolve to that `dist/`. After that the build does not track `src/`, so code importing the package by name can load an old build — including throwing stubs from before the implementation existed. CI's fresh install hides this entirely. Rebuild with `npm run build --workspace=packages/<name>` after changing the package, before testing anything that imports it by name.
 
 ## Project-local plugins
 
@@ -151,7 +176,7 @@ Panel kinds are the subtle one, because `PanelKindConfig.id` is persisted inside
 
 Every registration is tagged with a scope and filtered at broadcast and query time (`PluginContributionBroadcaster`). Global mutations broadcast as before; project-scoped mutations go to that project's renderers only, and the cold-start replay (`pushSnapshotTo`) takes the target view's `projectId` and pushes `global ∪ that project`. Getting that replay wrong is invisible until a project view is recreated after LRU eviction and suddenly sees another project's panels, which is why it takes the project explicitly rather than inferring one.
 
-Panels, commands/actions, toolbar buttons, keybindings, context menus and settings scope cleanly. The groups that register into a registry with no project axis at all — `menuItems`, `agents`, `skills`, `recipes`, `fileDecorationProviders`, `processTools`, `mcpServers` — are rejected at manifest validation for `scope: "project"`, each with an error naming its structural obstacle, rather than accepted and silently over-published. `forgeProviders` is rejected for a different reason: its host methods are synchronous and cannot cross the worker's message port. `PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS` in `electron/schemas/plugin.ts` is the enumerated set, so a group that later grows a project axis is removed in one place.
+Panels, commands/actions, toolbar buttons, keybindings, context menus and settings scope cleanly. The groups that register into a registry with no project axis at all — `menuItems`, `agents`, `skills`, `recipes`, `fileDecorationProviders`, `processTools`, `mcpServers` — are rejected at manifest validation for `scope: "project"`, each with an error naming its structural obstacle, rather than accepted and silently over-published. `forgeProviders` is rejected for a different reason: its host methods are synchronous and cannot cross the worker's message port. `PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS` in `electron/schemas/plugin.ts` is the enumerated set, so a group that later grows a project axis is removed in one place. `agentMcp` is allowed: its credentials are minted per terminal launch and bound to one project, and the grant registry refuses to pair a project plugin's instance with any project but its own.
 
 ### Host binding
 
@@ -224,6 +249,18 @@ Plugin view modules are loaded via Daintree's `plugin://` privileged protocol. W
 
 The resolved URL travels through the renderer over the existing panel-kinds IPC broadcast — no separate channel is required. `location: "sidebar"` and an unsafe `componentPath` (absolute paths, URL schemes, `..` segments) are rejected at manifest validation, so the whole plugin fails to load loudly rather than silently dropping the view. A view that targets a panel id with no matching `contributes.panels` entry is likewise rejected at manifest validation (#10620) — an orphaned view would otherwise never render, so the whole plugin fails to load rather than silently dropping it.
 
+### Built-in plugin views
+
+A built-in plugin's renderer is compiled into the host bundle, so the `plugin://` flow above has nothing to import. Built-in panel views resolve in-process instead, through `src/registry/builtinRendererRegistry.ts`.
+
+- The renderer entry calls `registerBuiltinView(slotId, Component, { pluginId, label })` at module load, where **`slotId` is the runtime panel kind id `{pluginId}.{panelId}`**. Use literal ids: `src/registry/__tests__/builtinViewRegistrations.test.ts` reads each built-in's renderer entry as text and fails when a manifest panel view has no registration under its kind id, or is registered under a different plugin id.
+- `PluginViewContent` takes the in-process path when a slot is registered under the kind id **and** its `pluginId` matches the kind's plugin. Otherwise it falls back to `plugin://` — which for a built-in fails as an import error or a timeout rather than a clear message, so a typo'd id shows up as a broken panel, not a helpful one.
+- The in-process path keeps the lifecycle that matters: `activateForView`, the activation timeout, the diagnostics error boundary with Try again, `disposeSignal` and `panelRemovedSignal`, and the newer-state-version refusal. It skips style preparation, document runtime registration and the import itself; styling comes from the host's own Tailwind build.
+- Registration can arrive after the panel mounted. The attempt is replaced and the old `disposeSignal` aborts.
+- `contributes.views[].componentPath` must still be present to satisfy the schema; it is never imported for a built-in.
+- **A failed chunk load cannot be retried in place.** Chromium makes a rejected dynamic import permanent for its specifier, and a built-in's view chunk has a fixed, host-bundled URL, so there is no fresh generation to fall back to the way `plugin://` views get one (`requestRecoveryPath`). Try again recovers a view that _threw_, not one whose chunk failed to load; that needs the project view reloaded. Keep the view's first chunk small so this stays rare, and don't wrap it in a module-level `React.lazy` expecting retry to re-import it.
+- **`disposeSignal` also fires for temporary unmounts** — a sibling panel maximised, a dock tab left. State that must survive those (a preview binding, an undo history) belongs in a controller keyed by `panelId` that subscribes to `panelRemovedSignal` itself; a listener registered by the view is lost when the panel is removed while the view is unmounted. Plugin deactivation is a third boundary distinct from both: the panel record survives it, but main-side state does not.
+
 ### Hot reload — dev only
 
 In dev, the host can re-evaluate a plugin view's module after the source changes. For installed and builtin plugins there is no production hot-reload path; project-local plugins are the exception, and reload from a watched `dist/` in an ordinary session (see [Hot reload for project plugins](#hot-reload-for-project-plugins)). A `daintree-plugin dev` session reloads views too — a settled rebuild re-enters the ordinary load path and mints a fresh view generation, so it is the same mechanism rather than a view-less worker respawn (#12277). V8 caches ESM module records by URL string and Chromium offers no eviction API (Vite #14438 / Chromium #350426234, unresolved as of 2026). Every cache-busting query string permanently expands the renderer's module map; iterating against a long-lived production renderer would leak memory indefinitely. Treat hot reload as a dev affordance and assume production users reach a clean state by closing and reopening the panel.
@@ -267,24 +304,24 @@ Each project view is its own `WebContentsView`, so each document compiles once (
 
 ## MCP supervisor
 
-`PluginMcpSupervisor` (`electron/services/PluginMcpSupervisor.ts`) manages plugin-shipped MCP servers.
+`PluginMcpSupervisor` (`electron/services/PluginMcpSupervisor.ts`) manages plugin-shipped `mcpServers`. Daintree is the MCP client here: the supervisor spawns each server over stdio and the `pluginMcp` IPC handlers (`electron/ipc/handlers/pluginMcp.ts`) are the only way to reach its tools; the in-app Daintree Assistant is their consumer, and the plugin manager's settings UI starts, restarts and inspects servers. Nothing on this path feeds the MCP server terminal agents connect to (`electron/services/mcp-server/`). The inbound direction is [Agent MCP endpoints](#agent-mcp-endpoints).
 
 ### Spawn timing
 
-Servers spawn **on first tool use**, not at plugin activation. Daintree's MCP client maintains a registry of available servers (their stdio command + args + env) but doesn't establish connections until an agent tries to use one.
+Servers spawn **on first tool use**, not at plugin activation. The supervisor keeps a registry of available servers (their stdio command + args + env) but spawns one only when something asks for it — a `pluginMcp.listTools` / `pluginMcp.getFullSchema` / `pluginMcp.callTool` for that server, or a start/restart from the plugin manager.
 
 Rationale: a user with 10 installed plugins, each shipping an MCP server, doesn't pay the startup cost of 10 subprocesses unless they actually use them. Many MCP servers are heavy at startup (loading SDKs, validating credentials, fetching schemas).
 
 ### Tool discovery
 
-Tool definitions themselves are fetched lazily. The first time an agent sessions attempts to enumerate available tools, Daintree queries each registered server's `tools/list` and caches the result. Individual tool schemas are only injected into the agent's context when the agent's own discovery query returns a match — inspired by Claude Code's MCP Tool Search pattern.
+Tool definitions themselves are fetched lazily. The first `pluginMcp.listTools` for a server queries its `tools/list` and caches the result, and the IPC surface hands back terse summaries, capped at `maxToolsPerSession`. A tool's full schema crosses only when a caller asks for it by name through `pluginMcp.getFullSchema` — inspired by Claude Code's MCP Tool Search pattern.
 
-This matters because tool definitions consume tokens. An MCP server exposing 40 detailed tools can add 30K+ tokens to every turn. Lazy discovery pushes the cost to only the servers and tools the agent actually uses.
+This matters because tool definitions consume tokens in whatever model ends up reading them. An MCP server exposing 40 detailed tools can add 30K+ tokens to every turn. Lazy discovery pushes the cost to only the servers and tools actually used.
 
 ### Process lifecycle
 
-- Spawn on first use per session.
-- Keep alive for the duration of the agent session.
+- Spawn on first use.
+- Keep alive until the plugin unloads or Daintree quits — teardown is keyed by plugin, not by any caller or session.
 - On unexpected exit the supervisor transitions the server to `crashed`, records the error, invalidates the cached tool list, and rejects any pending calls. There is **no** automatic retry, backoff, or "degraded" state — the status enum is `spawning | ready | crashed | stopped`. Recovery is an explicit manual restart (the `pluginMcp.restart` IPC, or re-enabling the server from Preferences → Plugins), which also re-runs the trust-on-first-use tool comparison before any tool is re-injected.
 - Teardown on plugin unload and on Daintree quit is execa-managed: `subprocess.kill()` with no explicit signal, so execa's own `forceKillAfterDelay` escalation stays armed (a 3-second grace before the hard kill). Passing a signal would disable that escalation, so the supervisor deliberately doesn't. On Windows it additionally shells out to `taskkill /T /F` after the grace window, because Windows does not cascade a kill to grandchildren.
 - Subprocess `stderr` is captured and logged for debugging but not exposed to agents.
@@ -300,6 +337,23 @@ Plugin-contributed **agent** `command` and `args` get the same `${settings:setti
 MCP subprocesses run with the full privileges of the Daintree process. There's no sandboxing. The curation model — human review and trusted-source install — is the primary defense; there is no signing or publisher verification (see the [trust model](./trust-model.md)).
 
 An MCP server can do anything the plugin could do: make network requests, read and write files, spawn further processes. The manifest's declared `capabilities` are disclosed in the plugin manager — if a plugin declares `network:fetch` because its MCP server calls Linear's API, the user sees that in the plugin's detail pane after install and decides whether to keep trusting it.
+
+## Agent MCP endpoints
+
+`contributes.agentMcp` is the inbound direction: Daintree hosts a tools-only MCP endpoint for the plugin on the same loopback listener as its own MCP server, and agents in Daintree's terminals are the clients. The code lives in `electron/services/pluginAgentMcp/`; the listener side is documented in [MCP server → Plugin endpoints](../architecture/mcp-server.md#plugin-endpoints).
+
+Four pieces, each keyed by plugin **instance** rather than manifest id, so two projects loading the same project plugin — or a project copy beside an installed one — never share consent, credentials or rosters:
+
+| Piece | File | Holds |
+| --- | --- | --- |
+| Roster registry | `endpointRegistry.ts` | The validated, frozen tool descriptors plus an invoker, per instance and endpoint. Written by `host.mcp.registerTools`, dropped on unload. |
+| Enablement | `projectEnablement.ts` | `projectAgentMcpEnablement` in the user store: `projectId → pluginInstanceId → endpointId → { decidedAt }`. Default off; switching one off revokes its credentials. |
+| Grants | `grantRegistry.ts` | One credential per endpoint per terminal launch. Only the SHA-256 digest of the bearer is kept; the bearer itself is written once, into the launch's config file. |
+| Declared endpoints | `declaredEndpoints.ts` | Which endpoints of which loaded instances a given project could expose. The launch path reads it; the route instead re-checks the grant, that the instance is loaded, and the project's enablement. |
+
+**The request path.** A Claude launch in a project (`electron/ipc/handlers/terminal/lifecycle.ts`) resolves the endpoints that are both enabled for that project and declared by a loaded instance, re-checks each immediately before minting its grant, and has `McpPaneConfigService` write one `type: "http"` entry per grant, with a literal `Authorization: Bearer` header, into the same `0600` `--mcp-config` file under `userData` that carries the Daintree orchestration entry. An agent request to `/mcp/plugin/<instance>/<endpoint>` is branched off by `HttpLifecycle` before orchestration auth and handled by `pluginMcpRoute.ts`, which authenticates the grant, checks the path, the plugin and the project's enablement on every request, and serves a per-session MCP server from `pluginSessionServer.ts`. A `tools/call` there activates the plugin if needed, looks the roster up, and invokes the plugin's `execute` — in-process for a builtin, across the worker's message port for everything else, where the result is serialized in the worker before it crosses.
+
+**Lifetimes.** Grants die with the terminal launch (PTY exit, spawn failure, a restart of the same pane), with the plugin instance (disable, uninstall, project close, trust revoke, reload), and with the endpoint's enablement. They survive idle worker disposal and a worker crash-respawn: the instance is still loaded, so its credentials stay valid, in-flight calls are rejected, and the roster returns when the worker re-activates. Nothing about a grant is persisted, so none outlives the app.
 
 ## Worktree observability
 
@@ -344,6 +398,7 @@ What the host derives from declared capabilities:
 - **Compound-capability lattice (live, #9247).** Single capabilities that aren't individually irreversible can still combine into a threat. `manifestTriggersCompoundElevation()` (`electron/services/plugin/pluginDangerLattice.ts`) catches two compound classes: exfiltration (a sensitive read in `SENSITIVE_READ_CAPABILITIES` paired with an unconstrained `shell:exec` or `network:fetch` sink) and remote-controlled mutation (`network:fetch` paired with a local write or shell sink). A plugin attenuates the elevation by declaring a tight `scopes.network.allowedUrls` — a scoped `network:fetch` can't be remote-controlled, so the scope removes that class. Wildcard scopes are rejected at the schema boundary.
 - **Just-in-time consent (live, #10524).** Declaring a capability is necessary but not sufficient for the sanctioned host surfaces. The first time a plugin actually calls `host.process.spawn` (`shell:exec`), `host.fs.writeFile` (`fs:*-write`), `host.git.add`/`commit` (`git:write`), or `host.sendToActiveAgent` (`agent:input`), `ensureCapabilityConsent` (`PluginHostFactory.ts`) raises a first-use dialog through `PluginCapabilityConsentService`. A pinned grant makes later calls silent; a denial rejects with `PERMISSION_REQUIRED:`. Grants key on `(scopeKey, pluginId, capability)` with `scopeKey` taken from the host's own binding, so one project's approval never answers for another project's copy of the same manifest id. Built-in plugins skip the prompt. This is the only place a capability is a runtime gate rather than a label — and only on the host-mediated path.
 - **MCP consent tier (live, #9234).** A plugin's declared capabilities cap the danger tier its MCP server's tool surface can reach (`electron/services/plugin-mcp/PluginMcpTierAuth.ts`): a server that didn't declare a high-risk capability can't trigger a D2 confirmation just by advertising `destructiveHint: true` — the call is denied, not silently downgraded. See the trust model for the complete list.
+- **Agent MCP gate (live).** `contributes.agentMcp` is rejected at the manifest gate without `mcp:expose`, and `host.mcp.registerTools` throws `PERMISSION_REQUIRED:` without it. Declaring it exposes nothing: each endpoint also needs the user's per-project enablement. See [Trust model → Agent MCP endpoints](./trust-model.md#agent-mcp-endpoints-mcpexpose).
 
 The purpose is to let users judge plugins by what they claim to need and to apply proportional friction at high-risk intent surfaces. A simple theme-packager plugin declaring `shell:exec` looks suspicious; a Linear integration declaring `network:fetch` looks expected. Declaring honestly matters: a plugin that silently makes network requests without declaring `network:fetch` erodes the ecosystem's trust model, even though nothing blocks the call at runtime.
 
@@ -417,7 +472,7 @@ A short rationale for the decisions most likely to feel arbitrary:
 
 **Why no runtime permission enforcement?** There is no Node sandbox. Moving user plugins into a `utilityProcess.fork` worker bought crash isolation and clean teardown, not privilege reduction: the worker is a full Node runtime running as the user, so a plugin bypasses any custom-API gate by calling `require("fs")` or `child_process.spawn` directly. (Node's experimental permission model was prototyped against the worker in #10890 and doesn't take — Electron's utility-process bootstrap never parses the `--permission` flags. `electron/services/plugin/pluginPermissionFlags.ts` keeps the mapping ready in case that changes.) Full enforcement would require Wasm sandboxing (Zed's approach — great DX cost), iframe isolation (worse DX, breaks React integration), or a prompt on every Node call (unusable). Instead of claiming enforcement we can't deliver, declared capabilities drive host-side policy effects (danger derivation, the compound-capability lattice, and the MCP consent tier) while the model stays honest that it does not sandbox arbitrary code. See the [trust model](./trust-model.md).
 
-**Why no separate hooks contribution point (PreToolUse/PostToolUse)?** An MCP server can act as a proxy in front of other tools, intercepting and modifying tool calls. This uses the ecosystem we're already committed to (MCP) rather than inventing a parallel API. Plugins that genuinely need this can build it cleanly.
+**Why no separate hooks contribution point (PreToolUse/PostToolUse)?** Intercepting an agent's tool calls means changing how the agent CLI behaves, which crosses the line Daintree holds on user-owned agent config. What a plugin gets instead is its own tools in the agent's hands through an [agent MCP endpoint](#agent-mcp-endpoints), using the ecosystem we're already committed to (MCP) rather than a parallel API. Those tools can refuse or annotate what they are asked to do; they never see the agent's other calls.
 
 ## SDK surface
 
@@ -474,7 +529,8 @@ Key source locations for contributors:
 
 - `electron/services/plugin-capability/` — just-in-time capability consent and its store
 - `electron/services/plugin-mcp/` — MCP consent, tier auth, rate limiting, audit
-- `electron/services/PluginMcpSupervisor.ts` — the MCP subprocess supervisor
+- `electron/services/PluginMcpSupervisor.ts` — the MCP subprocess supervisor (`mcpServers`, Daintree as client)
+- `electron/services/pluginAgentMcp/` — agent MCP endpoints (`agentMcp`, Daintree as host): roster validation, enablement, grants, the plugin route and its session server
 
 **Renderer**
 

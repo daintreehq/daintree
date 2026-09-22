@@ -30,9 +30,15 @@ import type { CopyTreeProgress } from "../shared/types/ipc.js";
 import type { WorkspaceHostRequest, WorkspaceHostEvent } from "../shared/types/workspace-host.js";
 import type { WorktreePortRequest } from "../shared/types/worktree-port.js";
 import { WorkspaceService } from "./workspace-host/WorkspaceService.js";
+import { isStatusReportCurrent } from "./workspace-host/StatusTimingRecorder.js";
 import { ensureSerializable } from "../shared/utils/serialization.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { initForgeBridge } from "./workspace-host/forgeBridge.js";
+import { createHostShutdown } from "./workspace-host/hostShutdown.js";
+import {
+  closeAllParcelWatcherSubscriptions,
+  getParcelWatcherLifecycleStats,
+} from "./utils/parcelWatcherBackend.js";
 import { fanoutEventToWorktreePorts } from "./workspace-host/worktreePortFanout.js";
 import { PERF_MARKS } from "../shared/perf/marks.js";
 import { markHostPerformance } from "./utils/hostPerformance.js";
@@ -128,7 +134,9 @@ async function handleWorktreePortRequest(
 
       case "set-active": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        workspaceService.setActiveWorktree(requestId, msg.payload.worktreeId);
+        workspaceService.setActiveWorktree(requestId, msg.payload.worktreeId, {
+          origin: msg.payload.origin,
+        });
         result = { ok: true };
         break;
       }
@@ -225,6 +233,21 @@ async function handleWorktreePortRequest(
         break;
       }
 
+      case "get-lifecycle-command-approval": {
+        const review = await workspaceService.getLifecycleCommandReview(msg.payload.worktreeId);
+        result = { review };
+        break;
+      }
+
+      case "approve-lifecycle-commands": {
+        await workspaceService.approveLifecycleCommands(
+          msg.payload.worktreeId,
+          msg.payload.fingerprint
+        );
+        result = { ok: true };
+        break;
+      }
+
       case "switch-worktree-environment": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         await workspaceService.switchWorktreeEnvironment(
@@ -251,6 +274,27 @@ async function handleWorktreePortRequest(
       case "get-submodule-delete-risk": {
         const risk = await workspaceService.getSubmoduleDeleteRisk(msg.payload.worktreeId);
         result = { risk };
+        break;
+      }
+
+      case "report-switch-status-timing": {
+        const { payload } = msg;
+        const host = workspaceService.getStatusTimingMarks();
+        const accepted = isStatusReportCurrent(payload, {
+          epoch: workspaceService.getVersion().epoch,
+          loaded: workspaceService.hasSettledLoad(),
+          marks: host,
+        });
+        if (accepted) {
+          sendEvent({
+            type: "switch-status-timing",
+            switchId: payload.switchId,
+            rendererAppliedAt: payload.appliedAt,
+            rendererStatusCount: payload.statusCount,
+            host,
+          });
+        }
+        result = { accepted };
         break;
       }
 
@@ -383,9 +427,6 @@ function sendEvent(event: WorkspaceHostEvent): void {
   }
 }
 
-// Process-level shutdown controller — aborted on dispose/SIGTERM to kill in-flight git operations
-const shutdownController = new AbortController();
-
 // Create singleton instance
 const workspaceService = new WorkspaceService(sendEvent);
 
@@ -398,47 +439,36 @@ const workspaceService = new WorkspaceService(sendEvent);
 // `docs/architecture/forge-provider-abstraction.md` for the rationale.
 const forgeBridge = initForgeBridge(sendEvent);
 
-let isShuttingDown = false;
-
 /**
  * Idempotent teardown shared by both shutdown triggers — the parent's `dispose`
  * message and SIGTERM.
  *
- * The explicit `process.exit(0)` is load-bearing (#11069). Disposing the
- * services alone never ends the process: the `port.on("message")` listener, the
- * persistent copytree worker, and in-flight parcel-watcher unsubscribes all keep
- * the event loop alive, and merely installing a SIGTERM handler suppresses
- * Node's default terminate-on-SIGTERM. A host that outlives `dispose` defeats
- * the point of "free memory" and strands the parent's backstop on a live child,
- * where Electron's `UtilityProcess.kill()` blocks the main thread for up to 2s
- * on macOS (`base::EnsureProcessTerminated`) and swallows user input.
+ * The explicit exit is load-bearing (#11069). Disposing the services alone
+ * never ends the process: the `port.on("message")` listener, the persistent
+ * copytree worker, and in-flight parcel-watcher unsubscribes all keep the event
+ * loop alive, and merely installing a SIGTERM handler suppresses Node's default
+ * terminate-on-SIGTERM. A host that outlives `dispose` defeats the point of
+ * "free memory" and strands the parent's backstop on a live child.
  *
- * Exit runs on a short deadline rather than the next turn. Electron's ParentPort
- * exposes no `close()`, so its listener keeps this event loop alive and the
- * process never drains on its own — the deadline below IS the exit. It is
- * unref'd purely so it cannot hold the process open in the case where the loop
- * does drain; while the port keeps the loop alive it still fires.
- *
- * The delay is a best-effort window for a short in-flight write tail (the
- * `.daintree` copy), NOT a guarantee — the parent force-kills at 1s regardless,
- * and this clock only starts after IPC delivery plus the synchronous dispose
- * above, so it is budgeted well under that. Exiting on the very next turn would
- * truncate tails that the old SIGKILL-after-~3s teardown let finish.
+ * Disposal aborts in-flight git (monitor and fetch controllers), waits a
+ * bounded time for the parcel lifecycle queue to drain so native unsubscribes
+ * are not abandoned mid-flight, then acknowledges and exits. The parent
+ * force-kills only if neither the ack nor the exit arrives. Budgets live in
+ * `hostShutdown.ts`.
  */
-function shutdown(): void {
-  if (isShuttingDown) return;
-  isShuttingDown = true;
-  try {
-    shutdownController.abort();
-    workspaceService.dispose();
-    forgeBridge.dispose();
-  } catch (err) {
-    console.warn("[WorkspaceHost] Error during shutdown:", err);
-  } finally {
-    const deadline = setTimeout(() => process.exit(0), 500);
-    deadline.unref?.();
-  }
-}
+const shutdown = createHostShutdown({
+  disposers: [() => workspaceService.dispose(), () => forgeBridge.dispose()],
+  settle: closeAllParcelWatcherSubscriptions,
+  getPending: () => {
+    const stats = getParcelWatcherLifecycleStats();
+    return {
+      parcelSubscriptions: stats.subscriptions,
+      parcelLifecycleOps: stats.lifecycleOps,
+    };
+  },
+  send: (event) => port.postMessage(event),
+  exit: (code) => process.exit(code),
+});
 
 // Handle requests from Main
 port.on("message", async (rawMsg: any) => {
@@ -536,7 +566,7 @@ port.on("message", async (rawMsg: any) => {
         break;
 
       case "refresh":
-        await workspaceService.refresh(request.requestId, request.worktreeId);
+        await workspaceService.refresh(request.requestId, request.worktreeId, request.reason);
         break;
 
       case "refresh-on-wake":
@@ -612,8 +642,8 @@ port.on("message", async (rawMsg: any) => {
         );
         break;
 
-      case "set-polling-enabled":
-        workspaceService.setPollingEnabled(request.enabled);
+      case "set-workspace-power-policy":
+        workspaceService.setWorkspacePowerPolicy(request.policy);
         break;
 
       case "set-pr-poll-cadence":
@@ -656,7 +686,7 @@ port.on("message", async (rawMsg: any) => {
       // Aborts in-flight git work and rejects pending forge calls (so awaiting
       // paths fail fast instead of hanging on the 30s timeout), then exits.
       case "dispose":
-        shutdown();
+        void shutdown();
         break;
 
       case "set-log-level-overrides": {
@@ -929,7 +959,7 @@ port.on("message", async (rawMsg: any) => {
 // Graceful shutdown on SIGTERM (macOS/Linux; Windows uses TerminateProcess so this won't fire)
 process.on("SIGTERM", () => {
   console.log("[WorkspaceHost] SIGTERM received, shutting down");
-  shutdown();
+  void shutdown();
 });
 
 // Signal ready

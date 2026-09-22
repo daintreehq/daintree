@@ -19,9 +19,10 @@ import {
   getGitRecoveryAction,
   getGitRecoveryHint,
 } from "../../shared/utils/gitOperationErrors.js";
-import { logWarn } from "../utils/logger.js";
+import { logError, logWarn } from "../utils/logger.js";
 import { isBinaryDiffOutput } from "../../shared/utils/gitDiffParsing.js";
 import type {
+  LifecycleCommandReview,
   Worktree,
   WorktreeSetupStatus,
   WorktreeSetupState,
@@ -42,7 +43,37 @@ interface CreatedWorktree {
   setupState: WorktreeSetupState;
 }
 
-type LifecycleSetupOutcome = { ok: true } | { ok: false; timedOut: boolean; error: string };
+type LifecycleSetupOutcome =
+  | { ok: true }
+  | { ok: false; timedOut: boolean; error: string }
+  // The repository's commands have not been approved, so nothing ran. Only the
+  // user can change that, from the worktree card.
+  | { ok: false; needsApproval: true };
+
+/** What a setup that stopped for approval was asked to do, so approving can finish it. */
+interface SetupAwaitingApproval {
+  provisionResource: boolean;
+  environmentId?: string;
+}
+
+/** The setup status a finished setup run settles on. */
+function setupStatusForOutcome(
+  outcome: LifecycleSetupOutcome,
+  startedAt: number,
+  completedAt: number
+): WorktreeSetupStatus {
+  if (outcome.ok) return { state: "ready", startedAt, completedAt };
+  if ("needsApproval" in outcome) {
+    return { state: "needs-approval", stage: "setup-script", startedAt, completedAt };
+  }
+  return {
+    state: outcome.timedOut ? "timed-out" : "failed",
+    stage: "setup-script",
+    startedAt,
+    completedAt,
+    error: outcome.error,
+  };
+}
 import type {
   WorkspaceHostEvent,
   WorkspaceFetchResult,
@@ -50,6 +81,7 @@ import type {
   MonitorConfig,
   CreateWorktreeOptions,
   BranchInfo,
+  HostStatusTimingMarks,
 } from "../../shared/types/workspace-host.js";
 import type {
   PluginWorktreeLinked,
@@ -70,6 +102,7 @@ import {
   parseIndexGitlinks,
 } from "../utils/submoduleInventory.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
+import { StatusTimingRecorder } from "./StatusTimingRecorder.js";
 import { branchRefName, readBranchCommitterDates } from "../utils/branchCommitterDates.js";
 import { withTimeout } from "../utils/withTimeout.js";
 import { detectWslPath, getDefaultWslDistro } from "../utils/wsl.js";
@@ -82,8 +115,19 @@ import {
 import { extractIssueNumberSync, extractIssueNumber } from "../services/issueExtractor.js";
 import { pullRequestService } from "../services/PullRequestService.js";
 import { events } from "../services/events.js";
-import { WorktreeLifecycleService, type WorkspaceHostContext } from "./WorktreeLifecycleService.js";
-import { WorktreeMonitor } from "./WorktreeMonitor.js";
+import {
+  LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR,
+  WorktreeLifecycleService,
+  ownResource,
+  type ResolvedResourceEnvironments,
+  type WorkspaceHostContext,
+} from "./WorktreeLifecycleService.js";
+import { WorktreeMonitor, type WorktreePollingPermissions } from "./WorktreeMonitor.js";
+import { StatusAdmissionController } from "./StatusAdmissionController.js";
+import {
+  ACTIVE_WORKSPACE_POLLING_POLICY,
+  type WorkspacePollingPolicy,
+} from "../../shared/types/powerPolicy.js";
 import { WorktreeListService } from "./WorktreeListService.js";
 import { PRIntegrationService, type PRIntegrationCallbacks } from "./PRIntegrationService.js";
 import { RepoFetchCoordinator } from "./RepoFetchCoordinator.js";
@@ -161,6 +205,9 @@ const DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS = 10000;
 // in `shared/types/resourceProfile.ts` — that profile must mirror the
 // hardcoded defaults. Overridden per-profile via `updateMonitorConfig`.
 const DEFAULT_BACKGROUND_GIT_WATCHER_CAP = 12;
+// Default cap on concurrent recursive watchers held by agent-active worktrees.
+// Matches the `balanced` profile's `agentRecursiveWatcherCap`.
+const DEFAULT_AGENT_RECURSIVE_WATCHER_CAP = 32;
 const WORKTREE_REMOVE_LOCK_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 3000, 5000, 8000];
 
 function sleep(ms: number): Promise<void> {
@@ -186,6 +233,13 @@ function isTransientWorktreeRemoveLockError(error: unknown): boolean {
 // allSettled, forceRefreshAfterGap catches). The underlying work isn't
 // cancelled, but the individual fs/git awaits are independently bounded.
 const POLL_QUEUE_TASK_TIMEOUT_MS = 60_000;
+
+/**
+ * Minimum gap between automatic focus revalidations, matching the cadence the
+ * PR service already uses for its own focus catch-up (and SWR's long-standing
+ * default). Only the automatic path is throttled.
+ */
+const FOCUS_REFRESH_THROTTLE_MS = 5_000;
 
 // Overall ceiling for a user-initiated full refresh. Guarantees the port
 // request always replies so the sidebar's Refresh button can never hang or be
@@ -225,6 +279,11 @@ const FORGE_RESELECT_MAX_RETRIES = 3;
 // Backstop cadence for the config fingerprint check when the git watcher is
 // disabled or has silently degraded. A stat, not a subprocess.
 const FORGE_CONFIG_POLL_INTERVAL_MS = 5 * 60 * 1000;
+
+// How long a resume waits for the remotes to settle before restarting PR
+// polling anyway. A stat on a dead mount never returns, and polling stranded
+// behind it would be worse than one check against a possibly stale provider.
+const FORGE_RESUME_SETTLE_TIMEOUT_MS = 5_000;
 
 // FIFO cap on the acknowledged-mutation dedup set. Mutation ids are arbitrary
 // UUIDs (not path-keyed), so size-capping is the only viable pruning strategy;
@@ -380,10 +439,14 @@ function samePath(a: string, b: string): boolean {
 
 export class WorkspaceService {
   private monitors = new Map<string, WorktreeMonitor>();
+  private readonly statusTiming = new StatusTimingRecorder();
   private pollQueue = new PQueue({
     concurrency: 3,
     timeout: POLL_QUEUE_TASK_TIMEOUT_MS,
   });
+  private readonly statusAdmission = new StatusAdmissionController();
+  /** When the last automatic focus revalidation ran; see FOCUS_REFRESH_THROTTLE_MS. */
+  private lastFocusRefreshAt = 0;
   private mainBranch: string = "main";
   private activeWorktreeId: string | null = null;
   private pollIntervalActive: number = DEFAULT_ACTIVE_WORKTREE_INTERVAL_MS;
@@ -416,11 +479,18 @@ export class WorkspaceService {
   // Worktree IDs the renderer reports as having an actively working agent
   // (via the `set-agent-activity` port action). Agent-active monitors are
   // elevated to the recursive watcher tier and exempted from the background
-  // watcher budget, exactly like the focused worktree — the ENOSPC/EMFILE
-  // degradation path bounds the worst case on constrained kernels. Kept as a
-  // set (not per-monitor only) so worktrees discovered *after* the broadcast
-  // (e.g. an agent's own `git worktree add`) inherit the flag on creation.
+  // watcher budget, exactly like the focused worktree. Kept as a set (not
+  // per-monitor only) so worktrees discovered *after* the broadcast (e.g. an
+  // agent's own `git worktree add`) inherit the flag on creation. Iteration
+  // order is activation order — `setAgentActivity` keeps survivors in place —
+  // which is what `applyWatcherBudget` ranks the recursive cap by.
   private agentActiveWorktreeIds = new Set<string>();
+  // Separate, generous ceiling on how many agent-active worktrees may hold a
+  // recursive watcher at once. With a fleet of agents most worktrees are
+  // agent-active, so the exemption above would otherwise leave the recursive
+  // stream count unbounded. Agents past it keep a `git-only` watcher plus the
+  // 60 s elevated poll.
+  private agentRecursiveWatcherCap: number = DEFAULT_AGENT_RECURSIVE_WATCHER_CAP;
   // Provider hostname-matcher table relayed from main's forge registry.
   // Empty until the first relay lands (after plugin load), so monitors start
   // unmatched and re-resolve when the table arrives or changes.
@@ -454,6 +524,26 @@ export class WorkspaceService {
   // interval; the git subprocess runs only when the fingerprint actually moved.
   private forgeConfigPollTimer: NodeJS.Timeout | null = null;
   private forgeConfigFingerprint: string | null = null;
+  // Detection runs for the loaded project; the backstop timer only while the
+  // host is foregrounded. Tracked apart so a pause can drop the timer without
+  // letting a later load mistake the missing timer for "never started".
+  private forgeRemoteDetectionActive = false;
+  // Set by `pause()`, cleared by `resume()`.
+  private backgrounded = false;
+  // The resume reprobe the PR poller waits on; see `resume()`.
+  private pendingResumeSettle: Promise<void> | null = null;
+  private latestForgeReprobe: Promise<void> | null = null;
+  // Stopped by `pause()` rather than by an unload, so `resume()` restarts it.
+  private wslDistroPollerSuspended = false;
+  // Credential changes that reached this host while backgrounded, the latest
+  // per provider, replayed once PR work resumes — they would otherwise fetch
+  // every worktree and poll PRs in a host nothing is looking at. Per provider
+  // because a set and a clear have different effects, and one provider's
+  // must not swallow another's.
+  private readonly deferredCredentialUpdates = new Map<
+    string,
+    import("../../shared/types/forge.js").Credentials | null
+  >();
   private git: SimpleGit | null = null;
   /**
    * Whether the loaded folder is a git repository, as observed by `loadProject`.
@@ -461,7 +551,16 @@ export class WorkspaceService {
    * topology watcher and forge detection permanently off for this host (#11405).
    */
   private gitBacked: boolean | null = null;
-  private pollingEnabled: boolean = true;
+  // App-wide power policy, pushed by main and replayed on host restart. One of
+  // the two inputs to `derivePermissions()`; `backgrounded` is the other.
+  private appPolicy: WorkspacePollingPolicy = { ...ACTIVE_WORKSPACE_POLLING_POLICY };
+  // What `reconcilePolling()` last pushed to the monitors. Starts at the state
+  // every monitor boots in, so the first real transition always lands.
+  private appliedPermissions: WorktreePollingPermissions = {
+    status: true,
+    backgroundWork: true,
+    attenuated: false,
+  };
   private projectRootPath: string | null = null;
   // Immutable project id threaded from main via load-project (#11282). The host
   // has no DB access, so it can never re-derive this from the path — hashing the
@@ -469,6 +568,12 @@ export class WorkspaceService {
   private projectId: string | null = null;
   private projectEnvVars: Record<string, string> = {};
   private lifecycleService = new WorktreeLifecycleService();
+  // Keyed by monitor, not id, so a setup intent dies with the incarnation it
+  // was recorded for: delete-then-recreate at the same path must not inherit it.
+  private setupAwaitingApproval = new WeakMap<WorktreeMonitor, SetupAwaitingApproval>();
+  // Monitors whose approved setup is already being resumed, so a second
+  // approval arriving meanwhile does not run it again once the first settles.
+  private resumingApprovedSetup = new WeakSet<WorktreeMonitor>();
   private listService = new WorktreeListService();
   private prService: PRIntegrationService;
   private fetchCoordinator: RepoFetchCoordinator;
@@ -590,6 +695,15 @@ export class WorkspaceService {
    */
   getVersion(): { epoch: string; seq: number } {
     return { epoch: this.epoch, seq: this.seq };
+  }
+
+  getStatusTimingMarks(): HostStatusTimingMarks {
+    return this.statusTiming.getMarks(this.monitors.values());
+  }
+
+  /** The latest project load succeeded and installed every worktree's monitor. */
+  hasSettledLoad(): boolean {
+    return this.statusTiming.isLoaded();
   }
 
   constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {
@@ -847,7 +961,7 @@ export class WorkspaceService {
     const self = this;
     const topologyHost: TopologyWatcherHost = {
       get pollingEnabled() {
-        return self.pollingEnabled;
+        return self.appliedPermissions.status;
       },
       get projectRootPath() {
         return self.projectRootPath;
@@ -875,6 +989,7 @@ export class WorkspaceService {
       forgeRemote: string | null;
     }
   ): Promise<void> {
+    this.statusTiming.beginLoad();
     try {
       // E2E-only: hold the load so renderer hydration's worktree prefetch
       // deterministically observes the pre-load window where `get-all-states`
@@ -932,6 +1047,8 @@ export class WorkspaceService {
       // `false`, which is exactly the deleted-`.git` case above.
       if (!(await this.isGitRepository())) {
         this.gitBacked = false;
+        this.statusTiming.markEnumerated();
+        this.statusTiming.markLoaded();
         this.sendEvent({ type: "load-project-result", requestId, success: true });
         return;
       }
@@ -955,6 +1072,7 @@ export class WorkspaceService {
 
       const rawWorktrees = await this.listService.list();
       const worktrees = await this.listService.mapToWorktrees(rawWorktrees);
+      this.statusTiming.markEnumerated();
 
       await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
 
@@ -962,7 +1080,7 @@ export class WorkspaceService {
       // Started independently of startWatcher() — that method no-ops when
       // `.git/worktrees/` is absent (the exact "all worktrees removed" case),
       // so gating the safety net on it would defeat its purpose (#8510).
-      if (this.pollingEnabled) {
+      if (this.appliedPermissions.status) {
         this.topologyWatcher.startSafetyTimer();
       }
 
@@ -980,17 +1098,25 @@ export class WorkspaceService {
       // owning project picks them up.
       this.pruneStaleWslGitEntries(worktrees);
 
+      this.statusTiming.markLoaded();
       this.sendEvent({ type: "load-project-result", requestId, success: true });
 
-      void Promise.allSettled([this.initializePRService(), this.refreshAll()]).then((results) => {
-        const [prResult, refreshResult] = results;
-        if (prResult?.status === "rejected") {
-          console.warn("[WorkspaceHost] PR service initialization failed:", prResult.reason);
+      // Automatic: a load is not proof anyone is looking. Hover-prefetch and
+      // dormant crash recovery reach this same path, and an ordinary load can
+      // be backgrounded while its remaining monitors sit in pollQueue.
+      // `startWithoutGitStatus()` has already emitted each initial snapshot, so
+      // the renderer has its rows either way, and resume owes the status pass.
+      void Promise.allSettled([this.initializePRService(), this.refreshAll(true)]).then(
+        (results) => {
+          const [prResult, refreshResult] = results;
+          if (prResult?.status === "rejected") {
+            console.warn("[WorkspaceHost] PR service initialization failed:", prResult.reason);
+          }
+          if (refreshResult?.status === "rejected") {
+            console.warn("[WorkspaceHost] Initial worktree refresh failed:", refreshResult.reason);
+          }
         }
-        if (refreshResult?.status === "rejected") {
-          console.warn("[WorkspaceHost] Initial worktree refresh failed:", refreshResult.reason);
-        }
-      });
+      );
     } catch (error) {
       // `formatErrorMessage`, not `(error as Error).message`: a non-Error throw
       // put a literal `undefined` in the "Couldn't load worktrees" banner. A
@@ -1067,7 +1193,14 @@ export class WorkspaceService {
     }
     if (monitorConfig?.backgroundGitWatcherCap !== undefined) {
       this.backgroundGitWatcherCap = this.normalizeWatcherCap(
-        monitorConfig.backgroundGitWatcherCap
+        monitorConfig.backgroundGitWatcherCap,
+        this.backgroundGitWatcherCap
+      );
+    }
+    if (monitorConfig?.agentRecursiveWatcherCap !== undefined) {
+      this.agentRecursiveWatcherCap = this.normalizeWatcherCap(
+        monitorConfig.agentRecursiveWatcherCap,
+        this.agentRecursiveWatcherCap
       );
     }
 
@@ -1239,6 +1372,12 @@ export class WorkspaceService {
   private startWslDistroPoller(): void {
     if (process.platform !== "win32") return;
     if (this.wslDistroPoller) return;
+    // A first WSL enrichment can finish after the host was backgrounded; arm
+    // on the way back to the foreground instead.
+    if (this.backgrounded) {
+      this.wslDistroPollerSuspended = true;
+      return;
+    }
     this.wslDistroPoller = setInterval(() => {
       void this.pollWslDefaultDistro();
     }, WorkspaceService.WSL_DISTRO_POLL_INTERVAL_MS);
@@ -1253,6 +1392,7 @@ export class WorkspaceService {
     // across a project switch could refresh the next project's monitors with
     // this project's distro.
     this.wslProbeSeq++;
+    this.wslDistroPollerSuspended = false;
     if (this.wslDistroPoller) {
       clearInterval(this.wslDistroPoller);
       this.wslDistroPoller = null;
@@ -1431,8 +1571,8 @@ export class WorkspaceService {
   // --- Background git-watcher budget (LRU) ---
 
   /** Clamp a requested cap to a non-negative integer, ignoring junk values. */
-  private normalizeWatcherCap(value: number): number {
-    if (!Number.isFinite(value)) return this.backgroundGitWatcherCap;
+  private normalizeWatcherCap(value: number, fallback: number): number {
+    if (!Number.isFinite(value)) return fallback;
     return Math.max(0, Math.floor(value));
   }
 
@@ -1452,7 +1592,9 @@ export class WorkspaceService {
    * worktree always keeps its watcher (excluded from the cap). Background
    * monitors are granted a watcher for the `cap` most-recently-focused entries
    * (LRU tail) and evicted otherwise — evicted monitors stop their watcher and
-   * fall back to adaptive polling.
+   * fall back to adaptive polling. Agent-active worktrees sit outside that
+   * pool and always keep a watcher, with recursive coverage bounded separately
+   * by `agentRecursiveWatcherCap` (see `agentRecursiveGrants`).
    *
    * Revocations run before grants so freed inotify/fd handles are released
    * before any new watcher arms, keeping the live handle count bounded by the
@@ -1494,20 +1636,49 @@ export class WorkspaceService {
     for (let i = 0; i < cutoff; i++) {
       this.monitors.get(ids[i])?.setGitWatchBudgetAllowed(false);
     }
+    const agentRecursive = this.agentRecursiveGrants();
+    for (const [id, monitor] of this.monitors) {
+      if (id !== this.activeWorktreeId && !agentRecursive.has(id)) {
+        monitor.setRecursiveWatchBudgetAllowed(false);
+      }
+    }
     // The focused worktree always keeps its watcher.
     if (this.activeWorktreeId) {
-      this.monitors.get(this.activeWorktreeId)?.setGitWatchBudgetAllowed(true);
+      const active = this.monitors.get(this.activeWorktreeId);
+      active?.setRecursiveWatchBudgetAllowed(true);
+      active?.setGitWatchBudgetAllowed(true);
     }
     // Worktrees with an actively working agent always keep theirs too —
-    // streaming those changes is the product's core loop; the watcher-failure
-    // degradation path (ENOSPC/EMFILE → git-only) bounds the worst case.
+    // streaming those changes is the product's core loop. The recursive cap
+    // bounds how many stream the whole tree; the rest watch `.git/` only.
     for (const id of this.agentActiveWorktreeIds) {
-      this.monitors.get(id)?.setGitWatchBudgetAllowed(true);
+      const monitor = this.monitors.get(id);
+      if (!monitor) continue;
+      if (agentRecursive.has(id)) monitor.setRecursiveWatchBudgetAllowed(true);
+      monitor.setGitWatchBudgetAllowed(true);
     }
     // Grant the surviving MRU tail.
     for (let i = cutoff; i < ids.length; i++) {
       this.monitors.get(ids[i])?.setGitWatchBudgetAllowed(true);
     }
+  }
+
+  /**
+   * Agent-active worktrees always keep a watcher, but only the first
+   * `agentRecursiveWatcherCap` installed ones, in activation order (so a
+   * newcomer never evicts an established stream), may hold a recursive one;
+   * the rest drop to git-only. The focused worktree is outside this cap — it
+   * has its own recursive entitlement whether or not an agent works there.
+   */
+  private agentRecursiveGrants(): Set<string> {
+    const grants = new Set<string>();
+    for (const id of this.agentActiveWorktreeIds) {
+      if (grants.size >= this.agentRecursiveWatcherCap) break;
+      if (id !== this.activeWorktreeId && this.monitors.has(id)) {
+        grants.add(id);
+      }
+    }
+    return grants;
   }
 
   /**
@@ -1523,9 +1694,29 @@ export class WorkspaceService {
     // Port payloads are typed but not runtime-validated; a malformed request
     // must not silently clear every elevation (`new Set(undefined)` is empty).
     if (!Array.isArray(worktreeIds)) return;
-    const next = new Set(worktreeIds.filter((id): id is string => typeof id === "string"));
+    const incoming = new Set(worktreeIds.filter((id): id is string => typeof id === "string"));
     const previous = this.agentActiveWorktreeIds;
+    // Survivors keep their place and newcomers join the end, so a broadcast
+    // that merely reorders the same agents can't reshuffle who holds a
+    // recursive watcher under the cap.
+    const next = new Set<string>();
+    for (const id of previous) {
+      if (incoming.has(id)) next.add(id);
+    }
+    for (const id of incoming) next.add(id);
     this.agentActiveWorktreeIds = next;
+
+    // Settle newcomers' recursive grants before they're elevated, so an agent
+    // over the cap arms git-only straight away instead of arming recursive and
+    // rotating down a moment later. Side-effect free: the flag only drives a
+    // rotation once the monitor is agent-active.
+    const grants = this.agentRecursiveGrants();
+    for (const id of next) {
+      const monitor = this.monitors.get(id);
+      if (monitor && !monitor.agentActive) {
+        monitor.setRecursiveWatchBudgetAllowed(grants.has(id));
+      }
+    }
 
     let membershipChanged = false;
     for (const [id, monitor] of this.monitors) {
@@ -1644,7 +1835,8 @@ export class WorkspaceService {
       },
       this.mainBranch,
       this.pollQueue,
-      ++this.worktreeGeneration
+      ++this.worktreeGeneration,
+      this.statusAdmission
     );
 
     monitor.setIssueNumber(issueNumber ?? undefined);
@@ -1667,6 +1859,12 @@ export class WorkspaceService {
     if (this.agentActiveWorktreeIds.has(wt.id)) {
       monitor.agentActive = true;
       monitor.setGitWatchBudgetAllowed(true);
+      // Recursive coverage waits for applyWatcherBudget() to rank it against
+      // the agent cap. Batched installs (syncMonitors) defer that pass until
+      // every monitor has started, so a default grant would let each newcomer
+      // arm recursive first and overshoot the cap; this one starts git-only
+      // and is promoted if it earns a slot.
+      monitor.setRecursiveWatchBudgetAllowed(false);
     }
 
     this.monitors.set(wt.id, monitor);
@@ -1682,6 +1880,12 @@ export class WorkspaceService {
       this.applyWatcherBudget();
     }
 
+    // A worktree that appears while the project is backgrounded (an agent's
+    // own worktree create, an MCP create) joins with the same permissions as
+    // its neighbours, so start() never arms a watcher or poll loop the rest of
+    // the host has let go of — and inherits the current attenuation.
+    monitor.applyPollingPermissions(this.appliedPermissions);
+
     if (skipInitialGitStatus) {
       monitor.startWithoutGitStatus();
     } else {
@@ -1694,6 +1898,11 @@ export class WorkspaceService {
 
     void (async () => {
       await this.initResourceConfigAsync(monitor, wt.path);
+      // Existing worktrees have no setup history to say commands were skipped,
+      // so this is how their cards learn there is something to review.
+      await this.refreshLifecycleCommandApproval(monitor).catch((err) => {
+        console.warn("[WorkspaceHost] Command approval check failed:", err);
+      });
       // Emit a secondary update if config was loaded and monitor is running.
       // This ensures the renderer receives the resource config metadata even when
       // initResourceConfigAsync completes after the initial snapshot was emitted.
@@ -1714,12 +1923,17 @@ export class WorkspaceService {
   ): Promise<void> {
     try {
       if (!this.projectRootPath) return;
-      const config = await this.lifecycleService.loadConfig(worktreePath, this.projectRootPath);
+      const resolvedConfig = await this.lifecycleService.resolveConfig(
+        worktreePath,
+        this.projectRootPath
+      );
+      const config = resolvedConfig?.config ?? null;
+      let resourceEnvironments: ResolvedResourceEnvironments | null = null;
       let resourceConfig = config?.resource;
       if (config?.resources) {
-        const envKey = monitor.worktreeMode;
-        if (envKey && config.resources[envKey]) {
-          resourceConfig = config.resources[envKey];
+        const named = ownResource(config.resources, monitor.worktreeMode);
+        if (named) {
+          resourceConfig = named;
         } else if (config.resources["default"]) {
           resourceConfig = config.resources["default"];
         } else {
@@ -1728,20 +1942,29 @@ export class WorkspaceService {
         }
       }
       if (!resourceConfig) {
-        const envs = await this.lifecycleService.loadProjectResourceEnvironments(
+        const resolvedEnvs = await this.lifecycleService.resolveProjectResourceEnvironments(
           this.projectRootPath
         );
+        const envs = resolvedEnvs?.environments;
         if (envs) {
           const envKey = monitor.worktreeMode;
-          if (envKey && envKey !== "local" && envs[envKey]) {
-            resourceConfig = envs[envKey];
+          const named = envKey !== "local" ? ownResource(envs, envKey) : undefined;
+          if (named) {
+            resourceConfig = named;
           } else {
             const keys = Object.keys(envs);
             if (keys.length > 0) resourceConfig = envs[keys[0]];
           }
+          if (resourceConfig) resourceEnvironments = resolvedEnvs;
         }
       }
       if (!resourceConfig) return;
+
+      const commandsApproved = await this.lifecycleService.isResourceApproved(
+        resolvedConfig,
+        resourceEnvironments,
+        this.projectRootPath
+      );
 
       // Cache resource config metadata regardless of monitor.isRunning state.
       // This ensures the UI shows the Resource submenu even during cold start
@@ -1754,7 +1977,7 @@ export class WorkspaceService {
         monitor.branch
       );
       const sub = (cmd: string) => this.lifecycleService.substituteVariables(cmd, vars);
-      applyResourceConfigToMonitor(monitor, resourceConfig, sub);
+      applyResourceConfigToMonitor(monitor, resourceConfig, sub, commandsApproved);
 
       // Runtime behavior (emits, polling) requires monitor.isRunning
       if (!monitor.isRunning) return;
@@ -1788,7 +2011,8 @@ export class WorkspaceService {
     }
   }
 
-  private handleMonitorUpdate(_monitor: WorktreeMonitor, snapshot: WorktreeSnapshot): void {
+  private handleMonitorUpdate(monitor: WorktreeMonitor, snapshot: WorktreeSnapshot): void {
+    this.statusTiming.noteEmit(monitor, snapshot.worktreeChanges != null);
     this.sendEvent({
       type: "worktree-update",
       worktree: snapshot,
@@ -1845,14 +2069,7 @@ export class WorkspaceService {
   }
 
   private emitUpdate(monitor: WorktreeMonitor): void {
-    const snapshot = monitor.getSnapshot();
-    this.sendEvent({
-      type: "worktree-update",
-      worktree: snapshot,
-      epoch: this.epoch,
-      seq: this.nextSeq(),
-    });
-    events.emit("sys:worktree:update", snapshot);
+    this.handleMonitorUpdate(monitor, monitor.getSnapshot());
   }
 
   /**
@@ -2141,7 +2358,28 @@ export class WorkspaceService {
    * `PullRequestService`'s no-match pause (#9997) meaningful, since the same
    * config file is written by `git push -u` on every first push.
    */
-  private async reprobeForgeRemoteAsync(): Promise<void> {
+  private reprobeForgeRemoteAsync(): Promise<void> {
+    const probe = this.runForgeRemoteReprobe();
+    this.latestForgeReprobe = probe;
+    return probe;
+  }
+
+  /**
+   * Resolve once the newest remote probe has finished. A probe superseded
+   * mid-read returns at its sequence check before its replacement has read
+   * anything, so waiting on the first one alone would release early.
+   */
+  private async settleForgeRemotes(): Promise<void> {
+    let probe = this.reprobeForgeRemoteAsync();
+    for (;;) {
+      await probe.catch(() => {});
+      const latest = this.latestForgeReprobe;
+      if (latest === null || latest === probe) return;
+      probe = latest;
+    }
+  }
+
+  private async runForgeRemoteReprobe(): Promise<void> {
     const cwd = this.forgeProbeCwd();
     if (!cwd) return;
     const seq = ++this.forgeRemoteProbeSeq;
@@ -2240,9 +2478,10 @@ export class WorkspaceService {
    * this slower read.
    */
   private startForgeRemoteDetection(): void {
-    if (this.forgeConfigPollTimer) return;
+    if (this.forgeRemoteDetectionActive) return;
     const rootPath = this.projectRootPath;
     if (!rootPath) return;
+    this.forgeRemoteDetectionActive = true;
 
     const seq = this.forgeRemoteProbeSeq;
     const epoch = this.forgeConfigEpoch;
@@ -2267,6 +2506,11 @@ export class WorkspaceService {
       this.forgeConfigFingerprint ??= after;
     })();
 
+    if (!this.backgrounded) this.armForgeConfigBackstop();
+  }
+
+  private armForgeConfigBackstop(): void {
+    if (this.forgeConfigPollTimer) return;
     // The backstop only has to WAKE the reprobe — the reprobe itself stats the
     // config and skips the git spawn when nothing moved, so an idle tick costs
     // one stat.
@@ -2276,11 +2520,17 @@ export class WorkspaceService {
     this.forgeConfigPollTimer.unref?.();
   }
 
-  private stopForgeRemoteDetection(): void {
+  private disarmForgeConfigBackstop(): void {
     if (this.forgeConfigPollTimer) {
       clearInterval(this.forgeConfigPollTimer);
       this.forgeConfigPollTimer = null;
     }
+  }
+
+  private stopForgeRemoteDetection(): void {
+    this.forgeRemoteDetectionActive = false;
+    this.pendingResumeSettle = null;
+    this.disarmForgeConfigBackstop();
     if (this.forgeReselectTimer) {
       clearTimeout(this.forgeReselectTimer);
       this.forgeReselectTimer = null;
@@ -2516,7 +2766,11 @@ export class WorkspaceService {
     });
   }
 
-  setActiveWorktree(requestId: string, worktreeId: string, options?: { silent?: boolean }): void {
+  setActiveWorktree(
+    requestId: string,
+    worktreeId: string,
+    options?: { silent?: boolean; origin?: string }
+  ): void {
     // Reject unknown worktree ids with success:false. Pre-PR, an unknown id
     // would mutate `this.activeWorktreeId` to a value the renderer could not
     // resolve; the new `worktree-activated` emit would propagate that miss
@@ -2593,12 +2847,38 @@ export class WorkspaceService {
       epoch: this.epoch,
       seq: this.nextSeq(),
       silent: options?.silent,
+      origin: options?.origin,
     });
 
     this.sendEvent({ type: "set-active-result", requestId, success: true });
   }
 
-  async refresh(requestId: string, worktreeId?: string): Promise<{ ok: boolean; error?: string }> {
+  async refresh(
+    requestId: string,
+    worktreeId?: string,
+    reason: "manual" | "focus" = "manual"
+  ): Promise<{ ok: boolean; error?: string }> {
+    // Cycling windows fires focus repeatedly. Watchers stayed armed through
+    // the blur, so each of these is a reconciliation rather than a cold read —
+    // but a full pass still walks every monitor plus topology and PRs, and
+    // alt-tabbing twice a second should not queue that twice a second. The
+    // same 5s shape the PR service already uses for its focus catch-up.
+    if (reason === "focus") {
+      // Nothing to revalidate for: this host is backgrounded, or no window is
+      // on screen. Declining here rather than inside the per-monitor fan-out
+      // also spares the topology enumeration and the PR refresh that run
+      // alongside it, which have no guard of their own.
+      if (!this.appliedPermissions.status) {
+        this.sendEvent({ type: "refresh-result", requestId, success: true });
+        return { ok: true };
+      }
+      const now = Date.now();
+      if (now - this.lastFocusRefreshAt < FOCUS_REFRESH_THROTTLE_MS) {
+        this.sendEvent({ type: "refresh-result", requestId, success: true });
+        return { ok: true };
+      }
+      this.lastFocusRefreshAt = now;
+    }
     try {
       if (worktreeId) {
         const monitor = this.monitors.get(worktreeId);
@@ -2628,7 +2908,10 @@ export class WorkspaceService {
                 `[WorkspaceHost] refresh: topology re-discovery failed: ${(err as Error).message}`
               );
             }
-            await Promise.allSettled([this.refreshAll(), pullRequestService.refresh()]);
+            await Promise.allSettled([
+              this.refreshAll(reason === "focus"),
+              pullRequestService.refresh(),
+            ]);
           })(),
           HOST_REFRESH_TIMEOUT_MS,
           "refresh watchdog: all worktrees"
@@ -2656,7 +2939,9 @@ export class WorkspaceService {
    * D2/D3 tier and the changed-file preview from LIVE changes — a backgrounded
    * worktree's cached snapshot can be ~30s stale, which lets a force-delete
    * skip the typed-name gate and silently discard uncommitted work. This runs
-   * `monitor.refresh()` (which bypasses the adaptive-poll cache) and reads the
+   * `monitor.getFreshChanges()` (which bypasses both the adaptive-poll cache
+   * and the single-flight status pass, and is deliberately not subject to the
+   * automatic-refresh suspension guard) and reads the
    * resulting changes back off the same monitor, so the caller gets a value
    * that provably reflects the refresh — no dependency on the broadcast landing
    * on the (separate) worktree port first. Watchdogged like `refresh()` so a
@@ -2769,9 +3054,9 @@ export class WorkspaceService {
       const promises = Array.from(this.monitors.values()).map((monitor) =>
         wakeQueue.add(async () => {
           try {
-            await monitor.refresh();
+            await monitor.refresh({ automatic: true });
           } finally {
-            if (monitor.isRunning && this.pollingEnabled) {
+            if (monitor.isRunning && this.appliedPermissions.status) {
               monitor.reschedulePolling();
             }
           }
@@ -2782,9 +3067,18 @@ export class WorkspaceService {
       // counts catch up against the network state we just reconnected to.
       // Fire-and-forget — the fetch coordinator serializes per-repo and
       // failures don't block the wake refresh result.
-      for (const monitor of this.monitors.values()) {
-        if (monitor.isRunning) {
-          void monitor.triggerFetchNow();
+      //
+      // Gated on background-work permission, unlike a user-triggered fetch: a
+      // forced fetch bypasses the poll gate by design, and its success path
+      // reaches `refreshStatusForFetchSiblings` -> `triggerRefreshIfUpdating`,
+      // which starts a status pass with no guard of its own. Without this the
+      // wake sweep declines every direct refresh and then starts the same work
+      // by the back door.
+      if (this.appliedPermissions.backgroundWork) {
+        for (const monitor of this.monitors.values()) {
+          if (monitor.isRunning) {
+            void monitor.triggerFetchNow();
+          }
         }
       }
       await pullRequestService.refresh();
@@ -2894,13 +3188,13 @@ export class WorkspaceService {
     await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
   }
 
-  private async refreshAll(): Promise<void> {
+  private async refreshAll(automatic: boolean): Promise<void> {
     const promises = Array.from(this.monitors.values()).map((monitor) =>
       this.pollQueue.add(async () => {
         try {
-          await monitor.refresh();
+          await monitor.refresh({ automatic });
         } finally {
-          if (monitor.isRunning && this.pollingEnabled) {
+          if (monitor.isRunning && this.appliedPermissions.status) {
             monitor.reschedulePolling();
           }
         }
@@ -3451,17 +3745,7 @@ export class WorkspaceService {
             error: submoduleFailure,
           });
         } else {
-          setSetupStatus(
-            setup.ok
-              ? { state: "ready", startedAt: setupStartedAt, completedAt }
-              : {
-                  state: setup.timedOut ? "timed-out" : "failed",
-                  stage: "setup-script",
-                  startedAt: setupStartedAt,
-                  completedAt,
-                  error: setup.error,
-                }
-          );
+          setSetupStatus(setupStatusForOutcome(setup, setupStartedAt, completedAt));
         }
       })().catch((err) => {
         const message = formatErrorMessage(err, "createWorktree async tail failed");
@@ -3551,6 +3835,9 @@ export class WorkspaceService {
       // Hardened rather than authenticated: this inherits `GIT_TERMINAL_PROMPT=0`
       // and a blanked `credential.helper`, so a private submodule fails fast
       // instead of blocking forever on an askpass the host has no terminal for.
+      // SSH submodules still authenticate through the user's keys and agent;
+      // the pinned `core.sshCommand` runs in BatchMode, so auth that would need
+      // an interactive answer fails without prompting.
       const git = await createHardenedGit(worktreePath, this._shutdownController.signal);
 
       // Roster authority is the new worktree's index, not `.gitmodules` — a
@@ -3706,7 +3993,24 @@ export class WorkspaceService {
       emitUpdate: (m) => this.emitUpdate(m),
     };
 
-    const { shouldProvision } = await this.lifecycleService.runLifecycleSetup(
+    // Ids are paths, so the monitor is pinned before the first await: only the
+    // incarnation this run started against may record or clear what it was
+    // asked to do.
+    const monitorAtStart = this.monitors.get(worktreeId);
+    const recordAwaitingApproval = (awaiting: boolean): void => {
+      const live = this.monitors.get(worktreeId);
+      if (!live || live !== monitorAtStart) return;
+      if (!awaiting) {
+        this.setupAwaitingApproval.delete(live);
+        return;
+      }
+      this.setupAwaitingApproval.set(live, {
+        provisionResource: provisionResource ?? false,
+        ...(environmentId !== undefined ? { environmentId } : {}),
+      });
+    };
+
+    const { shouldProvision, needsApproval } = await this.lifecycleService.runLifecycleSetup(
       worktreeId,
       worktreePath,
       ctx,
@@ -3714,10 +4018,16 @@ export class WorkspaceService {
       environmentId
     );
 
+    if (needsApproval) {
+      recordAwaitingApproval(true);
+      return { ok: false, needsApproval: true };
+    }
+
     // Read immediately, before auto-provision can overwrite the slot.
     const settled = this.monitors.get(worktreeId)?.lifecycleStatus;
     if (settled?.phase === "setup" && settled.state !== "success") {
       if (settled.state === "failed" || settled.state === "timed-out") {
+        recordAwaitingApproval(false);
         return {
           ok: false,
           timedOut: settled.state === "timed-out",
@@ -3733,6 +4043,14 @@ export class WorkspaceService {
         "provision"
       );
       if (!provision.success) {
+        // Provisioning re-checks approval against the config as it is now, so
+        // commands that changed after setup read them are waiting for approval
+        // rather than failed — and approving them should finish the job.
+        if (provision.error === LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR) {
+          recordAwaitingApproval(true);
+          return { ok: false, needsApproval: true };
+        }
+        recordAwaitingApproval(false);
         return {
           ok: false,
           timedOut: false,
@@ -3741,6 +4059,7 @@ export class WorkspaceService {
       }
     }
 
+    recordAwaitingApproval(false);
     return { ok: true };
   }
 
@@ -3780,9 +4099,18 @@ export class WorkspaceService {
     monitor.setSetupStatus({ state: "running", stage: "setup-script", startedAt });
     this.emitUpdate(monitor);
 
+    // A setup that stopped for approval resumes with what it was originally
+    // asked to do; a plain retry never provisions.
+    const intent = this.setupAwaitingApproval.get(monitor);
     let outcome: LifecycleSetupOutcome;
     try {
-      outcome = await this.runLifecycleSetup(worktreeId, monitor.path, this.projectRootPath, false);
+      outcome = await this.runLifecycleSetup(
+        worktreeId,
+        monitor.path,
+        this.projectRootPath,
+        intent?.provisionResource ?? false,
+        intent?.environmentId
+      );
     } catch (err) {
       const message = formatErrorMessage(err, "Setup retry failed");
       // BOTH statuses have to settle here. `runLifecycleSetup` writes the
@@ -3821,27 +4149,126 @@ export class WorkspaceService {
     // what makes the guard reject a concurrent second request.
     const live = this.monitors.get(worktreeId);
     if (live?.lifecycleStatus?.phase === "setup" && live.lifecycleStatus.state === "running") {
+      const settledState = outcome.ok
+        ? "success"
+        : "needsApproval" in outcome
+          ? "needs-approval"
+          : outcome.timedOut
+            ? "timed-out"
+            : "failed";
       live.setLifecycleStatus({
         ...live.lifecycleStatus,
-        state: outcome.ok ? "success" : outcome.timedOut ? "timed-out" : "failed",
+        state: settledState,
         completedAt: Date.now(),
-        ...(outcome.ok ? {} : { error: outcome.error }),
+        ...(!outcome.ok && "error" in outcome ? { error: outcome.error } : {}),
       });
       this.emitUpdate(live);
     }
 
-    this.setWorktreeSetupStatus(
-      worktreeId,
-      outcome.ok
-        ? { state: "ready", startedAt, completedAt: Date.now() }
-        : {
-            state: outcome.timedOut ? "timed-out" : "failed",
-            stage: "setup-script",
-            startedAt,
-            completedAt: Date.now(),
-            error: outcome.error,
+    this.setWorktreeSetupStatus(worktreeId, setupStatusForOutcome(outcome, startedAt, Date.now()));
+  }
+
+  /**
+   * The repository commands this worktree would run that still need the
+   * user's approval, or `null`. Also brings the worktree's approval flag up to
+   * date, since whoever asks is about to act on the answer.
+   *
+   * Reached only through the worktree port from the renderer's review dialog.
+   * Deliberately not an action: approval is the user's decision, and nothing
+   * on the action surface — which is also the MCP tool surface — can grant it.
+   */
+  async getLifecycleCommandReview(worktreeId: string): Promise<LifecycleCommandReview | null> {
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor) throw new Error(`Worktree not found: ${worktreeId}`);
+    const projectRootPath = this.projectRootPath;
+    if (!projectRootPath) throw new Error("Cannot review commands before a project is loaded");
+    const review = await this.lifecycleService.getCommandReview(monitor.path, projectRootPath);
+    this.applyCommandApprovalFlag(monitor, projectRootPath, review !== null);
+    return review;
+  }
+
+  /**
+   * Approve the commands a review showed, identified by its fingerprint.
+   *
+   * Approval is by content, so every worktree in the project that carries the
+   * same commands is cleared by it: their flags and published connect commands
+   * are refreshed. A setup this worktree skipped for approval is then resumed —
+   * that is what the user just approved it for. Other worktrees' skipped setups
+   * are left for their own cards.
+   */
+  async approveLifecycleCommands(worktreeId: string, fingerprint: string): Promise<void> {
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor) throw new Error(`Worktree not found: ${worktreeId}`);
+    const projectRootPath = this.projectRootPath;
+    if (!projectRootPath) throw new Error("Cannot approve commands before a project is loaded");
+
+    await this.lifecycleService.approveCommandReview(monitor.path, projectRootPath, fingerprint);
+
+    await Promise.all(
+      [...this.monitors.values()].map(async (m) => {
+        try {
+          // Only a monitor that was (or may have been) waiting, or that has no
+          // connect command published, can have had one withheld. Re-deriving
+          // an approved sibling's would drop the endpoint its last status check
+          // substituted in.
+          if (m.lifecycleCommandsNeedApproval !== false || m.resourceConnectCommand === undefined) {
+            await this.initResourceConfigAsync(m, m.path);
           }
+          await this.refreshLifecycleCommandApproval(m);
+        } catch (err) {
+          console.warn("[WorkspaceService] Failed to refresh command approval:", err);
+        }
+      })
     );
+
+    const live = this.monitors.get(worktreeId);
+    if (
+      live === monitor &&
+      this.setupAwaitingApproval.has(live) &&
+      !this.resumingApprovedSetup.has(live)
+    ) {
+      this.resumingApprovedSetup.add(live);
+      void (async () => {
+        // A resource action in flight — an automatic status check, say — holds
+        // the lifecycle slot, and a retry started under it would be refused as
+        // "already running", losing the setup the user just approved.
+        await this.resourceActionExecutor.whenIdle(worktreeId);
+        if (this.monitors.get(worktreeId) !== monitor) return;
+        if (!this.setupAwaitingApproval.has(monitor)) return;
+        await this.retryLifecycleSetup(worktreeId);
+      })()
+        .catch((err) => {
+          console.warn("[WorkspaceService] Setup after approval failed to start:", err);
+        })
+        .finally(() => {
+          this.resumingApprovedSetup.delete(monitor);
+        });
+    }
+  }
+
+  /** Re-derive a worktree's "commands need approval" flag from disk. */
+  private async refreshLifecycleCommandApproval(monitor: WorktreeMonitor): Promise<void> {
+    const projectRootPath = this.projectRootPath;
+    if (!projectRootPath) return;
+    const review = await this.lifecycleService.getCommandReview(monitor.path, projectRootPath);
+    this.applyCommandApprovalFlag(monitor, projectRootPath, review !== null);
+  }
+
+  private applyCommandApprovalFlag(
+    monitor: WorktreeMonitor,
+    projectRootPath: string,
+    needsApproval: boolean
+  ): void {
+    // The answer was read for this incarnation in this project; a monitor that
+    // has since been replaced, or a project that has since switched, gets none.
+    if (this.monitors.get(monitor.id) !== monitor || this.projectRootPath !== projectRootPath) {
+      return;
+    }
+    if (monitor.lifecycleCommandsNeedApproval === needsApproval) return;
+    monitor.setLifecycleCommandsNeedApproval(needsApproval);
+    if (monitor.isRunning && monitor.hasInitialStatus) {
+      this.emitUpdate(monitor);
+    }
   }
 
   private async runLifecycleTeardown(
@@ -4096,13 +4523,6 @@ export class WorkspaceService {
               `Worktree removed. Branch '${branchToDelete}' was kept because Git reports it isn't fully merged.`,
               { cause: branchError }
             );
-          } else if (errorMsg.includes("checked out at") || errorMsg.includes("Cannot delete")) {
-            throw new Error(
-              `Worktree removed. Couldn't delete branch '${branchToDelete}': ${errorMsg.split("\n")[0]}`,
-              {
-                cause: branchError,
-              }
-            );
           } else {
             throw new Error(
               `Worktree removed. Couldn't delete branch '${branchToDelete}': ${errorMsg}`,
@@ -4127,6 +4547,18 @@ export class WorkspaceService {
       // Delete failed — drop any pending entry so a real external change to
       // that name isn't masked, and cancel its safety valve.
       if (pendingDeleteKey) this.topologyWatcher.clearPending(pendingDeleteKey);
+      // The only durable record of a delete failure. The renderer surfaces it
+      // on the card, but a branch-delete failure arrives after the card is
+      // already gone — so without this the error survives nowhere on disk.
+      logError("Worktree delete failed", error, {
+        projectRootPath: this.projectRootPath,
+        requestId,
+        worktreeId,
+        mutationId,
+        force,
+        deleteBranch,
+        forceDeleteBranch: branchOptions.forceDeleteBranch === true,
+      });
       // sendEvent for the legacy `WorkspaceClient.sendWithResponse` path, which
       // resolves its requestId-keyed promise from `delete-worktree-result`.
       this.sendEvent({
@@ -4866,9 +5298,22 @@ ${lines.map((l) => "+" + l).join("\n")}`;
 
     let watcherCapChanged = false;
     if (config.backgroundGitWatcherCap !== undefined) {
-      const normalized = this.normalizeWatcherCap(config.backgroundGitWatcherCap);
+      const normalized = this.normalizeWatcherCap(
+        config.backgroundGitWatcherCap,
+        this.backgroundGitWatcherCap
+      );
       if (normalized !== this.backgroundGitWatcherCap) {
         this.backgroundGitWatcherCap = normalized;
+        watcherCapChanged = true;
+      }
+    }
+    if (config.agentRecursiveWatcherCap !== undefined) {
+      const normalized = this.normalizeWatcherCap(
+        config.agentRecursiveWatcherCap,
+        this.agentRecursiveWatcherCap
+      );
+      if (normalized !== this.agentRecursiveWatcherCap) {
+        this.agentRecursiveWatcherCap = normalized;
         watcherCapChanged = true;
       }
     }
@@ -4940,36 +5385,99 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this._lastAppliedThrottleMultiplier = safeMultiplier;
   }
 
+  /**
+   * The app-wide power policy, held as its own input. Never written by the
+   * project lifecycle and never overwriting it: both feed
+   * {@link reconcilePolling}, which is the only place the monitors are told
+   * what they may run. Replayed by main on host restart.
+   */
+  setWorkspacePowerPolicy(policy: WorkspacePollingPolicy): void {
+    this.appPolicy = { ...policy };
+    this.reconcilePolling();
+  }
+
+  /**
+   * Blunt all-or-nothing control, kept for callers that mean "this host can
+   * observe nothing at all" (and for the tests that pin that behaviour).
+   */
   setPollingEnabled(enabled: boolean): void {
-    if (this.pollingEnabled === enabled) return;
+    this.setWorkspacePowerPolicy(
+      enabled
+        ? ACTIVE_WORKSPACE_POLLING_POLICY
+        : { statusAllowed: false, backgroundWorkAllowed: false, attenuated: true }
+    );
+  }
 
-    this.pollingEnabled = enabled;
+  /**
+   * What this host may actually run, derived from both inputs. Status work
+   * needs the project foregrounded *and* a window someone could look at;
+   * network fetch and resource polling additionally need someone looking.
+   */
+  private derivePermissions(): WorktreePollingPermissions {
+    return {
+      status: !this.backgrounded && this.appPolicy.statusAllowed,
+      backgroundWork: !this.backgrounded && this.appPolicy.backgroundWorkAllowed,
+      attenuated: this.appPolicy.attenuated,
+    };
+  }
 
-    if (!enabled) {
+  /**
+   * Push the derived permissions to every monitor and the topology watcher.
+   * Idempotent, so any input may call it without checking whether it changed
+   * anything.
+   */
+  private reconcilePolling(): void {
+    const next = this.derivePermissions();
+    const previous = this.appliedPermissions;
+    if (
+      next.status === previous.status &&
+      next.backgroundWork === previous.backgroundWork &&
+      next.attenuated === previous.attenuated
+    ) {
+      return;
+    }
+    this.appliedPermissions = next;
+    this.statusAdmission.setAttenuated(next.attenuated);
+
+    for (const monitor of this.monitors.values()) {
+      monitor.applyPollingPermissions(next);
+    }
+
+    if (!next.status) {
       this.topologyWatcher.stop();
-      for (const monitor of this.monitors.values()) {
-        monitor.pausePolling();
-      }
-    } else if (this.gitBacked === false) {
+      return;
+    }
+    if (this.gitBacked === false) {
       // Foregrounding must not start the topology watcher for a workspace with
       // no repository — `loadProject` deliberately never started it, and this is
       // the one path that would otherwise revive it (#11405).
-    } else {
-      for (const monitor of this.monitors.values()) {
-        monitor.resumePolling();
-      }
-      void this.topologyWatcher.startWatcher();
-      // stop() (run on the !enabled branch) cleared the safety timer, so
-      // resume must restart it symmetrically (#8510).
-      this.topologyWatcher.startSafetyTimer();
-      this.topologyWatcher.scheduleReconcile();
+      return;
     }
+    if (previous.status) return;
+    void this.topologyWatcher.startWatcher();
+    // stop() (run when status work is withdrawn) cleared the safety timer, so
+    // restoring it must restart the timer symmetrically (#8510).
+    this.topologyWatcher.startSafetyTimer();
+    this.topologyWatcher.scheduleReconcile();
   }
 
   pause(): void {
-    console.log("[WorkspaceService] Pausing (backgrounded)");
-    this.setPollingEnabled(false);
+    // The pool re-asserts a retained host's pause every grace period, so only
+    // the transition is worth a line; the stops below stay idempotent.
+    if (!this.backgrounded) console.log("[WorkspaceService] Pausing (backgrounded)");
+    this.backgrounded = true;
+    this.pendingResumeSettle = null;
+    this.reconcilePolling();
     this.prService.pause();
+    // The pool keeps a backgrounded host for as long as its project's view is
+    // cached (#12519), so the config backstop would otherwise tick for hours in
+    // a host nothing is looking at. Nothing else watches `.git/config` while
+    // paused either — `resume()` reprobes once to catch what it missed.
+    this.disarmForgeConfigBackstop();
+    if (this.wslDistroPoller) {
+      this.stopWslDistroPoller();
+      this.wslDistroPollerSuspended = true;
+    }
     try {
       os.setPriority(process.pid, os.constants.priority.PRIORITY_LOW);
     } catch {
@@ -4984,7 +5492,54 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     } catch {
       // Sandboxed environments may deny setpriority — non-fatal
     }
-    this.setPollingEnabled(true);
+    const wasBackgrounded = this.backgrounded;
+    this.backgrounded = false;
+    // Reconcile rather than force-enable: foregrounding a project while the
+    // screen is locked or every window is hidden must not start polling that
+    // the app-wide policy has withdrawn.
+    this.reconcilePolling();
+    if (this.wslDistroPollerSuspended) {
+      this.wslDistroPollerSuspended = false;
+      this.startWslDistroPoller();
+    }
+    if (wasBackgrounded && this.forgeRemoteDetectionActive) {
+      this.armForgeConfigBackstop();
+      // Settle the remotes before the PR poller restarts on the provider it
+      // resolved before the pause: nothing watched `.git/config` meanwhile.
+      // Stat-gated, so an unchanged config costs one stat and no git; a changed
+      // one emits `sys:forge:remote-changed`, which drops that resolution first.
+      const settle = new Promise<void>((resolve) => {
+        const deadline = setTimeout(resolve, FORGE_RESUME_SETTLE_TIMEOUT_MS);
+        deadline.unref?.();
+        void this.settleForgeRemotes().finally(() => {
+          clearTimeout(deadline);
+          resolve();
+        });
+      });
+      this.pendingResumeSettle = settle;
+      void settle.then(() => {
+        // Superseded by a pause or an unload, each of which clears it.
+        if (this.pendingResumeSettle !== settle) return;
+        this.pendingResumeSettle = null;
+        this.resumePRWork();
+      });
+      return;
+    }
+    // A switch-back foregrounds twice (the switch handler, then the pool's warm
+    // re-attach); the second must not start the poller ahead of the settle.
+    if (this.pendingResumeSettle) return;
+    this.resumePRWork();
+  }
+
+  /** The PR side of `resume()`, run once the remotes have settled. */
+  private resumePRWork(): void {
+    // A credential change held back while backgrounded refreshes PRs, so it
+    // waits for the same settle the poller does.
+    const deferred = [...this.deferredCredentialUpdates];
+    this.deferredCredentialUpdates.clear();
+    for (const [providerId, credentials] of deferred) {
+      this.updateForgeCredentials(providerId, credentials);
+    }
     this.prService.resume();
   }
 
@@ -5006,7 +5561,9 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     const remoteSelectionChanged = args.forgeRemote !== this.forgeRemoteName;
     this.forgeRemoteName = args.forgeRemote;
     pullRequestService.setForgeSettings(args);
-    void pullRequestService.refresh();
+    // A backgrounded host re-resolves when it is foregrounded; refreshing now
+    // would query the forge for a project nothing is showing (#12519).
+    if (!this.backgrounded) void pullRequestService.refresh();
     // The remote table on disk is unchanged, so the signature-gated reprobe
     // would never fire — but the remote we *select* from it just moved, which
     // changes the matched provider for every monitor (#11408).
@@ -5103,6 +5660,10 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     providerId: string,
     credentials: import("../../shared/types/forge.js").Credentials | null
   ): void {
+    if (this.backgrounded || this.pendingResumeSettle) {
+      this.deferredCredentialUpdates.set(providerId, credentials);
+      return;
+    }
     this.prService.updateForgeCredentials(
       providerId,
       credentials,
@@ -5178,6 +5739,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.stopWslDistroPoller();
     this.topologyWatcher.clearQueue();
     this.prService.cleanup();
+    this.deferredCredentialUpdates.clear();
 
     for (const id of this.monitors.keys()) {
       this.resourceActionExecutor.cleanupResourceActionState(id);
@@ -5319,11 +5881,15 @@ ${lines.map((l) => "+" + l).join("\n")}`;
 
   dispose(): void {
     this._shutdownController.abort();
+    // Cancel git before releasing any watcher: a native unsubscribe can block
+    // this thread, and fetches signalled before it are already stopping.
+    this.fetchCoordinator.destroy();
     // stop() clears the pending sets and their safety timers.
     this.topologyWatcher.stop();
     this.stopWslDistroPoller();
     this.topologyWatcher.clearQueue();
     this.prService.cleanup();
+    this.deferredCredentialUpdates.clear();
     this.resourceActionExecutor.dispose();
     for (const monitor of this.monitors.values()) {
       monitor.stop();
@@ -5331,7 +5897,6 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.monitors.clear();
     this.backgroundGitWatcherLru.clear();
     this.agentActiveWorktreeIds.clear();
-    this.fetchCoordinator.destroy();
     this.authFailureConfirmedNotified.clear();
     this.pollQueue.clear();
     this.stopForgeRemoteDetection();

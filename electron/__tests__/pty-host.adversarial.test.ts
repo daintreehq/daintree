@@ -65,14 +65,18 @@ interface MockTerminalRecord {
   analysisEnabled?: boolean;
   wasKilled?: boolean;
   isExited?: boolean;
+  lastInputTime?: number;
 }
 
 interface InspectablePauseCoordinator {
   pause: TestMock;
   resume: TestMock;
   forceReleaseAll: TestMock;
+  enterCaptureMode: TestMock;
+  exitCaptureMode: TestMock;
   heldTokens: Set<string>;
   readonly isPaused: boolean;
+  readonly isCapturing: boolean;
 }
 
 type PendingSegment = { data: Uint8Array; offset: number };
@@ -225,6 +229,7 @@ vi.mock("../services/PtyManager.js", () => {
     setImagePathProbe = vi.fn();
     setPtyPool = vi.fn();
     setAnalysisWorkerPool = vi.fn();
+    setGracefulCaptureHost = vi.fn();
     setActivityMonitorTier = vi.fn();
     spawn = vi.fn((id: string, options: { projectId?: string }) => {
       if (!hostState.terminals.has(id)) {
@@ -350,6 +355,27 @@ vi.mock("../pty-host/index.js", async () => {
       this.heldTokens.clear();
       this.raw.resume();
     });
+
+    capturing = false;
+    enterCaptureMode = vi.fn(() => {
+      this.capturing = true;
+    });
+    exitCaptureMode = vi.fn(() => {
+      this.capturing = false;
+      return [];
+    });
+
+    get isCapturing(): boolean {
+      return this.capturing;
+    }
+
+    get isReadPaused(): boolean {
+      return this.heldTokens.size > 0 && !this.capturing;
+    }
+
+    hasToken(token: string): boolean {
+      return this.heldTokens.has(token);
+    }
 
     get isPaused(): boolean {
       return this.heldTokens.size > 0;
@@ -945,6 +971,50 @@ describe("pty-host adversarial", () => {
     expect(dataLoss[1].droppedBytes).toBe(80);
   });
 
+  it("flags output as echo or recent-input by its own terminal's input age (#12518)", async () => {
+    const parentPort = await loadHost();
+    const port = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: { projectId: "project-1" } });
+    parentPort.emit("message", { type: "spawn", id: "t2", options: { projectId: "project-1" } });
+    await flushMicrotasks();
+    const batcher = hostState.batchers[0];
+    batcher.write.mockReturnValue(true);
+
+    // Emit one chunk for t1 whose last input was `ageMs` ago; the batcher's
+    // last two args are (interactive, recentInput).
+    async function flagsForInputAge(ageMs: number | undefined): Promise<void> {
+      hostState.terminals.get("t1")!.lastInputTime =
+        ageMs === undefined ? undefined : Date.now() - ageMs;
+      batcher.write.mockClear();
+      (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "x");
+      await flushMicrotasks();
+    }
+
+    await flagsForInputAge(49);
+    expect(batcher.write).toHaveBeenLastCalledWith("t1", expect.anything(), 1, true, true, true);
+    await flagsForInputAge(50);
+    expect(batcher.write).toHaveBeenLastCalledWith("t1", expect.anything(), 1, true, false, true);
+    await flagsForInputAge(999);
+    expect(batcher.write).toHaveBeenLastCalledWith("t1", expect.anything(), 1, true, false, true);
+    await flagsForInputAge(1000);
+    expect(batcher.write).toHaveBeenLastCalledWith("t1", expect.anything(), 1, true, false, false);
+    await flagsForInputAge(undefined);
+    expect(batcher.write).toHaveBeenLastCalledWith("t1", expect.anything(), 1, true, false, false);
+
+    // A sibling without recent input of its own gets neither flag, whatever
+    // the other terminal is doing.
+    hostState.terminals.get("t1")!.lastInputTime = Date.now();
+    hostState.terminals.get("t2")!.lastInputTime = Date.now() - 5_000;
+    batcher.write.mockClear();
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t2", "y");
+    await flushMicrotasks();
+    expect(batcher.write).toHaveBeenLastCalledWith("t2", expect.anything(), 1, true, false, false);
+  });
+
   it("IPC_DATA_MIRROR_DELIVERS_BACKGROUND_TERMINAL_OUTPUT", async () => {
     // EXPERIMENT (hibernation teardown): a terminal tagged "background" no longer
     // has its visual stream suppressed — the producer gate streams live. So the
@@ -956,7 +1026,10 @@ describe("pty-host adversarial", () => {
     hostState.terminals.set("t1", createTerminal("t1", "project-1"));
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     parentPort.emit("message", { type: "spawn", id: "t1", options: { projectId: "project-1" } });
     parentPort.emit("message", { type: "set-ipc-data-mirror", id: "t1", enabled: true });
     parentPort.emit("message", { type: "set-activity-tier", id: "t1", tier: "background" });
@@ -997,7 +1070,10 @@ describe("pty-host adversarial", () => {
     hostState.terminals.set("t1", createTerminal("t1", "project-1"));
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     parentPort.emit("message", { type: "spawn", id: "t1", options: { projectId: "project-1" } });
     await flushMicrotasks();
 
@@ -1013,7 +1089,10 @@ describe("pty-host adversarial", () => {
     hostState.terminals.set("t1", createTerminal("t1", "project-1"));
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     parentPort.emit("message", { type: "spawn", id: "t1", options: { projectId: "project-1" } });
     await flushMicrotasks();
 
@@ -1182,6 +1261,461 @@ describe("pty-host adversarial", () => {
     expect(terminal.ptyProcess.resume).toHaveBeenCalledTimes(1);
   });
 
+  it("CACHED_DUPLICATE_KEEPS_THE_IPC_FALLBACK_OPEN (#12557)", async () => {
+    // A project open in two windows, where the second window switched away and
+    // now holds it CACHED. That cached view lost its window's MessagePort to
+    // whichever view went active, so the project-scoped IPC fallback is its
+    // only transport — but window 1's batcher accepting the chunk sets
+    // `visualWritten`, which used to suppress that fallback for everyone. The
+    // cached copy then received neither path and went permanently silent.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const portA = createRendererPort();
+    const portB = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2, holderWebContentsId: 102 },
+      ports: [portB],
+    });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-2" });
+    // Main's view registry — not the host — is what knows window 2 kept a
+    // cached copy of project-1; `windowProjectMap` only holds active projects.
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
+    await flushMicrotasks();
+
+    const batcher = hostState.batchers[0];
+    batcher.write.mockReturnValue(true);
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "working... step 1\r\n");
+    await flushMicrotasks();
+
+    // Window 1 still gets it on its port — the fast path is untouched.
+    expect(batcher.write).toHaveBeenCalled();
+    // And the fallback runs anyway, naming window 1 so Main can drop its
+    // port-holding view from the fan-out instead of double-delivering.
+    expect(dataPayloads(parentPort)).toEqual([
+      expect.objectContaining({
+        type: "data",
+        id: "t1",
+        data: "working... step 1\r\n",
+        portDeliveredWebContentsIds: [101],
+      }),
+    ]);
+  });
+
+  it("NO_CACHED_DUPLICATE_LEAVES_THE_FALLBACK_SUPPRESSED (#12557)", async () => {
+    // The common case must not change: with no cached view of the terminal's
+    // project anywhere, a port acceptance still suppresses the IPC fallback
+    // entirely. Otherwise every chunk would pay a second main-process hop.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const portA = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-9"],
+    });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    expect(dataPayloads(parentPort)).toHaveLength(0);
+  });
+
+  it("CACHED_VIEW_PROJECTS_IS_A_REPLACE_NOT_A_MERGE (#12557)", async () => {
+    // Main recomputes the whole set from its registry, so a later push that
+    // omits project-1 means its cached view is gone. Merging would leave the
+    // fallback open for that project forever.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const portA = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
+    await flushMicrotasks();
+    hostState.batchers[0].write.mockReturnValue(true);
+    parentPort.postMessage.mockClear();
+
+    // Prove the first message took effect, or "suppressed after clearing"
+    // would also pass an implementation that ignored both messages.
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "before\r\n");
+    await flushMicrotasks();
+    expect(dataPayloads(parentPort)).toHaveLength(1);
+
+    parentPort.emit("message", { type: "set-fallback-eligible-projects", projectIds: [] });
+    await flushMicrotasks();
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "after\r\n");
+    await flushMicrotasks();
+
+    expect(dataPayloads(parentPort)).toHaveLength(0);
+  });
+
+  it("CACHED_DUPLICATE_FALLBACK_SUPPRESSES_THE_SATURATION_PULSE (#12557)", async () => {
+    // A window whose batcher rejected the chunk normally gets a data-loss
+    // pulse, which paints a yellow discontinuity marker. When the cached-view
+    // fallback runs, that window's view receives the bytes over IPC after all
+    // — the marker would be a lie about data that did arrive.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const portA = createRendererPort();
+    const portB = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2, holderWebContentsId: 102 },
+      ports: [portB],
+    });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-1" });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
+    await flushMicrotasks();
+
+    // Window 1's batcher accepts, window 2's rejects.
+    hostState.batchers[0].write.mockReturnValue(true);
+    hostState.batchers[1].write.mockReturnValue(false);
+    portA.postMessage.mockClear();
+    portB.postMessage.mockClear();
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    const pulses = portB.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter(
+        (m: unknown) =>
+          typeof m === "object" && m !== null && (m as { status?: string }).status === "data-loss"
+      );
+    expect(pulses).toHaveLength(0);
+    // Only window 1 took it on a port, so only window 1 is excluded downstream.
+    expect(dataPayloads(parentPort)).toEqual([
+      expect.objectContaining({ type: "data", id: "t1", portDeliveredWebContentsIds: [101] }),
+    ]);
+  });
+
+  it("SUPPLEMENTARY_FALLBACK_NEVER_APPLIES_BACKPRESSURE (#12557)", async () => {
+    // The IPC ledger is drained by whoever receives the IPC copy. Here that is
+    // only the port-less duplicate, which may be a frozen renderer that never
+    // acks. Letting that reach applyBackpressure would pause the PTY and stall
+    // the healthy primary window on a background view's progress.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const port = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    const ipcQueue = hostState.ipcQueueManagers[0];
+    ipcQueue.applyBackpressure.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    expect(dataPayloads(parentPort)).toHaveLength(1);
+    expect(ipcQueue.applyBackpressure).not.toHaveBeenCalled();
+  });
+
+  it("PRIMARY_FALLBACK_STILL_APPLIES_BACKPRESSURE (#12557)", async () => {
+    // The guard above must be scoped to the supplementary case: when the IPC
+    // copy is the ONLY delivery, its ledger is the real flow control again.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const port = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-2" });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
+    await flushMicrotasks();
+
+    // Project-filtered away from the only window, so nothing takes it on a port.
+    const ipcQueue = hostState.ipcQueueManagers[0];
+    ipcQueue.applyBackpressure.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    expect(ipcQueue.applyBackpressure).toHaveBeenCalled();
+  });
+
+  it("SUPPLEMENTARY_FALLBACK_AT_CAPACITY_KEEPS_THE_TERMINAL_LIVE (#12557)", async () => {
+    // Dropping the duplicate's copy must not paint a data-loss marker (the
+    // pulse is project-scoped and would land on the pane that DID receive the
+    // bytes) and must not take the early return that skips semantic analysis.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const port = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-ipc-data-mirror", id: "t1", enabled: true });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    hostState.ipcQueueManagers[0].isAtCapacity.mockReturnValue(true);
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    const pulses = parentPort.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter(
+        (m: unknown) =>
+          typeof m === "object" && m !== null && (m as { status?: string }).status === "data-loss"
+      );
+    expect(pulses).toHaveLength(0);
+    expect(dataPayloads(parentPort)).toHaveLength(0);
+    // No `data` went out, so Main-side monitors still need their mirror copy —
+    // the pre-fix behaviour for a port-delivered chunk.
+    expect(dataPayloads(parentPort, "data-mirror")).toHaveLength(1);
+  });
+
+  it("CACHED_DUPLICATE_FALLBACK_REPLACES_THE_MIRROR_COPY (#12557)", async () => {
+    // Exactly one Main-readable copy: UrlDetector reads `data` as well, so a
+    // mirror alongside a successful fallback would double-feed it.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const port = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-ipc-data-mirror", id: "t1", enabled: true });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    expect(dataPayloads(parentPort)).toHaveLength(1);
+    expect(dataPayloads(parentPort, "data-mirror")).toHaveLength(0);
+  });
+
+  it("ELIGIBLE_SET_DOES_NOT_FORCE_A_FALLBACK_FOR_A_PROJECTLESS_TERMINAL (#12557)", async () => {
+    // A terminal with no project can never be the one a port-less view of some
+    // OTHER project is missing, so a non-empty eligible set must not reopen the
+    // fallback for it. The window deliberately claims no project, so the
+    // terminal is a genuine port target and its acceptance is what would have
+    // to be overridden.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1")); // undefined projectId
+
+    const port = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    expect(hostState.batchers[0].write).toHaveBeenCalled();
+    expect(dataPayloads(parentPort)).toHaveLength(0);
+  });
+
+  it("PROJECTLESS_TERMINAL_FALLBACK_CARRIES_NO_ROUTING_HINT (#12557)", async () => {
+    // Filtered away from every window that claims a project, so nothing takes
+    // it on a port and the fallback is its only path — exactly as before the
+    // fix, and with no delivered-window list for Main to act on.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1")); // undefined projectId
+
+    const port = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    const payloads = dataPayloads(parentPort);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].portDeliveredWebContentsIds).toBeUndefined();
+  });
+
+  it("SUSPENDED_TERMINAL_STAYS_SILENT_WITH_AN_ELIGIBLE_PROJECT (#12557)", async () => {
+    // Backpressure suspension outranks the fallback: no port write, no data,
+    // no mirror.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const port = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-ipc-data-mirror", id: "t1", enabled: true });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
+    await flushMicrotasks();
+
+    hostState.backpressureManagers[0].setSuspended("t1");
+    hostState.batchers[0].write.mockClear();
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    expect(hostState.batchers[0].write).not.toHaveBeenCalled();
+    expect(dataPayloads(parentPort)).toHaveLength(0);
+    expect(dataPayloads(parentPort, "data-mirror")).toHaveLength(0);
+  });
+
+  it("PORT_TEARDOWN_TELLS_MAIN_THE_VIEW_LOST_ITS_PORT (#12557)", async () => {
+    // Main's port-holder record is what decides whether a view counts as
+    // reachable by MessagePort. A teardown the host initiated is invisible to
+    // Main, so without this notice a window whose port failed stays ineligible
+    // for the fallback and a sibling's acceptance starves it.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const port = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
+    await flushMicrotasks();
+    parentPort.postMessage.mockClear();
+
+    parentPort.emit("message", { type: "disconnect-port", windowId: 1 });
+    await flushMicrotasks();
+
+    const notices = parentPort.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter(
+        (m: unknown): m is { type: string; windowId: number; holderWebContentsId?: number } =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as { type?: string }).type === "port-disconnected"
+      );
+    expect(notices).toHaveLength(1);
+    expect(notices[0].windowId).toBe(1);
+    expect(notices[0].holderWebContentsId).toBe(101);
+  });
+
+  it("PORT_REPLACE_NOTICE_NAMES_THE_DEPARTING_HOLDER (#12557)", async () => {
+    // Main brokers a replacement pair synchronously — clear holder, connect,
+    // postMessage, register the NEW holder — and the host only processes
+    // connect-port afterwards. Its port-replace notice therefore always lands
+    // after Main has recorded the replacement, so it must name the holder that
+    // left; a notice Main cannot identity-match wipes the live record and the
+    // window spends the rest of its life with no port holder, running (and
+    // never draining) the IPC fallback for every chunk of its project.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [createRendererPort()],
+    });
+    await flushMicrotasks();
+    parentPort.postMessage.mockClear();
+
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 102 },
+      ports: [createRendererPort()],
+    });
+    await flushMicrotasks();
+
+    const notices = parentPort.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter(
+        (m: unknown): m is { type: string; reason: string; holderWebContentsId?: number } =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as { type?: string }).type === "port-disconnected"
+      );
+    expect(notices).toHaveLength(1);
+    expect(notices[0].reason).toBe("port-replace");
+    expect(notices[0].holderWebContentsId).toBe(101);
+    // Main's side of the contract — the notice being ignored against a record
+    // that already names 102 — is covered in webContentsRegistry.test.ts.
+  });
+
   it("TIER_CHANGED_BROADCAST_RESPECTS_PROJECT_FILTER", async () => {
     // recomputeActivityTiers must push a tier-changed reconciliation message to
     // exactly the renderer ports that also receive the terminal's data — i.e.
@@ -1192,8 +1726,14 @@ describe("pty-host adversarial", () => {
 
     const portA = createRendererPort();
     const portB = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2, holderWebContentsId: 102 },
+      ports: [portB],
+    });
     await flushMicrotasks();
 
     // Window 2 owns project-2 first so the later window-1 recompute is the one
@@ -1595,8 +2135,14 @@ describe("pty-host adversarial", () => {
 
     const portA = createRendererPort();
     const portB = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2, holderWebContentsId: 102 },
+      ports: [portB],
+    });
     parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
     await flushMicrotasks();
 
@@ -1647,8 +2193,14 @@ describe("pty-host adversarial", () => {
 
     const portA = createRendererPort();
     const portB = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2, holderWebContentsId: 102 },
+      ports: [portB],
+    });
     parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
     await flushMicrotasks();
 
@@ -1683,8 +2235,14 @@ describe("pty-host adversarial", () => {
 
     const portA = createRendererPort();
     const portB = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2, holderWebContentsId: 102 },
+      ports: [portB],
+    });
     parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
     await flushMicrotasks();
 
@@ -1716,7 +2274,10 @@ describe("pty-host adversarial", () => {
 
     const portA = createRendererPort();
     const portThrowing = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
     parentPort.emit("message", {
       data: { type: "connect-port", windowId: 2 },
       ports: [portThrowing],
@@ -1752,8 +2313,14 @@ describe("pty-host adversarial", () => {
     const portA = createRendererPort();
     const portB = createRendererPort();
     const portC = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2, holderWebContentsId: 102 },
+      ports: [portB],
+    });
     parentPort.emit("message", { data: { type: "connect-port", windowId: 3 }, ports: [portC] });
     parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
     await flushMicrotasks();
@@ -1823,8 +2390,14 @@ describe("pty-host adversarial", () => {
 
     const portA = createRendererPort();
     const portB = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2, holderWebContentsId: 102 },
+      ports: [portB],
+    });
     parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
     parentPort.emit("message", { type: "set-ipc-data-mirror", id: "t1", enabled: true });
     await flushMicrotasks();
@@ -1914,7 +2487,10 @@ describe("pty-host adversarial", () => {
     hostState.terminals.set("t1", createTerminal("t1"));
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     await flushMicrotasks();
 
     const batcher = hostState.batchers[0];
@@ -1944,7 +2520,10 @@ describe("pty-host adversarial", () => {
     parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     await flushMicrotasks();
 
     // Window 1's port queue pauses t1 — the pause-start rides the funnel and
@@ -1969,7 +2548,10 @@ describe("pty-host adversarial", () => {
     parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     await flushMicrotasks();
 
     hostState.portQueueManagers[0].markPaused("t1");
@@ -2047,5 +2629,110 @@ describe("pty-host adversarial", () => {
     expect(terminals.find((t) => t.terminalId === "t1" && (t.droppedBytes as number) > 0)).toBe(
       undefined
     );
+  });
+
+  describe("graceful capture (#12432)", () => {
+    type CaptureHost = {
+      open(id: string): { shouldDiscard(data: string): boolean; close(): void } | null;
+    };
+
+    async function openCapture() {
+      const parentPort = await loadHost();
+      const terminal = createTerminal("t1");
+      hostState.terminals.set("t1", terminal);
+      parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+      await flushMicrotasks();
+      const coordinator = hostState.coordinators[hostState.coordinators.length - 1]!;
+      const manager = hostState.currentPtyManager as MiniEmitter & {
+        setGracefulCaptureHost: TestMock;
+      };
+      expect(manager.setGracefulCaptureHost).toHaveBeenCalledTimes(1);
+      const host = manager.setGracefulCaptureHost.mock.calls[0]![0] as CaptureHost;
+      const lease = host.open("t1");
+      if (!lease) throw new Error("expected a capture window");
+      parentPort.postMessage.mockClear();
+      return { parentPort, terminal, coordinator, manager, host, lease };
+    }
+
+    function dataLossPulses(parentPort: MockParentPort) {
+      return terminalStatusPayloads(parentPort).filter((p) => p.status === "data-loss");
+    }
+
+    it("opens and closes capture on the terminal's own coordinator", async () => {
+      const { coordinator, host, lease } = await openCapture();
+      expect(coordinator.enterCaptureMode).toHaveBeenCalledTimes(1);
+      expect(coordinator.isCapturing).toBe(true);
+      expect(host.open("t1")).toBeNull();
+
+      lease.close();
+      expect(coordinator.exitCaptureMode).toHaveBeenCalledTimes(1);
+      expect(coordinator.isCapturing).toBe(false);
+    });
+
+    it("opens nothing for a terminal the host does not know", async () => {
+      const { host } = await openCapture();
+      expect(host.open("ghost")).toBeNull();
+    });
+
+    it("discards only while a hold is recorded, and marks a survivor's gap once", async () => {
+      const { parentPort, coordinator, lease } = await openCapture();
+
+      expect(lease.shouldDiscard("kept")).toBe(false);
+      coordinator.pause("ipc-queue");
+      expect(lease.shouldDiscard("⚠".repeat(10))).toBe(true);
+      expect(lease.shouldDiscard("a".repeat(20))).toBe(true);
+      expect(dataLossPulses(parentPort)).toEqual([]);
+
+      lease.close();
+      lease.close();
+      await flushMicrotasks();
+
+      const pulses = dataLossPulses(parentPort);
+      expect(pulses).toHaveLength(1);
+      expect(pulses[0]).toMatchObject({ type: "terminal-status", id: "t1", droppedBytes: 50 });
+      expect(lease.shouldDiscard("after")).toBe(false);
+    });
+
+    it("marks no gap on a terminal that was killed", async () => {
+      const { parentPort, terminal, coordinator, lease } = await openCapture();
+      coordinator.pause("resource-governor");
+      lease.shouldDiscard("held");
+      terminal.wasKilled = true;
+
+      lease.close();
+      await flushMicrotasks();
+
+      expect(dataLossPulses(parentPort)).toEqual([]);
+    });
+
+    it("retires the window when the terminal exits first", async () => {
+      const { parentPort, terminal, coordinator, manager, host, lease } = await openCapture();
+      coordinator.pause("resource-governor");
+      lease.shouldDiscard("held");
+
+      manager.emit("exit", "t1", 0);
+      await flushMicrotasks();
+      expect(coordinator.exitCaptureMode).toHaveBeenCalledTimes(1);
+      expect(dataLossPulses(parentPort)).toEqual([]);
+
+      // A respawn at the same id starts without an exemption, and the old
+      // teardown's late close has nothing left to end.
+      parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+      await flushMicrotasks();
+      terminal.wasKilled = false;
+      const successor = hostState.coordinators[hostState.coordinators.length - 1]!;
+      expect(successor).not.toBe(coordinator);
+
+      lease.close();
+      await flushMicrotasks();
+      expect(dataLossPulses(parentPort)).toEqual([]);
+      expect(successor.enterCaptureMode).not.toHaveBeenCalled();
+      expect(successor.exitCaptureMode).not.toHaveBeenCalled();
+
+      successor.pause("resource-governor");
+      expect(lease.shouldDiscard("fresh")).toBe(false);
+      expect(host.open("t1")).not.toBeNull();
+      expect(successor.enterCaptureMode).toHaveBeenCalledTimes(1);
+    });
   });
 });

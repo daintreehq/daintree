@@ -24,13 +24,12 @@ describe("resolvePanelKindPolicy", () => {
 
   it("returns the default policy for a kind that omits the policy block", () => {
     expect(resolvePanelKindPolicy("terminal")).toEqual(DEFAULT_PANEL_KIND_POLICY);
-    expect(resolvePanelKindPolicy("dev-preview")).toEqual(DEFAULT_PANEL_KIND_POLICY);
   });
 
   it("layers a kind's declared policy over the default", () => {
-    // Review and browser are reading surfaces: focus returns to what the user
-    // was last viewing when the panel leaves the grid.
-    for (const kind of ["review", "browser"] as const) {
+    // Review, browser and dev-preview are reading surfaces: focus returns to
+    // what the user was last viewing when the panel leaves the grid.
+    for (const kind of ["review", "browser", "dev-preview"] as const) {
       expect(getPanelKindConfig(kind)).toBeDefined();
       expect(resolvePanelKindPolicy(kind)).toEqual({
         ...DEFAULT_PANEL_KIND_POLICY,

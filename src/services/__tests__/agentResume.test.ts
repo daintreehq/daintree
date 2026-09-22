@@ -147,8 +147,36 @@ describe("buildResumePanelOptions", () => {
       worktreeId: "wt-1",
       command: "claude --resume s-1",
       location: "grid",
+      agentLaunchFlags: ["--dangerously-skip-permissions"],
       agentSessionId: "s-1",
     });
+  });
+
+  // A resumed pane restarts from its stored flags, so dropping them would lose
+  // the standing instruction (and model) on its first restart (#12431).
+  it("stores the reconciled flags, not the captured ones, on the resumed pane", () => {
+    const captured = ["--append-system-prompt", "Be terse", "--dangerously-skip-permissions"];
+    const reconciled = ["--append-system-prompt", "Be terse"];
+    reconcileBypassFlagsMock.mockReturnValue(reconciled);
+    const options = buildResumePanelOptions(
+      { ...baseSession, agentLaunchFlags: captured },
+      { cwd: "/active" }
+    );
+    expect(options?.agentLaunchFlags).toEqual(reconciled);
+  });
+
+  // Tokens injected into an empty snapshot only serve the resume command; stored,
+  // they would pass for a complete configuration and skip the settings rebuild.
+  it("stores no flags when the record captured none, even if reconciliation injects some", () => {
+    reconcileBypassFlagsMock.mockReturnValue(["--dangerously-skip-permissions"]);
+    const options = buildResumePanelOptions(
+      { ...baseSession, agentLaunchFlags: undefined },
+      { cwd: "/active" }
+    );
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("claude", "s-1", [
+      "--dangerously-skip-permissions",
+    ]);
+    expect(options?.agentLaunchFlags).toBeUndefined();
   });
 
   it("prefers buildResumeCommand over buildResumeLatestCommand", () => {

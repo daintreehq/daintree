@@ -10,6 +10,7 @@ const hibernation = vi.fn();
 const idleTerminal = vi.fn();
 const parkRelease = vi.fn();
 const diskSpace = vi.fn();
+const systemMemoryPressure = vi.fn();
 const tokenHealth = vi.fn();
 const rateLimit = vi.fn();
 const recipeFocus = vi.fn();
@@ -17,6 +18,8 @@ const devServerSync = vi.fn();
 const soundPlayback = vi.fn();
 const storeUpdate = vi.fn();
 const pluginUpdateCheck = vi.fn();
+const hostMemoryPause = vi.fn();
+const keepAwake = vi.fn();
 const mark = vi.fn();
 
 vi.mock("@/hooks/useHibernationNotifications", () => ({
@@ -30,6 +33,15 @@ vi.mock("@/hooks/useParkReleaseNotifications", () => ({
 }));
 vi.mock("@/hooks/useDiskSpaceWarnings", () => ({
   useDiskSpaceWarnings: () => diskSpace(),
+}));
+vi.mock("@/hooks/useSystemMemoryPressureNotice", () => ({
+  useSystemMemoryPressureNotice: () => systemMemoryPressure(),
+}));
+vi.mock("@/hooks/useHostMemoryPauseSync", () => ({
+  useHostMemoryPauseSync: () => hostMemoryPause(),
+}));
+vi.mock("@/hooks/useKeepAwakeSync", () => ({
+  useKeepAwakeSync: () => keepAwake(),
 }));
 vi.mock("@/hooks/useForgeTokenHealth", () => ({
   useForgeTokenHealth: () => tokenHealth(),
@@ -59,6 +71,7 @@ const allHooks = [
   idleTerminal,
   parkRelease,
   diskSpace,
+  systemMemoryPressure,
   tokenHealth,
   rateLimit,
   recipeFocus,
@@ -66,6 +79,8 @@ const allHooks = [
   soundPlayback,
   storeUpdate,
   pluginUpdateCheck,
+  hostMemoryPause,
+  keepAwake,
 ];
 
 describe("PostHydrationListeners", () => {

@@ -20,7 +20,7 @@ export const RESUME_PAGE_SIZE = 20;
 
 const RESUME_FUSE_OPTIONS: IFuseOptions<ResumeSessionItem> = {
   keys: [
-    { name: "name", weight: 2 },
+    { name: "title", weight: 2 },
     { name: "searchAliases", weight: 1.5 },
     { name: "description", weight: 1 },
   ],
@@ -70,9 +70,17 @@ export function useResumeSessionsPalette() {
   const { query, results, selectedIndex, setQuery } = palette;
   const isSearching = query.trim().length > 0;
 
-  const [visibleCount, setVisibleCount] = useState(RESUME_PAGE_SIZE);
+  // Sessions whose worktree is gone cannot be resumed, and in a journal that
+  // has outlived a few worktrees they outnumber the ones that can. Browsing
+  // lists the resumable ones and folds the rest behind a heading; searching
+  // shows both, since a remembered session must stay findable.
+  const available = useMemo(() => results.filter((item) => !item.isStale), [results]);
+  const removed = useMemo(() => results.filter((item) => item.isStale), [results]);
 
-  // Reset the query and paging on open. The palette is opened via
+  const [visibleCount, setVisibleCount] = useState(RESUME_PAGE_SIZE);
+  const [removedExpanded, setRemovedExpanded] = useState(false);
+
+  // Reset the query, paging and the fold on open. The palette is opened via
   // `paletteStore.openPalette` from the action, which bypasses
   // `useSearchablePalette.open()` — so reset here too, mirroring ThemePalette.
   const wasOpenRef = useRef(false);
@@ -81,6 +89,7 @@ export function useResumeSessionsPalette() {
       wasOpenRef.current = true;
       setQuery("");
       setVisibleCount(RESUME_PAGE_SIZE);
+      setRemovedExpanded(false);
     }
     if (!isOpen) {
       wasOpenRef.current = false;
@@ -93,19 +102,28 @@ export function useResumeSessionsPalette() {
   // moves — selection walks the full results and must never target an
   // unrendered row, even transiently. The effect below only commits the growth
   // to state so the list never shrinks when selection moves back up.
+  //
+  // Selection is only ever on a resumable row (`canNavigate`), so its index
+  // into the resumable list is the one paging cares about.
+  const selectedItem = selectedIndex >= 0 ? results[selectedIndex] : undefined;
+  const selectedAvailableIndex = selectedItem ? available.indexOf(selectedItem) : -1;
   const grownCount =
-    !isSearching && selectedIndex >= visibleCount
-      ? Math.ceil((selectedIndex + 1) / RESUME_PAGE_SIZE) * RESUME_PAGE_SIZE
+    !isSearching && selectedAvailableIndex >= visibleCount
+      ? Math.ceil((selectedAvailableIndex + 1) / RESUME_PAGE_SIZE) * RESUME_PAGE_SIZE
       : visibleCount;
   useEffect(() => {
     if (grownCount > visibleCount) setVisibleCount(grownCount);
   }, [grownCount, visibleCount]);
 
-  const visibleResults = isSearching ? results : results.slice(0, grownCount);
-  const hiddenCount = results.length - visibleResults.length;
+  const visibleResults = isSearching ? available : available.slice(0, grownCount);
+  const hiddenCount = available.length - visibleResults.length;
 
   const showMore = useCallback(() => {
     setVisibleCount((count) => count + RESUME_PAGE_SIZE);
+  }, []);
+
+  const toggleRemoved = useCallback(() => {
+    setRemovedExpanded((expanded) => !expanded);
   }, []);
 
   return {
@@ -115,6 +133,15 @@ export function useResumeSessionsPalette() {
     visibleResults,
     hiddenCount,
     showMore,
+    /** Matching sessions whose worktree is gone, in journal order. */
+    removedResults: removed,
+    /**
+     * Whether the removed-worktree rows are rendered: always while searching,
+     * always when there is nothing resumable to fold them under (a lone fold
+     * over an empty list hides the only history there is), else once unfolded.
+     */
+    removedVisible: isSearching || removedExpanded || available.length === 0,
+    toggleRemoved,
     hasSessions: items.length > 0,
   };
 }

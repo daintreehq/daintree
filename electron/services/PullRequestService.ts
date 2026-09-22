@@ -224,9 +224,18 @@ class PullRequestService {
   // polling pauses and re-resolution is skipped until `invalidateProvider()`
   // clears it back to null — without this, a GitLab/Bitbucket project would
   // spin on the 5s cold-start cap forever (#9997). `"not-ready"` and null
-  // keep the cold-start retry cap. Re-armed by forge settings changes,
-  // manual refresh, and `forge:provider-registry-updated` pushes from main.
+  // keep the cold-start retry cap. Re-armed by forge settings changes, remote
+  // changes, and `forge:provider-registry-updated` pushes from main.
   private providerResolutionStatus: "resolved" | "no-match" | "not-ready" | null = null;
+  // Bumped by every invalidation, so a resolution in flight across one cannot
+  // write its now-stale answer back over it — the cached answer is reused
+  // until invalidated (#12519), so nothing else would correct it.
+  private providerGeneration = 0;
+  // The last resolution read the remote URL through a failed git call, so its
+  // answer (usually "no-match" for a missing URL) is a guess. `start()` and
+  // `refresh()` re-derive it; the debounced poll path still honours it, or a
+  // repo whose git keeps failing would spin on it (#9997).
+  private providerResolutionDegraded = false;
   // Forge provider routing settings, pushed in from the main process. The
   // workspace-host can't read `projectStore` or `electron-store` directly —
   // those modules pull `BrowserWindow`/`app` into the bundle and crash the
@@ -447,6 +456,8 @@ class PullRequestService {
 
   private async resolveProvider(): Promise<void> {
     if (!this.projectId) return;
+    const generation = this.providerGeneration;
+    let remoteReadFailed = false;
     try {
       const git = await createHardenedGit(this.cwd);
       // simple-git's typed `getConfig` returns a `ConfigGetResult` envelope at
@@ -457,8 +468,14 @@ class PullRequestService {
       // returned null and the provider failed to resolve (#8870). Unwrap
       // explicitly: prefer the envelope's `value`, fall back to a literal
       // string for callers that genuinely return one.
+      // A missing key is not a failure — git exits 1 with no stderr, which
+      // simple-git reports as a null value — so a rejection is a read that
+      // actually failed, and the answer built on it is only a guess.
       const readRemoteUrl = async (remoteName: string): Promise<string | null> => {
-        const result = await git.getConfig(`remote.${remoteName}.url`).catch(() => null);
+        const result = await git.getConfig(`remote.${remoteName}.url`).catch(() => {
+          remoteReadFailed = true;
+          return null;
+        });
         if (result === null || result === undefined) return null;
         const raw =
           typeof result === "string"
@@ -489,6 +506,8 @@ class PullRequestService {
         // `RepoRef.projectPath` (#10563).
         projectPath: this.cwd,
       });
+      if (generation !== this.providerGeneration) return;
+      this.providerResolutionDegraded = remoteReadFailed;
       if (resolved.status !== "resolved") {
         this.providerResolutionStatus = resolved.status;
         this.providerNamespacedId = null;
@@ -517,8 +536,10 @@ class PullRequestService {
       logWarn("PullRequestService provider resolution failed", {
         error: formatErrorMessage(error, "Provider resolution failed"),
       });
+      if (generation !== this.providerGeneration) return;
       // A thrown resolution (git read or IPC failure) is transient — leave
       // the status null so the cold-start retry cap stays in effect.
+      this.providerResolutionDegraded = false;
       this.providerResolutionStatus = null;
       this.providerNamespacedId = null;
       this.repoRef = null;
@@ -527,6 +548,8 @@ class PullRequestService {
   }
 
   private invalidateProvider(): void {
+    this.providerGeneration++;
+    this.providerResolutionDegraded = false;
     this.providerResolutionStatus = null;
     this.providerNamespacedId = null;
     this.repoRef = null;
@@ -748,8 +771,36 @@ class PullRequestService {
     });
   }
 
+  /**
+   * Whether the cached resolution must be (re)derived — the same test
+   * `checkForPRs()` applies. Both definitive answers (a provider, or "no-match")
+   * stay valid until one of their inputs moves, and each input has its own
+   * invalidation: `setForgeSettings()` (override, default, selected remote),
+   * `sys:forge:remote-changed` (the remote URL on disk) and
+   * `notifyForgeProviderRegistryUpdated()` (registry contents).
+   */
+  private needsProviderResolution(): boolean {
+    return (
+      (!this.providerNamespacedId || !this.repoRef) && this.providerResolutionStatus !== "no-match"
+    );
+  }
+
+  /** `needsProviderResolution()` for the once-per-call paths, which also retry a degraded answer. */
+  private needsProviderResolutionOnDemand(): boolean {
+    return this.needsProviderResolution() || this.providerResolutionDegraded;
+  }
+
   private runInitialCheck(): Promise<void> {
-    return this.resolveProvider().then(() =>
+    // Every project switch-away/back is a stop()/start() pair that invalidates
+    // nothing, so re-resolving here unconditionally redid the git-config read
+    // and the registry round trip on each return to a warm host (#12519). Still
+    // resolved eagerly rather than left to `checkForPRs()`, which returns
+    // before resolving when there are no candidates yet — and
+    // `getProviderContext()` is read at worktree-create time (#8888).
+    const resolution = this.needsProviderResolutionOnDemand()
+      ? this.resolveProvider()
+      : Promise.resolve();
+    return resolution.then(() =>
       this.checkForPRs().finally(() => {
         this.scheduleNextPoll();
         this.scheduleRevalidation();
@@ -850,13 +901,14 @@ class PullRequestService {
     // semantics of a manual refresh.
     this.resolvedWorktrees.clear();
     this.issueTitleFetchedWorktrees.clear();
-    // Re-resolve the forge provider on manual refresh so token changes
-    // and provider installs/uninstalls take effect immediately.
-    // `invalidateProvider()` disposes the request coalescers, rejecting any
-    // in-flight lookup so a stale promise from the previous provider can't bind
-    // a wrong-repo PR to a worktree after refresh.
-    this.invalidateProvider();
-    await this.resolveProvider();
+    // Reuse the cached resolution. This pass also runs on every app focus, and
+    // re-deriving an answer none of whose inputs moved cost a git-config read
+    // and a registry round trip each time (#12519). Each input invalidates on
+    // its own — settings, `.git/config` remotes, registry installs and removals
+    // — and credentials were never one: they're read in main per call.
+    if (this.needsProviderResolutionOnDemand()) {
+      await this.resolveProvider();
+    }
     await this.clearProviderPullRequestCaches();
     // Manual refresh is an explicit "I want fresh data now" — bypass the 5s
     // floor by clearing the throttle clock before the direct checkForPRs().
@@ -1760,10 +1812,7 @@ class PullRequestService {
     // provider, or a "no-match" miss, which would otherwise re-spawn
     // `resolveProvider()`'s git-config reads on every debounced worktree
     // update (#9997).
-    if (
-      (!this.providerNamespacedId || !this.repoRef) &&
-      this.providerResolutionStatus !== "no-match"
-    ) {
+    if (this.needsProviderResolution()) {
       await this.resolveProvider();
     }
 

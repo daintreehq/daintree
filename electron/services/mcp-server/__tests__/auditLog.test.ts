@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuditService, type AuditOutcome, type McpAuditLogStore } from "../auditLog.js";
 import {
   type McpAuditResult,
@@ -722,6 +722,44 @@ describe("AuditService.recordAuth401 / getAuditStats", () => {
 });
 
 describe("AuditService anomaly detection", () => {
+  const RECENCY_WINDOW_MS = 15 * 60_000;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const failureOutcome: AuditOutcome = {
+    kind: "result",
+    value: {
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "fail" },
+    } as import("../../../../shared/types/actions.js").ActionDispatchResult,
+  };
+
+  function append(
+    service: AuditService,
+    opts: { toolId?: string; durationMs?: number; failed?: boolean } = {}
+  ) {
+    service.appendRecord({
+      toolId: opts.toolId ?? "test.tool",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: opts.durationMs ?? 10,
+      outcome: opts.failed ? failureOutcome : successOutcome,
+      argsSummary: "{}",
+    });
+  }
+
+  // 10–18ms: median 14, MAD 2, so anything past ~23ms scores z ≥ 3.
+  function appendHealthy(service: AuditService, count: number, toolId = "test.tool") {
+    for (let i = 0; i < count; i++) append(service, { toolId, durationMs: 10 + (i % 5) * 2 });
+  }
+
+  function signalsOfKind(service: AuditService, kind: string) {
+    return service.getAuditStats().anomalySignals.filter((s) => s.kind === kind);
+  }
+
   function makeRecords(
     count: number,
     factory: (i: number) => Partial<{
@@ -805,6 +843,7 @@ describe("AuditService anomaly detection", () => {
     expect(firstSeen).toHaveLength(1);
     expect(firstSeen[0]!.toolId).toBe("tool.new");
     expect(firstSeen[0]!.tier).toBe("external");
+    expect(firstSeen[0]!.severity).toBe("info");
   });
 
   it("first-seen: passive read (markSeen=false) does not consume the signal", () => {
@@ -849,6 +888,32 @@ describe("AuditService anomaly detection", () => {
     expect(afterAck).toHaveLength(0);
   });
 
+  it("first-seen: stands past the recency window until acknowledged, as info", () => {
+    const t0 = new Date("2026-09-19T10:00:00Z").getTime();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(t0);
+
+    const service = makeRecords(50, () => ({ toolId: "tool.a", tier: "action" }));
+    service.getAuditStats(); // seed baseline known combos
+    service.appendRecord({
+      toolId: "tool.new",
+      sessionId: "sess-1",
+      tier: "external",
+      args: {},
+      durationMs: 5,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+
+    vi.setSystemTime(t0 + 2 * RECENCY_WINDOW_MS);
+    const firstSeen = service
+      .getAuditStats(false)
+      .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+    expect(firstSeen).toHaveLength(1);
+    expect(firstSeen[0]!.severity).toBe("info");
+    expect(firstSeen[0]!.expiresAt).toBeUndefined();
+  });
+
   it("first-seen: knownCombinations survives clear()", () => {
     const service = makeRecords(50, () => ({
       toolId: "tool.a",
@@ -884,6 +949,58 @@ describe("AuditService anomaly detection", () => {
     expect(firstSeen).toHaveLength(0);
   });
 
+  // Nothing polls the stats at startup (#12509), so the first read can come
+  // long after a new combo was used. The baseline must already exist by then.
+  it("first-seen: a combo used before the first read still fires", () => {
+    const service = makeRecords(50, () => ({
+      toolId: "tool.a",
+      tier: "action",
+      durationMs: 10,
+    }));
+
+    service.appendRecord({
+      toolId: "tool.new",
+      sessionId: "sess-1",
+      tier: "external",
+      args: {},
+      durationMs: 5,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+    const firstSeen = service
+      .getAuditStats()
+      .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+    expect(firstSeen.map((s) => s.toolId)).toEqual(["tool.new"]);
+  });
+
+  it("first-seen: a persisted log over the floor is the baseline for this session", () => {
+    const persisted = Array.from({ length: 50 }, (_, i) => ({
+      id: `old-${i}`,
+      timestamp: 1000 + i,
+      toolId: "tool.a",
+      sessionId: "sess-old",
+      tier: "action",
+      argsSummary: "{}",
+      result: "success",
+      durationMs: 10,
+    }));
+    const { service } = makeFixture({}, persisted);
+
+    service.appendRecord({
+      toolId: "tool.new",
+      sessionId: "sess-1",
+      tier: "external",
+      args: {},
+      durationMs: 5,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+    const firstSeen = service
+      .getAuditStats()
+      .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+    expect(firstSeen.map((s) => s.toolId)).toEqual(["tool.new"]);
+  });
+
   it("latency-drift: no signal when all durations are uniform", () => {
     const service = makeRecords(50, () => ({ durationMs: 10 }));
     const stats = service.getAuditStats();
@@ -891,36 +1008,125 @@ describe("AuditService anomaly detection", () => {
     expect(drift).toHaveLength(0);
   });
 
-  it("latency-drift: emits signal for outlier duration", () => {
+  it("latency-drift: a single slow call in a healthy session produces no signal", () => {
     const { service } = makeFixture();
-    // 49 records with some natural variance so MAD > 0.
-    for (let i = 0; i < 49; i++) {
-      service.appendRecord({
-        toolId: "test.tool",
-        sessionId: "sess-1",
-        tier: "action",
-        args: {},
-        durationMs: 10 + (i % 5) * 2,
-        outcome: successOutcome,
-        argsSummary: "{}",
-      });
-    }
-    // One extreme outlier.
-    service.appendRecord({
-      toolId: "test.tool",
-      sessionId: "sess-1",
-      tier: "action",
-      args: {},
-      durationMs: 5000,
-      outcome: successOutcome,
-      argsSummary: "{}",
-    });
-    const stats = service.getAuditStats();
-    const drift = stats.anomalySignals.filter((s) => s.kind === "latency-drift");
-    expect(drift.length).toBeGreaterThanOrEqual(1);
-    const outlier = drift.find((s) => s.recordIds.length > 0);
-    expect(outlier).toBeDefined();
-    expect(outlier!.zScore).toBeGreaterThanOrEqual(3);
+    appendHealthy(service, 49);
+    // e.g. one call in flight across an 18-minute sleep/wake stall.
+    append(service, { durationMs: 18 * 60_000 });
+    expect(signalsOfKind(service, "latency-drift")).toHaveLength(0);
+  });
+
+  it("latency-drift: two recent outliers are not enough", () => {
+    const { service } = makeFixture();
+    appendHealthy(service, 48);
+    append(service, { durationMs: 5000 });
+    append(service, { durationMs: 5000 });
+    expect(signalsOfKind(service, "latency-drift")).toHaveLength(0);
+  });
+
+  it("latency-drift: three recent outliers in the tool's last ten calls produce one warning", () => {
+    const { service } = makeFixture();
+    appendHealthy(service, 40);
+    append(service, { durationMs: 5000 });
+    appendHealthy(service, 2);
+    append(service, { durationMs: 6000 });
+    appendHealthy(service, 3);
+    append(service, { durationMs: 7000 });
+    appendHealthy(service, 2);
+
+    const drift = signalsOfKind(service, "latency-drift");
+    expect(drift).toHaveLength(1);
+    const signal = drift[0]!;
+    expect(signal.severity).toBe("warning");
+    expect(signal.toolId).toBe("test.tool");
+    const outlierIds = service
+      .getLogRecords()
+      .filter((r) => isAuditRecord(r) && r.durationMs >= 5000)
+      .map((r) => r.id)
+      .reverse();
+    expect(signal.recordIds).toEqual(outlierIds);
+    // Anchored on the newest outlier.
+    expect(signal.id).toBe(`latency-drift:test.tool:${outlierIds[2]}`);
+    expect(signal.durationMs).toBe(7000);
+    expect(signal.baselineMedianMs).toBe(14);
+    expect(signal.zScore).toBeGreaterThanOrEqual(3);
+  });
+
+  it("latency-drift: outliers that have left the tool's last ten calls stop counting", () => {
+    const { service } = makeFixture();
+    appendHealthy(service, 37);
+    for (let i = 0; i < 3; i++) append(service, { durationMs: 5000 });
+    appendHealthy(service, 10);
+    expect(signalsOfKind(service, "latency-drift")).toHaveLength(0);
+  });
+
+  it("latency-drift: other tools' traffic doesn't push a tool's outliers out of its window", () => {
+    const { service } = makeFixture();
+    appendHealthy(service, 27);
+    for (let i = 0; i < 3; i++) append(service, { durationMs: 5000 });
+    appendHealthy(service, 20, "other.tool");
+
+    const drift = signalsOfKind(service, "latency-drift");
+    expect(drift).toHaveLength(1);
+    expect(drift[0]!.toolId).toBe("test.tool");
+  });
+
+  it("latency-drift: slow failures are not latency outliers", () => {
+    const { service } = makeFixture();
+    appendHealthy(service, 47);
+    for (let i = 0; i < 3; i++) append(service, { durationMs: 5000, failed: true });
+    expect(signalsOfKind(service, "latency-drift")).toHaveLength(0);
+  });
+
+  it("latency-drift: aged-out outliers don't combine with a fresh one", () => {
+    const t0 = new Date("2026-09-19T10:00:00Z").getTime();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(t0);
+
+    const { service } = makeFixture();
+    appendHealthy(service, 42);
+    append(service, { durationMs: 5000 });
+    appendHealthy(service, 3);
+    append(service, { durationMs: 5000 });
+
+    vi.setSystemTime(t0 + RECENCY_WINDOW_MS);
+    append(service, { durationMs: 5000 });
+    appendHealthy(service, 2);
+    expect(signalsOfKind(service, "latency-drift")).toHaveLength(0);
+  });
+
+  it("latency-drift: expiresAt is when the third-newest outlier ages out", () => {
+    const t0 = new Date("2026-09-19T10:00:00Z").getTime();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(t0);
+
+    const { service } = makeFixture();
+    appendHealthy(service, 44);
+    append(service, { durationMs: 5000 });
+    vi.setSystemTime(t0 + 60_000);
+    append(service, { durationMs: 5000 });
+    vi.setSystemTime(t0 + 120_000);
+    append(service, { durationMs: 5000 });
+    vi.setSystemTime(t0 + 180_000);
+    append(service, { durationMs: 5000 });
+    appendHealthy(service, 2);
+
+    const [signal] = signalsOfKind(service, "latency-drift");
+    expect(signal?.recordIds).toHaveLength(4);
+    expect(signal?.expiresAt).toBe(t0 + 60_000 + RECENCY_WINDOW_MS);
+
+    vi.setSystemTime(t0 + 60_000 + RECENCY_WINDOW_MS - 1);
+    expect(signalsOfKind(service, "latency-drift")).toHaveLength(1);
+    vi.setSystemTime(t0 + 60_000 + RECENCY_WINDOW_MS);
+    expect(signalsOfKind(service, "latency-drift")).toHaveLength(0);
+  });
+
+  it("latency-drift: a tool needs a baseline before its calls are judged", () => {
+    const { service } = makeFixture();
+    appendHealthy(service, 40, "busy.tool");
+    appendHealthy(service, 7, "new.tool");
+    for (let i = 0; i < 3; i++) append(service, { toolId: "new.tool", durationMs: 5000 });
+    expect(signalsOfKind(service, "latency-drift")).toHaveLength(0);
   });
 
   it("latency-drift: excludes non-success records from baseline", () => {
@@ -993,6 +1199,7 @@ describe("AuditService anomaly detection", () => {
     const clusters = stats.anomalySignals.filter((s) => s.kind === "failure-cluster");
     expect(clusters.length).toBeGreaterThanOrEqual(1);
     expect(clusters[0]!.clusterSize).toBeGreaterThanOrEqual(3);
+    expect(clusters[0]!.severity).toBe("danger");
   });
 
   it("failure-cluster: does not fire for only 2 failures in a window", () => {
@@ -1067,13 +1274,17 @@ describe("AuditService anomaly detection", () => {
   });
 
   it("p95-z-score: skipped when fewer than 5 distinct tools", () => {
-    const service = makeRecords(50, (i) => ({
-      toolId: `tool.${i % 3}`,
-      durationMs: 10 + i,
-    }));
-    const stats = service.getAuditStats();
-    const p95 = stats.anomalySignals.filter((s) => s.kind === "p95-z-score");
-    expect(p95).toHaveLength(0);
+    const { service } = makeFixture();
+    // Enough samples per tool, and one extreme tool, but only four tools.
+    for (const [toolId, base] of [
+      ["tool.a", 10],
+      ["tool.b", 30],
+      ["tool.c", 50],
+      ["tool.e", 5000],
+    ] as const) {
+      for (let i = 0; i < 25; i++) append(service, { toolId, durationMs: base + i });
+    }
+    expect(signalsOfKind(service, "p95-z-score")).toHaveLength(0);
   });
 
   it("p95-z-score: emits signal for tool with extreme p95", () => {
@@ -1087,7 +1298,7 @@ describe("AuditService anomaly detection", () => {
       ["tool.f", 90],
     ];
     for (const [toolId, base] of toolBases) {
-      for (let i = 0; i < 15; i++) {
+      for (let i = 0; i < 25; i++) {
         service.appendRecord({
           toolId,
           sessionId: "sess-1",
@@ -1100,7 +1311,7 @@ describe("AuditService anomaly detection", () => {
       }
     }
     // Tool.e has extreme p95.
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < 25; i++) {
       service.appendRecord({
         toolId: "tool.e",
         sessionId: "sess-1",
@@ -1115,6 +1326,107 @@ describe("AuditService anomaly detection", () => {
     const p95 = stats.anomalySignals.filter((s) => s.kind === "p95-z-score");
     expect(p95.length).toBeGreaterThanOrEqual(1);
     expect(p95[0]!.toolId).toBe("tool.e");
+    expect(p95[0]!.severity).toBe("warning");
+  });
+
+  function appendP95Fixture(
+    service: AuditService,
+    toolE: (i: number) => number,
+    samplesPerTool = 25
+  ) {
+    const toolBases: [string, number][] = [
+      ["tool.a", 10],
+      ["tool.b", 30],
+      ["tool.c", 50],
+      ["tool.d", 70],
+      ["tool.f", 90],
+    ];
+    for (const [toolId, base] of toolBases) {
+      for (let i = 0; i < samplesPerTool; i++) append(service, { toolId, durationMs: base + i });
+    }
+    for (let i = 0; i < samplesPerTool; i++) {
+      append(service, { toolId: "tool.e", durationMs: toolE(i) });
+    }
+  }
+
+  it("p95-z-score: a tool needs 21 recent samples before its p95 is compared", () => {
+    const below = makeFixture().service;
+    appendP95Fixture(below, (i) => 5000 + i * 50, 20);
+    expect(signalsOfKind(below, "p95-z-score")).toHaveLength(0);
+
+    const at = makeFixture().service;
+    appendP95Fixture(at, (i) => 5000 + i * 50, 21);
+    const p95 = signalsOfKind(at, "p95-z-score");
+    expect(p95).toHaveLength(1);
+    expect(p95[0]!.toolId).toBe("tool.e");
+  });
+
+  it("p95-z-score: a single spike can't set a tool's p95", () => {
+    const { service } = makeFixture();
+    appendP95Fixture(service, (i) => (i === 24 ? 50_000 : 50 + i));
+    expect(signalsOfKind(service, "p95-z-score")).toHaveLength(0);
+  });
+
+  it("statistical signals expire once their evidence ages past the recency window", () => {
+    const t0 = new Date("2026-09-19T10:00:00Z").getTime();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(t0);
+
+    const { service } = makeFixture();
+    appendHealthy(service, 44);
+    for (let i = 0; i < 3; i++) append(service, { durationMs: 5000 });
+    for (let i = 0; i < 3; i++) append(service, { failed: true });
+    appendP95Fixture(service, (i) => 5000 + i * 50);
+
+    const kinds = ["latency-drift", "failure-cluster", "p95-z-score"];
+    for (const kind of kinds) {
+      const signals = signalsOfKind(service, kind);
+      expect(signals.length).toBeGreaterThan(0);
+      for (const signal of signals) expect(signal.expiresAt).toBe(t0 + RECENCY_WINDOW_MS);
+    }
+
+    vi.setSystemTime(t0 + RECENCY_WINDOW_MS - 1);
+    for (const kind of kinds) expect(signalsOfKind(service, kind).length).toBeGreaterThan(0);
+
+    // No new calls — the signals clear on age alone, while the records stay.
+    vi.setSystemTime(t0 + RECENCY_WINDOW_MS);
+    for (const kind of kinds) expect(signalsOfKind(service, kind)).toHaveLength(0);
+    expect(service.getLogRecords().length).toBeGreaterThan(0);
+  });
+
+  it("a relaunch hydrating stale records from disk doesn't revive their signals", () => {
+    const t0 = new Date("2026-09-19T10:00:00Z").getTime();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(t0);
+
+    const first = makeFixture();
+    appendHealthy(first.service, 44);
+    for (let i = 0; i < 3; i++) append(first.service, { durationMs: 5000 });
+    for (let i = 0; i < 3; i++) append(first.service, { failed: true });
+    expect(signalsOfKind(first.service, "latency-drift")).toHaveLength(1);
+    expect(signalsOfKind(first.service, "failure-cluster")).toHaveLength(1);
+    first.service.flushNow();
+
+    vi.setSystemTime(t0 + 20 * 60_000);
+    const relaunched = makeFixture({}, first.getPersistedLog());
+    const stats = relaunched.service.getAuditStats();
+    expect(stats.anomalySuppressed).toBe(false);
+    expect(stats.anomalySignals.filter((s) => s.kind !== "first-seen-combination")).toHaveLength(0);
+  });
+
+  it("failure-cluster: failures that have aged out don't combine with a fresh one", () => {
+    const t0 = new Date("2026-09-19T10:00:00Z").getTime();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(t0);
+
+    const { service } = makeFixture();
+    appendHealthy(service, 47);
+    append(service, { failed: true });
+    append(service, { failed: true });
+
+    vi.setSystemTime(t0 + RECENCY_WINDOW_MS);
+    append(service, { failed: true });
+    expect(signalsOfKind(service, "failure-cluster")).toHaveLength(0);
   });
 });
 
@@ -1365,5 +1677,353 @@ describe("AuditService.pruneByAge (#10776)", () => {
     // The flushed payload reflects the prune, so a reload won't resurrect the
     // dropped record.
     expect(persistedIds).toEqual([`r-${now - 1 * DAY}`]);
+  });
+});
+
+describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
+  const errorOutcome: AuditOutcome = {
+    kind: "result",
+    value: {
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "fail" },
+    } as import("../../../../shared/types/actions.js").ActionDispatchResult,
+  };
+
+  function append(
+    service: AuditService,
+    opts: {
+      toolId?: string;
+      tier?: "workbench" | "action" | "system" | "external";
+      durationMs?: number;
+      outcome?: AuditOutcome;
+      argsSummary?: string;
+      resultSummary?: string;
+      sessionId?: string;
+    } = {}
+  ) {
+    service.appendRecord({
+      toolId: opts.toolId ?? "tool.a",
+      sessionId: opts.sessionId ?? "sess-1",
+      tier: opts.tier ?? "action",
+      args: {},
+      durationMs: opts.durationMs ?? 10,
+      outcome: opts.outcome ?? successOutcome,
+      argsSummary: opts.argsSummary ?? "{}",
+      ...(opts.resultSummary !== undefined ? { resultSummary: opts.resultSummary } : {}),
+    });
+  }
+
+  function persisted(
+    i: number,
+    toolId: string,
+    result: McpAuditResult,
+    durationMs = 10
+  ): Record<string, unknown> {
+    return {
+      id: `p-${i}`,
+      // Recent enough to count as evidence for the statistical detectors, which
+      // only score records inside ANOMALY_RECENCY_WINDOW_MS (#12507).
+      timestamp: Date.now() - 60_000 + i,
+      toolId,
+      sessionId: "sess-1",
+      tier: "action",
+      argsSummary: "{}",
+      result,
+      durationMs,
+    };
+  }
+
+  // Distinct, strictly increasing timestamps that are still inside the anomaly
+  // recency window when the snapshot is read back with the real clock.
+  function withSequentialClock<T>(fn: () => T): T {
+    let now = Date.now() - 5 * 60_000;
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => ++now);
+    try {
+      return fn();
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("reports an empty ring as suppressed with zero counts", () => {
+    const { service } = makeFixture();
+    expect(service.getDiagnosticsSnapshot()).toEqual({
+      enabled: true,
+      maxRecords: 500,
+      recordCount: 0,
+      dispatchRecordCount: 0,
+      anomalyRecordFloor: expect.any(Number),
+      anomalySuppressed: true,
+      auth401Count: 0,
+      anomalySignalCount: 0,
+      anomalySignalCountsByKind: {},
+      anomalySignals: [],
+      perTool: [],
+    });
+  });
+
+  it("counts calls and failures per tool, excluding grant records", () => {
+    const { service } = makeFixture();
+    append(service, { toolId: "tool.b" });
+    append(service, { toolId: "tool.b", outcome: errorOutcome });
+    append(service, { toolId: "tool.b", outcome: { kind: "dedup" } });
+    append(service, { toolId: "tool.a", outcome: { kind: "unauthorized" } });
+    append(service, { toolId: "tool.a", outcome: { kind: "collision" } });
+    append(service, { toolId: "tool.a", outcome: { kind: "throw", error: new Error("x") } });
+    service.appendGrantRecord({ type: "grant.issued", sessionId: "s", toolId: "tool.a", ttlMs: 1 });
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    expect(snapshot.recordCount).toBe(7);
+    expect(snapshot.dispatchRecordCount).toBe(6);
+    expect(snapshot.perTool).toEqual([
+      { toolId: "tool.a", callCount: 3, failureCount: 3 },
+      { toolId: "tool.b", callCount: 3, failureCount: 1 },
+    ]);
+  });
+
+  it("counts every 401 while coalesced pre-auth rows count once per record", () => {
+    const { service } = makeFixture();
+    withSequentialClock(() => {
+      service.recordAuth401();
+      service.recordAuth401();
+      service.recordAuth401();
+    });
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    expect(snapshot.auth401Count).toBe(3);
+    expect(snapshot.dispatchRecordCount).toBe(1);
+    expect(snapshot.perTool).toEqual([{ toolId: "mcp.pre-auth", callCount: 1, failureCount: 1 }]);
+  });
+
+  it("hydrates persisted records when the snapshot is the first read", () => {
+    const { service } = makeFixture({ auditEnabled: false }, [
+      persisted(0, "tool.a", "success"),
+      persisted(1, "tool.a", "error"),
+      persisted(2, "tool.b", "success"),
+    ]);
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    expect(snapshot.enabled).toBe(false);
+    expect(snapshot.dispatchRecordCount).toBe(3);
+    expect(snapshot.perTool).toEqual([
+      { toolId: "tool.a", callCount: 2, failureCount: 1 },
+      { toolId: "tool.b", callCount: 1, failureCount: 0 },
+    ]);
+  });
+
+  it("uses the same failure definition as the failure-cluster detector", () => {
+    // Every non-success result class, including the historical rate_limited
+    // one only reachable through hydration, plus dedup as the non-failure
+    // control, landing consecutively after a clean baseline.
+    const failures: McpAuditResult[] = [
+      "error",
+      "confirmation-pending",
+      "unauthorized",
+      "collision",
+      "rate_limited",
+    ];
+    const log = [
+      ...Array.from({ length: 50 }, (_, i) => persisted(i, "tool.ok", "success")),
+      ...failures.map((result, i) => persisted(50 + i, "tool.x", result)),
+      persisted(55, "tool.x", "dedup"),
+    ];
+    const { service } = makeFixture({}, log);
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    const toolX = snapshot.perTool.find((t) => t.toolId === "tool.x");
+    expect(toolX).toEqual({ toolId: "tool.x", callCount: 6, failureCount: failures.length });
+    const clusters = snapshot.anomalySignals.filter((s) => s.kind === "failure-cluster");
+    expect(Math.max(...clusters.map((c) => c.clusterSize ?? 0))).toBe(toolX!.failureCount);
+  });
+
+  it("reports the dispatch count against the floor at the suppression boundary", () => {
+    const { service } = makeFixture();
+    for (let i = 0; i < 49; i++) append(service);
+    service.appendGrantRecord({ type: "grant.issued", sessionId: "s", toolId: "tool.a", ttlMs: 1 });
+    const below = service.getDiagnosticsSnapshot();
+    expect(below.dispatchRecordCount).toBe(49);
+    expect(below.dispatchRecordCount).toBe(below.anomalyRecordFloor - 1);
+    expect(below.anomalySuppressed).toBe(true);
+
+    append(service);
+    const at = service.getDiagnosticsSnapshot();
+    expect(at.dispatchRecordCount).toBe(at.anomalyRecordFloor);
+    expect(at.anomalySuppressed).toBe(false);
+  });
+
+  it("keeps reporting retained history after recording is disabled", () => {
+    const { service } = makeFixture();
+    append(service, { toolId: "tool.a" });
+    service.setEnabled(false);
+    append(service, { toolId: "tool.b" });
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    expect(snapshot.enabled).toBe(false);
+    expect(snapshot.perTool).toEqual([{ toolId: "tool.a", callCount: 1, failureCount: 0 }]);
+  });
+
+  it("never acknowledges first-seen-combination signals", () => {
+    const { service } = makeFixture();
+    for (let i = 0; i < 50; i++) append(service);
+    service.getAuditStats(); // seed the baseline
+    append(service, { toolId: "tool.new", tier: "external" });
+
+    for (let i = 0; i < 2; i++) {
+      const firstSeen = service
+        .getDiagnosticsSnapshot()
+        .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+      expect(firstSeen).toEqual([
+        expect.objectContaining({ toolId: "tool.new", tier: "external", severity: "info" }),
+      ]);
+    }
+
+    // The user-facing read still gets to acknowledge it.
+    const acknowledged = service
+      .getAuditStats()
+      .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+    expect(acknowledged).toHaveLength(1);
+  });
+
+  it("projects latency-drift and failure-cluster signals without ids or record content", () => {
+    const { service } = makeFixture();
+    withSequentialClock(() => {
+      // 10–18ms baseline: median 14, MAD 2, so 5000ms scores z ≥ 3. Drift needs
+      // LATENCY_DRIFT_MIN_OUTLIERS outliers in the tool's last ten calls.
+      for (let i = 0; i < 60; i++) {
+        append(service, {
+          durationMs: 10 + (i % 5) * 2,
+          argsSummary: '{"prompt":"ARGS_SENTINEL"}',
+          resultSummary: "RESULT_SENTINEL",
+          sessionId: "SESSION_SENTINEL",
+        });
+      }
+      for (let i = 0; i < 3; i++) append(service, { durationMs: 5000 });
+      for (let i = 0; i < 3; i++) append(service, { toolId: "tool.flaky", outcome: errorOutcome });
+    });
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    const raw = service.getAuditStats(false).anomalySignals;
+    const rawDrift = raw.filter((s) => s.kind === "latency-drift");
+    const rawCluster = raw.filter((s) => s.kind === "failure-cluster");
+    expect(rawDrift).toHaveLength(1);
+    expect(rawCluster).toHaveLength(1);
+    // The baseline is taken when the ring crosses the detection floor, so
+    // `tool.flaky` — appended after that — is a genuine first-seen combination.
+    expect(snapshot.anomalySignalCountsByKind).toEqual({
+      "first-seen-combination": 1,
+      "latency-drift": 1,
+      "failure-cluster": 1,
+    });
+
+    expect(snapshot.anomalySignals.filter((s) => s.kind === "latency-drift")).toEqual([
+      {
+        kind: "latency-drift",
+        toolId: "tool.a",
+        tier: "action",
+        severity: "warning",
+        timestamp: rawDrift[0]!.timestamp,
+        zScore: rawDrift[0]!.zScore,
+        durationMs: 5000,
+        baselineMedianMs: 14,
+      },
+    ]);
+    expect(snapshot.anomalySignals.filter((s) => s.kind === "failure-cluster")).toEqual([
+      {
+        kind: "failure-cluster",
+        toolId: "tool.flaky",
+        severity: "danger",
+        timestamp: rawCluster[0]!.timestamp,
+        clusterSize: 3,
+        clusterWindow: rawCluster[0]!.clusterWindow,
+      },
+    ]);
+
+    const serialized = JSON.stringify(snapshot);
+    expect(serialized).not.toContain("ARGS_SENTINEL");
+    expect(serialized).not.toContain("RESULT_SENTINEL");
+    expect(serialized).not.toContain("SESSION_SENTINEL");
+    expect(serialized).not.toContain("recordIds");
+    expect(serialized).not.toContain('"id"');
+  });
+
+  it("projects p95 z-score signals with their p95", () => {
+    // Five tools with steady, distinct latencies; one is far above the rest.
+    // Each needs P95_Z_SCORE_MIN_SAMPLES recent successes to get a p95 at all.
+    const SAMPLES = 25;
+    const log = [10, 11, 12, 13, 1000].flatMap((durationMs, t) =>
+      Array.from({ length: SAMPLES }, (_, i) =>
+        persisted(t * SAMPLES + i, `tool.t${t}`, "success", durationMs)
+      )
+    );
+    const { service } = makeFixture({}, log);
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    const [raw] = service
+      .getAuditStats(false)
+      .anomalySignals.filter((s) => s.kind === "p95-z-score");
+    expect(snapshot.anomalySignals.filter((s) => s.kind === "p95-z-score")).toEqual([
+      {
+        kind: "p95-z-score",
+        toolId: "tool.t4",
+        severity: "warning",
+        timestamp: raw!.timestamp,
+        zScore: raw!.zScore,
+        p95Ms: 1000,
+      },
+    ]);
+  });
+
+  it("replaces tool ids outside the MCP tool-name grammar with a placeholder", () => {
+    const { service } = makeFixture();
+    for (let i = 0; i < 50; i++) append(service);
+    service.getAuditStats(); // seed the baseline
+    const prose = "please summarise the quarterly numbers for ACME";
+    append(service, { toolId: prose, outcome: { kind: "unauthorized" } });
+    append(service, { toolId: `x${"y".repeat(256)}`, outcome: { kind: "unauthorized" } });
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    const serialized = JSON.stringify(snapshot);
+    expect(serialized).not.toContain("quarterly");
+    expect(serialized).not.toContain("yyyy");
+    const unrecognized = snapshot.perTool.filter((t) => t.toolId !== "tool.a");
+    expect(unrecognized).toHaveLength(1);
+    expect(unrecognized[0]).toMatchObject({ callCount: 2, failureCount: 2 });
+    const firstSeen = snapshot.anomalySignals.filter((s) => s.kind === "first-seen-combination");
+    expect(firstSeen).toHaveLength(2);
+    expect(new Set(firstSeen.map((s) => s.toolId))).toEqual(new Set([unrecognized[0]!.toolId]));
+  });
+
+  it("keeps attribution for maximum-length project plugin ids", () => {
+    const { service } = makeFixture();
+    // project__{64-hex projectId}__{64-char publisher.name}.{64-char command}
+    const manifestId = `${"p".repeat(31)}.${"n".repeat(32)}`;
+    const projectPluginToolId = `project__${"a".repeat(64)}__${manifestId}.${"c".repeat(64)}`;
+    append(service, { toolId: projectPluginToolId });
+
+    expect(service.getDiagnosticsSnapshot().perTool).toEqual([
+      { toolId: projectPluginToolId, callCount: 1, failureCount: 0 },
+    ]);
+  });
+
+  it("caps exported signals to the newest 200 while reporting the full counts", () => {
+    const { service } = makeFixture({ auditMaxRecords: 1000 });
+    // A baseline of one tool, then 201 never-before-seen tools: one
+    // first-seen-combination signal each.
+    withSequentialClock(() => {
+      for (let i = 0; i < 50; i++) append(service);
+      for (let i = 0; i < 201; i++) append(service, { toolId: `tool.t${i}` });
+    });
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    const newToolTimestamps = service
+      .getRecords()
+      .filter((r) => r.toolId !== "tool.a")
+      .map((r) => r.timestamp);
+    expect(newToolTimestamps).toHaveLength(201);
+    expect(snapshot.anomalySignalCount).toBe(201);
+    expect(snapshot.anomalySignalCountsByKind).toEqual({ "first-seen-combination": 201 });
+    expect(snapshot.anomalySignals.map((s) => s.timestamp)).toEqual(
+      [...newToolTimestamps].sort((a, b) => b - a).slice(0, 200)
+    );
   });
 });

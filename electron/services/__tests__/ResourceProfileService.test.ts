@@ -49,6 +49,13 @@ import { app, powerMonitor } from "electron";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { ResourceProfileService, type ResourceProfileDeps } from "../ResourceProfileService.js";
 import { RESOURCE_PROFILE_CONFIGS } from "../../../shared/types/resourceProfile.js";
+import { setPollThrottle, setWorkspacePollingPolicy } from "../../window/focusThrottleState.js";
+import {
+  ACTIVE_WORKSPACE_POLLING_POLICY,
+  derivePowerPolicy,
+  powerPolicyPollMultiplier,
+  workspacePollingCadence,
+} from "../../../shared/types/powerPolicy.js";
 import { resolveResourceProfileConfig } from "../../utils/resourceProfileConfig.js";
 import { resolveWebglThresholds } from "../../utils/webglContextBudget.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
@@ -405,6 +412,7 @@ describe("ResourceProfileService", () => {
       fetchIntervalActiveMs: RESOURCE_PROFILE_CONFIGS.efficiency.fetchIntervalActiveMs,
       fetchIntervalBackgroundMs: RESOURCE_PROFILE_CONFIGS.efficiency.fetchIntervalBackgroundMs,
       backgroundGitWatcherCap: RESOURCE_PROFILE_CONFIGS.efficiency.backgroundGitWatcherCap,
+      agentRecursiveWatcherCap: RESOURCE_PROFILE_CONFIGS.efficiency.agentRecursiveWatcherCap,
     });
     expect(hib.setMemoryPressureThresholdMs).toHaveBeenCalledWith(
       RESOURCE_PROFILE_CONFIGS.efficiency.memoryPressureInactiveMs
@@ -780,6 +788,117 @@ describe("ResourceProfileService", () => {
 
     expectArmedPolicy(pvm);
     expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
+
+    service.stop();
+  });
+
+  it("pushes the starting profile to the pty host on start() even without a transition", () => {
+    const deps = createDeps();
+    const pty = deps.getPtyClient() as unknown as MockPtyClient;
+    const service = new ResourceProfileService(deps);
+
+    service.start();
+
+    expect(pty.setResourceProfile).toHaveBeenCalledTimes(1);
+    expect(pty.setResourceProfile).toHaveBeenCalledWith(service.getProfile());
+
+    service.stop();
+  });
+
+  it("re-applies the focus throttle over the starting profile when started blurred", () => {
+    const deps = createDeps();
+    const pty = deps.getPtyClient() as unknown as MockPtyClient & {
+      setProcessTreePollInterval: Mock;
+    };
+    pty.setProcessTreePollInterval = vi.fn();
+    const service = new ResourceProfileService(deps);
+
+    const blurred = powerPolicyPollMultiplier(
+      derivePowerPolicy({
+        onBattery: false,
+        screenLocked: false,
+        anyWindowFocused: false,
+        anyWindowVisible: true,
+      })
+    );
+
+    setPollThrottle({ throttled: true, multiplier: blurred });
+    try {
+      service.start();
+    } finally {
+      setPollThrottle({ throttled: false, multiplier: 1 });
+    }
+
+    expect(pty.setProcessTreePollInterval).toHaveBeenCalledWith(
+      RESOURCE_PROFILE_CONFIGS[service.getProfile()].processTreePollInterval * blurred
+    );
+    // The profile push resets the host's cadence, so the throttle must land after it.
+    expect(pty.setResourceProfile.mock.invocationCallOrder[0]!).toBeLessThan(
+      pty.setProcessTreePollInterval.mock.invocationCallOrder[0]!
+    );
+
+    service.stop();
+  });
+
+  it("keeps the workspace cadence attenuated across a profile push", () => {
+    // The two writers of the workspace intervals must agree. powerMonitor
+    // derives them from the workspace POLICY, not from the poll multiplier, so
+    // a profile transition landing while nobody is looking has to derive them
+    // the same way — pushing `baseline × multiplier` here would reinstate a
+    // cadence the policy had already stretched, silently and until the next
+    // focus change.
+    const deps = createDeps();
+    const workspace = deps.getWorkspaceClient() as unknown as { updateMonitorConfig: Mock };
+    const service = new ResourceProfileService(deps);
+
+    setPollThrottle({ throttled: true, multiplier: 5 });
+    setWorkspacePollingPolicy({
+      statusAllowed: true,
+      backgroundWorkAllowed: false,
+      attenuated: true,
+    });
+    try {
+      mockIsOnBatteryPower.mockReturnValue(true);
+      service.start();
+      // Drive a real profile transition — the second writer only pushes the
+      // workspace cadence when the profile actually moves.
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    } finally {
+      setPollThrottle({ throttled: false, multiplier: 1 });
+      setWorkspacePollingPolicy(ACTIVE_WORKSPACE_POLLING_POLICY);
+    }
+
+    const config = RESOURCE_PROFILE_CONFIGS[service.getProfile()];
+    const expected = workspacePollingCadence(config, {
+      statusAllowed: true,
+      backgroundWorkAllowed: false,
+      attenuated: true,
+    });
+    expect(workspace.updateMonitorConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pollIntervalActive: expected.pollIntervalActive,
+        pollIntervalBackground: expected.pollIntervalBackground,
+      })
+    );
+    // Not the multiplier the other pollers use.
+    expect(expected.pollIntervalActive).not.toBe(config.pollIntervalActive * 5);
+
+    service.stop();
+  });
+
+  it("still starts when the pty host rejects the starting profile", () => {
+    const deps = createDeps();
+    const pty = deps.getPtyClient() as unknown as MockPtyClient;
+    pty.setResourceProfile.mockImplementation(() => {
+      throw new Error("host gone");
+    });
+    const service = new ResourceProfileService(deps);
+
+    expect(() => service.start()).not.toThrow();
+    expect(pty.setResourceProfile).toHaveBeenCalledWith(service.getProfile());
+    // Startup carried on past the rejected push to the lag monitor it arms last.
+    expect((service as unknown as { lagInterval: unknown }).lagInterval).toBeTruthy();
 
     service.stop();
   });
@@ -1619,10 +1738,18 @@ describe("ResourceProfileService", () => {
       }
     });
 
-    function stubSystemMemory(freeKb: number, purgeableKb: number, totalKb: number): void {
+    // `fileBacked` is omitted unless a test supplies it: a reported zero is an
+    // unreadable Darwin reading (#12517), not an empty file cache.
+    function stubSystemMemory(
+      freeKb: number,
+      purgeableKb: number,
+      totalKb: number,
+      fileBackedKb?: number
+    ): void {
       (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo = vi.fn(() => ({
         free: freeKb,
         purgeable: purgeableKb,
+        fileBacked: fileBackedKb,
         total: totalKb,
       }));
     }
@@ -1689,6 +1816,25 @@ describe("ResourceProfileService", () => {
       // Asserting "performance" only passes if purgeable was added — without it
       // the score would jump to +2 (sys mem critical).
       stubSystemMemory(200 * 1024, 4 * 1024 * 1024, EIGHT_GB / 1024);
+
+      const deps = createDeps();
+      const service = new ResourceProfileService(deps);
+      service.start();
+
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+      mockIsOnBatteryPower.mockReturnValue(false);
+
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
+      expect(service.getProfile()).toBe("performance");
+
+      service.stop();
+    });
+
+    it("includes the file cache in the 'available' calculation (#12363)", () => {
+      // Same shape as the purgeable case: 200 MB free alone is below the 10%
+      // floor, and 4 GB of file-backed pages lifts it above 20%. "performance"
+      // only holds if fileBacked was added.
+      stubSystemMemory(200 * 1024, 0, EIGHT_GB / 1024, 4 * 1024 * 1024);
 
       const deps = createDeps();
       const service = new ResourceProfileService(deps);
@@ -1895,7 +2041,6 @@ describe("ResourceProfileService", () => {
       expect(snap.targetProfile).toBe("performance");
       expect(snap.currentProfile).toBe("balanced");
       expect(snap.lagPressureActive).toBe(false);
-      expect(snap.interactiveOverrideActive).toBe(false);
     });
 
     it("maps a single low-memory signal (score 1) to a balanced target", () => {
@@ -2200,6 +2345,61 @@ describe("ResourceProfileService", () => {
       }
       expect(service.getProfile()).toBe("balanced");
 
+      service.stop();
+    });
+  });
+
+  describe("onProfileChanged", () => {
+    it("reports every applied transition in order", () => {
+      const service = new ResourceProfileService(createDeps());
+      const seen: Array<{ from: string; to: string }> = [];
+      service.onProfileChanged((change) => seen.push(change));
+
+      service._forceProfileForTesting("efficiency");
+      service._forceProfileForTesting("balanced");
+
+      expect(seen).toEqual([
+        { from: "balanced", to: "efficiency" },
+        { from: "efficiency", to: "balanced" },
+      ]);
+      service.stop();
+    });
+
+    it("stays silent for a no-op transition", () => {
+      const service = new ResourceProfileService(createDeps());
+      const listener = vi.fn();
+      service.onProfileChanged(listener);
+
+      service._forceProfileForTesting("balanced");
+
+      expect(listener).not.toHaveBeenCalled();
+      service.stop();
+    });
+
+    it("stops reporting after unsubscribe", () => {
+      const service = new ResourceProfileService(createDeps());
+      const listener = vi.fn();
+      const unsubscribe = service.onProfileChanged(listener);
+
+      unsubscribe();
+      service._forceProfileForTesting("efficiency");
+
+      expect(listener).not.toHaveBeenCalled();
+      service.stop();
+    });
+
+    it("applies the transition even when a listener throws", () => {
+      const service = new ResourceProfileService(createDeps());
+      const after = vi.fn();
+      service.onProfileChanged(() => {
+        throw new Error("observer bug");
+      });
+      service.onProfileChanged(after);
+
+      service._forceProfileForTesting("efficiency");
+
+      expect(service.getProfile()).toBe("efficiency");
+      expect(after).toHaveBeenCalledWith({ from: "balanced", to: "efficiency" });
       service.stop();
     });
   });

@@ -93,7 +93,8 @@ describe("TerminalAttachErrorBanner", () => {
     const { onRetry } = renderBanner({ isRetrying: true });
 
     const button = screen.getByRole("button", { name: "Retry terminal display" });
-    expect(button.hasAttribute("disabled")).toBe(true);
+    // Loading keeps focus on the control (no native disabled) and blocks activation.
+    expect(button.getAttribute("aria-disabled")).toBe("true");
 
     fireEvent.click(button);
     expect(onRetry).not.toHaveBeenCalled();

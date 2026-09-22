@@ -171,13 +171,6 @@ const EXCEPTIONS: {
     reason: "Same miniature; the 7px rows are the mock terminal body against the 6px chrome",
   },
   {
-    file: "src/components/Project/ProjectResourceBadge.tsx",
-    match: "text-[8px]",
-    count: 1,
-    reason:
-      "A disclosure caret glyph, sized to the triangle rather than to text — putting it on the type scale would oversize it",
-  },
-  {
     file: "src/components/Pulse/PulseHeatmap.tsx",
     match: "rounded-[2px]",
     count: 1,

@@ -2,8 +2,8 @@
 import { store } from "../store.js";
 import type { AppAgentConfig } from "../../shared/types/appAgent.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { resolveAppAgentChatCompletionsUrl } from "../../shared/utils/appAgentUrl.js";
 
-const FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1";
 export const API_TEST_TIMEOUT_MS = 15_000;
 
 function formatApiErrorText(rawText: string): string {
@@ -52,20 +52,16 @@ export class AppAgentService {
 
   async testApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }> {
     const config = store.get("appAgentConfig");
-    const baseUrl = config.baseUrl || FIREWORKS_BASE_URL;
-
-    let url: URL;
-    try {
-      url = new URL(`${baseUrl}/chat/completions`);
-    } catch {
-      return { valid: false, error: "Invalid base URL configured" };
+    const resolved = resolveAppAgentChatCompletionsUrl(config.baseUrl);
+    if (!resolved.ok) {
+      return { valid: false, error: resolved.error };
     }
 
     const abortController = new AbortController();
     const timeoutId = setTimeout(() => abortController.abort(), API_TEST_TIMEOUT_MS);
 
     try {
-      const response = await fetch(url.toString(), {
+      const response = await fetch(resolved.url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -127,20 +123,16 @@ export class AppAgentService {
       return { valid: false, error: "API key not configured" };
     }
 
-    const baseUrl = config.baseUrl || FIREWORKS_BASE_URL;
-
-    let url: URL;
-    try {
-      url = new URL(`${baseUrl}/chat/completions`);
-    } catch {
-      return { valid: false, error: "Invalid base URL configured" };
+    const resolved = resolveAppAgentChatCompletionsUrl(config.baseUrl);
+    if (!resolved.ok) {
+      return { valid: false, error: resolved.error };
     }
 
     const abortController = new AbortController();
     const timeoutId = setTimeout(() => abortController.abort(), API_TEST_TIMEOUT_MS);
 
     try {
-      const response = await fetch(url.toString(), {
+      const response = await fetch(resolved.url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -4,6 +4,7 @@ import type { z } from "zod";
 import { BUILT_IN_ACTION_IDS } from "@shared/config/actionIds";
 import type { ActionDefinition, ActionContext, ActionManifestEntry } from "@shared/types/actions";
 import { actionService } from "@/services/ActionService";
+import type { AnyActionDefinition } from "../../actionTypes";
 
 // Node 25 exposes a broken native `localStorage` stub on `globalThis` (no
 // `clear`/`getItem`/etc) that shadows JSDOM's Storage and leaks the warning
@@ -872,6 +873,74 @@ describe("actions.search", () => {
       results: ActionManifestEntry[];
     };
     expect(byCategory.results[0]!.id).toBe("b");
+  });
+
+  // Typed wide enough to take the query and hand back the raw result, so these
+  // ranking specs neither cast their args nor their results.
+  function search(query: string): Promise<unknown> {
+    const def: AnyActionDefinition = registry.get("actions.search")!();
+    return def.run({ query }, stubCtx);
+  }
+
+  // Each pair puts the stronger match on the id that sorts later, so a tie
+  // would hand the win to the wrong entry.
+  it("ranks a keyword the query names outright above one that merely contains it", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "a.partial", title: "A", keywords: ["respawn"] }),
+      makeEntry({ id: "b.exact", title: "B", keywords: ["spawn"] }),
+    ]);
+
+    expect(await search("Spawn")).toMatchObject({
+      results: [{ id: "b.exact" }, { id: "a.partial" }],
+    });
+  });
+
+  it("treats each word of a multi-word keyword as named outright", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "a.partial", title: "A", keywords: ["renew"] }),
+      makeEntry({ id: "b.exact", title: "B", keywords: ["new agent"] }),
+    ]);
+
+    expect(await search("new")).toMatchObject({
+      results: [{ id: "b.exact" }, { id: "a.partial" }],
+    });
+  });
+
+  it("does not stack a keyword substring on top of an outright keyword match", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "a.spawn", title: "A" }),
+      makeEntry({ id: "z.item", title: "Z", keywords: ["spawn", "respawn"] }),
+    ]);
+
+    // Equal weight for an id substring and an outright keyword, so the id
+    // tie-break decides; a stacked substring bonus would reverse it.
+    expect(await search("spawn")).toMatchObject({
+      results: [{ id: "a.spawn" }, { id: "z.item" }],
+    });
+  });
+
+  it("adds nothing for a keyword that restates a word the id already carries", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "b.devtools", title: "B" }),
+      makeEntry({ id: "z.dev", title: "Z", keywords: ["dev"] }),
+    ]);
+
+    // Both score the id substring alone, so the id tie-break decides; any
+    // keyword weight on top would put z.dev first.
+    expect(await search("dev")).toMatchObject({
+      results: [{ id: "b.devtools" }, { id: "z.dev" }],
+    });
+  });
+
+  it("does not let a plural keyword add weight to the singular in the title", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "a.restart", title: "Restart Agent" }),
+      makeEntry({ id: "b.launch", title: "Launch Agent", keywords: ["agents"] }),
+    ]);
+
+    expect(await search("agent")).toMatchObject({
+      results: [{ id: "a.restart" }, { id: "b.launch" }],
+    });
   });
 
   it("stably orders results by score descending then id ascending", async () => {

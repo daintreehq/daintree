@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { WorktreeState } from "@/types";
-import { isStandardBranch } from "@shared/config/branchPrefixes";
+import { getWorktreeBranchLabel, isMainWorktreeOnStandardBranch } from "@/lib/worktreeHeadline";
 import { MAIN_WORKTREE_NOTE_TTL_MS, deriveEffectiveNote } from "@/lib/worktreeAiNote";
 
 export type SpineState = "dirty" | "current" | "stale" | "idle";
@@ -103,23 +103,8 @@ export function useWorktreeStatus({
     [worktree.aiNote, isMainWorktree, worktree.aiNoteTimestamp, now]
   );
 
-  const isMainOnStandardBranch = !!(
-    isMainWorktree &&
-    worktree.branch &&
-    !worktree.isDetached &&
-    isStandardBranch(worktree.branch)
-  );
-
-  let branchLabel: string;
-  if (isMainWorktree) {
-    if (!worktree.branch || worktree.isDetached) {
-      branchLabel = worktree.name;
-    } else {
-      branchLabel = worktree.branch;
-    }
-  } else {
-    branchLabel = worktree.branch ?? worktree.name;
-  }
+  const isMainOnStandardBranch = isMainWorktreeOnStandardBranch(worktree);
+  const branchLabel = getWorktreeBranchLabel(worktree);
   const hasChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
 
   const rawLastCommitMessage = worktree.worktreeChanges?.lastCommitMessage;
@@ -248,6 +233,10 @@ export function useWorktreeStatus({
     if (lifecycle.state === "timed-out") {
       const phase = PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;
       return `${phase.replace(/^(Running |Provisioning |Tearing down |Resuming |Pausing |Checking )/, "")} timed out`;
+    }
+    if (lifecycle.state === "needs-approval") {
+      const phase = PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;
+      return `${phase.replace(/^(Running |Provisioning |Tearing down |Resuming |Pausing |Checking )/, "")} needs approval`;
     }
     return undefined;
   }, [lifecycle]);

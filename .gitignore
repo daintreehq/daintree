@@ -69,7 +69,7 @@ perf-metrics.ndjson
 demo-output/
 
 # Demo authoring project (daintreehq/demo-studio clone target)
-demo/
+/demo/
 
 # Cache
 .cache/
@@ -83,6 +83,7 @@ coverage/
 .nyc_output/
 test-results/
 test-results-mechanism/
+test-results-plugins/
 playwright-report/
 blob-report/
 daintree-e2e-artifacts/

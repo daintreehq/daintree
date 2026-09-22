@@ -298,7 +298,61 @@ describe("useAccessibilityAnnouncements — badge-state announcements (#9204)", 
     expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A: output paused");
   });
 
-  it("announces flow status entering 'paused-resource-governor' with memory context", () => {
+  // #12375 — the governor pauses every terminal on a host at once, so the pause
+  // is announced once for the whole app by useHostMemoryPauseSync, never per pane.
+  it("does not announce a resource-governor pause per pane", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([
+        { id: "t1", title: "Pane A" },
+        { id: "t2", title: "Pane B" },
+      ]);
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setPanels([
+        { id: "t1", title: "Pane A", flowStatus: "paused-resource-governor" },
+        { id: "t2", title: "Pane B", flowStatus: "paused-resource-governor" },
+      ]);
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+  });
+
+  it("does not announce a per-pane resume when a resource-governor pause releases", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", flowStatus: "paused-resource-governor" }]);
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", flowStatus: "running" }]);
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+  });
+
+  it("drops a pending pane pause that a resource-governor pause overtakes", () => {
     const { rerender } = renderHook(() => useAccessibilityAnnouncements());
 
     act(() => {
@@ -311,6 +365,13 @@ describe("useAccessibilityAnnouncements — badge-state announcements (#9204)", 
     useAnnouncerStore.setState({ polite: null, assertive: null });
 
     act(() => {
+      setPanels([{ id: "t1", title: "Pane A", flowStatus: "paused-backpressure" }]);
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    act(() => {
       setPanels([{ id: "t1", title: "Pane A", flowStatus: "paused-resource-governor" }]);
     });
     rerender();
@@ -318,7 +379,30 @@ describe("useAccessibilityAnnouncements — badge-state announcements (#9204)", 
       vi.advanceTimersByTime(400);
     });
 
-    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A: output paused, memory pressure");
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+  });
+
+  it("still announces the pane's own backpressure pause the governor's release restores", () => {
+    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", flowStatus: "paused-resource-governor" }]);
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+
+    act(() => {
+      setPanels([{ id: "t1", title: "Pane A", flowStatus: "paused-backpressure" }]);
+    });
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A: output paused");
   });
 
   // FUTURE_SAB: `suspended` is a skeleton value with no production

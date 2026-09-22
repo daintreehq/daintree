@@ -19,22 +19,24 @@ import { detachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import {
   freezeWebContents,
   unfreezeWebContents,
-  throttleCpuWebContents,
   unthrottleCpuWebContents,
   purgeMemoryWebContents,
+  readJsHeapUsedBytes,
 } from "../utils/webContentsLifecycle.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { logWarn } from "../utils/logger.js";
 import * as AgentStateCache from "./ProjectViewAgentStateCache.js";
 import { updateViewBounds } from "./ProjectViewFactory.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
-import type { ViewEntry } from "./ProjectViewManagerTypes.js";
+import type { CachedViewPurgeSession, ViewEntry } from "./ProjectViewManagerTypes.js";
 
 // Cached-view memory purge cadence. The delay keeps the likely next-switch
-// target (a just-cached view) fully warm so fast switch-back pays nothing;
-// the interval re-purges long-cached views whose background work (agent
-// output, worktree events) keeps re-accumulating garbage. Purge is per-target
-// CDP — the active view is never touched.
+// target (a just-cached view) fully warm so fast switch-back pays nothing.
+// After that a pass runs on the interval, but only collects once the heap has
+// grown by the threshold since the last collection: a quiet or frozen view
+// is left alone, while one whose background work (agent output, worktree
+// events) keeps allocating is still reclaimed. Purge is per-target CDP — the
+// active view is never touched.
 /**
  * Delay from a view becoming cached to its first memory purge. Exported so
  * the freeze harness can budget its measurement against the same number
@@ -42,6 +44,7 @@ import type { ViewEntry } from "./ProjectViewManagerTypes.js";
  */
 export const CACHED_VIEW_PURGE_DELAY_MS = 20_000;
 const CACHED_VIEW_PURGE_INTERVAL_MS = 60_000;
+const CACHED_VIEW_PURGE_MIN_GROWTH_BYTES = 32 * 1024 * 1024;
 
 /**
  * @param opts.preserveLastUsed Keep the entry's existing `lastUsed` instead of
@@ -93,50 +96,43 @@ export function deactivateEntry(
   current.state = "cached";
   if (!opts.preserveLastUsed) current.lastUsed = Date.now();
 
-  // Throttle background view to reduce CPU and allow Chromium to reclaim memory
+  // Quiet the background view and let Chromium reclaim its memory
   if (!current.view.webContents.isDestroyed()) {
     const cachedWcId = current.view.webContents.id;
     // Mark cached so visible-only broadcasts (log batches) skip this
-    // renderer — pushed messages have no backpressure once throttled/frozen.
+    // renderer — pushed messages are wasted work while cached and have no
+    // backpressure once frozen.
     registerCachedViewWebContents(current.view.webContents);
     // Tell the renderer it's being cached so it cancels any in-flight wake/
     // repaint rAFs and reveal backstops scheduled for the view it's leaving —
     // otherwise those fire against a now-occluded/frozen view, or survive to
-    // run stale work on the next reactivation. Sent before the CPU throttle so
+    // run stale work on the next reactivation. Sent before any freeze below so
     // the renderer can still process it.
     try {
       current.view.webContents.send(CHANNELS.APP_VIEW_CACHED);
     } catch {
       // ignore — a destroyed/closing renderer has nothing to cancel
     }
-    // Close live producer ports BEFORE applying CPU throttle. Once throttled,
-    // Chromium can freeze the renderer after ~5 min hidden or under memory
-    // pressure; any messages still posted by main/utility processes
-    // accumulate in the frozen renderer's task queue (no native
-    // backpressure). Reactivation re-brokers a fresh port via activateView.
+    // Close live producer ports BEFORE the view can be frozen. Once hidden,
+    // Chromium can freeze the renderer after ~5 min or under memory pressure,
+    // and the efficiency freeze below can land immediately; any messages
+    // still posted by main/utility processes accumulate in the frozen
+    // renderer's task queue (no native backpressure). Reactivation re-brokers
+    // a fresh port via activateView.
     try {
       host.onViewCached?.(cachedWcId);
     } catch (error) {
       console.error("[ProjectViewManager] onViewCached threw during deactivate:", error);
     }
-    // Use CDP Emulation.setCPUThrottlingRate (per-renderer) instead of
-    // WebContents.setBackgroundThrottling — the latter is window-wide in
-    // Electron 28+, so the active view's setBackgroundThrottling(false)
-    // silently un-throttled every cached sibling (#8599). CPU throttling
-    // keeps the event loop and MessagePort dispatch alive while slowing
-    // V8/Blink CPU time for this single renderer.
-    void throttleCpuWebContents(current.view.webContents);
-
-    // <webview> guests (browser/dev-preview panels) are separate renderer
-    // processes with their own CDP targets — the host's throttle does not
-    // propagate. Throttle each guest too, or a cached project's dev-preview
-    // SPA keeps running at full rate with only native 1 Hz timer
-    // throttling. Guests are intentionally NOT CDP-frozen: freezing kills
-    // dev-server HMR websockets and would fight the dock-hide freeze owned
-    // by useWebviewThrottle.
-    forEachGuest(current.view.webContents, (guest) => {
-      void throttleCpuWebContents(guest);
-    });
+    // No CPU throttle here, host or <webview> guests. CDP
+    // `Emulation.setCPUThrottlingRate` looks like a background-CPU lever but
+    // is a slow-device simulation that busy-spins the throttled renderer's
+    // main thread — every cached view burned 25-40% of a core at rate 4,
+    // frozen or not (#12456). `setBackgroundThrottling` is no substitute:
+    // it is window-wide in Electron 28+ (#8599). Idle cost comes from what
+    // is already here: the view is hidden, the renderer was told it is
+    // cached, producer ports are closed, and the freeze below applies when
+    // nothing protects the view.
 
     // Flush pending DOMStorage writes (synchronous — view stays alive in
     // cache, so data loss is not a concern)
@@ -185,31 +181,88 @@ export function deactivateEntry(
       }
     }
 
-    schedulePurge(host, current, CACHED_VIEW_PURGE_DELAY_MS);
+    startPurgeSession(host, current);
   }
 }
 
 /**
  * Delayed + periodic V8 garbage collection for a cached view. The
- * renderer-side `requestIdleCallback(gc)` above is best-effort inside a
- * throttled renderer; this is the guaranteed main-side counterpart (works
- * throttled or frozen). It reclaims the renderer's JS heap only — Blink's
+ * renderer-side `requestIdleCallback(gc)` above is best-effort and never runs
+ * once the view is frozen; this is the guaranteed main-side counterpart (works
+ * frozen too). It reclaims the renderer's JS heap only — Blink's
  * discardable caches are not in reach from main (see the invariants on
  * `purgeMemoryWebContents`). Collecting does not stop timers, ports, or
  * agent output processing, so it is safe for cached views with live agents.
+ *
+ * The session's first collection is unconditional: it reclaims what the view
+ * left behind in the foreground. Later passes collect only on heap growth over
+ * the post-collection baseline, and skip when the heap cannot be read rather
+ * than collect blind. One pass at a time — the next is armed only once the
+ * current one settles, and only while the same cache session is live.
  */
-function schedulePurge(host: ProjectViewManager, entry: ViewEntry, delayMs: number): void {
+function startPurgeSession(host: ProjectViewManager, entry: ViewEntry): void {
+  const session: CachedViewPurgeSession = { collected: false, baselineBytes: null };
+  entry.purgeSession = session;
+  schedulePurge(host, entry, session, CACHED_VIEW_PURGE_DELAY_MS);
+}
+
+function schedulePurge(
+  host: ProjectViewManager,
+  entry: ViewEntry,
+  session: CachedViewPurgeSession,
+  delayMs: number
+): void {
   clearPurgeTimer(entry);
   const timer = setTimeout(() => {
-    const live = host.views.get(entry.projectId);
-    if (live !== entry || entry.state !== "cached") return;
-    const wc = entry.view.webContents;
-    if (!wc || wc.isDestroyed()) return;
-    void purgeMemoryWebContents(wc);
-    schedulePurge(host, entry, CACHED_VIEW_PURGE_INTERVAL_MS);
+    entry.purgeTimer = undefined;
+    void runPurgePass(host, entry, session)
+      .catch((error) => {
+        console.error("[ProjectViewManager] cached-view purge pass failed:", error);
+      })
+      .then(() => {
+        if (isPurgeSessionLive(host, entry, session)) {
+          schedulePurge(host, entry, session, CACHED_VIEW_PURGE_INTERVAL_MS);
+        }
+      });
   }, delayMs);
   timer.unref?.();
   entry.purgeTimer = timer;
+}
+
+async function runPurgePass(
+  host: ProjectViewManager,
+  entry: ViewEntry,
+  session: CachedViewPurgeSession
+): Promise<void> {
+  const live = () => isPurgeSessionLive(host, entry, session);
+  if (!live()) return;
+  const wc = entry.view.webContents;
+  if (session.collected) {
+    const used = await readJsHeapUsedBytes(wc);
+    if (used === null || !live()) return;
+    if (session.baselineBytes === null) {
+      // The read after the last collection failed; measure growth from here.
+      session.baselineBytes = used;
+      return;
+    }
+    if (used - session.baselineBytes < CACHED_VIEW_PURGE_MIN_GROWTH_BYTES) return;
+  }
+  // Re-checked after the enable round trip, so a pass that raced a
+  // reactivation never collects on a view that just went active.
+  if (!(await purgeMemoryWebContents(wc, { shouldCollect: live }))) return;
+  session.collected = true;
+  session.baselineBytes = await readJsHeapUsedBytes(wc);
+}
+
+function isPurgeSessionLive(
+  host: ProjectViewManager,
+  entry: ViewEntry,
+  session: CachedViewPurgeSession
+): boolean {
+  if (entry.purgeSession !== session) return false;
+  if (host.views.get(entry.projectId) !== entry || entry.state !== "cached") return false;
+  const wc = entry.view.webContents;
+  return !!wc && !wc.isDestroyed();
 }
 
 function clearPurgeTimer(entry: ViewEntry): void {
@@ -217,6 +270,12 @@ function clearPurgeTimer(entry: ViewEntry): void {
     clearTimeout(entry.purgeTimer);
     entry.purgeTimer = undefined;
   }
+}
+
+/** Ends the cache session, so the next one starts again from an unconditional collection. */
+function endPurgeSession(entry: ViewEntry): void {
+  clearPurgeTimer(entry);
+  entry.purgeSession = undefined;
 }
 
 /**
@@ -272,7 +331,7 @@ export function activateView(
   insertBehind = false
 ): void {
   // A view being activated must never take a scheduled cache purge.
-  clearPurgeTimer(entry);
+  endPurgeSession(entry);
   registerAppView(host.win, entry.view);
 
   // Restore visibility BEFORE unfreezing: deactivateEntry() called
@@ -290,10 +349,25 @@ export function activateView(
     unregisterCachedViewWebContents(entry.view.webContents.id);
   }
 
-  // Defensive unfreeze BEFORE restoring CPU rate: efficiency transitions and
-  // view activations are async, so an activating view may still be frozen
-  // even if we've left efficiency in the meantime. Chromium does not
-  // auto-resume on focus or re-attach — explicit "active" required.
+  // Clear CPU emulation BEFORE the thaw below. The reset only acts on a
+  // renderer that already has a debugger session, and the thaw attaches one
+  // synchronously — run it first and every activation would pay a CDP round
+  // trip for a view nothing ever throttled. Nothing raises the rate any more
+  // (#12456); this is defensive cleanup for a session left at another rate.
+  // Guests too: separate renderer processes with their own CDP targets. CPU
+  // rate only — a guest the dock-hide path froze stays frozen (separate
+  // mechanism, released by useWebviewThrottle when its tab is shown).
+  if (!entry.view.webContents.isDestroyed()) {
+    void unthrottleCpuWebContents(entry.view.webContents);
+    forEachGuest(entry.view.webContents, (guest) => {
+      void unthrottleCpuWebContents(guest);
+    });
+  }
+
+  // Defensive unfreeze: efficiency transitions and view activations are
+  // async, so an activating view may still be frozen even if we've left
+  // efficiency in the meantime. Chromium does not auto-resume on focus or
+  // re-attach — explicit "active" required.
   // Fire-and-forget: there is a sub-millisecond window between addChildView
   // making the view visible and Chromium processing the "active" CDP command.
   // Awaiting would force activateView to be async and ripple through all
@@ -301,19 +375,6 @@ export function activateView(
   // been observable in testing.
   if (!entry.view.webContents.isDestroyed()) {
     void unfreezeWebContents(entry.view.webContents);
-  }
-
-  // Restore full CPU rate before making visible. Uses
-  // Emulation.setCPUThrottlingRate (per-renderer) — see deactivateEntry for
-  // why setBackgroundThrottling is unsuitable (window-wide in Electron 28+).
-  if (!entry.view.webContents.isDestroyed()) {
-    void unthrottleCpuWebContents(entry.view.webContents);
-    // Mirror the guest throttle applied in deactivateEntry. CPU rate only —
-    // a guest the dock-hide path froze stays frozen (separate mechanism,
-    // released by useWebviewThrottle when its tab is shown).
-    forEachGuest(entry.view.webContents, (guest) => {
-      void unthrottleCpuWebContents(guest);
-    });
   }
 
   // `insertBehind` stacks the incoming view at z-index 0 (below the still-
@@ -358,8 +419,8 @@ function forEachGuest(
       fn(guest);
     }
   } catch {
-    // Best-effort: enumeration unavailable (tests / teardown) — guests
-    // simply keep their current CPU rate.
+    // Best-effort: enumeration unavailable (tests / teardown) — guests are
+    // simply skipped.
   }
 }
 
@@ -439,7 +500,7 @@ export function cleanupEntry(host: ProjectViewManager, projectId: string): void 
   const entry = host.views.get(projectId);
   if (!entry) return;
 
-  clearPurgeTimer(entry);
+  endPurgeSession(entry);
 
   // Detach persistent webContents listeners before close() so any queued
   // event (did-finish-load, render-process-gone, etc.) cannot fire against

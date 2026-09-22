@@ -19,12 +19,20 @@ import type {
   HelpSessionIdResolver,
   AssistantPaneWebContentsResolver,
   AssistantPaneActionContextResolver,
+  PaneWorkspaceBinding,
+  PaneWorkspaceBindingResolver,
+  PaneOwnershipPrincipalResolver,
+  PaneTerminalResolver,
+  HelpSessionTerminalResolver,
+  WorkspaceDispatchOptions,
   McpTier,
   McpSessionOrigin,
   McpWorkspaceBinding,
 } from "./shared.js";
 import { parseWorkspaceSelector, type WorkspaceSelectorRejection } from "./workspaceSelector.js";
+import { projectAuditResult } from "./auditResultProjection.js";
 import { WorkspaceBindingError } from "./rendererBridge.js";
+import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "../pluginAgentMcp/types.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type {
   ActiveBearerRecord,
@@ -51,6 +59,7 @@ import { computeMcpAuditSeverity } from "../../../shared/types/ipc/mcpServer.js"
 import { buildMcpClientConfig } from "../../../shared/config/mcpClientConfigs.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
+import { helpWatchKey, paneWatchKey } from "./terminalWatch.js";
 import type { AbusePolicy } from "./abusePolicy.js";
 import {
   DEFAULT_PORT,
@@ -102,22 +111,28 @@ export interface HttpLifecycleDeps {
     sessionOrigin?: McpSessionOrigin
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   // Workspace-bound variants used for external sessions that named a workspace
-  // at handshake (#11789). They resolve the workspace's current view per call,
-  // so a session survives its view being replaced and fails closed rather than
-  // following focus when it can't. Optional for the same reason as the pinned
-  // variants above: test fixtures that don't wire workspace routing.
+  // at handshake (#11789) and for agent panes bound to their launch workspace
+  // (#12486). They resolve the workspace's current view per call, so a session
+  // survives its view being replaced and fails closed rather than following
+  // focus when it can't. `preferredWebContentsId` is a pane's launch view,
+  // preferred while it still shows the workspace. Optional for the same reason
+  // as the pinned variants above: test fixtures that don't wire workspace
+  // routing. A pane's dispatch also carries its launch context.
   requestManifestForWorkspace?: (
-    workspaceId: string
+    workspaceId: string,
+    preferredWebContentsId?: number
   ) => Promise<import("../../../shared/types/actions.js").ActionManifestEntry[]>;
   dispatchActionForWorkspace?: (
     workspaceId: string,
     actionId: string,
     args: unknown,
     confirmed?: boolean,
-    sessionOrigin?: McpSessionOrigin
+    sessionOrigin?: McpSessionOrigin,
+    options?: WorkspaceDispatchOptions
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   getCachedManifestForWorkspace?: (
-    workspaceId: string
+    workspaceId: string,
+    preferredWebContentsId?: number
   ) => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   /**
    * Take the user to a run and bring its window with them (#12315).
@@ -130,7 +145,8 @@ export interface HttpLifecycleDeps {
     actionId: string,
     args: unknown,
     confirmed: boolean,
-    sessionOrigin: McpSessionOrigin
+    sessionOrigin: McpSessionOrigin,
+    preferredWebContentsId?: number
   ) => Promise<{ envelope: import("./shared.js").DispatchEnvelope; raised: boolean }>;
   /**
    * Validate a handshake workspace selector, or throw when it names no live
@@ -140,12 +156,12 @@ export interface HttpLifecycleDeps {
   handleWaitUntilIdle: (
     rawArgs: unknown,
     signal: AbortSignal,
-    options?: { maxTimeoutMs?: number }
+    options?: { maxTimeoutMs?: number; workspaceId?: string }
   ) => Promise<import("./shared.js").WaitUntilIdleResult>;
   handleWaitUntilIdleBatch: (
     rawArgs: unknown,
     signal: AbortSignal,
-    options?: { maxTimeoutMs?: number }
+    options?: { maxTimeoutMs?: number; workspaceId?: string }
   ) => Promise<import("../../../shared/types/terminalWaitUntilIdle.js").WaitUntilIdleBatchResult>;
   handleSkillsSearch: (
     rawArgs: unknown
@@ -159,6 +175,10 @@ export interface HttpLifecycleDeps {
     rawArgs: unknown,
     workspaceId: string
   ) => Promise<import("../../../shared/types/terminalStatus.js").TerminalStatusResult>;
+  handleTerminalReadLastMessageOwned: import("./sessionServer.js").OwnedMainExecutors["handleTerminalReadLastMessageOwned"];
+  isTerminalIdInUse: (terminalId: string) => boolean;
+  /** Terminal watches (#12491). Absent, every watch tool answers not-eligible. */
+  terminalWatch?: import("./terminalWatch.js").TerminalWatchHandlers;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   // Per-WebContents manifest cache read for pinned help sessions (#9887). Lets
   // the pinned `getCachedManifest` closure return the session's own window's
@@ -198,18 +218,43 @@ function resolveUserAgent(req: http.IncomingMessage): string {
 }
 
 /**
+ * The identity a session is bound to at handshake and checked against on every
+ * follow-up.
+ *
+ * Digests the extracted token rather than the raw header because pane and help
+ * tokens are parsed with a case-insensitive scheme and trimmed whitespace
+ * (`extractBearerToken`): a client that sends `bearer  tok` on one leg and
+ * `Bearer tok` on the next is the same bearer, and `isAuthorized` accepts both.
+ * The raw header is the fallback only when no token can be extracted — the
+ * unauthenticated loopback path, where every caller presents the same empty
+ * header and is equally privileged. The two inputs are prefixed so a header
+ * can never collide with a token.
+ */
+export function sessionCredentialDigest(authHeader: string): string {
+  const token = extractBearerToken(authHeader);
+  const material = token !== null ? `token:${token}` : `raw:${authHeader}`;
+  return createHash("sha256").update(material).digest("hex");
+}
+
+/**
  * Render a dispatch outcome as a redacted, bounded result summary for the
  * audit record, so the recent-calls popover can show what each call actually
  * returned. Gate outcomes (unauthorized / dedup / collision / rate-limit)
  * return null — their `result` classification already says everything.
+ *
+ * A successful result passes through its tool's host-owned projection first
+ * (#12479). The scrub and the length cap run afterwards on whatever is left,
+ * so a tool whose result is conversation hands the summarizer only its shape —
+ * truncating the text after the fact would still have kept its head.
  */
 function summarizeAuditOutcome(
+  toolId: string,
   outcome: import("./auditLog.js").AuditOutcome,
   scrub: (value: string) => string
 ): string | null {
   if (outcome.kind === "result") {
     if (outcome.value.ok) {
-      return summarizeMcpResult(outcome.value.result, scrub);
+      return summarizeMcpResult(projectAuditResult(toolId, outcome.value.result), scrub);
     }
     const { code, message } = outcome.value.error;
     return scrub(`${code}: ${message}`).slice(0, 500);
@@ -266,6 +311,10 @@ export class HttpLifecycle {
   private helpSessionIdResolver: HelpSessionIdResolver | null = null;
   private assistantPaneWebContentsResolver: AssistantPaneWebContentsResolver | null = null;
   private assistantPaneActionContextResolver: AssistantPaneActionContextResolver | null = null;
+  private paneWorkspaceBindingResolver: PaneWorkspaceBindingResolver | null = null;
+  private paneOwnershipPrincipalResolver: PaneOwnershipPrincipalResolver | null = null;
+  private paneTerminalResolver: PaneTerminalResolver | null = null;
+  private helpSessionTerminalResolver: HelpSessionTerminalResolver | null = null;
   private lastError: string | null = null;
   private intentionalStop = false;
   private restartAttempts = 0;
@@ -281,8 +330,13 @@ export class HttpLifecycle {
   // explicit revoke, transport close) can find which bearer owns a closing
   // session without re-parsing the header they no longer hold.
   private readonly sessionToTokenHash = new Map<string, string>();
+  private pluginRouteHandler: PluginMcpRouteHandler | null = null;
 
   constructor(private readonly deps: HttpLifecycleDeps) {}
+
+  setPluginRouteHandler(handler: PluginMcpRouteHandler | null): void {
+    this.pluginRouteHandler = handler;
+  }
 
   get isRunning(): boolean {
     return this.httpServer !== null && this.httpServer.listening && this.port !== null;
@@ -355,6 +409,22 @@ export class HttpLifecycle {
     this.assistantPaneActionContextResolver = resolver;
   }
 
+  setPaneWorkspaceBindingResolver(resolver: PaneWorkspaceBindingResolver | null): void {
+    this.paneWorkspaceBindingResolver = resolver;
+  }
+
+  setPaneOwnershipPrincipalResolver(resolver: PaneOwnershipPrincipalResolver | null): void {
+    this.paneOwnershipPrincipalResolver = resolver;
+  }
+
+  setPaneTerminalResolver(resolver: PaneTerminalResolver | null): void {
+    this.paneTerminalResolver = resolver;
+  }
+
+  setHelpSessionTerminalResolver(resolver: HelpSessionTerminalResolver | null): void {
+    this.helpSessionTerminalResolver = resolver;
+  }
+
   /**
    * Parses a Bearer header and asks the help-session resolver — then the
    * assistant-pane resolver (#10647) — which renderer minted it, keeping *which*
@@ -367,9 +437,10 @@ export class HttpLifecycle {
    * external-client inventory all need that distinction, so it is recorded here
    * rather than inferred downstream.
    *
-   * Returns null for bearers that own no renderer — api-key clients and generic
-   * pane tokens — which are classified `external` and keep the focused-window
-   * fallback in `buildSessionServerDeps` unless they bind a workspace.
+   * Returns null for bearers that own no renderer — api-key clients and agent
+   * pane tokens — which are classified `external`. An api-key client follows
+   * window focus unless it names a workspace; an agent pane is bound to its
+   * launch workspace by {@link resolvePaneWorkspaceBinding} instead.
    */
   private resolveSessionPin(
     authHeader: string
@@ -381,6 +452,74 @@ export class HttpLifecycle {
     const fromPane = this.assistantPaneWebContentsResolver?.(token) ?? null;
     if (fromPane !== null) return { origin: "assistant-pane", webContentsId: fromPane };
     return null;
+  }
+
+  /**
+   * The launch workspace of an ordinary agent pane bearer (#12486), for a
+   * bearer neither pin resolver matched.
+   *
+   * Server-derived, never client-supplied: the binding was recorded when the
+   * pane was spawned, so the pane cannot choose or change its target, and a
+   * selector from one is still refused by {@link resolveWorkspaceSelector} on
+   * tier. It sets routing only. The session keeps the `external` origin every
+   * unpinned bearer gets, so being bound to a view never makes a pane
+   * renderer-owned (#12407).
+   */
+  private resolvePaneWorkspaceBinding(authHeader: string): PaneWorkspaceBinding | null {
+    const token = extractBearerToken(authHeader);
+    if (!token) return null;
+    return this.paneWorkspaceBindingResolver?.(token) ?? null;
+  }
+
+  /**
+   * The principal a pane bearer's resource ownership is held under (#12487),
+   * or null for every other bearer.
+   *
+   * Resolved before any session state is written, like the pane's workspace
+   * binding, and bound with no await in between, so no revocation can land
+   * between the two — a revoked token resolves to nothing, and the session
+   * keeps session-scoped ownership. Looked up whatever the session's origin:
+   * the assistant pane's bearer is a pane token too, minted and revoked on the
+   * same path.
+   */
+  private resolveOwnershipPrincipal(authHeader: string): string | null {
+    const token = extractBearerToken(authHeader);
+    if (!token) return null;
+    return this.paneOwnershipPrincipalResolver?.(token) ?? null;
+  }
+
+  /**
+   * The pane a pane bearer's watches may wake (#12491): its own terminal,
+   * keyed by the ownership principal so a reconnect finds the same watches.
+   * Null for every other bearer, and for a pane bearer without a principal.
+   */
+  private resolveOwnPane(
+    authHeader: string,
+    ownershipPrincipal: string | null
+  ): import("./terminalWatch.js").OwnPane | null {
+    if (ownershipPrincipal === null) return null;
+    const token = extractBearerToken(authHeader);
+    if (!token) return null;
+    const terminalId = this.paneTerminalResolver?.(token) ?? null;
+    return terminalId === null ? null : { key: paneWatchKey(ownershipPrincipal), terminalId };
+  }
+
+  /**
+   * Describe a pane's launch workspace for the session's binding record. Same
+   * best-effort shape as a selector binding: the descriptive fields come from
+   * the live view when exactly one answers, and an unreachable workspace binds
+   * identity-only — the pane was launched there, so the route comes back when
+   * the workspace does, and each call reports the gap meanwhile.
+   */
+  private describePaneWorkspaceBinding(workspaceId: string): McpWorkspaceBinding {
+    const resolve = this.deps.resolveWorkspaceBinding;
+    if (!resolve) return { workspaceId };
+    try {
+      return resolve(workspaceId);
+    } catch (err) {
+      if (err instanceof WorkspaceBindingError) return { workspaceId };
+      throw err;
+    }
   }
 
   /**
@@ -539,11 +678,16 @@ export class HttpLifecycle {
   /**
    * Record (or refresh) the bearer behind an authenticated session handshake.
    * Called once per new session — not per request — because only handshake
-   * requests carry the `Authorization` header through this path. Only
-   * `external`-tier bearers are tracked: the "External clients" row is for
-   * third-party MCP clients (Claude Code, Cursor, scripts), never the
-   * Daintree Assistant's own help-session or in-pane agent tokens — surfacing
-   * those would let the user disconnect their own assistant.
+   * requests carry the `Authorization` header through this path. Every tier
+   * is tracked; non-`external` bearers (help-session and in-pane agent tokens)
+   * are flagged `isHelpSession` so they stay out of the "External clients" row
+   * — surfacing those would let the user disconnect their own assistant — while
+   * still being resolvable for eager teardown (#9151) and listed in the
+   * "Daintree Assistant connections" row (#10036).
+   *
+   * This register is an inventory, not an authorization record: a disconnect
+   * clears it. Which bearer may use a session is recorded separately, in
+   * `SessionStore.sessionCredentialMap`.
    *
    * The hash of the full header is the stable per-token identity; `userAgent`
    * and `lastActiveAt` refresh on every (re)connect. `requestsSinceLaunch`
@@ -880,6 +1024,7 @@ export class HttpLifecycle {
 
     // Drain sessions
     this.deps.sessionStore.drain();
+    this.pluginRouteHandler?.closeAllSessions();
     // Wipe the bearer register so a restart starts from zero live clients —
     // every external client must reconnect, re-registering on handshake.
     this.clearAllBearers();
@@ -976,6 +1121,7 @@ export class HttpLifecycle {
         this.deps.auditService.flushNow();
         this.deps.turnOutcomeService.flushNow();
         this.deps.sessionStore.drain();
+        this.pluginRouteHandler?.closeAllSessions();
         this.clearAllBearers();
         // The drain wipes session-scoped state (grants, dedup, pins);
         // the abuse-policy denial Map is owned alongside but lives on
@@ -1134,6 +1280,19 @@ export class HttpLifecycle {
 
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${this.port}`);
 
+    // Plugin endpoints authenticate their own credentials and nothing else, so
+    // they branch off before the orchestration gate: a plugin grant must never
+    // reach `isAuthorized`, whose fallback would score it as a workbench bearer.
+    if (url.pathname.startsWith(PLUGIN_MCP_ROUTE_PREFIX)) {
+      if (this.pluginRouteHandler && this.port !== null) {
+        await this.pluginRouteHandler.handle(req, res, url, this.port);
+      } else {
+        res.writeHead(404, { "Content-Type": "text/plain" });
+        res.end("Not found");
+      }
+      return;
+    }
+
     const authHeader = req.headers.authorization ?? "";
     if (!isAuthorized(authHeader, this.apiKeyBearerHash, this.helpTokenValidator)) {
       // A session id is a routing handle, not proof of ownership. Attributing
@@ -1178,22 +1337,38 @@ export class HttpLifecycle {
       });
       const sessionId = transport.sessionId;
       const tier = resolveTokenTier(authHeader, this.apiKeyBearerHash, this.helpTokenValidator);
+      // An agent pane's launch workspace (#12486) is resolved before any session
+      // state is written, as the /mcp selector is, so an unexpected resolver
+      // failure leaves nothing behind. This is the transport Claude panes use.
+      const pin = this.resolveSessionPin(authHeader);
+      const paneBinding = pin === null ? this.resolvePaneWorkspaceBinding(authHeader) : null;
+      const workspaceBinding =
+        paneBinding !== null ? this.describePaneWorkspaceBinding(paneBinding.workspaceId) : null;
+      const ownershipPrincipal = this.resolveOwnershipPrincipal(authHeader);
       this.deps.sessionStore.sessionTierMap.set(sessionId, tier);
       this.deps.sessionStore.registerClientMetadata(
         sessionId,
         this.headerString(req.headers["user-agent"]),
         "sse"
       );
+      this.deps.sessionStore.bindSessionCredential(sessionId, sessionCredentialDigest(authHeader));
       this.touchBearer(authHeader, resolveUserAgent(req), sessionId, tier);
 
-      const pin = this.resolveSessionPin(authHeader);
       this.deps.sessionStore.sessionOriginMap.set(sessionId, pin?.origin ?? "external");
+      if (ownershipPrincipal !== null) {
+        this.deps.sessionStore.resourceOwnership.bindPrincipal(sessionId, ownershipPrincipal);
+      }
       const pinnedWebContentsId = pin?.webContentsId ?? null;
       if (pinnedWebContentsId !== null) {
         this.deps.sessionStore.sessionWebContentsMap.set(sessionId, pinnedWebContentsId);
       }
 
-      const boundActionContext = this.resolveActionContext(authHeader);
+      if (workspaceBinding !== null) {
+        this.deps.sessionStore.sessionWorkspaceMap.set(sessionId, workspaceBinding.workspaceId);
+      }
+
+      const boundActionContext =
+        this.resolveActionContext(authHeader) ?? paneBinding?.actionContext ?? null;
       if (boundActionContext !== null) {
         this.deps.sessionStore.sessionContextMap.set(sessionId, boundActionContext);
       }
@@ -1203,7 +1378,12 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionHelpIdMap.set(sessionId, helpSessionId);
       }
 
-      const deps = this.buildSessionServerDeps(sessionId);
+      const deps = this.buildSessionServerDeps(
+        sessionId,
+        workspaceBinding ?? undefined,
+        paneBinding ?? undefined,
+        this.resolveOwnPane(authHeader, ownershipPrincipal)
+      );
       const server = createSessionServer(sessionId, deps);
 
       const idleTimer = this.deps.sessionStore.createIdleTimer(sessionId);
@@ -1277,8 +1457,17 @@ export class HttpLifecycle {
         return;
       }
 
+      // Only the bearer that opened the stream may post into it. Any other
+      // valid bearer gets the same 404 an unknown id does, so the response
+      // never confirms that a guessed or leaked id is live. The ownership
+      // check runs whether or not the id resolved, so both answers do the
+      // same work.
       const session = this.deps.sessionStore.sessions.get(sid);
-      if (session) {
+      const owned = this.deps.sessionStore.isSessionCredential(
+        sid,
+        sessionCredentialDigest(authHeader)
+      );
+      if (session && owned) {
         this.deps.sessionStore.resetIdleTimer(sid);
         this.markBearerActive(sid);
         await session.transport.handlePostMessage(req, res);
@@ -1311,8 +1500,18 @@ export class HttpLifecycle {
     const sessionId = Array.isArray(headerValue) ? headerValue[0] : headerValue;
 
     if (sessionId !== undefined && sessionId !== "") {
+      // Ownership before anything that could tell the caller the session
+      // exists — the selector checks below answer differently for a live
+      // session, so they must never run for a bearer that did not create it.
+      // DELETE is covered too: terminating someone else's session is the
+      // cheapest thing a leaked id would otherwise buy. Evaluated for unknown
+      // ids too, so both answers do the same work.
       const session = this.deps.sessionStore.httpSessions.get(sessionId);
-      if (!session) {
+      const owned = this.deps.sessionStore.isSessionCredential(
+        sessionId,
+        sessionCredentialDigest(req.headers.authorization ?? "")
+      );
+      if (!session || !owned) {
         res.writeHead(404, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
@@ -1379,11 +1578,22 @@ export class HttpLifecycle {
       this.rejectHandshake(res, selector.rejection);
       return;
     }
-    const workspaceBinding = selector?.binding ?? null;
+    // Looked up only without a selector. A pane bearer never gets here with
+    // one — its tier refuses it above — so this only makes explicit that the
+    // two sources of a binding can never both apply.
+    const paneBinding =
+      pin === null && selector === null ? this.resolvePaneWorkspaceBinding(authHeader) : null;
+    const workspaceBinding =
+      selector?.binding ??
+      (paneBinding !== null ? this.describePaneWorkspaceBinding(paneBinding.workspaceId) : null);
+    const ownershipPrincipal = this.resolveOwnershipPrincipal(authHeader);
 
     const newSessionId = randomUUID();
     this.deps.sessionStore.sessionTierMap.set(newSessionId, tier);
     this.deps.sessionStore.sessionOriginMap.set(newSessionId, origin);
+    if (ownershipPrincipal !== null) {
+      this.deps.sessionStore.resourceOwnership.bindPrincipal(newSessionId, ownershipPrincipal);
+    }
     this.deps.sessionStore.registerClientMetadata(
       newSessionId,
       this.headerString(req.headers["user-agent"]),
@@ -1398,7 +1608,8 @@ export class HttpLifecycle {
       this.deps.sessionStore.sessionWorkspaceMap.set(newSessionId, workspaceBinding.workspaceId);
     }
 
-    const boundActionContext = this.resolveActionContext(authHeader);
+    const boundActionContext =
+      this.resolveActionContext(authHeader) ?? paneBinding?.actionContext ?? null;
     if (boundActionContext !== null) {
       this.deps.sessionStore.sessionContextMap.set(newSessionId, boundActionContext);
     }
@@ -1408,7 +1619,12 @@ export class HttpLifecycle {
       this.deps.sessionStore.sessionHelpIdMap.set(newSessionId, helpSessionId);
     }
 
-    const deps = this.buildSessionServerDeps(newSessionId, workspaceBinding ?? undefined);
+    const deps = this.buildSessionServerDeps(
+      newSessionId,
+      workspaceBinding ?? undefined,
+      paneBinding ?? undefined,
+      this.resolveOwnPane(authHeader, ownershipPrincipal)
+    );
     const server = createSessionServer(newSessionId, deps);
     const allowedHosts = [`127.0.0.1:${this.port}`, `localhost:${this.port}`];
     const allowedOrigins = [`http://127.0.0.1:${this.port}`, `http://localhost:${this.port}`];
@@ -1420,6 +1636,12 @@ export class HttpLifecycle {
       allowedHosts,
       allowedOrigins,
       onsessioninitialized: (initializedSessionId) => {
+        // Bound before the session is filed in `httpSessions`, so there is no
+        // instant at which the id is addressable without an owner on record.
+        this.deps.sessionStore.bindSessionCredential(
+          initializedSessionId,
+          sessionCredentialDigest(authHeader)
+        );
         const idleTimer = this.deps.sessionStore.createHttpIdleTimer(initializedSessionId);
         this.deps.sessionStore.httpSessions.set(initializedSessionId, {
           transport,
@@ -1535,21 +1757,27 @@ export class HttpLifecycle {
    * handshake. Three routes, in precedence order:
    *
    * 1. **Workspace-bound** (#11789) — an external session that named a
-   *    workspace. Every operation re-resolves that workspace's current view, so
+   *    workspace, or an agent pane bound to the workspace it was launched in
+   *    (#12486). Every operation re-resolves that workspace's current view, so
    *    the session survives its view being replaced and fails closed rather
-   *    than following focus when the workspace has no single live view.
+   *    than following focus when the workspace has no single live view. A
+   *    pane's launch view is preferred while it still shows the workspace.
    * 2. **WebContents-pinned** (#7002) — help-session and assistant-pane
    *    bearers, routed to the renderer that minted them, with a cache-free
    *    manifest lookup so window A's manifest can never be served to window B.
-   * 3. **Unbound** — api-key / pane tokens, which keep the shared dispatch and
-   *    cached-manifest path and follow window focus, as documented.
+   * 3. **Unbound** — api-key tokens with no selector, which keep the shared
+   *    dispatch and cached-manifest path and follow window focus, as
+   *    documented.
    *
    * The two bound routes are mutually exclusive by construction: a selector
-   * from a pinned bearer is refused at handshake.
+   * from a pinned bearer is refused at handshake, and a pane binding is only
+   * looked up for a bearer neither pin resolver matched.
    */
   private buildSessionServerDeps(
     sessionId: string,
-    workspaceBinding?: McpWorkspaceBinding
+    workspaceBinding?: McpWorkspaceBinding,
+    paneBinding?: PaneWorkspaceBinding,
+    ownPane?: import("./terminalWatch.js").OwnPane | null
   ): import("./sessionServer.js").SessionServerDeps {
     const pinnedDispatch = this.deps.dispatchActionForWebContents;
     const pinnedManifest = this.deps.requestManifestForWebContents;
@@ -1559,6 +1787,19 @@ export class HttpLifecycle {
     // mid-call must keep failing closed to its own workspace rather than
     // silently reverting to the focused-window path.
     const boundWorkspaceId = workspaceBinding?.workspaceId ?? null;
+    // Only ever alongside a workspace binding: the handshake derives one from
+    // the other. Undefined for an external bound session, whose route has no
+    // launch view to prefer and nothing extra to carry. Captured with the
+    // workspace, for the workspace's reason: a session torn down while a call
+    // awaits its manifest must still dispatch against the pane's own worktree,
+    // not drop its context and act on whatever the view has selected.
+    const paneDispatchOptions: WorkspaceDispatchOptions | undefined = paneBinding
+      ? {
+          contextOverride: paneBinding.actionContext,
+          preferredWebContentsId: paneBinding.launchWebContentsId,
+        }
+      : undefined;
+    const preferredWebContentsId = paneBinding?.launchWebContentsId;
     // Captured at build time (both handshakes populate the map before calling
     // this) so an in-flight dispatch settling after teardown deletes the map
     // entry still stamps its audit record / resolves its turnId correctly.
@@ -1593,7 +1834,7 @@ export class HttpLifecycle {
       () => {
         if (boundWorkspaceId !== null) {
           return workspaceManifest
-            ? workspaceManifest(boundWorkspaceId)
+            ? workspaceManifest(boundWorkspaceId, preferredWebContentsId)
             : Promise.reject(missingWorkspaceRoute());
         }
         const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
@@ -1618,7 +1859,14 @@ export class HttpLifecycle {
     const revealOwnedRun: import("./sessionServer.js").SessionServerDeps["revealOwnedRun"] =
       bridgeReveal
         ? (workspaceId, actionId, args, confirmed) =>
-            bridgeReveal(workspaceId, actionId, args, confirmed ?? false, sessionOrigin)
+            bridgeReveal(
+              workspaceId,
+              actionId,
+              args,
+              confirmed ?? false,
+              sessionOrigin,
+              preferredWebContentsId
+            )
         : undefined;
 
     const dispatchAction: import("./sessionServer.js").SessionServerDeps["dispatchAction"] = (
@@ -1627,21 +1875,31 @@ export class HttpLifecycle {
       confirmed
     ) => {
       if (boundWorkspaceId !== null) {
-        // No context override: unlike a help session, which replays the
-        // ActionContext snapshot taken when the user launched it (#8317), a
-        // bound external session has no launch moment to replay — and the bound
-        // view's own live context already describes the right workspace.
+        // A bound external session records no context: unlike a help session,
+        // which replays the ActionContext snapshot taken when the user launched
+        // it (#8317), it has no launch moment to replay, and the bound view's
+        // own live context already describes the right workspace. An agent
+        // pane does have one (#12486), so its snapshot rides along here.
         //
         // No `callerInfo` either: it exists solely to name the requesting client
-        // in the confirm dialog (#9157), and a bound session's surface excludes
-        // every confirm-gated tool, so nothing could ever read it.
+        // in the confirm dialog (#9157). A bound external session's surface
+        // excludes every confirm-gated tool, so nothing could ever read it, and
+        // a pane's ladder-tier bearer has none to give — the bearer register
+        // withholds it for every non-external tier, bound or not.
         //
         // `sessionOrigin` is threaded even though only `external` sessions may
         // bind — a selector from a pinned bearer is refused at handshake — so
         // the payload is built the same way on all three routes rather than one
         // of them relying on a default that a later binding rule could falsify.
         return workspaceDispatch
-          ? workspaceDispatch(boundWorkspaceId, actionId, args, confirmed, sessionOrigin)
+          ? workspaceDispatch(
+              boundWorkspaceId,
+              actionId,
+              args,
+              confirmed,
+              sessionOrigin,
+              paneDispatchOptions
+            )
           : Promise.reject(missingWorkspaceRoute());
       }
       const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
@@ -1675,7 +1933,10 @@ export class HttpLifecycle {
         // Workspace-bound sessions get the same treatment against the view that
         // currently owns their workspace (#11789).
         if (boundWorkspaceId !== null) {
-          return this.deps.getCachedManifestForWorkspace?.(boundWorkspaceId) ?? null;
+          return (
+            this.deps.getCachedManifestForWorkspace?.(boundWorkspaceId, preferredWebContentsId) ??
+            null
+          );
         }
         if (pinnedWebContentsId !== null) {
           return this.deps.getCachedManifestForWebContents?.(pinnedWebContentsId) ?? null;
@@ -1848,6 +2109,7 @@ export class HttpLifecycle {
       // (#11789) — a client must be able to verify where its calls will land
       // before it issues the first mutation.
       ...(workspaceBinding ? { workspaceBinding } : {}),
+      ...(preferredWebContentsId !== undefined ? { preferredWebContentsId } : {}),
       requestManifest,
       dispatchAction,
       revealOwnedRun,
@@ -1857,6 +2119,18 @@ export class HttpLifecycle {
       handleSkillsLoad: this.deps.handleSkillsLoad,
       handleProjectRunCheck: this.deps.handleProjectRunCheck,
       handleTerminalGetStatusViewless: this.deps.handleTerminalGetStatusViewless,
+      handleTerminalReadLastMessageOwned: this.deps.handleTerminalReadLastMessageOwned,
+      isTerminalIdInUse: this.deps.isTerminalIdInUse,
+      ...(this.deps.terminalWatch !== undefined ? { terminalWatch: this.deps.terminalWatch } : {}),
+      // A pane bearer's own terminal is fixed for the bearer's life and was
+      // resolved at handshake; a help lane's is read per call, because its
+      // binding follows the PTY that currently serves it.
+      resolveOwnPane: () => {
+        if (ownPane) return ownPane;
+        if (helpSessionId === null) return null;
+        const terminalId = this.helpSessionTerminalResolver?.(helpSessionId) ?? null;
+        return terminalId === null ? null : { key: helpWatchKey(helpSessionId), terminalId };
+      },
       appendAuditRecord: (input) => {
         // Scrub structural secrets BEFORE the truncation step inside
         // `summarizeMcpArgs` — running the scrubber after truncation would
@@ -1871,7 +2145,7 @@ export class HttpLifecycle {
         // public field).
         const { capturedTurnId, ...recordInput } = input;
         const turnId = capturedTurnId ?? null;
-        const resultSummary = summarizeAuditOutcome(input.outcome, (s) =>
+        const resultSummary = summarizeAuditOutcome(input.toolId, input.outcome, (s) =>
           scrubSecrets(sanitizePath(s))
         );
         // `summarizeAuditOutcome` returns null for all gate outcomes by

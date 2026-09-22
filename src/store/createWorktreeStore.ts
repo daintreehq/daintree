@@ -10,8 +10,10 @@ import {
   type WorktreeTerminalRestoreSnapshot,
 } from "@/components/Worktree/worktreeDeleteHelper";
 import { logDebug } from "@/utils/logger";
+import { logErrorWithContext } from "@/utils/errorContext";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { issueNumberBelongsToLinkedPr } from "@shared/utils/worktreeIssueProjection";
 
 /**
  * How long a `worktree-removed` tombstone suppresses a late `worktree-update`
@@ -1630,6 +1632,11 @@ async function runDeleteAsync(
   options: WorktreeDeleteOptions,
   mutationId: string
 ): Promise<void> {
+  // Which half of the flow a failure came from. `classifyError` reads the
+  // message, and a branch name is part of that message — `feature/fetch` reads
+  // as a network error, `fix/file-upload` as a filesystem one. Once the delete
+  // call is in flight we know the category without having to guess at text.
+  let reachedDelete = false;
   try {
     // A rapid retry after a prior attempt's restore must not start closing
     // terminals while that restore is still spawning panels (#11344) — wait it
@@ -1665,6 +1672,7 @@ async function runDeleteAsync(
     const existingDevPreview = await window.electron.devPreview.getByWorktree({ worktreeId });
     const hadDevPreview = existingDevPreview !== null;
     await window.electron.devPreview.stopByWorktree({ worktreeId });
+    reachedDelete = true;
     await worktreeClient.delete(worktreeId, {
       force: options.force,
       deleteBranch: options.deleteBranch,
@@ -1688,6 +1696,26 @@ async function runDeleteAsync(
     pruneOutboxEntry(get, set, mutationId);
   } catch (err) {
     const message = formatErrorMessage(err, "Failed to delete worktree");
+    // Logged once here, before the routing split below, so the partial-success
+    // path (card already gone, toast only) and the pre-IPC failures (dev-preview
+    // stop, terminal close) land in `daintree.log` too — not just the failures
+    // that still have a card to draw an error on.
+    // Only the delete itself is known to be git. The terminal-close and
+    // dev-preview failures ahead of it are not, so those are left to
+    // `classifyError` and its structured props rather than forced to a
+    // category the stage cannot support.
+    logErrorWithContext(err, {
+      operation: "delete_worktree",
+      component: "createWorktreeStore",
+      ...(reachedDelete ? { errorType: "git" as const } : {}),
+      details: {
+        worktreeId,
+        mutationId,
+        force: options.force,
+        deleteBranch: options.deleteBranch,
+        closeTerminals: options.closeTerminals,
+      },
+    });
     const prev = get();
     // Partial-success path: the backend removes the worktree and emits
     // `worktree-removed` BEFORE it touches the branch, so a branch-delete
@@ -2087,12 +2115,6 @@ function mergeIssueState(
     issueTitle = existing.issueTitle;
   }
 
-  // MANUAL_OVER_AUTO: explicit user association wins over auto-detection.
-  if (manual) {
-    issueNumber = manual.issueNumber;
-    issueTitle = manual.issueTitle;
-  }
-
   // `linked: undefined` from the host means "PR service hasn't run yet" —
   // preserve whatever the renderer already has (e.g. `linked.pr` from a
   // prior session's `pr-detected` event). `linked: null` is an explicit
@@ -2101,6 +2123,21 @@ function mergeIssueState(
     incoming.linked === undefined && existing?.linked !== undefined
       ? existing.linked
       : incoming.linked;
+
+  // The host already drops an issue number its linked GitHub PR carries, but
+  // the `pr-detected` overlay re-adds the raw candidate number the event was
+  // sent with. Applied before the manual override so an explicit association
+  // still wins (#12381).
+  if (issueNumberBelongsToLinkedPr(issueNumber, linked)) {
+    issueNumber = undefined;
+    issueTitle = undefined;
+  }
+
+  // MANUAL_OVER_AUTO: explicit user association wins over auto-detection.
+  if (manual) {
+    issueNumber = manual.issueNumber;
+    issueTitle = manual.issueTitle;
+  }
 
   if (
     issueNumber === incoming.issueNumber &&
@@ -2169,6 +2206,7 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.hasResumeCommand === b.hasResumeCommand &&
     a.hasTeardownCommand === b.hasTeardownCommand &&
     a.resourceConnectCommand === b.resourceConnectCommand &&
+    a.lifecycleCommandsNeedApproval === b.lifecycleCommandsNeedApproval &&
     a.isExternal === b.isExternal &&
     a.isWslPath === b.isWslPath &&
     a.wslDistro === b.wslDistro &&

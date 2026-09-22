@@ -5,7 +5,7 @@
  * introduced in issue #5483: `ready + authConfirmed: undefined` should hide
  * the section; `ready + authConfirmed: false` should surface the auth nudge;
  * `installed` (WSL cap) should surface a distinct WSL message and never
- * claim "not signed in".
+ * claim a credential problem.
  */
 import { describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/react";
@@ -90,7 +90,10 @@ describe("AgentInstallSection tri-state rendering", () => {
     };
     const { container } = renderSection({ availability: "unauthenticated", detail });
     expect(container.textContent).toContain("Authentication");
-    expect(container.textContent).toContain("not signed in");
+    // States what the probe saw, and does not promise what launching will do — the
+    // state is launchable and the CLI resolves credentials at run time.
+    expect(container.textContent).toContain("no credentials were detected");
+    expect(container.textContent).not.toMatch(/will prompt/i);
   });
 
   it("renders the WSL 'Not launchable' message for installed WSL agents (not an auth nudge)", () => {
@@ -103,8 +106,8 @@ describe("AgentInstallSection tri-state rendering", () => {
     const { container } = renderSection({ availability: "installed", detail });
     expect(container.textContent).toContain("Not launchable");
     expect(container.textContent).toContain("WSL");
-    // Must NOT claim the user needs to sign in — the issue is launch, not auth.
-    expect(container.textContent).not.toContain("not signed in");
+    // Must NOT claim a credential problem — the issue is launch, not auth.
+    expect(container.textContent).not.toContain("no credentials were detected");
   });
 
   it("renders the Installation header when availability is missing", () => {

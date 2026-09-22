@@ -25,11 +25,13 @@ import {
 import {
   ACTION_TIER_ADDONS as ACTION_TIER_ADDONS_LIST,
   ACTIONS_LIST_TOOL,
+  RENDERER_OWNED_ORIGIN_ONLY_TOOLS,
   SYSTEM_TIER_ADDONS as SYSTEM_TIER_ADDONS_LIST,
   WORKBENCH_TIER_TOOLS as WORKBENCH_TIER_TOOLS_LIST,
 } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import { MCP_EXTERNAL_TIER_TOOLS } from "../../../shared/config/mcpExternalTierAllowlist.js";
 import { MCP_WORKSPACE_ID_HEADER as MCP_WORKSPACE_ID_HEADER_CANONICAL } from "../../../shared/config/mcpClientConfigs.js";
+import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../shared/config/mcpLimits.js";
 import { safeSerializeToolResult } from "../../utils/safeSerializeToolResult.js";
 import { buildToolCallTextResult } from "./toolCallResult.js";
 
@@ -56,7 +58,7 @@ export type HelpTokenValidator = (token: string) => HelpAssistantTier | false;
  * `httpLifecycle` to record the session in `sessionWebContentsMap` and route
  * all of that session's tool calls through the pinned view rather than the
  * "first live view" fallback. Returns null for non-help bearers (api-key /
- * pane tokens), which keep the existing focused-window semantics.
+ * pane tokens), which route by workspace binding or follow window focus.
  */
 export type HelpSessionWebContentsResolver = (token: string) => number | null;
 /**
@@ -67,7 +69,7 @@ export type HelpSessionWebContentsResolver = (token: string) => number | null;
  * against the worktree/terminal the user had focused when they launched the
  * assistant — not whatever they happen to be looking at when the model's
  * tool call lands. Returns null for non-help bearers (api-key / pane
- * tokens), which intentionally keep the live focused-window context.
+ * tokens); an agent pane's snapshot comes from its workspace binding instead.
  */
 export type HelpSessionActionContextResolver = (token: string) => ActionContext | null;
 /**
@@ -95,6 +97,60 @@ export type AssistantPaneWebContentsResolver = (token: string) => number | null;
  * context.
  */
 export type AssistantPaneActionContextResolver = (token: string) => ActionContext | null;
+/**
+ * Where an ordinary agent pane's MCP session routes (#12486): the workspace it
+ * was launched in, not whichever window has focus when a call arrives.
+ *
+ * The workspace id is the routing identity, re-resolved per call so the pane
+ * survives its view being evicted and recreated. `launchWebContentsId` is the
+ * view that launched it, preferred while it is alive and still shows the
+ * workspace, so a workspace open in two windows keeps routing to the one the
+ * pane belongs to instead of failing as ambiguous. `actionContext` is the
+ * launch-time snapshot replayed on every dispatch (#8317).
+ */
+export interface PaneWorkspaceBinding {
+  workspaceId: string;
+  launchWebContentsId?: number;
+  actionContext?: ActionContext;
+}
+/**
+ * Resolver consulted at MCP handshake for an ordinary agent pane bearer's
+ * launch workspace (#12486). Consulted only after the help and assistant-pane
+ * resolvers miss, and confers no origin: the session stays `external`, so
+ * binding where its calls land never widens what it may call (#12407).
+ */
+export type PaneWorkspaceBindingResolver = (token: string) => PaneWorkspaceBinding | null;
+/**
+ * Resolver consulted at MCP handshake for the principal a per-pane bearer's
+ * resource ownership is held under (#12487). Server-derived from the bearer,
+ * never from anything the client sends, so one pane cannot name its way into
+ * another's resources. Returns null for every other bearer, whose ownership
+ * stays with the session.
+ */
+export type PaneOwnershipPrincipalResolver = (token: string) => string | null;
+/**
+ * Resolver consulted at MCP handshake for the terminal a per-pane bearer was
+ * minted for (#12491): the pane a terminal watch may wake. Null for every
+ * other bearer.
+ */
+export type PaneTerminalResolver = (token: string) => string | null;
+/**
+ * The terminal a help session is bound to (#12491), read when a watch tool is
+ * called rather than at handshake: the binding lands when the PTY spawns and
+ * goes when it is displaced.
+ */
+export type HelpSessionTerminalResolver = (helpSessionId: string) => string | null;
+/**
+ * What an agent pane's workspace-bound dispatch carries beyond an external
+ * session's (#12486). Every field is optional, so an external bound session
+ * passes nothing and dispatches exactly as it always has.
+ */
+export interface WorkspaceDispatchOptions {
+  /** The pane's launch-time snapshot, replayed as a help session's is (#8317). */
+  contextOverride?: ActionContext;
+  /** The pane's launch view, preferred while it still shows the workspace. */
+  preferredWebContentsId?: number;
+}
 export type { HelpAssistantTier };
 
 export { MCP_SERVER_KEY } from "../../../shared/config/mcpClientConfigs.js";
@@ -515,6 +571,35 @@ export const TIER_ALLOWLISTS: Readonly<Record<McpTier, ReadonlySet<string>>> = {
   external: MCP_TOOL_ALLOWLIST,
 };
 
+/** Tools only a renderer-owned session may reach, at any tier (#12407). */
+export const RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS: ReadonlySet<string> = new Set(
+  RENDERER_OWNED_ORIGIN_ONLY_TOOLS
+);
+
+function withoutSet(set: ReadonlySet<string>, removed: ReadonlySet<string>): ReadonlySet<string> {
+  const out = new Set<string>();
+  for (const value of set) {
+    if (!removed.has(value)) out.add(value);
+  }
+  return out;
+}
+
+/**
+ * The same four surfaces as {@link TIER_ALLOWLISTS}, admitted against by every
+ * session whose origin is not renderer-owned — an agent pane's bearer at a
+ * ladder tier, or an api-key client (#12407).
+ *
+ * `external` is filtered too even though its allowlist is curated without these
+ * ids: the subtraction is what keeps a future edit to that list from quietly
+ * handing unscoped terminal input back to a third-party client.
+ */
+export const NON_RENDERER_OWNED_TIER_ALLOWLISTS: Readonly<Record<McpTier, ReadonlySet<string>>> = {
+  workbench: withoutSet(TIER_ALLOWLISTS.workbench, RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS),
+  action: withoutSet(TIER_ALLOWLISTS.action, RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS),
+  system: withoutSet(TIER_ALLOWLISTS.system, RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS),
+  external: withoutSet(TIER_ALLOWLISTS.external, RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS),
+};
+
 export const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
 
 /**
@@ -597,7 +682,7 @@ export const MCP_SERVER_INSTRUCTIONS = [
 
   "`tools/list` is the advertised baseline; do not invent tool names. When its schemas are too large to reason over, use `actions.search` for a compact ranked shortlist of what this session is already authorized to call, then `actions.getSchema` for one action's manifest entry and whatever schemas it publishes. Neither widens access: discovery reports the surface, it does not extend it.",
 
-  'Resolve the target worktree and terminal ids before scoped actions. `terminal.sendCommand` returns once the text is submitted, not when the work finishes — prefer `terminal.waitUntilIdle` or `terminal.waitUntilIdleBatch` over tight polling, then read `idleReason`, `waitingReason`, and `exitCode` before your next turn or any irreversible step. Those waits track agent panes: a terminal with no tracked agent returns `idleReason: "unknown"` at once, which is not proof a shell command finished.',
+  'Resolve the target worktree and terminal ids before scoped actions. A terminal submission returns once the text is queued, not when the work finishes — prefer `terminal.waitUntilIdle` or `terminal.waitUntilIdleBatch` over tight polling, then read `idleReason`, `waitingReason`, and `exitCode` before your next turn or any irreversible step. Those waits track agent panes: a terminal with no tracked agent returns `idleReason: "unknown"` at once, which is not proof a shell command finished.',
 
   "Authorization is tiered: in-app `workbench`, `action`, and `system` progressively widen access, while `external` is an independently curated allowlist; a call outside the current authorized surface returns `TIER_NOT_PERMITTED`. Honor `retriable` on errors — retry a `false` only once arguments, context, or authorization have changed.",
 ].join("\n\n");
@@ -765,7 +850,7 @@ export const RESOURCE_BACKING_ACTIONS: Readonly<Record<ResourceKind, string>> = 
  */
 export const WORKSPACE_BINDING_RESOURCE_URI = "daintree://workspace/current/binding";
 
-export const RESOURCE_TEXT_MAX_BYTES = 50 * 1024;
+export const RESOURCE_TEXT_MAX_BYTES = MCP_RESPONSE_TEXT_MAX_BYTES;
 
 export const RESOURCE_SCROLLBACK_TAIL_LINES = 200;
 
@@ -919,11 +1004,12 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
         "4. **Act on `agentState`** for non-working terminals:",
         "   - `completed` — agent finished its task; record the result and dispatch the next step.",
         "   - `exited` — agent process exited; surface to the user, the terminal won't recover on its own.",
-        '   - `waiting` — agent paused, likely needing input. `waitingReason` distinguishes `"prompt"` (empty input prompt, safe to auto-drive), `"question"` (agent is asking the user something — verify before auto-replying), `"approval"` (a permission/approval selector needs a specific choice — send the selection keys, not free text), and `"error"` (agent stopped after a blocking error such as auth/rate limit/network — input alone may not unblock it; surface to the user when unsure).',
+        '   - `waiting` — agent paused, likely needing input. `waitingReason` distinguishes `"prompt"` (no more specific reason was detected — usually an empty input prompt, but it is also the fallback when nothing matched, so confirm against output before driving it), `"question"` (agent is asking the user something — verify before auto-replying), `"approval"` (a trust, permission or approval dialog is waiting on a choice — answer it only within authority the user already gave and say that you did, otherwise surface the agent, the question and the directory to the user; read the dialog first, because a command send types text and then presses Enter, and a stray Enter or guessed key lands in whatever comes next), and `"error"` (agent stopped after a blocking error such as auth/rate limit/network — input alone may not unblock it; surface to the user when unsure).',
         "   - `idle` — agent is settling between subtasks; skip and re-poll.",
         "   - `null` — no agent attached or unknown state; treat as still busy.",
-        "5. **Cross-check stuck state with `includeOutput`.** The state cache is a heuristic, not ground truth — `ActivityMonitor` can pin a finished agent at `working`. **If `agentState` for a given terminal hasn't transitioned across roughly 3 polling rounds, set `includeOutput` on the next round to verify against actual terminal text.** A short scrollback tail is usually enough to tell a stuck FSM from a genuinely working agent.",
+        "5. **Cross-check stuck state with `includeOutput`.** The state cache is a heuristic, not ground truth — `ActivityMonitor` can pin a finished agent at `working`. **If `agentState` for a given terminal hasn't transitioned across roughly 3 polling rounds, set `includeOutput` on the next round to verify against actual terminal text.** A short scrollback tail is usually enough to tell a stuck FSM from a genuinely working agent. The same call fills `lastOutputChangeAt` — when the visible screen last changed, ignoring recognized spinner/timer redraws — so compare it across rounds: an advancing value means the screen is still moving. It is absent when no change was observed, which is unknown rather than stalled, and it is NOT a hang verdict: quiet reasoning leaves the screen just as still as a frozen agent, so read the tail before acting on it.",
         "5b. **Route on `lastCheckResult` instead of scraping tails.** When present it carries `{ command, passed, ranAt, failureSummary, truncated }` parsed from the agent's last recognized tsc/ESLint/Vitest/Jest summary — use `passed` to branch (e.g. proceed vs. tell the agent to fix), and `failureSummary` to see what broke without an `includeOutput` round-trip. It is PARSED, not an authoritative exit code: trust it for routing but confirm with `recentOutput` before anything destructive. Absence means no recognized check summary was seen — NOT that a check passed or that none ran. Check `ranAt` against `lastTransitionAt` to confirm the result is from the current run.",
+        "5c. **Read `lastHandback` when you asked for one.** A send or launch with `handback: true` asks the agent to end its reply with a marker; once it prints one, the entry carries `lastHandback` (`{ message, observedAt, submissionToken?, truncated }`), and so do both waits. It records that the agent printed the marker, not that the work is done: `message` is the agent's own untrusted, lossy summary — read its last message for exact text. Match `submissionToken` to the send that asked. Absence never means still working: agents forget the instruction or lose it when their context compacts, so `agentState` stays the floor.",
         "6. **Pace the next round with `ScheduleWakeup`.** Don't busy-loop. `ScheduleWakeup` resumes the orchestrator after a delay without holding a blocking call open, so it stays responsive to user interrupts.",
         "",
         "Sketch:",
@@ -974,8 +1060,8 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
         '    case "exited":',
         "      /* surface to user */ break;",
         '    case "waiting":',
-        '      /* t.waitingReason: "prompt" → safe to auto-drive; "question" → verify against scrollback, then act or ask; */',
-        '      /* "approval" → answer the selector (keys, not prose); "error" → check scrollback, often needs the user */',
+        '      /* t.waitingReason: "prompt" → also the fallback when nothing matched, so confirm against output; "question" → verify against scrollback, then act or ask; */',
+        '      /* "approval" → read the dialog; answer only within the user\'s authority and report it, else surface it; "error" → check scrollback, often needs the user */',
         "      break;",
         "  }",
         "  stuckCount[t.terminalId] = 0;",
@@ -986,7 +1072,7 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
         "",
         "**Single terminals pace the same way.** Don't hold a blocking `terminal.waitUntilIdle` open to wait out a task — while the call is in flight the user can't talk to you, so an interactive session looks frozen until they cancel it (the server caps interactive waits at 60s for this reason). Kick off the task, then `ScheduleWakeup` → non-blocking check (`terminal.getStatus` or `waitUntilIdle({ timeoutMs: 0 })`) → repeat. A short bounded `waitUntilIdle` long-poll is fine when completion is expected within the minute; on `timedOut: true`, fall back to wakeup pacing instead of re-blocking back-to-back.",
         "",
-        '**Fleet broadcast runs are supervised.** When the user fans a prompt out with the in-app fleet broadcast, `fleet.getRunStatus` returns the supervised run in one call: per-target submission outcome (`sent` / `failed` with `permanent`-vs-`transient` classification / `skipped` on cancel), a live `agentState` snapshot, `settled` flags, and aggregate counts. Use it to answer "how is the fleet run going" instead of reconstructing the picture from raw `terminal.getStatus` — but keep using `terminal.getStatus` (with `includeOutput`) as ground truth before acting on any single terminal. `fleet.getRunStatus` never dispatches anything, and there is deliberately no MCP tool that broadcasts to the whole fleet: to orchestrate your own fan-out, send one `terminal.sendCommand` per terminal and watch with batched `terminal.getStatus` / a bounded `terminal.waitUntilIdleBatch`.',
+        '**Fleet broadcast runs are supervised.** When the user fans a prompt out with the in-app fleet broadcast, `fleet.getRunStatus` returns the supervised run in one call: per-target submission outcome (`sent` / `failed` with `permanent`-vs-`transient` classification / `skipped` on cancel), a live `agentState` snapshot, `settled` flags, and aggregate counts. Use it to answer "how is the fleet run going" instead of reconstructing the picture from raw `terminal.getStatus` — but keep using `terminal.getStatus` (with `includeOutput`) as ground truth before acting on any single terminal. `fleet.getRunStatus` never dispatches anything, and there is deliberately no MCP tool that broadcasts to the whole fleet: to orchestrate your own fan-out, send one `terminal.sendCommandOwned` per terminal you launched or the user handed you, and watch with batched `terminal.getStatus` / a bounded `terminal.waitUntilIdleBatch`.',
       ].join("\n");
     },
   },
@@ -1110,6 +1196,34 @@ export function truncateText(text: string, maxBytes: number = RESOURCE_TEXT_MAX_
   if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
   const sliced = Buffer.from(text, "utf8").subarray(0, maxBytes).toString("utf8");
   return `${sliced}\n\n[truncated]`;
+}
+
+const TAIL_TRUNCATION_MARKER = "[truncated]\n\n";
+
+/**
+ * Tail-preserving counterpart of {@link truncateText}, for text whose newest
+ * end is the part a reader asked for (#12450). Keeps whole trailing lines within
+ * `maxBytes`, marker included; a single line too long to fit keeps its trailing
+ * bytes, started on a character boundary. The marker leads so a client that
+ * trims the text again cannot cut it off.
+ */
+export function truncateTextTail(text: string, maxBytes: number = RESOURCE_TEXT_MAX_BYTES): string {
+  const limit = Math.max(0, Math.floor(maxBytes));
+  const buffer = Buffer.from(text, "utf8");
+  if (buffer.length <= limit) return text;
+  // The marker is ASCII, so a character slice is a byte slice.
+  if (limit <= TAIL_TRUNCATION_MARKER.length) return TAIL_TRUNCATION_MARKER.slice(0, limit);
+  const budget = limit - TAIL_TRUNCATION_MARKER.length;
+  let start = buffer.length - budget;
+  if (buffer[start - 1] !== 0x0a) {
+    const newline = buffer.indexOf(0x0a, start);
+    if (newline !== -1 && newline + 1 < buffer.length) {
+      start = newline + 1;
+    } else {
+      while (start < buffer.length && (buffer[start]! & 0xc0) === 0x80) start += 1;
+    }
+  }
+  return `${TAIL_TRUNCATION_MARKER}${buffer.subarray(start).toString("utf8")}`;
 }
 
 export function readStringField(value: unknown, keys: readonly string[]): string | undefined {

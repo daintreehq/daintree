@@ -221,7 +221,8 @@ describe("SpawnErrorBanner", () => {
   it("disables retry and shows aria-busy when isRestarting is true", () => {
     renderBanner("ENOENT", { isRestarting: true });
     const retry = screen.getByRole("button", { name: /retry starting terminal/i });
-    expect(retry.hasAttribute("disabled")).toBe(true);
+    // Loading keeps focus on the control (no native disabled) and blocks activation.
+    expect(retry.getAttribute("aria-disabled")).toBe("true");
     expect(retry.getAttribute("aria-busy")).toBe("true");
   });
 

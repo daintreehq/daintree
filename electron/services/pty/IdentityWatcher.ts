@@ -20,6 +20,10 @@ export const SHELL_IDENTITY_FALLBACK_POLL_MS = 200;
 // it did before the ration — on a stale cache — and is no worse off.
 export const FOREGROUND_PROBE_KEEPWARM_MS = 5_000;
 export const FOREGROUND_PROBE_FOLLOW_UP_MS = 400;
+// How long a fresh "agent still owns the foreground" reading answers an
+// unchanged prompt candidate in the poll. Without it, prompt-looking agent
+// output that stays on screen would re-probe every tick for the whole session.
+export const FOREGROUND_PROBE_REFUTATION_MS = 5_000;
 export const SHELL_IDENTITY_FALLBACK_PROMPT_POLLS = 2;
 export const SHELL_IDENTITY_FALLBACK_SCAN_LINES = 4;
 export const SHELL_INPUT_BUFFER_MAX = 4096;
@@ -116,6 +120,53 @@ const COMMAND_NOT_FOUND_PATTERNS = [
 
 const COMMAND_NOT_FOUND_REGEX = new RegExp(COMMAND_NOT_FOUND_PATTERNS.join("|"), "iu");
 
+interface ForegroundShellIdleReading {
+  readonly shellIdle: boolean;
+  readonly supported: boolean;
+  // True when the read produced no real reading (warm-up sentinel or a
+  // stale/failed probe) — the caller may want to look again shortly.
+  readonly empty: boolean;
+  // When the probe behind a real reading started, if the probe says.
+  readonly sampledAt?: number;
+}
+
+// The only two answers a latched probe can give while an agent is committed:
+// the shell owns the foreground, or it does not (a fresh busy reading and the
+// fail-closed unknown judge identically).
+const FOREGROUND_SHELL_IDLE: ForegroundShellIdleReading = Object.freeze({
+  shellIdle: true,
+  supported: true,
+  empty: false,
+});
+const FOREGROUND_SHELL_BUSY: ForegroundShellIdleReading = Object.freeze({
+  shellIdle: false,
+  supported: true,
+  empty: true,
+});
+
+interface CommittedPollSignals {
+  readonly identity: CommandIdentity;
+  readonly ptyDescendantCount: number | undefined;
+  readonly promptVisible: boolean;
+  readonly unambiguousShellPromptVisible: boolean;
+  readonly hasRecentCommandFailureOutput: boolean;
+}
+
+type PromptReturnVerdict =
+  | { readonly advance: true }
+  | { readonly advance: false; readonly hold?: "foreground-child-active" | "agent-ui-prompt" };
+
+const ADVANCE_PROMPT_STREAK: PromptReturnVerdict = Object.freeze({ advance: true });
+const RESET_PROMPT_STREAK: PromptReturnVerdict = Object.freeze({ advance: false });
+const HOLD_FOREGROUND_CHILD_ACTIVE: PromptReturnVerdict = Object.freeze({
+  advance: false,
+  hold: "foreground-child-active",
+});
+const HOLD_AGENT_UI_PROMPT: PromptReturnVerdict = Object.freeze({
+  advance: false,
+  hold: "agent-ui-prompt",
+});
+
 export interface IdentityWatcherDelegate {
   readonly terminalId: string;
   readonly isExited: boolean;
@@ -130,7 +181,11 @@ export interface IdentityWatcherDelegate {
   getRecentOutput?(): string;
   getLastCommand(): string | undefined;
   getPtyDescendantCount(): number | undefined;
-  readForegroundProcessGroupSnapshot(): { shellPgid: number; foregroundPgid: number } | null;
+  readForegroundProcessGroupSnapshot(): {
+    shellPgid: number;
+    foregroundPgid: number;
+    sampledAt?: number;
+  } | null;
   handleAgentDetection(result: DetectionResult, spawnedAt: number): void;
 }
 
@@ -175,6 +230,16 @@ export class IdentityWatcher {
   private sawForegroundSnapshot = false;
   private lastForegroundProbeReadAt = 0;
   private foregroundProbeFollowUpAt = 0;
+  // The poll's current prompt candidate: when the evidence behind it last
+  // changed (0 = no candidate), the tree it was judged against, and when a
+  // reading taken after that evidence last found the agent still in the
+  // foreground.
+  private foregroundCandidateSince = 0;
+  private foregroundCandidateDescendantCount: number | undefined;
+  private foregroundRefutedAt = 0;
+  // Peak descendant count over ticks that took no foreground reading, folded
+  // in by the next tick that does — see poll().
+  private unreadPeakDescendantCount = 0;
   private recheckTimer: ReturnType<typeof setTimeout> | null = null;
   private suppressNext = false;
   private inputBuffer = "";
@@ -312,6 +377,8 @@ export class IdentityWatcher {
     this.promptStreak = 0;
     this.sawPtyDescendant = false;
     this.sawReturnedShellPromptOutput = false;
+    this.resetForegroundCandidate();
+    this.unreadPeakDescendantCount = 0;
 
     // If the new command has no recognizable identity (e.g. `echo hi` after a
     // prior `npm run dev` that committed `npm`), clear any stale shell
@@ -428,31 +495,36 @@ export class IdentityWatcher {
     ) {
       this.sawReturnedShellPromptOutput = true;
     }
+    // New prompt evidence reopens a candidate the poll had already checked.
+    if (hasReturnedShellPromptOutput) {
+      this.resetForegroundCandidate();
+    }
 
     // Everything below decides whether a returned shell prompt demotes the
     // agent. The probe behind readForegroundShellIdleForAgentDemotion is a
-    // `ps` spawn, refreshed whenever its 500 ms cache goes stale — and for an
-    // agent panel this is its only caller, so reading it on every chunk turned
-    // a TUI that repaints continuously (Codex's composer sparkles) into two
-    // `ps` spawns a second per terminal, forever, with no prompt in sight.
-    // Without a prompt the read is only worth its side effects — keeping the
-    // cache warm and latching `sawForegroundSnapshot` so a later null read is
-    // treated as transient rather than unsupported — so it is rationed to one
-    // per keep-warm window; a prompt always reads.
+    // `ps` spawn, refreshed whenever its 500 ms cache goes stale, so reading
+    // it on every chunk turned a TUI that repaints continuously (Codex's
+    // composer sparkles) into two `ps` spawns a second per terminal, forever,
+    // with no prompt in sight. Without a prompt the read is only worth its
+    // side effect of latching `sawForegroundSnapshot`, so a later null read is
+    // treated as transient rather than unsupported. Until that latch it is
+    // rationed to one per keep-warm window; once latched a prompt-less chunk
+    // reads only to consume a pending follow-up (#12513). A prompt always
+    // reads.
     // A read past the cache's hard-max age only *starts* a refresh and comes
     // back empty, so a single rationed read would never latch. The follow-up
     // read, inside the soft-stale window, consumes the reading that refresh
     // produced — one probe spawn per window, two reads. A prompt whose read
     // came back empty gets the same follow-up by re-observing the chunk, so a
-    // returned prompt is judged on a real snapshot, as it was when every
-    // chunk kept the cache warm.
+    // returned prompt is judged on a real snapshot even from a cold cache.
     const now = Date.now();
     const followUpDue =
       this.foregroundProbeFollowUpAt !== 0 && now >= this.foregroundProbeFollowUpAt;
     if (
       !hasReturnedShellPromptOutput &&
       !followUpDue &&
-      now - this.lastForegroundProbeReadAt < FOREGROUND_PROBE_KEEPWARM_MS
+      (this.sawForegroundSnapshot ||
+        now - this.lastForegroundProbeReadAt < FOREGROUND_PROBE_KEEPWARM_MS)
     ) {
       return;
     }
@@ -488,6 +560,8 @@ export class IdentityWatcher {
       this.recheckTimer = null;
     }
     this.foregroundProbeFollowUpAt = 0;
+    this.resetForegroundCandidate();
+    this.unreadPeakDescendantCount = 0;
     this.submittedAt = null;
     this.commandText = undefined;
     this.identity = null;
@@ -614,13 +688,7 @@ export class IdentityWatcher {
     }, FOREGROUND_PROBE_FOLLOW_UP_MS);
   }
 
-  private readForegroundShellIdleForAgentDemotion(): {
-    readonly shellIdle: boolean;
-    readonly supported: boolean;
-    // True when the read produced no real reading (warm-up sentinel or a
-    // stale/failed probe) — the caller may want to look again shortly.
-    readonly empty: boolean;
-  } {
+  private readForegroundShellIdleForAgentDemotion(): ForegroundShellIdleReading {
     const snapshot = this.delegate.readForegroundProcessGroupSnapshot();
     if (snapshot && snapshot.shellPgid > 0 && snapshot.foregroundPgid > 0) {
       // Record that the probe genuinely works on this terminal so a later null
@@ -638,6 +706,7 @@ export class IdentityWatcher {
         shellIdle: snapshot.shellPgid === snapshot.foregroundPgid,
         supported: true,
         empty: isSentinel,
+        sampledAt: snapshot.sampledAt,
       };
     }
 
@@ -680,17 +749,42 @@ export class IdentityWatcher {
     }
 
     const ptyDescendantCount = this.delegate.getPtyDescendantCount();
-    const foregroundShellIdle = this.readForegroundShellIdleForAgentDemotion();
-    const hasPtyDescendants = ptyDescendantCount !== undefined && ptyDescendantCount > 0;
-    const hasActivePtyDescendants = foregroundShellIdle.supported
-      ? hasPtyDescendants
-      : ptyDescendantCount !== undefined && ptyDescendantCount > 1;
-    if (hasActivePtyDescendants) {
-      this.sawPtyDescendant = true;
+    // The foreground reading feeds only the committed-agent demotion gate, and
+    // every stale read is a `ps` spawn — reading it on each 200 ms tick cost
+    // two spawns a second per agent terminal for the whole session (#12513).
+    // An agent command reads it until it is committed and the probe has
+    // latched, so the gate starts from a latched probe; from then on the gate
+    // reads only when a reading could change its verdict. Unknown and non-agent
+    // commands never consult it, so they never read it.
+    const agentIdentity = Boolean(this.identity?.agentType);
+    const foregroundGated = agentIdentity && this.committed && this.sawForegroundSnapshot;
+    const foregroundShellIdle =
+      agentIdentity && !foregroundGated ? this.readForegroundShellIdleForAgentDemotion() : null;
+    // Whether a descendant counts as the command's child depends on the
+    // reading (without a probe the shell itself can show up as one), so a tick
+    // with no reading only remembers the peak, for the tick that has one. An
+    // identity recovered late from the command line still knows its child ran.
+    // A latched probe reports as supported for every read while an agent is
+    // committed, so the gated path counts descendants the supported way.
+    if (!foregroundGated && foregroundShellIdle === null) {
+      if (ptyDescendantCount !== undefined) {
+        this.unreadPeakDescendantCount = Math.max(
+          this.unreadPeakDescendantCount,
+          ptyDescendantCount
+        );
+      }
+    } else {
+      const observedDescendantCount = Math.max(
+        ptyDescendantCount ?? 0,
+        this.unreadPeakDescendantCount
+      );
+      const supported = foregroundGated || foregroundShellIdle?.supported === true;
+      if (observedDescendantCount > (supported ? 0 : 1)) {
+        this.sawPtyDescendant = true;
+      }
     }
 
-    const agentCommitted =
-      Boolean(this.identity?.agentType) || Boolean(this.delegate.detectedAgentId);
+    const agentCommitted = agentIdentity || Boolean(this.delegate.detectedAgentId);
     const unambiguousShellPromptVisible = this.hasUnambiguousShellPromptVisible(agentCommitted);
     const promptVisible =
       unambiguousShellPromptVisible ||
@@ -780,78 +874,24 @@ export class IdentityWatcher {
       return;
     }
 
-    const hasRecentCommandFailureOutput = this.hasRecentCommandFailureOutput();
-    const posixShellOwnsPtyAfterAgent =
-      Boolean(this.identity.agentType) &&
-      this.sawPtyDescendant &&
-      foregroundShellIdle.supported &&
-      foregroundShellIdle.shellIdle &&
-      // A clean tree is sufficient by itself. If an agent leaves a background
-      // helper behind, pair foreground ownership with the shell prompt output
-      // observed during the hand-off instead of pinning identity indefinitely.
-      (ptyDescendantCount === 0 || this.sawReturnedShellPromptOutput) &&
-      !hasRecentCommandFailureOutput;
-    // Windows has no foreground-PGID probe. If the agent command had an observed
-    // child and that child is now gone, treat that as the same lifecycle signal
-    // as a returned prompt, unless the visible tail still looks like agent UI.
-    const nonPosixObservedChildExitedAfterAgent =
-      Boolean(this.identity.agentType) &&
-      this.sawPtyDescendant &&
-      !foregroundShellIdle.supported &&
-      (ptyDescendantCount ?? 0) <= 1 &&
-      !hasRecentCommandFailureOutput &&
-      !this.hasAgentUiPromptFalsePositive(false);
+    const signals: CommittedPollSignals = {
+      identity: this.identity,
+      ptyDescendantCount,
+      promptVisible,
+      unambiguousShellPromptVisible,
+      hasRecentCommandFailureOutput: this.hasRecentCommandFailureOutput(),
+    };
+    const verdict = foregroundGated
+      ? this.judgePromptReturnWithGatedProbe(signals)
+      : this.judgePromptReturn(signals, foregroundShellIdle ?? FOREGROUND_SHELL_BUSY);
 
-    if (
-      this.identity.agentType &&
-      unambiguousShellPromptVisible &&
-      (!foregroundShellIdle.supported || foregroundShellIdle.shellIdle) &&
-      !hasRecentCommandFailureOutput &&
-      !this.hasAgentUiPromptFalsePositive(false)
-    ) {
-      this.promptStreak += 1;
-      if (this.promptStreak >= SHELL_IDENTITY_FALLBACK_PROMPT_POLLS) {
-        this.clearShellCommandEvidenceAfterPromptReturn();
-      }
-      return;
-    }
-
-    if (!promptVisible && !posixShellOwnsPtyAfterAgent && !nonPosixObservedChildExitedAfterAgent) {
-      this.promptStreak = 0;
-      return;
-    }
-
-    if (!this.identity.agentType && ptyDescendantCount === undefined) {
-      this.promptStreak = 0;
-      return;
-    }
-
-    if (
-      this.identity.agentType &&
-      !hasRecentCommandFailureOutput &&
-      !foregroundShellIdle.shellIdle
-    ) {
-      if (this.promptStreak > 0) {
+    if (!verdict.advance) {
+      if (verdict.hold === "foreground-child-active" && this.promptStreak > 0) {
         console.log(
           `[IdentityDebug] shell-fallback-hold term=${this.delegate.terminalId.slice(-8)} ` +
             `reason=foreground-child-active`
         );
-      }
-      this.promptStreak = 0;
-      return;
-    }
-
-    if (
-      this.identity.agentType &&
-      !hasRecentCommandFailureOutput &&
-      !posixShellOwnsPtyAfterAgent &&
-      this.hasAgentUiPromptFalsePositive(
-        foregroundShellIdle.supported
-          ? hasPtyDescendants && !foregroundShellIdle.shellIdle
-          : hasActivePtyDescendants
-      )
-    ) {
-      if (this.promptStreak > 0) {
+      } else if (verdict.hold === "agent-ui-prompt" && this.promptStreak > 0) {
         console.log(
           `[IdentityDebug] shell-fallback-hold term=${this.delegate.terminalId.slice(-8)} ` +
             `reason=agent-ui-prompt count=${ptyDescendantCount ?? "unknown"} ` +
@@ -868,5 +908,142 @@ export class IdentityWatcher {
     }
 
     this.clearShellCommandEvidenceAfterPromptReturn();
+  }
+
+  // With a latched probe and a committed agent, every read is one of two
+  // answers — the shell owns the foreground, or it does not (fresh or failed
+  // closed) — and an idle answer only ever moves the verdict toward demotion.
+  // So the probe is read only when the two answers disagree: a prompt
+  // candidate, an emptied tree or a returned prompt is in play. A stable agent
+  // with none of those spawns nothing.
+  private judgePromptReturnWithGatedProbe(signals: CommittedPollSignals): PromptReturnVerdict {
+    const ifShellIdle = this.judgePromptReturn(signals, FOREGROUND_SHELL_IDLE);
+    if (!ifShellIdle.advance) {
+      this.resetForegroundCandidate();
+      return ifShellIdle;
+    }
+    const ifShellBusy = this.judgePromptReturn(signals, FOREGROUND_SHELL_BUSY);
+    if (ifShellBusy.advance) {
+      this.resetForegroundCandidate();
+      return ifShellBusy;
+    }
+
+    const now = Date.now();
+    if (signals.ptyDescendantCount !== this.foregroundCandidateDescendantCount) {
+      // The tree moved: whatever refuted the candidate before predates it.
+      this.resetForegroundCandidate();
+      this.foregroundCandidateDescendantCount = signals.ptyDescendantCount;
+    }
+    if (this.foregroundCandidateSince === 0) {
+      this.foregroundCandidateSince = now;
+    }
+    // A reading that found the agent in the foreground after this evidence
+    // appeared answers an unchanged candidate for the refutation window.
+    // Re-asking every tick would put prompt-looking agent output that stays on
+    // screen back on a 500 ms spawn loop.
+    if (
+      this.foregroundRefutedAt !== 0 &&
+      now - this.foregroundRefutedAt < FOREGROUND_PROBE_REFUTATION_MS
+    ) {
+      return ifShellBusy;
+    }
+
+    const foreground = this.readForegroundShellIdleForAgentDemotion();
+    if (!foreground.empty) {
+      if (foreground.shellIdle) {
+        this.foregroundRefutedAt = 0;
+      } else if (
+        foreground.sampledAt !== undefined &&
+        foreground.sampledAt >= this.foregroundCandidateSince
+      ) {
+        // Only a reading sampled after the evidence can refute it. The probe
+        // keeps serving a cached reading for a while, and a slow one lands
+        // late, so a busy answer taken before a prompt returned must not buy
+        // the agent a five-second hold; until a later one arrives, keep asking.
+        this.foregroundRefutedAt = now;
+      }
+    }
+    return this.judgePromptReturn(signals, foreground);
+  }
+
+  private resetForegroundCandidate(): void {
+    this.foregroundCandidateSince = 0;
+    this.foregroundCandidateDescendantCount = undefined;
+    this.foregroundRefutedAt = 0;
+  }
+
+  // Pure verdict for one committed poll tick: advance the prompt streak, or
+  // reset it (optionally naming the hold). Side-effect free so the gated path
+  // can ask it about a reading it has not taken.
+  private judgePromptReturn(
+    signals: CommittedPollSignals,
+    foreground: ForegroundShellIdleReading
+  ): PromptReturnVerdict {
+    const {
+      identity,
+      ptyDescendantCount,
+      promptVisible,
+      unambiguousShellPromptVisible,
+      hasRecentCommandFailureOutput,
+    } = signals;
+    const isAgent = Boolean(identity.agentType);
+    const hasPtyDescendants = ptyDescendantCount !== undefined && ptyDescendantCount > 0;
+    const posixShellOwnsPtyAfterAgent =
+      isAgent &&
+      this.sawPtyDescendant &&
+      foreground.supported &&
+      foreground.shellIdle &&
+      // A clean tree is sufficient by itself. If an agent leaves a background
+      // helper behind, pair foreground ownership with the shell prompt output
+      // observed during the hand-off instead of pinning identity indefinitely.
+      (ptyDescendantCount === 0 || this.sawReturnedShellPromptOutput) &&
+      !hasRecentCommandFailureOutput;
+    // Windows has no foreground-PGID probe. If the agent command had an observed
+    // child and that child is now gone, treat that as the same lifecycle signal
+    // as a returned prompt, unless the visible tail still looks like agent UI.
+    const nonPosixObservedChildExitedAfterAgent =
+      isAgent &&
+      this.sawPtyDescendant &&
+      !foreground.supported &&
+      (ptyDescendantCount ?? 0) <= 1 &&
+      !hasRecentCommandFailureOutput &&
+      !this.hasAgentUiPromptFalsePositive(false);
+
+    if (
+      isAgent &&
+      unambiguousShellPromptVisible &&
+      (!foreground.supported || foreground.shellIdle) &&
+      !hasRecentCommandFailureOutput &&
+      !this.hasAgentUiPromptFalsePositive(false)
+    ) {
+      return ADVANCE_PROMPT_STREAK;
+    }
+
+    if (!promptVisible && !posixShellOwnsPtyAfterAgent && !nonPosixObservedChildExitedAfterAgent) {
+      return RESET_PROMPT_STREAK;
+    }
+
+    if (!isAgent && ptyDescendantCount === undefined) {
+      return RESET_PROMPT_STREAK;
+    }
+
+    if (isAgent && !hasRecentCommandFailureOutput && !foreground.shellIdle) {
+      return HOLD_FOREGROUND_CHILD_ACTIVE;
+    }
+
+    if (
+      isAgent &&
+      !hasRecentCommandFailureOutput &&
+      !posixShellOwnsPtyAfterAgent &&
+      this.hasAgentUiPromptFalsePositive(
+        foreground.supported
+          ? hasPtyDescendants && !foreground.shellIdle
+          : ptyDescendantCount !== undefined && ptyDescendantCount > 1
+      )
+    ) {
+      return HOLD_AGENT_UI_PROMPT;
+    }
+
+    return ADVANCE_PROMPT_STREAK;
   }
 }

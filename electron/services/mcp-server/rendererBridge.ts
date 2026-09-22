@@ -16,6 +16,7 @@ import type {
   DispatchEnvelope,
   DispatchedWorkspaceRef,
   McpWorkspaceBinding,
+  WorkspaceDispatchOptions,
 } from "./shared.js";
 import { MCP_MANIFEST_REQUEST_TIMEOUT_MS, MCP_DISPATCH_TIMEOUT_MS } from "./shared.js";
 
@@ -164,12 +165,10 @@ function routeTimeoutSuffix(route: BridgeRoute | undefined, timeoutMs: number): 
  * lifecycle call sites: those only need the view running again eventually,
  * whereas the IPC queued here is precisely what the thaw has to precede.
  *
- * CPU throttling is deliberately left in place, matching `unfreezeActiveAgentViews`.
- * `Emulation.setCPUThrottlingRate` is orthogonal to lifecycle state and slows
- * JS without suspending it, so a thawed-but-throttled view still answers — and
- * clearing it would hand a background workspace the CPU budget of a foreground
- * one. Nothing here attaches, shows, focuses, or activates the view either: a
- * bound session driving project A must never disturb what the user is looking at.
+ * Thaw only, matching `unfreezeActiveAgentViews`: the view stays cached, so its
+ * renderer keeps demoting its own periodic work. Nothing here attaches, shows,
+ * focuses, or activates the view either: a bound session driving project A must
+ * never disturb what the user is looking at.
  */
 function thawThenSend(
   webContents: Electron.WebContents,
@@ -302,9 +301,21 @@ export function createRendererBridge(
    * "pick the first" branch, because that is the focus-order guessing this
    * whole binding replaces. Dispatching into a *frozen* view is #11790; this
    * resolver is correct whenever the bound view is live.
+   *
+   * The one exception is a named preference, not a guess: an agent pane's
+   * binding carries the view that launched it (#12486), which wins while it is
+   * still one of the workspace's live views. Once that view is gone the
+   * preference simply stops matching, and the rules above decide.
    */
-  function getWorkspaceWebContents(workspaceId: string): Electron.WebContents {
+  function getWorkspaceWebContents(
+    workspaceId: string,
+    preferredWebContentsId?: number
+  ): Electron.WebContents {
     const matches = getWebContentsForProject(workspaceId).filter((wc) => !wc.isDestroyed());
+    if (preferredWebContentsId !== undefined) {
+      const preferred = matches.find((wc) => wc.id === preferredWebContentsId);
+      if (preferred) return preferred;
+    }
     if (matches.length === 0) throw new WorkspaceBindingError(workspaceId, "not-found");
     if (matches.length > 1) throw new WorkspaceBindingError(workspaceId, "ambiguous");
     return matches[0];
@@ -332,10 +343,19 @@ export function createRendererBridge(
    * Falls back to the active view when the workspace has no view anywhere: a
    * workspace nothing holds cannot be duplicated, and the switch cold-starts it
    * for whoever is asking.
+   *
+   * An agent pane's launch view is tried first when it is one of the holders
+   * (#12486): the pane's dispatches land there, so that is the view whose panel
+   * store holds the runs it created.
    */
-  function resolveRevealTarget(workspaceId: string | undefined): Electron.WebContents {
+  function resolveRevealTarget(
+    workspaceId: string | undefined,
+    preferredWebContentsId?: number
+  ): Electron.WebContents {
     if (workspaceId !== undefined) {
       const holders = getWebContentsForProject(workspaceId).filter((wc) => !wc.isDestroyed());
+      const preferred = holders.findIndex((wc) => wc.id === preferredWebContentsId);
+      if (preferred > 0) holders.unshift(...holders.splice(preferred, 1));
       for (const holder of holders) {
         const win = getWindowForWebContents(holder);
         if (!win || win.isDestroyed()) continue;
@@ -376,9 +396,10 @@ export function createRendererBridge(
     actionId: string,
     args: unknown,
     confirmed: boolean,
-    sessionOrigin: McpSessionOrigin
+    sessionOrigin: McpSessionOrigin,
+    preferredWebContentsId?: number
   ): Promise<{ envelope: DispatchEnvelope; raised: boolean }> {
-    const target = resolveRevealTarget(workspaceId);
+    const target = resolveRevealTarget(workspaceId, preferredWebContentsId);
     // Routed as pinned, so the view holds an eviction lease and is thawed for
     // the duration. It is about to be swapped out by its own switch, and a
     // response that never comes back is indistinguishable to the caller from a
@@ -620,9 +641,9 @@ export function createRendererBridge(
             actionId,
             args,
             confirmed,
-            // Only pinned help-session dispatch passes a contextOverride; the
-            // unpinned external/api-key path leaves this undefined so the
-            // renderer keeps its live focused-window context (#8317).
+            // Only help/assistant-pinned and agent-pane dispatch pass a
+            // contextOverride; the external/api-key paths leave this undefined
+            // so the renderer keeps its live context (#8317, #12486).
             context: contextOverride,
             // Display-only requesting-bearer identity for the confirm dialog
             // (#9157). Only the unpinned external path supplies it; absent for
@@ -784,10 +805,13 @@ export function createRendererBridge(
    * cross-window isolation and the same warm cache, keyed by whichever view
    * currently owns its workspace.
    */
-  function requestManifestForWorkspace(workspaceId: string): Promise<ActionManifestEntry[]> {
+  function requestManifestForWorkspace(
+    workspaceId: string,
+    preferredWebContentsId?: number
+  ): Promise<ActionManifestEntry[]> {
     let id: number;
     try {
-      id = getWorkspaceWebContents(workspaceId).id;
+      id = getWorkspaceWebContents(workspaceId, preferredWebContentsId).id;
     } catch (err) {
       return Promise.reject(normalizeError(err, "MCP workspace binding unavailable"));
     }
@@ -804,26 +828,27 @@ export function createRendererBridge(
   }
 
   /**
-   * Action dispatch for a workspace-bound external session (#11789). No
-   * `contextOverride`: unlike a help session — which replays the ActionContext
-   * snapshot taken when the user launched it — a bound external session has no
-   * launch moment to replay, and the bound view's own live context already
-   * describes the right workspace.
+   * Action dispatch for a workspace-bound session (#11789). An external
+   * session passes no `contextOverride`: it has no launch moment to replay, and
+   * the bound view's own live context already describes the right workspace.
+   * An agent pane does (#12486) — it replays the snapshot taken when it was
+   * launched, as a help session does, so "current worktree" means its own.
    */
   function dispatchActionForWorkspace(
     workspaceId: string,
     actionId: string,
     args: unknown,
     confirmed = false,
-    sessionOrigin: McpSessionOrigin = "external"
+    sessionOrigin: McpSessionOrigin = "external",
+    options: WorkspaceDispatchOptions = {}
   ): Promise<DispatchEnvelope> {
     return sendDispatchRequest(
-      () => getWorkspaceWebContents(workspaceId),
+      () => getWorkspaceWebContents(workspaceId, options.preferredWebContentsId),
       actionId,
       args,
       confirmed,
       sessionOrigin,
-      undefined,
+      options.contextOverride,
       undefined,
       { kind: "workspace", workspaceId }
     );
@@ -933,9 +958,16 @@ export function createRendererBridge(
      * surface — the same isolation `getCachedManifestForWebContents` gives the
      * pinned path.
      */
-    getCachedManifestForWorkspace: (workspaceId: string): ActionManifestEntry[] | null => {
+    getCachedManifestForWorkspace: (
+      workspaceId: string,
+      preferredWebContentsId?: number
+    ): ActionManifestEntry[] | null => {
       try {
-        return perWebContentsCache.get(getWorkspaceWebContents(workspaceId).id) ?? null;
+        return (
+          perWebContentsCache.get(
+            getWorkspaceWebContents(workspaceId, preferredWebContentsId).id
+          ) ?? null
+        );
       } catch {
         return null;
       }

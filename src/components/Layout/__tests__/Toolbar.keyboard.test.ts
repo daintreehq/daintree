@@ -24,6 +24,13 @@ describe("Toolbar keyboard navigation — issue #2814", () => {
       expect(source).toMatch(/activeToolbarIndexRef\s*=\s*useRef/);
     });
 
+    it("keeps the tab stop on the focused item when an item appears ahead of it", () => {
+      // The host memory pause indicator (#12375) comes and goes ahead of the
+      // assistant and portal toggles. A stored index alone would then point at
+      // the newcomer and strand the tab stop away from where focus really is.
+      expect(source).toMatch(/items\.findIndex\(\(el\) => el === document\.activeElement\)/);
+    });
+
     it("stores toolbar element in a ref", () => {
       expect(source).toMatch(/toolbarRef\s*=\s*useRef/);
     });

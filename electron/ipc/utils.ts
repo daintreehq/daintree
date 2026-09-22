@@ -381,25 +381,68 @@ export function broadcastToRenderer(channel: string, ...args: unknown[]): void {
 }
 
 /**
- * Project-scoped broadcast for per-terminal hot streams (flow-status pulses,
- * activity headlines): one structured clone + renderer IPC task per VIEW OF
- * THE OWNING PROJECT instead of per WebContents in the app. Cached views of
- * the project are included — these are state events with no replay path on
- * warm reactivation (#9490). Falls back to a full broadcast when the
+ * Project-scoped broadcast for per-terminal hot streams (terminal data,
+ * flow-status pulses, activity headlines): one structured clone + renderer IPC
+ * task per VIEW OF THE OWNING PROJECT instead of per WebContents in the app.
+ * Cached views of the project are included — these streams have no replay
+ * path on warm reactivation (#9490). Falls back to a full broadcast when the
  * terminal's project is unknown or no project views are registered (startup /
  * windows that don't route through ProjectViewManager); when project views
  * exist but none host this project, no renderer has panels for the terminal
- * and the event is dropped. NOT for TERMINAL_DATA — its all-windows fallback
- * delivery is a deliberate project-switch correctness crutch (see
- * src/clients/terminalClient.ts onData).
+ * and the event is dropped.
+ *
+ * Safe for TERMINAL_DATA's IPC fallback, which exists because the pty-host's
+ * per-window MessagePort filter keys off `windowProjectMap` and can lag a
+ * project switch (src/clients/terminalClient.ts onData). This scoping keys off
+ * the view registry instead, which is bound per view and registered before the
+ * view loads, so the owning project's view — active or cached — still gets the
+ * bytes mid-switch.
  */
 export function broadcastToProjectRenderers(
   projectId: string | null,
   channel: string,
   ...args: unknown[]
 ): void {
+  broadcastToProjectRenderersExcept(projectId, null, channel, ...args);
+}
+
+/**
+ * {@link broadcastToProjectRenderers} minus a set of WebContents ids.
+ *
+ * The one caller is TERMINAL_DATA (#12557). A cached duplicate view has no
+ * MessagePort of its own, so the pty-host keeps the IPC fallback open for it
+ * even when a sibling window's port already took the chunk — and names the
+ * windows it fed. Their port-holder views must be excluded here or the chunk
+ * lands in the same xterm twice (terminalClient.onData subscribes to both the
+ * port and the IPC path).
+ *
+ * Exclusions apply to the unscoped fallback path too. That branch also runs
+ * for a terminal whose project Main can no longer name — `getTerminalProjectId`
+ * starts returning null the moment `PtyClient.kill()` drops the spawn record,
+ * while chunks the host already emitted are still arriving — and a port holder
+ * that just read the chunk off its port must not receive it again merely
+ * because the routing hint went missing.
+ */
+export function broadcastToProjectRenderersExcept(
+  projectId: string | null,
+  exclude: ReadonlySet<number> | null,
+  channel: string,
+  ...args: unknown[]
+): void {
   if (projectId !== null && hasRegisteredProjectViews()) {
     for (const wc of getWebContentsForProject(projectId)) {
+      if (exclude?.has(wc.id)) continue;
+      try {
+        wc.send(channel, ...args);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+    return;
+  }
+  if (exclude && exclude.size > 0) {
+    for (const wc of getAllAppWebContents()) {
+      if (exclude.has(wc.id) || wc.isDestroyed()) continue;
       try {
         wc.send(channel, ...args);
       } catch {
@@ -415,8 +458,8 @@ export function broadcastToProjectRenderers(
  * Broadcast that skips cached (deactivated) project views. Two valid uses:
  *
  * - High-frequency streams the renderer can re-fetch on activation (e.g. log
- *   batches via LOGS_GET_ALL) — cached renderers are CPU-throttled or frozen,
- *   so pushed messages would queue unbounded in their task queues.
+ *   batches via LOGS_GET_ALL) — pushing them is wasted work in a cached
+ *   renderer, and one that is frozen queues them unbounded in its task queue.
  * - Visibility-scoped effects whose audience is *defined* as the non-cached
  *   renderers at emission time (e.g. SOUND_TRIGGER — every view owns an
  *   AudioContext, so a global broadcast plays one copy per open project and

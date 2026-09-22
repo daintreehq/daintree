@@ -884,11 +884,11 @@ describe("WorktreeHeader collapsed session indicators", () => {
       sessionStates: { ...allZeroStates, working: 2, completed: 1 },
     });
     const indicators = screen.getByTestId("collapsed-session-indicators");
-    const svgs = indicators.querySelectorAll("svg");
-    // First svg is working icon — should have animate-spin-slow
-    expect(svgs[0]!.getAttribute("class")).toContain("animate-spin-slow");
-    // Second svg is completed icon — should NOT have animate-spin-slow
-    expect(svgs[1]!.getAttribute("class")).not.toContain("animate-spin-slow");
+    const glyphs = indicators.querySelectorAll("[data-glyph-box], svg");
+    // First glyph is the working icon — should have animate-spin-slow
+    expect(glyphs[0]!.getAttribute("class")).toContain("animate-spin-slow");
+    // Second glyph is the completed icon — should NOT have animate-spin-slow
+    expect(glyphs[1]!.getAttribute("class")).not.toContain("animate-spin-slow");
   });
 
   it("does not render when sessionStates is not provided", () => {

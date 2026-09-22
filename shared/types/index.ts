@@ -195,6 +195,10 @@ export type {
   ForgeRateLimitKind,
   ForgeRateLimitChangedPayload,
   ForgeTokenHealthChangedPayload,
+  ForgeCredentialImportFailureReason,
+  ForgeCredentialImportFailure,
+  ForgeCredentialImportPreviewResult,
+  ForgeCredentialImportCommitResult,
   // Per-service connectivity types
   ConnectivityServiceKey,
   ServiceConnectivityStatus,
@@ -209,6 +213,9 @@ export type {
   IdleTerminalProjectEntry,
   // Session restore types
   SessionRestoreConfig,
+  // Keep-awake types
+  KeepAwakeConfig,
+  KeepAwakeState,
   // Idle background-project auto-close types
   IdleBackgroundAutoCloseConfig,
   IdleBackgroundClosedPayload,
@@ -472,8 +479,14 @@ export type {
 } from "./terminal.js";
 export {
   isValidTerminalGeometry,
+  isPlausibleTerminalGeometry,
+  isUsableTerminalGeometry,
   normalizeTerminalGridDimension,
   MAX_TERMINAL_GRID_DIMENSION,
+  COLLAPSED_TERMINAL_COLS,
+  COLLAPSED_TERMINAL_ROWS,
+  MIN_PLAUSIBLE_TERMINAL_COLS,
+  MIN_PLAUSIBLE_TERMINAL_ROWS,
 } from "./terminal.js";
 
 // Pty Host types - IPC protocol for terminal management

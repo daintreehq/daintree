@@ -22,7 +22,7 @@
 import type { EventEmitter } from "events";
 import type {
   BroadcastWriteResultPayload,
-  FdLeakWarningPayload,
+  FdGrowthPayload,
   PtyHostEvent,
   PtyHostSpawnOptions,
   SpawnResult,
@@ -150,7 +150,27 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
     }
 
     case "data":
-      emitter.emit("data", event.id, event.data);
+      // The routing hints only exist when the host kept the fallback open for
+      // a port-less view, or is recovering one window's failed port flush
+      // (#12557); emitting them as trailing `undefined`s otherwise would
+      // change the arity every listener sees on the ordinary path for no gain.
+      if (
+        event.portDeliveredWebContentsIds !== undefined ||
+        event.portRecoveryWebContentsId !== undefined
+      ) {
+        emitter.emit("data", event.id, event.data, {
+          portDeliveredWebContentsIds: event.portDeliveredWebContentsIds,
+          portRecoveryWebContentsId: event.portRecoveryWebContentsId,
+        });
+      } else {
+        emitter.emit("data", event.id, event.data);
+      }
+      return true;
+
+    // A window's renderer connection is gone — Main drops its port-holder
+    // record so that view is treated as fallback-eligible again (#12557).
+    case "port-disconnected":
+      emitter.emit("port-disconnected", event.windowId, event.reason, event.holderWebContentsId);
       return true;
 
     // Main-process-only mirror copy (the renderer already received this chunk
@@ -298,6 +318,10 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.result);
       return true;
 
+    case "session-captures-finished":
+      broker.resolve(event.requestId, event.result);
+      return true;
+
     case "terminal-diagnostic-info":
       broker.resolve(event.requestId, event.info);
       return true;
@@ -396,16 +420,10 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       return true;
     }
 
-    case "fd-leak-warning": {
-      const flwEvent: FdLeakWarningPayload = {
-        fdCount: event.fdCount,
-        activeTerminals: event.activeTerminals,
-        estimatedLeaked: event.estimatedLeaked,
-        orphanedPids: event.orphanedPids,
-        ptmxLimit: event.ptmxLimit,
-        timestamp: event.timestamp,
-      };
-      emitter.emit("fd-leak-warning", flwEvent);
+    case "fd-growth": {
+      const { type: _type, ...fdGrowth } = event;
+      const fdEvent: FdGrowthPayload = fdGrowth;
+      emitter.emit("fd-growth", fdEvent);
       return true;
     }
 

@@ -701,6 +701,59 @@ describe("TerminalRestoreController", () => {
       expect(mockTerminal.resize).not.toHaveBeenCalled();
     });
 
+    it("refuses a collapsed capture grid and still replays the payload (#12442)", async () => {
+      // Structurally valid, so the old validator aligned to it — and parking a
+      // real xterm on a snapshot's 2x1 capture grid is how the renderer adopted
+      // the collapse, which `collectTerminalSizes` then persisted as the pane's
+      // real size. The session must still come back; only the alignment goes.
+      traceGrid();
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      controller.restoreFromSerialized("t1", "payload", { cols: 2, rows: 1 });
+      await flushMicrotasks();
+
+      expect(mockTerminal.resize).not.toHaveBeenCalled();
+      expect(mockTerminal.write).toHaveBeenCalledWith("payload", expect.any(Function));
+    });
+
+    it("does not return an opened pane to a collapsed grid when the replay closes (#12442)", async () => {
+      // The seed, not the capture. An opened pane already at 2x1 seeds the
+      // restore window from its own live grid, aligns to a HEALTHY capture
+      // grid for the replay, and would then be resized straight back to 2x1 on
+      // completion — reintroducing the collapse from inside the fix.
+      const trace = traceGrid();
+      const managed = makeManagedTerminal();
+      managed.isOpened = true;
+      mockTerminal.cols = 2;
+      mockTerminal.rows = 1;
+      instances.set("t1", managed);
+
+      controller.restoreFromSerialized("t1", "payload", { cols: 80, rows: 24 });
+      await flushMicrotasks();
+
+      expect(trace).not.toContain("resize:2x1");
+      expect(mockTerminal.write).toHaveBeenCalledWith("payload", expect.any(Function));
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+    });
+
+    it("still lands a healthy target parked while an implausible resize was refused", async () => {
+      // The restore must complete either way: a refused geometry cannot leave
+      // the pane frozen with its write gate shut, and the healthy target that
+      // was already parked still has to be applied.
+      const trace = traceGrid();
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      controller.restoreFromSerialized("t1", "payload", captureAt80);
+      managed.pendingRestoreGeometry = { cols: 120, rows: 30 };
+      await flushMicrotasks();
+
+      expect(trace.at(-1)).toBe("resize:120x30");
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+      expect(managed.pendingRestoreGeometry).toBeUndefined();
+    });
+
     it("normalizes to a resize that landed mid-replay, not the pre-replay grid", async () => {
       const trace = traceGrid();
       const managed = makeManagedTerminal();

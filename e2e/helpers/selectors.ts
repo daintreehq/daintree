@@ -126,7 +126,9 @@ export const SEL = {
     // ReviewHub spec unable to open the hub. Note the button is ABSENT entirely
     // when there is nothing to review and nothing to push.
     reviewHubButton: '[aria-label^="Open Review &"]',
-    filterButton: '[aria-label="Filter and sort worktrees"]',
+    // Prefix-matched: the accessible name carries the active-filter count
+    // ("…, 3 active") so the number is spoken as well as drawn.
+    filterButton: '[aria-label^="Filter and sort worktrees"]',
     filterPopover: '[data-testid="worktree-filter-popover"]',
     openOverviewButton: '[aria-label="Open worktrees overview"]',
     // Keyed on the test id rather than `aria-labelledby`: the overview is
@@ -257,7 +259,7 @@ export const SEL = {
     cancel: '[data-confirm-role="cancel"]',
   },
   welcome: {
-    openFolder: 'button:has-text("Open folder")',
+    openFolder: '[data-testid="quick-actions"] button:has-text("Open project")',
   },
   firstRun: {
     welcomeTitle: 'h1:has-text("Welcome to Daintree")',
@@ -445,9 +447,11 @@ export const SEL = {
     manager: '[data-testid="plugin-manager-view"]',
     back: '[aria-label="Back"]',
     close: '[aria-label="Close plugin manager"]',
-    list: '[role="listbox"][aria-label="All plugins"]',
-    option: '[role="listbox"][aria-label="All plugins"] [role="option"]',
-    filterInput: '[aria-label="Filter plugins"]',
+    // The master list is a plain list, not a composite listbox: a listbox may
+    // only own option/group, and each row carries a sibling enable switch.
+    list: '[data-testid="plugin-list"]',
+    option: '[data-testid="plugin-list"] li',
+    filterInput: '[aria-label="Search plugins"]',
     urlInput: '[aria-label="Plugin URL"]',
     tabOverview: '[role="tab"][data-tab="overview"]',
     tabSettings: '[role="tab"][data-tab="settings"]',
@@ -569,7 +573,7 @@ export const SEL = {
     item: (id: string) => `[data-checklist-item="${id}"]`,
   },
   recovery: {
-    watchdogDisabledBanner: '[role="alert"]:has-text("Crash watchdog disabled")',
+    watchdogDisabledBanner: '[role="status"]:has-text("Crash watchdog disabled")',
     watchdogRestartButton: 'button:has-text("Restart watchdog")',
   },
 } as const;

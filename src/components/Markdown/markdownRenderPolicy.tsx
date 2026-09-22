@@ -117,6 +117,40 @@ export interface MarkdownRenderPolicy {
   urlTransform: NonNullable<Options["urlTransform"]>;
 }
 
+/**
+ * The host's link policy for Markdown documents, shared by the rendered
+ * document and the Markdown editor's Mod+click (#12323). External links open
+ * in the browser; repo links resolve against the document and open only when
+ * the document's own root contains them. Markdown is untrusted content, so a
+ * link must never become a lever for browsing outside the project.
+ */
+export function activateMarkdownLink(
+  href: string | undefined,
+  { filePath, rootPath }: { filePath: string; rootPath: string }
+): void {
+  // Same-document anchors: headings carry no ids (no rehype-slug), so
+  // there is nothing to scroll to — swallow instead of navigating.
+  if (!href || href.startsWith("#")) return;
+  if (HTTPish.test(href)) {
+    actionService
+      .dispatch("browser.openExternal", { url: href }, { source: "user" })
+      .catch((err) => logError("[markdownRenderPolicy] openExternal failed", err));
+    return;
+  }
+  // Protocol-relative ("//host/…") and other non-http schemes survive to
+  // here only as untrusted oddities — never treat them as local paths.
+  if (href.startsWith("//")) return;
+  // Repo link — strip any query/fragment, resolve against the document,
+  // and only open files the document's own root contains.
+  const pathPart = href.split(/[?#]/, 1)[0];
+  if (!pathPart) return;
+  const absolute = resolveAgainstFile(filePath, pathPart);
+  if (!isPathInside(absolute, rootPath)) return;
+  actionService
+    .dispatch("file.view", { path: absolute, rootPath }, { source: "user" })
+    .catch((err) => logError("[markdownRenderPolicy] file.view failed", err));
+}
+
 export function useMarkdownRenderPolicy({
   filePath,
   rootPath,
@@ -143,31 +177,7 @@ export function useMarkdownRenderPolicy({
   }, [filePath, rootPath, cacheBust]);
 
   const handleLinkActivate = useMemo(() => {
-    return (href: string | undefined) => {
-      // Same-document anchors: headings carry no ids (no rehype-slug), so
-      // there is nothing to scroll to — swallow instead of navigating.
-      if (!href || href.startsWith("#")) return;
-      if (HTTPish.test(href)) {
-        actionService
-          .dispatch("browser.openExternal", { url: href }, { source: "user" })
-          .catch((err) => logError("[markdownRenderPolicy] openExternal failed", err));
-        return;
-      }
-      // Protocol-relative ("//host/…") and other non-http schemes survive to
-      // here only as untrusted oddities — never treat them as local paths.
-      if (href.startsWith("//")) return;
-      // Repo link — strip any query/fragment, resolve against the document,
-      // and only open files the document's own root contains. Rendered
-      // markdown is untrusted content; it must not become a lever for
-      // browsing arbitrary paths outside the project.
-      const pathPart = href.split(/[?#]/, 1)[0];
-      if (!pathPart) return;
-      const absolute = resolveAgainstFile(filePath, pathPart);
-      if (!isPathInside(absolute, rootPath)) return;
-      actionService
-        .dispatch("file.view", { path: absolute, rootPath }, { source: "user" })
-        .catch((err) => logError("[markdownRenderPolicy] file.view failed", err));
-    };
+    return (href: string | undefined) => activateMarkdownLink(href, { filePath, rootPath });
   }, [filePath, rootPath]);
 
   const components = useMemo<Components>(

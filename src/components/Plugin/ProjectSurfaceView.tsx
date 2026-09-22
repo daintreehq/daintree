@@ -149,12 +149,18 @@ export function _resetProjectSurfaceRuntimesForTest(): void {
  * `contain: layout paint` (with `overflow-hidden`) keeps a `position: fixed`
  * descendant inside this box. A surface can then style its own region freely
  * and still never paint over the strip that leads out of it.
+ *
+ * A flex COLUMN, not a plain block (#12361). `PluginViewContent` fills its host
+ * with `flex-1 min-h-0` on the content it wraps, which does nothing unless the
+ * host is a flex container — the panel path gets one from `ContentPanel`'s body.
+ * Without it here the plugin drew at its intrinsic height with dead canvas under
+ * it, so any surface with a bottom bar floated it mid-region.
  */
 export function ProjectSurfaceView({ config }: { config: PanelKindConfig }) {
   const { content: Content, removal } = getSurfaceRuntime(config);
   return (
     <div
-      className="relative isolate h-full w-full min-h-0 min-w-0 overflow-hidden"
+      className="relative isolate flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden"
       style={{ contain: "layout paint" }}
     >
       <Content panelId={`surface:${config.id}`} panelRemovedSignal={removal.signal} />

@@ -1376,9 +1376,18 @@ describe("resume configuration", () => {
     expect(resume?.kind).toBe("session-id");
     if (resume?.kind === "session-id") {
       const args = resume.args("abc-123");
-      expect(args).toEqual(["resume", "abc-123"]);
+      // `-C ./` pins the resume to the launch directory (#12434).
+      expect(args).toEqual(["resume", "abc-123", "-C", "."]);
       expect(args[0]).not.toMatch(/^-/);
     }
+  });
+
+  it("declares cross-directory resume for codex only", () => {
+    const declaring = Object.keys(AGENT_REGISTRY).filter((agentId) => {
+      const resume = getAgentConfig(agentId)?.resume;
+      return resume?.kind === "session-id" && resume.crossDirectoryResume === true;
+    });
+    expect(declaring).toEqual(["codex"]);
   });
 
   it("copilot is session-id and produces --resume= flag args (equals concatenation)", () => {

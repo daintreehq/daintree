@@ -11,6 +11,7 @@ import { ensureWindowFocused } from "../../helpers/focus";
 import { getGridPanelIds, getPanelById } from "../../helpers/panels";
 import { waitForTerminalText } from "../../helpers/terminal";
 import {
+  approveWorktreeCommands,
   writeResourceConfig,
   createWorktree,
   commandArg,
@@ -139,6 +140,7 @@ test.describe.serial("Full: Worktree Resource Substitution", () => {
       JSON.stringify({ status: "ready" })
     );
     fs.writeFileSync(wtConfigPath, JSON.stringify(config, null, 2));
+    await approveWorktreeCommands(window, BRANCH);
 
     await ensureWindowFocused(ctx.app);
     await window.keyboard.press(`${mod}+Shift+P`);
@@ -204,6 +206,7 @@ test.describe.serial("Full: Worktree Resource Substitution", () => {
       "PROJECT={{project_root}}",
     ]);
     fs.writeFileSync(wtConfigPath, JSON.stringify(config, null, 2));
+    await approveWorktreeCommands(window, BRANCH);
 
     await ensureWindowFocused(ctx.app);
     await window.evaluate(async () => {

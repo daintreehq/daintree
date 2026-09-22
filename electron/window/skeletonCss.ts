@@ -233,21 +233,28 @@ export function buildSkeletonCss(
     lines.push("#startup-skeleton .skeleton-sidebar { display: none; }");
   }
 
-  // Project-switch cold starts reveal the incoming view the instant its
-  // skeleton parses (~150ms). That reveal lands well inside index.html's 400ms
-  // Doherty anti-flicker delay (`animation: skeleton-doherty-gate ... 400ms
-  // backwards`), which holds the container at opacity:0 — so without this
-  // override the freshly-revealed view shows a blank themed canvas until the
-  // gate elapses (~480ms) instead of the skeleton it was supposed to show. The
-  // 400ms gate is correct for the INITIAL app launch (suppress a skeleton flash
-  // on sub-threshold loads), but wrong for a switch, where the reveal is already
-  // gated on the skeleton being present. Override only the `animation-delay`
-  // longhand — never the `animation` shorthand — so the 200ms fade and the
-  // reduced-motion `#startup-skeleton { animation: none }` rule both survive
-  // (overriding the delay can't restore an animation-name that reduced-motion
-  // set to none). User-origin `!important` outranks the author-origin shorthand.
+  // Project-switch cold starts reveal the incoming view on its skeleton, a few
+  // hundred ms after it parses. index.html gives the skeleton an entrance built
+  // for the INITIAL app launch: the container holds at opacity:0 behind a 400ms
+  // Doherty delay and then fades up, each `.skel-reveal` section and the
+  // identified title fade up from 0 on their own staggered delays (to ~720ms).
+  // On launch that suppresses a skeleton flash on sub-threshold loads. On a
+  // switch the reveal is already gated on the skeleton being drawn, so any of
+  // those fades leaves the freshly revealed view showing a blank canvas
+  // instead of the skeleton (#12394). Remove every entrance: the switch gate
+  // waits for this stylesheet before confirming the frame it reveals.
+  //
+  // Only `animation-name` is overridden — never the `animation` shorthand — so
+  // the reduced-motion `animation: none` rules keep working (a name of `none`
+  // cannot restore an animation they removed). The container's opacity is left
+  // alone so the `.fade-out` exit transition still runs; the sections and the
+  // title rest at opacity:0 without their animation, so they are pinned to 1.
+  // User-origin `!important` outranks the author-origin rules.
   if (options?.instantReveal) {
-    lines.push("#startup-skeleton { animation-delay: 0ms !important; }");
+    lines.push("#startup-skeleton { animation-name: none !important; }");
+    lines.push(
+      "#startup-skeleton .skel-reveal, #startup-skeleton .skeleton-title.skeleton-title--identified { animation-name: none !important; opacity: 1 !important; }"
+    );
   }
 
   return lines.join("\n");
@@ -256,12 +263,14 @@ export function buildSkeletonCss(
 /**
  * Insert a (possibly precomputed) skeleton CSS string into a WebContents.
  */
-export function insertSkeletonCss(wc: WebContents, css: string): void {
-  void wc.insertCSS(css, { cssOrigin: "user" }).catch(() => {
+export async function insertSkeletonCss(wc: WebContents, css: string): Promise<void> {
+  try {
+    await wc.insertCSS(css, { cssOrigin: "user" });
+  } catch {
     // Best-effort first-paint seed: a destroyed/navigated WebContents during
     // rapid project switching rejects here. Swallow — the index.html skeleton
     // styles carry hardcoded fallbacks, so the splash still paints.
-  });
+  }
 }
 
 /**
@@ -272,15 +281,19 @@ export function insertSkeletonCss(wc: WebContents, css: string): void {
  * (the initial-window path) leaves the resolved scheme untouched.
  *
  * Pass `{ instantReveal: true }` for project-switch cold starts to drop the
- * 400ms Doherty entry delay so the skeleton shows the instant the incoming view
- * is revealed instead of staying blank behind the gate (see buildSkeletonCss).
+ * skeleton's entrance animations so it is opaque the moment the incoming view
+ * is revealed instead of fading up from a blank canvas (see buildSkeletonCss).
+ *
+ * Settles once the insertion attempt has finished — including a swallowed
+ * failure, so resolution does not certify the stylesheet landed. Never
+ * rejects, so a caller that must not reveal before it applies can wait for it.
  */
 export function injectSkeletonCss(
   wc: WebContents,
   project?: Pick<Project, "color"> | null,
   options?: { instantReveal?: boolean }
-): void {
-  insertSkeletonCss(wc, buildSkeletonCss(project, undefined, options));
+): Promise<void> {
+  return insertSkeletonCss(wc, buildSkeletonCss(project, undefined, options));
 }
 
 /**

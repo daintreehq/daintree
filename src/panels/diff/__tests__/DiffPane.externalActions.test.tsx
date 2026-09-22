@@ -64,7 +64,7 @@ vi.mock("@/store/panelStore", () => ({
     selector({ panelsById, setDiffPanelFile: vi.fn() }),
 }));
 
-const worktrees = new Map<string, { path: string; branch: string }>();
+const worktrees = new Map<string, { id: string; path: string; branch: string }>();
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (state: unknown) => unknown) => selector({ worktrees }),
 }));
@@ -192,7 +192,7 @@ beforeEach(() => {
     retry: vi.fn(),
   });
   worktrees.clear();
-  worktrees.set(WORKTREE_ID, { path: WORKTREE_ROOT, branch: "feature/x" });
+  worktrees.set(WORKTREE_ID, { id: WORKTREE_ID, path: WORKTREE_ROOT, branch: "feature/x" });
   vi.stubGlobal(
     "matchMedia",
     vi.fn(() => ({
@@ -554,7 +554,7 @@ describe("DiffPane toolbar — concurrency", () => {
 
     // A worktree move re-aims the buttons without `filePath` changing at all —
     // which is why the reset keys on the resolved path, not the relative one.
-    worktrees.set(WORKTREE_ID, { path: "/repo-moved", branch: "feature/x" });
+    worktrees.set(WORKTREE_ID, { id: WORKTREE_ID, path: "/repo-moved", branch: "feature/x" });
     rerender(
       <DiffPane
         id={PANEL_ID}
@@ -670,5 +670,56 @@ describe("DiffPane toolbar — concurrency", () => {
       gate.resolve(ok());
       await gate.promise;
     });
+  });
+});
+
+describe("DiffPane — file browser access", () => {
+  it.each(["docs/GEMINI.md", "/repo/docs/GEMINI.md"])(
+    "reveals %s in the file browser",
+    async (path) => {
+      seedPanel(path);
+      renderPane();
+      await click(screen.getByLabelText("Open in file browser"));
+      expect(dispatchCall(0)).toEqual([
+        "worktree.openFileBrowser",
+        { worktreeId: WORKTREE_ID, revealPath: "docs/GEMINI.md", revealKind: "file" },
+        { source: "user" },
+      ]);
+    }
+  );
+
+  it("opens the containing worktree instead of the diff panel's stamped worktree", async () => {
+    worktrees.set("nested", { id: "nested", path: "/repo/nested", branch: "nested" });
+    seedPanel("/repo/nested/plan.md");
+    renderPane();
+    await click(screen.getByLabelText("Open in file browser"));
+    expect(dispatchCall(0)[1]).toEqual({
+      worktreeId: "nested",
+      revealPath: "plan.md",
+      revealKind: "file",
+    });
+  });
+
+  it("doesn't offer the browser for a deleted file", () => {
+    seedPanel("docs/removed.md", "deleted");
+    renderPane();
+    expect(screen.queryByLabelText("Open in file browser")).toBeNull();
+  });
+
+  it("doesn't offer a browser rooted in a different directory", () => {
+    seedPanel("/repo-other/plan.md");
+    renderPane();
+    expect(screen.queryByLabelText("Open in file browser")).toBeNull();
+  });
+
+  it("keeps the diff visible and retries a failed browser open", async () => {
+    seedPanel("docs/plan.md");
+    dispatchMock.mockResolvedValueOnce(fail("Couldn't read this worktree"));
+    renderPane();
+    await click(screen.getByLabelText("Open in file browser"));
+    expect(screen.getByText("Couldn't open file browser")).toBeTruthy();
+    await click(screen.getByLabelText("Retry opening file browser"));
+    expect(dispatchCall(1)).toEqual(dispatchCall(0));
+    expect(screen.queryByText("Couldn't open file browser")).toBeNull();
   });
 });

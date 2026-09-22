@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { TerminalHeaderContent } from "../TerminalHeaderContent";
 
 vi.mock("react-dom", async () => {
@@ -37,45 +37,6 @@ vi.mock("@/components/ui/tooltip", () => ({
   ),
 }));
 
-vi.mock("@/components/Worktree/terminalStateConfig", () => {
-  const mockIcon = (props: React.SVGProps<SVGSVGElement>) => (
-    <svg data-testid="state-icon" {...props} />
-  );
-  const STATE_ICONS: Record<string, typeof mockIcon> = {
-    working: mockIcon,
-    waiting: mockIcon,
-    directing: mockIcon,
-    idle: mockIcon,
-    completed: mockIcon,
-  };
-  const STATE_COLORS: Record<string, string> = {
-    working: "text-working",
-    waiting: "text-waiting",
-    directing: "text-directing",
-    idle: "text-idle",
-    completed: "text-completed",
-  };
-  const STATE_LABELS: Record<string, string> = {
-    working: "working",
-    waiting: "waiting",
-    directing: "directing",
-    idle: "idle",
-    completed: "done",
-  };
-  return {
-    STATE_ICONS,
-    STATE_COLORS,
-    STATE_LABELS,
-    getEffectiveStateIcon: (state: string) => STATE_ICONS[state] ?? mockIcon,
-    getEffectiveStateColor: (state: string) => STATE_COLORS[state] ?? "text-unknown",
-    getEffectiveStateLabel: (state: string) => STATE_LABELS[state] ?? state,
-  };
-});
-
-vi.mock("@/store/errorStore", () => ({
-  useErrorStore: (selector: (s: Record<string, unknown>) => unknown) => selector({ errors: [] }),
-}));
-
 let mockResourceEnabled = false;
 let mockResourceState: Record<string, unknown> | null = null;
 
@@ -91,6 +52,18 @@ vi.mock("@/store/resourceMonitoringStore", () => ({
 
 vi.mock("../TerminalResourceSparkline", () => ({
   TerminalResourceSparkline: () => <span data-testid="resource-sparkline" />,
+}));
+
+// The real chip only renders once a provider reports children over IPC.
+vi.mock("../TerminalWatchChip", () => ({
+  TerminalWatchChip: () => null,
+}));
+
+let mockSubagentChipVisible = false;
+
+vi.mock("../SubagentChip", () => ({
+  SubagentChip: () =>
+    mockSubagentChipVisible ? <button type="button" data-testid="subagent-chip" /> : null,
 }));
 
 let mockTerminal: Record<string, unknown> = {};
@@ -109,6 +82,7 @@ vi.mock("@/store", () => ({
 
 beforeEach(() => {
   mockTerminal = { id: "t1" };
+  mockSubagentChipVisible = false;
   mockResourceEnabled = false;
   mockResourceState = null;
   vi.useFakeTimers();
@@ -119,94 +93,13 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("TerminalHeaderContent — agent state chip tooltip", () => {
-  it("shows headline, state, trigger, confidence, and relative time", () => {
-    mockTerminal = {
-      id: "t1",
-      stateChangeTrigger: "output",
-      stateChangeConfidence: 0.85,
-      lastStateChange: new Date("2026-03-19T11:59:30Z").getTime(),
-    };
-
-    render(
-      <TerminalHeaderContent
-        id="t1"
-        agentState="working"
-        activity={{ headline: "Installing deps", status: "working", type: "background" }}
-      />
-    );
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Installing deps"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).toContain("State: working");
-    expect(agentTooltip!.textContent).toContain("Output");
-    expect(agentTooltip!.textContent).toContain("(85%)");
-    expect(agentTooltip!.textContent).toContain("Since:");
-  });
-
-  it("names the waiting reason in the tooltip state line and chip aria-label when classified", () => {
-    mockTerminal = {
-      id: "t1",
-      stateChangeTrigger: "heuristic",
-      stateChangeConfidence: 1,
-      waitingReason: "approval",
-    };
-
-    render(<TerminalHeaderContent id="t1" agentState="waiting" />);
-
-    const chip = screen.getByRole("status", { name: "Agent state: waiting (approval)" });
-    expect(chip).toBeTruthy();
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("State: waiting"));
-    expect(agentTooltip!.textContent).toContain("State: waiting (approval)");
-  });
-
-  it("keeps the plain waiting label for the prompt fallback (no overclaiming)", () => {
-    mockTerminal = {
-      id: "t1",
-      stateChangeTrigger: "heuristic",
-      stateChangeConfidence: 1,
-      waitingReason: "prompt",
-    };
-
-    render(<TerminalHeaderContent id="t1" agentState="waiting" />);
-
-    const chip = screen.getByRole("status", { name: "Agent state: waiting" });
-    expect(chip).toBeTruthy();
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("State: waiting"));
-    expect(agentTooltip!.textContent).not.toContain("(prompt)");
-  });
-
-  it("ignores a stale waiting reason once the agent is no longer waiting", () => {
-    mockTerminal = {
-      id: "t1",
-      stateChangeTrigger: "output",
-      stateChangeConfidence: 1,
-      waitingReason: "approval",
-    };
+describe("TerminalHeaderContent — settled-agent trace", () => {
+  it("renders no agent glyph in the row: PanelHeader owns it past the close button", () => {
+    mockTerminal = { id: "t1", stateChangeTrigger: "output", stateChangeConfidence: 1 };
 
     render(<TerminalHeaderContent id="t1" agentState="working" />);
 
-    const chip = screen.getByRole("status", { name: "Agent state: working" });
-    expect(chip).toBeTruthy();
-  });
-
-  it("shows AI classification trigger label", () => {
-    mockTerminal = {
-      id: "t1",
-      stateChangeTrigger: "ai-classification",
-      stateChangeConfidence: 0.95,
-    };
-
-    render(<TerminalHeaderContent id="t1" agentState="waiting" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent waiting"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).toContain("AI classification");
-    expect(agentTooltip!.textContent).toContain("(95%)");
+    expect(screen.queryByRole("status", { name: /agent state/i })).toBeNull();
   });
 
   it("shows exit code when exited", () => {
@@ -218,117 +111,29 @@ describe("TerminalHeaderContent — agent state chip tooltip", () => {
     expect(badge.textContent).toContain("[exit 1]");
   });
 
-  it("omits missing fields gracefully", () => {
+  it("shows exit code 0 correctly", () => {
     mockTerminal = { id: "t1" };
 
-    render(<TerminalHeaderContent id="t1" agentState="working" />);
+    render(<TerminalHeaderContent id="t1" agentState="completed" isExited={true} exitCode={0} />);
 
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent working"));
-    expect(agentTooltip).toBeTruthy();
-    const text = agentTooltip!.textContent!;
-    expect(text).toContain("State: working");
-    expect(text).not.toContain("undefined");
-    expect(text).not.toContain("·");
-    expect(text).not.toContain("Since:");
-    expect(text).not.toContain("Exit code:");
-    expect(text).not.toContain("%");
+    const badge = screen.getByRole("status");
+    expect(badge.textContent).toContain("[exit 0]");
   });
 
-  it("hides confidence when exactly 1.0", () => {
-    mockTerminal = {
-      id: "t1",
-      stateChangeTrigger: "output",
-      stateChangeConfidence: 1.0,
-    };
-
-    render(<TerminalHeaderContent id="t1" agentState="working" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent working"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).not.toContain("%");
-  });
-
-  it("shows elapsed time when startedAt is present", () => {
-    mockTerminal = {
-      id: "t1",
-      isInputLocked: false,
-      startedAt: new Date("2026-03-19T09:46:00Z").getTime(),
-    };
-
-    render(
-      <TerminalHeaderContent
-        id="t1"
-        kind="agent"
-        agentState="working"
-        activity={{ headline: "Installing deps", status: "working", type: "background" }}
-      />
-    );
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Installing deps"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).toContain("·");
-    expect(agentTooltip!.textContent).toContain("2h 14m");
-  });
-
-  it("omits elapsed time when startedAt is undefined", () => {
-    mockTerminal = { id: "t1", isInputLocked: false };
-
-    render(
-      <TerminalHeaderContent
-        id="t1"
-        kind="agent"
-        agentState="working"
-        activity={{ headline: "Building project", status: "working", type: "background" }}
-      />
-    );
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Building project"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).not.toContain("· ");
-  });
-
-  it("updates elapsed time after timer interval", () => {
-    const base = new Date("2026-03-19T11:59:15Z").getTime();
-
-    mockTerminal = {
-      id: "t1",
-      isInputLocked: false,
-      startedAt: base,
-    };
-
-    render(<TerminalHeaderContent id="t1" kind="agent" agentState="working" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent working"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).toContain("45s");
-
-    act(() => {
-      vi.advanceTimersByTime(30_000);
-    });
-
-    expect(agentTooltip!.textContent).toContain("1m");
-    expect(agentTooltip!.textContent).not.toContain("45s");
-  });
-
-  it("renders no chip when idle", () => {
-    mockTerminal = { id: "t1" };
-
-    render(<TerminalHeaderContent id="t1" agentState="idle" />);
-
-    expect(screen.queryByRole("status", { name: /agent state/i })).toBeNull();
-  });
-
-  it("renders no chip when completed", () => {
-    mockTerminal = { id: "t1" };
+  it("renders the cost readout for a settled agent with a session cost", () => {
+    mockTerminal = { id: "t1", sessionCost: 0.42, sessionTokens: 12_000 };
 
     render(<TerminalHeaderContent id="t1" agentState="completed" />);
 
-    expect(screen.queryByRole("status", { name: /agent state/i })).toBeNull();
+    expect(screen.getByText(/\$0\.42/).textContent).toContain("12");
+  });
+
+  it("renders no cost readout while the agent is still working", () => {
+    mockTerminal = { id: "t1", sessionCost: 0.42 };
+
+    render(<TerminalHeaderContent id="t1" agentState="working" />);
+
+    expect(screen.queryByText(/\$0\.42/)).toBeNull();
   });
 
   it("renders 'Finished, no changes' pill when completed with no file changes", () => {
@@ -349,79 +154,12 @@ describe("TerminalHeaderContent — agent state chip tooltip", () => {
     expect(screen.queryByRole("status", { name: /no file changes/i })).toBeNull();
   });
 
-  it("omits 'Finished, no changes' pill when sessionCost is present (regular cost chip wins)", () => {
+  it("omits 'Finished, no changes' pill when sessionCost is present (cost readout wins)", () => {
     mockTerminal = { id: "t1", sessionCost: 0.42 };
 
     render(<TerminalHeaderContent id="t1" agentState="completed" completedWithNoChanges={true} />);
 
     expect(screen.queryByRole("status", { name: /no file changes/i })).toBeNull();
-  });
-
-  it("falls back to Agent {state} when no headline", () => {
-    mockTerminal = { id: "t1" };
-
-    render(<TerminalHeaderContent id="t1" agentState="directing" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent directing"));
-    expect(agentTooltip).toBeTruthy();
-  });
-
-  it("shows exit code 0 correctly", () => {
-    mockTerminal = { id: "t1" };
-
-    render(<TerminalHeaderContent id="t1" agentState="completed" isExited={true} exitCode={0} />);
-
-    const badge = screen.getByRole("status");
-    expect(badge.textContent).toContain("[exit 0]");
-  });
-
-  it("does not show stalled state for working agent past 60 seconds", () => {
-    mockTerminal = {
-      id: "t1",
-      lastStateChange: new Date("2026-03-19T11:58:00Z").getTime(), // 2 minutes ago
-    };
-
-    render(<TerminalHeaderContent id="t1" agentState="working" />);
-
-    const chip = screen.getByRole("status", { name: /agent state/i });
-    expect(chip).toBeTruthy();
-    expect(chip.getAttribute("aria-label")).toBe("Agent state: working");
-
-    const icon = chip.querySelector("[data-testid='state-icon']");
-    expect(icon).toBeTruthy();
-    expect(icon!.getAttribute("class")).toContain("animate-spin-slow");
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent working"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).toContain("State: working");
-    expect(agentTooltip!.textContent).not.toContain("stalled");
-
-    // Advance past 90s to ensure no timer-driven stall detection kicks in
-    act(() => {
-      vi.advanceTimersByTime(90_000);
-    });
-
-    expect(chip.getAttribute("aria-label")).toBe("Agent state: working");
-    expect(icon!.getAttribute("class")).toContain("animate-spin-slow");
-    expect(agentTooltip!.textContent).toContain("State: working");
-    expect(agentTooltip!.textContent).not.toContain("stalled");
-  });
-
-  it("shows 0% confidence when stateChangeConfidence is 0", () => {
-    mockTerminal = {
-      id: "t1",
-      stateChangeTrigger: "heuristic",
-      stateChangeConfidence: 0,
-    };
-
-    render(<TerminalHeaderContent id="t1" agentState="working" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent working"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).toContain("(0%)");
   });
 });
 
@@ -706,93 +444,12 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
   });
 });
 
-describe("TerminalHeaderContent — elapsed-state-duration suffix", () => {
-  it("omits the duration suffix at exactly 10 seconds since last state change", () => {
-    const lastChange = new Date("2026-03-19T11:59:50Z").getTime();
-    mockTerminal = { id: "t1", lastStateChange: lastChange };
-
-    render(<TerminalHeaderContent id="t1" agentState="working" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("State: working"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.querySelector(".motion-safe\\:animate-in")).toBeNull();
-  });
-
-  it("renders the duration suffix in an animated span past the 10-second threshold", () => {
-    const lastChange = new Date("2026-03-19T11:59:30Z").getTime();
-    mockTerminal = { id: "t1", lastStateChange: lastChange };
-
-    render(<TerminalHeaderContent id="t1" agentState="working" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("State: working"));
-    expect(agentTooltip).toBeTruthy();
-
-    const animatedSpan = agentTooltip!.querySelector(".motion-safe\\:animate-in");
-    expect(animatedSpan).toBeTruthy();
-    const cls = animatedSpan!.getAttribute("class")!;
-    expect(cls).toContain("motion-safe:animate-in");
-    expect(cls).toContain("motion-safe:fade-in");
-    expect(cls).toContain("motion-safe:duration-150");
-    expect(cls).not.toMatch(/\bopacity-/);
-    expect(animatedSpan!.textContent).toContain("·");
-    expect(animatedSpan!.textContent).toContain("30s");
-  });
-});
-
-describe("TerminalHeaderContent — paused / suspended tooltips", () => {
-  it("paused tooltip shows two-tier copy and omits the action instruction", () => {
-    mockTerminal = { id: "t1" };
-
-    render(<TerminalHeaderContent id="t1" flowStatus="paused-backpressure" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const pausedTooltip = tooltips.find((el) => el.textContent?.includes("Buffer overflow"));
-    expect(pausedTooltip).toBeTruthy();
-    const text = pausedTooltip!.textContent!;
-    expect(text).toContain("Buffer overflow");
-    expect(text).toContain("Output paused to prevent data loss.");
-    expect(text).not.toMatch(/right-click/i);
-    expect(text).not.toMatch(/Force Resume/i);
-
-    const stack = pausedTooltip!.querySelector(".flex.flex-col.gap-0\\.5");
-    expect(stack).toBeTruthy();
-    const primary = stack!.querySelector(".font-medium");
-    expect(primary).toBeTruthy();
-    expect(primary!.textContent).toBe("Buffer overflow");
-  });
-
-  // FUTURE_SAB: `suspended` is a skeleton value with no production producer
-  // (#9900). This test exercises the forward-looking UI; the badge never
-  // renders in production. When the SAB transport path is revived, the
-  // tooltip body should be reviewed for accuracy.
-  it("suspended tooltip shows two-tier copy with stative title (FUTURE_SAB; #9900)", () => {
-    mockTerminal = { id: "t1" };
-
-    render(<TerminalHeaderContent id="t1" flowStatus="suspended" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const suspendedTooltip = tooltips.find((el) => el.textContent?.includes("Output suspended"));
-    expect(suspendedTooltip).toBeTruthy();
-    const text = suspendedTooltip!.textContent!;
-    expect(text).toContain("Output suspended");
-    expect(text).toContain("Streaming stalled.");
-    expect(text).toContain("Recovers automatically on focus.");
-
-    const stack = suspendedTooltip!.querySelector(".flex.flex-col.gap-0\\.5");
-    expect(stack).toBeTruthy();
-    const primary = stack!.querySelector(".font-medium");
-    expect(primary).toBeTruthy();
-    expect(primary!.textContent).toBe("Output suspended");
-  });
-});
-
 // #9204 — per-pane state badges must silence their implicit live region so the
 // global announcer (mounted once in App.tsx) is the single source of polite
 // announcements. `role="status"` carries an implicit `aria-live="polite"` per
 // ARIA spec, so simply removing the explicit attribute is insufficient — each
-// badge must opt out with `aria-live="off"`.
+// badge must opt out with `aria-live="off"`. Flow and submit status render in
+// TerminalStatusSlot (#12374), which carries the same coverage.
 describe("TerminalHeaderContent — per-pane badges silence implicit live region (#9204)", () => {
   it("exit-code badge sets aria-live='off'", () => {
     mockTerminal = { id: "t1" };
@@ -807,36 +464,6 @@ describe("TerminalHeaderContent — per-pane badges silence implicit live region
     const badge = container.querySelector('[role="status"][aria-live="off"]');
     expect(badge).toBeTruthy();
     expect(badge!.textContent).toContain("queued");
-  });
-
-  it("paused-backpressure badge sets aria-live='off'", () => {
-    mockTerminal = { id: "t1" };
-    const { container } = render(
-      <TerminalHeaderContent id="t1" flowStatus="paused-backpressure" />
-    );
-    const badge = container.querySelector('[role="status"][aria-live="off"]');
-    expect(badge).toBeTruthy();
-    expect(badge!.textContent).toContain("Paused");
-  });
-
-  it("paused-resource-governor badge sets aria-live='off'", () => {
-    mockTerminal = { id: "t1" };
-    const { container } = render(
-      <TerminalHeaderContent id="t1" flowStatus="paused-resource-governor" />
-    );
-    const badge = container.querySelector('[role="status"][aria-live="off"]');
-    expect(badge).toBeTruthy();
-    expect(badge!.textContent).toContain("memory");
-  });
-
-  // FUTURE_SAB: see Suspended pill (#9900). The badge never renders in
-  // production; this test locks in the future aria semantics.
-  it("suspended badge sets aria-live='off' (FUTURE_SAB; #9900)", () => {
-    mockTerminal = { id: "t1" };
-    const { container } = render(<TerminalHeaderContent id="t1" flowStatus="suspended" />);
-    const badge = container.querySelector('[role="status"][aria-live="off"]');
-    expect(badge).toBeTruthy();
-    expect(badge!.textContent).toContain("Suspended");
   });
 
   it("hibernated badge sets aria-live='off'", () => {
@@ -855,7 +482,6 @@ describe("TerminalHeaderContent — per-pane badges silence implicit live region
         isExited={true}
         exitCode={1}
         queueCount={3}
-        flowStatus="paused-backpressure"
         isHibernated={true}
       />
     );
@@ -863,13 +489,14 @@ describe("TerminalHeaderContent — per-pane badges silence implicit live region
   });
 });
 
-// #9814 — chip row vocabulary calibration. The agent-state chip leads, the
-// three flow pills are demoted off `status-warning/15` to neutral overlay
-// (per docs/architecture/resource-governance.md#173), the hibernated pill is
-// `rounded-full` + `border-dashed` to separate its silhouette from the three
-// flow pills, and the resource sparkline trails as ambient telemetry.
+// #9814 — chip row vocabulary calibration. The agent glyph is not in this row
+// at all (PanelHeader keeps it past the close button), the hibernated pill is
+// `rounded-full` + `border-dashed` so its silhouette reads apart from the other
+// metadata chips, and the resource sparkline trails as ambient telemetry.
+// Transient flow status left this row for TerminalStatusSlot's reserved box in
+// #12374.
 describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
-  it("agent-state chip is the first role=status badge in DOM order", () => {
+  it("keeps the agent glyph out of the row entirely", () => {
     mockTerminal = { id: "t1" };
     const { container } = render(
       <TerminalHeaderContent
@@ -877,34 +504,15 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
         agentState="working"
         isExited={true}
         exitCode={1}
-        flowStatus="paused-backpressure"
         queueCount={2}
       />
     );
     const badges = Array.from(container.querySelectorAll<HTMLElement>('[role="status"]'));
     expect(badges.length).toBeGreaterThan(0);
-    const first = badges[0]!;
-    expect(first.getAttribute("aria-label")).toMatch(/^Agent state:/);
+    expect(badges.some((el) => /^Agent state:/.test(el.getAttribute("aria-label") ?? ""))).toBe(
+      false
+    );
   });
-
-  // FUTURE_SAB: `suspended` is a skeleton value (#9900). The test
-  // exercises the chip-row vocabulary for all three flow pills; the
-  // suspended case never renders in production.
-  it.each(["paused-backpressure", "paused-resource-governor", "suspended"] as const)(
-    // FUTURE_SAB: see above.
-    "%s flow pill is rendered with neutral overlay, not status-warning",
-    (status) => {
-      mockTerminal = { id: "t1" };
-      const { container } = render(<TerminalHeaderContent id="t1" flowStatus={status} />);
-      const badge = container.querySelector<HTMLElement>('[role="status"][aria-live="off"]');
-      expect(badge).toBeTruthy();
-      const className = badge!.getAttribute("class") ?? "";
-      expect(className).not.toContain("status-warning");
-      expect(className).not.toContain("status-error");
-      expect(className).toContain("bg-overlay-soft");
-      expect(className).toContain("border-divider");
-    }
-  );
 
   it("hibernated badge keeps its testid and aria semantics, with rounded-full + dashed border", () => {
     mockTerminal = { id: "t1" };
@@ -917,19 +525,34 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
     expect(className).toContain("border-dashed");
   });
 
-  it("flow pills lack the hibernated silhouette (exclusivity)", () => {
-    mockTerminal = { id: "t1" };
+  // PanelHeader clips this row from its trailing end in a narrow pane, so order
+  // decides what survives: the subagent chip is the row's only pointer entry
+  // point and must sit ahead of the lock glyph and telemetry (#12374).
+  it("clips telemetry and the lock glyph before the subagent chip", () => {
+    mockTerminal = { id: "t1", isInputLocked: true };
+    mockSubagentChipVisible = true;
+    mockResourceEnabled = true;
+    mockResourceState = { cpuPercent: 12, memoryKb: 2048, cpuHistory: [1, 2, 3], breakdown: [] };
     const { container } = render(
-      <TerminalHeaderContent id="t1" flowStatus="paused-backpressure" />
+      <TerminalHeaderContent id="t1" kind="terminal" agentState="working" queueCount={2} />
     );
-    const badge = container.querySelector<HTMLElement>('[role="status"][aria-live="off"]');
-    expect(badge).toBeTruthy();
-    const className = badge!.getAttribute("class") ?? "";
-    expect(className).not.toContain("border-dashed");
-    expect(className).not.toContain("rounded-full");
+    const subagent = screen.getByTestId("subagent-chip");
+    const lockTooltip = screen
+      .getAllByTestId("tooltip-content")
+      .find((el) => el.textContent?.includes("Input locked"));
+    const lock = lockTooltip?.parentElement?.querySelector('[role="status"]');
+    const resource = Array.from(container.querySelectorAll<HTMLElement>('[role="status"]')).find(
+      (el) => /%/.test(el.textContent ?? "")
+    );
+    expect(lock).toBeTruthy();
+    expect(resource).toBeTruthy();
+    expect(subagent.compareDocumentPosition(lock!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      lock!.compareDocumentPosition(resource!) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
   });
 
-  it("combined render: agent leads, sparkline does not lead, hibernated renders after paused-backpressure", () => {
+  it("combined render: telemetry trails the ambient hibernated cue", () => {
     mockTerminal = { id: "t1", isInputLocked: true };
     mockResourceEnabled = true;
     mockResourceState = {
@@ -945,30 +568,20 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
         agentState="working"
         isExited={true}
         exitCode={1}
-        flowStatus="paused-backpressure"
         isHibernated={true}
         queueCount={2}
       />
     );
     const allStatuses = Array.from(container.querySelectorAll<HTMLElement>('[role="status"]'));
-    const agentIndex = allStatuses.findIndex((el) =>
-      (el.getAttribute("aria-label") ?? "").startsWith("Agent state:")
-    );
-    // Agent chip is the first status in DOM order.
-    expect(agentIndex).toBe(0);
     // The resource sparkline (text contains CPU%/memory signature) is NOT the
-    // first status — it has been demoted behind the macro pane-state chip.
+    // first status — it trails the pane-local exit badge.
     const firstStatus = allStatuses[0]!;
     expect(firstStatus.textContent ?? "").not.toMatch(/%/);
-    // Hibernated (by data-testid) renders after paused-backpressure in DOM order.
     const hibernated = screen.getByTestId("terminal-hibernated-badge");
-    const pausedBadge = Array.from(
-      container.querySelectorAll<HTMLElement>('[role="status"][aria-live="off"]')
-    ).find((el) => (el.textContent ?? "").includes("Paused"));
-    expect(pausedBadge).toBeTruthy();
-    // pausedBadge precedes hibernated; check via direct DOM-tree comparison.
+    const resource = allStatuses.find((el) => /%/.test(el.textContent ?? ""));
+    expect(resource).toBeTruthy();
     expect(
-      pausedBadge!.compareDocumentPosition(hibernated) & Node.DOCUMENT_POSITION_FOLLOWING
+      hibernated.compareDocumentPosition(resource!) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
   });
 });

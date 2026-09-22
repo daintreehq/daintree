@@ -11,9 +11,17 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.getOutput",
   "terminal.getStatus",
   "terminal.sendCommand",
+  "terminal.sendCommandOwned",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
+  "terminal.readLastMessageOwned",
   "terminal.resumeSessions",
+
+  // -- terminalWatchActions --
+  "terminal.registerWatch",
+  "terminal.listWatches",
+  "terminal.getWatchEvents",
+  "terminal.cancelWatch",
 
   // -- terminalMetaActions --
   "terminal.setClientMetadata",
@@ -224,6 +232,7 @@ export const BUILT_IN_ACTION_IDS = [
   "forge.openIssues",
   "forge.openPRs",
   "forge.openCommits",
+  "forge.openRepo",
   "forge.openIssue",
   "forge.openPR",
   "forge.assignIssue",
@@ -420,6 +429,7 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.contextMenu",
   "terminal.sendToAgent",
   "terminal.inject",
+  "terminal.injectOwned",
   "terminal.bulkCommand",
   "terminal.interrupt",
   "terminal.interruptOwned",
@@ -510,6 +520,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- devServerActions --
   "devServer.start",
   "devPreview.stop",
+  "devPreview.toggleTool",
 
   // -- devPreviewActions --
   "devPreview.reloadPreview",
@@ -555,6 +566,8 @@ export type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];
 export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "plugin.reloadWindow",
   "terminal.sendCommand",
+  "terminal.sendCommandOwned",
+  "terminal.injectOwned",
   "terminal.setClientMetadata",
   "terminal.paste",
   "project.runCheck",
@@ -569,4 +582,11 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "fleet.retryFailures",
   "terminal.interrupt",
   "terminal.interruptOwned",
+  "terminal.readLastMessageOwned",
+  // Main-process only, keyed on the caller's MCP credential (#12491): a plugin
+  // dispatch has no pane to watch from.
+  "terminal.registerWatch",
+  "terminal.listWatches",
+  "terminal.getWatchEvents",
+  "terminal.cancelWatch",
 ] as const satisfies readonly BuiltInRuntimeActionId[];

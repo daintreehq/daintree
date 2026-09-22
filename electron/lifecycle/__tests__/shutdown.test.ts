@@ -14,6 +14,15 @@ vi.mock("../../services/pty/agentSessionHistory.js", () => ({
   persistAgentSession: persistAgentSessionMock,
 }));
 
+const capturePersistenceMock = vi.hoisted(() => ({
+  sealAndDrainCapturedSessionPersistence: vi.fn(async (_budgetMs: number) => ({
+    drained: true,
+    pending: 0,
+  })),
+}));
+
+vi.mock("../../services/pty/agentSessionCapturePersistence.js", () => capturePersistenceMock);
+
 // Retention is read from the electron-store singleton, which isn't wired in
 // this unit test; stub the accessor so the shutdown journaling path gets a
 // plain value instead of touching the real store.
@@ -141,6 +150,12 @@ const closeSharedDbMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../../services/persistence/db.js", () => closeSharedDbMock);
+
+const vadDrainMock = vi.hoisted(() => ({
+  waitForRetiringVadProcesses: vi.fn((_budgetMs: number) => Promise.resolve(0)),
+}));
+
+vi.mock("../../services/voice/openaiVadProcess.js", () => vadDrainMock);
 
 const closeTelemetryMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
@@ -279,10 +294,13 @@ vi.mock("../../utils/performanceTrace.js", () => performanceTraceMock);
 
 import type { ShutdownDeps } from "../shutdown.js";
 import {
+  CAPTURE_DELIVERY_BUDGET_MS,
+  CAPTURE_PERSISTENCE_DRAIN_BUDGET_MS,
   CLEANUP_TIMEOUT_MS,
   PROJECT_GRACEFUL_KILL_TIMEOUT_MS,
   SHUTDOWN_DEADLINE_MS,
   SHUTDOWN_TAIL_TIMEOUT_MS,
+  VAD_DRAIN_BUDGET_MS,
 } from "../shutdownConfig.js";
 
 function makeDeps(overrides?: Partial<ShutdownDeps>): ShutdownDeps {
@@ -638,6 +656,80 @@ describe("registerShutdownHandler", () => {
         expect.any(Error)
       );
       warnSpy.mockRestore();
+    });
+  });
+
+  describe("voice VAD drain at quit (#12577)", () => {
+    it("waits for the VAD process voice teardown retired before exiting", async () => {
+      const order: string[] = [];
+      let releaseDrain!: () => void;
+      const drained = new Promise<void>((resolve) => {
+        releaseDrain = resolve;
+      });
+      let markWaitStarted!: () => void;
+      const waitStarted = new Promise<void>((resolve) => {
+        markWaitStarted = resolve;
+      });
+      vadDrainMock.waitForRetiringVadProcesses.mockImplementationOnce(async (budgetMs) => {
+        order.push(`vad-wait:${budgetMs}`);
+        markWaitStarted();
+        await drained;
+        order.push("vad-drained");
+        return 0;
+      });
+      let markDbClosed!: () => void;
+      const dbClosed = new Promise<void>((resolve) => {
+        markDbClosed = resolve;
+      });
+      closeSharedDbMock.closeSharedDb.mockImplementationOnce(() => {
+        order.push("closeSharedDb");
+        markDbClosed();
+      });
+      const exited = new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => {
+          order.push("exit");
+          resolve();
+        });
+      });
+
+      const { beforeQuitCb } = await setup({
+        getCleanupIpcHandlers: vi.fn(() => () => {
+          order.push("cleanupIpc");
+        }),
+      });
+      await beforeQuitCb(makeEvent());
+
+      await Promise.all([waitStarted, dbClosed]);
+      // Give an unblocked chain every chance to run on to its telemetry flush.
+      for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+      expect(closeTelemetryMock).not.toHaveBeenCalled();
+      expect(order).not.toContain("exit");
+
+      releaseDrain();
+      await exited;
+      expect(order.indexOf("cleanupIpc")).toBeLessThan(
+        order.indexOf(`vad-wait:${VAD_DRAIN_BUDGET_MS}`)
+      );
+      expect(order.slice(-2)).toEqual(["vad-drained", "exit"]);
+    });
+
+    it("exits cleanly when a VAD process is still draining at the budget", async () => {
+      vadDrainMock.waitForRetiringVadProcesses.mockResolvedValueOnce(1);
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const exited = new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => resolve());
+      });
+
+      try {
+        const { beforeQuitCb } = await setup({});
+        await beforeQuitCb(makeEvent());
+        await exited;
+
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+        expect(warnSpy).toHaveBeenCalledWith("[MAIN] 1 VAD process(es) still draining at quit");
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
   });
 
@@ -1209,6 +1301,7 @@ describe("registerShutdownHandler", () => {
         gracefulKillByProject: vi.fn(async () => []),
         getPartialGracefulKillResults: vi.fn(() => []),
         getAllTerminalsAsync: vi.fn(async () => []),
+        finishAgentSessionCaptures: vi.fn(async () => ({ complete: true, pending: 0 })),
         dispose: vi.fn(),
         ...overrides,
       } as never;
@@ -1252,6 +1345,141 @@ describe("registerShutdownHandler", () => {
       expect(record.agentId).toBe("claude");
       expect(record.cwd).toBe("/repo");
       expect(record.branch).toBe("feature/x");
+    });
+
+    describe("passive capture barrier (#12433)", () => {
+      beforeEach(() => {
+        capturePersistenceMock.sealAndDrainCapturedSessionPersistence.mockResolvedValue({
+          drained: true,
+          pending: 0,
+        });
+      });
+
+      it("delivers host captures, then drains persistence, before disposing anything", async () => {
+        const order: string[] = [];
+        projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+        capturePersistenceMock.sealAndDrainCapturedSessionPersistence.mockImplementation(
+          async (budgetMs: number) => {
+            order.push(`drain:${budgetMs}`);
+            return { drained: true, pending: 0 };
+          }
+        );
+        const ptyClient = makePtyClient({
+          gracefulKillByProject: vi.fn(async () => {
+            order.push("graceful-kill");
+            return [];
+          }),
+          finishAgentSessionCaptures: vi.fn(async (budgetMs: number) => {
+            order.push(`deliver:${budgetMs}`);
+            return { complete: true, pending: 0 };
+          }),
+          dispose: vi.fn(() => order.push("pty-dispose")),
+        });
+        const { beforeQuitCb } = await setup({
+          getPtyClient: () => ptyClient,
+          getCleanupIpcHandlers: () => () => order.push("ipc-cleanup"),
+        });
+
+        await beforeQuitCb(makeEvent());
+        await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+        expect(order).toEqual([
+          "graceful-kill",
+          `deliver:${CAPTURE_DELIVERY_BUDGET_MS}`,
+          `drain:${CAPTURE_PERSISTENCE_DRAIN_BUDGET_MS}`,
+          "pty-dispose",
+          "ipc-cleanup",
+        ]);
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      it("holds disposal while the host is still delivering", async () => {
+        let finishDelivery!: () => void;
+        const ptyClient = makePtyClient({
+          finishAgentSessionCaptures: vi.fn(
+            () =>
+              new Promise((resolve) => {
+                finishDelivery = () => resolve({ complete: true, pending: 0 });
+              })
+          ),
+        });
+        const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+        await beforeQuitCb(makeEvent());
+        await vi.waitFor(() => expect(finishDelivery).toBeTypeOf("function"));
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(
+          capturePersistenceMock.sealAndDrainCapturedSessionPersistence
+        ).not.toHaveBeenCalled();
+        expect((ptyClient as { dispose: ReturnType<typeof vi.fn> }).dispose).not.toHaveBeenCalled();
+
+        finishDelivery();
+        await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
+        expect(capturePersistenceMock.sealAndDrainCapturedSessionPersistence).toHaveBeenCalled();
+      });
+
+      it("holds disposal until accepted writes have drained", async () => {
+        let finishDrain!: () => void;
+        capturePersistenceMock.sealAndDrainCapturedSessionPersistence.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              finishDrain = () => resolve({ drained: true, pending: 0 });
+            })
+        );
+        const ptyClient = makePtyClient();
+        const cleanupIpc = vi.fn();
+        const { beforeQuitCb } = await setup({
+          getPtyClient: () => ptyClient,
+          getCleanupIpcHandlers: () => cleanupIpc,
+        });
+
+        await beforeQuitCb(makeEvent());
+        await vi.waitFor(() => expect(finishDrain).toBeTypeOf("function"));
+        await new Promise((resolve) => setImmediate(resolve));
+        expect((ptyClient as { dispose: ReturnType<typeof vi.fn> }).dispose).not.toHaveBeenCalled();
+        expect(cleanupIpc).not.toHaveBeenCalled();
+        expect(closeSharedDbMock.closeSharedDb).not.toHaveBeenCalled();
+        expect(appMock.exit).not.toHaveBeenCalled();
+
+        finishDrain();
+        await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
+        expect((ptyClient as { dispose: ReturnType<typeof vi.fn> }).dispose).toHaveBeenCalled();
+        expect(cleanupIpc).toHaveBeenCalled();
+      });
+
+      it("still drains and exits clean when delivery fails or stays incomplete", async () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        capturePersistenceMock.sealAndDrainCapturedSessionPersistence.mockResolvedValue({
+          drained: false,
+          pending: 2,
+        });
+        const ptyClient = makePtyClient({
+          finishAgentSessionCaptures: vi.fn(async () => {
+            throw new Error("host gone");
+          }),
+        });
+        const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+        await beforeQuitCb(makeEvent());
+        await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+        // A capture that misses the window costs its own resume, not the quit.
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+        expect(capturePersistenceMock.sealAndDrainCapturedSessionPersistence).toHaveBeenCalled();
+        expect((ptyClient as { dispose: ReturnType<typeof vi.fn> }).dispose).toHaveBeenCalled();
+        warn.mockRestore();
+      });
+
+      it("seals persistence even with no pty host to deliver from", async () => {
+        const { beforeQuitCb } = await setup();
+
+        await beforeQuitCb(makeEvent());
+        await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
+
+        expect(capturePersistenceMock.sealAndDrainCapturedSessionPersistence).toHaveBeenCalledWith(
+          CAPTURE_PERSISTENCE_DRAIN_BUDGET_MS
+        );
+      });
     });
 
     it("skips the assistant's overlay terminal but journals the pane beside it", async () => {

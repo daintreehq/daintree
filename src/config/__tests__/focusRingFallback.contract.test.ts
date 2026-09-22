@@ -501,11 +501,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "Review hub file listbox — roving focus via aria-activedescendant; the active row owns the focus indicator, not the container (tabIndex=-1, programmatic focus only)",
   },
   {
-    file: "src/components/Terminal/ContentGridTwoPaneSplit.tsx",
-    fragment: "h-full flex flex-col outline-hidden",
-    reason: "Grid layout container — focus owned by terminal pane children",
-  },
-  {
     file: "src/components/Terminal/ContentGridMaximizedGroup.tsx",
     fragment: "h-full flex flex-col bg-surface-canvas outline-hidden",
     reason: "Grid layout container — focus owned by terminal pane children",
@@ -527,7 +522,7 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   },
   {
     file: "src/components/Fleet/FleetArmingRibbon.tsx",
-    fragment: "relative flex items-center gap-3 overflow-hidden border-b border-border-default",
+    fragment: 'FLEET_RIBBON_SHELL_CLASS, "overflow-hidden outline-hidden"',
     reason:
       "Status ribbon — focus delegated to child controls (Exit button, count chip, selection-menu trigger); ribbon container uses tabIndex=-1 to receive programmatic focus only",
   },
@@ -612,9 +607,9 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
     file: "src/components/Worktree/WorktreeSidebarSearchBar.tsx",
     fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder-daintree-text/40 focus:outline-hidden",
+      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden",
     reason:
-      "Parent shows focus: wrapper at line 141 has `focus-within:border-accent-primary focus-within:ring-1`",
+      "Parent shows focus: the field wrapper carries `has-[input:focus-visible]:outline outline-2 outline-accent-primary`. Moved off the alpha-accent border + 1px alpha ring, which measured 2.61:1 and 1.47:1 against their grounds.",
   },
   {
     file: "src/components/Layout/LocalCommitsDropdown.tsx",
@@ -648,13 +643,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     fragment:
       "flex-1 text-sm font-medium bg-surface-canvas border border-border-strong rounded px-2 py-0.5 focus:outline-hidden",
     reason: "PRE-EXISTING #8940: preset rename input has no focus indicator — follow-up",
-  },
-  {
-    file: "src/components/Panel/PanelHeader.tsx",
-    fragment:
-      "text-xs font-medium bg-overlay-soft border border-transparent px-1 h-5 min-w-32 text-text-primary select-text transition-colors focus:outline-hidden",
-    reason:
-      "PRE-EXISTING #8940: inline panel title rename input has no focus indicator — follow-up",
   },
   {
     file: "src/components/Panel/TabButton.tsx",

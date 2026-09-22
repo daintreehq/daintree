@@ -1,5 +1,11 @@
 import { z } from "zod";
 import { BUILT_IN_AGENT_IDS, BUILT_IN_TERMINAL_TYPES } from "@shared/config/agentIds";
+import { LAST_OUTPUT_CHANGE_AT_DESCRIPTION } from "@shared/types/terminalStatus";
+import { HANDBACK_MESSAGE_DESCRIPTION, LAST_HANDBACK_DESCRIPTION } from "@shared/types/handback";
+import {
+  AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS,
+  type AgentLastMessageResult,
+} from "@shared/types/agentLastMessage";
 import {
   GLOBAL_SETTINGS_TAB_IDS,
   PROJECT_SETTINGS_TAB_IDS,
@@ -413,9 +419,9 @@ export const AgentSettingsEntrySchema = z
  * ambiguity `setupStatus` exists to remove.
  */
 export const WorktreeSetupStateSchema = z
-  .enum(["pending", "running", "ready", "failed", "timed-out", "unknown"])
+  .enum(["pending", "running", "ready", "failed", "timed-out", "needs-approval", "unknown"])
   .describe(
-    "Post-create initialization state: pending (worktree exists, setup not started), running (config copy, submodules, or the setup script and any configured resource provisioning are in flight), ready, failed, timed-out, or unknown (this host session has no record — it did not create the worktree, or it restarted since)."
+    "Post-create setup state: pending (not started), running (config copy, submodules, setup script or provisioning in flight), ready, failed, timed-out, needs-approval (repository setup commands skipped until the user approves them; you can't), or unknown (this host did not create it, or restarted since)."
   );
 
 export const WorktreeSummarySchema = z.object({
@@ -489,6 +495,23 @@ export const TerminalSubmissionRecordSchema = z.object({
       "How far this submission got. `pty_written`: the text and its Enter reached the pty without error — it does NOT mean the agent read them or acted on them. `queued`/`writing`: still in progress. `failed`/`cancelled`: it did not go out whole, and part may sit in the composer, so neither makes re-sending safe. `unknown`: the terminal was read and holds no record, including tokens aged past the last 32."
     ),
   at: z.number().optional().describe("Epoch ms the phase was entered. Absent for `unknown`."),
+  // Kept inside the 160-byte property target: the tool description is at its
+  // cap, so what a caller should do with an absent value lives in the help
+  // partials instead (#12478).
+  outputChangeAfterWriteAt: z
+    .number()
+    .optional()
+    .describe(
+      "For pty_written only: epoch ms of the latest screen change stamped >200ms after the Enter. Ordering, not attribution; absent means no such change seen."
+    ),
+});
+
+/** Wire shape of `TerminalHandback` (#12488). */
+const TerminalHandbackSchema = z.object({
+  message: z.string().nullable().describe(HANDBACK_MESSAGE_DESCRIPTION),
+  observedAt: z.number(),
+  submissionToken: z.string().optional(),
+  truncated: z.boolean(),
 });
 
 export const TerminalStatusEntrySchema = z.object({
@@ -497,6 +520,7 @@ export const TerminalStatusEntrySchema = z.object({
   agentState: z.string().nullable(),
   waitingReason: z.string().optional(),
   lastTransitionAt: z.number().optional(),
+  lastOutputChangeAt: z.number().optional().describe(LAST_OUTPUT_CHANGE_AT_DESCRIPTION),
   exitCode: z
     .number()
     .int()
@@ -511,6 +535,14 @@ export const TerminalStatusEntrySchema = z.object({
     .describe(
       "Wall-clock spawn time in epoch milliseconds, for run-duration and staleness checks."
     ),
+  agentIncarnation: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe(
+      "Times a new agent was seen taking over this PTY after one exited — the relaunch `spawnedAt` cannot see. 0 is none observed; absent is unobserved, not 0."
+    ),
   lastCheckResult: z
     .object({
       command: z.string().nullable(),
@@ -523,7 +555,14 @@ export const TerminalStatusEntrySchema = z.object({
     .describe(
       "A best-effort reading of the agent's most recent test, lint, or build summary, parsed from its output rather than from a process exit code — the check runs inside the terminal, so its real exit status is unobservable. Absence means no recognized summary was seen, which is not the same as no check running and not the same as passing. Check the run time for freshness before trusting it."
     ),
+  lastHandback: TerminalHandbackSchema.optional().describe(LAST_HANDBACK_DESCRIPTION),
   recentOutput: z.string().nullable().optional(),
+  recentOutputTruncated: z
+    .boolean()
+    .optional()
+    .describe(
+      "Set when older output was left out, by `lines` or the 50 KiB response budget the terminals share; the newest lines are kept."
+    ),
   armed: z
     .boolean()
     .optional()
@@ -573,11 +612,77 @@ export const TerminalStatusResultSchema = z.object({
       "Which surface answered. `pty` is the reduced reading given when this session's workspace has no open window."
     ),
   unavailableFields: z
-    .array(z.enum(["armed", "lastCheckResult", "exitCode", "hasPty"]))
+    .array(z.enum(["armed", "lastCheckResult", "exitCode", "hasPty", "lastOutputChangeAt"]))
     .describe(
       "Fields the answering surface could not observe at all. Absent from every entry, and unknown rather than false."
     ),
 });
+
+const AgentLastMessageSchema = z.object({
+  id: z.string().nullable(),
+  text: z
+    .string()
+    .describe("Its text blocks in order, cut to `maxBytes` once escaped, keeping the end."),
+  truncated: z.boolean().describe("The start of the message was cut to fit."),
+  recordedAt: z.number().nullable(),
+  stopReason: z
+    .string()
+    .nullable()
+    .describe("Raw from the transcript, not a verdict on whether the turn ended."),
+  nextCursor: z
+    .string()
+    .nullable()
+    .describe("Pass as `cursor` for the text before this. Null once nothing earlier is in reach."),
+});
+
+/**
+ * A root union, so zod emits `oneOf` with no top-level type — and
+ * `buildToolOutputSchema` forwards only an object-rooted schema, which would
+ * silently advertise nothing (#12479). The metadata puts `type: "object"` at
+ * the root beside the arms, which is valid JSON Schema and keeps each arm
+ * closed: an `ok` without its fields, or an `unavailable` carrying them, fails
+ * a strict client's check. Main builds this result itself and nothing on the
+ * way validates it, so those closed arms are the whole contract.
+ */
+export const TerminalLastMessageResultSchema = z
+  .discriminatedUnion("status", [
+    z.object({
+      status: z.literal("ok"),
+      provider: z.enum(["claude", "codex"]),
+      message: AgentLastMessageSchema.nullable().describe(
+        "The selected reply with text. Null when only an unanswered tool call is on record."
+      ),
+      unansweredToolUses: z
+        .array(
+          z.object({
+            id: z.string(),
+            name: z.string(),
+            input: z
+              .record(z.string(), z.unknown())
+              .optional()
+              .describe("Only on a question to the user; omitted whole when too large or deep."),
+          })
+        )
+        .describe(
+          "Calls made in or after the message with no result later in the file, oldest first, at most 8. Not proof the agent is waiting on one now."
+        ),
+      newerRecordsFollow: z
+        .boolean()
+        .describe(
+          "A prompt, tool result or later message follows the text, or a line is still being written."
+        ),
+      fileUpdatedAt: z.number(),
+    }),
+    z.object({
+      status: z.literal("unavailable"),
+      reason: z
+        .enum(AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS)
+        .describe(
+          "'provider-mismatch': an agent this cannot read yet. 'store-unknown': the pane's own store is uncertain, so nothing was read. 'search-cap-reached': no reply within the bounded read; an older one is not substituted. 'message-not-found': no reply at that index, or the cursor's message changed."
+        ),
+    }),
+  ])
+  .meta({ type: "object" }) satisfies z.ZodType<AgentLastMessageResult>;
 
 export const PersistedStoreInfoSchema = z.object({
   storeId: z.string(),

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   getSystemMemoryThresholds,
   readAvailableSystemMemoryMb,
+  readElectronSwapUsage,
   readSystemMemorySnapshot,
 } from "../systemMemory.js";
 
@@ -34,10 +35,9 @@ describe("systemMemory thresholds", () => {
 
   it("holds the critical edge flat above the knee while the warning edge keeps widening", () => {
     // The asymmetry IS the fix. `criticalMb` gates tier-2 collapse, the
-    // efficiency latch and OOM classification, and is measured against a
-    // `free + purgeable` figure that omits Darwin's file cache — so it stays
-    // put. `warningMb` only starts the one-view-per-tick ladder, so it is the
-    // edge allowed to scale with the machine.
+    // efficiency latch and OOM classification, so it stays put. `warningMb`
+    // only starts the one-view-per-tick ladder, so it is the edge allowed to
+    // scale with the machine.
     const knee = getSystemMemoryThresholds(10 * 1024);
     let previousWarning = knee.warningMb;
     // Strictly increasing only up to the saturation point; past it the band is
@@ -143,7 +143,12 @@ describe("systemMemory thresholds", () => {
 
 describe("readSystemMemorySnapshot", () => {
   const proc = process as unknown as {
-    getSystemMemoryInfo?: () => { free: number; purgeable?: number; total: number };
+    getSystemMemoryInfo?: () => {
+      free: number;
+      purgeable?: number;
+      fileBacked?: number;
+      total: number;
+    };
   };
   const original = proc.getSystemMemoryInfo;
 
@@ -183,7 +188,7 @@ describe("readSystemMemorySnapshot", () => {
     expect(readAvailableSystemMemoryMb()).toBeNull();
   });
 
-  it("adds purgeable to free and ignores a malformed purgeable figure", () => {
+  it("adds purgeable to free", () => {
     // macOS holds reclaimable pages as purgeable rather than free, so dropping
     // it would fire false positives on every healthy Mac.
     stub(() => ({ free: 512 * 1024, purgeable: 256 * 1024, total: 8 * 1024 * 1024 }));
@@ -193,7 +198,136 @@ describe("readSystemMemorySnapshot", () => {
     expect(snapshot).toMatchObject({ freeMb: 512, purgeableMb: 256, availableMb: 768 });
     expect(readAvailableSystemMemoryMb()).toBe(768);
 
-    stub(() => ({ free: 512 * 1024, purgeable: Number.NaN, total: 8 * 1024 * 1024 }));
-    expect(readAvailableSystemMemoryMb()).toBe(512);
+    // Zero purgeable is an ordinary reading, unlike zero file cache.
+    stub(() => ({
+      free: 512 * 1024,
+      purgeable: 0,
+      fileBacked: 1024 * 1024,
+      total: 8 * 1024 * 1024,
+    }));
+    expect(readAvailableSystemMemoryMb()).toBe(512 + 1024);
+  });
+
+  it("rejects a reported purgeable figure it cannot use instead of reading it as zero (#12517)", () => {
+    // Dropping a component the platform did report under-counts the machine,
+    // and an under-count is what reads as critical.
+    for (const purgeable of [Number.NaN, Number.POSITIVE_INFINITY, -4096, "lots"]) {
+      stub(() => ({ free: 512 * 1024, purgeable, total: 8 * 1024 * 1024 }));
+      expect(readSystemMemorySnapshot()).toBeNull();
+      // However much file cache comes with it.
+      stub(() => ({
+        free: 512 * 1024,
+        purgeable,
+        fileBacked: 4 * 1024 * 1024,
+        total: 8 * 1024 * 1024,
+      }));
+      expect(readSystemMemorySnapshot()).toBeNull();
+    }
+  });
+
+  it("counts Darwin's file cache as available, so a warm-cache Mac is not read as short (#12363)", () => {
+    // The issue's machine: 64 GB with ~600 MB free, ~1 GB purgeable and ~24 GB
+    // of file cache. Free + purgeable alone sits under the 64 GB warning edge,
+    // which is what had the ladder evicting cached views on every tick.
+    const band = getSystemMemoryThresholds(64 * 1024);
+    stub(() => ({
+      free: 600 * 1024,
+      purgeable: 1024 * 1024,
+      fileBacked: 24 * 1024 * 1024,
+      total: 64 * 1024 * 1024,
+    }));
+    const snapshot = readSystemMemorySnapshot();
+    expect(snapshot).toMatchObject({ freeMb: 600, purgeableMb: 1024, fileBackedMb: 24 * 1024 });
+    expect(snapshot!.availableMb).toBe(600 + 1024 + 24 * 1024);
+    expect(snapshot!.freeMb + snapshot!.purgeableMb).toBeLessThan(band.warningMb);
+    expect(snapshot!.availableMb).toBeGreaterThan(band.warningMb);
+  });
+
+  it("reads an absent fileBacked figure as not reported, as Windows and Linux report none", () => {
+    stub(() => ({ free: 512 * 1024, purgeable: 256 * 1024, total: 8 * 1024 * 1024 }));
+    expect(readSystemMemorySnapshot()).toMatchObject({ fileBackedMb: 0, availableMb: 768 });
+  });
+
+  it("treats a reported file cache that is zero or malformed as unreadable, not critical (#12517)", () => {
+    // A running Mac always has file-backed pages resident, so a zero here is an
+    // unpopulated field. Summed as zero it hands every consumer a near-empty
+    // machine — the false "critical" the issue's diagnostics carried for days.
+    for (const fileBacked of [0, Number.NaN, Number.POSITIVE_INFINITY, -4096, "lots"]) {
+      stub(() => ({ free: 60 * 1024, purgeable: 11 * 1024, fileBacked, total: 18 * 1024 * 1024 }));
+      expect(readSystemMemorySnapshot()).toBeNull();
+      expect(readAvailableSystemMemoryMb()).toBeNull();
+    }
+  });
+
+  it("still trusts a genuinely low reading whose components are all present", () => {
+    // No floor: a well-formed reading this low is what real exhaustion looks
+    // like, and it is exactly when the pressure ladder has to hear about it.
+    stub(() => ({
+      free: 40 * 1024,
+      purgeable: 0,
+      fileBacked: 31 * 1024,
+      total: 18 * 1024 * 1024,
+    }));
+    expect(readAvailableSystemMemoryMb()).toBe(71);
+  });
+
+  it("still rejects a malformed free reading however much file cache comes with it", () => {
+    // Same reasoning as a plausible purgeable: a component must not launder a
+    // broken reading into a healthy-looking one.
+    stub(() => ({
+      free: -1024,
+      purgeable: 0,
+      fileBacked: 24 * 1024 * 1024,
+      total: 8 * 1024 * 1024,
+    }));
+    expect(readAvailableSystemMemoryMb()).toBeNull();
+  });
+});
+
+describe("readElectronSwapUsage", () => {
+  const original = (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo;
+
+  function stub(value: unknown) {
+    Object.defineProperty(process, "getSystemMemoryInfo", { configurable: true, value });
+  }
+
+  afterEach(() => {
+    Object.defineProperty(process, "getSystemMemoryInfo", {
+      configurable: true,
+      value: original,
+    });
+  });
+
+  it("converts Electron's KB swap figures to used and total MB", () => {
+    stub(() => ({ free: 1024, total: 8192, swapTotal: 4 * 1024 * 1024, swapFree: 1024 * 1024 }));
+    expect(readElectronSwapUsage()).toEqual({ usedMb: 3 * 1024, totalMb: 4 * 1024 });
+  });
+
+  it("reads a machine with no swap configured as zero of zero, not a failure", () => {
+    stub(() => ({ free: 1024, total: 8192, swapTotal: 0, swapFree: 0 }));
+    expect(readElectronSwapUsage()).toEqual({ usedMb: 0, totalMb: 0 });
+  });
+
+  it("returns null on Darwin, where Electron reports no swap fields", () => {
+    stub(() => ({ free: 1024, total: 8192, purgeable: 0, fileBacked: 0 }));
+    expect(readElectronSwapUsage()).toBeNull();
+  });
+
+  it("rejects malformed or inconsistent swap figures", () => {
+    stub(() => ({ free: 1024, total: 8192, swapTotal: Number.NaN, swapFree: 0 }));
+    expect(readElectronSwapUsage()).toBeNull();
+    stub(() => ({ free: 1024, total: 8192, swapTotal: 1024, swapFree: -1 }));
+    expect(readElectronSwapUsage()).toBeNull();
+    stub(() => ({ free: 1024, total: 8192, swapTotal: 1024, swapFree: 2048 }));
+    expect(readElectronSwapUsage()).toBeNull();
+  });
+
+  it("returns null when the API is missing or throws", () => {
+    stub(undefined);
+    expect(readElectronSwapUsage()).toBeNull();
+    stub(() => {
+      throw new Error("unavailable");
+    });
+    expect(readElectronSwapUsage()).toBeNull();
   });
 });

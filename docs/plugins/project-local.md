@@ -134,6 +134,7 @@ Scoped to the owning project, and visible only in its views:
 | `keybindings` | Renderer-level, so they resolve within the focused project |
 | `settings` | `scope: "project"` settings resolve from the bound project root, not from whatever is focused |
 | `surfaces` | Project-scope only — see [Surfaces](#surfaces) |
+| `agentMcp` | Tools served to agents in this project's terminals only. Every credential is minted for one terminal launch in one project, and a project plugin's endpoint can only be granted to the project that loaded it. Still off until the user turns the endpoint on for the project — trusting the folder does not do it. See [Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints) |
 
 Forbidden under `scope: "project"`, each rejected at manifest validation with an error naming the real obstacle:
 
@@ -141,11 +142,11 @@ Forbidden under `scope: "project"`, each rejected at manifest validation with an
 | --- | --- |
 | `menuItems` | The application menu is one OS-level menu shared by every window, with no per-project projection — the item would stay on the menu bar while another project is focused, and dispatch into it |
 | `agents` | The plugin agent roster is one app-wide registry mirrored into the shared pty-host, and an agent's launch identity is persisted into terminals and sessions that outlive the project binding |
-| `skills` | Contributed skills land in one app-wide index behind the built-in MCP server's `skills.search` / `skills.load`, which external agent sessions query with no project context to filter on |
+| `skills` | Contributed skills land in one app-wide index behind the built-in MCP server's `skills.search` / `skills.load`, which answer every MCP session — terminal agents, external clients, the in-app assistant — without filtering by project |
 | `recipes` | The plugin recipe registry is broadcast to every renderer unfiltered, so the recipe would appear in every project's launcher and empty state |
 | `fileDecorationProviders` | Decoration requests carry a resource path with no owning-project routing, so the provider would be consulted for files in every open project |
 | `processTools` | Process-tool detections are mirrored into the shared pty-host as one detection table for every terminal in the app |
-| `mcpServers` | Contributed servers are reachable through the app-global plugin-MCP surface, where an external agent session carries no project binding to check against |
+| `mcpServers` | Daintree is the client of a contributed server, and the plugin-MCP IPC surface that reaches it is app-global: servers are addressed by plugin and server id alone, and a tool call from the settings UI or the in-app assistant carries no project to check the contribution against. (These tools never reach terminal agents at all — for that, use `agentMcp`.) |
 | `forgeProviders` | Forge providers need synchronous host methods (`parseRemote`, the URL builders) that cannot cross the plugin worker's async message port, so the descriptor could never be given an implementation |
 
 These are deferred, not closed. Each error names the structural obstacle so that when the obstacle goes, the rule can go with it. An installed or builtin plugin is unaffected — being app-wide is what the absent `scope` means.
@@ -175,6 +176,7 @@ Rules:
 - **`viewId` must name a declared `contributes.views` entry**, cross-checked at manifest validation like any other dangling reference. It must not name a panel with `hasPty: true` — a PTY panel is rendered by the terminal host and never loads the view module, so the claim would hold the slot and draw nothing.
 - **At most one plugin per slot per project.** The first claim stands and a second is refused, with both plugin names logged — fixing it means editing one of the two manifests, and you cannot do that without knowing the other. It is never a silent last-wins. The refused plugin still loads and everything else it contributes works, and its claim is remembered: if the incumbent later unloads, the slot passes to it rather than reverting to stock.
 - The surface view receives the standard `PanelViewProps` (`panelId`, `pluginId`, `disposeSignal`) and sits inside the standard plugin error boundary, so a crash falls back with a working "Try again" rather than a blank region.
+- **The box is the region below the strip, at its full height.** A surface gets the same container a panel view does — `flex flex-col flex-1 min-h-0 w-full` — so the root shape in [Views](./views.md#where-you-render) applies here unchanged, and a view with its own bottom bar can rely on that bar sitting on the region's bottom edge.
 
 `projectHome` and `defaultLayout` appear in the design notes for this feature and are **not implemented** — the manifest schema rejects them. There is no per-project routing a persistent home surface could live at yet, and a recipe is launched against a worktree rather than against a project cold open. They land with the routing they need, not before it.
 

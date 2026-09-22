@@ -9,7 +9,7 @@ export function registerTerminalNavigationActions(
 ): void {
   actions.set("terminal.focusNext", () => ({
     id: "terminal.focusNext",
-    title: "Focus Next Terminal",
+    title: "Focus next terminal",
     description: "Focus the next terminal (cycles through grid then dock)",
     category: "terminal",
     kind: "command",
@@ -23,7 +23,7 @@ export function registerTerminalNavigationActions(
 
   actions.set("terminal.focusPrevious", () => ({
     id: "terminal.focusPrevious",
-    title: "Focus Previous Terminal",
+    title: "Focus previous terminal",
     description: "Focus the previous terminal (cycles through grid then dock)",
     category: "terminal",
     kind: "command",
@@ -37,7 +37,7 @@ export function registerTerminalNavigationActions(
 
   actions.set("terminal.focusAlternate", () => ({
     id: "terminal.focusAlternate",
-    title: "Focus Alternate Panel",
+    title: "Focus alternate panel",
     description: "Toggle focus between the current panel and the previously focused one",
     category: "terminal",
     kind: "command",
@@ -52,7 +52,7 @@ export function registerTerminalNavigationActions(
 
   actions.set("terminal.focusUp", () => ({
     id: "terminal.focusUp",
-    title: "Focus Terminal Up",
+    title: "Focus terminal up",
     description: "Focus terminal above",
     category: "terminal",
     kind: "command",
@@ -69,7 +69,7 @@ export function registerTerminalNavigationActions(
 
   actions.set("terminal.focusDown", () => ({
     id: "terminal.focusDown",
-    title: "Focus Terminal Down",
+    title: "Focus terminal down",
     description: "Focus terminal below",
     category: "terminal",
     kind: "command",
@@ -86,7 +86,7 @@ export function registerTerminalNavigationActions(
 
   actions.set("terminal.focusLeft", () => ({
     id: "terminal.focusLeft",
-    title: "Focus Terminal Left",
+    title: "Focus terminal left",
     description: "Focus terminal to the left",
     category: "terminal",
     kind: "command",
@@ -106,7 +106,7 @@ export function registerTerminalNavigationActions(
 
   actions.set("terminal.focusRight", () => ({
     id: "terminal.focusRight",
-    title: "Focus Terminal Right",
+    title: "Focus terminal right",
     description: "Focus terminal to the right",
     category: "terminal",
     kind: "command",
@@ -130,7 +130,7 @@ export function registerTerminalNavigationActions(
   // the Cmd+1..9 keybindings below (terminal.focusIndexN).
   actions.set("panel.focusIndex", () => ({
     id: "panel.focusIndex",
-    title: "Focus Panel by Index",
+    title: "Focus panel by index",
     description: "Focus the panel at a specific position (1-9)",
     category: "panel",
     kind: "command",
@@ -150,7 +150,7 @@ export function registerTerminalNavigationActions(
     const actionId = `terminal.focusIndex${index}` as ActionId;
     actions.set(actionId, () => ({
       id: actionId,
-      title: `Focus Terminal ${index}`,
+      title: `Focus terminal ${index}`,
       description: `Focus terminal at position ${index}; press again to toggle fullscreen`,
       category: "terminal",
       kind: "command",
@@ -167,7 +167,7 @@ export function registerTerminalNavigationActions(
 
   actions.set("terminal.focusDock", () => ({
     id: "terminal.focusDock",
-    title: "Focus Dock",
+    title: "Focus dock",
     description: "Focus the active dock terminal (or first dock terminal in the active worktree)",
     category: "terminal",
     kind: "command",
@@ -202,7 +202,7 @@ export function registerTerminalNavigationActions(
 
   actions.set("terminal.scrollToLastActivity", () => ({
     id: "terminal.scrollToLastActivity",
-    title: "Scroll to Last Activity",
+    title: "Scroll to last activity",
     description: "Scroll the focused terminal to where the agent last produced output",
     category: "terminal",
     kind: "command",
@@ -257,7 +257,7 @@ export function registerTerminalNavigationActions(
 
   actions.set("tab.next", () => ({
     id: "tab.next",
-    title: "Next Tab",
+    title: "Next tab",
     description: "Switch to the next tab in the focused panel group",
     category: "terminal",
     kind: "command",
@@ -270,7 +270,7 @@ export function registerTerminalNavigationActions(
 
   actions.set("tab.previous", () => ({
     id: "tab.previous",
-    title: "Previous Tab",
+    title: "Previous tab",
     description: "Switch to the previous tab in the focused panel group",
     category: "terminal",
     kind: "command",

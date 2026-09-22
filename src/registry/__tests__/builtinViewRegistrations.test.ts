@@ -1,8 +1,11 @@
 /**
  * Keeps the two halves of the built-in view seam honest: every
- * `forgeProviders.slots` ref in a built-in plugin's manifest must have a
- * matching `registerBuiltinView` call in that plugin's renderer entry, under the
- * declaring plugin's own id.
+ * `forgeProviders.slots` ref, every `fileEditors[].slot` (#12323) and every
+ * panel view in a built-in plugin's manifest must have a matching
+ * `registerBuiltinView` call in that plugin's renderer entry, under the
+ * declaring plugin's own id. A built-in panel view has no `plugin://` bundle to
+ * fall back on, so its slot is the runtime panel kind id `{name}.{viewId}`; a
+ * missing registration is a panel that opens onto an import error.
  *
  * Nothing else checks this. The main process validates `slots` for shape only —
  * it cannot see the renderer bundle the ids resolve against (see
@@ -54,16 +57,35 @@ function readSlotRefs(manifest: unknown): string[] {
   const contributes = manifest.contributes;
   if (!isRecord(contributes)) return [];
   const providers = contributes.forgeProviders;
-  if (!Array.isArray(providers)) return [];
-
-  return providers.flatMap((provider) => {
-    if (!isRecord(provider)) return [];
-    const slots = provider.slots;
-    if (!isRecord(slots)) return [];
-    return Object.values(slots).filter(
-      (ref): ref is string => typeof ref === "string" && ref !== ""
-    );
-  });
+  const forgeRefs = Array.isArray(providers)
+    ? providers.flatMap((provider) => {
+        if (!isRecord(provider)) return [];
+        const slots = provider.slots;
+        if (!isRecord(slots)) return [];
+        return Object.values(slots).filter(
+          (ref): ref is string => typeof ref === "string" && ref !== ""
+        );
+      })
+    : [];
+  const editors = contributes.fileEditors;
+  const editorRefs = Array.isArray(editors)
+    ? editors.flatMap((editor) =>
+        isRecord(editor) && typeof editor.slot === "string" && editor.slot !== ""
+          ? [editor.slot]
+          : []
+      )
+    : [];
+  const name = typeof manifest.name === "string" ? manifest.name : null;
+  const views = contributes.views;
+  const viewRefs =
+    name !== null && Array.isArray(views)
+      ? views.flatMap((view) =>
+          isRecord(view) && typeof view.id === "string" && view.id !== ""
+            ? [`${name}.${view.id}`]
+            : []
+        )
+      : [];
+  return [...forgeRefs, ...editorRefs, ...viewRefs];
 }
 
 function readManifestName(manifest: unknown, fallback: string): string {
@@ -135,7 +157,7 @@ describe("built-in plugin view registrations", () => {
       const registrations = parseRegistrations(plugin.rendererSource);
       const registeredIds = registrations.map((registration) => registration.id);
 
-      it("registers a view for every forge provider slot ref", () => {
+      it("registers a view for every forge provider and file editor slot ref", () => {
         const missing = plugin.slotRefs.filter((ref) => !registeredIds.includes(ref));
         expect(missing).toEqual([]);
       });

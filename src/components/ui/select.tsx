@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { OVERLAY_MOTION_CLASS } from "./overlayMotion";
 import { composeHandlers, primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
+import { menuRowPointerMove } from "./menu-row-hover-focus";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 
 const SelectIntentContext = React.createContext<((next: boolean) => void) | null>(null);
@@ -117,7 +118,7 @@ const SelectTrigger = React.forwardRef<
         onClick={intentClick}
       >
         {children}
-        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-daintree-text/40" aria-hidden="true" />
+        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
       </button>
     );
   }
@@ -131,7 +132,10 @@ const SelectTrigger = React.forwardRef<
         "flex w-full items-center justify-between gap-2 rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-3 py-1.5 text-sm text-text-primary transition-colors",
         "focus:outline-hidden focus:border-accent-primary",
         "disabled:opacity-50 disabled:cursor-not-allowed",
-        "data-[placeholder]:text-text-muted",
+        // `text-text-secondary`, not `text-muted`: a placeholder is the only
+        // thing naming an unset control, and `text-muted` has no dark-theme
+        // contrast floor (2.22:1 on namib, 2.50:1 on redwoods).
+        "data-[placeholder]:text-text-secondary",
         "[&>span]:line-clamp-1 [&>span]:text-left",
         className
       )}
@@ -141,7 +145,7 @@ const SelectTrigger = React.forwardRef<
       {children}
       <Icon asChild>
         <ChevronDown
-          className="h-3.5 w-3.5 shrink-0 text-daintree-text/40 transition-transform in-data-[state=open]:rotate-180"
+          className="h-3.5 w-3.5 shrink-0 text-text-secondary transition-transform in-data-[state=open]:rotate-180"
           aria-hidden="true"
         />
       </Icon>
@@ -303,7 +307,7 @@ interface SelectItemProps extends React.ComponentPropsWithoutRef<typeof SelectPr
 const SelectItem = React.forwardRef<
   React.ElementRef<typeof SelectPrimitiveType.Item>,
   SelectItemProps
->(({ className, children, description, ...props }, ref) => {
+>(({ className, children, description, onPointerMove, ...props }, ref) => {
   const radix = useRadixPrimitives();
   if (!radix) return null;
   const Item = radix.SelectPrimitive.Item;
@@ -319,19 +323,36 @@ const SelectItem = React.forwardRef<
         className
       )}
       {...props}
+      onPointerMove={(event) => menuRowPointerMove(event, onPointerMove)}
     >
       <span className="absolute left-2 top-1.5 flex h-3.5 w-3.5 items-center justify-center">
         <ItemIndicator>
           <Check className="h-3.5 w-3.5" aria-hidden="true" />
         </ItemIndicator>
       </span>
+      {/* `min-w-0` on the text column: as a flex child it otherwise takes its
+          content width as a floor (`min-width: auto`), so a long label runs out
+          past the popup's padding and is cut by the edge with no ellipsis, and
+          a descendant's `truncate` never gets the chance to fire.
+
+          It lifts that floor unconditionally — not only where something asks to
+          truncate — so under enough constraint non-truncating content can wrap
+          where it previously overflowed. That is the better failure of the two,
+          and no current consumer is constrained enough to meet it.
+
+          No `flex-1`: the default `flex-shrink: 1` is what does the work here,
+          and filling surplus width buys nothing. No `truncate` on the
+          description either — those are full sentences across the settings tabs
+          and are meant to wrap. */}
       {description ? (
-        <span className="flex flex-col gap-0.5">
+        <span className="flex min-w-0 flex-col gap-0.5">
           <ItemText>{children}</ItemText>
           <span className="text-2xs text-text-secondary">{description}</span>
         </span>
       ) : (
-        <ItemText>{children}</ItemText>
+        <span className="flex min-w-0 flex-col">
+          <ItemText>{children}</ItemText>
+        </span>
       )}
     </Item>
   );

@@ -1,7 +1,6 @@
 import type { ManagedTerminal } from "./types";
 import { WRITE_BURST_DECAY_MS } from "./types";
 import { TerminalRefreshTier } from "@/types";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 // BURST-tier hold after a wheel scroll before reverting to the computed tier —
 // matches the keystroke input-burst decay so a scroll feels just as responsive.
@@ -12,21 +11,25 @@ const WHEEL_BURST_DECAY_MS = 1000;
 // back at all (wedged pty, remote shell lag) so sibling drains can't starve.
 const ECHO_PENDING_HOLD_MAX_MS = 150;
 
-// Interactive resource-profile override (symptom B): while actively scrolling a
-// full-screen TUI, ask the main process to hold the profile off efficiency.
-// DURATION must exceed THROTTLE so re-requests overlap and the hold never lapses
-// mid-scroll; both are short so the hold self-expires soon after scrolling stops.
-const INTERACTIVE_OVERRIDE_DURATION_MS = 1500;
-const INTERACTIVE_OVERRIDE_THROTTLE_MS = 500;
-
 export interface TerminalBurstControllerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
   applyRendererPolicy: (id: string, tier: TerminalRefreshTier) => void;
+  /** Whether this project view is cached — output there earns no burst (#12514). */
+  isViewCached?: () => boolean;
+  // Keep this pane's existing WebGL context through a DOM-mode flip while it
+  // is being scrolled (TerminalWebGLManager.holdForScroll).
+  holdWebGLForScroll: (id: string, durationMs: number) => void;
 }
 
 /**
  * Owns the wheel-scroll and write-driven BURST-tier boosts, plus the
- * interactive resource-profile override IPC throttle.
+ * per-terminal WebGL scroll hold.
+ *
+ * Every boost here is scoped to the terminal being interacted with. Scrolling
+ * used to ask the main process to lift the global resource profile off
+ * efficiency, and with the pressure score unchanged each lift was followed by a
+ * full transition back — freeze/thaw of every cached view, host reconfiguration,
+ * worker trims — per scroll burst (#12518).
  */
 export class TerminalBurstController {
   // Every terminal with a live alt-buffer wheel gesture (id → last wheel
@@ -38,8 +41,6 @@ export class TerminalBurstController {
   // same decay window as the BURST tier so "gesture over" is one consistent
   // notion across the renderer.
   private activeWheelAt = new Map<string, number>();
-  // Throttle for the interactive resource-profile override IPC (see onActiveWheel).
-  private lastInteractiveOverrideRequestAt = 0;
   // Keystroke-echo round trip in flight: input left for the PTY and its echo
   // has not been delivered yet. While set (bounded by ECHO_PENDING_HOLD_MAX_MS),
   // the ingest service holds background drains so the echo's port delivery,
@@ -110,12 +111,15 @@ export class TerminalBurstController {
    * Active wheel scroll in a focused full-screen mouse-reporting TUI. Scrolling
    * such a TUI is an app-owned PTY round-trip per line, and a focused-but-idle
    * pane sits at FOCUSED (10fps): without this the first flick repaints slowly
-   * until the TUI's own redraw output happens to bump the tier. We (1) lift the
+   * until the TUI's own redraw output happens to bump the tier. We lift the
    * renderer to BURST (60fps) for the scroll — reusing the input-burst decay
-   * timer, since a scroll wants the same ~1s revert as a keystroke — and (2) ask
-   * the main process to hold the resource profile at ≥ balanced, so efficiency
-   * mode's stretched port-batch delay (40ms vs 16ms) can't throttle the
-   * returned-redraw stream mid-scroll ("gets slow and stays slow", symptom B).
+   * timer, since a scroll wants the same ~1s revert as a keystroke.
+   *
+   * The other two halves need nothing from here. The wheel reports are PTY
+   * input, so the pty-host's recent-input batch window already keeps this
+   * terminal's redraws off efficiency's stretched 40ms batch delay; and a
+   * mouse-reporting TUI runs in the alt buffer, whose WebGL pin outlasts any
+   * DOM-mode flip.
    */
   onActiveWheel(id: string): void {
     const managed = this.deps.getInstance(id);
@@ -133,50 +137,22 @@ export class TerminalBurstController {
       current.inputBurstTimer = undefined;
       this.deps.applyRendererPolicy(id, current.getRefreshTier());
     }, WHEEL_BURST_DECAY_MS);
-
-    this.requestInteractiveProfileOverride();
   }
 
   /**
    * Ordinary scrollback wheel/key scrolling (not mouse-reporting forwarding).
-   * Holds the resource profile off efficiency for the same reason as
-   * `onActiveWheel` — a profile downgrade mid-scroll drops the WebGL upper
-   * threshold and can force the visible terminal onto the DOM renderer right
-   * as the user is scrolling it (#10858). Unlike `onActiveWheel`, plain
-   * scrollback is client-side xterm rendering with no PTY round-trip per
-   * line, so there's no renderer-tier boost to apply here.
+   * A WebGL-threshold drop mid-scroll — a genuine profile downgrade, another
+   * pane becoming visible — can force the scrolled terminal onto the DOM
+   * renderer right under the user's wheel (#10858), so hold its current
+   * context until the gesture is over. Plain scrollback is client-side xterm
+   * rendering with no PTY round-trip per line, so there's no renderer-tier
+   * boost to apply here.
    */
   onUserScrollIntent(id: string): void {
     const managed = this.deps.getInstance(id);
     if (!managed) return;
 
-    this.requestInteractiveProfileOverride();
-  }
-
-  /**
-   * Fire-and-forget request that the main process keep the resource profile off
-   * efficiency while the user is actively scrolling. Throttled hard because a
-   * trackpad momentum stream calls this dozens of times/sec; the override window
-   * (INTERACTIVE_OVERRIDE_DURATION_MS) is longer than the throttle so the hold
-   * never lapses between requests, and self-expires shortly after scrolling stops.
-   */
-  private requestInteractiveProfileOverride(): void {
-    const now = Date.now();
-    if (now - this.lastInteractiveOverrideRequestAt < INTERACTIVE_OVERRIDE_THROTTLE_MS) return;
-    this.lastInteractiveOverrideRequestAt = now;
-    try {
-      // safeFireAndForget swallows the ASYNC rejection (channel skew during a
-      // reload, future validation), which a bare synchronous try/catch around a
-      // Promise-returning IPC call would miss; the try/catch still guards a
-      // synchronous throw if `window.electron.system` is absent. Either way the
-      // renderer-side BURST boost above already applied — this is non-critical.
-      safeFireAndForget(
-        window.electron.system.requestInteractiveOverride(INTERACTIVE_OVERRIDE_DURATION_MS),
-        { context: "terminal.requestInteractiveProfileOverride" }
-      );
-    } catch {
-      // window.electron.system unavailable — non-critical.
-    }
+    this.deps.holdWebGLForScroll(id, WHEEL_BURST_DECAY_MS);
   }
 
   /**
@@ -197,6 +173,9 @@ export class TerminalBurstController {
    * stranding the terminal at FOCUSED/VISIBLE/BACKGROUND mid-stream.
    */
   onPtyWrite(id: string): void {
+    // A streaming agent in a cached view would otherwise re-request BURST and
+    // re-arm the decay timer on every chunk, only for the policy to clamp it.
+    if (this.deps.isViewCached?.() === true) return;
     const managed = this.deps.getInstance(id);
     if (!managed) return;
 

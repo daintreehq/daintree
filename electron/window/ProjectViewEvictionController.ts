@@ -6,7 +6,7 @@
  */
 
 import { getAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
-import { logInfo } from "../utils/logger.js";
+import { logDebug, logInfo } from "../utils/logger.js";
 import { cleanupEntry, sumGuestMemoryKb } from "./ProjectViewLifecycleController.js";
 import { hasActiveAgent } from "./ProjectViewAgentStateCache.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
@@ -27,6 +27,24 @@ type EvictionCandidate = {
   boundMcpSession: boolean;
   keepResident: boolean;
 };
+
+/**
+ * Consecutive sampler readings below the warning edge before a pressure pass
+ * may destroy anything (#12363). At the sampler's 30s cadence, two means the
+ * reading was still low half a minute later — enough to tell a dip from a trend
+ * while confirming real pressure inside a minute. A view the user only just left
+ * also waits out MIN_PRESSURE_EVICTION_AGE_MS on top of that.
+ */
+export const PRESSURE_SAMPLES_TO_CONFIRM = 2;
+
+/**
+ * How long a view must have sat unused before a gradual pressure pass may take
+ * it (#12363). The view the user just left is the likeliest next switch, so
+ * destroying it trades a ~60ms warm reveal for a cold reload exactly while they
+ * are moving between projects. Measured from `lastUsed`, the stamp LRU order
+ * already sorts on.
+ */
+export const MIN_PRESSURE_EVICTION_AGE_MS = 60_000;
 
 /**
  * workingSetSize is the only cross-platform field — privateBytes is
@@ -159,14 +177,20 @@ export function backgroundRestoreCapacity(
 export function evictStaleViews(
   host: ProjectViewManager,
   reason: EvictionReason,
-  forcePressure = false
+  forcePressure = false,
+  sampledAvailableMb?: number
 ): number {
   // Override the user-configured cap when system memory is low so we can
   // reclaim Chromium renderers (~100–500 MB each) before the OS hits
   // compressed-RAM throttling. The override is per-pass — `maxCachedViews`
   // is never mutated, so once pressure subsides the user's setting takes
   // effect on the next eviction.
-  const availableMb = getAvailableMemoryMb();
+  //
+  // The sampler hands over the reading that confirmed the pass, so the pass acts
+  // on the figure it counted. A fresh read landing above the warning edge would
+  // turn its one-view gradual pass into an unbudgeted trim to the configured cap
+  // that skips the minimum age (#12363).
+  const availableMb = sampledAvailableMb ?? getAvailableMemoryMb();
   const policy = host.memoryPressurePolicy;
   const { level, targetMax } =
     policy != null && availableMb != null
@@ -219,23 +243,12 @@ export function evictStaleViews(
   }
   const effectiveReason: EvictionReason = criticalPressure || gradualPressure ? "pressure" : reason;
 
-  if (host.views.size <= effectiveMax) return 0;
-  if (host.activeProjectId === null) return 0;
-
-  if (criticalPressure || gradualPressure) {
-    logInfo("projectview.pressure-override", {
-      availableMb,
-      thresholdMb: policy?.criticalMb ?? null,
-      warningThresholdMb: policy?.warningMb ?? null,
-      // The sampled band, not the pass's aggressiveness — a forced tier-2
-      // reclaim can land at any band, and a sampler tick reading "critical"
-      // still sheds gradually. `forced` carries the aggressiveness.
-      pressureLevel: level,
-      forced: criticalPressure,
-      configuredMax: host.maxCachedViews,
-      effectiveMax,
-      evictionBudget: Number.isFinite(evictionBudget) ? evictionBudget : null,
-    });
+  if (host.views.size <= effectiveMax || host.activeProjectId === null) {
+    // Nothing is over target, so whatever the last pass reported has ended; a
+    // later pass that finds the cache over it again is a new episode.
+    host.lastEvictionSkippedLog = null;
+    if (criticalPressure || gradualPressure) host.lastPressureOverrideLog = null;
+    return 0;
   }
 
   // Build pid → memory index from the synchronous app.getAppMetrics()
@@ -444,9 +457,26 @@ export function evictStaleViews(
 
   let evictedCount = 0;
   while (host.views.size > effectiveMax && candidates.length > 0 && evictedCount < evictionBudget) {
+    const next = candidates[0];
+    const ageMs = Date.now() - next.entry.lastUsed;
+    // Ends the pass rather than skipping to the next candidate. The queue is
+    // tier-ordered, so passing over a young ordinary view would hand its
+    // eviction to an older one the tiers deliberately rank as costlier to lose
+    // — an agent's, a bound session's, or a workspace the user granted
+    // residency. Gradual passes only: the forced reclaim is the OOM escape
+    // hatch, and LRU and limit-change passes enforce a cap the user chose.
+    if (gradualPressure && ageMs < MIN_PRESSURE_EVICTION_AGE_MS) {
+      logInfo("projectview.eviction-deferred", {
+        projectId: next.projectId,
+        reason: effectiveReason,
+        ageMs,
+        minimumAgeMs: MIN_PRESSURE_EVICTION_AGE_MS,
+      });
+      break;
+    }
+    candidates.shift();
     const { projectId, entry, activeAgent, liveAssistantBackend, boundMcpSession, keepResident } =
-      candidates.shift()!;
-    const ageMs = Date.now() - entry.lastUsed;
+      next;
     const memoryKb = memoryFor(entry);
     const guestMemoryKb = guestMemoryFor(entry);
     const ctx: Record<string, unknown> = {
@@ -475,6 +505,32 @@ export function evictStaleViews(
     // liveness — see `readWorkspaceBindingState` (#12313).
     recordWorkspaceEviction(projectId, effectiveReason);
     evictedCount++;
+  }
+
+  // Logged after the pass rather than before it, so it can say what the pass
+  // did — it used to announce an override on every 30s tick and then find every
+  // candidate protected (#12517). A pass that evicts always reports. One that
+  // evicts nothing reports only when the override itself has changed, so a
+  // cache pinned by live assistants logs its episode once, not every tick.
+  // `availableMb` is left out of that comparison: it moves on every reading.
+  if (criticalPressure || gradualPressure) {
+    const override = {
+      thresholdMb: policy?.criticalMb ?? null,
+      warningThresholdMb: policy?.warningMb ?? null,
+      // The sampled band, not the pass's aggressiveness — a forced tier-2
+      // reclaim can land at any band, and a sampler tick reading "critical"
+      // still sheds gradually. `forced` carries the aggressiveness.
+      pressureLevel: level,
+      forced: criticalPressure,
+      configuredMax: host.maxCachedViews,
+      effectiveMax,
+      evictionBudget: Number.isFinite(evictionBudget) ? evictionBudget : null,
+    };
+    const signature = JSON.stringify(override);
+    if (evictedCount > 0 || signature !== host.lastPressureOverrideLog) {
+      host.lastPressureOverrideLog = signature;
+      logInfo("projectview.pressure-override", { availableMb, ...override, evictedCount });
+    }
   }
 
   // The cache is deliberately over its cap because protecting a running
@@ -509,7 +565,7 @@ export function evictStaleViews(
         (id): id is string => id !== null && id !== host.activeProjectId
       )
     );
-    logInfo("projectview.eviction-skipped", {
+    const skipped = {
       reason: effectiveReason,
       forced: criticalPressure,
       viewCount: host.views.size,
@@ -525,7 +581,17 @@ export function evictStaleViews(
       // each count means exactly one thing.
       mcpLeasedCount: mcpLeasedProjectIds.size,
       protectedProjectIds: assistantProtected.map(({ projectId }) => projectId),
-    });
+    };
+    // Once per change in what is holding the cache over, not once per pass: a
+    // live assistant pins its view for as long as it runs, and the sampler
+    // re-finds it every 30s (#12517).
+    const signature = JSON.stringify(skipped);
+    if (signature !== host.lastEvictionSkippedLog) {
+      host.lastEvictionSkippedLog = signature;
+      logInfo("projectview.eviction-skipped", skipped);
+    }
+  } else {
+    host.lastEvictionSkippedLog = null;
   }
 
   return evictedCount;
@@ -534,9 +600,12 @@ export function evictStaleViews(
 /**
  * Periodic renderer-memory sample for cached (non-active) project views.
  * Silent telemetry only — emits one `projectview.cached-memory` event per
- * cached view per tick so the keep-warm cost is observable in logs without
- * any user-visible behaviour change. Skips when the cache holds only the
- * active view (or fewer) so a single-project session generates no events.
+ * cached view per tick so the keep-warm cost is observable without any
+ * user-visible behaviour change. Debug level, like ProcessMemoryMonitor's own
+ * per-process samples: at info it was the bulk of a diagnostics log — one line
+ * per cached view every 30s, per window (#12517). Skips when the cache holds
+ * only the active view (or fewer) so a single-project session generates no
+ * events.
  */
 export function sampleCachedViewMemory(host: ProjectViewManager): void {
   if (host.views.size <= 1) return;
@@ -588,7 +657,7 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
         gpuKb,
       };
       if (guestMemoryKb > 0) ctx.guestMemoryKb = guestMemoryKb;
-      logInfo("projectview.cached-memory", ctx);
+      logDebug("projectview.cached-memory", ctx);
     } catch {
       // Telemetry only — skip this view and continue with the rest.
     }
@@ -608,29 +677,41 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
  * path that performs banded contraction, so gating it on `criticalMb` would
  * leave the graduated ladder unreachable (#11469).
  *
+ * One reading below that edge destroys nothing; it takes
+ * PRESSURE_SAMPLES_TO_CONFIRM consecutive ones (#12363). A reading is one
+ * instant of a figure the OS is constantly rebalancing, and acting on the first
+ * low one let a machine hovering near the edge shed a renderer on every tick it
+ * happened to dip. Once confirmed the streak holds, so sustained pressure still
+ * converges a view per tick rather than a view per confirmation. A tick that is
+ * not a readable low sample — at or above the edge, unreadable, unarmed, or
+ * with nothing cached to take — starts the count over.
+ *
  * Never escalates to a one-pass collapse, at any band. This sampler is
- * per-window and fires off an instantaneous availability reading with no
- * consecutive-poll count, no cooldown, and no view of whether a cheaper
+ * per-window, holds no cooldown, and has no view of whether a cheaper
  * mitigation is already in flight — the combination that let it destroy a
  * live assistant's view 560ms into a tier-1 pass that resolved the pressure
  * without it (#11477). Collapse is `ProcessMemoryMonitor`'s tier 2 alone,
  * which owns all of that state globally and arrives via `forcePressure`.
  */
 export function maybeEvictUnderPressure(host: ProjectViewManager): void {
-  if (host.views.size <= 1) return;
   const policy = host.memoryPressurePolicy;
-  if (policy == null) return;
-  const availableMb = getAvailableMemoryMb();
-  if (availableMb == null || availableMb >= policy.warningMb) return;
-  evictStaleViews(host, "pressure");
+  const availableMb = policy != null && host.views.size > 1 ? getAvailableMemoryMb() : null;
+  if (policy == null || availableMb == null || availableMb >= policy.warningMb) {
+    host.pressureSampleStreak = 0;
+    // The episode is over; the next one reports afresh even if it looks the same.
+    host.lastPressureOverrideLog = null;
+    host.lastEvictionSkippedLog = null;
+    return;
+  }
+  host.pressureSampleStreak = Math.min(host.pressureSampleStreak + 1, PRESSURE_SAMPLES_TO_CONFIRM);
+  if (host.pressureSampleStreak < PRESSURE_SAMPLES_TO_CONFIRM) return;
+  evictStaleViews(host, "pressure", false, availableMb);
 }
 
 /**
- * Read system-wide available memory in MB. On macOS, "available" = free +
- * purgeable, because Darwin holds reclaimable pages as purgeable rather
- * than free — using `free` alone would fire false positives on every
- * healthy mac. On Windows/Linux, `free` alone is accurate. Returns null
- * when the Chromium API is unavailable (e.g., under test mocks).
+ * Read system-wide available memory in MB — see `readSystemMemorySnapshot` for
+ * what "available" counts on each platform. Returns null when the Chromium API
+ * is unavailable (e.g., under test mocks).
  */
 export function getAvailableMemoryMb(): number | null {
   return readAvailableSystemMemoryMb();

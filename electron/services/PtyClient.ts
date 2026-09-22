@@ -59,7 +59,7 @@ import os from "os";
 import path from "path";
 import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
-import { createLogger, isValidLogOverrideLevel } from "../utils/logger.js";
+import { createLogger, ingestHostLogEvent, isValidLogOverrideLevel } from "../utils/logger.js";
 import { store } from "../store.js";
 import { stripAssignedSessionIdArgs } from "../../shared/types/agentSettings.js";
 import { buildCommandLaunchShell } from "../ipc/handlers/terminal/commandLaunch.js";
@@ -82,6 +82,7 @@ import { routeHostEvent, type PtyEventRouterDeps } from "./pty/PtyEventRouter.js
 import { sendPtyHostRpc } from "./pty/PtyHostRpcFacade.js";
 import { mergeFlowControlSnapshots, mergeMemoryRollups } from "./pty/rollupMerge.js";
 import { HostSignalAggregator, type HostMemoryWarningPayload } from "./pty/HostSignalAggregator.js";
+import { HostMemoryPauseTracker } from "./pty/HostMemoryPauseTracker.js";
 import { ShardPlacementRouter } from "./pty/ShardPlacementRouter.js";
 import { PtyShard } from "./pty/PtyShard.js";
 import {
@@ -102,22 +103,31 @@ import type {
   CrashType,
   SpawnResult,
   FlowControlSnapshot,
+  HostMemoryPauseSnapshot,
   HostThrottlePayload,
   MemoryRollup,
   GracefulKillResult,
+  AgentSessionCaptureFinishResult,
   PtyHostWorkerGovernanceSnapshot,
   TrimStateResult,
   TrimStateScope,
   TrimStateSummary,
+  TerminalSubmitGuard,
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId, WaitingReason } from "../../shared/types/agent.js";
 import type { PanelKind, PanelTitleMode } from "../../shared/types/panel.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
+import {
+  deriveAgentObservationLevel,
+  type PowerPolicyLevel,
+} from "../../shared/types/powerPolicy.js";
+import { getPowerPolicy } from "../window/powerPolicy.js";
 import type { SerializedTerminalSnapshot } from "../../shared/types/terminal.js";
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
+import type { TerminalHandback } from "../../shared/types/handback.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -140,7 +150,11 @@ interface TerminalInfoResponse {
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;
+  /** Last visible-content change, ignoring spinner and timer redraws (#12428). */
+  lastOutputChangeAt?: number;
   lastInputTime?: number;
+  /** Last input that could have put text in the composer, ignoring xterm's own reports (#12491). */
+  lastTypedInputAt?: number;
   lastOutputTime?: number;
   spawnedAt: number;
   isTrashed?: boolean;
@@ -158,6 +172,12 @@ interface TerminalInfoResponse {
   originalAgentPresetId?: string;
   /** Set once on first runtime agent detection; never cleared. Sticky across agent exit/re-enter within session. */
   everDetectedAgent?: boolean;
+  /**
+   * Observed count of new agent sessions taking over this PTY after a prior
+   * one exited (#12535). Absent means the surface could not observe it; zero
+   * means none was observed. Reset with the record when the PTY is replaced.
+   */
+  agentIncarnation?: number;
   /** Runtime-detected agent identity (cleared when the agent exits). */
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
@@ -170,6 +190,8 @@ interface TerminalInfoResponse {
    * absent means either "not asked" or "this terminal holds no record".
    */
   submission?: TerminalSubmissionRecord;
+  /** Most recent handback marker observed for a request this terminal held (#12488). */
+  lastHandback?: TerminalHandback;
 }
 
 /**
@@ -340,10 +362,25 @@ export class PtyClient extends EventEmitter {
   private readonly signalAggregator = new HostSignalAggregator({
     emit: (event, payload) => this.emit(event, payload),
   });
+  // The same per-shard transitions read as pressure episodes, for the UI's one
+  // app-wide memory-pause indicator (#12375). Fed ahead of the aggregator,
+  // which drops every transition that leaves its OR unchanged.
+  private readonly memoryPauseTracker = new HostMemoryPauseTracker({
+    onChange: (snapshot) => this.emit("host-memory-pause-changed", snapshot),
+  });
   /** Mirrors the system-sleep watchdog pause so shards created mid-sleep stay quiet. */
   private healthChecksPaused = false;
 
   private pendingSpawns: Map<string, PtyHostSpawnOptions> = new Map();
+  /**
+   * The registration a spawn overwrote, held until that spawn's result. A spawn
+   * for an id whose PTY is still live is rejected by the host
+   * (TERMINAL_ALREADY_LIVE, #11341), but `spawn()` has already replaced the
+   * live terminal's entry by then and the failure deletes it — leaving a
+   * running terminal that `hasTerminal` reports gone and a crash would not
+   * replay (#12498). Keyed by id, tagged with the displacing generation.
+   */
+  private displacedSpawns = new Map<string, { byGeneration: number; entry: PtyHostSpawnOptions }>();
   private ipcDataMirrorIds = new Set<string>();
   private pendingKillCount: Map<string, number> = new Map();
   // Captures streamed back for a graceful kill that is still in flight, keyed
@@ -376,6 +413,10 @@ export class PtyClient extends EventEmitter {
   // so a restarted host would otherwise boot on balanced governor thresholds and
   // the ProcessTreeCache constructor default until the next profile change.
   private lastResourceProfile: ResourceProfile | null = null;
+  /** Last fallback-eligible project set pushed to the shards (#12557); replayed on shard boot. */
+  private fallbackEligibleProjects: string[] = [];
+  /** Per-connection holder identity, echoed to the host on every (re)connect (#12557). */
+  private windowPortHolders = new Map<number, number>();
   private lastProcessTreePollIntervalMs: number | null = null;
 
   /**
@@ -503,6 +544,10 @@ export class PtyClient extends EventEmitter {
     if (this.shardCallbacksCache) return this.shardCallbacksCache;
     this.shardCallbacksCache = {
       onMessage: (shard, event) => this.handleShardEvent(shard, event),
+      // The host already wrote this entry to the shared log file — mirror it
+      // into Main's buffer and the renderer, never to disk again (#12544).
+      // Shard-agnostic: the entry carries its own source and timestamp.
+      onHostLog: (event) => ingestHostLogEvent(event),
       onExitSync: (shard, { fallbackCrashType }) => {
         shard.watchdog.stop();
         if (this.isDisposed) {
@@ -513,8 +558,12 @@ export class PtyClient extends EventEmitter {
         shard.shouldResyncProjectContext = true;
         // The crashed shard's throttle/memory-warning holds are gone with the
         // process; recompute the aggregate so a sibling-free release isn't
-        // stuck behind a dead shard's stale hold.
-        this.dropShardSignals(shard.key);
+        // stuck behind a dead shard's stale hold. Only for the shard that
+        // still holds the key: a retired shard already dropped its signals,
+        // and its late exit must not erase a same-key replacement's.
+        if (this.shards.get(shard.key) === shard) {
+          this.dropShardSignals(shard.key);
+        }
       },
       onCrashClassified: (shard, { crashType, payload }) => {
         this.cleanupOrphanedPtysForShard(shard, crashType);
@@ -610,6 +659,7 @@ export class PtyClient extends EventEmitter {
           if (inFlight?.requestId === requestId) inFlight.results.push(result);
         },
         onSpawnResult: (id, result) => {
+          this.settleDisplacedSpawn(id, result);
           const ledger = getLifecycleLedger();
           // Prefer the generation echoed by the host: a stale result from a
           // killed predecessor must record against its own incarnation (where
@@ -680,10 +730,12 @@ export class PtyClient extends EventEmitter {
   }
 
   private emitAggregatedThrottle(shard: PtyShard, payload: HostThrottlePayload): boolean {
+    this.memoryPauseTracker.recordThrottle(shard.key, payload);
     return this.signalAggregator.recordThrottle(shard.key, payload);
   }
 
   private emitAggregatedMemoryWarning(shard: PtyShard, payload: HostMemoryWarningPayload): boolean {
+    this.memoryPauseTracker.recordMemoryWarning(shard.key, payload.isWarning);
     return this.signalAggregator.recordMemoryWarning(shard.key, payload);
   }
 
@@ -717,6 +769,12 @@ export class PtyClient extends EventEmitter {
    */
   private dropShardSignals(shardKey: string): void {
     this.signalAggregator.dropShard(shardKey);
+    this.memoryPauseTracker.dropShard(shardKey);
+  }
+
+  /** The terminal hosts' memory pause as last published to the UI (#12375). */
+  getHostMemoryPause(): HostMemoryPauseSnapshot {
+    return this.memoryPauseTracker.getSnapshot();
   }
 
   /**
@@ -836,11 +894,30 @@ export class PtyClient extends EventEmitter {
       type: "set-plugin-process-tool-registry",
       registry: getPluginProcessToolRegistry(),
     });
+    // Power policy on every ready — the default host's first one included,
+    // which gets no config replay, and a host whose client was created after
+    // the policy moved. Read live: main's policy is authoritative and a host
+    // boots at `active`, so only a saving level needs sending.
+    const powerSnapshot = getPowerPolicy();
+    const observationLevel = deriveAgentObservationLevel(powerSnapshot);
+    // A host boots at `active` on both counts, so only a narrowed state needs
+    // sending. `active` observation cannot coincide with a non-active level
+    // (battery and blur both narrow it), so the level test covers both.
+    if (powerSnapshot.level !== "active") {
+      shard.send({
+        type: "set-power-policy",
+        level: powerSnapshot.level,
+        observationLevel,
+      });
+    }
     // A project shard forked mid-session missed every earlier config setter
     // (resource profile, monitoring, persistence suppression) — those are
-    // host-process-wide, so replay the caches on its first ready. Restart
-    // readies get the same replay from respawnPendingForShard below.
-    if (shard.key !== DEFAULT_SHARD_KEY && !shard.needsRespawn) {
+    // host-process-wide, so replay the caches on its first ready. The default
+    // shard needs it too: with deferred start, a setter sent before its first
+    // ready (ResourceProfileService's startup push, #12513) was posted before
+    // the host's listener existed and dropped. Restart readies get the same
+    // replay from respawnPendingForShard below.
+    if (!shard.needsRespawn) {
       this.replayGlobalConfigToShard(shard);
     }
     // Re-arm the watchdog on every successful ready — covers both the initial
@@ -905,6 +982,22 @@ export class PtyClient extends EventEmitter {
       options: withCurrentWindowsPath(options),
     });
     this.disarmStoredSessionAssignment(id);
+    this.disarmStoredHandback(id);
+  }
+
+  /**
+   * Drop a launch's handback code from the STORED spawn entry once it has been
+   * delivered (#12488). A replay after a host crash re-runs the launch, but the
+   * request it carried belonged to the host that died, and a code may be
+   * observed at most once — so the replayed launch holds no request, the same
+   * as any other request lost with its host. Same delivery point as
+   * {@link disarmStoredSessionAssignment}, for the same reason.
+   */
+  private disarmStoredHandback(id: string): void {
+    const stored = this.pendingSpawns.get(id);
+    if (stored?.handbackCode === undefined) return;
+    const { handbackCode: _delivered, ...rest } = stored;
+    this.pendingSpawns.set(id, rest);
   }
 
   /**
@@ -1019,8 +1112,8 @@ export class PtyClient extends EventEmitter {
 
   /**
    * Replay the cached host-process-wide config to one shard: on restarts
-   * (the new process booted with defaults) and on a project shard's first
-   * ready (it missed every earlier live setter).
+   * (the new process booted with defaults) and on every shard's first ready
+   * (any setter posted before it was dropped).
    */
   private replayGlobalConfigToShard(shard: PtyShard): void {
     // Re-enable resource monitoring if it was active
@@ -1044,6 +1137,16 @@ export class PtyClient extends EventEmitter {
       shard.send({
         type: "set-process-tree-poll-interval",
         ms: this.lastProcessTreePollIntervalMs,
+      });
+    }
+
+    // A shard that booted without this set would suppress the IPC fallback for
+    // every project whose only remaining consumer holds no port — the #12557
+    // starvation, reintroduced for exactly as long as the shard stays unaware.
+    if (this.fallbackEligibleProjects.length > 0) {
+      shard.send({
+        type: "set-fallback-eligible-projects",
+        projectIds: this.fallbackEligibleProjects,
       });
     }
   }
@@ -1361,7 +1464,15 @@ export class PtyClient extends EventEmitter {
    * old shard gets an explicit disconnect so it can tear down its per-window
    * queue/batcher state.
    */
-  connectMessagePort(windowId: number, port: MessagePortMain): void {
+  connectMessagePort(windowId: number, port: MessagePortMain, holderWebContentsId?: number): void {
+    // Remembered per connection so the internal re-entries (shard reroute,
+    // restart replay, pending-port flush) carry the same identity as the
+    // original broker — they re-send the same port, so the recipient is
+    // unchanged and must keep being named (#12557).
+    if (holderWebContentsId !== undefined) {
+      this.windowPortHolders.set(windowId, holderWebContentsId);
+    }
+    const holderId = this.windowPortHolders.get(windowId);
     const targetKey = this.shardKeyForWindowContext(windowId);
     const target = this.ensureShard(targetKey);
 
@@ -1400,7 +1511,10 @@ export class PtyClient extends EventEmitter {
     }
 
     try {
-      target.lifecycle.child.postMessage({ type: "connect-port", windowId }, [port]);
+      target.lifecycle.child.postMessage(
+        { type: "connect-port", windowId, holderWebContentsId: holderId },
+        [port]
+      );
       if (process.env.DAINTREE_VERBOSE) {
         console.log(`[PtyClient] MessagePort forwarded to Pty Host for window ${windowId}`);
       }
@@ -1488,6 +1602,7 @@ export class PtyClient extends EventEmitter {
     this.windowPortShard.delete(windowId);
     this.windowProjectContexts.delete(windowId);
     this.windowFocusedTerminals.delete(windowId);
+    this.windowPortHolders.delete(windowId);
     (this.shards.get(portKey ?? DEFAULT_SHARD_KEY) ?? this.defaultShard).send({
       type: "disconnect-port",
       windowId,
@@ -1586,8 +1701,38 @@ export class PtyClient extends EventEmitter {
     // the send so events and per-terminal requests route consistently.
     const shard = this.ensureShardForProject(resolvedProjectId);
     this.terminalOwners.set(id, shard.key);
+    // A duplicate still awaiting its answer keeps the entry it displaced — that
+    // is the terminal actually running, not the attempt queued behind it.
+    const displaced = this.displacedSpawns.get(id)?.entry ?? this.pendingSpawns.get(id);
+    if (displaced) {
+      this.displacedSpawns.set(id, { byGeneration: generation, entry: displaced });
+    } else {
+      this.displacedSpawns.delete(id);
+    }
     this.pendingSpawns.set(id, resolvedOptions);
     this.sendSpawnWithPostInput(shard, id, resolvedOptions);
+  }
+
+  /**
+   * Put back the entry a spawn displaced when the host refused that spawn
+   * because the id is still live. Runs after the router has already dropped the
+   * refused spawn's own entry; any other outcome just forgets the displaced one.
+   * A later generation resolving means a crash replay superseded the refused
+   * spawn, which retires the record too.
+   */
+  private settleDisplacedSpawn(id: string, result: SpawnResult): void {
+    const displaced = this.displacedSpawns.get(id);
+    const generation = result.launchGeneration;
+    if (!displaced || generation === undefined || generation < displaced.byGeneration) return;
+    this.displacedSpawns.delete(id);
+    if (
+      generation === displaced.byGeneration &&
+      !result.success &&
+      result.error?.code === "TERMINAL_ALREADY_LIVE" &&
+      !this.pendingSpawns.has(id)
+    ) {
+      this.pendingSpawns.set(id, displaced.entry);
+    }
   }
 
   /**
@@ -1622,8 +1767,29 @@ export class PtyClient extends EventEmitter {
     this.shardForTerminal(id).send({ type: "write", id, data, traceId });
   }
 
-  submit(id: string, text: string, submissionToken?: string): void {
-    this.shardForTerminal(id).send({ type: "submit", id, text, submissionToken });
+  submit(
+    id: string,
+    text: string,
+    submissionToken?: string,
+    handbackCode?: string,
+    guard?: TerminalSubmitGuard
+  ): void {
+    this.shardForTerminal(id).send({
+      type: "submit",
+      id,
+      text,
+      submissionToken,
+      handbackCode,
+      ...(guard !== undefined ? { guard } : {}),
+    });
+  }
+
+  /**
+   * Withdraw a guarded submission this client queued (#12491): dropped if it
+   * has not reached the lane, its Enter abandoned if its body already has.
+   */
+  withdrawGuardedSubmission(id: string, submissionToken: string): void {
+    this.shardForTerminal(id).send({ type: "withdraw-submission", id, submissionToken });
   }
 
   /**
@@ -1696,6 +1862,7 @@ export class PtyClient extends EventEmitter {
     getTrashedPidTracker().removeTrashed(id);
     const wasKnown = this.pendingSpawns.has(id);
     this.pendingSpawns.delete(id);
+    this.displacedSpawns.delete(id);
     this.ipcDataMirrorIds.delete(id);
 
     // Only track pendingKillCount for ids we've seen locally. An "exit"
@@ -1730,6 +1897,15 @@ export class PtyClient extends EventEmitter {
   /** Check if a terminal exists (based on local tracking) */
   hasTerminal(id: string): boolean {
     return this.pendingSpawns.has(id);
+  }
+
+  /**
+   * The launch generation of the incarnation main is tracking under `id`, or
+   * null for an unknown terminal. Lets a caller holding authority over one
+   * incarnation tell a result for it apart from one for a successor (#12490).
+   */
+  getLaunchGeneration(id: string): number | null {
+    return this.pendingSpawns.get(id)?.launchGeneration ?? null;
   }
 
   /**
@@ -1799,6 +1975,29 @@ export class PtyClient extends EventEmitter {
     this.shardForWindow(windowId).send({ type: "set-focused-terminal", windowId, id });
   }
 
+  /**
+   * Tell every shard which projects currently have a view holding no
+   * MessagePort (#12557) — a cached duplicate, or one mid-transport-handoff. A
+   * window's single connection follows whichever view is active, so the
+   * project-scoped IPC fallback is the only transport those views have, and the
+   * host suppresses that fallback the moment any window's batcher accepts the
+   * chunk. Only Main can see which views hold a port, so it pushes the set here
+   * whenever that changes.
+   *
+   * Sent to every shard, not the owning one: a project's terminals can be
+   * spread across shards, and a shard holding one of them must not suppress the
+   * fallback because it happens not to host that view's active project.
+   */
+  setFallbackEligibleProjects(projectIds: string[]): void {
+    this.fallbackEligibleProjects = [...projectIds];
+    for (const shard of this.shards.values()) {
+      shard.send({
+        type: "set-fallback-eligible-projects",
+        projectIds: this.fallbackEligibleProjects,
+      });
+    }
+  }
+
   setResourceMonitoring(enabled: boolean): void {
     this.resourceMonitoringEnabled = enabled;
     for (const shard of this.shards.values()) {
@@ -1813,6 +2012,12 @@ export class PtyClient extends EventEmitter {
     this.lastProcessTreePollIntervalMs = null;
     for (const shard of this.shards.values()) {
       shard.send({ type: "set-resource-profile", profile });
+    }
+  }
+
+  setPowerPolicy(level: PowerPolicyLevel, observationLevel: PowerPolicyLevel): void {
+    for (const shard of this.shards.values()) {
+      shard.send({ type: "set-power-policy", level, observationLevel });
     }
   }
 
@@ -2619,6 +2824,45 @@ export class PtyClient extends EventEmitter {
     return summary;
   }
 
+  /**
+   * Quit-time producer barrier (#12433): have every reachable shard deliver the
+   * session captures it has already observed, then acknowledge. Captures ride
+   * the same port ahead of each acknowledgement, so once this resolves the
+   * records are on Main's bus — persisting them is the caller's next step.
+   *
+   * Never rejects. `complete` is false when any live shard ran out of budget,
+   * could not answer, or could not be reached — as in `trimState`, a shard
+   * that cannot be asked is not evidence that it had nothing to deliver.
+   */
+  async finishAgentSessionCaptures(budgetMs: number): Promise<AgentSessionCaptureFinishResult> {
+    const liveShards = [...this.shards.values()].filter((shard) => !shard.retired);
+    const reachable = new Set(this.fanOutShards());
+    const results = await Promise.all(
+      liveShards.map((shard) =>
+        reachable.has(shard)
+          ? sendPtyHostRpc<AgentSessionCaptureFinishResult>(
+              shard,
+              "finish-session-captures",
+              (requestId) => ({ type: "finish-session-captures", requestId, budgetMs }),
+              // The host bounds its own wait; this only covers one that stopped answering.
+              { method: "finish-session-captures", timeoutMs: budgetMs + 500 }
+            ).catch(() => null)
+          : Promise.resolve(null)
+      )
+    );
+    let complete = true;
+    let pending = 0;
+    for (const result of results) {
+      if (!result) {
+        complete = false;
+        continue;
+      }
+      complete &&= result.complete;
+      pending += result.pending;
+    }
+    return { complete, pending };
+  }
+
   /** Suppress or resume terminal session persistence across all shards */
   suppressSessionPersistence(suppressed: boolean): void {
     this.sessionPersistSuppressed = suppressed;
@@ -2684,6 +2928,7 @@ export class PtyClient extends EventEmitter {
     this.shards.clear();
 
     this.pendingSpawns.clear();
+    this.displacedSpawns.clear();
     this.pendingKillCount.clear();
     this.windowProjectContexts.clear();
     this.windowFocusedTerminals.clear();
@@ -2693,6 +2938,7 @@ export class PtyClient extends EventEmitter {
     this.projectShardOverrides.clear();
     this.windowPortShard.clear();
     this.signalAggregator.clear();
+    this.memoryPauseTracker.dispose();
     this.removeAllListeners();
 
     console.log("[PtyClient] Disposed");

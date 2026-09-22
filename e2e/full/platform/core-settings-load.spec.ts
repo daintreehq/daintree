@@ -46,7 +46,8 @@ test.describe.serial("Core: Settings Pages Load", () => {
 
     // Click Hibernation subtab
     await window
-      .locator(`${SEL.settings.subtabNav} button[role="tab"]`, { hasText: "Hibernation" })
+      .getByRole("tablist", { name: "General settings sections" })
+      .getByRole("tab", { name: "Hibernation" })
       .click();
 
     // Verify loading text disappears (the key fix we're testing)
@@ -64,7 +65,8 @@ test.describe.serial("Core: Settings Pages Load", () => {
     const { window } = ctx;
 
     await window
-      .locator(`${SEL.settings.subtabNav} button[role="tab"]`, { hasText: "Display" })
+      .getByRole("tablist", { name: "General settings sections" })
+      .getByRole("tab", { name: "Display" })
       .click();
 
     await expect(window.locator("#general-project-pulse")).toBeVisible({ timeout: T_SHORT });
@@ -88,7 +90,8 @@ test.describe.serial("Core: Settings Pages Load", () => {
 
     await test.step("Switch to Terminal subtab and verify content", async () => {
       await window
-        .locator(`${SEL.settings.subtabNav} button[role="tab"]`, { hasText: "Terminal" })
+        .getByRole("tablist", { name: "Appearance settings sections" })
+        .getByRole("tab", { name: "Terminal" })
         .click();
       await expect(window.locator(SEL.settings.fontSizeInput)).toBeVisible({ timeout: T_SHORT });
     });
@@ -144,7 +147,8 @@ test.describe.serial("Core: Settings Pages Load", () => {
 
     await test.step("Switch to Data & Storage subtab and verify content", async () => {
       await window
-        .locator(`${SEL.settings.subtabNav} button[role="tab"]`, { hasText: "Data & Storage" })
+        .getByRole("tablist", { name: "Privacy and data sections" })
+        .getByRole("tab", { name: "Data & Storage" })
         .click();
       await expect(window.locator("button", { hasText: "Clear Cache" })).toBeVisible({
         timeout: T_SHORT,
@@ -171,13 +175,14 @@ test.describe.serial("Core: Settings Pages Load", () => {
       const subtabs = ["Input", "Layout", "Scrollback", "Accessibility"];
       for (const subtab of subtabs) {
         await window
-          .locator(`${SEL.settings.subtabNav} button[role="tab"]`, { hasText: subtab })
+          .getByRole("tablist", { name: "Terminal settings sections" })
+          .getByRole("tab", { name: subtab })
           .click();
         // Verify the subtab button becomes selected
         await expect(
-          window.locator(`${SEL.settings.subtabNav} button[role="tab"][aria-selected="true"]`, {
-            hasText: subtab,
-          })
+          window
+            .getByRole("tablist", { name: "Terminal settings sections" })
+            .getByRole("tab", { name: subtab, selected: true })
         ).toBeVisible({ timeout: T_SHORT });
       }
     });

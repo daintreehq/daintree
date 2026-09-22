@@ -38,6 +38,7 @@ function manifestFor(name: string): Readonly<PluginManifest> {
       mcpServers: [],
       forgeProviders: [],
       fileDecorationProviders: [],
+      fileEditors: [],
       skills: [],
       agents: [],
       recipes: [],

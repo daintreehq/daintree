@@ -634,6 +634,31 @@ body,
   will-change: transform, opacity;
 }
 
+/* The working glyph: a 270deg arc with round caps, gap from 3:00 to 6:00.
+ * Proportions are SpinnerCircle's old 16-unit svg (r=6, stroke 1.333), in
+ * percentages so any square w-/h- size works. An HTML box so its spin composites.
+ * The shape is all mask and the colour is painted once: layered backgrounds
+ * would stack where the caps meet the arc and darken a translucent tone. */
+.spinner-circle {
+  /* What preflight gives the <svg> this replaced, so it lays out the same. */
+  display: block;
+  vertical-align: middle;
+  background: currentColor;
+  /* caps + (arc within ring): the caps already sit inside the ring's band. */
+  mask:
+    radial-gradient(ellipse 4.167% 4.167% at 50% 87.5%, #000 92%, transparent 100%),
+    radial-gradient(ellipse 4.167% 4.167% at 87.5% 50%, #000 92%, transparent 100%),
+    conic-gradient(from 180deg, #000 270deg, transparent 0),
+    radial-gradient(
+      closest-side,
+      transparent calc(66.67% - 0.25px),
+      #000 calc(66.67% + 0.25px),
+      #000 calc(83.33% - 0.25px),
+      transparent calc(83.33% + 0.25px)
+    );
+  mask-composite: add, add, intersect, add;
+}
+
 /* Slower spinner to reduce "chaos" in dense panel grids */
 @keyframes spin-slow {
   to {
@@ -642,7 +667,15 @@ body,
 }
 
 .animate-spin-slow {
-  animation: spin-slow 1.4s linear infinite;
+  /* Shared phase is set by usePowerSavingMotion, including newly mounted icons.
+   * Stepped so the glyph changes about seventeen times a second, not at display
+   * rate: a composited transform that holds its value across vsyncs leaves the
+   * damage rect empty, so cc aborts the draw and no frame is swapped. The
+   * compositor still wakes every vsync either way, which is what a step rate
+   * cannot buy back — so the rate is set by the eye, at 9 degrees a step. Apply
+   * it to HTML boxes only: Chromium keeps a transform animation whose target is
+   * an <svg> on the main thread (see SpinnerCircle). */
+  animation: spin-slow 2.4s steps(40, end) infinite;
   transform-origin: center;
   will-change: transform;
 }
@@ -891,6 +924,53 @@ body,
 
 .animate-trash-pulse {
   animation: trash-pulse 200ms var(--ease-out-expo) both;
+}
+
+/* Trash TTL meter: the remaining-time bar on a recently-closed row. Its
+ * duration IS the signal — it is the twenty-second destruction window, not a
+ * transition between two UI states — so it is one of the semantic exceptions
+ * the shared motion tiers exempt. One animation drains the whole window, so
+ * the row's 1Hz re-render costs no extra paint.
+ *
+ * Deliberately NOT in the reduced-motion list below: that block also forces
+ * `transform: none`, which would snap every meter to full width and report
+ * twenty seconds left on a row with two. The element's inline `transform`
+ * already holds the current fraction, so `motion-reduce:animate-none` on the
+ * element leaves a correct bar that steps down once a second instead of
+ * sliding. */
+@keyframes trash-meter-drain {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+/* Fixed duration, positioned by a negative delay.
+ *
+ * The first cut restated the duration as the row's *remaining* time on every
+ * tick, which is wrong: changing `animation-duration` does not restart an
+ * animation, it keeps the elapsed playback time. Ten seconds in, the duration
+ * became 10s against 10s already elapsed, so the bar hit empty while the label
+ * still read 10s left — the bar said "gone" on a pane with half its window to
+ * run. Holding the duration at the full TTL and seeking with
+ * `animation-delay: -elapsed` puts the bar at the right place by construction,
+ * and re-stating the delay each tick re-syncs rather than drifts. */
+.animate-trash-meter {
+  animation: trash-meter-drain var(--trash-meter-ttl) linear forwards;
+  animation-delay: var(--trash-meter-elapsed);
+}
+
+/* Its own override rather than a line in the shared list below, because that
+ * list also forces `transform: none` — which would snap every meter back to
+ * full width and report twenty seconds left on a row with two. Dropping only
+ * the animation leaves the element's inline `transform`, so the bar stays
+ * correct and steps down once a second instead of sliding. */
+@variant reduce-motion {
+  .animate-trash-meter {
+    animation: none;
+  }
 }
 
 /* All-clear flash: subtle full-screen overlay when all agents complete */
@@ -1999,7 +2079,8 @@ label:focus-within .brand-mark,
   transition: opacity var(--duration-150) ease-out;
 }
 
-.palette-row[aria-selected="true"]::before {
+.palette-row[aria-selected="true"]::before,
+.palette-row[data-selected="true"]::before {
   opacity: 1;
 }
 
@@ -2111,10 +2192,13 @@ label:focus-within .brand-mark,
   }
 }
 
+/* Bounded: a running animation keeps the renderer, GPU process and compositor
+ * presenting at display rate, and a forge error can persist for hours (#12584).
+ * Two and a half breaths draw the eye, then the bar rests on the 50% keyframe's
+ * full opacity, which is also its static state, so the end does not snap. */
 .forge-status-error {
   background: var(--color-status-error);
-  animation: forge-status-error-pulse 2s ease-in-out infinite;
-  will-change: opacity;
+  animation: forge-status-error-pulse 2s ease-in-out 2.5;
 }
 
 /* Respect user's motion preferences */
@@ -2321,6 +2405,64 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   backdrop-filter: none !important;
 }
 
+/* Power saving (#12515) — nothing visible: locked or hidden window, hidden
+ * document, or a cached view (usePowerSavingMotion). Stops only what LOOPS: one
+ * looping element keeps the compositor producing frames at display rate for as
+ * long as it runs. An explicit list, never a wildcard, so one-shot transitions
+ * and Radix Presence exits are untouched. Each glyph keeps its resting frame
+ * and colour — the same static rendering reduced motion already uses. A window
+ * that can still be seen never gets this; it gets the reduced rate below.
+ * Transient loaders
+ * (`animate-spin`, the gated skeleton pulses) are left alone: they end on
+ * their own, and a frozen one would read as a hang. */
+body[data-power-saving="true"] .animate-spin-slow,
+body[data-power-saving="true"] .animate-activity-pulse,
+body[data-power-saving="true"] .animate-breathe,
+body[data-power-saving="true"] .animate-pulse,
+body[data-power-saving="true"] .motion-safe\:animate-pulse,
+body[data-power-saving="true"] .status-working,
+body[data-power-saving="true"] .forge-status-error {
+  animation: none;
+  will-change: auto;
+}
+
+/* Reduced rate — battery, a blurred but visible window, or the efficiency
+ * profile. The loops keep running so a glance still shows what is working, but
+ * eased motion at display rate becomes a few discrete steps per second (steps
+ * apply per keyframe interval). Only the timing function changes, so whatever
+ * already resolved to `animation: none` for reduced motion stays still. */
+body[data-motion-rate="reduced"] .animate-spin-slow {
+  /* Half the foreground rate, which the CSS contract test holds us to: 8.3
+   * steps a second at 18 degrees. Discrete rotation reads as ticking rather
+   * than motion below roughly 8 steps a second or past a 30 degree step, and
+   * this tier covers a window that is visible and genuinely live underneath —
+   * its worktrees keep watching while blurred. Dropping it further buys about
+   * four aborted draws a second against a compositor that wakes 60 times
+   * either way, so the rate is spent on being legible. */
+  animation-timing-function: steps(20, end);
+}
+
+body[data-motion-rate="reduced"] .animate-activity-pulse,
+body[data-motion-rate="reduced"] .animate-breathe,
+body[data-motion-rate="reduced"] .animate-pulse,
+body[data-motion-rate="reduced"] .motion-safe\:animate-pulse,
+body[data-motion-rate="reduced"] .status-working,
+body[data-motion-rate="reduced"] .forge-status-error {
+  animation-timing-function: steps(2, end);
+}
+
+body[data-motion-rate="reduced"] .animate-skeleton-shimmer::after,
+body[data-motion-rate="reduced"] .pulse-skeleton-shimmer::after {
+  animation-timing-function: steps(8, end);
+}
+
+/* `animation: none` alone leaves the shimmer's gradient stripe parked mid-bone. */
+body[data-power-saving="true"] .animate-skeleton-shimmer::after,
+body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
+  display: none;
+  will-change: auto;
+}
+
 /* Windows High Contrast / forced-colors support
    In forced-colors mode the UA overrides color, background-color, border-color,
    outline-color and removes box-shadow entirely. We ensure critical UI boundaries
@@ -2331,7 +2473,29 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     outline-offset: 2px !important;
   }
 
+  /* The working glyph is nothing but a masked background, which the forced
+     canvas colour would erase. */
+  .spinner-circle {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+
   .xterm {
+    forced-color-adjust: none;
+  }
+
+  /* The trash TTL meter is a coloured background against a coloured track, and
+   * forced colors replaces both — which leaves a bar whose length carries the
+   * remaining-time signal with no edge to see it against. Give the fill a
+   * system colour and the track a visible outline so length survives; the
+   * numeric label beside it carries the value either way. */
+  [data-trash-meter] {
+    outline: 1px solid CanvasText;
+    outline-offset: 0;
+  }
+
+  [data-trash-meter] > * {
+    background-color: CanvasText;
     forced-color-adjust: none;
   }
 
@@ -2455,7 +2619,8 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-color: Canvas;
   }
 
-  .palette-row[aria-selected="true"] {
+  .palette-row[aria-selected="true"],
+  .palette-row[data-selected="true"] {
     outline: 2px solid SelectedItem;
     outline-offset: -2px;
   }
@@ -2682,11 +2847,11 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   /* Inbox filter segments. Selection is carried by a fill, which the UA
      flattens to Canvas, so all four chips arrive as the same outlined pill and
      the panel stops saying which filter you are looking at — you cannot tell
-     Archived from All. Same shape of problem as the destructive button above,
+     Archived from All, or Dirty from Stale in the worktree filter popover. Same shape of problem as the destructive button above,
      and the same remedy: the selected one takes the heavier border. Not
      Highlight — this block already spends Highlight on `*:focus-visible`, and a
      chip can be both selected and focused. */
-  [data-notification-filter="true"][aria-pressed="true"] {
+  [data-filter-chip="true"][aria-pressed="true"] {
     border: 2px solid ButtonText;
   }
 
@@ -2730,6 +2895,33 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   button .status-mark,
   [role="button"] .status-mark {
     background-color: ButtonText !important;
+  }
+
+  /* The working glyph is a masked background too, so it takes the same pair. */
+  button .spinner-circle,
+  [role="button"] .spinner-circle,
+  [role="tab"] .spinner-circle,
+  [role="radio"] .spinner-circle {
+    background: ButtonText;
+  }
+
+  /* The one mark whose emptiness IS the state.
+     The sidebar footer's readout says working with a filled dot and idle with a
+     hollow ring, so the shape carries the distinction where colour cannot — and
+     the blanket repaints above, written for marks whose fill would otherwise
+     vanish, would flatten that ring into a solid disc and lose the only signal
+     forced colors had left. Keep its interior the surface colour and let the
+     border do the telling. Matched pair, same reasoning as above: Canvas
+     outside a control, ButtonFace within one. */
+  .status-mark[data-working="false"] {
+    background-color: Canvas !important;
+    border-color: CanvasText !important;
+  }
+
+  button .status-mark[data-working="false"],
+  [role="button"] .status-mark[data-working="false"] {
+    background-color: ButtonFace !important;
+    border-color: ButtonText !important;
   }
 
   /* Project-switcher row marks. The solid states are a CSS background, which
@@ -2834,7 +3026,7 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
      it sits inside the pill rather than growing it. Separate from the
      forced-colors rule on purpose — author colours survive here, so the fill
      still does its job and only the outline is missing. */
-  [data-notification-filter="true"][aria-pressed="true"] {
+  [data-filter-chip="true"][aria-pressed="true"] {
     outline: 1px solid var(--color-border-strong);
     outline-offset: -1px;
   }

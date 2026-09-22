@@ -17,6 +17,8 @@ interface Harness {
     typeof vi.fn<(text: string, ctx: SubmitExecutionContext) => Promise<void>>
   >;
   statuses: TerminalSubmitStatusState[];
+  /** What the terminal's viewport tracker last stamped, as `lastOutputChangeAt`. */
+  outputChangeAt: { value: number | undefined };
   options: WriteQueueOptions;
 }
 
@@ -27,12 +29,15 @@ function makeHarness(): Harness {
     }
   );
   const statuses: TerminalSubmitStatusState[] = [];
+  const outputChangeAt: { value: number | undefined } = { value: undefined };
   return {
     performSubmit,
     statuses,
+    outputChangeAt,
     options: {
       isExited: () => false,
       lastOutputTime: () => Date.now(),
+      lastOutputChangeAt: () => outputChangeAt.value,
       performSubmit: (text, ctx) => performSubmit(text, ctx),
       onSubmitStatus: (state) => statuses.push(state),
     },
@@ -426,5 +431,157 @@ describe("WriteQueue submission ledger", () => {
     wq.noteRejectedSubmission("tok-1");
 
     expect(wq.getSubmission("tok-1")?.phase).toBe("cancelled");
+  });
+});
+
+/**
+ * #12478: whether the screen moved after a delivered Enter. Timing only — the
+ * queue orders a change after the write and never attributes it.
+ */
+describe("WriteQueue outputChangeAfterWriteAt", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(100_000);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function deliver(wq: WriteQueue, token = "tok-1"): Promise<number> {
+    wq.submit("hello", token);
+    await vi.runAllTimersAsync();
+    const record = wq.getSubmission(token);
+    expect(record?.phase).toBe("pty_written");
+    return record!.at!;
+  }
+
+  it("is absent while no viewport change has been observed at all", async () => {
+    const h = makeHarness();
+    const wq = new WriteQueue(h.options);
+
+    await deliver(wq);
+
+    // The reported failure: `pty_written`, and a screen that never moved.
+    expect(wq.getSubmission("tok-1")).not.toHaveProperty("outputChangeAfterWriteAt");
+  });
+
+  it("ignores a change stamped before the Enter", async () => {
+    const h = makeHarness();
+    const wq = new WriteQueue(h.options);
+    const at = await deliver(wq);
+
+    h.outputChangeAt.value = at - 50;
+
+    expect(wq.getSubmission("tok-1")).not.toHaveProperty("outputChangeAfterWriteAt");
+  });
+
+  it("ignores a change stamped within one sampling interval of the Enter, boundary included", async () => {
+    const h = makeHarness();
+    const wq = new WriteQueue(h.options);
+    const at = await deliver(wq);
+
+    // A body echo arriving just before the Enter is sampled up to 200ms later,
+    // so it can be stamped just after it. Nothing in this window is placeable.
+    h.outputChangeAt.value = at + 10;
+    expect(wq.getSubmission("tok-1")).not.toHaveProperty("outputChangeAfterWriteAt");
+    h.outputChangeAt.value = at + 200;
+    expect(wq.getSubmission("tok-1")).not.toHaveProperty("outputChangeAfterWriteAt");
+
+    h.outputChangeAt.value = at + 201;
+    expect(wq.getSubmission("tok-1")?.outputChangeAfterWriteAt).toBe(at + 201);
+  });
+
+  it("does not let an in-window change qualify just because the read comes later", async () => {
+    const h = makeHarness();
+    const wq = new WriteQueue(h.options);
+    const at = await deliver(wq);
+
+    h.outputChangeAt.value = at + 150;
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    // Qualification is about when the change was stamped, not how long ago the
+    // Enter was.
+    expect(wq.getSubmission("tok-1")).not.toHaveProperty("outputChangeAfterWriteAt");
+  });
+
+  it("reports the latest change, re-read on every lookup", async () => {
+    const h = makeHarness();
+    const wq = new WriteQueue(h.options);
+    const at = await deliver(wq);
+
+    h.outputChangeAt.value = at + 500;
+    expect(wq.getSubmission("tok-1")?.outputChangeAfterWriteAt).toBe(at + 500);
+
+    h.outputChangeAt.value = at + 4_000;
+    expect(wq.getSubmission("tok-1")?.outputChangeAfterWriteAt).toBe(at + 4_000);
+  });
+
+  it("is still derivable once later submissions have joined the retained ring", async () => {
+    const h = makeHarness();
+    const wq = new WriteQueue(h.options);
+    const at = await deliver(wq, "tok-1");
+    await vi.advanceTimersByTimeAsync(1_000);
+    for (let i = 2; i <= 5; i++) await deliver(wq, `tok-${i}`);
+
+    // Only `{token, phase, at}` is retained, so the value comes from the
+    // terminal at read time — and a later submission's output satisfies the
+    // earlier record too. That is the ordering-not-attribution caveat.
+    h.outputChangeAt.value = Date.now() + 1_000;
+
+    const first = wq.getSubmission("tok-1");
+    expect(first?.at).toBe(at);
+    expect(first?.outputChangeAfterWriteAt).toBe(h.outputChangeAt.value);
+    expect(wq.getSubmission("tok-5")?.outputChangeAfterWriteAt).toBe(h.outputChangeAt.value);
+  });
+
+  it("derives the value rather than storing it on the record", async () => {
+    const h = makeHarness();
+    const wq = new WriteQueue(h.options);
+    const at = await deliver(wq);
+
+    h.outputChangeAt.value = at + 1_000;
+    const read = wq.getSubmission("tok-1")!;
+    read.outputChangeAfterWriteAt = 1;
+
+    expect(wq.getSubmission("tok-1")?.outputChangeAfterWriteAt).toBe(at + 1_000);
+  });
+
+  it("is never reported for a submission still queued or writing", async () => {
+    const h = makeHarness();
+    h.performSubmit.mockImplementation(() => new Promise<void>(() => {}));
+    const wq = new WriteQueue(h.options);
+
+    wq.submit("first", "tok-1");
+    wq.submit("second", "tok-2");
+    await vi.advanceTimersByTimeAsync(1);
+    h.outputChangeAt.value = Date.now() + 10_000;
+
+    // A body still being written echoes on its own; with no Enter out there is
+    // nothing to order the change after.
+    expect(wq.getSubmission("tok-1")).toMatchObject({ phase: "writing" });
+    expect(wq.getSubmission("tok-1")).not.toHaveProperty("outputChangeAfterWriteAt");
+    expect(wq.getSubmission("tok-2")).toMatchObject({ phase: "queued" });
+    expect(wq.getSubmission("tok-2")).not.toHaveProperty("outputChangeAfterWriteAt");
+  });
+
+  it("is never reported for a failed or cancelled submission", async () => {
+    const h = makeHarness();
+    h.performSubmit
+      .mockImplementationOnce(async () => {
+        throw new Error("write EPIPE");
+      })
+      .mockImplementationOnce(async () => {});
+    const wq = new WriteQueue(h.options);
+
+    wq.submit("first", "tok-failed");
+    wq.submit("second", "tok-cancelled");
+    await vi.runAllTimersAsync();
+    h.outputChangeAt.value = Date.now() + 10_000;
+
+    expect(wq.getSubmission("tok-failed")).toMatchObject({ phase: "failed" });
+    expect(wq.getSubmission("tok-failed")).not.toHaveProperty("outputChangeAfterWriteAt");
+    expect(wq.getSubmission("tok-cancelled")).toMatchObject({ phase: "cancelled" });
+    expect(wq.getSubmission("tok-cancelled")).not.toHaveProperty("outputChangeAfterWriteAt");
   });
 });

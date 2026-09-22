@@ -13,7 +13,7 @@ const WorkspaceSummarySchema = z.object({
 export function registerWorkspaceActions(actions: ActionRegistry): void {
   actions.set("workspace.list", () => ({
     id: "workspace.list",
-    title: "List Workspaces",
+    title: "List workspaces",
     description:
       "List every project and scratch Daintree knows about, open or not, so a client can look up a workspace id rather than derive one by hashing a path. workspaceId is what the Daintree-Workspace-Id header binds to; kind is project or scratch. hasLiveView says whether a view is open, not whether an id is valid — absence from this list is what makes an id wrong.",
     category: "workspace",

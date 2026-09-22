@@ -47,11 +47,16 @@ export const SAFE_MODE_BANNER_COPY = {
   title: "Safe mode — panels weren't restored",
 } as const;
 
-export function getRestoreConfirmationTitle(suspectCount: number): string {
-  if (suspectCount > 0) {
-    return `Session recovered after unexpected exit — ${suspectCount} ${suspectCount === 1 ? "panel" : "panels"} created near the crash may be affected.`;
-  }
-  return "Session recovered after unexpected exit.";
+export const RESTORE_CONFIRMATION_TITLE = "Session recovered after unexpected exit";
+
+/**
+ * The caveat under the title, or `undefined` when there is none — a clean
+ * recovery is a one-line reassurance, and the description is what turns it
+ * into a warning.
+ */
+export function getRestoreConfirmationDescription(suspectCount: number): string | undefined {
+  if (suspectCount <= 0) return undefined;
+  return `${suspectCount} ${suspectCount === 1 ? "panel" : "panels"} created near the crash may be affected.`;
 }
 
 export function getSuspectPanelBannerTitle(count: number, deselected: boolean): string {

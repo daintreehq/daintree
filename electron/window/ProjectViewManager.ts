@@ -56,8 +56,8 @@ import { collectGuestPids } from "./ProjectViewLifecycleController.js";
 // after we've decided to leave efficiency is the worst-of-both-worlds.
 const EFFICIENCY_FREEZE_DEBOUNCE_MS = 500;
 // Trailing-edge debounce for forwarding resize-end content bounds to cached
-// project views (#10415). Cached renderers are CPU-throttled (and CDP-frozen
-// under efficiency), so mid-drag spam is pure waste — only the settled size
+// project views (#10415). Cached renderers are hidden (and CDP-frozen under
+// efficiency), so mid-drag spam is pure waste — only the settled size
 // matters. IPC to a frozen renderer queues in Mojo and delivers on unfreeze,
 // so no wake cycle is needed. Single debounce on `resize` rather than the
 // `resized` event because Linux never emits `resized`.
@@ -107,8 +107,9 @@ const DEFAULT_VIEW_LOAD_HARD_TIMEOUT_MS = 30_000;
  * matches `ProcessMemoryMonitor` and keeps the synchronous `app.getAppMetrics()`
  * call (5–50 ms per invocation) out of the budget that would risk main-thread
  * jank. Each tick also evaluates the low-memory pressure floor (see
- * `maybeEvictUnderPressure`), bounding pressure-eviction latency to one
- * sample period without a new timer.
+ * `maybeEvictUnderPressure`), which acts only on consecutive low readings and
+ * spares a view used within the last minute, so pressure-eviction latency is a
+ * few sample periods and needs no new timer.
  */
 const CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS = 30_000;
 
@@ -150,8 +151,8 @@ export interface ProjectViewManagerOptions {
   /**
    * Called when a view transitions from active to cached with its webContents.id.
    * Mirrors onViewEvicted: live producer ports (worktree, workspace direct) must
-   * be closed so messages don't accumulate in a renderer that Chromium may freeze
-   * after CPU throttling lands. Reactivation re-brokers a fresh port.
+   * be closed so messages don't accumulate in a renderer that may be frozen once
+   * it is parked. Reactivation re-brokers a fresh port.
    */
   onViewCached?: (webContentsId: number) => void;
   /** Called on every did-finish-load for any managed view (initial load and reloads) */
@@ -288,6 +289,14 @@ export class ProjectViewManager {
   activeProjectId: string | null = null;
   maxCachedViews = 1;
   memoryPressurePolicy: MemoryPressurePolicy | null = null;
+  /** Consecutive sampler readings below the warning edge — see `maybeEvictUnderPressure`. */
+  pressureSampleStreak = 0;
+  /**
+   * What the last `projectview.pressure-override` and `projectview.eviction-skipped`
+   * lines said, so an unchanged pass logs nothing — see `evictStaleViews` (#12517).
+   */
+  lastPressureOverrideLog: string | null = null;
+  lastEvictionSkippedLog: string | null = null;
   win: BrowserWindow;
   dirname: string;
   onRecreateWindow?: () => Promise<void>;
@@ -596,6 +605,9 @@ export class ProjectViewManager {
       releaseChannel?: "painted" | "warm-painted" | "skeleton-painted";
       softMs?: number;
       hardMs?: number;
+      confirmFrame?: () => Promise<boolean>;
+      deferFrameConfirmation?: boolean;
+      unpaintedHardMs?: number;
     }
   ): Promise<PaintGateOutcome> {
     return PaintGateController.waitForPaint(
@@ -621,15 +633,33 @@ export class ProjectViewManager {
   }
 
   /**
-   * Renderer-driven gate release. Called from the `APP_VIEW_PAINTED` IPC
-   * handler with the webContentsId of the renderer that just painted.
+   * Let an open gate armed with deferred frame confirmation start probing for
+   * a drawn frame, once the cold view's load has settled (#12394). A real
+   * instance method for the same reason as `waitForPaint`.
+   */
+  enableFrameConfirmation(webContentsId: number): boolean {
+    return PaintGateController.enableFrameConfirmation(this, webContentsId);
+  }
+
+  /**
+   * Fail an open frame-confirmed gate whose renderer has gone away (#12394). A
+   * real instance method for the same reason as `waitForPaint`.
+   */
+  failFrameConfirmation(webContentsId: number): void {
+    PaintGateController.failFrameConfirmation(this, webContentsId);
+  }
+
+  /**
+   * Renderer-driven gate readiness. Called from the `APP_VIEW_PAINTED` IPC
+   * handler with the webContentsId of the renderer that just painted; a
+   * frame-confirmed gate releases once a frame drawn after it is confirmed.
    */
   signalViewPainted(webContentsId: number): void {
     PaintGateController.signalViewPainted(this, webContentsId);
   }
 
   /**
-   * Early-reveal gate release. Called when an incoming cold-start view's
+   * Early-reveal gate readiness. Called when an incoming cold-start view's
    * `APP_SKELETON_PARSED` fires. See ProjectViewPaintGateController for
    * the full rationale.
    */
@@ -638,7 +668,7 @@ export class ProjectViewManager {
   }
 
   /**
-   * Warm-reactivation gate release. Called from the `APP_VIEW_WARM_PAINTED`
+   * Warm-reactivation gate readiness. Called from the `APP_VIEW_WARM_PAINTED`
    * IPC handler after a cached view's wake fan-out completes (#9679).
    */
   signalWarmViewPainted(webContentsId: number): void {
@@ -667,10 +697,11 @@ export class ProjectViewManager {
    * is non-evictable for the same reason as the active view. Eviction paths
    * must skip both (mirrors the LRU guard in `evictStaleViews`).
    *
-   * Spans the whole load, not just the paint gate: the gate resolves on the
-   * incoming skeleton signal — which lands during the load — and nulls itself,
-   * while the outgoing view stays attached until `loadView` settles, up to the
-   * load ceiling (#11459). Falling back to `pendingColdSwitch` closes that window
+   * Spans the whole load, not just the paint gate: a gate that settles before
+   * the load does (a painted-channel gate spent from arm, or one cleared
+   * mid-load) nulls itself, while the outgoing view stays attached until
+   * `loadView` settles, up to the load ceiling (#11459). Falling back to
+   * `pendingColdSwitch` closes that window
    * for every consumer (hibernation, idle auto-close, relocation, menu state),
    * any of which would otherwise destroy the visible outgoing view and leave
    * rollback with nothing to restore.
@@ -883,7 +914,7 @@ export class ProjectViewManager {
    * Never rejects, but the three outcomes are NOT interchangeable and the
    * caller must branch on them: a timeout means the renderer never said it had
    * restored its panels, so its agents may not have respawned. Treating that as
-   * success would park a half-booted view as `"cached"` — throttled, purge
+   * success would park a half-booted view as `"cached"` — hidden, purge
    * scheduled, and indistinguishable from a healthy one until the user switches
    * to it and finds it blank.
    */
@@ -1094,14 +1125,17 @@ export class ProjectViewManager {
    * Set the available-memory band governing cached-view reclaim, without
    * mutating `maxCachedViews`. Pushed once at ResourceProfileService start (and
    * per late-created window), never on a profile transition — the band is a
-   * property of the machine, not of the profile, so the interactive
-   * efficiency→balanced clamp cannot loosen it (#11469). `null` disables
+   * property of the machine, not of the profile, so an efficiency→balanced
+   * lift cannot loosen it (#11469). `null` disables
    * reclaim entirely.
    *
    * The pair is copied: the caller's object is a long-lived service field, and
    * an inverted or non-finite edge disables rather than half-arms the policy.
    */
   setMemoryPressurePolicy(policy: MemoryPressurePolicy | null): void {
+    // Readings counted against the previous band say nothing about this one.
+    this.pressureSampleStreak = 0;
+    this.lastPressureOverrideLog = null;
     if (
       policy == null ||
       !Number.isFinite(policy.criticalMb) ||
@@ -1128,6 +1162,8 @@ export class ProjectViewManager {
    * cache in a single pass.
    */
   setLowMemoryFreeThresholdMb(mb: number | null): void {
+    this.pressureSampleStreak = 0;
+    this.lastPressureOverrideLog = null;
     if (mb == null || !Number.isFinite(mb) || mb <= 0) {
       this.memoryPressurePolicy = null;
     } else {
@@ -1227,9 +1263,10 @@ export class ProjectViewManager {
       // session that is already using the view.
       //
       // Unlike eviction, skipping the freeze needs no bounded lease. It costs
-      // one optimization on one cached view — CPU throttling and the periodic
-      // memory purge still apply — rather than the memory a resident renderer
-      // holds, so a quiet binding can hold it for as long as the session lives.
+      // one optimization on one cached view — the renderer's own cached-view
+      // work demotion and the periodic memory purge still apply — rather than
+      // the memory a resident renderer holds, so a quiet binding can hold it
+      // for as long as the session lives.
       const mcp = this.mcpActivityFor(projectId, wc);
       if (mcp.liveBinding || mcp.dispatchLease || mcp.unknown) continue;
       void freezeWebContents(wc);
@@ -1268,8 +1305,8 @@ export class ProjectViewManager {
 
   // Wake any cached background view whose project gained a live agent after it
   // was already frozen (the seed/state-change races freezeAllCached). Unfreeze
-  // only — CPU throttle stays applied; throttling slows JS but does not suspend
-  // it, so the queued state event still applies. No-op outside efficiency.
+  // only — the view stays cached and hidden, and the queued state event applies
+  // once its event loop runs again. No-op outside efficiency.
   //
   // Not `private`: called from ProjectViewAgentStateCache's seed() after a
   // fresh agent-state map lands (#11004).

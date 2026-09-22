@@ -25,6 +25,13 @@ export interface TerminalGracefulShutdownHost {
    * anything still draining there would interleave with them (#11851).
    */
   acquireInputLock(): () => void;
+  /**
+   * Open the capture window and return its close (#12432). While open, the
+   * host keeps this PTY's reads flowing past its memory and backpressure holds,
+   * which otherwise outlast the whole teardown budget. Opened only once the
+   * capture listeners exist, since reads can resume the moment it opens.
+   */
+  enterCaptureMode(): () => void;
   kill(reason: string): void;
 }
 
@@ -226,6 +233,9 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
   // and released on every exit path by the `finally` below — including a
   // throwing `host.kill()`, which would otherwise strand the terminal's input.
   const releaseInputLock = host.acquireInputLock();
+  // Assigned inside the executor below; the cast keeps TS from narrowing the
+  // `finally` read to the initial null.
+  let exitCaptureMode = null as (() => void) | null;
   try {
     return await new Promise<string | null>((resolve) => {
       // Pre-declared so finish() can dispose them centrally (forward reference).
@@ -310,16 +320,20 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
         // below, but settled only after the capture check — a frame that carries
         // both the footer and the resume hint must resolve as a capture, not as
         // permission to press again.
+        //
+        // Both buffers are matched BEFORE they are trimmed to their cap. Reads
+        // held back by a pause arrive as one large chunk once they resume, and
+        // trimming first would drop whatever sits at its head (#12432).
         if (gateArm && shutdownSignal) {
           gateProbe += data;
-          if (gateProbe.length > GRACEFUL_SHUTDOWN_BUFFER_SIZE) {
-            gateProbe = gateProbe.slice(-GRACEFUL_SHUTDOWN_BUFFER_SIZE);
-          }
         }
         const gateMatched =
           gateArm !== null &&
           shutdownSignal !== undefined &&
           stripAnsiCodes(gateProbe).includes(shutdownSignal.gateText);
+        if (gateProbe.length > GRACEFUL_SHUTDOWN_BUFFER_SIZE) {
+          gateProbe = gateProbe.slice(-GRACEFUL_SHUTDOWN_BUFFER_SIZE);
+        }
 
         if (!matcher) {
           if (gateMatched) settleGateArm(true);
@@ -327,11 +341,10 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
         }
 
         shutdownBuffer += data;
+        const match = matcher(shutdownBuffer, { occurrence: "first", boundary: "stream" });
         if (shutdownBuffer.length > GRACEFUL_SHUTDOWN_BUFFER_SIZE) {
           shutdownBuffer = shutdownBuffer.slice(-GRACEFUL_SHUTDOWN_BUFFER_SIZE);
         }
-
-        const match = matcher(shutdownBuffer, { occurrence: "first", boundary: "stream" });
         if (match.kind !== "none") {
           // A session id in this chunk means the agent is already on its way
           // out, so this chunk must never also read as permission to press
@@ -423,7 +436,22 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
         }
       };
 
+      // Listeners first, then the capture window: a held-back read can land as
+      // soon as reads resume, and it must find somebody listening. A host that
+      // fails to open the window costs the protection, not the teardown.
+      try {
+        exitCaptureMode = host.enterCaptureMode();
+      } catch (error) {
+        logger.warn("Graceful shutdown could not open its capture window", {
+          terminalId: terminal.id,
+          error: formatErrorMessage(error, "enterCaptureMode threw a non-Error"),
+        });
+      }
+
       (async () => {
+        // Resuming reads can deliver the hint, or the exit, before a byte is
+        // written — nothing is left to send by then.
+        if (resolved) return;
         if (shutdownSignal) {
           await runGatedEscalation(shutdownSignal);
           return;
@@ -496,6 +524,18 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
       })();
     });
   } finally {
+    // Closed on every exit path, including a throwing kill: a terminal that
+    // survives its close must not keep draining past its memory protection.
+    if (exitCaptureMode) {
+      try {
+        exitCaptureMode();
+      } catch (error) {
+        logger.warn("Graceful shutdown could not close its capture window", {
+          terminalId: terminal.id,
+          error: formatErrorMessage(error, "exitCaptureMode threw a non-Error"),
+        });
+      }
+    }
     releaseInputLock();
   }
 }

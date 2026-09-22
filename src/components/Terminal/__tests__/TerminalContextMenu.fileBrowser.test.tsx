@@ -68,8 +68,8 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 
 vi.mock("@/services/terminal/FileLinksAddon", () => ({ reportFileLinkFailure }));
 
-vi.mock("@/hooks/useWorktrees", () => ({
-  useWorktrees: () => ({ worktrees: worktreeList.current }),
+vi.mock("@/hooks/useSidebarWorktreeOrder", () => ({
+  useSidebarWorktreeOrder: () => worktreeList.current,
 }));
 
 vi.mock("@/hooks/useIsHibernated", () => ({ useIsHibernated: () => false }));

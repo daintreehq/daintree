@@ -51,6 +51,13 @@ export const AgentStateChangedSchema = z.extend(EventContextSchema, {
   state: AgentStateSchema,
   previousState: AgentStateSchema,
   timestamp: positiveInt,
+  // How many new agent sessions this PTY has been observed taking on after a
+  // prior one exited (#12535). Carried on every transition, not just the
+  // respawn that moves it, so a subscriber applying the state can apply the
+  // session it belongs to in the same write — otherwise a fresh `idle` is
+  // briefly visible beside its predecessor's count. Optional because an older
+  // producer may not report it, and absent means unobserved, never zero.
+  agentIncarnation: z.optional(nonNegativeInt),
   traceId: z.optional(z.string()),
   trigger: AgentStateChangeTriggerSchema,
   // Confidence in the state detection (0.0 = uncertain, 1.0 = certain)
@@ -88,6 +95,17 @@ export const AgentStateChangedSchema = z.extend(EventContextSchema, {
       passed: z.boolean(),
       ranAt: positiveInt,
       failureSummary: z.nullable(z.string()),
+      truncated: z.boolean(),
+    })
+  ),
+  // Handback marker observed at this settle for a request the terminal held
+  // (#12488). Present only on the settle where a request's marker was first
+  // seen. `message` is terminal text the agent wrote — never log it.
+  lastHandback: z.optional(
+    z.object({
+      message: z.nullable(z.string()),
+      observedAt: positiveInt,
+      submissionToken: z.optional(z.string()),
       truncated: z.boolean(),
     })
   ),

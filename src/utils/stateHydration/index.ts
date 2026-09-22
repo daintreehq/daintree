@@ -17,7 +17,7 @@ import type {
   TabGroup,
 } from "@/types";
 import type { WaitingReason } from "@shared/types/agent";
-import type { SessionLostReason } from "@shared/types/panel";
+import type { PanelRestoreRecovery, SessionLostReason } from "@shared/types/panel";
 import type { BackendTerminalInfo, TerminalReconnectResult } from "@shared/types/ipc/terminal";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isGitBackedProject } from "@shared/types";
@@ -111,6 +111,8 @@ export interface HydrationOptions {
     isUsingFallback?: boolean;
     fallbackChainIndex?: number;
     sessionLostOnRestore?: SessionLostReason;
+    conversationCwd?: string;
+    restoreRecovery?: PanelRestoreRecovery;
     env?: Record<string, string>;
     extensionState?: Record<string, unknown>;
     pluginId?: string;
@@ -224,7 +226,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     });
 
     // The active scratch persists in main but doesn't ride the hydrate payload,
-    // so without this the toolbar and sidebar show "Open project" after a relaunch
+    // so without this the toolbar and sidebar show "Select project" after a relaunch
     // into a scratch. Fire-and-forget: nothing on the boot path blocks on it.
     void useScratchStore
       .getState()

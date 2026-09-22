@@ -1,4 +1,4 @@
-import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
+import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
 
 export interface PrimarySelectionDeps {
   hostElement: HTMLElement;
@@ -54,9 +54,13 @@ export function installLinuxPrimarySelectionListeners(deps: PrimarySelectionDeps
       const { text } = await readSelection();
       if (!text) return;
       if (isDisposed() || isInputLocked()) return;
-      const payload = getBracketedPasteMode()
-        ? formatWithBracketedPaste(text)
-        : text.replace(/\r?\n/g, "\r");
+      // A PRIMARY selection is whatever was on screen, escape sequences from a
+      // program's own output included, so it cannot reach the parser as it
+      // stands in either mode. `formatForTerminalPaste` owns both branches and
+      // the line-ending encoding each one needs.
+      const payload = formatForTerminalPaste(text, {
+        bracketedPasteMode: getBracketedPasteMode(),
+      });
       writeToPty(terminalId, payload);
       notifyUserInput(terminalId);
     } catch {

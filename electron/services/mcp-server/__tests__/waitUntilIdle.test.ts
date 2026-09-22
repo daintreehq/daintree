@@ -1,7 +1,13 @@
-import { describe, it, expect } from "vitest";
-import { handleWaitUntilIdle, handleWaitUntilIdleBatch } from "../waitUntilIdle.js";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import {
+  handleWaitUntilIdle,
+  handleWaitUntilIdleBatch,
+  OUTPUT_PROGRESS_LOOKUP_TIMEOUT_MS,
+} from "../waitUntilIdle.js";
 import { events } from "../../events.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
+import { setPtyClientRef } from "../../../window/serviceRefs.js";
+import type { PtyClient } from "../../PtyClient.js";
 import type { WaitUntilIdleResult } from "../../../../shared/types/terminalWaitUntilIdle.js";
 
 const emitIdle = (
@@ -201,7 +207,7 @@ describe("handleWaitUntilIdle stale-state crash race (#10816)", () => {
       timestamp: Date.now(),
       waitingReason: "prompt",
     });
-    expect(store.getState(agentId)).toBe("waiting");
+    expect(store.getTerminalSnapshot(oldTerminal)?.state).toBe("waiting");
 
     // New session spawns under the same agentId (e.g. another "claude" launch).
     events.emit("agent:spawned", { agentId, terminalId: newTerminal, timestamp: Date.now() });
@@ -254,14 +260,251 @@ describe("handleWaitUntilIdle stale-state crash race (#10816)", () => {
       timestamp: Date.now(),
       // No exitCode — failed-to-start, process never ran.
     });
-    expect(store.getState(agentId)).toBe("exited");
-    expect(store.getExitCode(agentId)).toBeUndefined();
+    expect(store.getTerminalSnapshot(terminalId)?.state).toBe("exited");
+    expect(store.getTerminalSnapshot(terminalId)).not.toHaveProperty("exitCode");
 
     const result = await handleWaitUntilIdle({ terminalId }, new AbortController().signal);
     expect(result.timedOut).toBe(false);
     expect(result.busyState).toBe("idle");
     expect(result.idleReason).toBe("exited");
     expect(result).not.toHaveProperty("exitCode");
+  });
+});
+
+// #12494 — agent ids name the agent type, so a fleet of identical agents shares
+// one. Each wait must answer from its own terminal, never from a sibling's.
+describe("same-type sibling terminals", () => {
+  const siblings = () => {
+    counter += 1;
+    return {
+      agentId: `wt-agent-shared-${counter}`,
+      a: `wt-term-sib-a-${counter}`,
+      b: `wt-term-sib-b-${counter}`,
+      c: `wt-term-sib-c-${counter}`,
+    };
+  };
+
+  const spawnAt = (agentId: string, terminalId: string, timestamp: number) => {
+    getAgentAvailabilityStore();
+    events.emit("agent:spawned", { agentId, terminalId, timestamp });
+  };
+
+  const transitionAt = (
+    agentId: string,
+    terminalId: string,
+    state: "waiting" | "completed" | "exited" | "idle",
+    timestamp: number,
+    extra: { waitingReason?: "prompt" | "question"; exitCode?: number | null } = {}
+  ) => {
+    events.emit("agent:state-changed", {
+      agentId,
+      terminalId,
+      state,
+      previousState: "working",
+      trigger: state === "completed" || state === "exited" ? "exit" : "output",
+      confidence: 1,
+      timestamp,
+      ...extra,
+    });
+  };
+
+  const pendingAfter = <T>(p: Promise<T>, ms = 60) =>
+    Promise.race([
+      p.then(() => "resolved" as const),
+      new Promise<"pending">((r) => setTimeout(() => r("pending"), ms)),
+    ]);
+
+  it("does not settle a wait on one terminal because its sibling is already waiting", async () => {
+    const { agentId, a, b } = siblings();
+    spawnAt(agentId, a, 1_000);
+    spawnAt(agentId, b, 2_000);
+    transitionAt(agentId, a, "waiting", 3_000, { waitingReason: "question" });
+
+    const p = handleWaitUntilIdle(
+      { terminalId: b, timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    expect(await pendingAfter(p)).toBe("pending");
+
+    transitionAt(agentId, b, "completed", 4_000, { exitCode: 0 });
+    const result = await p;
+    expect(result.timedOut).toBe(false);
+    expect(result.idleReason).toBe("completed");
+    expect(result.lastTransitionAt).toBe(4_000);
+    expect(result.exitCode).toBe(0);
+    expect(result).not.toHaveProperty("waitingReason");
+  });
+
+  it("settles a wait on an older terminal that was waiting before a sibling spawned", async () => {
+    const { agentId, a, b } = siblings();
+    spawnAt(agentId, a, 1_000);
+    transitionAt(agentId, a, "waiting", 2_000, { waitingReason: "question" });
+    spawnAt(agentId, b, 3_000);
+
+    const result = await handleWaitUntilIdle(
+      { terminalId: a, timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    expect(result.timedOut).toBe(false);
+    expect(result.idleReason).toBe("waiting_for_user");
+    expect(result.waitingReason).toBe("question");
+    expect(result.lastTransitionAt).toBe(2_000);
+  });
+
+  it("reports the waited terminal's own last transition on timeout", async () => {
+    const { agentId, a, b } = siblings();
+    spawnAt(agentId, b, 1_000);
+    spawnAt(agentId, a, 2_000);
+    transitionAt(agentId, a, "waiting", 3_000);
+
+    const result = await handleWaitUntilIdle(
+      { terminalId: b, timeoutMs: 30 },
+      new AbortController().signal
+    );
+    expect(result.timedOut).toBe(true);
+    expect(result.busyState).toBe("working");
+    expect(result.lastTransitionAt).toBe(1_000);
+  });
+
+  it("reads each terminal's own cached exit code on the already-idle path", async () => {
+    const { agentId, a, b } = siblings();
+    spawnAt(agentId, a, 1_000);
+    spawnAt(agentId, b, 2_000);
+    transitionAt(agentId, a, "exited", 3_000, { exitCode: 1 });
+    transitionAt(agentId, b, "completed", 4_000, { exitCode: 0 });
+
+    const signal = new AbortController().signal;
+    const resultA = await handleWaitUntilIdle({ terminalId: a, timeoutMs: 0 }, signal);
+    const resultB = await handleWaitUntilIdle({ terminalId: b, timeoutMs: 0 }, signal);
+
+    expect(resultA).toMatchObject({ idleReason: "exited", exitCode: 1, lastTransitionAt: 3_000 });
+    expect(resultB).toMatchObject({
+      idleReason: "completed",
+      exitCode: 0,
+      lastTransitionAt: 4_000,
+    });
+  });
+
+  it("batch 'first' settles only the terminal that is itself already waiting", async () => {
+    const { agentId, a, b } = siblings();
+    spawnAt(agentId, a, 1_000);
+    spawnAt(agentId, b, 2_000);
+    transitionAt(agentId, a, "waiting", 3_000, { waitingReason: "prompt" });
+
+    const res = await handleWaitUntilIdleBatch(
+      { terminalIds: [a, b], mode: "first", timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+
+    expect(res.timedOut).toBe(false);
+    expect(res.settledTerminalIds).toEqual([a]);
+    const aEntry = res.results.find((e) => e.terminalId === a)!;
+    expect(aEntry).toMatchObject({
+      settled: true,
+      idleReason: "waiting_for_user",
+      waitingReason: "prompt",
+      lastTransitionAt: 3_000,
+    });
+    const bEntry = res.results.find((e) => e.terminalId === b)!;
+    expect(bEntry).toMatchObject({ settled: false, busyState: "working", lastTransitionAt: 2_000 });
+    expect(bEntry).not.toHaveProperty("waitingReason");
+  });
+
+  it("batch 'all' holds for the sibling that is still working", async () => {
+    const { agentId, a, b } = siblings();
+    spawnAt(agentId, a, 1_000);
+    spawnAt(agentId, b, 2_000);
+    transitionAt(agentId, a, "waiting", 3_000);
+
+    const p = handleWaitUntilIdleBatch(
+      { terminalIds: [a, b], mode: "all", timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    expect(await pendingAfter(p)).toBe("pending");
+
+    transitionAt(agentId, b, "exited", 4_000, { exitCode: 7 });
+    const res = await p;
+    expect(res.timedOut).toBe(false);
+    expect(res.settledTerminalIds).toEqual([a, b]);
+    expect(res.results.find((e) => e.terminalId === a)).not.toHaveProperty("exitCode");
+    expect(res.results.find((e) => e.terminalId === b)).toMatchObject({
+      idleReason: "exited",
+      exitCode: 7,
+    });
+  });
+
+  it("batch rows are not settled by a same-type terminal outside the request", async () => {
+    const { agentId, a, b, c } = siblings();
+    // c spawns last, so the most-recently-spawned guard this replaced pointed
+    // at c and read a's "waiting" as c's.
+    spawnAt(agentId, a, 1_000);
+    spawnAt(agentId, b, 2_000);
+    spawnAt(agentId, c, 3_000);
+    transitionAt(agentId, a, "waiting", 4_000);
+
+    const res = await handleWaitUntilIdleBatch(
+      { terminalIds: [b, c], mode: "first" },
+      new AbortController().signal,
+      { maxTimeoutMs: 40 }
+    );
+    expect(res.timedOut).toBe(true);
+    expect(res.settledTerminalIds).toEqual([]);
+  });
+
+  it("batch settles a killed row as closed without waiting on its live sibling", async () => {
+    const { agentId, a, b } = siblings();
+    spawnAt(agentId, a, 1_000);
+    spawnAt(agentId, b, 2_000);
+
+    const p = handleWaitUntilIdleBatch(
+      { terminalIds: [a, b], mode: "all", timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    expect(await pendingAfter(p)).toBe("pending");
+
+    // Killing an already-idle agent emits no transition, only the kill notice.
+    events.emit("agent:killed", { agentId, terminalId: a, timestamp: Date.now() });
+    expect(await pendingAfter(p)).toBe("pending");
+
+    transitionAt(agentId, b, "completed", 3_000, { exitCode: 0 });
+    const res = await p;
+    expect(res.timedOut).toBe(false);
+    expect(res.results.find((e) => e.terminalId === a)).toMatchObject({
+      settled: true,
+      busyState: "idle",
+      idleReason: "unknown",
+      trackingState: "closed",
+    });
+    expect(res.results.find((e) => e.terminalId === b)).toMatchObject({
+      settled: true,
+      idleReason: "completed",
+      exitCode: 0,
+      trackingState: "tracked",
+    });
+  });
+
+  it("batch settles an older terminal that was waiting before a sibling spawned", async () => {
+    const { agentId, a, b } = siblings();
+    spawnAt(agentId, a, 1_000);
+    transitionAt(agentId, a, "waiting", 2_000, { waitingReason: "question" });
+    spawnAt(agentId, b, 3_000);
+
+    const res = await handleWaitUntilIdleBatch(
+      { terminalIds: [a], mode: "all", timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    expect(res.timedOut).toBe(false);
+    expect(res.results[0]).toMatchObject({
+      settled: true,
+      waitingReason: "question",
+      lastTransitionAt: 2_000,
+    });
   });
 });
 
@@ -687,5 +930,280 @@ describe("a kill landing mid-wait (#12339)", () => {
     expect(result.timedOut).toBe(false);
     expect(result.busyState).toBe("idle");
     expect(result.trackingState).toBe("closed");
+  });
+});
+
+describe("lastOutputChangeAt on wait results (#12428)", () => {
+  afterEach(() => {
+    setPtyClientRef(null);
+  });
+
+  // Only these two are read; the cast keeps the fake to that surface.
+  const installPtyClient = (
+    getTerminalAsync: (id: string) => Promise<{ lastOutputChangeAt?: number } | null>,
+    owners: Record<string, string> = {}
+  ) => {
+    const fake = {
+      getTerminalAsync: vi.fn(getTerminalAsync),
+      getTerminalProjectId: vi.fn((id: string) => owners[id] ?? null),
+    };
+    setPtyClientRef(fake as unknown as PtyClient);
+    return fake;
+  };
+
+  it("reports each terminal's own reading on a batch, settled rows and working ones alike", async () => {
+    const moving = nextIds();
+    const still = nextIds();
+    seedWorkingAgent(moving.terminalId, moving.agentId);
+    seedWorkingAgent(still.terminalId, still.agentId);
+    const readings: Record<string, number> = {
+      [moving.terminalId]: 9_000,
+      [still.terminalId]: 3_000,
+    };
+    const fake = installPtyClient(async (id) => ({ lastOutputChangeAt: readings[id] }));
+
+    const pending = handleWaitUntilIdleBatch(
+      { terminalIds: [moving.terminalId, still.terminalId], mode: "first", timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    emitIdle(moving.terminalId, moving.agentId);
+    const res = await pending;
+
+    const byId = new Map(res.results.map((entry) => [entry.terminalId, entry]));
+    expect(byId.get(moving.terminalId)).toMatchObject({ settled: true, lastOutputChangeAt: 9_000 });
+    // The row still `working` is the one a caller needs this for most.
+    expect(byId.get(still.terminalId)).toMatchObject({
+      settled: false,
+      busyState: "working",
+      lastOutputChangeAt: 3_000,
+    });
+    // Read once the wait resolved, not per state event.
+    expect(fake.getTerminalAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it("never reads the pty-host for a terminal the store does not track", async () => {
+    const fake = installPtyClient(async () => ({ lastOutputChangeAt: 1 }));
+
+    const res = await handleWaitUntilIdleBatch(
+      { terminalIds: ["progress-untracked"], mode: "first" },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+
+    expect(res.results[0]!.trackingState).toBe("unknown");
+    expect(res.results[0]).not.toHaveProperty("lastOutputChangeAt");
+    expect(fake.getTerminalAsync).not.toHaveBeenCalled();
+  });
+
+  it("attaches the reading to a single wait that timed out still working", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    installPtyClient(async () => ({ lastOutputChangeAt: 4_242 }));
+
+    const result = await handleWaitUntilIdle({ terminalId }, new AbortController().signal, {
+      maxTimeoutMs: 20,
+    });
+
+    expect(result.timedOut).toBe(true);
+    expect(result.busyState).toBe("working");
+    expect(result.lastOutputChangeAt).toBe(4_242);
+  });
+
+  it("leaves the field absent when no change was observed or the record is gone", async () => {
+    const unobserved = nextIds();
+    const missing = nextIds();
+    seedWorkingAgent(unobserved.terminalId, unobserved.agentId);
+    seedWorkingAgent(missing.terminalId, missing.agentId);
+    installPtyClient(async (id) => (id === missing.terminalId ? null : {}));
+
+    const res = await handleWaitUntilIdleBatch(
+      { terminalIds: [unobserved.terminalId, missing.terminalId], mode: "first", timeoutMs: 20 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+
+    expect(res.timedOut).toBe(true);
+    for (const entry of res.results) expect(entry).not.toHaveProperty("lastOutputChangeAt");
+  });
+
+  it("returns the wait's answer without the field when the pty-host read stalls", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    installPtyClient(() => new Promise(() => {}));
+
+    const started = Date.now();
+    const result = await handleWaitUntilIdle({ terminalId }, new AbortController().signal, {
+      maxTimeoutMs: 20,
+    });
+
+    expect(result.timedOut).toBe(true);
+    expect(result).not.toHaveProperty("lastOutputChangeAt");
+    // Bounded by the lookup ceiling, not by the host.
+    expect(Date.now() - started).toBeLessThan(OUTPUT_PROGRESS_LOOKUP_TIMEOUT_MS + 2_000);
+  });
+
+  it("reads only the bound workspace's terminals, and routes nothing for the rest", async () => {
+    const own = nextIds();
+    const foreign = nextIds();
+    const unplaced = nextIds();
+    for (const ids of [own, foreign, unplaced]) seedWorkingAgent(ids.terminalId, ids.agentId);
+    const fake = installPtyClient(async () => ({ lastOutputChangeAt: 7_000 }), {
+      [own.terminalId]: "ws-a",
+      [foreign.terminalId]: "ws-b",
+    });
+
+    const res = await handleWaitUntilIdleBatch(
+      {
+        terminalIds: [own.terminalId, foreign.terminalId, unplaced.terminalId],
+        mode: "first",
+        timeoutMs: 0,
+      },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000, workspaceId: "ws-a" }
+    );
+
+    const byId = new Map(res.results.map((entry) => [entry.terminalId, entry]));
+    expect(byId.get(own.terminalId)?.lastOutputChangeAt).toBe(7_000);
+    // The wait still answers for the others exactly as before.
+    expect(byId.get(foreign.terminalId)).toMatchObject({ trackingState: "tracked" });
+    expect(byId.get(foreign.terminalId)).not.toHaveProperty("lastOutputChangeAt");
+    expect(byId.get(unplaced.terminalId)).not.toHaveProperty("lastOutputChangeAt");
+    expect(fake.getTerminalAsync.mock.calls.map(([id]) => id)).toEqual([own.terminalId]);
+  });
+
+  it("rejects as cancelled when the request is aborted during the read", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    let readStarted!: () => void;
+    const reading = new Promise<void>((resolve) => (readStarted = resolve));
+    installPtyClient(() => {
+      readStarted();
+      return new Promise(() => {});
+    });
+    const controller = new AbortController();
+
+    const pending = handleWaitUntilIdle({ terminalId }, controller.signal, { maxTimeoutMs: 20 });
+    await reading;
+    controller.abort();
+
+    // Without the abort this would resolve successfully at the lookup ceiling.
+    await expect(pending).rejects.toMatchObject({ message: expect.stringMatching(/cancelled/) });
+  });
+
+  it("rejects as cancelled when the abort lands while the wait is settling", async () => {
+    // The wait has already picked its answer when the abort arrives, so the
+    // read's own listener would never fire; it must not report success.
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    const fake = installPtyClient(async () => ({ lastOutputChangeAt: 1 }));
+    const controller = new AbortController();
+
+    const pending = handleWaitUntilIdle({ terminalId }, controller.signal, {
+      maxTimeoutMs: 5_000,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    emitIdle(terminalId, agentId);
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ message: expect.stringMatching(/cancelled/) });
+    expect(fake.getTerminalAsync).not.toHaveBeenCalled();
+  });
+
+  it("keeps the wait's answer when the pty-host read fails", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    installPtyClient(async () => {
+      throw new Error("host gone");
+    });
+
+    const pending = handleWaitUntilIdle({ terminalId }, new AbortController().signal, {
+      maxTimeoutMs: 5_000,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    emitIdle(terminalId, agentId);
+    const result = await pending;
+
+    expect(result).toMatchObject({ busyState: "idle", idleReason: "completed", timedOut: false });
+    expect(result).not.toHaveProperty("lastOutputChangeAt");
+  });
+});
+
+describe("lastHandback on wait results (#12488)", () => {
+  afterEach(() => {
+    setPtyClientRef(null);
+  });
+
+  type Handback = { message: string | null; observedAt: number; truncated: boolean };
+  const installPtyClient = (
+    getTerminalAsync: (
+      id: string
+    ) => Promise<{ lastOutputChangeAt?: number; lastHandback?: Handback } | null>
+  ) => {
+    const fake = {
+      getTerminalAsync: vi.fn(getTerminalAsync),
+      getTerminalProjectId: vi.fn(() => null),
+    };
+    setPtyClientRef(fake as unknown as PtyClient);
+    return fake;
+  };
+
+  it("attaches the terminal's own handback to a single wait that settled", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    const handback = { message: "done", observedAt: 1_000, truncated: false };
+    installPtyClient(async () => ({ lastOutputChangeAt: 900, lastHandback: handback }));
+
+    const pending = handleWaitUntilIdle(
+      { terminalId, timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    emitIdle(terminalId, agentId);
+    const result = await pending;
+
+    expect(result).toMatchObject({
+      busyState: "idle",
+      lastOutputChangeAt: 900,
+      lastHandback: handback,
+    });
+  });
+
+  it("keeps each batched row's handback to its own terminal", async () => {
+    const asked = nextIds();
+    const other = nextIds();
+    seedWorkingAgent(asked.terminalId, asked.agentId);
+    seedWorkingAgent(other.terminalId, other.agentId);
+    const handback = { message: null, observedAt: 2_000, truncated: false };
+    installPtyClient(async (id) => (id === asked.terminalId ? { lastHandback: handback } : {}));
+
+    const pending = handleWaitUntilIdleBatch(
+      { terminalIds: [asked.terminalId, other.terminalId], mode: "all", timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    emitIdle(asked.terminalId, asked.agentId);
+    emitIdle(other.terminalId, other.agentId);
+    const res = await pending;
+
+    const byId = new Map(res.results.map((entry) => [entry.terminalId, entry]));
+    expect(byId.get(asked.terminalId)?.lastHandback).toEqual(handback);
+    expect(byId.get(other.terminalId)).not.toHaveProperty("lastHandback");
+  });
+
+  it("leaves the field absent when the record holds no handback", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    installPtyClient(async () => ({ lastOutputChangeAt: 5 }));
+
+    const result = await handleWaitUntilIdle({ terminalId }, new AbortController().signal, {
+      maxTimeoutMs: 20,
+    });
+
+    expect(result.lastOutputChangeAt).toBe(5);
+    expect(result).not.toHaveProperty("lastHandback");
   });
 });

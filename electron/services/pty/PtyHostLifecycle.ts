@@ -37,6 +37,7 @@ import os from "os";
 import path from "path";
 import { performance } from "node:perf_hooks";
 import { PERF_MARKS } from "../../../shared/perf/marks.js";
+import type { HostLogEvent } from "../../../shared/types/host-log.js";
 import type {
   CrashType,
   HostCrashPayload,
@@ -177,6 +178,13 @@ export interface PtyHostLifecycleCallbacks {
   onBeforeRestart: () => void;
   /** Returns whether PtyClient.isDisposed is true. */
   isDisposed: () => boolean;
+  /**
+   * Receive a structured entry the host already wrote to the shared log file.
+   * Intercepted ahead of {@link onMessage} so a log never reaches the event
+   * router, the domain bus, or the broker. PtyClient mirrors it into Main's
+   * buffer and the renderer without writing it again (#12544).
+   */
+  onHostLog: (event: HostLogEvent) => void;
   /** Logger functions. Decoupled from any specific logger implementation. */
   logInfo: (message: string) => void;
   logWarn: (message: string) => void;
@@ -208,8 +216,12 @@ export class PtyHostLifecycle {
   private childProcessGoneHandler:
     ((event: Electron.Event, details: Electron.Details) => void) | null = null;
 
-  private hostStdoutBuffer = "";
-  private hostStderrBuffer = "";
+  /**
+   * Drains the *current* child's stdout/stderr remainders. Replaced on every
+   * fork, so buffers belong to one child and one stream and can never be
+   * flushed into a successor's output.
+   */
+  private flushCurrentHostOutput: (() => void) | null = null;
 
   private readyPromise: Promise<void>;
   private readyResolve: (() => void) | null = null;
@@ -381,6 +393,10 @@ export class PtyHostLifecycle {
     this.installHostLogForwarding();
 
     this.child.on("message", (msg: PtyHostEvent) => {
+      if (msg.type === "log") {
+        this.callbacks.onHostLog(msg);
+        return;
+      }
       this.callbacks.onMessage(msg);
     });
 
@@ -585,66 +601,67 @@ export class PtyHostLifecycle {
 
   private installHostLogForwarding(): void {
     if (!this.child) return;
-    this.hostStdoutBuffer = "";
-    this.hostStderrBuffer = "";
+
+    // Buffers live with the child that produced them. A restart installs a
+    // fresh pair, so a dead pipe draining late can neither be silently
+    // dropped nor flush its successor's partial line.
+    const buffers: Record<"stdout" | "stderr", string> = { stdout: "", stderr: "" };
+
+    const append = (kind: "stdout" | "stderr", chunk: Buffer): void => {
+      buffers[kind] += chunk.toString("utf8");
+      if (buffers[kind].length > HOST_LOG_BUFFER_LIMIT) {
+        buffers[kind] = buffers[kind].slice(-HOST_LOG_BUFFER_LIMIT);
+      }
+
+      const lines = buffers[kind].split(/\r?\n/);
+      buffers[kind] = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trimEnd();
+        if (!trimmed) continue;
+        this.logHostOutputLine(kind, trimmed);
+      }
+    };
+
+    // Flush one stream only: the other may still be mid-line, and clearing it
+    // here would split a crash trace across two records.
+    const flush = (kind: "stdout" | "stderr"): void => {
+      const remainder = buffers[kind].trim();
+      buffers[kind] = "";
+      if (remainder) this.logHostOutputLine(kind, remainder);
+    };
+
+    this.flushCurrentHostOutput = () => {
+      flush("stdout");
+      flush("stderr");
+    };
 
     const stdout = (this.child as unknown as { stdout?: NodeJS.ReadableStream }).stdout;
     const stderr = (this.child as unknown as { stderr?: NodeJS.ReadableStream }).stderr;
 
-    stdout?.on("data", (chunk: Buffer) => this.forwardHostOutput("stdout", chunk));
-    stderr?.on("data", (chunk: Buffer) => this.forwardHostOutput("stderr", chunk));
+    stdout?.on("data", (chunk: Buffer) => append("stdout", chunk));
+    stderr?.on("data", (chunk: Buffer) => append("stderr", chunk));
+    // Swallow post-exit pipe errors so an unhandled Readable error can't
+    // surface as an uncaughtException after the host is already shutting down.
+    stdout?.on("error", () => {});
+    stderr?.on("error", () => {});
+    // 'exit' fires before the pipes finish draining, so the tail of a crash
+    // trace arrives after the exit-time flush has already run.
+    stdout?.on("close", () => flush("stdout"));
+    stderr?.on("close", () => flush("stderr"));
   }
 
-  private forwardHostOutput(kind: "stdout" | "stderr", chunk: Buffer): void {
-    const text = chunk.toString("utf8");
-    if (kind === "stdout") {
-      this.hostStdoutBuffer += text;
+  private logHostOutputLine(kind: "stdout" | "stderr", line: string): void {
+    const clamped =
+      line.length > HOST_LOG_LINE_LIMIT ? `${line.slice(0, HOST_LOG_LINE_LIMIT)}…` : line;
+    const message = `[PtyHost] ${clamped}`;
+    if (kind === "stderr") {
+      this.callbacks.logWarn(message);
     } else {
-      this.hostStderrBuffer += text;
-    }
-
-    if (this.hostStdoutBuffer.length > HOST_LOG_BUFFER_LIMIT) {
-      this.hostStdoutBuffer = this.hostStdoutBuffer.slice(-HOST_LOG_BUFFER_LIMIT);
-    }
-    if (this.hostStderrBuffer.length > HOST_LOG_BUFFER_LIMIT) {
-      this.hostStderrBuffer = this.hostStderrBuffer.slice(-HOST_LOG_BUFFER_LIMIT);
-    }
-
-    const current = kind === "stdout" ? this.hostStdoutBuffer : this.hostStderrBuffer;
-    const lines = current.split(/\r?\n/);
-    const remainder = lines.pop() ?? "";
-    if (kind === "stdout") {
-      this.hostStdoutBuffer = remainder;
-    } else {
-      this.hostStderrBuffer = remainder;
-    }
-
-    for (const line of lines) {
-      const trimmed = line.trimEnd();
-      if (!trimmed) continue;
-      const message = `[PtyHost] ${trimmed.length > HOST_LOG_LINE_LIMIT ? `${trimmed.slice(0, HOST_LOG_LINE_LIMIT)}…` : trimmed}`;
-      if (kind === "stderr") {
-        this.callbacks.logWarn(message);
-      } else {
-        this.callbacks.logInfo(message);
-      }
+      this.callbacks.logInfo(message);
     }
   }
 
   private flushHostOutputBuffers(): void {
-    const stdoutRemainder = this.hostStdoutBuffer.trim();
-    if (stdoutRemainder) {
-      this.callbacks.logInfo(
-        `[PtyHost] ${stdoutRemainder.length > HOST_LOG_LINE_LIMIT ? `${stdoutRemainder.slice(0, HOST_LOG_LINE_LIMIT)}…` : stdoutRemainder}`
-      );
-    }
-    const stderrRemainder = this.hostStderrBuffer.trim();
-    if (stderrRemainder) {
-      this.callbacks.logWarn(
-        `[PtyHost] ${stderrRemainder.length > HOST_LOG_LINE_LIMIT ? `${stderrRemainder.slice(0, HOST_LOG_LINE_LIMIT)}…` : stderrRemainder}`
-      );
-    }
-    this.hostStdoutBuffer = "";
-    this.hostStderrBuffer = "";
+    this.flushCurrentHostOutput?.();
   }
 }

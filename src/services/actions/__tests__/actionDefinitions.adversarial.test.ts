@@ -1604,3 +1604,80 @@ describe("worktree cycling respects sidebar order", () => {
     expect(select).not.toHaveBeenCalledWith("wt-idle");
   });
 });
+
+describe("terminal.sendCommand handback (#12488)", () => {
+  /** A string field off an untyped value, or `undefined`. */
+  const stringField = (value: unknown, key: string): string | undefined => {
+    if (typeof value !== "object" || value === null) return undefined;
+    const field: unknown = Reflect.get(value, key);
+    return typeof field === "string" ? field : undefined;
+  };
+
+  it("appends the instruction with a fresh code and echoes the caller's own text", async () => {
+    const actions = buildRegistry(registerTerminalActions);
+    const sendCommand = actions.get("terminal.sendCommand")!();
+    usePanelStore.setState({
+      panelsById: {
+        agent: createTerminal({ id: "agent", launchAgentId: "claude", agentState: "idle" }),
+      },
+      panelIds: ["agent"],
+    });
+
+    const first = await sendCommand.run(
+      { terminalId: "agent", command: "Fix the bug", handback: true },
+      {}
+    );
+    await sendCommand.run({ terminalId: "agent", command: "Fix the bug", handback: true }, {});
+
+    const calls: unknown[][] = mocks.terminalClient.submit.mock.calls;
+    expect(calls).toHaveLength(2);
+    const code = String(calls[0]?.[3]);
+    expect(code).toMatch(/^[a-z0-9]{6}$/);
+    expect(calls[0]).toEqual([
+      "agent",
+      expect.stringMatching(/^Fix the bug\n\n/),
+      stringField(first, "submissionToken"),
+      code,
+    ]);
+    expect(String(calls[0]?.[1]).endsWith(`DAINTREE-DONE-${code}: <summary> END-${code}`)).toBe(
+      true
+    );
+    // A second send mints its own code.
+    expect(calls[1]?.[3]).not.toBe(code);
+    // The caller never sees the code or the instruction.
+    expect(stringField(first, "command")).toBe("Fix the bug");
+    expect(JSON.stringify(first)).not.toContain(code);
+  });
+
+  it("refuses handback on a plain shell without sending anything", async () => {
+    const actions = buildRegistry(registerTerminalActions);
+    const sendCommand = actions.get("terminal.sendCommand")!();
+    usePanelStore.setState({
+      panelsById: { shell: createTerminal({ id: "shell" }) },
+      panelIds: ["shell"],
+    });
+
+    await expect(
+      sendCommand.run({ terminalId: "shell", command: "ls", handback: true }, {})
+    ).rejects.toThrow("handback needs an agent pane");
+    expect(mocks.terminalClient.submit).not.toHaveBeenCalled();
+  });
+
+  it("sends exactly as before when handback is not asked for", async () => {
+    const actions = buildRegistry(registerTerminalActions);
+    const sendCommand = actions.get("terminal.sendCommand")!();
+    usePanelStore.setState({
+      panelsById: { agent: createTerminal({ id: "agent", launchAgentId: "claude" }) },
+      panelIds: ["agent"],
+    });
+
+    const result = await sendCommand.run(
+      { terminalId: "agent", command: "status", handback: false },
+      {}
+    );
+
+    expect(mocks.terminalClient.submit.mock.calls).toEqual([
+      ["agent", "status", stringField(result, "submissionToken")],
+    ]);
+  });
+});

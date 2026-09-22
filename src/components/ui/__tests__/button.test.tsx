@@ -91,8 +91,9 @@ describe("Button loading state", () => {
         Save
       </Button>
     );
+    // Spinner sizes its rotating wrapper; the glyph fills it.
     expect(
-      sm.container.querySelector('[data-slot="button-spinner"] svg')!.getAttribute("class")
+      sm.container.querySelector('[data-slot="button-spinner"] svg')!.parentElement!.className
     ).toContain("w-3.5");
 
     const xs = render(
@@ -101,7 +102,7 @@ describe("Button loading state", () => {
       </Button>
     );
     expect(
-      xs.container.querySelector('[data-slot="button-spinner"] svg')!.getAttribute("class")
+      xs.container.querySelector('[data-slot="button-spinner"] svg')!.parentElement!.className
     ).toContain("w-3");
   });
 

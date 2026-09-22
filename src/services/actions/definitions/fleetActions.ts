@@ -119,7 +119,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
     // no-op when nothing is armed. They're keybinding/Fleet-UI driven, not
     // palette commands.
     palette: { mode: "hidden" },
-    title: "Fleet: Accept",
+    title: "Fleet: accept",
     description:
       "Send 'y' + Enter to every armed agent that is waiting for input (accepts [y/N] prompts)",
     category: "terminal",
@@ -150,7 +150,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
   actions.set("fleet.reject", () => ({
     id: "fleet.reject",
     palette: { mode: "hidden" },
-    title: "Fleet: Reject",
+    title: "Fleet: reject",
     description:
       "Send 'n' + Enter to every armed agent that is waiting for input (rejects [y/N] prompts; confirms when 5+ targets)",
     category: "terminal",
@@ -189,7 +189,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
   actions.set("fleet.interrupt", () => ({
     id: "fleet.interrupt",
     palette: { mode: "hidden" },
-    title: "Fleet: Interrupt",
+    title: "Fleet: interrupt",
     description:
       "Send double-Escape to armed working/waiting full agent terminals. Confirms when 3+ targets.",
     category: "terminal",
@@ -222,7 +222,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
   actions.set("fleet.restart", () => ({
     id: "fleet.restart",
     palette: { mode: "hidden" },
-    title: "Fleet: Restart",
+    title: "Fleet: restart",
     description: "Restart every armed agent terminal (always requires confirmation)",
     category: "terminal",
     kind: "command",
@@ -249,7 +249,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
   actions.set("fleet.kill", () => ({
     id: "fleet.kill",
     palette: { mode: "hidden" },
-    title: "Fleet: Kill",
+    title: "Fleet: kill",
     description:
       "Remove every armed terminal panel. This destroys those terminals with no trash step: their running processes and scrollback are unrecoverable, though a journaled agent session can still be resumed afterwards. It always requires confirmation.",
     category: "terminal",
@@ -278,7 +278,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
   actions.set("fleet.trash", () => ({
     id: "fleet.trash",
     palette: { mode: "hidden" },
-    title: "Fleet: Trash",
+    title: "Fleet: trash",
     description: "Move every armed terminal to trash (confirms when 5+ targets)",
     category: "terminal",
     kind: "command",
@@ -306,7 +306,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
   actions.set("fleet.scope.enter", () => ({
     id: "fleet.scope.enter",
     palette: { mode: "hidden" },
-    title: "Fleet: Enter Scope Mode",
+    title: "Fleet: enter scope mode",
     description:
       "Activate Fleet scope mode (primitive — gated by fleetScopeMode flag; no-op in legacy mode)",
     category: "terminal",
@@ -323,7 +323,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
   actions.set("fleet.scope.exit", () => ({
     id: "fleet.scope.exit",
     palette: { mode: "hidden" },
-    title: "Fleet: Exit Scope Mode",
+    title: "Fleet: exit scope mode",
     description:
       "Exit Fleet scope mode, restoring the pre-scope active worktree (no-op in legacy mode)",
     category: "terminal",
@@ -346,7 +346,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
   actions.set("fleet.retryFailures", () => ({
     id: "fleet.retryFailures",
     palette: { mode: "hidden" },
-    title: "Fleet: Retry failed broadcast",
+    title: "Fleet: retry failed broadcast",
     description:
       "Re-fire the most recent broadcast against any panes that rejected it. No-op when no failures are recorded.",
     category: "terminal",
@@ -410,7 +410,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
 
   actions.set("fleet.armMatchingFilter", () => ({
     id: "fleet.armMatchingFilter",
-    title: "Fleet: Arm Agents Matching Filter",
+    title: "Fleet: arm agents matching filter",
     description:
       "Arm all eligible agent terminals whose worktree is in the provided set — sidebar 'Arm N matching' affordance",
     category: "terminal",
@@ -427,7 +427,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
   actions.set("fleet.armFocused", () => ({
     id: "fleet.armFocused",
     palette: { mode: "hidden" },
-    title: "Fleet: Toggle Arm Focused Pane",
+    title: "Fleet: toggle arm focused pane",
     description:
       "Toggle fleet membership on the focused terminal — keyboard equivalent of ⌘/⇧-clicking pane chrome",
     category: "terminal",
@@ -445,7 +445,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
 
   actions.set("fleet.armAll", () => ({
     id: "fleet.armAll",
-    title: "Fleet: Arm All Eligible",
+    title: "Fleet: arm all eligible",
     description: "Arm all fleet-eligible terminals in the current worktree",
     category: "terminal",
     kind: "command",
@@ -464,7 +464,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
 
   actions.set("fleet.saveNamedFleet", () => ({
     id: "fleet.saveNamedFleet",
-    title: "Fleet: Save named fleet",
+    title: "Fleet: save named fleet",
     description:
       "Persist the current fleet selection (snapshot) or a state filter (predicate) under a name for later recall.",
     category: "terminal",
@@ -533,7 +533,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
 
   actions.set("fleet.recallNamedFleet", () => ({
     id: "fleet.recallNamedFleet",
-    title: "Fleet: Recall named fleet",
+    title: "Fleet: recall named fleet",
     description:
       "Apply panes from a saved fleet. Snapshots drop missing IDs; predicates re-evaluate against current panes.",
     category: "terminal",
@@ -572,7 +572,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
     id: "fleet.getRunStatus",
     // Query with a structured result — nothing for a palette pick to show.
     palette: { mode: "hidden" },
-    title: "Fleet: Get run status",
+    title: "Fleet: get run status",
     description:
       "Read a snapshot of the in-app fleet broadcast the user is currently running, including per-terminal delivery and liveness. This only observes and dispatches nothing, so drive a fan-out by sending to each terminal yourself and watching with a status snapshot or batched wait. Agent state here is a passive heuristic and a parsed check result is not an exit code; confirm both before acting.",
     category: "terminal",
@@ -628,7 +628,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
 
   actions.set("fleet.deleteNamedFleet", () => ({
     id: "fleet.deleteNamedFleet",
-    title: "Fleet: Delete named fleet",
+    title: "Fleet: delete named fleet",
     description: "Remove a saved fleet by id. Idempotent — unknown ids are silently ignored.",
     category: "terminal",
     kind: "command",

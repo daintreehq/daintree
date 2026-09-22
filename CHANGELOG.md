@@ -1,5 +1,163 @@
 # Changelog
 
+## [0.37.0] - 2026-09-22
+
+SvelteKit Tools ships as a built-in plugin: click an element in a running dev preview, see its source, and hand the request to an agent in the same worktree. Alongside it, a release-long push on battery and idle energy — one power policy composed from battery, focus, visibility and lock, and the end of the pty-host's `ps` forking, cached views painting, and animations holding the frame scheduler at display rate. MCP grew the primitives an orchestrator needs to supervise agents it did not launch.
+
+### Features
+
+**SvelteKit Tools**
+
+- A new built-in plugin turns the dev preview into a way to point at your own site and hand the work to your own agent: click any element or component on a running SvelteKit site and the drawer shows the source file, line and component chain, then sends a written request to a Claude Code, Codex or Gemini session in the same worktree, or starts a fresh one (#12441)
+- The plugin reports what the page's Svelte metadata actually supports, places an element by its template shape when the page's own location is wrong, and says plainly when a `svelte.config.js` or route config could not be read rather than guessing (#12550)
+
+**Markdown editing**
+
+- Markdown files in the file panel gain an Edit mode, shipped as a built-in plugin so the core panel stays read-only and the write path is capability-gated and audited (#12323)
+
+**MCP**
+
+- A user can hand an already-running terminal to an orchestrating agent pane from the terminal's own context menu, with a dialog that says what the orchestrator can do and a "Take back" to end it (#12490)
+- `terminal.readLastMessageOwned` reads the last message a Claude agent wrote in its own transcript, and can page through a long message or reach up to 20 replies back (#12479, #12496)
+- `terminal.registerWatch` and its siblings wake an idle orchestrator pane when a terminal it watches changes, instead of polling on a timer — off by default behind a settings toggle (#12491)
+- `terminal.getStatus` reports `lastOutputChangeAt`, the moment the visible screen last changed with spinner and timer redraws ignored, so a frozen turn is distinguishable from a long one (#12428, #12495)
+- A submission reports whether output was observed after its Enter, so a send dropped by a still-starting CLI can be told from one that landed (#12478)
+- A caller can request a handback marker from an agent it prompts, on `agent.launch`, `terminal.sendCommand` and `terminal.sendCommandOwned` (#12488)
+- `agent.launch` takes an agent-neutral `systemPrompt`, mapped to each CLI's own flag and replayed across restart, restore and resume (#12431)
+- An agent pane launched with Daintree's injected endpoint routes every call to the workspace it launched in, rather than following whichever window has focus (#12486)
+
+**Power**
+
+- Keep awake while agents work is an explicit setting that honours power source: on by default on AC, off by default on battery, and honoured live as you plug and unplug (#12516)
+- One power policy composed from battery state, window focus, window visibility and lock screen drives polling everywhere — lock, unlock and window hide/show are now observed at all (#12515)
+
+**Plugins**
+
+- A plugin can serve its own MCP tools to the agents running in Daintree terminals, scoped to a project and off until you turn it on in Project settings › Plugins › Agent tools (#12369)
+
+**Forge**
+
+- The GitHub credential `gh` already holds can be imported instead of pasting a token into Settings (#12480)
+- The Review Hub's CI badge opens a popover listing every check with its outcome, requiredness and a link to its log, and hands the failing check to an agent (#12417)
+- Right-clicking a forge stats pill leads with that segment's own navigation — all issues, all pull requests, commits on the active branch (#12354)
+
+**Terminals and panels**
+
+- A searchable "Move to worktree…" picker in the panel header menu, with the context-menu submenu capped at ten rows and handing off to it past that (#12444, #12446)
+- The dev preview panel is dockable (#12397)
+- Every composer gains an Attach files button, and the Expanded Editor accepts file drops (#12561, #12570)
+
+**UI**
+
+- Hidden toolbar buttons can be restored by right-clicking empty toolbar space, which is the only way back for the forge pill (#12355)
+- The File menu is reorganised around what each item acts on, and `Open Directory…` is now `Open Project…` (#12473)
+- The welcome screen measures its own container and scales its layout and type on wide surfaces (#12438)
+- The project tree footer is rebuilt around what Daintree is doing: a filled dot while agents work, a hollow ring at rest, and QuickRun collapsed and remembered per project
+- Redesigns of the theme browser, the worktree filter popover, the resume-session palette, the plugin manager, the fleet arming picker and ribbon, and the Settings General pane
+
+**Memory and crash recovery**
+
+- Sustained system memory pressure is observed and surfaced as a quiet, dismissible notice once it is clearly the machine and not the app (#12462)
+- Local native crash dumps are pruned on the app's own schedule — 30 days, 20 dumps or 100 MiB — instead of sitting in `pending` forever (#12563)
+
+### Bug Fixes
+
+**Terminals**
+
+- Hidden and backgrounded agent panes collapsed to a 2×1 terminal grid, and the CLI's overflow went permanently into scrollback; the floor is now refused at every boundary that records a measurement (#12442)
+- A scrolled-back reader stayed stranded at line 0 when Codex rebuilt its whole transcript on a height change (#12398)
+- A file path that an agent TUI hard-wrapped at the pane's right margin linked to the wrong file (#12449)
+- A project open in two windows could leave its cached copy with no terminal output at all (#12557)
+- The composer's trailing buttons reserved width beside every line of the draft, so a long prompt wrapped to thirteen lines in a narrow pane
+- An untouched Claude pane was restored with `--resume` for an id Claude Code never wrote a transcript for (#12371)
+- A Codex pane moved to another worktree was restored in its original checkout, and id-less panes competed for one resume slot (#12434)
+- A terminal's spawn source was dropped before it reached the persisted snapshot, so Terminal Info read `Unknown` and QuickRun panes fell out of Running Tasks after a restart (#12419)
+- A session captured on a natural PTY exit never reached the saved pane state cold restore reads from (#12433)
+- Graceful shutdown could lose an agent's session handshake to a `pty-host` pause hold (#12432)
+
+**Power and energy**
+
+- Opening a second window while agents were working released the sleep blocker, and its four-hour safety timer released it outright rather than renewing; renewal now checkpoints to a 12-hour cap (#12498)
+- On Linux the battery observation is read from sysfs, since Electron's battery APIs are no-op stubs there (#12533)
+- Blurring the app ran the same teardown as backgrounding a project, so a Daintree left visible on a second screen learned nothing until focus came back (#12564, #12565, #12566)
+
+**Privacy and security**
+
+- Choosing Off in Settings › Privacy stops Sentry uploads immediately instead of at the next restart, and `sentry-trace` headers no longer leak onto third-party requests (#12404)
+- The consent disclosure claimed crash reports and analytics were sampled. Nothing is sampled (#12405)
+- The app agent could send an API key over plain HTTP to a non-loopback host (#12406)
+- Clear cache covered only the default session and always reported success; it now covers every Daintree session partition and surfaces real failures (#12562)
+- Repository-supplied lifecycle commands from `.daintree/config.json` no longer run until you approve them (#12408)
+- An agent pane's MCP bearer could type into the user's own shell; agent terminal input is now scoped to terminals the session created (#12407)
+
+**Memory and hosts**
+
+- A warm macOS file cache made the cached-view sampler evict views continuously while the OS had gigabytes reclaimable (#12363)
+- Cached project views, their guests and parked Portal tabs were CPU-throttled by a mechanism Chromium implements by busy-waiting, burning 25–40% of a core (#12456)
+- About half of workspace host disposals ended in `SIGKILL`; teardown is now a bounded, phased shutdown that acks when it is genuinely done (#12460)
+- A backgrounded project kept every watcher armed and kept polling for status (#12459)
+- FD growth is reported once per episode against a post-restore baseline, and a streak is broken across a gap in sampling rather than stitched across a sleep (#12520, #12532)
+- `pty-host` aborted with `SIGABRT` on quit through an upstream node-pty exit-callback defect (#12578)
+- The voice VAD runs in a utility process, so a native ONNX abort takes out that child instead of the whole app (#12577)
+
+**Worktrees**
+
+- The active worktree could oscillate at 2 Hz after a cold start; the loop is now broken by a breaker and every switch is traceable (#12370)
+- A worktree folder named for a number that belongs to a pull request rendered a phantom issue stacked on the PR (#12381)
+- A branch-delete failure truncated the git stderr line that names the worktree still holding the branch, and never reached the log (#12418)
+- Bulk worktree removal confirmed against store state up to 30 seconds stale, then force-deleted regardless (#12416)
+- A cold start could leave the sidebar stuck on the empty state because the renderer never received its worktree port (#12576)
+- Worktrees of repos with SSH submodules came up with empty gitlinks (#12475)
+
+**UI**
+
+- Status pills appearing and disappearing in the pane header pushed overflow, maximize and close sideways (#12374)
+- A terminal host crossing its memory budget lit a "Paused (memory)" pill on every pane; it now shows once, app-wide (#12375)
+- Closing one panel in the grid remounted its neighbours, restarting media and dropping the file browser's scroll and viewer state (#12476)
+- Menu rows painted a focus ring on mouse hover depending on what the user had done before opening the menu (#12383)
+- A project switch could reveal the incoming view before a frame had painted (#12394)
+- The ten global recovery banners had drifted into three button shapes, three dismiss positions and severity-coloured text failing contrast on most themes
+- A consistency pass across the app shell, judged against real captures of twenty surfaces, with the capture harness itself fixed to fail instead of silently skipping states
+- Drag ghosts, drop placeholders and insertion lines are legible and read as the panel in hand
+- Open in Browser and Show Console in the dev preview stayed clickable with nothing to act on (#12395)
+- The send-to-agent palette never named the worktree, so two Claude panes in different worktrees were indistinguishable (#12420)
+- The recently-closed list hid its countdown until hover, so it read like a trash can with indefinite retention; every row now carries its remaining time and a draining meter
+
+**Agents**
+
+- On Windows every extensionless native-install path could never match the real `.exe`, and one shared 10-second budget erased agents that had already resolved (#12352)
+- Agent state was keyed by agent type, so two terminals running the same CLI shared one slot and `waitUntilIdle` could resolve on the sibling's transition (#12494)
+- Relaunching an agent in a leftover shell moved nothing observable, so a queued request could be delivered into what the user sees as a different session (#12535)
+
+**Plugins**
+
+- Watcher streams were torn down and re-created on a non-fatal FSEvents rescan notice (#12457)
+- Worktree watcher ignores never reached the OS level, so every write under `node_modules` and `dist` was delivered and thrown away, overflowing the FSEvents streams (#12458)
+
+**MCP**
+
+- Terminal tail reads exceeded the 50 KiB response cap and were cut into unparseable JSON (#12450)
+- A pane that lost its MCP session to a reconnect or idle reap lost authority over the agents it had launched (#12487)
+- The audit anomaly detector fired on a single slow call and held the signal until the record aged out, with every kind hardcoded to `danger` (#12507)
+- Support bundles carried nothing from the MCP audit service (#12508)
+- MCP health no longer shows as a pip on the Assistant toolbar button; Settings › MCP Server's audit log is the one surface for anomaly signals (#12509)
+
+**Help**
+
+- Help sessions that launch coding agents now handle their workspace-trust dialogs, stalled screens and per-agent interrupt keys openly instead of answering on the user's behalf
+- The help prompts no longer let a session generalise a dead window into a product limitation, or step around a confirmation the user never gave
+
+### Performance
+
+- Cached project views stop receiving terminal chunks, painting them, holding foreground tiers and WebGL contexts, polling at foreground cadence, and taking a blind forced GC every minute (#12514)
+- `pty-host` was forking `ps` up to 110 times a second while agents ran; both the identity probe and the process census now scale with events (#12513)
+- Dense output from hidden terminals is coalesced and working spinners share one cycle across project views and windows — 39.7% less renderer CPU and 70.2% less GPU-process CPU on a 20-worktree fixture (#12552, #12553, #12554, #12556)
+- A working agent repainting a few composer rows no longer triggers a full terminal refresh
+- Remaining display-rate frame costs are gone: the composer cursor blinks on a timer, the overview ruler skips repaints with nothing to draw, and the working spinner is drawn in CSS so its spin composites (#12584)
+- Scrolling a terminal no longer flips the whole app's resource profile and back (#12518)
+- Memory pressure mitigation that reclaims nothing now backs off instead of re-running on the same cooldown forever (#12517)
+- A workspace host stays resident and silent while its project's view is cached, instead of being disposed after 180 seconds and cold-started on return (#12519)
+
 ## [0.36.1] - 2026-09-10
 
 A fix release on top of 0.36.0. Codex's new composer animation was holding idle panes in a working state; portaled overlays were unclickable wherever they painted over the toolbar; and a project plugin's empty-canvas surface now has host chrome, a remembered choice, and a way back to the launcher that nothing can paint over.

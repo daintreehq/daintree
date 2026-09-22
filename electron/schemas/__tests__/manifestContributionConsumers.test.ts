@@ -6,16 +6,20 @@ import { z } from "zod";
 import {
   AgentContributionSchema,
   AgentDetectionConfigSchema,
+  AgentMcpContributionSchema,
   CommandContributionSchema,
   ContextMenuContributionSchema,
   CredentialFieldSchema,
   FileDecorationContributionSchema,
+  FileEditorContributionSchema,
   ForgeProviderContributionSchema,
   getPluginManifestSchema,
   KeybindingContributionSchema,
   McpServerContributionSchema,
   MenuItemContributionSchema,
   PanelContributionObjectSchema,
+  PreviewToolContributionSchema,
+  GuestAdapterContributionSchema,
   ProcessToolContributionSchema,
   RecipeContributionSchema,
   RecipeContributionTerminalSchema,
@@ -89,6 +93,10 @@ const RECIPE_SANITIZER = "shared/utils/recipeSanitizer.ts";
 const ARCHIVE_INSTALL_INTENT = "electron/setup/archiveInstallIntent.ts";
 const PROCESS_TOOL_REGISTRY = "shared/config/pluginProcessToolRegistry.ts";
 const PROCESS_DETECTOR_REGISTRIES = "electron/services/ProcessDetector/registries.ts";
+const AGENT_MCP_DECLARED = "electron/services/pluginAgentMcp/declaredEndpoints.ts";
+const DEV_PREVIEW_TOOL_REGISTRY = "src/registry/devPreviewToolRegistry.ts";
+const BUILTIN_GUEST_ADAPTERS = "electron/services/sitePreview/builtinGuestAdapters.ts";
+const GUEST_ADAPTER_ASSETS = "electron/services/sitePreview/guestAdapterAssets.ts";
 
 /**
  * The schemas swept for field coverage. The first block matches the fourteen
@@ -108,10 +116,14 @@ const SWEPT_SCHEMAS = {
   skills: SkillContributionSchema,
   forgeProviders: ForgeProviderContributionSchema,
   fileDecorationProviders: FileDecorationContributionSchema,
+  fileEditors: FileEditorContributionSchema,
+  previewTools: PreviewToolContributionSchema,
+  guestAdapters: GuestAdapterContributionSchema,
   agents: AgentContributionSchema,
   processTools: ProcessToolContributionSchema,
   settings: SettingDefinitionObjectSchema,
   recipes: RecipeContributionSchema,
+  agentMcp: AgentMcpContributionSchema,
   surfaces: SurfaceContributionsSchema,
   "agents.detection": AgentDetectionConfigSchema,
   "surfaces.emptyCanvas": SurfaceViewSlotSchema,
@@ -139,10 +151,14 @@ const TOP_LEVEL_GROUPS = [
   "skills",
   "forgeProviders",
   "fileDecorationProviders",
+  "fileEditors",
+  "previewTools",
+  "guestAdapters",
   "agents",
   "processTools",
   "settings",
   "recipes",
+  "agentMcp",
   "surfaces",
 ] as const;
 
@@ -181,10 +197,14 @@ type FieldConsumerCoverage = {
     keyof z.infer<typeof FileDecorationContributionSchema>,
     ConsumerDescriptor
   >;
+  fileEditors: Record<keyof z.infer<typeof FileEditorContributionSchema>, ConsumerDescriptor>;
+  previewTools: Record<keyof z.infer<typeof PreviewToolContributionSchema>, ConsumerDescriptor>;
+  guestAdapters: Record<keyof z.infer<typeof GuestAdapterContributionSchema>, ConsumerDescriptor>;
   agents: Record<keyof z.infer<typeof AgentContributionSchema>, ConsumerDescriptor>;
   processTools: Record<keyof z.infer<typeof ProcessToolContributionSchema>, ConsumerDescriptor>;
   settings: Record<keyof z.infer<typeof SettingDefinitionObjectSchema>, ConsumerDescriptor>;
   recipes: Record<keyof z.infer<typeof RecipeContributionSchema>, ConsumerDescriptor>;
+  agentMcp: Record<keyof z.infer<typeof AgentMcpContributionSchema>, ConsumerDescriptor>;
   surfaces: Record<keyof z.infer<typeof SurfaceContributionsSchema>, ConsumerDescriptor>;
   "agents.detection": Record<keyof z.infer<typeof AgentDetectionConfigSchema>, ConsumerDescriptor>;
   "surfaces.emptyCanvas": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
@@ -599,6 +619,68 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       note: "Matched to route renderer decoration pulls to the provider.",
     },
   },
+  fileEditors: {
+    id: {
+      mode: "verbatim",
+      consumers: [{ file: "src/registry/fileEditorRegistry.ts", symbol: "registerFileEditor" }],
+      note: "Keys the renderer-side editor registration the plugin's renderer entry mirrors from its manifest.",
+    },
+    slot: {
+      mode: "verbatim",
+      consumers: [{ file: "src/registry/fileEditorRegistry.ts", symbol: "useFileEditor" }],
+      note: "Resolved enable-aware through the builtin view registry to the component the file panel mounts for Edit mode.",
+    },
+    extensions: {
+      mode: "verbatim",
+      consumers: [{ file: "src/registry/fileEditorRegistry.ts", symbol: "resolveFileEditor" }],
+      note: "Matched case-insensitively against the panel file's extension to decide whether Edit is offered.",
+    },
+    maxBytes: {
+      mode: "verbatim",
+      consumers: [{ file: "src/panels/file/FilePane.tsx", symbol: "availableModes (edit gate)" }],
+      note: "Upper bound on the loaded file's byte size before the panel offers Edit.",
+    },
+  },
+  previewTools: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        { file: "src/store/pluginRuntimeStore.ts", symbol: "pullPluginRuntimeSnapshot" },
+        { file: DEV_PREVIEW_TOOL_REGISTRY, symbol: "isDeclared" },
+      ],
+      note: "Admits the renderer-registered tool of the same id; an undeclared tool stays hidden.",
+    },
+    title: {
+      mode: "intentional-metadata",
+      consumers: [{ file: PLUGIN_SCHEMA, symbol: "PreviewToolContributionSchema" }],
+      note: "The tool's own registration supplies the rendered label; the manifest states the name for the catalog and for review of what a built-in ships.",
+    },
+    iconId: {
+      mode: "intentional-metadata",
+      consumers: [{ file: PLUGIN_SCHEMA, symbol: "PreviewToolContributionSchema" }],
+      note: "Advisory, like contributes.views[].iconId — the tool's Button component owns the rendered glyph.",
+    },
+    guestAdapter: {
+      mode: "cross-reference",
+      consumers: [{ file: PLUGIN_SCHEMA, symbol: "preview_tool_guest_adapter_undeclared" }],
+      note: "Validated against contributes.guestAdapters in the same manifest, so a tool cannot name a runtime nothing registers.",
+    },
+  },
+  guestAdapters: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        { file: BUILTIN_GUEST_ADAPTERS, symbol: "registerBuiltinGuestAdapters" },
+        { file: GUEST_ADAPTER_ASSETS, symbol: "guestAdapterAssetPath" },
+      ],
+      note: "Registered as the site-preview adapter id the renderer binds by, and the asset path is derived from it.",
+    },
+    entry: {
+      mode: "verbatim",
+      consumers: [{ file: GUEST_ADAPTER_ASSETS, symbol: "listBuiltinGuestAdapters" }],
+      note: "The bundle's source entry; `scripts/build-main.mjs` mirrors this same read to hand it to esbuild, which emits the derived asset the startup registration reads back.",
+    },
+  },
   agents: {
     id: {
       mode: "verbatim",
@@ -726,6 +808,28 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: PLUGIN_SCHEMA, symbol: "SettingDefinitionSchema transform (→ type 'secret')" },
       ],
       note: "Normalized into type: 'secret' by the schema; also read directly by the form.",
+    },
+  },
+  agentMcp: {
+    id: {
+      mode: "verbatim",
+      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "listDeclaredAgentMcpEndpoints" }],
+      note: "Keys per-project enablement, the grant, and the endpoint's route path.",
+    },
+    name: {
+      mode: "verbatim",
+      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "listDeclaredAgentMcpEndpoints" }],
+      note: "Shown in the per-project enablement UI.",
+    },
+    description: {
+      mode: "verbatim",
+      consumers: [{ file: AGENT_MCP_DECLARED, symbol: "listDeclaredAgentMcpEndpoints" }],
+      note: "Shown beneath the endpoint name in the per-project enablement UI.",
+    },
+    mode: {
+      mode: "intentional-metadata",
+      consumers: [{ file: PLUGIN_SCHEMA, symbol: "AgentMcpContributionSchema (literal 'tools')" }],
+      note: "Only 'tools' is accepted; kept explicit so a later endpoint mode is additive.",
     },
   },
   recipes: {

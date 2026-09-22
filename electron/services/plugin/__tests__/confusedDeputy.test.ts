@@ -420,7 +420,7 @@ describe("a host bound to A while B is focused", () => {
   });
 
   it("reaches A's cached view rather than B's visible one", async () => {
-    // A evicted to a cached (CPU-throttled but live) renderer; B visible.
+    // A evicted to a cached (hidden but live) renderer; B visible.
     closeProjectViews(PROJECT_A);
     const cachedA = openProject(PROJECT_A, { root: projectRootOf(PROJECT_A), cached: true });
     const host = hostBoundTo(boundToA);

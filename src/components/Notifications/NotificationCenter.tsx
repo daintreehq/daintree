@@ -15,7 +15,6 @@ import {
   useNotificationHistoryStore,
   type NotificationHistoryEntry,
 } from "@/store/slices/notificationHistorySlice";
-import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { NotificationCenterEntry } from "./NotificationCenterEntry";
 import { useSnoozeExpiryTimer } from "./useSnoozeExpiryTimer";
 import { resolveSnoozeDuration, type SnoozeDurationOption } from "@shared/utils/snoozeTimestamps";
@@ -52,6 +51,7 @@ import {
   selectKindOffKinds,
   KIND_SHORT_LABEL,
 } from "@/lib/notificationEffectiveState";
+import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 
 const NEEDS_ATTENTION_CAP = 5;
 const CONTEXT_NONE_KEY = "__none__";
@@ -1270,6 +1270,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                     onRowFocus={setFocusedIndex}
                     onDropdownOpenChange={handleDropdownOpenChange}
                     groupByContext={groupByContext}
+                    hasPinnedAbove={needsAttentionGroups.length > 0}
                     dividerGroupId={dividerGroupId}
                     dividerRef={setDividerEl}
                     lastClosedAt={lastClosedAt}
@@ -1363,12 +1364,13 @@ function FilterChip({
     <button
       type="button"
       aria-pressed={selected}
-      // Handle for the `forced-colors: active` block in index.css. There the UA
+      // Handle for the `forced-colors: active` block in index.css, shared with
+      // the worktree filter popover's chips. There the UA
       // flattens `bg-filter-selected-bg-strong` to Canvas and paints every chip
       // as the same outlined pill, so which filter you are looking at becomes
       // unreadable — the same failure the destructive-button rule in that block
       // already solves, and solved the same way: a heavier border.
-      data-notification-filter="true"
+      data-filter-chip="true"
       onClick={onSelect}
       className={cn(
         "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
@@ -1485,6 +1487,7 @@ function ChronoSection({
   onConsumeSnoozePending,
   onSnoozeRow,
   onUnsnoozeRow,
+  hasPinnedAbove,
 }: {
   section: ContextSection;
   groupByContext: boolean;
@@ -1500,6 +1503,14 @@ function ChronoSection({
   onConsumeSnoozePending: () => void;
   onSnoozeRow: (row: FlatRow, option: SnoozeDurationOption) => void;
   onUnsnoozeRow: (row: FlatRow) => void;
+  /**
+   * Whether the "Needs attention" rail is rendering above this list. That rail
+   * is a preview, not a filter — a pinned entry still appears here — so with
+   * one notification in the app the same row was drawn twice with nothing
+   * between the two but a divider, and it read as a duplicate rather than as a
+   * summary of a list. The header is what tells them apart.
+   */
+  hasPinnedAbove?: boolean;
 } & RovingSectionProps) {
   const sectionUnreadIds = section.groups.flatMap((g) =>
     g.entries.filter((e) => !e.seenAsToast).map((e) => e.id)
@@ -1510,6 +1521,11 @@ function ChronoSection({
   const sectionLabel = groupByContext ? "Notifications for this context" : "All notifications";
   return (
     <div data-testid="chrono-section">
+      {!groupByContext && hasPinnedAbove && (
+        <div className="pl-4 pr-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-text-secondary">
+          {sectionLabel}
+        </div>
+      )}
       {groupByContext && (
         <ContextSectionHeader
           worktreeId={section.worktreeId}
@@ -1705,7 +1721,10 @@ function ContextSectionHeader({
           <button
             type="button"
             onClick={onMarkRead}
-            className="inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 normal-case tracking-normal text-text-secondary hover:text-text-primary hover:bg-overlay-raised focus-visible:text-text-primary focus-visible:bg-overlay-raised transition-colors"
+            className={cn(
+              "inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 normal-case tracking-normal text-text-secondary hover:text-text-primary hover:bg-overlay-raised transition-colors",
+              PALETTE_ROW_FOCUS_CLASS
+            )}
           >
             Mark read
           </button>

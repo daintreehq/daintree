@@ -435,6 +435,31 @@ describe("ConsoleDrawer", () => {
       expect(terminalInstanceService.setVisible).toHaveBeenCalledWith(mockTerminalId, true);
     });
 
+    it("keeps the Output terminal hidden while the host panel is parked in the dock", () => {
+      const { rerender } = render(
+        <ConsoleDrawer
+          terminalId={mockTerminalId}
+          paneId={mockPaneId}
+          isOpen={true}
+          isPanelVisible={false}
+        />
+      );
+      expect(terminalInstanceService.setVisible).toHaveBeenLastCalledWith(mockTerminalId, false);
+      expect(screen.getByTestId("refresh-tier").textContent).toBe(
+        String(TerminalRefreshTier.BACKGROUND)
+      );
+
+      rerender(
+        <ConsoleDrawer
+          terminalId={mockTerminalId}
+          paneId={mockPaneId}
+          isOpen={true}
+          isPanelVisible={true}
+        />
+      );
+      expect(terminalInstanceService.setVisible).toHaveBeenLastCalledWith(mockTerminalId, true);
+    });
+
     it("drops the terminal to background when the Console tab is active", () => {
       renderDrawer({ defaultOpen: true });
       vi.clearAllMocks();

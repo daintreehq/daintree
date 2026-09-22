@@ -14,17 +14,22 @@ function serviceNameFor(projectPath: string): string {
   return `daintree-workspace-host:${safeName}-${pathHash}`;
 }
 
-const { forkMock, mockChildren, loggerCalls, appMock } = vi.hoisted(() => {
+const { forkMock, mockChildren, loggerCalls, ingestedLogs, appMock } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter } = require("events") as typeof import("events");
   const forkMock = vi.fn();
   const mockChildren: any[] = [];
-  const loggerCalls: { level: "info" | "warn"; message: string }[] = [];
+  const loggerCalls: {
+    level: "info" | "warn";
+    message: string;
+    context?: Record<string, unknown>;
+  }[] = [];
+  const ingestedLogs: unknown[] = [];
   const appEmitter = new EventEmitter();
   const appMock = Object.assign(appEmitter, {
     getPath: vi.fn(() => "/tmp/userData"),
   });
-  return { forkMock, mockChildren, loggerCalls, appMock };
+  return { forkMock, mockChildren, loggerCalls, ingestedLogs, appMock };
 });
 
 class MockUtilityChild extends EventEmitter {
@@ -61,10 +66,13 @@ vi.mock("../../utils/logger.js", () => ({
   createLogger: (name: string) => ({
     name,
     debug: vi.fn(),
-    info: (message: string) => loggerCalls.push({ level: "info", message }),
-    warn: (message: string) => loggerCalls.push({ level: "warn", message }),
+    info: (message: string, context?: Record<string, unknown>) =>
+      loggerCalls.push({ level: "info", message, context }),
+    warn: (message: string, context?: Record<string, unknown>) =>
+      loggerCalls.push({ level: "warn", message, context }),
     error: vi.fn(),
   }),
+  ingestHostLogEvent: (event: unknown) => ingestedLogs.push(event),
 }));
 
 async function loadModule(): Promise<typeof import("../WorkspaceHostProcess.js")> {
@@ -77,6 +85,7 @@ describe("WorkspaceHostProcess", () => {
     forkMock.mockReset();
     mockChildren.length = 0;
     loggerCalls.length = 0;
+    ingestedLogs.length = 0;
     appMock.removeAllListeners();
     forkMock.mockImplementation(() => new MockUtilityChild());
   });
@@ -220,6 +229,175 @@ describe("WorkspaceHostProcess", () => {
     host.dispose();
   });
 
+  describe("structured host log events (#12544)", () => {
+    const logEvent = {
+      type: "log" as const,
+      timestamp: 1_700_000_000_000,
+      level: "info" as const,
+      source: "workspace-host:Topology",
+      message: "PR detected for worktree",
+      contextJson: '{"worktree":"feature/x"}',
+    };
+
+    function makeHost(WorkspaceHostProcess: any) {
+      const host = new WorkspaceHostProcess("/tmp/project", {
+        maxRestartAttempts: 3,
+        healthCheckIntervalMs: 30000,
+      } as any);
+      host.waitForReady().catch(() => {});
+      return host;
+    }
+
+    it("mirrors the entry through the logger's ingest path exactly once", async () => {
+      const { WorkspaceHostProcess } = await loadModule();
+      const host = makeHost(WorkspaceHostProcess);
+      const hostEvents: unknown[] = [];
+      host.on("host-event", (event: unknown) => hostEvents.push(event));
+
+      mockChildren[0].emit("message", logEvent);
+
+      expect(ingestedLogs).toEqual([logEvent]);
+      // A log must not reach the plugin bus, the broker, or the domain relay —
+      // and must not be re-logged, which is what produced the second record.
+      expect(hostEvents).toHaveLength(0);
+      expect(loggerCalls).toHaveLength(0);
+
+      host.dispose();
+    });
+
+    it("keeps delivering log events after dispose", async () => {
+      const { WorkspaceHostProcess } = await loadModule();
+      const host = makeHost(WorkspaceHostProcess);
+
+      host.dispose();
+      mockChildren[0].emit("message", logEvent);
+
+      // Handled ahead of the isDisposed guard: a host's teardown logs are the
+      // ones most worth keeping.
+      expect(ingestedLogs).toEqual([logEvent]);
+    });
+  });
+
+  it("captures the final partial line when the pipe closes after exit", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const child = mockChildren[0] as MockUtilityChild;
+    // 'exit' fires before the pipes drain, so the tail of a native crash
+    // trace lands after the exit-time flush has already run.
+    child.emit("exit", 139);
+    child.stderr.emit("data", Buffer.from("FATAL ERROR: unterminated tail"));
+    child.stderr.emit("close");
+
+    const warnMessages = loggerCalls.filter((c) => c.level === "warn").map((c) => c.message);
+    expect(warnMessages).toContain("[WorkspaceHost] FATAL ERROR: unterminated tail");
+
+    host.dispose();
+  });
+
+  it("does not split one stream's partial line when the other closes", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const child = mockChildren[0] as MockUtilityChild;
+    child.stderr.emit("data", Buffer.from("FATAL ERROR: out of mem"));
+    child.stdout.emit("close");
+    child.stderr.emit("data", Buffer.from("ory\n"));
+
+    const warnMessages = loggerCalls.filter((c) => c.level === "warn").map((c) => c.message);
+    // A close on the other pipe must not truncate this one mid-line.
+    expect(warnMessages).toContain("[WorkspaceHost] FATAL ERROR: out of memory");
+    expect(warnMessages).not.toContain("[WorkspaceHost] FATAL ERROR: out of mem");
+
+    host.dispose();
+  });
+
+  it("flushes a tail exactly once across exit and both stream closes", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const child = mockChildren[0] as MockUtilityChild;
+    child.stderr.emit("data", Buffer.from("crash tail"));
+    child.emit("exit", 1);
+    child.stdout.emit("close");
+    child.stderr.emit("close");
+
+    const matching = loggerCalls.filter((c) => c.message === "[WorkspaceHost] crash tail");
+    expect(matching).toHaveLength(1);
+
+    host.dispose();
+  });
+
+  it("keeps a dead child's tail and a successor's partial line apart", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const firstChild = mockChildren[0] as MockUtilityChild;
+    firstChild.emit("exit", 1);
+
+    // manualRestart forks synchronously, bypassing the backoff timer.
+    host.manualRestart();
+    host.waitForReady().catch(() => {});
+    const secondChild = mockChildren[1] as MockUtilityChild;
+    secondChild.stdout.emit("data", Buffer.from("successor partial"));
+
+    // The dead pipe delivers its crash tail only now, with a replacement
+    // already running — the ordering that makes this hard.
+    firstChild.stderr.emit("data", Buffer.from("FATAL: dying child tail"));
+    firstChild.stderr.emit("close");
+
+    const messages = loggerCalls.map((c) => c.message);
+    // The old child's diagnostics must not be dropped just because a
+    // successor exists...
+    expect(messages.filter((m) => m === "[WorkspaceHost] FATAL: dying child tail")).toHaveLength(1);
+    // ...and must not consume the successor's still-incomplete line.
+    expect(messages).not.toContain("[WorkspaceHost] successor partial");
+
+    secondChild.stdout.emit("data", Buffer.from(" line\n"));
+    expect(loggerCalls.map((c) => c.message)).toContain("[WorkspaceHost] successor partial line");
+
+    host.dispose();
+  });
+
+  it("keeps repeated raw lines repeated, including ones shaped like log prefixes", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const child = mockChildren[0] as MockUtilityChild;
+    child.stdout.emit("data", Buffer.from("[INFO] [workspace-host:default] retrying\n"));
+    child.stdout.emit("data", Buffer.from("[INFO] [workspace-host:default] retrying\n"));
+
+    // Nothing classifies stdout by its text — the fix removes structured
+    // entries from the stream rather than filtering them out of it, so a line
+    // that merely looks like one is still forwarded, twice.
+    const repeats = loggerCalls.filter(
+      (c) => c.message === "[WorkspaceHost] [INFO] [workspace-host:default] retrying"
+    );
+    expect(repeats).toHaveLength(2);
+
+    host.dispose();
+  });
+
   it("routes inotify-limit-reached as host-event (spontaneous event)", async () => {
     const { WorkspaceHostProcess } = await loadModule();
     const host = new WorkspaceHostProcess("/tmp/project", {
@@ -273,6 +451,38 @@ describe("WorkspaceHostProcess", () => {
     child.emit("message", { type: "watcher-recovered" });
 
     expect(onHostEvent).toHaveBeenCalledWith({ type: "watcher-recovered" });
+
+    host.dispose();
+  });
+
+  it("routes switch-status-timing as host-event with payload intact (#12461)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const onHostEvent = vi.fn();
+    host.on("host-event", onHostEvent);
+
+    const event = {
+      type: "switch-status-timing",
+      switchId: "switch-1",
+      rendererAppliedAt: 2_000,
+      rendererStatusCount: 1,
+      host: {
+        loadStartedAt: 100,
+        enumeratedAt: 200,
+        firstSnapshotAt: 210,
+        firstStatusAt: [1_900],
+        monitorCount: 1,
+      },
+    };
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", event);
+
+    expect(onHostEvent).toHaveBeenCalledWith(event);
 
     host.dispose();
   });
@@ -685,6 +895,174 @@ describe("WorkspaceHostProcess BrokerError contract", () => {
       vi.runOnlyPendingTimers();
 
       expect(forkMock).toHaveBeenCalledTimes(1);
+    });
+
+    // #12460 — half of all disposals ended in this SIGKILL, and nothing in the
+    // log said how long they took or what the host was doing when it died.
+    describe("dispose acknowledgement and outcome logging (#12460)", () => {
+      const settledAck = {
+        type: "disposed",
+        elapsedMs: 42,
+        settled: true,
+        pending: { parcelSubscriptions: 0, parcelLifecycleOps: 0 },
+      } as const;
+      let clock = 0;
+
+      beforeEach(() => {
+        clock = 0;
+        vi.spyOn(performance, "now").mockImplementation(() => clock);
+      });
+
+      function advance(ms: number): void {
+        clock += ms;
+        vi.advanceTimersByTime(ms);
+      }
+
+      const exitLog = () => loggerCalls.find((c) => c.message.includes("Exited with code"));
+
+      it("retires the backstop when the host acks, and logs the disposal as ack", async () => {
+        const { host, child, killSpy } = await disposeWedgedHost();
+
+        host.dispose("idle-grace");
+        advance(1_200);
+        child.emit("message", settledAck);
+        // Past the original 1.5s deadline: only a cleared backstop stays quiet.
+        advance(400);
+        expect(killSpy).not.toHaveBeenCalled();
+
+        child.emit("exit", 0);
+        vi.runOnlyPendingTimers();
+        expect(killSpy).not.toHaveBeenCalled();
+        expect((host as any).disposeTimer).toBeNull();
+        expect(exitLog()?.level).toBe("info");
+        expect(exitLog()?.context).toEqual({
+          outcome: "ack",
+          durationMs: 1_600,
+          ackMs: 1_200,
+          exitCode: 0,
+          reason: "idle-grace",
+          lastPhase: "disposed",
+          hostElapsedMs: 42,
+          settled: true,
+          pending: settledAck.pending,
+        });
+      });
+
+      it("still kills a silent host and logs what it last reported", async () => {
+        const { host, child, killSpy } = await disposeWedgedHost();
+
+        host.dispose("warm-cap");
+        child.emit("message", {
+          type: "dispose-progress",
+          phase: "settling",
+          elapsedMs: 12,
+          pending: { parcelSubscriptions: 3, parcelLifecycleOps: 2 },
+        });
+
+        advance(1_499);
+        expect(killSpy).not.toHaveBeenCalled();
+        advance(1);
+        expect(killSpy).toHaveBeenCalledTimes(1);
+        expect(killSpy).toHaveBeenCalledWith(child.pid, "SIGKILL");
+        expect(child.kill).not.toHaveBeenCalled();
+
+        const killLog = loggerCalls.find((c) => c.message.includes("sent SIGKILL"));
+        expect(killLog?.level).toBe("warn");
+        expect(killLog?.context).toMatchObject({
+          reason: "warm-cap",
+          killReason: "no-ack",
+          lastPhase: "settling",
+          hostElapsedMs: 12,
+          pending: { parcelSubscriptions: 3, parcelLifecycleOps: 2 },
+        });
+
+        // A report racing the kill cannot rewrite why the host died.
+        child.emit("message", settledAck);
+        advance(50);
+        child.emit("exit", 0);
+        expect(exitLog()?.context).toMatchObject({
+          outcome: "kill",
+          killReason: "no-ack",
+          durationMs: 1_550,
+          lastPhase: "settling",
+        });
+      });
+
+      it("kills a host that acks but never exits, once the post-ack grace runs out", async () => {
+        const { host, child, killSpy } = await disposeWedgedHost();
+
+        host.dispose();
+        advance(1_200);
+        child.emit("message", { ...settledAck, settled: false });
+
+        // The original 1.5s mark passes quietly; the grace runs from the ack.
+        advance(499);
+        expect(killSpy).not.toHaveBeenCalled();
+        advance(1);
+        expect(killSpy).toHaveBeenCalledTimes(1);
+
+        child.emit("exit", 0);
+        expect(exitLog()?.context).toMatchObject({
+          outcome: "kill",
+          killReason: "no-exit-after-ack",
+          settled: false,
+        });
+      });
+
+      it("does not let a repeated ack stretch the post-ack grace", async () => {
+        const { host, child, killSpy } = await disposeWedgedHost();
+
+        host.dispose();
+        advance(100);
+        child.emit("message", settledAck);
+        advance(400);
+        child.emit("message", { ...settledAck, elapsedMs: 999 });
+        advance(100);
+
+        expect(killSpy).toHaveBeenCalledTimes(1);
+        child.emit("exit", 0);
+        expect(exitLog()?.context).toMatchObject({ ackMs: 100, hostElapsedMs: 42 });
+      });
+
+      it("logs an exit with no ack as exit, with the last phase the host reached", async () => {
+        const { host, child } = await disposeWedgedHost();
+
+        host.dispose();
+        child.emit("message", {
+          type: "dispose-progress",
+          phase: "disposing-services",
+          elapsedMs: 0,
+          pending: { parcelSubscriptions: 5, parcelLifecycleOps: 0 },
+        });
+        advance(300);
+        child.emit("exit", 0);
+
+        expect(exitLog()?.level).toBe("info");
+        expect(exitLog()?.context).toMatchObject({
+          outcome: "exit",
+          durationMs: 300,
+          reason: "unspecified",
+          lastPhase: "disposing-services",
+        });
+      });
+
+      it("ignores teardown reports from a host that was never asked to dispose", async () => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const { host, child } = await disposeWedgedHost();
+
+        try {
+          child.emit("message", settledAck);
+          expect((host as any).disposeTrace).toBeNull();
+          expect((host as any).disposeTimer).toBeNull();
+          expect(warnSpy.mock.calls.some((c) => String(c[0]).includes("Unknown event"))).toBe(
+            false
+          );
+          expect(errorSpy).not.toHaveBeenCalled();
+        } finally {
+          host.dispose();
+        }
+      });
     });
 
     it("swallows the ESRCH race where the child exits between the pid read and the signal", async () => {

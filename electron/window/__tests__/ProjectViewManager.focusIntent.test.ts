@@ -169,7 +169,6 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
   purgeMemoryWebContents: vi.fn().mockResolvedValue(undefined),
   freezeWebContents: vi.fn().mockResolvedValue(undefined),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
-  throttleCpuWebContents: vi.fn().mockResolvedValue(undefined),
   unthrottleCpuWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -320,7 +319,7 @@ describe("ProjectViewManager — pending focus intent", () => {
     expect(focusSends).toHaveLength(0);
   });
 
-  it("delivers focus intent immediately on cached-view reactivation", async () => {
+  it("delivers focus intent on cached-view reactivation", async () => {
     // Prime B as a cached view.
     const bWc = createMockWebContents();
     wcQueue.push(bWc);
@@ -337,8 +336,8 @@ describe("ProjectViewManager — pending focus intent", () => {
     initialWc.send.mockClear();
 
     // Now switch back to B with a pending focus intent. B is in the LRU cache,
-    // so the cached fast path fires — must deliver intent synchronously,
-    // not via the paint gate (which the cached path skips).
+    // so the cached path fires — it delivers the intent itself once its warm
+    // gate settles, not through the cold paint-gate intent handling.
     bWc.send.mockClear();
     manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
     const switchBack = manager.switchTo("proj-b", "/path/b");

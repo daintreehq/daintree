@@ -149,6 +149,11 @@ export interface ManagedTerminal {
   ptyGeometryDivergenceSignature?: string;
   // Same episode-dedup for the container-vs-xterm fit diagnostic.
   fitGeometryDivergenceSignature?: string;
+  // Same episode-dedup for refused implausible grids (#12442). A hidden pane
+  // whose box keeps measuring zero is asked for the same impossible grid on
+  // every observer tick, and the log has to name the caller without becoming
+  // the flood it exists to explain.
+  implausibleGridSignature?: string;
   // Visibility tracking
   isVisible: boolean;
   lastActiveTime: number;
@@ -169,6 +174,10 @@ export interface ManagedTerminal {
 
   // Viewport pinning: suppress scroll tracking during programmatic scrollToBottom
   _suppressScrollTracking?: boolean;
+  // Daintree-owned ESC[3J writes (worker-mirror snapshot applies) still queued
+  // or parsing on this terminal. The viewport anchor ignores erases while this
+  // is non-zero so its own clears never read as an agent replay.
+  pendingOwnClearWrites?: number;
   // Viewport pinning: set by wheel/keyboard events to distinguish user-initiated scroll
   _userScrollIntent?: boolean;
   // Timestamp of the most recent wheel event on the host element — used to

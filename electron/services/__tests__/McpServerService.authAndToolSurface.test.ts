@@ -797,6 +797,83 @@ describe("McpServerService", () => {
     expect(status).toBe(403);
   });
 
+  it("refuses an api-key bearer posting into a pane-token SSE session and leaves that session working", async () => {
+    // A session id is a routing handle, not a credential. The api key is a
+    // valid bearer, so `isAuthorized` alone would let it drive the pane's
+    // higher-tier session by naming its id.
+    const dispatched: string[] = [];
+    const { window } = createMockWindow({
+      getManifest: () => [
+        createManifestEntry({
+          id: "terminal.list",
+          title: "List Terminals",
+          description: "Read the terminal list",
+          kind: "query",
+        }),
+      ],
+      dispatchAction: (payload) => {
+        dispatched.push(payload.actionId);
+        return { ok: true, result: "ok" };
+      },
+    });
+    await service.start(window);
+    paneTokenTiers.set("pane-token", "system");
+    const port = service.currentPort!;
+
+    const pane = await connectClient(port, { Authorization: "Bearer pane-token" });
+    transports.push(pane.transport);
+    const sessions = (service as unknown as { _sessions: Map<string, unknown> })._sessions;
+    const [paneSessionId] = Array.from(sessions.keys());
+
+    const hijack = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const req = http.request(
+        {
+          host: "127.0.0.1",
+          port,
+          path: `/messages?sessionId=${paneSessionId}`,
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${service.getStatus().apiKey}`,
+            "Content-Type": "application/json",
+          },
+        },
+        (res) => {
+          let body = "";
+          res.setEncoding("utf8");
+          res.on("data", (chunk) => {
+            body += chunk;
+          });
+          res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+        }
+      );
+      req.on("error", reject);
+      req.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 99,
+          method: "tools/call",
+          params: { name: "terminal.list", arguments: {} },
+        })
+      );
+    });
+
+    expect(hijack).toEqual({ status: 404, body: "Session not found" });
+    expect(dispatched).toEqual([]);
+
+    const result = getTextResult(
+      await pane.client.callTool({ name: "terminal.list", arguments: {} })
+    );
+    expect(result.isError).not.toBe(true);
+    expect(dispatched).toEqual(["terminal.list"]);
+
+    const credentials = (
+      service as unknown as { sessionStore: { sessionCredentialMap: Map<string, string> } }
+    ).sessionStore.sessionCredentialMap;
+    expect(credentials.has(paneSessionId!)).toBe(true);
+    await pane.transport.close();
+    await vi.waitFor(() => expect(credentials.has(paneSessionId!)).toBe(false));
+  });
+
   it("closes idle SSE sessions after the application-level timeout", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {

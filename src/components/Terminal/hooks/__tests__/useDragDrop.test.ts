@@ -21,14 +21,22 @@ vi.mock("@/store/panelStore", () => ({
 
 const { useDragDrop } = await import("../useDragDrop");
 const { FILE_DRAG_MIME, encodeFileDragPaths } = await import("@/lib/fileDragPayload");
+const { getAllAtFileTokens } = await import("../../hybridInputParsing");
 
 const CWD = "/Users/greg/Projects/daintree";
 
-function fakeView(head = 0) {
+/**
+ * `before` is the document text ahead of the caret. Whitespace by default, so a
+ * drop needs no separator and chip ranges line up with the caret directly.
+ */
+function fakeView(head = 0, before = " ".repeat(head)) {
   const dispatch = vi.fn();
   const focus = vi.fn();
   const view = {
-    state: { selection: { main: { head } } },
+    state: {
+      selection: { main: { head } },
+      doc: { sliceString: (from: number, to: number) => before.slice(from, to) },
+    },
     dispatch,
     focus,
   } as unknown as EditorView;
@@ -250,6 +258,22 @@ describe("useDragDrop", () => {
     expect(chipSpellings(dispatch, head).sort()).toEqual(
       [`${CWD}/src/shot.png`, "@src/a.ts"].sort()
     );
+  });
+
+  it("separates a drop from the word the caret sits right after", async () => {
+    pathForFile.mockReturnValue(`${CWD}/src/App.tsx`);
+    const before = "look at this";
+    const { dispatch, ref } = fakeView(before.length, before);
+    const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+    await act(async () => {
+      await result.current.handleDrop(dropEvent([fakeFile("App.tsx")]));
+    });
+
+    expect(getAllAtFileTokens(before + insertedToken(dispatch)).map((t) => t.path)).toEqual([
+      "src/App.tsx",
+    ]);
+    expect(chipSpellings(dispatch, before.length)).toEqual(["@src/App.tsx"]);
   });
 
   it("inserts at the cursor and leaves the caret after everything it inserted", async () => {
@@ -601,6 +625,33 @@ describe("useDragDrop", () => {
 
       act(() => {
         result.current.handleDragLeave(dragEvent([FILE_DRAG_MIME]));
+      });
+      expect(result.current.isDragOverFiles).toBe(true);
+
+      act(() => {
+        result.current.handleDragLeave(dragEvent([FILE_DRAG_MIME]));
+      });
+      expect(result.current.isDragOverFiles).toBe(false);
+    });
+
+    // A drop target unmounted mid-drag never gets its leaves (#12570). The
+    // release has to drop the depth it stranded as well as the overlay, or the
+    // next drag's single leave would leave the overlay stuck on.
+    it("releases a stranded drag so the next drag clears on its own leave", () => {
+      const { ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+      act(() => {
+        result.current.handleDragEnter(dragEvent([FILE_DRAG_MIME]));
+        result.current.handleDragEnter(dragEvent([FILE_DRAG_MIME]));
+      });
+      act(() => {
+        result.current.resetDragState();
+      });
+      expect(result.current.isDragOverFiles).toBe(false);
+
+      act(() => {
+        result.current.handleDragEnter(dragEvent([FILE_DRAG_MIME]));
       });
       expect(result.current.isDragOverFiles).toBe(true);
 

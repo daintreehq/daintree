@@ -5,6 +5,7 @@ import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { TabButton } from "../TabButton";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { GLYPH_SELECTOR } from "@/components/icons/__tests__/glyphBox";
 
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
@@ -423,9 +424,10 @@ describe("TabButton", () => {
     // The state icon is the only element that combines "shrink-0" with
     // "motion-reduce:animate-none" (TabButton.tsx). That class combo is a
     // stable identifier across all six AgentState values.
+    // The working glyph is a CSS-drawn span, the other states are svgs.
     const queryStateIcon = (container: Element) =>
-      Array.from(container.querySelectorAll("svg")).find((svg) => {
-        const cls = svg.getAttribute("class") ?? "";
+      Array.from(container.querySelectorAll(GLYPH_SELECTOR)).find((glyph) => {
+        const cls = glyph.getAttribute("class") ?? "";
         return cls.includes("motion-reduce:animate-none");
       });
 
@@ -435,6 +437,8 @@ describe("TabButton", () => {
       );
       const spinner = container.querySelector(".text-state-working");
       expect(spinner).not.toBeNull();
+      // The helper the negative cases below rely on has to see this glyph.
+      expect(queryStateIcon(container)).toBe(spinner);
     });
 
     it("does not render state icon when agentState='exited'", () => {
@@ -634,6 +638,36 @@ describe("TabButton", () => {
 
       expect(sensorHandler).not.toHaveBeenCalled();
       expect(parentHandler).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("close button in the Tab order", () => {
+    it("is a Tab stop only on the active tab — inactive tabs are reached with the arrows", () => {
+      const { unmount } = render(<TabButton {...defaultProps} isActive />);
+      expect(screen.getByLabelText("Close Test Agent").tabIndex).toBe(0);
+      unmount();
+      render(<TabButton {...defaultProps} isActive={false} />);
+      expect(screen.getByLabelText("Close Test Agent").tabIndex).toBe(-1);
+    });
+  });
+
+  describe("tabs pattern relationships", () => {
+    it("carries an id and points aria-controls at the region it switches", () => {
+      render(<TabButton {...defaultProps} tabPanelId="panel-body-x" />);
+      const tab = screen.getByRole("tab");
+      expect(tab.id).not.toBe("");
+      expect(tab.getAttribute("aria-controls")).toBe("panel-body-x");
+    });
+  });
+
+  describe("parked tabs", () => {
+    it("stays in layout but is not painted while parked", () => {
+      render(<TabButton {...defaultProps} isActive={false} parked />);
+      const tab = screen.getByRole("tab", { hidden: true });
+      // `visibility: hidden` keeps the box for the overflow observer to measure
+      // and keeps pointer and focus off a tab the user cannot see.
+      expect(tab.classList.contains("invisible")).toBe(true);
+      expect(tab.getAttribute("data-tab-parked")).toBe("true");
     });
   });
 });

@@ -89,6 +89,7 @@ vi.mock("../../../services/ProjectStore.js", () => ({
 }));
 
 const ackDepsCapture = vi.hoisted(() => ({ current: null as null | Record<string, unknown> }));
+const ackLifecycle = vi.hoisted(() => ({ calls: [] as string[] }));
 
 // Captured rather than exercised on its timer: the routing decision inside
 // `markSeen` is the whole point, and driving the real 1s sampler to reach it
@@ -98,8 +99,15 @@ vi.mock("../../../services/CompletionAcknowledgementService.js", () => ({
     constructor(deps: Record<string, unknown>) {
       ackDepsCapture.current = deps;
     }
-    start() {}
-    stop() {}
+    start() {
+      ackLifecycle.calls.push("start");
+    }
+    stop() {
+      ackLifecycle.calls.push("stop");
+    }
+    setObserving(observing: boolean) {
+      ackLifecycle.calls.push(`observing:${observing}`);
+    }
   },
 }));
 
@@ -153,6 +161,10 @@ import { registerDeferredTask } from "../../../window/deferredInitQueue.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { createProjectCrudRegistrar } from "./helpers/projectCrudLifecycle.js";
+import {
+  resetPowerPolicyForTesting,
+  updatePowerObservations,
+} from "../../../window/powerPolicy.js";
 import { getAgentAvailabilityStore } from "../../../services/AgentAvailabilityStore.js";
 import {
   ASSISTANT_PROJECTION_PARITY,
@@ -828,6 +840,44 @@ describe("registerProjectStatsHandlers — deferred initial compute", () => {
  * scratch carries a status entry, the dwell that clears "ready for review" is
  * reachable with a scratch id, which `projectStore` has no row for.
  */
+// The acknowledgement dwell must not run while nobody can see a window — a
+// locked screen leaves its window focused, so the observed-project read alone
+// would keep counting (#12515).
+describe("completion acknowledgement follows the power policy", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Earlier suites register without cleanup; drop their subscriptions.
+    resetPowerPolicyForTesting();
+    ackLifecycle.calls = [];
+  });
+
+  afterEach(() => {
+    resetPowerPolicyForTesting();
+  });
+
+  it("seeds observability before starting and tracks it until cleanup", () => {
+    updatePowerObservations({ screenLocked: true });
+    const cleanup = registerProjectCrudHandlers(makeDeps(makePtyClient()));
+
+    expect(ackLifecycle.calls).toEqual(["observing:false", "start"]);
+
+    updatePowerObservations({ screenLocked: false });
+    // Battery keeps the level at `saving` but the user is still watching.
+    updatePowerObservations({ onBattery: true });
+    updatePowerObservations({ anyWindowFocused: false });
+    expect(ackLifecycle.calls.slice(2)).toEqual([
+      "observing:true",
+      "observing:true",
+      "observing:false",
+    ]);
+
+    cleanup();
+    ackLifecycle.calls = [];
+    updatePowerObservations({ anyWindowFocused: true });
+    expect(ackLifecycle.calls).toEqual([]);
+  });
+});
+
 describe("bulk stats and acknowledgement for scratch workspaces", () => {
   const SCRATCH_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
 

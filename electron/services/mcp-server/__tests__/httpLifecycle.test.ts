@@ -34,11 +34,13 @@ vi.mock("electron", () => ({
 import http from "node:http";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
-import { HttpLifecycle } from "../httpLifecycle.js";
+import { HttpLifecycle, sessionCredentialDigest } from "../httpLifecycle.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
 import { minimumPermittingTier } from "../shared.js";
 import type { SessionServerDeps } from "../sessionServer.js";
+import { ResourceOwnershipLedger } from "../resourceOwnership.js";
 import { WorkspaceBindingError } from "../rendererBridge.js";
+import { AuditService, type McpAuditLogStore } from "../auditLog.js";
 
 type BearerTestHandle = {
   touchBearer: (
@@ -115,6 +117,21 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
         this.sessionContextMap.delete(sessionId);
         this.sessionOriginMap.delete(sessionId);
         this.sessionWorkspaceMap.delete(sessionId);
+        this.sessionCredentialMap.delete(sessionId);
+        this.resourceOwnership.clearSession(sessionId);
+      },
+      // A real ledger, so the handshake's principal binding is observed as the
+      // session server will read it (#12487).
+      resourceOwnership: new ResourceOwnershipLedger(),
+      // Real behaviour for the same reason as the origin predicates: a stub
+      // that always matched would make every session-binding test vacuous.
+      sessionCredentialMap: new Map<string, string>(),
+      bindSessionCredential(sessionId: string, digest: string) {
+        this.sessionCredentialMap.set(sessionId, digest);
+      },
+      isSessionCredential(sessionId: string, digest: string) {
+        const bound = this.sessionCredentialMap.get(sessionId);
+        return bound !== undefined && bound === digest;
       },
       drain: vi.fn(),
       getTier: vi.fn(() => "workbench" as const),
@@ -170,6 +187,10 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
     handleTerminalGetStatusViewless: vi
       .fn()
       .mockResolvedValue({ terminals: [], source: "pty", unavailableFields: [] }),
+    handleTerminalReadLastMessageOwned: vi
+      .fn()
+      .mockResolvedValue({ status: "unavailable", reason: "no-message" }),
+    isTerminalIdInUse: vi.fn(() => false),
     getCachedManifest: vi.fn(() => null),
     clearCachedManifest: vi.fn(),
     cleanupListeners: [],
@@ -1097,6 +1118,88 @@ describe("HttpLifecycle", () => {
     });
   });
 
+  // The audit ring is persisted and exportable, and the generic summarizer's
+  // redaction is built for secrets, not for an agent's prose or its questions.
+  // Driven end to end — through the lifecycle's own summary and into a real
+  // audit service's stored and persisted records — because a projection that
+  // exists but is not on the path proves nothing (#12479).
+  describe("buildSessionServerDeps — last-message reads reach the audit log as shape only", () => {
+    it("records status, provider, length and tool names, never the text or a question", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      const deps_ = (
+        lc as unknown as {
+          buildSessionServerDeps: (sessionId: string) => {
+            appendAuditRecord: (input: Record<string, unknown>) => void;
+          };
+        }
+      ).buildSessionServerDeps("session-read");
+      const prose = "PROSE-SENTINEL ".repeat(200);
+      deps_.appendAuditRecord({
+        toolId: "terminal.readLastMessageOwned",
+        sessionId: "session-read",
+        tier: "external",
+        args: { terminalId: "term-1" },
+        durationMs: 3,
+        outcome: {
+          kind: "result",
+          value: {
+            ok: true,
+            result: {
+              status: "ok",
+              provider: "claude",
+              message: {
+                id: "msg_1",
+                text: prose,
+                truncated: false,
+                recordedAt: 1,
+                stopReason: "end_turn",
+              },
+              unansweredToolUses: [
+                {
+                  id: "toolu_q",
+                  name: "AskUserQuestion",
+                  input: { questions: [{ question: "QUESTION-SENTINEL?" }] },
+                },
+              ],
+              newerRecordsFollow: false,
+              fileUpdatedAt: 1,
+            },
+          },
+        },
+      });
+
+      const call = (deps.auditService.appendRecord as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+      expect(JSON.parse(call.resultSummary)).toEqual({
+        status: "ok",
+        provider: "claude",
+        messageChars: prose.length,
+        unansweredToolNames: ["AskUserQuestion"],
+      });
+
+      let persisted: unknown[] = [];
+      const store: McpAuditLogStore = {
+        read: () => persisted,
+        write: (records: unknown[]) => {
+          persisted = records;
+        },
+      };
+      const service = new AuditService(
+        () => {},
+        () => ({ auditEnabled: true, auditMaxRecords: 500 }),
+        store
+      );
+      service.appendRecord(call);
+      service.flushNow();
+
+      for (const written of [service.getRecords(), persisted]) {
+        const text = JSON.stringify(written);
+        expect(text).toContain("AskUserQuestion");
+        expect(text).not.toContain("SENTINEL");
+      }
+    });
+  });
+
   describe("bearer register", () => {
     const authA = "Bearer secret-token-aaaa";
     const authB = "Bearer secret-token-bbbb";
@@ -1577,6 +1680,65 @@ describe("HttpLifecycle", () => {
       }
     );
 
+    describe("plugin route", () => {
+      function pluginReq(headers: Record<string, string> = {}): http.IncomingMessage {
+        return {
+          method: "POST",
+          url: "/mcp/plugin/acme.ledger/data",
+          headers: { host: "127.0.0.1:45454", authorization: "Bearer test-api-key", ...headers },
+        } as unknown as http.IncomingMessage;
+      }
+      const invoke = (lc: HttpLifecycle, req: http.IncomingMessage, res: http.ServerResponse) =>
+        (
+          lc as unknown as {
+            handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+          }
+        ).handleRequest(req, res);
+
+      it("hands plugin paths to the plugin handler without consulting orchestration auth", async () => {
+        const deps = fakeDeps();
+        const lc = new HttpLifecycle(deps);
+        lc.setApiKey("test-api-key");
+        (lc as unknown as { port: number }).port = 45454;
+        const handler = { handle: vi.fn(async () => {}), closeAllSessions: vi.fn() };
+        lc.setPluginRouteHandler(handler);
+        const req = pluginReq();
+        const res = { writeHead: vi.fn(), end: vi.fn() } as unknown as http.ServerResponse;
+
+        await invoke(lc, req, res);
+
+        expect(handler.handle).toHaveBeenCalledWith(req, res, expect.any(URL), 45454);
+        expect(res.writeHead).not.toHaveBeenCalled();
+        expect(deps.auditService.recordAuth401).not.toHaveBeenCalled();
+      });
+
+      it("answers 404 when no plugin handler is mounted, even for a valid orchestration bearer", async () => {
+        const deps = fakeDeps();
+        const lc = new HttpLifecycle(deps);
+        lc.setApiKey("test-api-key");
+        (lc as unknown as { port: number }).port = 45454;
+        const res = { writeHead: vi.fn(), end: vi.fn() } as unknown as http.ServerResponse;
+
+        await invoke(lc, pluginReq(), res);
+
+        expect(res.writeHead).toHaveBeenCalledWith(404, expect.anything());
+      });
+
+      it("still applies the Host check before the plugin handler", async () => {
+        const deps = fakeDeps();
+        const lc = new HttpLifecycle(deps);
+        (lc as unknown as { port: number }).port = 45454;
+        const handler = { handle: vi.fn(async () => {}), closeAllSessions: vi.fn() };
+        lc.setPluginRouteHandler(handler);
+        const res = { writeHead: vi.fn(), end: vi.fn() } as unknown as http.ServerResponse;
+
+        await invoke(lc, pluginReq({ host: "evil.example:45454" }), res);
+
+        expect(res.writeHead).toHaveBeenCalledWith(403, expect.anything());
+        expect(handler.handle).not.toHaveBeenCalled();
+      });
+    });
+
     it("returns 401 with WWW-Authenticate: Bearer realm header", async () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
@@ -1633,6 +1795,304 @@ describe("HttpLifecycle", () => {
 
       expect(res.writeHead).toHaveBeenCalledWith(403, expect.anything());
       expect(deps.auditService.recordAuth401).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("session credential binding", () => {
+    // A bearer above `external` stands in for a pane or assistant token: what
+    // matters to the gate is that a session id minted for it is worth more
+    // than the api key presenting it.
+    const API_KEY_AUTH = "Bearer test-api-key";
+    const ELEVATED_AUTH = "Bearer elevated-tok";
+
+    type RequestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+
+    function lifecycle(deps: HttpLifecycleDeps): { lc: HttpLifecycle; handle: RequestHandler } {
+      const lc = new HttpLifecycle(deps);
+      lc.setApiKey("test-api-key");
+      lc.setHelpTokenValidator((token) => (token === "elevated-tok" ? "system" : false));
+      (lc as unknown as { port: number }).port = 45454;
+      const handle = (lc as unknown as { handleRequest: RequestHandler }).handleRequest.bind(lc);
+      return { lc, handle };
+    }
+
+    function request(
+      method: string,
+      url: string,
+      headers: Record<string, string>
+    ): http.IncomingMessage {
+      return {
+        method,
+        url,
+        headers: { host: "127.0.0.1:45454", ...headers },
+      } as unknown as http.IncomingMessage;
+    }
+
+    function recordingRes() {
+      const res = new EventEmitter() as EventEmitter & {
+        writeHead: ReturnType<typeof vi.fn>;
+        write: ReturnType<typeof vi.fn>;
+        end: ReturnType<typeof vi.fn>;
+        headersSent: boolean;
+      };
+      res.writeHead = vi.fn();
+      res.write = vi.fn(() => true);
+      res.end = vi.fn();
+      res.headersSent = false;
+      return res;
+    }
+
+    /** What the client saw: every status/header write and body, in order. */
+    function observed(res: ReturnType<typeof recordingRes>) {
+      return { head: res.writeHead.mock.calls, body: res.end.mock.calls };
+    }
+
+    /**
+     * Open a real SSE session through `handleRequest`, so the binding under
+     * test is the one the production handshake writes, not one the fixture
+     * planted.
+     */
+    async function openSseSession(deps: HttpLifecycleDeps, handle: RequestHandler, auth: string) {
+      const streamRes = recordingRes();
+      await handle(
+        request("GET", "/sse", { authorization: auth }),
+        streamRes as unknown as http.ServerResponse
+      );
+      const [sessionId] = Array.from(deps.sessionStore.sessions.keys());
+      const session = deps.sessionStore.sessions.get(sessionId!)!;
+      const handlePostMessage = vi
+        .spyOn(session.transport, "handlePostMessage")
+        .mockImplementation(async (_req, res) => {
+          res.writeHead(202);
+          res.end("Accepted");
+        });
+      return { sessionId: sessionId!, streamRes, handlePostMessage };
+    }
+
+    function liveHttpSession(deps: HttpLifecycleDeps, sessionId: string, auth: string | null) {
+      const handleRequest = vi.fn().mockResolvedValue(undefined);
+      (deps.sessionStore.httpSessions as Map<string, unknown>).set(sessionId, {
+        transport: { handleRequest },
+        idleTimer: setTimeout(() => {}, 1_000_000),
+      } as never);
+      deps.sessionStore.sessionTierMap.set(sessionId, "system");
+      if (auth !== null) {
+        deps.sessionStore.bindSessionCredential(sessionId, sessionCredentialDigest(auth));
+      }
+      return handleRequest;
+    }
+
+    describe("SSE /messages", () => {
+      it("binds the session to its creator at handshake", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+
+        const { sessionId } = await openSseSession(deps, handle, ELEVATED_AUTH);
+
+        expect(
+          deps.sessionStore.isSessionCredential(sessionId, sessionCredentialDigest(ELEVATED_AUTH))
+        ).toBe(true);
+        expect(
+          deps.sessionStore.isSessionCredential(sessionId, sessionCredentialDigest(API_KEY_AUTH))
+        ).toBe(false);
+      });
+
+      it("refuses an api-key bearer posting into an elevated session and leaves it untouched", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { sessionId, handlePostMessage } = await openSseSession(deps, handle, ELEVATED_AUTH);
+        const res = recordingRes();
+
+        await handle(
+          request("POST", `/messages?sessionId=${sessionId}`, { authorization: API_KEY_AUTH }),
+          res as unknown as http.ServerResponse
+        );
+
+        expect(res.writeHead).toHaveBeenCalledWith(404, { "Content-Type": "text/plain" });
+        expect(res.end).toHaveBeenCalledWith("Session not found");
+        expect(handlePostMessage).not.toHaveBeenCalled();
+        expect(deps.sessionStore.resetIdleTimer).not.toHaveBeenCalled();
+        expect(deps.sessionStore.sessions.has(sessionId)).toBe(true);
+        expect(deps.sessionStore.sessionTierMap.get(sessionId)).toBe("system");
+        expect(
+          deps.sessionStore.isSessionCredential(sessionId, sessionCredentialDigest(ELEVATED_AUTH))
+        ).toBe(true);
+      });
+
+      it("answers a foreign bearer exactly as it answers an unknown session id", async () => {
+        // No oracle: a caller holding a leaked id must not be able to tell
+        // "live but not yours" from "does not exist".
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { sessionId } = await openSseSession(deps, handle, ELEVATED_AUTH);
+        const foreign = recordingRes();
+        const unknown = recordingRes();
+
+        await handle(
+          request("POST", `/messages?sessionId=${sessionId}`, { authorization: API_KEY_AUTH }),
+          foreign as unknown as http.ServerResponse
+        );
+        await handle(
+          request("POST", "/messages?sessionId=never-issued", { authorization: API_KEY_AUTH }),
+          unknown as unknown as http.ServerResponse
+        );
+
+        expect(observed(foreign)).toEqual(observed(unknown));
+      });
+
+      it("admits the creator when it varies the scheme casing and whitespace", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { sessionId, handlePostMessage } = await openSseSession(deps, handle, ELEVATED_AUTH);
+        const res = recordingRes();
+
+        await handle(
+          request("POST", `/messages?sessionId=${sessionId}`, {
+            authorization: "bearer \t elevated-tok  ",
+          }),
+          res as unknown as http.ServerResponse
+        );
+
+        expect(handlePostMessage).toHaveBeenCalledOnce();
+        expect(res.writeHead).toHaveBeenCalledWith(202);
+      });
+
+      it("refuses a live session whose binding row is missing, even for its creator", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { sessionId, handlePostMessage } = await openSseSession(deps, handle, ELEVATED_AUTH);
+        deps.sessionStore.sessionCredentialMap.delete(sessionId);
+        const res = recordingRes();
+
+        await handle(
+          request("POST", `/messages?sessionId=${sessionId}`, { authorization: ELEVATED_AUTH }),
+          res as unknown as http.ServerResponse
+        );
+
+        expect(res.writeHead).toHaveBeenCalledWith(404, { "Content-Type": "text/plain" });
+        expect(handlePostMessage).not.toHaveBeenCalled();
+      });
+
+      it("drops the binding when the stream closes", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const { sessionId, streamRes } = await openSseSession(deps, handle, ELEVATED_AUTH);
+
+        streamRes.emit("close");
+
+        expect(deps.sessionStore.sessions.has(sessionId)).toBe(false);
+        expect(deps.sessionStore.sessionCredentialMap.has(sessionId)).toBe(false);
+      });
+
+      it("drops the binding when the session server fails to connect", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const streamRes = recordingRes();
+        // `SSEServerTransport.start` opens the stream with `writeHead`; failing
+        // it fails `server.connect` after the handshake has already bound.
+        streamRes.writeHead.mockImplementationOnce(() => {
+          throw new Error("socket gone");
+        });
+
+        await expect(
+          handle(
+            request("GET", "/sse", { authorization: ELEVATED_AUTH }),
+            streamRes as unknown as http.ServerResponse
+          )
+        ).rejects.toThrow("socket gone");
+
+        expect(deps.sessionStore.sessions.size).toBe(0);
+        expect(deps.sessionStore.sessionCredentialMap.size).toBe(0);
+      });
+    });
+
+    describe("Streamable /mcp", () => {
+      it.each(["POST", "GET", "DELETE"])(
+        "refuses an api-key bearer's %s on an elevated session with the unknown-session 404",
+        async (method) => {
+          const deps = fakeDeps();
+          const { handle } = lifecycle(deps);
+          const handleRequest = liveHttpSession(deps, "elevated", ELEVATED_AUTH);
+          const foreign = recordingRes();
+          const unknown = recordingRes();
+
+          await handle(
+            request(method, "/mcp", { authorization: API_KEY_AUTH, "mcp-session-id": "elevated" }),
+            foreign as unknown as http.ServerResponse
+          );
+          await handle(
+            request(method, "/mcp", {
+              authorization: API_KEY_AUTH,
+              "mcp-session-id": "never-issued",
+            }),
+            unknown as unknown as http.ServerResponse
+          );
+
+          expect(foreign.writeHead).toHaveBeenCalledWith(404, {
+            "Content-Type": "application/json",
+          });
+          expect(observed(foreign)).toEqual(observed(unknown));
+          expect(handleRequest).not.toHaveBeenCalled();
+          expect(deps.sessionStore.resetHttpIdleTimer).not.toHaveBeenCalled();
+          expect(deps.sessionStore.httpSessions.has("elevated")).toBe(true);
+          expect(deps.sessionStore.sessionTierMap.get("elevated")).toBe("system");
+        }
+      );
+
+      it("checks ownership before the workspace selector, so a mismatch cannot probe liveness", async () => {
+        // The selector checks answer 400 for a live session and would
+        // otherwise distinguish it from an unknown id.
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const handleRequest = liveHttpSession(deps, "bound", API_KEY_AUTH);
+        deps.sessionStore.sessionWorkspaceMap.set("bound", WS_A);
+        const res = recordingRes();
+
+        await handle(
+          request("POST", "/mcp", {
+            authorization: ELEVATED_AUTH,
+            "mcp-session-id": "bound",
+            "daintree-workspace-id": WS_B,
+          }),
+          res as unknown as http.ServerResponse
+        );
+
+        expect(res.writeHead).toHaveBeenCalledWith(404, { "Content-Type": "application/json" });
+        expect(handleRequest).not.toHaveBeenCalled();
+      });
+
+      it("admits the creator when it varies the scheme casing and whitespace", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const handleRequest = liveHttpSession(deps, "elevated", ELEVATED_AUTH);
+        const res = recordingRes();
+
+        await handle(
+          request("POST", "/mcp", {
+            authorization: "BEARER   elevated-tok\t",
+            "mcp-session-id": "elevated",
+          }),
+          res as unknown as http.ServerResponse
+        );
+
+        expect(handleRequest).toHaveBeenCalledOnce();
+        expect(res.writeHead).not.toHaveBeenCalled();
+      });
+
+      it("refuses a live session whose binding row is missing, even for its creator", async () => {
+        const deps = fakeDeps();
+        const { handle } = lifecycle(deps);
+        const handleRequest = liveHttpSession(deps, "unbound", null);
+        const res = recordingRes();
+
+        await handle(
+          request("DELETE", "/mcp", { authorization: ELEVATED_AUTH, "mcp-session-id": "unbound" }),
+          res as unknown as http.ServerResponse
+        );
+
+        expect(res.writeHead).toHaveBeenCalledWith(404, { "Content-Type": "application/json" });
+        expect(handleRequest).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -2061,7 +2521,7 @@ describe("HttpLifecycle", () => {
         await sessionDeps.requestManifest();
         await sessionDeps.dispatchAction("terminal.list", {}, false);
 
-        expect(deps.requestManifestForWorkspace).toHaveBeenCalledWith(WS_MISSING);
+        expect(deps.requestManifestForWorkspace).toHaveBeenCalledWith(WS_MISSING, undefined);
         expect(deps.requestManifest).not.toHaveBeenCalled();
         expect(deps.dispatchAction).not.toHaveBeenCalled();
       });
@@ -2082,6 +2542,9 @@ describe("HttpLifecycle", () => {
           transport: { handleRequest: vi.fn().mockResolvedValue(undefined) },
           idleTimer: setTimeout(() => {}, 1_000_000),
         } as never);
+        // These requests carry no Authorization header, so the session is
+        // owned by the empty credential — the loopback no-key path.
+        deps.sessionStore.bindSessionCredential(sessionId, sessionCredentialDigest(""));
         if (workspaceId) deps.sessionStore.sessionWorkspaceMap.set(sessionId, workspaceId);
       }
 
@@ -2227,16 +2690,20 @@ describe("HttpLifecycle", () => {
         await sessionDeps.requestManifest();
         await sessionDeps.dispatchAction("terminal.list", {}, false);
 
-        expect(deps.requestManifestForWorkspace).toHaveBeenCalledWith(WS_A);
+        // No launch view to prefer: only an agent pane's binding carries one.
+        expect(deps.requestManifestForWorkspace).toHaveBeenCalledWith(WS_A, undefined);
         // Only external sessions may bind a workspace — a selector from a
         // pinned bearer is refused at handshake — so the origin threaded here
         // is always "external" (#11808).
+        // Nothing beyond the route: no replayed context, preferred view, or
+        // caller identity — those are an agent pane's (#12486).
         expect(deps.dispatchActionForWorkspace).toHaveBeenCalledWith(
           WS_A,
           "terminal.list",
           {},
           false,
-          "external"
+          "external",
+          undefined
         );
         // Never the focus-following path — that is the retargeting this removes.
         expect(deps.dispatchAction).not.toHaveBeenCalled();
@@ -2291,8 +2758,391 @@ describe("HttpLifecycle", () => {
         const lc = new HttpLifecycle(deps);
 
         expect(sessionDepsFor(lc, "bound", { workspaceId: WS_A }).getCachedManifest()).toEqual([]);
-        expect(deps.getCachedManifestForWorkspace).toHaveBeenCalledWith(WS_A);
+        expect(deps.getCachedManifestForWorkspace).toHaveBeenCalledWith(WS_A, undefined);
         expect(deps.getCachedManifest).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("agent-pane launch binding (#12486)", () => {
+      const PANE_TOKEN = "pane-token-9f3a";
+      const PANE_AUTH = `Bearer ${PANE_TOKEN}`;
+      const LAUNCH_CONTEXT = { projectId: WS_A, activeWorktreeId: "wt-7" };
+
+      /**
+       * A lifecycle that authenticates PANE_TOKEN at a ladder tier, as the
+       * composite validator does for every pane bearer, and binds it to WS_A.
+       */
+      function paneLifecycle(
+        deps: HttpLifecycleDeps,
+        binding: import("../shared.js").PaneWorkspaceBinding | null = {
+          workspaceId: WS_A,
+          launchWebContentsId: 42,
+          actionContext: LAUNCH_CONTEXT,
+        }
+      ) {
+        const lc = new HttpLifecycle(deps);
+        lc.setApiKey("test-api-key");
+        lc.setHelpTokenValidator((token) => (token === PANE_TOKEN ? "action" : false));
+        const paneResolver = vi.fn((token: string) => (token === PANE_TOKEN ? binding : null));
+        lc.setPaneWorkspaceBindingResolver(paneResolver);
+        (lc as unknown as { port: number }).port = 45454;
+        return { lc, paneResolver };
+      }
+
+      /** Open a real SSE session — the transport Claude panes connect over. */
+      async function openSse(lc: HttpLifecycle, deps: HttpLifecycleDeps, auth: string) {
+        const res = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        res.writeHead = vi.fn();
+        res.write = vi.fn(() => true);
+        res.end = vi.fn();
+        res.headersSent = false;
+        await (
+          lc as unknown as {
+            handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+          }
+        ).handleRequest(
+          {
+            method: "GET",
+            url: "/sse",
+            headers: { host: "127.0.0.1:45454", authorization: auth },
+          } as unknown as http.IncomingMessage,
+          res as unknown as http.ServerResponse
+        );
+        const [sessionId] = Array.from(deps.sessionStore.sessions.keys());
+        return sessionId!;
+      }
+
+      /**
+       * The session deps the production handshake itself built, not a rebuilt
+       * copy: a handshake that stopped passing the pane binding through would
+       * leave a rebuilt copy routing correctly while the real session followed
+       * focus.
+       */
+      async function openSseWithDeps(lc: HttpLifecycle, deps: HttpLifecycleDeps, auth: string) {
+        const build = vi.spyOn(
+          lc as unknown as {
+            buildSessionServerDeps: (
+              ...a: unknown[]
+            ) => import("../sessionServer.js").SessionServerDeps;
+          },
+          "buildSessionServerDeps"
+        );
+        const sessionId = await openSse(lc, deps, auth);
+        const sessionDeps = build.mock.results[0]!
+          .value as import("../sessionServer.js").SessionServerDeps;
+        build.mockRestore();
+        return { sessionId, sessionDeps };
+      }
+
+      it("binds a pane's /sse session to its launch workspace, as a non-renderer-owned origin", async () => {
+        const deps = bindingDeps();
+        const { lc } = paneLifecycle(deps);
+
+        const sessionId = await openSse(lc, deps, PANE_AUTH);
+
+        expect(deps.sessionStore.sessionWorkspaceMap.get(sessionId)).toBe(WS_A);
+        expect(deps.sessionStore.sessionContextMap.get(sessionId)).toEqual(LAUNCH_CONTEXT);
+        // Routing only. The session is still an external-origin bearer at the
+        // tier it was minted with, so nothing it may call has changed (#12407).
+        expect(deps.sessionStore.getOrigin(sessionId)).toBe("external");
+        expect(deps.sessionStore.isRendererOwnedOrigin(sessionId)).toBe(false);
+        expect(deps.sessionStore.sessionTierMap.get(sessionId)).toBe("action");
+        // Not a WebContents pin: that route dies with the view for good.
+        expect(deps.sessionStore.sessionWebContentsMap.has(sessionId)).toBe(false);
+      });
+
+      it("routes the pane's calls to its workspace with its launch context and view, never focus", async () => {
+        const deps = bindingDeps({
+          requestManifestForWorkspace: vi.fn().mockResolvedValue([]),
+          dispatchActionForWorkspace: vi.fn().mockResolvedValue({ result: { ok: true } }),
+          getCachedManifestForWorkspace: vi.fn(() => []),
+        });
+        const { lc } = paneLifecycle(deps);
+        const { sessionDeps } = await openSseWithDeps(lc, deps, PANE_AUTH);
+
+        await sessionDeps.requestManifest();
+        await sessionDeps.dispatchAction("worktree.getCurrent", {}, false);
+        sessionDeps.getCachedManifest();
+
+        expect(deps.requestManifestForWorkspace).toHaveBeenCalledWith(WS_A, 42);
+        expect(deps.dispatchActionForWorkspace).toHaveBeenCalledWith(
+          WS_A,
+          "worktree.getCurrent",
+          {},
+          false,
+          "external",
+          { contextOverride: LAUNCH_CONTEXT, preferredWebContentsId: 42 }
+        );
+        expect(deps.getCachedManifestForWorkspace).toHaveBeenCalledWith(WS_A, 42);
+        expect(deps.dispatchAction).not.toHaveBeenCalled();
+        expect(deps.requestManifest).not.toHaveBeenCalled();
+        expect(deps.getCachedManifest).not.toHaveBeenCalled();
+        // The binding the client can read back names the pane's workspace.
+        expect(sessionDeps.workspaceBinding?.workspaceId).toBe(WS_A);
+        expect(sessionDeps.preferredWebContentsId).toBe(42);
+      });
+
+      it("keeps the launch context on a call that outlives its session's teardown", async () => {
+        // A call awaiting its manifest can resume after the transport closed and
+        // `clearSessionBinding` ran. It must still act on the pane's worktree,
+        // not drop the context and act on the view's current selection.
+        const deps = bindingDeps({
+          dispatchActionForWorkspace: vi.fn().mockResolvedValue({ result: { ok: true } }),
+        });
+        const { lc } = paneLifecycle(deps);
+        const { sessionId, sessionDeps } = await openSseWithDeps(lc, deps, PANE_AUTH);
+
+        deps.sessionStore.clearSessionBinding(sessionId);
+        await sessionDeps.dispatchAction("git.stageAll", {}, false);
+
+        expect(deps.dispatchActionForWorkspace).toHaveBeenCalledWith(
+          WS_A,
+          "git.stageAll",
+          {},
+          false,
+          "external",
+          { contextOverride: LAUNCH_CONTEXT, preferredWebContentsId: 42 }
+        );
+      });
+
+      it("passes the launch view to a reveal, so it switches the window the pane's runs are in", async () => {
+        const revealOwnedRun = vi.fn().mockResolvedValue({
+          envelope: { result: { ok: true, result: null } },
+          raised: true,
+        });
+        const deps = bindingDeps({ revealOwnedRun });
+        const { lc } = paneLifecycle(deps);
+        const { sessionDeps } = await openSseWithDeps(lc, deps, PANE_AUTH);
+
+        await sessionDeps.revealOwnedRun!(WS_A, "pilot.openRun", { runId: "t1" }, false);
+
+        expect(revealOwnedRun).toHaveBeenCalledWith(
+          WS_A,
+          "pilot.openRun",
+          { runId: "t1" },
+          false,
+          "external",
+          42
+        );
+      });
+
+      it("binds identity-only when the launch workspace has no live view at handshake", async () => {
+        // An evicted launch view is a route that comes back, not a reason to
+        // refuse the pane — or to let it follow focus meanwhile.
+        const deps = bindingDeps();
+        const { lc } = paneLifecycle(deps, { workspaceId: WS_MISSING });
+
+        const sessionId = await openSse(lc, deps, PANE_AUTH);
+
+        expect(deps.sessionStore.sessionWorkspaceMap.get(sessionId)).toBe(WS_MISSING);
+        expect(deps.sessionStore.sessionContextMap.has(sessionId)).toBe(false);
+      });
+
+      it("binds the /mcp handshake the same way", async () => {
+        const deps = bindingDeps();
+        const { lc } = paneLifecycle(deps);
+        // The SDK rejects the stub request and the sweep reclaims the session,
+        // so observe the production writes as they happen.
+        const writes: Record<string, unknown[]> = { workspace: [], origin: [], context: [] };
+        const watch = <V>(map: Map<string, V>, key: string) => {
+          const realSet = map.set.bind(map);
+          map.set = (id: string, value: V) => {
+            writes[key]!.push(value);
+            return realSet(id, value);
+          };
+        };
+        watch(deps.sessionStore.sessionWorkspaceMap, "workspace");
+        watch(deps.sessionStore.sessionOriginMap, "origin");
+        watch(deps.sessionStore.sessionContextMap, "context");
+
+        await handshakeHandler(lc)(
+          fakeReq({ authorization: PANE_AUTH }),
+          fakeRes(),
+          new URL("http://127.0.0.1:45454/mcp")
+        );
+
+        expect(writes).toEqual({
+          workspace: [WS_A],
+          origin: ["external"],
+          context: [LAUNCH_CONTEXT],
+        });
+      });
+
+      it("refuses a workspace selector from a pane — its target is not the client's to choose", async () => {
+        const deps = bindingDeps();
+        const { lc, paneResolver } = paneLifecycle(deps);
+        const res = fakeRes();
+
+        await handshakeHandler(lc)(
+          fakeReq({ authorization: PANE_AUTH, "daintree-workspace-id": WS_B }),
+          res,
+          new URL("http://127.0.0.1:45454/mcp")
+        );
+
+        expect(parseRejection(res).error.data.code).toBe("WORKSPACE_SELECTOR_NOT_ALLOWED");
+        expect(paneResolver).not.toHaveBeenCalled();
+        expect(deps.sessionStore.sessionWorkspaceMap.size).toBe(0);
+      });
+
+      it("never consults the pane binding for a bearer the assistant resolver pins", async () => {
+        // Pin precedence keeps the two binding models disjoint: an assistant
+        // bearer routes by its WebContents, with its own renderer-owned origin.
+        const deps = bindingDeps();
+        const { lc, paneResolver } = paneLifecycle(deps);
+        lc.setAssistantPaneWebContentsResolver((token) => (token === PANE_TOKEN ? 77 : null));
+
+        const sessionId = await openSse(lc, deps, PANE_AUTH);
+
+        expect(paneResolver).not.toHaveBeenCalled();
+        expect(deps.sessionStore.getOrigin(sessionId)).toBe("assistant-pane");
+        expect(deps.sessionStore.sessionWebContentsMap.get(sessionId)).toBe(77);
+        expect(deps.sessionStore.sessionWorkspaceMap.has(sessionId)).toBe(false);
+      });
+
+      it("leaves an api-key session with no selector following focus", async () => {
+        const deps = bindingDeps();
+        const { lc } = paneLifecycle(deps);
+
+        const sessionId = await openSse(lc, deps, "Bearer test-api-key");
+
+        expect(deps.sessionStore.sessionWorkspaceMap.has(sessionId)).toBe(false);
+        expect(deps.sessionStore.sessionContextMap.has(sessionId)).toBe(false);
+        expect(deps.sessionStore.getOrigin(sessionId)).toBe("external");
+      });
+    });
+
+    describe("pane-bearer ownership principal (#12487)", () => {
+      const PANE_TOKEN = "pane-token-5c1e";
+      const PANE_AUTH = `Bearer ${PANE_TOKEN}`;
+
+      function principalLifecycle(
+        deps: HttpLifecycleDeps,
+        principal: string | null = "principal-p"
+      ) {
+        const lc = new HttpLifecycle(deps);
+        lc.setApiKey("test-api-key");
+        lc.setHelpTokenValidator((token) => (token === PANE_TOKEN ? "action" : false));
+        const resolver = vi.fn((token: string) => (token === PANE_TOKEN ? principal : null));
+        lc.setPaneOwnershipPrincipalResolver(resolver);
+        (lc as unknown as { port: number }).port = 45454;
+        return { lc, resolver };
+      }
+
+      async function openSse(lc: HttpLifecycle, deps: HttpLifecycleDeps, auth: string) {
+        const before = new Set(deps.sessionStore.sessions.keys());
+        const res = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        res.writeHead = vi.fn();
+        res.write = vi.fn(() => true);
+        res.end = vi.fn();
+        res.headersSent = false;
+        await (
+          lc as unknown as {
+            handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+          }
+        ).handleRequest(
+          {
+            method: "GET",
+            url: "/sse",
+            headers: { host: "127.0.0.1:45454", authorization: auth },
+          } as unknown as http.IncomingMessage,
+          res as unknown as http.ServerResponse
+        );
+        const sessionId = Array.from(deps.sessionStore.sessions.keys()).find(
+          (id) => !before.has(id)
+        );
+        return sessionId!;
+      }
+
+      it("binds a pane's /sse session to the principal its bearer resolves to", async () => {
+        const deps = bindingDeps();
+        const { lc, resolver } = principalLifecycle(deps);
+
+        const sessionId = await openSse(lc, deps, PANE_AUTH);
+
+        const ledger = deps.sessionStore.resourceOwnership;
+        expect(resolver).toHaveBeenCalledWith(PANE_TOKEN);
+        expect(ledger.isPrincipalOwner(ledger.ownerOf(sessionId))).toBe(true);
+      });
+
+      it("gives a session that replaces a torn-down one on the same bearer its records", async () => {
+        const deps = bindingDeps();
+        const { lc } = principalLifecycle(deps);
+        const ledger = deps.sessionStore.resourceOwnership;
+        const first = await openSse(lc, deps, PANE_AUTH);
+        ledger.record(ledger.ownerOf(first), [{ kind: "terminal", id: "terminal-1" }]);
+
+        deps.sessionStore.sessions.get(first)!.transport.onclose?.();
+        const second = await openSse(lc, deps, PANE_AUTH);
+
+        expect(second).not.toBe(first);
+        expect(ledger.ownerOf(first)).toBe(first);
+        expect(ledger.owns(ledger.ownerOf(second), "terminal", "terminal-1")).toBe(true);
+      });
+
+      it("binds the /mcp handshake to the principal the same way", async () => {
+        const deps = bindingDeps();
+        const { lc } = principalLifecycle(deps);
+        // The SDK rejects the stub request and the sweep reclaims the session,
+        // so observe the production write as it happens.
+        const bind = vi.spyOn(deps.sessionStore.resourceOwnership, "bindPrincipal");
+
+        await handshakeHandler(lc)(
+          fakeReq({ authorization: PANE_AUTH }),
+          fakeRes(),
+          new URL("http://127.0.0.1:45454/mcp")
+        );
+
+        expect(bind).toHaveBeenCalledExactlyOnceWith(expect.any(String), "principal-p");
+      });
+
+      it("binds an assistant-pane bearer too — it is a pane token, revoked on the same path", async () => {
+        const deps = bindingDeps();
+        const { lc } = principalLifecycle(deps);
+        lc.setAssistantPaneWebContentsResolver((token) => (token === PANE_TOKEN ? 77 : null));
+
+        const sessionId = await openSse(lc, deps, PANE_AUTH);
+
+        const ledger = deps.sessionStore.resourceOwnership;
+        expect(deps.sessionStore.getOrigin(sessionId)).toBe("assistant-pane");
+        expect(ledger.isPrincipalOwner(ledger.ownerOf(sessionId))).toBe(true);
+      });
+
+      it("leaves an api-key session owning its records itself", async () => {
+        const deps = bindingDeps();
+        const { lc, resolver } = principalLifecycle(deps);
+
+        const sessionId = await openSse(lc, deps, "Bearer test-api-key");
+
+        expect(resolver).toHaveBeenCalledWith("test-api-key");
+        expect(deps.sessionStore.resourceOwnership.ownerOf(sessionId)).toBe(sessionId);
+      });
+
+      it("writes no session state when the principal resolver throws", async () => {
+        // Resolved ahead of every map write, like the workspace binding, so a
+        // failing lookup leaves nothing for the reaper to miss.
+        const deps = bindingDeps();
+        const { lc } = principalLifecycle(deps);
+        lc.setPaneOwnershipPrincipalResolver(() => {
+          throw new Error("resolver failed");
+        });
+
+        await expect(openSse(lc, deps, PANE_AUTH)).rejects.toThrow("resolver failed");
+
+        expect(deps.sessionStore.sessions.size).toBe(0);
+        expect(deps.sessionStore.sessionTierMap.size).toBe(0);
+        expect(deps.sessionStore.sessionOriginMap.size).toBe(0);
+        expect(deps.sessionStore.sessionCredentialMap.size).toBe(0);
+      });
+
+      it("keeps a bearer that resolves to no principal session-scoped", async () => {
+        // A pane token revoked between the auth gate and the handshake resolves
+        // to nothing, and the session falls back to the api-key behaviour.
+        const deps = bindingDeps();
+        const { lc } = principalLifecycle(deps, null);
+
+        const sessionId = await openSse(lc, deps, PANE_AUTH);
+
+        expect(deps.sessionStore.resourceOwnership.ownerOf(sessionId)).toBe(sessionId);
       });
     });
 

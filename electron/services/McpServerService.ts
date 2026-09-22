@@ -21,21 +21,34 @@ import type {
   McpRevokeSessionGrantsResult,
   McpRuntimeSnapshot,
   McpRuntimeState,
+  TerminalAdoptionEntry,
+  TerminalAdoptionRefusal,
+  TerminalAdoptionResult,
   TurnOutcomeClass,
 } from "../../shared/types/ipc/mcpServer.js";
 import { SessionStore } from "./mcp-server/sessionStore.js";
-import { AuditService } from "./mcp-server/auditLog.js";
+import { principalOwnerKey } from "./mcp-server/resourceOwnership.js";
+import type { TerminalAdoptionRecord } from "./mcp-server/terminalAdoption.js";
+import { isTierPermitted } from "./mcp-server/tierAuth.js";
+import type { OrchestratorPaneIdentity } from "./McpPaneConfigService.js";
+import { AuditService, type McpAuditDiagnosticsSnapshot } from "./mcp-server/auditLog.js";
 import { TurnOutcomeService } from "./mcp-server/turnOutcomeLog.js";
 import { createRendererBridge } from "./mcp-server/rendererBridge.js";
 import { handleWaitUntilIdle, handleWaitUntilIdleBatch } from "./mcp-server/waitUntilIdle.js";
 import { handleSkillsSearch, handleSkillsLoad } from "./mcp-server/skills.js";
 import { handleProjectRunCheck } from "./mcp-server/projectCheck.js";
 import { handleTerminalGetStatusViewless } from "./mcp-server/terminalStatus.js";
+import { handleTerminalReadLastMessageOwned } from "./mcp-server/terminalLastMessage.js";
+import { TerminalWatchService, paneWatchKey } from "./mcp-server/terminalWatch.js";
+import type { PaneWatchState } from "../../shared/types/terminalWatch.js";
+import { broadcastToProjectRenderers } from "../ipc/utils.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
 import { HttpLifecycle } from "./mcp-server/httpLifecycle.js";
 import { AbusePolicy } from "./mcp-server/abusePolicy.js";
 import { WorkspaceViewLeaseRegistry } from "./mcp-server/workspaceViewLease.js";
-import { setMcpServerServiceRef } from "../window/serviceRefs.js";
+import { createPluginMcpRoute } from "./pluginAgentMcp/pluginMcpRoute.js";
+import type * as PluginServiceModule from "./PluginService.js";
+import { getPtyClient, setMcpServerServiceRef } from "../window/serviceRefs.js";
 import type {
   PendingRequest,
   DispatchEnvelope,
@@ -45,10 +58,29 @@ import type {
   HelpSessionIdResolver,
   AssistantPaneWebContentsResolver,
   AssistantPaneActionContextResolver,
+  PaneWorkspaceBindingResolver,
+  PaneOwnershipPrincipalResolver,
+  PaneTerminalResolver,
+  HelpSessionTerminalResolver,
 } from "./mcp-server/shared.js";
 import type { ActionManifestEntry } from "../../shared/types/actions.js";
 import { events } from "./events.js";
 import { wireMcpServerToConnectivityRegistry } from "./connectivity/index.js";
+
+// PluginService is loaded lazily, like every other main-side caller: it pulls in
+// the whole plugin host, and only a request on the plugin MCP route needs it.
+type PluginServiceSingleton = typeof PluginServiceModule.pluginService;
+let pluginServicePromise: Promise<PluginServiceSingleton> | null = null;
+function loadPluginService(): Promise<PluginServiceSingleton> {
+  pluginServicePromise ??= import("./PluginService.js").then(
+    (m) => m.pluginService,
+    (err: unknown) => {
+      pluginServicePromise = null;
+      throw err;
+    }
+  );
+  return pluginServicePromise;
+}
 
 // Re-export types for backward compatibility with existing importers.
 export type { HelpTokenValidator } from "./mcp-server/shared.js";
@@ -63,6 +95,8 @@ export class McpServerService {
   private readonly auditService: AuditService;
   private readonly turnOutcomeService: TurnOutcomeService;
   private readonly httpLifecycle: HttpLifecycle;
+  /** Terminal watches and the pane wakes they cause (#12491). */
+  private readonly terminalWatch: TerminalWatchService;
   /**
    * Resolver injected by `HelpSessionService` after construction. Returns
    * the help-session id bound to a terminal id, or null when the terminal
@@ -177,6 +211,9 @@ export class McpServerService {
 
     const offTrashed = events.on("terminal:trashed", (payload) => {
       this.turnOutcomeService.dropTerminal(payload.id);
+      // Trashing is the user putting the terminal away; restoring it later
+      // does not restore a hand-over they never repeated (#12490).
+      this.sessionStore.terminalAdoption.release(payload.id);
     });
     this.persistentListeners.push(offTrashed);
 
@@ -199,6 +236,24 @@ export class McpServerService {
       () => this._registry,
       this.viewLeases
     );
+
+    // Subscribes to the bus and the pty-host only while a pane holds a watch.
+    this.terminalWatch = new TerminalWatchService({
+      getPtyClient: () => getPtyClient(),
+      onStateChanged: (listener) =>
+        events.on("agent:state-changed", (payload) => listener(payload)),
+      onKilled: (listener) =>
+        events.on("agent:killed", (payload) => {
+          if (payload.terminalId) listener(payload.terminalId);
+        }),
+      onTrashed: (listener) => events.on("terminal:trashed", (payload) => listener(payload.id)),
+      isEnabled: () => this.isEnabled() && this.isPaneWakeEnabled(),
+      publish: (projectId, state) =>
+        broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
+          name: "terminal:watch-state",
+          payload: state,
+        }),
+    });
 
     this.httpLifecycle = new HttpLifecycle({
       sessionStore: this.sessionStore,
@@ -225,21 +280,43 @@ export class McpServerService {
           contextOverride,
           sessionOrigin
         ),
-      requestManifestForWorkspace: (workspaceId) =>
-        this.bridge.requestManifestForWorkspace(workspaceId),
-      dispatchActionForWorkspace: (workspaceId, actionId, args, confirmed, sessionOrigin) =>
+      requestManifestForWorkspace: (workspaceId, preferredWebContentsId) =>
+        this.bridge.requestManifestForWorkspace(workspaceId, preferredWebContentsId),
+      dispatchActionForWorkspace: (
+        workspaceId,
+        actionId,
+        args,
+        confirmed,
+        sessionOrigin,
+        options
+      ) =>
         this.bridge.dispatchActionForWorkspace(
           workspaceId,
           actionId,
           args,
           confirmed,
-          sessionOrigin
+          sessionOrigin,
+          options
         ),
       // Deliberately not this session's own route (#12315): a reveal runs in
       // the view that is being replaced, in the window that already holds the
       // destination workspace.
-      revealOwnedRun: (workspaceId, actionId, args, confirmed, sessionOrigin) =>
-        this.bridge.revealOwnedRun(workspaceId, actionId, args, confirmed, sessionOrigin),
+      revealOwnedRun: (
+        workspaceId,
+        actionId,
+        args,
+        confirmed,
+        sessionOrigin,
+        preferredWebContentsId
+      ) =>
+        this.bridge.revealOwnedRun(
+          workspaceId,
+          actionId,
+          args,
+          confirmed,
+          sessionOrigin,
+          preferredWebContentsId
+        ),
       resolveWorkspaceBinding: (workspaceId) => this.bridge.resolveWorkspaceBinding(workspaceId),
       handleWaitUntilIdle: (rawArgs, signal, options) =>
         handleWaitUntilIdle(rawArgs, signal, options),
@@ -250,10 +327,16 @@ export class McpServerService {
       handleProjectRunCheck: (rawArgs, signal) => handleProjectRunCheck(rawArgs, signal),
       handleTerminalGetStatusViewless: (rawArgs, workspaceId) =>
         handleTerminalGetStatusViewless(rawArgs, workspaceId),
+      handleTerminalReadLastMessageOwned: (terminalId, options, signal) =>
+        handleTerminalReadLastMessageOwned(terminalId, options, signal),
+      // The pty-host's own spawn tracking spans every view, which is what a
+      // collision check needs: a panel store only knows its own (#12407).
+      isTerminalIdInUse: (terminalId) => getPtyClient()?.hasTerminal(terminalId) ?? false,
+      terminalWatch: this.terminalWatch,
       getCachedManifest: () => this.bridge.getCachedManifest(),
       getCachedManifestForWebContents: (id) => this.bridge.getCachedManifestForWebContents(id),
-      getCachedManifestForWorkspace: (workspaceId) =>
-        this.bridge.getCachedManifestForWorkspace(workspaceId),
+      getCachedManifestForWorkspace: (workspaceId, preferredWebContentsId) =>
+        this.bridge.getCachedManifestForWorkspace(workspaceId, preferredWebContentsId),
       clearCachedManifest: () => this.bridge.clearCache(),
       cleanupListeners: this.cleanupListeners,
       pendingManifests: this.pendingManifests,
@@ -263,6 +346,15 @@ export class McpServerService {
       emitRuntimeStateChange: () => this.emitRuntimeStateChange(),
       setConfig: (patch) => this.persistConfig(patch),
     });
+
+    this.httpLifecycle.setPluginRouteHandler(
+      createPluginMcpRoute({
+        isPluginLoaded: async (pluginInstanceId) =>
+          (await loadPluginService()).hasPlugin(pluginInstanceId),
+        activatePlugin: async (pluginInstanceId) =>
+          (await loadPluginService()).activatePlugin(pluginInstanceId),
+      })
+    );
 
     // Wire the live turn-outcome alert push now that both collaborators exist
     // (#10018). The service classifies `agent-stuck` / `reasoning-loop` and
@@ -326,6 +418,192 @@ export class McpServerService {
 
   setAssistantPaneActionContextResolver(resolver: AssistantPaneActionContextResolver | null): void {
     this.httpLifecycle.setAssistantPaneActionContextResolver(resolver);
+  }
+
+  setPaneWorkspaceBindingResolver(resolver: PaneWorkspaceBindingResolver | null): void {
+    this.httpLifecycle.setPaneWorkspaceBindingResolver(resolver);
+  }
+
+  setPaneOwnershipPrincipalResolver(resolver: PaneOwnershipPrincipalResolver | null): void {
+    this.httpLifecycle.setPaneOwnershipPrincipalResolver(resolver);
+  }
+
+  setPaneTerminalResolver(resolver: PaneTerminalResolver | null): void {
+    this.httpLifecycle.setPaneTerminalResolver(resolver);
+  }
+
+  setHelpSessionTerminalResolver(resolver: HelpSessionTerminalResolver | null): void {
+    this.httpLifecycle.setHelpSessionTerminalResolver(resolver);
+  }
+
+  /**
+   * Drop every ownership record a revoked pane bearer held (#12487), the
+   * hand-overs it held (#12490), and the watches it registered (#12491).
+   * Called by `McpPaneConfigService` in the same step as the revocation
+   * itself.
+   */
+  revokeOwnershipPrincipal(principal: string): void {
+    this.sessionStore.resourceOwnership.revokePrincipal(principal);
+    // A relaunched pane gets a new bearer, so a terminal handed to the old one
+    // is not silently handed to the new one (#12490).
+    this.sessionStore.terminalAdoption.revokePrincipal(principal);
+    this.terminalWatch.revokeOwner(paneWatchKey(principal));
+  }
+
+  /**
+   * Hand a running terminal to an orchestrating agent pane (#12490).
+   *
+   * Reached only over the renderer's IPC — never an action and never an MCP
+   * tool — so the only thing that can start one is the user, in the UI. An
+   * agent has no way to ask for a hand-over, and so no way to nag its way
+   * through one.
+   *
+   * `orchestrator` is the pane's live bearer identity, resolved by the caller
+   * from the pane config service with no await before this runs, or null when
+   * the pane holds none. `callerWorkspaceId` is the project of the view the
+   * user acted in, when main could resolve it.
+   */
+  adoptTerminal(request: {
+    terminalId: string;
+    orchestratorPaneId: string;
+    orchestrator: OrchestratorPaneIdentity | null;
+    callerWorkspaceId?: string;
+  }): TerminalAdoptionResult {
+    const { terminalId, orchestratorPaneId, orchestrator, callerWorkspaceId } = request;
+    const refuse = (reason: TerminalAdoptionRefusal): TerminalAdoptionResult => ({
+      status: "refused",
+      reason,
+    });
+    if (terminalId === orchestratorPaneId) return refuse("self");
+    if (orchestrator === null || !canDriveTerminals(orchestrator)) {
+      return refuse("not-orchestrator");
+    }
+    const ptyClient = getPtyClient();
+    if (!ptyClient?.hasTerminal(terminalId)) return refuse("terminal-gone");
+    // An orchestrator's calls land in the workspace its pane was launched in
+    // (#12486), so a terminal anywhere else would be handed over in name only.
+    const terminalWorkspaceId = ptyClient.getTerminalProjectId(terminalId) ?? undefined;
+    const workspaces = [terminalWorkspaceId, orchestrator.workspaceId, callerWorkspaceId].filter(
+      (id): id is string => id !== undefined
+    );
+    if (new Set(workspaces).size > 1) return refuse("other-project");
+    // One driver per terminal: whoever launched it can already type into it.
+    const creator = this.sessionStore.resourceOwnership.creatorOf("terminal", terminalId);
+    if (creator !== undefined) {
+      return refuse(
+        creator === principalOwnerKey(orchestrator.principalId)
+          ? "launched-by-orchestrator"
+          : "launched-by-another"
+      );
+    }
+    const workspaceId = workspaces[0];
+    const launchGeneration = ptyClient.getLaunchGeneration(terminalId);
+    const outcome = this.sessionStore.terminalAdoption.adopt({
+      terminalId,
+      orchestratorPaneId,
+      principalId: orchestrator.principalId,
+      ...(workspaceId !== undefined ? { workspaceId } : {}),
+      ...(launchGeneration !== null ? { launchGeneration } : {}),
+    });
+    if (!outcome.ok) {
+      return { status: "refused", reason: "already-handed", heldByPaneId: outcome.heldByPaneId };
+    }
+    return { status: "handed-over", adoption: toTerminalAdoptionEntry(outcome.record) };
+  }
+
+  /**
+   * The panes the hand-over menu may offer: those whose bearer can submit
+   * input and whose PTY the host is still tracking.
+   */
+  filterOrchestratorPanes(
+    panes: ReadonlyArray<{ paneId: string } & OrchestratorPaneIdentity>
+  ): string[] {
+    const ptyClient = getPtyClient();
+    return panes
+      .filter((pane) => canDriveTerminals(pane) && ptyClient?.hasTerminal(pane.paneId) === true)
+      .map((pane) => pane.paneId);
+  }
+
+  /**
+   * End a hand-over when the process the user handed over has exited (#12490).
+   * The exit carries no launch generation, so it is placed by what main still
+   * tracks under the id. That works because `PtyEventRouter` drops the
+   * `pendingSpawns` entry of a process that ended on its own before the event
+   * fans out, and keeps it when a kill is queued — so a hand-over of a
+   * respawned successor outlives its predecessor's late exit.
+   */
+  handleTerminalExit(terminalId: string): void {
+    const record = this.sessionStore.terminalAdoption.getForTerminal(terminalId);
+    if (record === undefined) return;
+    const tracked = getPtyClient()?.getLaunchGeneration(terminalId) ?? null;
+    if (tracked !== null && tracked === record.launchGeneration) return;
+    this.sessionStore.terminalAdoption.release(terminalId);
+  }
+
+  /**
+   * End a hand-over that a spawn result shows is no longer of the process the
+   * user handed over (#12490): a later launch under the id succeeded, or a
+   * launch at or after the handed-over one failed to start — crash recovery
+   * included, which reports no exit for the process it lost. A refused
+   * respawn (`TERMINAL_ALREADY_LIVE`) left the process running, and a result
+   * for an earlier launch is stale; neither changes anything. Where either
+   * generation is unknown the hand-over ends, since the result cannot be
+   * placed.
+   */
+  handleTerminalSpawnResult(
+    terminalId: string,
+    result: { success: boolean; launchGeneration?: number; error?: { code?: string } }
+  ): void {
+    const record = this.sessionStore.terminalAdoption.getForTerminal(terminalId);
+    if (record === undefined) return;
+    if (!result.success && result.error?.code === "TERMINAL_ALREADY_LIVE") return;
+    const adopted = record.launchGeneration;
+    const reported = result.launchGeneration;
+    const ends =
+      adopted === undefined ||
+      reported === undefined ||
+      (result.success ? reported > adopted : reported >= adopted);
+    if (ends) this.sessionStore.terminalAdoption.release(terminalId);
+  }
+
+  /** Take a handed-over terminal back. Resolves false when it wasn't handed over. */
+  releaseTerminalAdoption(terminalId: string): boolean {
+    return this.sessionStore.terminalAdoption.release(terminalId);
+  }
+
+  listTerminalAdoptions(): TerminalAdoptionEntry[] {
+    return this.sessionStore.terminalAdoption.list().map(toTerminalAdoptionEntry);
+  }
+
+  onTerminalAdoptionsChange(listener: (adoptions: TerminalAdoptionEntry[]) => void): () => void {
+    return this.sessionStore.terminalAdoption.onChange(() => {
+      listener(this.listTerminalAdoptions());
+    });
+  }
+
+  /**
+   * Whether the user lets watches wake their panes (#12491). Off unless the
+   * stored value is exactly `true`: a missing or malformed setting never types
+   * into anyone's prompt.
+   */
+  isPaneWakeEnabled(): boolean {
+    return this.getConfig().paneWakeEnabled === true;
+  }
+
+  setPaneWakeEnabled(enabled: boolean): boolean {
+    this.persistConfig({ paneWakeEnabled: enabled });
+    // Turning it off stops every watch now, not at its next wake.
+    if (!enabled) this.terminalWatch.disposeAll();
+    return this.isPaneWakeEnabled();
+  }
+
+  getPaneWatchState(terminalId: string): PaneWatchState | null {
+    return this.terminalWatch.getPaneState(terminalId);
+  }
+
+  /** The pane's own "stop": every watch it holds goes, and nothing more is typed. */
+  stopPaneWatches(terminalId: string): void {
+    this.terminalWatch.stopPane(terminalId);
   }
 
   private emitStatusChange(): void {
@@ -409,6 +687,7 @@ export class McpServerService {
         this.emitRuntimeStateChange();
       }
     } else if (!enabled && (this.isRunning || this.httpLifecycle.isStartInFlight)) {
+      this.terminalWatch.disposeAll();
       // `stop()` awaits any in-flight `start()` before closing, so a disable
       // that races a slow start still tears the server down instead of
       // leaving it listening after the user turned it off.
@@ -476,6 +755,8 @@ export class McpServerService {
   }
 
   async stop(): Promise<void> {
+    // Nothing could read the observations a wake would point at.
+    this.terminalWatch.disposeAll();
     await this.httpLifecycle.stop();
     // The stop rejects every pending request, so the leases those requests own
     // have no one left to release them. Holding them would pin their views
@@ -554,6 +835,10 @@ export class McpServerService {
 
   getAuditStats(markSeen = true): McpAuditStats {
     return this.auditService.getAuditStats(markSeen);
+  }
+
+  getAuditDiagnostics(): McpAuditDiagnosticsSnapshot {
+    return this.auditService.getDiagnosticsSnapshot();
   }
 
   clearAuditLog(): void {
@@ -843,6 +1128,25 @@ export class McpServerService {
   get _viewLeases() {
     return this.viewLeases;
   }
+}
+
+/**
+ * Whether a pane's bearer could use a hand-over at all. Adoption widens which
+ * terminals a pane may act on, never which tools: a tier that cannot submit
+ * input would be handed a terminal it could only read.
+ */
+function canDriveTerminals(orchestrator: OrchestratorPaneIdentity): boolean {
+  return (
+    orchestrator.tier !== "off" && isTierPermitted(orchestrator.tier, "terminal.sendCommandOwned")
+  );
+}
+
+function toTerminalAdoptionEntry(record: TerminalAdoptionRecord): TerminalAdoptionEntry {
+  return {
+    terminalId: record.terminalId,
+    orchestratorPaneId: record.orchestratorPaneId,
+    adoptedAt: record.adoptedAt,
+  };
 }
 
 export const mcpServerService = new McpServerService();

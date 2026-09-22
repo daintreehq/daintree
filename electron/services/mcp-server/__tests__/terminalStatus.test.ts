@@ -9,6 +9,8 @@ vi.mock("../../assistantTerminal.js", () => ({
 }));
 
 import { buildViewlessTerminalStatus, viewlessStatusArgsAreAnswerable } from "../terminalStatus.js";
+import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../../shared/config/mcpLimits.js";
+import type { TerminalSubmissionRecord } from "../../../../shared/types/terminalSubmission.js";
 
 const WORKSPACE = "ws-1";
 
@@ -37,10 +39,7 @@ function deps(
     /** Main-side spawn ledger. Ids absent from it read as untracked (`null`). */
     owners?: Record<string, string>;
     /** Per-terminal submission ledger, keyed by terminal id then token. */
-    submissions?: Record<
-      string,
-      Record<string, { token: string; phase: string; at?: number } | undefined>
-    >;
+    submissions?: Record<string, Record<string, TerminalSubmissionRecord | undefined>>;
   } = {}
 ) {
   const byId = new Map(records.map((r) => [r["id"] as string, r]));
@@ -122,9 +121,33 @@ describe("buildViewlessTerminalStatus results", () => {
       lastTransitionAt: 2000,
       spawnedAt: 1000,
     });
+    // Counted on the pty-host record, so this surface reports it straight
+    // through; an older record without one stays absent rather than zero
+    // (#12535).
+    expect(result.terminals[0]).not.toHaveProperty("agentIncarnation");
     expect(result.terminals[0]).not.toHaveProperty("armed");
     expect(result.terminals[0]).not.toHaveProperty("lastCheckResult");
     expect(result.terminals[0]).not.toHaveProperty("exitCode");
+  });
+
+  it("reports the observed session count off the record (#12535)", async () => {
+    // Zero is a reading — no relaunch observed in this pty generation — and it
+    // has to survive the builder rather than be dropped as falsy.
+    const zero = await buildViewlessTerminalStatus(
+      deps([record({ agentIncarnation: 0 })]),
+      WORKSPACE,
+      {
+        terminalIds: ["t-1"],
+      }
+    );
+    expect(zero.terminals[0]?.agentIncarnation).toBe(0);
+
+    const relaunched = await buildViewlessTerminalStatus(
+      deps([record({ agentIncarnation: 2 })]),
+      WORKSPACE,
+      { terminalIds: ["t-1"] }
+    );
+    expect(relaunched.terminals[0]?.agentIncarnation).toBe(2);
   });
 
   it("prefers the detected agent over the launch agent, matching the renderer", async () => {
@@ -273,12 +296,10 @@ describe("buildViewlessTerminalStatus results", () => {
   });
 
   it("never reports an exitCode, even for an agent that has finished", async () => {
-    // Main does cache exit metadata, but `AgentAvailabilityStore` keys it by
-    // agent *type* ("claude"), not by spawn — several terminals share one id
-    // and only the most recent is mapped back. Joining through it would report
-    // whichever same-type terminal exited last, which for a fleet of identical
-    // agents is wrong far more often than right. `agentState` still says the
-    // run finished, and how.
+    // Main caches exit metadata per terminal in `AgentAvailabilityStore`, but
+    // this answer is built from the pty-host record and does not splice in a
+    // field from that separately-fed copy. `agentState` still says the run
+    // finished, and how.
     const result = await buildViewlessTerminalStatus(
       deps([
         record({ id: "a", agentState: "exited" }),
@@ -317,6 +338,38 @@ describe("buildViewlessTerminalStatus results", () => {
     // The states must survive intact too, or the crossing proves nothing.
     expect(result.terminals.map((t) => t.agentState)).toEqual(["completed", "working"]);
     for (const entry of result.terminals) expect(entry.error).toBeUndefined();
+  });
+
+  it("reports each terminal's own output-progress time, even for one agent type (#12428)", async () => {
+    // Two terminals running the same agent must not share a reading — the
+    // point is to single out the one whose screen stopped moving.
+    const result = await buildViewlessTerminalStatus(
+      deps([
+        record({ id: "moving", lastOutputChangeAt: 9000 }),
+        record({ id: "still", lastOutputChangeAt: 3000 }),
+        record({ id: "never" }),
+      ]),
+      WORKSPACE,
+      { terminalIds: ["moving", "still", "never"] }
+    );
+
+    expect(result.terminals.map((t) => t.lastOutputChangeAt)).toEqual([9000, 3000, undefined]);
+    // Unobserved is absent, not a time — and not a field this surface lacks.
+    expect(result.terminals[2]).not.toHaveProperty("lastOutputChangeAt");
+    expect(result.unavailableFields).not.toContain("lastOutputChangeAt");
+  });
+
+  it("reports each terminal's own handback and never lists it as unavailable (#12488)", async () => {
+    const handback = { message: "shipped", observedAt: 4_000, truncated: false };
+    const result = await buildViewlessTerminalStatus(
+      deps([record({ id: "asked", lastHandback: handback }), record({ id: "plain" })]),
+      WORKSPACE,
+      { terminalIds: ["asked", "plain"] }
+    );
+
+    expect(result.terminals[0]?.lastHandback).toEqual(handback);
+    expect(result.terminals[1]).not.toHaveProperty("lastHandback");
+    expect(result.unavailableFields).not.toContain("lastHandback");
   });
 
   it("keeps hasPty through the output attachment, in both polarities", async () => {
@@ -404,6 +457,42 @@ describe("buildViewlessTerminalStatus results", () => {
     });
 
     expect(result.terminals[0]?.recentOutput).toBe("two\nthree");
+    expect(result.terminals[0]?.recentOutputTruncated).toBe(true);
+  });
+
+  it("fits busy tails under the response cap, keeping each one's newest lines (#12450)", async () => {
+    const ids = ["t-1", "t-2", "t-3"];
+    const linesFor = (id: string) =>
+      Array.from({ length: 50 }, (_, i) => `${id} row ${i} `.padEnd(600, "│"));
+    const d = deps(
+      ids.map((id) => record({ id })),
+      { serialized: Object.fromEntries(ids.map((id) => [id, { data: linesFor(id).join("\n") }])) }
+    );
+    // A repeated id is its own row and spends its own share; an unknown one is
+    // an error-only row that must not grow output fields.
+    const requested = ["t-1", "t-2", "t-1", "missing", "t-3"];
+
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, {
+      terminalIds: requested,
+      includeOutput: { lines: 50 },
+    });
+
+    expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(
+      MCP_RESPONSE_TEXT_MAX_BYTES
+    );
+    expect(result.terminals.map((t) => t.terminalId)).toEqual(requested);
+    expect(d.ptyClient.getSerializedStateAsync).toHaveBeenCalledTimes(3);
+    const missing = result.terminals[3]!;
+    expect(missing.error).toBeDefined();
+    expect(missing).not.toHaveProperty("recentOutput");
+    expect(missing).not.toHaveProperty("recentOutputTruncated");
+    for (const entry of result.terminals.filter((t) => t.terminalId !== "missing")) {
+      const lines = linesFor(entry.terminalId);
+      expect(entry.recentOutput).not.toBe("");
+      const kept = (entry.recentOutput as string).split("\n");
+      expect(kept).toEqual(lines.slice(-kept.length));
+      expect(entry.recentOutputTruncated).toBe(true);
+    }
   });
 
   it("strips ANSI by default and keeps it on request", async () => {
@@ -476,6 +565,34 @@ describe("buildViewlessTerminalStatus submission correlation (#12337)", () => {
       token: "tok-1",
       phase: "pty_written",
       at: 4242,
+    });
+  });
+
+  it("forwards the output observation the pty-host derived (#12478)", async () => {
+    const d = deps([record()], {
+      owners,
+      submissions: {
+        "t-1": {
+          "tok-1": {
+            token: "tok-1",
+            phase: "pty_written",
+            at: 4242,
+            outputChangeAfterWriteAt: 9000,
+          },
+        },
+      },
+    });
+
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, {
+      terminalIds: ["t-1"],
+      submissionToken: "tok-1",
+    });
+
+    expect(result.terminals[0]?.submission).toEqual({
+      token: "tok-1",
+      phase: "pty_written",
+      at: 4242,
+      outputChangeAfterWriteAt: 9000,
     });
   });
 

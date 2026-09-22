@@ -6,6 +6,7 @@ import { openExternalUrl } from "./utils/openExternal.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { broadcastProjectSwitchUpdates } from "./ipc/projectSwitchBroadcast.js";
 import { getProjectHistory } from "./services/ProjectHistoryService.js";
+import { projectSwitchStatusTiming } from "./services/ProjectSwitchStatusTiming.js";
 import { getEffectiveRegistry } from "../shared/config/agentRegistry.js";
 import { isAssistantOnlyAgentId } from "../shared/config/agentIds.js";
 import type { CliAvailabilityService } from "./services/CliAvailabilityService.js";
@@ -24,7 +25,12 @@ import { getAutoUpdaterServiceRef } from "./window/serviceRefs.js";
 import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
 import { evaluateWhen } from "./services/WhenClauseService.js";
 import { getAppWebContents } from "./window/webContentsRegistry.js";
-import { PROJECT_MENU_ITEM_IDS, resolveProjectIdForApplicationMenu } from "./projectMenuState.js";
+import {
+  CLOSE_WINDOW_MENU_ITEM_ID,
+  PROJECT_MENU_ITEM_IDS,
+  hasOpenApplicationWindow,
+  resolveProjectIdForApplicationMenu,
+} from "./projectMenuState.js";
 import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/productBranding.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { getUserMessage, isAppError } from "./utils/errorTypes.js";
@@ -222,9 +228,12 @@ export function createApplicationMenu(
   const template: Electron.MenuItemConstructorOptions[] = [
     {
       label: "File",
+      // Grouped by what each item acts on: getting a project open, the open
+      // project, the window, then closing — Open Recent stays directly under the
+      // open command it belongs with.
       submenu: [
         {
-          label: "Open Directory…",
+          label: "Open Project…",
           accelerator: "CommandOrControl+O",
           click: async (_item, browserWindow) => {
             const win = getTargetBrowserWindow(browserWindow);
@@ -233,16 +242,15 @@ export function createApplicationMenu(
           },
         },
         {
+          label: "Open Recent",
+          submenu: recentProjectsMenu,
+        },
+        {
           label: "Clone Repository…",
           click: (_item, browserWindow) =>
             sendAction("project.cloneRepo", getTargetBrowserWindow(browserWindow)),
         },
-        {
-          label: "New Window",
-          accelerator: rendererMenuAccelerator("app.newWindow"),
-          click: (_item, browserWindow) =>
-            sendAction("app.newWindow", getTargetBrowserWindow(browserWindow)),
-        },
+        { type: "separator" },
         {
           // No native accelerator: the default binding is the chord
           // Cmd+K Cmd+N, which Electron accelerators can't express. The old
@@ -255,12 +263,22 @@ export function createApplicationMenu(
             sendAction("worktree.createDialog.open", getTargetBrowserWindow(browserWindow)),
         },
         {
-          label: "Open Recent",
-          submenu: recentProjectsMenu,
+          id: PROJECT_MENU_ITEM_IDS[0],
+          label: "Project Settings…",
+          enabled: projectMenuEnabled,
+          click: (_item, browserWindow) =>
+            sendAction("project.settings.open", getTargetBrowserWindow(browserWindow)),
         },
         { type: "separator" },
+        {
+          label: "New Window",
+          accelerator: rendererMenuAccelerator("app.newWindow"),
+          click: (_item, browserWindow) =>
+            sendAction("app.newWindow", getTargetBrowserWindow(browserWindow)),
+        },
         ...(process.platform !== "darwin"
           ? [
+              { type: "separator" as const },
               {
                 label: "Settings…",
                 accelerator: rendererMenuAccelerator("app.settings"),
@@ -274,13 +292,6 @@ export function createApplicationMenu(
               },
             ]
           : []),
-        {
-          id: PROJECT_MENU_ITEM_IDS[0],
-          label: "Project Settings…",
-          enabled: projectMenuEnabled,
-          click: (_item, browserWindow) =>
-            sendAction("project.settings.open", getTargetBrowserWindow(browserWindow)),
-        },
         ...(filePluginItems.length > 0 ? [{ type: "separator" as const }, ...filePluginItems] : []),
         { type: "separator" },
         {
@@ -291,9 +302,22 @@ export function createApplicationMenu(
             sendAction("project.closeActive", getTargetBrowserWindow(browserWindow)),
         },
         {
+          id: CLOSE_WINDOW_MENU_ITEM_ID,
           label: "Close Window",
-          role: "close",
-          registerAccelerator: false,
+          enabled: hasOpenApplicationWindow(),
+          ...(process.platform === "darwin"
+            ? {
+                // Not role "close": macOS 26 attaches its ✕ symbol to any item
+                // whose action is performClose:, and that one icon indents the
+                // whole section so Close Project reads as hanging off the group
+                // above. Sending the same selector to the first responder keeps
+                // the role's targeting (sheets, detached DevTools) without it.
+                // Cmd+W still reaches the renderer first — app views ignore menu
+                // shortcuts for it (see ProjectViewHandlers.ts).
+                accelerator: "Command+W",
+                click: () => Menu.sendActionToFirstResponder("performClose:"),
+              }
+            : { role: "close" as const, registerAccelerator: false }),
         },
         ...(process.platform !== "darwin"
           ? [{ type: "separator" as const }, { label: "Exit", role: "quit" as const }]
@@ -780,7 +804,7 @@ function buildRecentProjectsMenu(
 
 /**
  * Show the folder picker and open whatever the user chooses. Shared by the File
- * menu's Open Directory… item and the "Choose another folder" recovery on a
+ * menu's Open Project… item and the "Choose another folder" recovery on a
  * failed open (#11409), so both configure the dialog identically.
  */
 async function promptForDirectoryOpen(
@@ -908,6 +932,7 @@ export async function handleDirectoryOpen(
   cliAvailabilityService?: CliAvailabilityService
 ): Promise<void> {
   if (targetWindow.isDestroyed()) return;
+  const requestedAt = Date.now();
 
   try {
     const project = await projectStore.addProject(directoryPath);
@@ -924,10 +949,19 @@ export async function handleDirectoryOpen(
       // project row to be the current project of (#11936).
       const departingWorkspaceId = pvm.getActiveProjectId();
 
-      const { view, isNew } = await pvm.switchTo(project.id, project.path, {
-        switchId: randomUUID(),
-        entryPoint: "menu",
-      });
+      // One id for the swap's trace and the view's switch notice, so the view's
+      // status-timing report finds the record begun here. Timed only when a
+      // worktree load follows, as on the IPC switch path.
+      const switchId = randomUUID();
+      const statusTimingDeadlineAt = getWorkspaceClientRef()
+        ? projectSwitchStatusTiming.begin(switchId, project.id, targetWindow.id, requestedAt)
+        : undefined;
+      const { view, isNew } = await pvm
+        .switchTo(project.id, project.path, { switchId, entryPoint: "menu" })
+        .catch((error: unknown) => {
+          projectSwitchStatusTiming.fail(switchId, "swap-failed");
+          throw error;
+        });
       // Capture the outgoing project id before the pointer flips so we can
       // broadcast its bumped `lastOpened` to every cached view (#8561).
       const previousProjectId = projectStore.getCurrentProjectId();
@@ -958,7 +992,8 @@ export async function handleDirectoryOpen(
       if (!view.webContents.isDestroyed()) {
         view.webContents.send(CHANNELS.PROJECT_ON_SWITCH, {
           project: projectStore.getProjectById(project.id) ?? project,
-          switchId: randomUUID(),
+          switchId,
+          ...(statusTimingDeadlineAt !== undefined && { statusTimingDeadlineAt }),
         });
       }
 
@@ -973,13 +1008,17 @@ export async function handleDirectoryOpen(
         const broker = getWorktreePortBrokerRef();
         if (wsClient) {
           try {
-            await wsClient.loadProject(project.path, targetWindow.id);
+            projectSwitchStatusTiming.hostReady(
+              switchId,
+              await wsClient.loadProject(project.path, targetWindow.id)
+            );
             wsClient.attachDirectPort(targetWindow.id, view.webContents);
             const host = wsClient.getHostForProject(project.path);
             if (host && broker) {
               broker.brokerPort(host, view.webContents);
             }
           } catch (err) {
+            projectSwitchStatusTiming.fail(switchId, "load-failed");
             console.error("[menu] Failed to restore worktree ports:", err);
           }
         }

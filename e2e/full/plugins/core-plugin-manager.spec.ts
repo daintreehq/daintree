@@ -44,11 +44,12 @@ test.describe.serial("Core: Plugin manager view", () => {
     // resolvePluginCategory). The header carries a trailing count, so match on
     // the aria-label, not text.
     const list = window.locator(SEL.plugin.list);
-    await expect(list.getByRole("option", { name: "AI & agents", exact: true })).toBeVisible({
+    // Categories are real headings over real lists now, with a trailing count.
+    await expect(list.getByRole("heading", { name: /^AI & agents\b/ })).toBeVisible({
       timeout: T_MEDIUM,
     });
-    // SEL.plugin.option already scopes to the listbox, so don't re-nest it under
-    // `list` (that yields a `listbox listbox option` selector matching nothing).
+    // SEL.plugin.option already scopes to the plugin list, so don't re-nest it
+    // under `list` (that would double the container in the selector).
     const sampleRow = window.locator(SEL.plugin.option).filter({ hasText: SAMPLE_PLUGIN_LABEL });
     await expect(sampleRow).toBeVisible({ timeout: T_MEDIUM });
 
@@ -63,9 +64,12 @@ test.describe.serial("Core: Plugin manager view", () => {
     const { window } = ctx;
     await openPluginManager(window);
 
+    // The row holds a selection button and an enable switch; target the button.
     await window
       .locator(SEL.plugin.option)
       .filter({ hasText: SAMPLE_PLUGIN_LABEL })
+      .first()
+      .locator("button")
       .first()
       .click();
 

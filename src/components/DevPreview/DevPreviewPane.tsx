@@ -20,6 +20,11 @@ import { useDevPreviewViewport } from "./useDevPreviewViewport";
 import { DevPreviewWebviewOverlays } from "./DevPreviewWebviewOverlays";
 import { useDevPreviewNavigation } from "./useDevPreviewNavigation";
 import { DevPreviewEmptyStates } from "./DevPreviewEmptyStates";
+import {
+  DevPreviewToolButtons,
+  DevPreviewToolDrawer,
+  DevPreviewToolToolbar,
+} from "./DevPreviewTools";
 import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
 import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
@@ -96,6 +101,7 @@ export function DevPreviewPane({
   onTitleChange,
   onMinimize,
   onRestore,
+  showRestoreControl,
   isMultiPanelGrid,
 }: DevPreviewPaneProps) {
   const webviewRef = useRef<Electron.WebviewTag>(null);
@@ -114,6 +120,9 @@ export function DevPreviewPane({
   const projectSettings = useProjectSettingsStore((state) => state.settings);
   const projectEnv = projectSettings?.environmentVariables;
   const isDragging = useIsDragging();
+  const isParkedInDock = usePanelStore(
+    (state) => location === "dock" && state.activeDockTerminalId !== id
+  );
 
   const terminal = usePanelStore((state) => {
     const p = state.getTerminal(id);
@@ -242,19 +251,27 @@ export function DevPreviewPane({
   // effect does not fire a redundant loadURL on first ready (#9940). The
   // hard-restart path resets this to "" explicitly when unconfigured.
   const lastSetUrlRef = useRef<string>(history.present);
-  // Seed value for the webview `src` attribute, fixed for the lifetime of each guest.
-  // Never re-bound to navigation state while a guest is mounted — Electron's
-  // SrcAttribute observer would turn each guest navigation into a redundant full
-  // reload (#9940). A ref rather than state because a *replacement* guest has to be
-  // re-seeded synchronously, before the JSX below reads it: an effect lands after the
-  // fresh guest has already begun loading the stale value, which is how the intended
-  // route was lost across an origin migration (#12297). See the re-seed just above the
-  // webview JSX, and BrowserPane's `initialUrlRef` for the same pattern (#10185).
-  const webviewSeedUrlRef = useRef(history.present);
-  // Bumped to force a fresh guest when in-place reload cannot reach the current
-  // one — a renderer that died before it was ever attached has no WebContents to
-  // reload, and recovery must not silently do nothing (#12296).
-  const [webviewInstanceKey, setWebviewInstanceKey] = useState(0);
+  // Identity and seed of the current guest, as one value. `seedUrl` is the webview
+  // `src` attribute, fixed for the lifetime of each guest.
+  //
+  // `seedUrl` is never re-bound to navigation state while a guest is mounted —
+  // Electron's SrcAttribute observer would turn each guest navigation into a
+  // redundant full reload (#9940). A *replacement* guest has to be re-seeded before
+  // the JSX below reads it: an effect lands after the fresh guest has already begun
+  // loading the stale value, which is how the intended route was lost across an
+  // origin migration (#12297). State adjusted during render rather than a ref —
+  // refs may not be read or written during render (React Compiler enforces it) —
+  // which React resolves before it commits the replacement guest.
+  //
+  // `key` is bumped to force a fresh guest when in-place reload cannot reach the
+  // current one: a renderer that died before it was ever attached has no WebContents
+  // to reload, and recovery must not silently do nothing (#12296). Paired with the
+  // seed so that replacement is atomic.
+  const [webviewInstance, setWebviewInstance] = useState(() => ({
+    key: 0,
+    seedUrl: history.present,
+  }));
+  const webviewSeedUrl = webviewInstance.seedUrl;
   const [consoleTerminalId, setConsoleTerminalId] = useState<string | null>(terminalId);
   const isConsoleOpen = terminal?.devPreviewConsoleOpen ?? false;
   const activeConsoleTab = terminal?.devPreviewConsoleTab ?? "output";
@@ -436,7 +453,9 @@ export function DevPreviewPane({
     if (!isUnconfigured) return;
     setHistory(initializeBrowserHistory(undefined, ""));
     setBrowserUrl(id, "");
-    webviewSeedUrlRef.current = "";
+    setWebviewInstance((previous) =>
+      previous.seedUrl === "" ? previous : { ...previous, seedUrl: "" }
+    );
     lastSetUrlRef.current = "";
     setWebviewLoadError(null);
     clearRetryState();
@@ -457,12 +476,15 @@ export function DevPreviewPane({
         // Match the `src` seed so the isWebviewReady navigation effect does not
         // re-load the same URL on first ready (#9940). The isUnconfigured effect
         // resets this to "" afterward when there is no dev command.
-        lastSetUrlRef.current = webviewSeedUrlRef.current;
+        lastSetUrlRef.current = webviewSeedUrl;
         clearRetryState();
       }
       setWebviewElement(node);
     },
-    [captureScrollViaCdp, clearRetryState]
+    // Deliberately the seed, not `currentUrl`: the seed only moves while no guest is
+    // attached, so this identity never churns under an ordinary navigation and can
+    // never detach and re-attach a live guest.
+    [captureScrollViaCdp, clearRetryState, webviewSeedUrl]
   );
 
   useEffect(() => {
@@ -480,12 +502,11 @@ export function DevPreviewPane({
   // the URL we actually want before the remount rather than letting the new element
   // rewind to the mount-time URL.
   const remountWebview = useCallback(() => {
-    // Imperative, not the render-time re-seed below: a key bump keeps `showEmptyState`
-    // false, so that mount-edge guard never fires and the replacement guest would boot
-    // from the mount-time seed (#12297).
-    webviewSeedUrlRef.current = currentUrl;
+    // Seeded here, not by the render-time adjustment below: a key bump keeps
+    // `showEmptyState` false, so that mount-edge guard never fires and the
+    // replacement guest would boot from the mount-time seed (#12297).
     setIsWebviewReady(false);
-    setWebviewInstanceKey((key) => key + 1);
+    setWebviewInstance((previous) => ({ key: previous.key + 1, seedUrl: currentUrl }));
   }, [currentUrl, setIsWebviewReady]);
 
   // Returns whether a reload was actually initiated. Deliberately not gated on
@@ -594,7 +615,9 @@ export function DevPreviewPane({
     clearLoadTimers();
     setHistory(initializeBrowserHistory(undefined, ""));
     setBrowserUrl(id, "");
-    webviewSeedUrlRef.current = "";
+    setWebviewInstance((previous) =>
+      previous.seedUrl === "" ? previous : { ...previous, seedUrl: "" }
+    );
     lastSetUrlRef.current = "";
     setIsLoading(false);
     setIsWebviewReady(false);
@@ -866,11 +889,14 @@ export function DevPreviewPane({
   //
   // Gated on `webviewElement` rather than on `showEmptyState`: the ref callback only runs
   // on commit, so this reflects whether a guest is *actually* live. That keeps the write
-  // impossible while one is mounted (re-binding `src` would trigger Electron's
-  // SrcAttribute observer into a redundant reload, #9940) and immune to a render that
-  // React starts and throws away, which a previous/next flag comparison is not.
-  if (!webviewElement && currentUrl) {
-    webviewSeedUrlRef.current = currentUrl;
+  // impossible while one is mounted — re-binding `src` would trigger Electron's
+  // SrcAttribute observer into a redundant reload (#9940).
+  //
+  // Safe against a render React starts and throws away because it converges rather than
+  // transitions: it only ever assigns `currentUrl`, so a discarded pass re-derives the
+  // same value instead of consuming an edge, which a previous/next flag comparison would.
+  if (!webviewElement && currentUrl && webviewSeedUrl !== currentUrl) {
+    setWebviewInstance({ ...webviewInstance, seedUrl: currentUrl });
   }
 
   return (
@@ -886,10 +912,10 @@ export function DevPreviewPane({
       onTitleChange={onTitleChange}
       onMinimize={onMinimize}
       onRestore={onRestore}
+      showRestoreControl={showRestoreControl}
       isMultiPanelGrid={isMultiPanelGrid}
       kind="dev-preview"
       headerContent={headerContent}
-      headerContentPlacement="leading"
       className={
         phaseLabel === "Compiling"
           ? "panel-state-compiling"
@@ -909,6 +935,8 @@ export function DevPreviewPane({
           zoomFactor={zoomFactor}
           isWebviewReady={isWebviewReady}
           isConsoleOpen={isConsoleOpen}
+          canOpenExternal={Boolean(currentUrl)}
+          canToggleConsole={Boolean(consoleTerminalId)}
           viewportPreset={viewportPreset}
           viewportRotated={viewportRotated}
           viewportDpr={viewportDpr}
@@ -929,6 +957,23 @@ export function DevPreviewPane({
           onViewportRotateToggle={handleViewportRotateToggle}
           onViewportDprChange={handleViewportDprChange}
           onViewportFitToggle={handleViewportFitToggle}
+          extraActions={
+            <DevPreviewToolButtons
+              panelId={id}
+              projectId={currentProjectId}
+              worktreeId={worktreeId}
+              url={currentUrl}
+              isWebviewReady={isWebviewReady}
+            />
+          }
+        />
+
+        <DevPreviewToolToolbar
+          panelId={id}
+          projectId={currentProjectId}
+          worktreeId={worktreeId}
+          url={currentUrl}
+          isWebviewReady={isWebviewReady}
         />
 
         {promoteToPortalError && (
@@ -964,155 +1009,166 @@ export function DevPreviewPane({
 
         {status === "running" && hmrDead && <DevPreviewHmrDeadBanner onReload={handleReload} />}
 
-        <div
-          className={cn(
-            "relative flex-1 min-h-0 bg-surface-canvas",
-            viewportPreset && viewportFit ? "overflow-hidden" : "overflow-auto"
-          )}
-        >
-          {viewportPreset && effectiveViewport && (
-            <div className="absolute top-1 left-1/2 -translate-x-1/2 z-10 px-1.5 py-0.5 rounded text-3xs font-medium bg-surface/90 text-text-secondary border border-overlay/50">
-              {getViewportPreset(viewportPreset).label} · {effectiveViewport.width}×
-              {effectiveViewport.height}
-              {viewportFit && fitScale < 1 && ` · ${Math.round(fitScale * 100)}%`}
-            </div>
-          )}
-          {showEmptyState ? (
-            <DevPreviewEmptyStates
-              isRestarting={isRestarting}
-              status={status}
-              isProxyUrlPending={isProxyUrlPending}
-              phaseLabel={phaseLabel}
-              error={error}
-              handleRetry={handleRetry}
-              setDevPreviewConsoleOpen={setDevPreviewConsoleOpen}
-              id={id}
-              currentUrl={currentUrl}
-              handleOpenExternal={handleOpenExternal}
-              isUnconfigured={isUnconfigured}
-              primaryCandidate={primaryCandidate}
-              isAutoDetecting={isAutoDetecting}
-              isSettingsLoading={isSettingsLoading}
-              handleAutoDetect={handleAutoDetect}
-              autoDetectFailedCommand={autoDetectFailedCommand}
-              candidates={candidates}
-              pickerOpen={pickerOpen}
-              setPickerOpen={setPickerOpen}
-              handlePickCandidate={handlePickCandidate}
-              handleOpenSettings={handleOpenSettings}
-              commandInput={commandInput}
-              setCommandInput={setCommandInput}
-              handleSaveCommand={handleSaveCommand}
-              commandInputError={commandInputError}
-              devCommand={devCommand}
-              handleStartFromRestored={handleStartFromRestored}
-              hasBeenVisible={hasBeenVisible}
-              isEvicted={isEvicted}
-            />
-          ) : (
-            <div
-              ref={setFitContainerEl}
-              className={cn(
-                "h-full",
-                viewportPreset &&
-                  (viewportFit
-                    ? "flex items-center justify-center"
-                    : "flex items-start justify-center pt-5")
-              )}
-            >
+        {/* `relative`: a tool drawer floats over the page rather than squeezing it
+            when the pane is too narrow to share (`DevPreviewToolDrawerChrome`). */}
+        <div className="relative flex flex-1 min-h-0">
+          <div
+            className={cn(
+              "relative flex-1 min-w-0 min-h-0 bg-surface-canvas",
+              viewportPreset && viewportFit ? "overflow-hidden" : "overflow-auto"
+            )}
+          >
+            {viewportPreset && effectiveViewport && (
+              <div className="absolute top-1 left-1/2 -translate-x-1/2 z-10 px-1.5 py-0.5 rounded text-3xs font-medium bg-surface/90 text-text-secondary border border-overlay/50">
+                {getViewportPreset(viewportPreset).label} · {effectiveViewport.width}×
+                {effectiveViewport.height}
+                {viewportFit && fitScale < 1 && ` · ${Math.round(fitScale * 100)}%`}
+              </div>
+            )}
+            {showEmptyState ? (
+              <DevPreviewEmptyStates
+                isRestarting={isRestarting}
+                status={status}
+                isProxyUrlPending={isProxyUrlPending}
+                phaseLabel={phaseLabel}
+                error={error}
+                handleRetry={handleRetry}
+                setDevPreviewConsoleOpen={setDevPreviewConsoleOpen}
+                id={id}
+                currentUrl={currentUrl}
+                handleOpenExternal={handleOpenExternal}
+                isUnconfigured={isUnconfigured}
+                primaryCandidate={primaryCandidate}
+                isAutoDetecting={isAutoDetecting}
+                isSettingsLoading={isSettingsLoading}
+                handleAutoDetect={handleAutoDetect}
+                autoDetectFailedCommand={autoDetectFailedCommand}
+                candidates={candidates}
+                pickerOpen={pickerOpen}
+                setPickerOpen={setPickerOpen}
+                handlePickCandidate={handlePickCandidate}
+                handleOpenSettings={handleOpenSettings}
+                commandInput={commandInput}
+                setCommandInput={setCommandInput}
+                handleSaveCommand={handleSaveCommand}
+                commandInputError={commandInputError}
+                devCommand={devCommand}
+                handleStartFromRestored={handleStartFromRestored}
+                hasBeenVisible={hasBeenVisible}
+                isEvicted={isEvicted}
+              />
+            ) : (
               <div
+                ref={setFitContainerEl}
                 className={cn(
-                  "relative",
-                  viewportPreset
-                    ? // Outline, not border: this element carries the preset's
-                      // exact width/height and box-sizing is border-box, so a
-                      // 1px border would shave 2px off the content box the
-                      // guest is emulated at (#12298).
-                      "rounded-lg outline outline-1 -outline-offset-1 outline-overlay/50 shadow-[var(--theme-shadow-floating)] overflow-hidden"
-                    : "h-full"
+                  "h-full",
+                  viewportPreset &&
+                    (viewportFit
+                      ? "flex items-center justify-center"
+                      : "flex items-start justify-center pt-5")
                 )}
-                style={
-                  viewportPreset && effectiveViewport
-                    ? viewportFit
-                      ? {
-                          width: effectiveViewport.width * fitScale,
-                          height: effectiveViewport.height * fitScale,
-                        }
-                      : {
-                          maxWidth: effectiveViewport.width,
-                          width: "100%",
-                          aspectRatio: `${effectiveViewport.width} / ${effectiveViewport.height}`,
-                        }
-                    : undefined
-                }
               >
-                <DevPreviewWebviewOverlays
-                  reconnectAttempt={reconnectAttempt}
-                  webviewLoadError={webviewLoadError}
-                  certCopied={certCopied}
-                  onCopyMkcert={handleCopyMkcert}
-                  isRestarting={isRestarting}
-                  onRestartDevServer={handleRestartDevServer}
-                  onHardReload={handleHardReload}
-                  onRequestRestartAndClearCache={handleRequestRestartAndClearCache}
-                  onRequestReinstallAndRestart={handleRequestReinstallAndRestart}
-                  onRetryWebviewLoad={handleRetryWebviewLoad}
-                  currentUrl={currentUrl}
-                  onOpenExternal={handleOpenExternal}
-                  blockedNav={blockedNav}
-                  panelId={id}
-                  webviewElement={webviewElement}
-                  onDispatchBlockedNav={dispatchBlockedNav}
-                  crashState={crashState}
-                  crashDetails={crashDetails}
-                  onCloseCrash={resetCrashHistory}
-                  onCloseUnresponsive={clearUnresponsiveState}
-                  isLoading={isLoading}
-                  onCancelLoad={handleCancelLoad}
-                  showRecoverySpinner={showRecoverySpinner}
-                  isRecoveringFromEviction={isRecoveringFromEviction}
-                  isDragging={isDragging}
-                  findInPage={findInPage}
-                  currentDialog={currentDialog}
-                  onDialogRespond={handleDialogRespond}
+                <div
+                  className={cn(
+                    "relative",
+                    viewportPreset
+                      ? // Outline, not border: this element carries the preset's
+                        // exact width/height and box-sizing is border-box, so a
+                        // 1px border would shave 2px off the content box the
+                        // guest is emulated at (#12298).
+                        "rounded-lg outline outline-1 -outline-offset-1 outline-overlay/50 shadow-[var(--theme-shadow-floating)] overflow-hidden"
+                      : "h-full"
+                  )}
+                  style={
+                    viewportPreset && effectiveViewport
+                      ? viewportFit
+                        ? {
+                            width: effectiveViewport.width * fitScale,
+                            height: effectiveViewport.height * fitScale,
+                          }
+                        : {
+                            maxWidth: effectiveViewport.width,
+                            width: "100%",
+                            aspectRatio: `${effectiveViewport.width} / ${effectiveViewport.height}`,
+                          }
+                      : undefined
+                  }
                 >
-                  {/* Only the webview is scaled by zoom-to-fit; overlays above
+                  <DevPreviewWebviewOverlays
+                    reconnectAttempt={reconnectAttempt}
+                    webviewLoadError={webviewLoadError}
+                    certCopied={certCopied}
+                    onCopyMkcert={handleCopyMkcert}
+                    isRestarting={isRestarting}
+                    onRestartDevServer={handleRestartDevServer}
+                    onHardReload={handleHardReload}
+                    onRequestRestartAndClearCache={handleRequestRestartAndClearCache}
+                    onRequestReinstallAndRestart={handleRequestReinstallAndRestart}
+                    onRetryWebviewLoad={handleRetryWebviewLoad}
+                    currentUrl={currentUrl}
+                    onOpenExternal={handleOpenExternal}
+                    blockedNav={blockedNav}
+                    panelId={id}
+                    webviewElement={webviewElement}
+                    onDispatchBlockedNav={dispatchBlockedNav}
+                    crashState={crashState}
+                    crashDetails={crashDetails}
+                    onCloseCrash={resetCrashHistory}
+                    onCloseUnresponsive={clearUnresponsiveState}
+                    isLoading={isLoading}
+                    onCancelLoad={handleCancelLoad}
+                    showRecoverySpinner={showRecoverySpinner}
+                    isRecoveringFromEviction={isRecoveringFromEviction}
+                    isDragging={isDragging}
+                    findInPage={findInPage}
+                    currentDialog={currentDialog}
+                    onDialogRespond={handleDialogRespond}
+                  >
+                    {/* Only the webview is scaled by zoom-to-fit; overlays above
                         stay at full size relative to the outer container so
                         their action buttons remain readable and clickable. */}
-                  <div
-                    className={
-                      viewportPreset && viewportFit
-                        ? "absolute top-0 left-0 origin-top-left"
-                        : "w-full h-full"
-                    }
-                    style={
-                      viewportPreset && viewportFit && effectiveViewport
-                        ? {
-                            width: effectiveViewport.width,
-                            height: effectiveViewport.height,
-                            transform: `scale(${fitScale})`,
-                          }
-                        : undefined
-                    }
-                  >
-                    <webview
-                      key={webviewInstanceKey}
-                      ref={setWebviewNode}
-                      // Seed-only: never re-bind to navigation state (#9940).
-                      src={webviewSeedUrlRef.current}
-                      partition={webviewPartition}
-                      // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
-                      allowpopups=""
-                      className={cn(
-                        "w-full h-full border-0",
-                        isDragging && "invisible pointer-events-none"
-                      )}
-                    />
-                  </div>
-                </DevPreviewWebviewOverlays>
+                    <div
+                      className={
+                        viewportPreset && viewportFit
+                          ? "absolute top-0 left-0 origin-top-left"
+                          : "w-full h-full"
+                      }
+                      style={
+                        viewportPreset && viewportFit && effectiveViewport
+                          ? {
+                              width: effectiveViewport.width,
+                              height: effectiveViewport.height,
+                              transform: `scale(${fitScale})`,
+                            }
+                          : undefined
+                      }
+                    >
+                      <webview
+                        key={webviewInstance.key}
+                        ref={setWebviewNode}
+                        // Seed-only: never re-bind to navigation state (#9940).
+                        src={webviewSeedUrl}
+                        partition={webviewPartition}
+                        // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
+                        allowpopups=""
+                        className={cn(
+                          "w-full h-full border-0",
+                          isDragging && "invisible pointer-events-none"
+                        )}
+                      />
+                    </div>
+                  </DevPreviewWebviewOverlays>
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
+          <DevPreviewToolDrawer
+            panelId={id}
+            projectId={currentProjectId}
+            worktreeId={worktreeId}
+            url={currentUrl}
+            isWebviewReady={isWebviewReady}
+          />
         </div>
 
         {forceKilled && status === "stopped" && !forceKillBannerDismissed && (
@@ -1161,6 +1217,7 @@ export function DevPreviewPane({
             onRequestRestartAndClearCache={handleRequestRestartAndClearCache}
             onRequestReinstallAndRestart={handleRequestReinstallAndRestart}
             onStop={stop}
+            isPanelVisible={!isParkedInDock}
           />
         )}
         <DevPreviewDestructiveConfirmDialog

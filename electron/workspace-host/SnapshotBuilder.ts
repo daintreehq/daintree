@@ -11,6 +11,7 @@ import type { CIStatusState } from "../../shared/types/forge.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import type { WorktreeChanges, RepoState } from "../../shared/types/git.js";
 import type { PluginWorktreeLinked } from "../../shared/types/plugin.js";
+import { issueNumberBelongsToLinkedPr } from "../../shared/utils/worktreeIssueProjection.js";
 
 export interface SnapshotBuilderHost {
   readonly id: string;
@@ -52,6 +53,7 @@ export interface SnapshotBuilderHost {
   readonly hasResumeCommand: boolean;
   readonly hasTeardownCommand: boolean;
   readonly hasProvisionCommand: boolean;
+  readonly lifecycleCommandsNeedApproval: boolean | undefined;
   readonly worktreeMode: string;
   readonly worktreeEnvironmentLabel: string | undefined;
   readonly hasPlanFile: boolean;
@@ -113,6 +115,11 @@ export class SnapshotBuilder {
         linkedPr.ciStatus.state === "pending")
         ? linkedPr.ciStatus.state
         : undefined;
+    const detectedIssueNumber = linkedIssue?.ref.number ?? this.host.issueNumber;
+    // Dropped from the projection only: the monitor keeps the parsed number so
+    // `onIssueNotFound` still matches its lookup, and a genuine PR clear brings
+    // the #8851 offline fallback back (#12381).
+    const issueIsLinkedPr = issueNumberBelongsToLinkedPr(detectedIssueNumber, this.host.linked);
 
     const snapshot: WorktreeSnapshot = {
       id: this.host.id,
@@ -130,7 +137,7 @@ export class SnapshotBuilder {
       createdAt: this.host.createdAt,
       aiNote: this.host.aiNote,
       aiNoteTimestamp: this.host.aiNoteTimestamp,
-      issueNumber: linkedIssue?.ref.number ?? this.host.issueNumber,
+      issueNumber: issueIsLinkedPr ? undefined : detectedIssueNumber,
       prNumber: linkedPr?.ref.number ?? this.host.prNumber,
       prUrl: linkedPr?.url ?? this.host.prUrl,
       prState: linkedPr
@@ -140,7 +147,11 @@ export class SnapshotBuilder {
           : this.host.prState,
       prCiStatus: linkedPr ? linkedPrCiStatus : this.host.prCiStatus,
       prTitle: linkedPr ? linkedPr.title : this.host.prTitle,
-      issueTitle: linkedIssue ? linkedIssue.title : this.host.issueTitle,
+      issueTitle: issueIsLinkedPr
+        ? undefined
+        : linkedIssue
+          ? linkedIssue.title
+          : this.host.issueTitle,
       branchDerivedTitle: this.host.branchDerivedTitle,
       sourcePrNumber: this.host.sourcePrNumber,
       prLastUpdatedAt: this.host.prLastUpdatedAt,
@@ -162,6 +173,9 @@ export class SnapshotBuilder {
       hasResumeCommand: this.host.hasResumeCommand || undefined,
       hasTeardownCommand: this.host.hasTeardownCommand || undefined,
       hasProvisionCommand: this.host.hasProvisionCommand || undefined,
+      // Only `true` is load-bearing; "checked, nothing waiting" and "not
+      // checked yet" both mean there is nothing to review.
+      lifecycleCommandsNeedApproval: this.host.lifecycleCommandsNeedApproval || undefined,
       worktreeMode: this.host.worktreeMode !== "local" ? this.host.worktreeMode : undefined,
       worktreeEnvironmentLabel: this.host.worktreeEnvironmentLabel,
       hasPlanFile: this.host.hasPlanFile || undefined,

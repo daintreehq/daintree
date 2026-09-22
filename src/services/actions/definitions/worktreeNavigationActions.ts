@@ -12,7 +12,7 @@ export function registerWorktreeNavigationActions(
   actions.set("worktree.select", () =>
     defineAction({
       id: "worktree.select",
-      title: "Select Worktree",
+      title: "Select worktree",
       description: "Select a worktree by ID",
       category: "worktree",
       kind: "command",
@@ -34,7 +34,7 @@ export function registerWorktreeNavigationActions(
 
   actions.set("worktree.next", () => ({
     id: "worktree.next",
-    title: "Next Worktree",
+    title: "Next worktree",
     description: "Switch to the next worktree",
     category: "worktree",
     kind: "command",
@@ -56,7 +56,7 @@ export function registerWorktreeNavigationActions(
 
   actions.set("worktree.previous", () => ({
     id: "worktree.previous",
-    title: "Previous Worktree",
+    title: "Previous worktree",
     description: "Switch to the previous worktree",
     category: "worktree",
     kind: "command",
@@ -85,7 +85,7 @@ export function registerWorktreeNavigationActions(
   actions.set("worktree.switchIndex", () =>
     defineAction({
       id: "worktree.switchIndex",
-      title: "Switch to Worktree by Index",
+      title: "Switch to worktree by index",
       description: "Switch to worktree at a specific position (1-9)",
       category: "worktree",
       kind: "command",
@@ -107,7 +107,7 @@ export function registerWorktreeNavigationActions(
     const actionId = `worktree.switch${index}` as ActionId;
     actions.set(actionId, () => ({
       id: actionId,
-      title: `Switch to Worktree ${index}`,
+      title: `Switch to worktree ${index}`,
       description: `Switch to worktree at position ${index}`,
       category: "worktree",
       kind: "command",
@@ -145,7 +145,7 @@ export function registerWorktreeNavigationActions(
 
   actions.set("worktree.up", () => ({
     id: "worktree.up",
-    title: "Worktree Up",
+    title: "Worktree up",
     description: "Move selection up in the worktree list",
     category: "worktree",
     kind: "command",
@@ -159,7 +159,7 @@ export function registerWorktreeNavigationActions(
 
   actions.set("worktree.down", () => ({
     id: "worktree.down",
-    title: "Worktree Down",
+    title: "Worktree down",
     description: "Move selection down in the worktree list",
     category: "worktree",
     kind: "command",
@@ -173,7 +173,7 @@ export function registerWorktreeNavigationActions(
 
   actions.set("worktree.upVim", () => ({
     id: "worktree.upVim",
-    title: "Worktree Up (Vim)",
+    title: "Worktree up (Vim)",
     description: "Move selection up in the worktree list",
     category: "worktree",
     kind: "command",
@@ -187,7 +187,7 @@ export function registerWorktreeNavigationActions(
 
   actions.set("worktree.downVim", () => ({
     id: "worktree.downVim",
-    title: "Worktree Down (Vim)",
+    title: "Worktree down (Vim)",
     description: "Move selection down in the worktree list",
     category: "worktree",
     kind: "command",
@@ -201,7 +201,7 @@ export function registerWorktreeNavigationActions(
 
   actions.set("worktree.home", () => ({
     id: "worktree.home",
-    title: "Worktree Home",
+    title: "Worktree home",
     description: "Select the first worktree",
     category: "worktree",
     kind: "command",
@@ -217,7 +217,7 @@ export function registerWorktreeNavigationActions(
 
   actions.set("worktree.end", () => ({
     id: "worktree.end",
-    title: "Worktree End",
+    title: "Worktree end",
     description: "Select the last worktree",
     category: "worktree",
     kind: "command",
@@ -233,7 +233,7 @@ export function registerWorktreeNavigationActions(
 
   actions.set("worktree.selectSpace", () => ({
     id: "worktree.selectSpace",
-    title: "Select Worktree (Space)",
+    title: "Select worktree (Space)",
     description: "Select the currently focused worktree",
     category: "worktree",
     kind: "command",
@@ -249,7 +249,7 @@ export function registerWorktreeNavigationActions(
 
   actions.set("worktree.openPalette", () => ({
     id: "worktree.openPalette",
-    title: "Open Worktree Palette",
+    title: "Open worktree palette",
     description: "Open the worktree selection palette",
     category: "worktree",
     kind: "command",
@@ -264,7 +264,7 @@ export function registerWorktreeNavigationActions(
 
   actions.set("worktree.overview", () => ({
     id: "worktree.overview",
-    title: "Toggle Worktree Overview",
+    title: "Toggle worktree overview",
     description: "Open or close the full-screen worktree overview modal",
     category: "worktree",
     kind: "command",
@@ -279,7 +279,7 @@ export function registerWorktreeNavigationActions(
 
   actions.set("worktree.overview.open", () => ({
     id: "worktree.overview.open",
-    title: "Open Worktree Overview",
+    title: "Open worktree overview",
     description: "Open the full-screen worktree overview modal",
     category: "worktree",
     kind: "command",
@@ -294,7 +294,7 @@ export function registerWorktreeNavigationActions(
 
   actions.set("worktree.overview.close", () => ({
     id: "worktree.overview.close",
-    title: "Close Worktree Overview",
+    title: "Close worktree overview",
     description: "Close the full-screen worktree overview modal",
     category: "worktree",
     kind: "command",
@@ -309,7 +309,7 @@ export function registerWorktreeNavigationActions(
 
   actions.set("worktree.panel", () => ({
     id: "worktree.panel",
-    title: "Open Worktree Panel",
+    title: "Open worktree panel",
     description: "Open the worktree panel",
     category: "worktree",
     kind: "command",

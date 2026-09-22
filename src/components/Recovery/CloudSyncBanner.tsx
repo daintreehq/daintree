@@ -1,4 +1,3 @@
-import { AlertTriangle } from "lucide-react";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -52,16 +51,20 @@ export function CloudSyncBanner() {
 
   return (
     <InlineStatusBanner
-      icon={AlertTriangle}
       title={copy.title}
       description={copy.description}
       severity="warning"
       role="status"
+      // × hides the warning for this session; the inbox entry the hook raised
+      // keeps it findable. Silencing it for good is a preference change, so it
+      // stays a labelled action rather than hiding behind the ×.
+      onClose={() => setBanner({ service: null, projectId: null })}
+      closeAriaLabel="Dismiss cloud folder warning"
       actions={[
         {
           id: "dismiss",
           label: "Don't warn for this project",
-          variant: "primary",
+          variant: "dismiss",
           onClick: handleDismiss,
         },
       ]}

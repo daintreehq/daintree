@@ -24,6 +24,7 @@ import { SnapshotBuilder, type SnapshotBuilderHost } from "./SnapshotBuilder.js"
 import { StatPrecheck, type StatPrecheckHost } from "./StatPrecheck.js";
 import { BaseDivergence, type BaseDivergenceHost } from "./BaseDivergence.js";
 import { GitStatusPass, type GitStatusPassHost } from "./GitStatusPass.js";
+import type { StatusAdmissionController } from "./StatusAdmissionController.js";
 import { withTimeout } from "../utils/withTimeout.js";
 
 // Hard ceiling for individual filesystem syscalls on the poll path. On a
@@ -60,6 +61,21 @@ const STATUS_INITIAL_DELAY_MAX_MS = 5_000;
 function randomBetween(minMs: number, maxMs: number): number {
   if (maxMs <= minMs) return minMs;
   return minMs + Math.floor(Math.random() * (maxMs - minMs));
+}
+
+/**
+ * What a monitor may run right now, derived by WorkspaceService from the
+ * project lifecycle and the app-wide power policy together. Three permissions
+ * rather than one boolean: observing a worktree, fetching from its remote, and
+ * how expensively we may act on what we observe are separately affordable.
+ */
+export interface WorktreePollingPermissions {
+  /** Git status may run and the watcher may stay armed. */
+  status: boolean;
+  /** Scheduled network fetch and resource-command polling may run. */
+  backgroundWork: boolean;
+  /** Coalesce harder and meter automatic status passes. */
+  attenuated: boolean;
 }
 
 export interface WorktreeMonitorConfig {
@@ -161,7 +177,31 @@ export class WorktreeMonitor {
   private resumeTimer: NodeJS.Timeout | null = null;
   private _isRunning: boolean = false;
   private _isUpdating: boolean = false;
-  private pollingEnabled: boolean = true;
+  // Whether this worktree may run git status and hold a watcher at all.
+  // Withdrawn when the project is backgrounded (WorkspaceService.pause) or
+  // nobody can see a window; an agent-active worktree keeps working through
+  // either, via `statusWorkAllowed`.
+  private statusPollingEnabled: boolean = true;
+  // Whether scheduled *network* fetch and resource-command polling may run.
+  // Held to the stricter "someone is looking" bar than status work: a fetch
+  // nobody is waiting on can wait, and it costs a request rather than a stat.
+  private backgroundPollingEnabled: boolean = true;
+  // Consume change signals cheaply: longer watcher coalescing, and automatic
+  // status passes admitted through the host's rate budget. Set while nobody is
+  // looking. Never stops observation — only paces what we do about it.
+  private attenuated: boolean = false;
+  // Set when a pause tore down a recursive watcher, so resume can tell the
+  // file browser its listings may have missed writes in the meantime.
+  private recursiveLostToPause: boolean = false;
+  // The resume catch-up still waiting for a poll-queue slot, if any. Rapid
+  // background/foreground flips while the queue is busy reuse it rather than
+  // stacking one pass per resume; it is released the moment the pass starts,
+  // so a resume that overlaps a running pass still queues its own.
+  private resumeCatchUpWaiting: object | null = null;
+  // Sticky until a catch-up pass consumes it: a resume that lost recursive
+  // coverage needs a forced pass even if the worktree is no longer elevated
+  // by the time the queued request runs.
+  private resumeCatchUpNeedsForce: boolean = false;
   private _hasInitialStatus: boolean = false;
 
   // File watcher state — owned by `watcherController`. The remaining fields
@@ -176,6 +216,10 @@ export class WorktreeMonitor {
   // monitor falls back to adaptive polling. Always true for the focused
   // worktree (which is never counted against the cap).
   private gitWatchBudgetAllowed: boolean = true;
+  // Second budget gate, for agent-active worktrees past WorkspaceService's
+  // recursive cap: they keep a watcher but only on `.git/`. Never consulted
+  // for the focused worktree, which has its own recursive entitlement.
+  private recursiveWatchBudgetAllowed: boolean = true;
   private gitWatchDebounceMs: number;
   private lastGitStatusCompletedAt: number = 0;
   // Monotonic timestamp of the last recursive-watcher flush — a raw filesystem
@@ -230,6 +274,9 @@ export class WorktreeMonitor {
   private _hasResumeCommand: boolean = false;
   private _hasTeardownCommand: boolean = false;
   private _hasProvisionCommand: boolean = false;
+  // `undefined` until the host has checked, which is a different answer from
+  // "checked, nothing waiting" — see `Worktree.lifecycleCommandsNeedApproval`.
+  private _lifecycleCommandsNeedApproval: boolean | undefined;
   private _worktreeMode: string = "local";
   private _worktreeEnvironmentLabel: string | undefined;
 
@@ -280,6 +327,8 @@ export class WorktreeMonitor {
   private pollingStrategy: AdaptivePollingStrategy;
   private noteReader: NoteFileReader;
   private pollQueue?: PQueue;
+  /** Host-wide budget for automatic status passes while attenuated. */
+  private readonly statusAdmission?: StatusAdmissionController;
   private readonly snapshotBuilder: SnapshotBuilder;
   private readonly statPrecheck: StatPrecheck;
   private readonly baseDivergence: BaseDivergence;
@@ -303,8 +352,10 @@ export class WorktreeMonitor {
     private callbacks: WorktreeMonitorCallbacks,
     private mainBranch: string,
     pollQueue?: PQueue,
-    generation: number = 0
+    generation: number = 0,
+    statusAdmission?: StatusAdmissionController
   ) {
+    this.statusAdmission = statusAdmission;
     this.id = worktree.id;
     this.generation = generation;
     this.path = worktree.path;
@@ -344,6 +395,9 @@ export class WorktreeMonitor {
       get isRunning() {
         return monitor._isRunning;
       },
+      get pollingEnabled() {
+        return monitor.backgroundPollingEnabled;
+      },
       get isCurrent() {
         return monitor._isCurrent;
       },
@@ -365,6 +419,9 @@ export class WorktreeMonitor {
     const resourceHost: ResourcePollTimerHost = {
       get isRunning() {
         return monitor._isRunning;
+      },
+      get pollingEnabled() {
+        return monitor.backgroundPollingEnabled;
       },
       get hasResourceConfig() {
         return monitor._hasResourceConfig;
@@ -389,6 +446,12 @@ export class WorktreeMonitor {
       },
       get isElevated() {
         return monitor._isCurrent || monitor._agentActive;
+      },
+      get recursiveAllowed() {
+        return monitor._isCurrent || monitor.recursiveWatchBudgetAllowed;
+      },
+      get suspended() {
+        return !monitor.statusWorkAllowed;
       },
       get gitWatchEnabled() {
         // Combined gate: the per-view watcher budget can suppress the watcher
@@ -416,12 +479,30 @@ export class WorktreeMonitor {
         return monitor.lastGitStatusCompletedAt;
       },
       onTriggerUpdate: () => {
+        // A backgrounded worktree without an agent runs no status work; its
+        // watcher is torn down on pause, so this only catches a straggling
+        // flush. Resume's catch-up pass covers whatever it would have seen.
+        if (!monitor.statusWorkAllowed) return;
         // Stamp the watcher event time before triggering so the stat
         // pre-check on the next timed poll knows to invalidate any baseline
         // captured before this event.
         monitor.lastWatcherEventAt = Date.now();
         monitor.pollingStrategy.recordStateChange();
-        void monitor.updateGitStatus(true);
+        // GitStatusPass reflects a failure as mood=error and then rethrows;
+        // detached, that rethrow would reach the host's exit-on-unhandled-
+        // rejection guard. This path also drains requests parked with
+        // `markPending()` (resume catch-up, heartbeat-gap recovery).
+        //
+        // Admission is a no-op while someone is looking — a save reaches the
+        // sidebar without waiting behind anyone. While attenuated it bounds
+        // how fast N worktrees under agent writes may fork git, coalescing to
+        // one pending pass each rather than dropping any.
+        const run = () => void monitor.updateGitStatus(true).catch(() => {});
+        if (monitor.statusAdmission) {
+          monitor.statusAdmission.request(monitor.id, run);
+        } else {
+          run();
+        }
       },
       onInotifyLimitReached: (worktreeId: string) =>
         monitor.callbacks.onInotifyLimitReached?.(worktreeId),
@@ -550,6 +631,9 @@ export class WorktreeMonitor {
       },
       get hasProvisionCommand() {
         return monitor._hasProvisionCommand;
+      },
+      get lifecycleCommandsNeedApproval() {
+        return monitor._lifecycleCommandsNeedApproval;
       },
       get worktreeMode() {
         return monitor._worktreeMode;
@@ -1057,6 +1141,13 @@ export class WorktreeMonitor {
     if (!changed || !this._isRunning) {
       return;
     }
+    if (!value && !this.statusPollingEnabled) {
+      // The agent finished while the project is backgrounded: this worktree
+      // is now as idle as its neighbours, so it lets go of its watcher and
+      // poll loop the same way. Its final state lands with resume's catch-up.
+      this.suspendStatusWork();
+      return;
+    }
     if (this.gitWatchEnabled) {
       const rotatedImmediately = this.watcherController.handleElevationChange(this.isElevated);
       if (rotatedImmediately && this.pollingTimer) {
@@ -1069,10 +1160,24 @@ export class WorktreeMonitor {
       // Agent work incoming — reset the idle backoff so the poll fallback
       // returns to base cadence, mirroring the focus-gain path.
       this.pollingStrategy.recordStateChange();
+      // On a backgrounded project the poll loop was stopped; an agent that
+      // starts here needs it back. No-op when a timer is already armed.
+      this.scheduleNextPoll();
+      this.reportWritesMissedWhilePaused();
     }
     if (this._hasInitialStatus) {
       this.triggerRefreshIfUpdating();
     }
+  }
+
+  /**
+   * Status work (watcher-driven refreshes and the timed poll) runs while this
+   * worktree's project is in the foreground of a window someone could look at.
+   * When that does not hold it continues only for a worktree an agent is
+   * working in — that worktree's freshness is the product's core loop.
+   */
+  private get statusWorkAllowed(): boolean {
+    return this.statusPollingEnabled || this._agentActive;
   }
 
   get isMainWorktree(): boolean {
@@ -1261,6 +1366,14 @@ export class WorktreeMonitor {
     return this._resourceConnectCommand;
   }
 
+  get lifecycleCommandsNeedApproval(): boolean | undefined {
+    return this._lifecycleCommandsNeedApproval;
+  }
+
+  setLifecycleCommandsNeedApproval(needsApproval: boolean): void {
+    this._lifecycleCommandsNeedApproval = needsApproval;
+  }
+
   setResourceConnectCommand(cmd: string | undefined): void {
     this._resourceConnectCommand = cmd;
   }
@@ -1424,7 +1537,6 @@ export class WorktreeMonitor {
     }
 
     this._isRunning = true;
-    this.pollingEnabled = true;
     this._pollAbortController = new AbortController();
 
     if (this.gitWatchEnabled) {
@@ -1440,7 +1552,7 @@ export class WorktreeMonitor {
     if (this.isElevated) {
       await this.updateGitStatus(true);
 
-      if (this._isRunning && this.pollingEnabled) {
+      if (this._isRunning) {
         this.scheduleNextPoll();
         this.fetchScheduler.schedule(true);
       }
@@ -1458,9 +1570,7 @@ export class WorktreeMonitor {
             // Already emitted as error mood inside updateGitStatus
           })
           .finally(() => {
-            if (this._isRunning && this.pollingEnabled) {
-              this.scheduleNextPoll();
-            }
+            this.scheduleNextPoll();
           });
       }, delayMs);
       this.initialStatusTimer.unref?.();
@@ -1473,7 +1583,6 @@ export class WorktreeMonitor {
     }
 
     this._isRunning = true;
-    this.pollingEnabled = true;
     this._pollAbortController = new AbortController();
 
     if (this.gitWatchEnabled) {
@@ -1491,10 +1600,8 @@ export class WorktreeMonitor {
     this._hasInitialStatus = true;
     this.emitUpdate();
 
-    if (this._isRunning && this.pollingEnabled) {
-      this.scheduleNextPoll();
-      this.fetchScheduler.schedule(true);
-    }
+    this.scheduleNextPoll();
+    this.fetchScheduler.schedule(true);
   }
 
   stop(): void {
@@ -1502,6 +1609,8 @@ export class WorktreeMonitor {
     this._pollAbortController.abort();
     this.clearTimers();
     this.watcherController.stop();
+    // A parked automatic pass would run against a stopped monitor.
+    this.statusAdmission?.cancel(this.id);
   }
 
   /**
@@ -1528,12 +1637,27 @@ export class WorktreeMonitor {
     this.fetchScheduler.reschedule(initial);
   }
 
-  async refresh(): Promise<void> {
+  /**
+   * Force a status pass.
+   *
+   * `automatic` marks a pass nobody asked for by hand: the focus revalidation
+   * and the post-wake sweep. Those fan out across every monitor and are
+   * awaited one at a time, so a request can easily still be queued when its
+   * project is backgrounded or the app stops being observable — and would then
+   * run a full pass in a host that is supposed to be quiescent, against a
+   * worktree whose watcher was released on pause. Checked at run time, like
+   * the poll and queued catch-up paths, not when the fan-out was decided.
+   *
+   * A user-initiated refresh is never skipped. It is the escape hatch, and the
+   * whole point of it is to run when the automatic machinery has not.
+   */
+  async refresh(options?: { automatic?: boolean }): Promise<void> {
     // A stopped monitor has nothing to refresh. This also makes the ENOENT
     // preflight below idempotent: the first removal detection calls stop(),
     // so a concurrent refresh() (background poll racing a topology reconcile)
     // returns here instead of emitting a duplicate worktree-removed (#8510).
     if (!this._isRunning) return;
+    if (options?.automatic && !this.statusWorkAllowed) return;
     // Path-existence preflight (#8510): without this, a removed worktree is
     // only self-detected once the poll reaches the fs.access deep inside
     // getWorktreeChangesWithStats. Catching it here means every refresh path —
@@ -1571,29 +1695,186 @@ export class WorktreeMonitor {
     await this.updateGitStatus(true);
   }
 
-  pausePolling(): void {
-    this.pollingEnabled = false;
-    this.clearTimers();
+  /**
+   * Apply the permissions WorkspaceService derived from the project lifecycle
+   * and the app-wide power policy. The single entry point: both axes reach the
+   * monitor through here, so neither can overwrite the other's decision.
+   *
+   * Attenuation is applied first and unconditionally — a worktree that keeps
+   * working through a pause (an agent is running in it) must still pick up the
+   * cheaper cadence.
+   */
+  applyPollingPermissions(permissions: WorktreePollingPermissions): void {
+    this.applyAttenuation(permissions.attenuated);
+    this.backgroundPollingEnabled = permissions.backgroundWork;
+    if (!permissions.backgroundWork) {
+      this.fetchScheduler.clearTimer();
+      this.clearResourcePollTimer();
+    }
+    if (permissions.status === this.statusPollingEnabled) {
+      if (permissions.backgroundWork && this._isRunning) {
+        this.scheduleResourcePoll();
+        this.fetchScheduler.schedule(true);
+      }
+      return;
+    }
+    if (permissions.status) {
+      this.resumeStatusPolling(permissions.backgroundWork);
+    } else {
+      this.pauseStatusPolling();
+    }
   }
 
+  /**
+   * Status work is withdrawn. A worktree without a working agent stops its
+   * status poll and lets go of its watcher entirely — including the focused
+   * one, since nobody can see it. An agent-active worktree keeps both.
+   */
+  private pauseStatusPolling(): void {
+    this.statusPollingEnabled = false;
+    if (!this._agentActive) {
+      this.suspendStatusWork();
+    }
+  }
+
+  /**
+   * Retime this monitor for the attenuated or full cadence. The watcher stays
+   * armed across the transition: tearing it down and rebuilding would cost a
+   * full directory walk and open a window where events are lost outright,
+   * which is the failure this whole change exists to remove.
+   */
+  private applyAttenuation(attenuated: boolean): void {
+    if (this.attenuated === attenuated) return;
+    this.attenuated = attenuated;
+    this.watcherController.setAttenuated(attenuated);
+    // The armed poll timer still holds the old cadence. Re-arming it is safe
+    // here — unlike `resumePolling`'s catch-up, nothing is owed, so dropping
+    // the pending timer loses nothing.
+    if (this.pollingTimer) {
+      clearTimeout(this.pollingTimer);
+      this.pollingTimer = null;
+      this.scheduleNextPoll();
+    }
+  }
+
+  /**
+   * The project was backgrounded. Kept as the direct entry point for the
+   * lifecycle-only path and its tests; permission changes route through
+   * {@link applyPollingPermissions}.
+   */
+  pausePolling(): void {
+    this.backgroundPollingEnabled = false;
+    this.fetchScheduler.clearTimer();
+    this.clearResourcePollTimer();
+    this.pauseStatusPolling();
+  }
+
+  /**
+   * The project is back in the foreground. A worktree whose status work was
+   * suspended re-arms its watcher and queues one catch-up pass before resuming
+   * its normal cadence — nothing was watching it in between, so a scheduled
+   * poll alone could leave it stale for a full heartbeat. The poll queue
+   * spreads N resuming monitors across its slots, so no jitter timer (which
+   * `reschedulePolling()` could clear, dropping the catch-up) is needed.
+   */
   resumePolling(): void {
-    if (!this._isRunning) return;
+    this.backgroundPollingEnabled = true;
+    this.resumeStatusPolling(true);
+  }
 
+  private resumeStatusPolling(scheduleBackgroundWork: boolean): void {
+    if (!this._isRunning) {
+      // Still record the grant: `start()` reads `statusWorkAllowed`, so a
+      // monitor that has not started yet must not begin life suspended after
+      // the permission that suspended it was lifted.
+      this.statusPollingEnabled = true;
+      return;
+    }
+
+    const wasSuspended = !this.statusWorkAllowed;
     this.pollingStrategy.reset();
-    this.pollingEnabled = true;
+    this.statusPollingEnabled = true;
 
-    if (!this.pollingStrategy.isCircuitBreakerTripped()) {
+    if (wasSuspended) {
+      this.watcherController.ensureState();
+      const lostRecursive = this.recursiveLostToPause;
+      this.reportWritesMissedWhilePaused();
+      this.queueResumeCatchUp(lostRecursive);
+    } else if (!this.pollingStrategy.isCircuitBreakerTripped()) {
       const jitter = Math.random() * 2000;
       this.resumeTimer = setTimeout(() => {
         this.resumeTimer = null;
-        if (this._isRunning && this.pollingEnabled) {
-          this.scheduleNextPoll();
-        }
+        this.scheduleNextPoll();
       }, jitter);
     }
 
-    this.scheduleResourcePoll();
-    this.fetchScheduler.schedule(true);
+    if (scheduleBackgroundWork) {
+      this.scheduleResourcePoll();
+      this.fetchScheduler.schedule(true);
+    }
+  }
+
+  /**
+   * Queue the one status pass a resume owes a suspended worktree. Forced when
+   * the pause took down recursive coverage or the worktree is elevated when
+   * the pass runs: back under a recursive watcher, the stat pre-check would
+   * trust it to have reported every working-tree write, and it wasn't
+   * listening. Everything else goes through the pre-check, which reads the
+   * same .git/ files a git-only watcher would have reported.
+   */
+  private queueResumeCatchUp(lostRecursive: boolean): void {
+    this.resumeCatchUpNeedsForce ||= lostRecursive;
+    if (this.resumeCatchUpWaiting) return;
+    const token = {};
+    this.resumeCatchUpWaiting = token;
+    const release = (): void => {
+      if (this.resumeCatchUpWaiting === token) this.resumeCatchUpWaiting = null;
+    };
+    void this.queueStatusPassThenPoll(() => {
+      release();
+      const force = this.resumeCatchUpNeedsForce || this.isElevated;
+      this.resumeCatchUpNeedsForce = false;
+      return force;
+    }).finally(release);
+  }
+
+  /**
+   * A pause tore down this worktree's recursive watcher, so writes to
+   * gitignored paths — which git status can't see — went unreported. Tell the
+   * file browser to re-read every listing.
+   */
+  private reportWritesMissedWhilePaused(): void {
+    if (!this.recursiveLostToPause) return;
+    this.recursiveLostToPause = false;
+    try {
+      this.handleWorktreeFilesChanged(null);
+    } catch {
+      // A throwing update listener must not abort the resume (or the agent
+      // flip) that is re-arming this worktree's watcher and polling.
+    }
+  }
+
+  /**
+   * Stop this worktree's status work for a backgrounded project: its poll
+   * timers and its watcher. Pending debounced flushes go with the watcher.
+   */
+  private suspendStatusWork(): void {
+    if (this.pollingTimer) {
+      clearTimeout(this.pollingTimer);
+      this.pollingTimer = null;
+    }
+    if (this.resumeTimer) {
+      clearTimeout(this.resumeTimer);
+      this.resumeTimer = null;
+    }
+    if (this.initialStatusTimer) {
+      clearTimeout(this.initialStatusTimer);
+      this.initialStatusTimer = null;
+    }
+    if (this.watcherController.currentMode === "recursive") {
+      this.recursiveLostToPause = true;
+    }
+    this.watcherController.ensureState();
   }
 
   getSnapshot(): WorktreeSnapshot {
@@ -1632,6 +1913,7 @@ export class WorktreeMonitor {
     return getWorktreeChangesWithStats(this.path, {
       forceRefresh: true,
       wsl: this.wslInvocation,
+      signal: this._pollAbortController.signal,
     });
   }
 
@@ -1660,9 +1942,7 @@ export class WorktreeMonitor {
       this.resumeTimer = null;
     }
 
-    if (this._isRunning && this.pollingEnabled) {
-      this.scheduleNextPoll();
-    }
+    this.scheduleNextPoll();
   }
 
   ensureWatcherState(): void {
@@ -1695,6 +1975,36 @@ export class WorktreeMonitor {
     this.reschedulePolling();
   }
 
+  /**
+   * Grant or withhold a recursive watcher for this worktree
+   * (WorkspaceService's agent recursive cap). Withholding drops an elevated
+   * worktree to `git-only` right away — the 60 s elevated poll picks up the
+   * slack — unless a focus downgrade is already settling, which lands on the
+   * same mode. No-op when the flag is unchanged.
+   */
+  setRecursiveWatchBudgetAllowed(allowed: boolean): void {
+    if (this.recursiveWatchBudgetAllowed === allowed) return;
+    this.recursiveWatchBudgetAllowed = allowed;
+    // Only an agent-active worktree away from focus is governed by the flag;
+    // anyone else picks it up the next time their elevation changes.
+    if (!this._isRunning || !this._agentActive || this._isCurrent) return;
+    const before = this.watcherController.currentMode;
+    this.watcherController.ensureState();
+    const after = this.watcherController.currentMode;
+    if (after !== before) {
+      this.reschedulePolling();
+    }
+    if (after === "recursive" && before !== "recursive" && this.lastGitStatusCompletedAt > 0) {
+      // An edit made under git-only coverage since the last elevated poll was
+      // never reported, and the stat pre-check trusts a recursive watcher from
+      // here on — reconcile now, as every other upgrade path does. Queued, so
+      // a budget pass promoting many agents at once shares the poll queue's
+      // slots. Skipped before any real pass: with no stat baseline yet, the
+      // next poll runs a full status regardless.
+      void this.queueStatusPassThenPoll(() => true);
+    }
+  }
+
   restartWatcherIfRunning(): void {
     this.watcherController.restartIfRunning();
   }
@@ -1720,7 +2030,7 @@ export class WorktreeMonitor {
   }
 
   private scheduleCircuitBreakerRetry(): void {
-    if (!this._isRunning || !this.pollingEnabled) {
+    if (!this._isRunning || !this.statusWorkAllowed) {
       return;
     }
 
@@ -1740,14 +2050,14 @@ export class WorktreeMonitor {
 
     this.resumeTimer = setTimeout(() => {
       this.resumeTimer = null;
-      if (this._isRunning && this.pollingEnabled) {
+      if (this._isRunning && this.statusWorkAllowed) {
         void this.poll(true);
       }
     }, cooldown + jitter);
   }
 
   private scheduleNextPoll(): void {
-    if (!this._isRunning || !this.pollingEnabled) {
+    if (!this._isRunning || !this.statusWorkAllowed) {
       return;
     }
 
@@ -1788,7 +2098,7 @@ export class WorktreeMonitor {
         if (elapsedMs > threshold) {
           this.mood = "stale";
           this.emitUpdate();
-          void this.forceRefreshAfterGap();
+          void this.queueStatusPassThenPoll(() => true);
           return;
         }
       }
@@ -1797,13 +2107,29 @@ export class WorktreeMonitor {
     }, delayMs).unref();
   }
 
-  private async forceRefreshAfterGap(): Promise<void> {
-    // Route through pollQueue when present so wake-induced gap refreshes are
-    // serialized across sibling monitors instead of all racing simultaneously.
-    const run = (): Promise<void> =>
-      this.updateGitStatus(true).catch(() => {
+  /**
+   * One out-of-band status pass (heartbeat-gap recovery, resume catch-up),
+   * then back to the normal cadence. Routed through pollQueue when present so
+   * N monitors waking or resuming together are serialized across its slots
+   * instead of all forking git at once.
+   */
+  private async queueStatusPassThenPoll(forceRefresh: () => boolean): Promise<void> {
+    const run = (): Promise<void> => {
+      // Paused again while this sat in the queue — the next resume queues its own.
+      if (!this.statusWorkAllowed) return Promise.resolve();
+      if (this._isUpdating) {
+        // A pass that started before this request would make updateGitStatus
+        // return early and drop it. Park it on the pending flag instead; the
+        // in-flight pass drains that into a forced refresh when it lands.
+        this.watcherController.markPending();
+        return Promise.resolve();
+      }
+      // Read at run time: a worktree that gained or lost elevation while the
+      // request waited for its slot gets the pass it needs now.
+      return this.updateGitStatus(forceRefresh()).catch(() => {
         // updateGitStatus's own error path emits "error" mood; nothing to do here.
       });
+    };
     try {
       if (this.pollQueue) {
         await this.pollQueue.add(run, {
@@ -1816,9 +2142,7 @@ export class WorktreeMonitor {
     } catch {
       // Queue abort or task error — already swallowed by run() / signal.
     }
-    if (this._isRunning && this.pollingEnabled) {
-      this.scheduleNextPoll();
-    }
+    this.scheduleNextPoll();
   }
 
   private async poll(force: boolean = false): Promise<void> {
@@ -1846,6 +2170,8 @@ export class WorktreeMonitor {
     const queuedAt = Date.now();
 
     const executePoll = async (): Promise<void> => {
+      // The project was backgrounded while this poll waited for a queue slot.
+      if (!this.statusWorkAllowed) return;
       const startTime = Date.now();
       const queueDelayMs = Math.max(0, startTime - queuedAt);
 
@@ -1901,10 +2227,11 @@ export class WorktreeMonitor {
       // Reschedule unconditionally — even if the await above rejected (it can't,
       // it's already caught) or the task was dropped by the queue's own
       // watchdog. The only paths that must NOT reschedule are stop()/pause(),
-      // both guarded by the _isRunning / pollingEnabled checks.
+      // both guarded inside scheduleNextPoll() by the _isRunning /
+      // statusWorkAllowed checks.
       if (tripped) {
         this.scheduleCircuitBreakerRetry();
-      } else if (this._isRunning && this.pollingEnabled) {
+      } else {
         this.scheduleNextPoll();
       }
     }

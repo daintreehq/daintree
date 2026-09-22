@@ -4,8 +4,12 @@ import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
 import { useRosettaBannerStore } from "@/store/rosettaBannerStore";
-import { useSyncExternalStore } from "react";
+import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
+import { useEffect, useSyncExternalStore } from "react";
 import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { useGlobalBannerDismissalStore } from "@/store/globalBannerDismissalStore";
+import { selectActiveForgeTokenProvider } from "./ForgeTokenBanner";
 import {
   useMissingPrerequisiteStore,
   selectMissingPrerequisiteVisible,
@@ -14,6 +18,7 @@ import {
 export type GlobalBannerSlot =
   | "host-crash"
   | "watchdog-disabled"
+  | "host-memory-stall"
   | "safe-mode"
   | "restore-confirmation"
   | "missing-prerequisite"
@@ -26,6 +31,7 @@ export type GlobalBannerSlot =
 // Precedence (highest first):
 //   host-crash         — backend is unusable right now (#8678 motivator)
 //   watchdog-disabled  — deadlock detector is gone; protection layer down (#8674)
+//   host-memory-stall  — a terminal host's memory pause isn't recovering (#12375)
 //   safe-mode          — panels weren't restored after a crash loop
 //   restore-confirmation — informational "session recovered" toast-banner
 //   missing-prerequisite — a fatal tool (Git, Node) isn't installed (#11763)
@@ -42,6 +48,12 @@ export type GlobalBannerSlot =
 // that gate the coordinator shows nothing rather than flashing the
 // lower-priority banner back in, matching the Doherty anti-flicker pattern
 // used elsewhere in the app.
+//
+// host-memory-stall sits below both because its backend is still connected and
+// protected, and above safe-mode and restore-confirmation because it is a live
+// problem slowing terminal output now, while those two describe the previous
+// session — and neither loses anything by waiting, since restore-confirmation's
+// auto-dismiss timer only runs once it's mounted.
 //
 // missing-prerequisite, forge-token and cloud-sync sit below the recovery
 // block. restore-confirmation stays above them all because its auto-dismiss
@@ -60,12 +72,20 @@ export type GlobalBannerSlot =
 export function useGlobalBannerPriority(): GlobalBannerSlot {
   const backendStatus = usePanelStore((s) => s.backendStatus);
   const watchdogStatus = usePanelStore((s) => s.watchdogStatus);
+  const hostMemoryStalled = useHostMemoryPauseStore((s) => s.snapshot?.stalled ?? false);
   const safeMode = useSafeModeStore((s) => s.safeMode);
   const safeModeDismissed = useSafeModeStore((s) => s.dismissed);
   const restoreVisible = useRestoreConfirmationStore((s) => s.visible);
-  const tokenUnhealthy = useForgeProviderHealthStore((s) =>
-    Object.values(s.providers).some((p) => p.tokenUnhealthy)
-  );
+  // A banner that would render nothing must not claim the slot, or the band
+  // sits empty while every lower banner stays suppressed. Forge's eligibility
+  // is the banner's own predicate; watchdog and plugin-document honour a
+  // session dismissal that clears with the condition.
+  const forgeProviders = useForgeProviderHealthStore((s) => s.providers);
+  const disabledPluginIds = usePluginRuntimeStore((s) => s.disabledPluginIds);
+  const tokenUnhealthy =
+    selectActiveForgeTokenProvider(forgeProviders, disabledPluginIds) !== undefined;
+  const dismissed = useGlobalBannerDismissalStore((s) => s.dismissed);
+  const resetDismissal = useGlobalBannerDismissalStore((s) => s.reset);
   const cloudSyncService = useCloudSyncBannerStore((s) => s.service);
   const rosettaVisible = useRosettaBannerStore((s) => s.visible);
   const prerequisiteVisible = useMissingPrerequisiteStore(selectMissingPrerequisiteVisible);
@@ -74,13 +94,21 @@ export function useGlobalBannerPriority(): GlobalBannerSlot {
     pluginDocumentRuntime.getSnapshot
   );
 
+  const watchdogDisabled = watchdogStatus === "disabled";
+  const pluginsNeedReload = documentDiagnostics.length > 0;
+  useEffect(() => {
+    if (!watchdogDisabled) resetDismissal("watchdog-disabled");
+    if (!pluginsNeedReload) resetDismissal("plugin-document");
+  }, [watchdogDisabled, pluginsNeedReload, resetDismissal]);
+
   if (backendStatus !== "connected") return "host-crash";
-  if (watchdogStatus === "disabled") return "watchdog-disabled";
+  if (watchdogDisabled && !dismissed.has("watchdog-disabled")) return "watchdog-disabled";
+  if (hostMemoryStalled) return "host-memory-stall";
   if (safeMode && !safeModeDismissed) return "safe-mode";
   if (restoreVisible) return "restore-confirmation";
   if (prerequisiteVisible) return "missing-prerequisite";
   if (tokenUnhealthy) return "forge-token";
-  if (documentDiagnostics.length > 0) return "plugin-document";
+  if (pluginsNeedReload && !dismissed.has("plugin-document")) return "plugin-document";
   if (cloudSyncService !== null) return "cloud-sync";
   if (rosettaVisible) return "rosetta";
   return null;

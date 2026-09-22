@@ -69,8 +69,11 @@ export function SettingsSwitchCard({
       className={cn(
         "relative w-full flex items-center justify-between transition-colors",
         isCard ? "p-4 rounded-[var(--radius-lg)] border hover:bg-tint/5" : "py-2",
-        "border-border-default text-text-secondary",
-        isEnabled && "border-border-default text-text-primary",
+        // An off setting is still an available setting: it keeps full title contrast, and
+        // only the switch position says which way it is set. Dimming the label too made
+        // every off row read as disabled — and the genuinely disabled case below already
+        // owns that treatment.
+        "border-border-default text-text-primary",
         !disabled && "cursor-pointer",
         disabled && "opacity-50"
       )}
@@ -85,7 +88,15 @@ export function SettingsSwitchCard({
       <div className="flex items-center gap-3 flex-1">
         {Icon && (
           <Icon
-            className={cn("w-5 h-5", isEnabled ? scheme.icon : "text-daintree-text/50")}
+            // Neutral in both positions by default. Six enabled rows in one pane meant six
+            // accent glyphs, i.e. accent standing for membership rather than for the one
+            // load-bearing signal in the focus region. An explicit `colorScheme` still opts
+            // a card into a status hue where the hue itself is the point. `text-muted` is
+            // not an option for either position: it has no dark-theme contrast floor.
+            className={cn(
+              "w-5 h-5",
+              isEnabled && colorScheme !== "accent" ? scheme.icon : "text-text-secondary"
+            )}
             aria-hidden="true"
           />
         )}
@@ -99,7 +110,7 @@ export function SettingsSwitchCard({
               </span>
             )}
           </div>
-          <div id={descriptionId} className="text-xs opacity-70">
+          <div id={descriptionId} className="text-xs text-text-secondary">
             {subtitle}
           </div>
         </div>

@@ -110,7 +110,7 @@ async function ensureProjectOpen(): Promise<void> {
     }
     if (
       await ctx.window
-        .getByRole("button", { name: "Open folder" })
+        .getByRole("button", { name: "Open project", exact: true })
         .isVisible({ timeout: 500 })
         .catch(() => false)
     ) {
@@ -323,7 +323,7 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
 
     await test.step("The failure banner appears with a retry action", async () => {
       await expect(window.locator(SEL.fleet.failureBanner)).toBeVisible({ timeout: T_LONG });
-      await expect(window.getByRole("button", { name: "Retry failed" })).toBeVisible({
+      await expect(window.getByRole("button", { name: "Retry", exact: true })).toBeVisible({
         timeout: T_MEDIUM,
       });
       // The faulted broadcast must not have reached either pane — otherwise a
@@ -338,9 +338,9 @@ test.describe.serial("Fleet broadcast: failure and progress paths", () => {
 
     await test.step("Clearing the fault and retrying delivers the payload", async () => {
       await clearAllFaults(ctx.app);
-      const retryFailed = window.getByRole("button", { name: "Retry failed" });
+      const retryFailed = window.getByRole("button", { name: "Retry", exact: true });
       await expect(retryFailed).toBeVisible({ timeout: T_MEDIUM });
-      await window.getByRole("button", { name: "Retry failed" }).click({
+      await retryFailed.click({
         force: true,
         timeout: T_MEDIUM,
       });

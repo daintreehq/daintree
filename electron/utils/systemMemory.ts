@@ -35,7 +35,13 @@ export interface SystemMemorySnapshot {
   totalMb: number;
   freeMb: number;
   purgeableMb: number;
+  fileBackedMb: number;
   availableMb: number;
+}
+
+export interface SwapUsage {
+  usedMb: number;
+  totalMb: number;
 }
 
 export interface SystemMemoryThresholds {
@@ -54,13 +60,11 @@ export interface SystemMemoryThresholds {
  * window — assistant-backed views stay protected at any band),
  * scores `+3` on the profile — enough to latch efficiency alone — and lets a
  * contemporaneous renderer `crashed`/`killed` be classified as probable OOM.
- * It is capped flat above the knee and stays that way. `availableMb` is
- * `free + purgeable`, which on Darwin omits `fileBacked` — the file cache, and
- * the bulk of what the OS would actually reclaim first. A large-RAM machine
- * therefore reports a far smaller "available" figure than it has headroom for,
- * and raising this edge against that scale would manufacture emergencies on
- * healthy machines. That measurement is the real ceiling on how far the band
- * can move and is worth fixing on its own; it is not this change.
+ * It is capped flat above the knee and stays that way. Since #12363
+ * `availableMb` counts Darwin's file cache, so on a large Mac this edge is
+ * crossed only once that cache is spent — which is what an emergency is.
+ * Raising it would move the collapse ahead of that point with nothing measured
+ * to say where.
  *
  * `warningMb` is the proactive edge: crossing it starts the graduated ladder,
  * which sheds at most one renderer per 30s sample per window and restores the
@@ -92,6 +96,47 @@ export function getSystemMemoryThresholds(totalMb: number): SystemMemoryThreshol
   };
 }
 
+/**
+ * A Darwin-only component (KB) as MB: 0 when the platform does not report it
+ * (Windows and Linux), null when it is reported but unusable.
+ *
+ * A reported component that is malformed means the reading is incomplete, not
+ * that the component is empty. Summing the rest would under-count exactly the
+ * way #12517's two days of false "critical" did — 71 MB available on an 18 GB
+ * Mac, because the file cache was missing from the sum — so the caller treats
+ * it as unreadable rather than as a low figure.
+ */
+function darwinComponentMb(kb: unknown, mustBePositive: boolean): number | null {
+  if (kb === undefined) return 0;
+  if (typeof kb !== "number" || !Number.isFinite(kb) || kb < 0) return null;
+  if (mustBePositive && kb === 0) return null;
+  return kb / 1024;
+}
+
+/**
+ * `availableMb` is free memory plus, on Darwin, what Activity Monitor calls
+ * Cached Files: `fileBacked` + `purgeable`, which Electron reports only there,
+ * so Windows and Linux read `free` alone. That is the line macOS itself draws
+ * between reclaimable memory and Memory Used (app + wired + compressed).
+ *
+ * On a large Mac the file cache is most of it: a 64 GB machine with a warm
+ * cache routinely shows ~1.5 GB free + purgeable beside ~24 GB of `fileBacked`.
+ * Leaving that out read the machine as permanently short and evicted its cached
+ * views around the clock (#12363).
+ *
+ * The figure errs optimistic in one place: `fileBacked` counts active file
+ * pages as well as idle cache, and pages under heavy churn cost more to reclaim
+ * than clean ones. Pressure Daintree causes itself still reaches
+ * ProcessMemoryMonitor's own-process RSS tiers, which never read this.
+ *
+ * Returns null for a reading that cannot be true, so every consumer reads it as
+ * "no signal" rather than as critical (#12517). A reported `fileBacked` of zero
+ * is one: it is Darwin's external page count, and a running Mac always has
+ * file-backed pages resident — the executables and shared cache of everything
+ * running — so zero is an unpopulated field, not an exhausted machine. A
+ * genuinely low but well-formed reading is still trusted however small it is;
+ * there is no floor, because real exhaustion is exactly when it should be.
+ */
 export function readSystemMemorySnapshot(): SystemMemorySnapshot | null {
   const totalMb = os.totalmem() / 1024 / 1024;
   if (!Number.isFinite(totalMb) || totalMb <= 0) return null;
@@ -102,14 +147,19 @@ export function readSystemMemorySnapshot(): SystemMemorySnapshot | null {
   if (getIsE2EFaultMode() || getIsE2EMode()) {
     const availableMb = Number(process.env.DAINTREE_E2E_SYSTEM_AVAILABLE_MEMORY_MB);
     if (Number.isFinite(availableMb) && availableMb > 0) {
-      return { totalMb, freeMb: availableMb, purgeableMb: 0, availableMb };
+      return { totalMb, freeMb: availableMb, purgeableMb: 0, fileBackedMb: 0, availableMb };
     }
   }
 
   try {
     const getInfo = (
       process as {
-        getSystemMemoryInfo?: () => { free: number; purgeable?: number; total: number };
+        getSystemMemoryInfo?: () => {
+          free: number;
+          purgeable?: number;
+          fileBacked?: number;
+          total: number;
+        };
       }
     ).getSystemMemoryInfo;
     if (typeof getInfo !== "function") return null;
@@ -119,17 +169,16 @@ export function readSystemMemorySnapshot(): SystemMemorySnapshot | null {
     // sum back into a healthy-looking figure.
     if (typeof info.free !== "number" || !Number.isFinite(info.free) || info.free < 0) return null;
     const freeMb = info.free / 1024;
-    const purgeableMb =
-      typeof info.purgeable === "number" && Number.isFinite(info.purgeable) && info.purgeable > 0
-        ? info.purgeable / 1024
-        : 0;
-    const availableMb = freeMb + purgeableMb;
+    const purgeableMb = darwinComponentMb(info.purgeable, false);
+    const fileBackedMb = darwinComponentMb(info.fileBacked, true);
+    if (purgeableMb === null || fileBackedMb === null) return null;
+    const availableMb = freeMb + purgeableMb + fileBackedMb;
     // A zero total is treated as an API artifact, not a maximally-critical
     // reading: a transiently zeroed struct must not collapse every cached view
     // and downgrade the profile. Genuine exhaustion is caught by
     // ProcessMemoryMonitor's own-process RSS tiers.
     if (availableMb <= 0) return null;
-    return { totalMb, freeMb, purgeableMb, availableMb };
+    return { totalMb, freeMb, purgeableMb, fileBackedMb, availableMb };
   } catch {
     return null;
   }
@@ -137,4 +186,33 @@ export function readSystemMemorySnapshot(): SystemMemorySnapshot | null {
 
 export function readAvailableSystemMemoryMb(): number | null {
   return readSystemMemorySnapshot()?.availableMb ?? null;
+}
+
+function isNonNegativeFinite(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+/**
+ * Swap in use, from the same Electron call as {@link readSystemMemorySnapshot}.
+ * Chromium fills `swapTotal`/`swapFree` (KB) on Windows and Linux only — on
+ * Windows they are the commit limit and its headroom, not the page file alone —
+ * so Darwin returns null here and reads `sysctl vm.swapusage` instead. A
+ * machine with no swap configured reads as zero of zero, which is an
+ * observation, not a failure.
+ */
+export function readElectronSwapUsage(): SwapUsage | null {
+  try {
+    const getInfo = (
+      process as {
+        getSystemMemoryInfo?: () => { swapTotal?: number; swapFree?: number };
+      }
+    ).getSystemMemoryInfo;
+    if (typeof getInfo !== "function") return null;
+    const { swapTotal, swapFree } = getInfo.call(process);
+    if (!isNonNegativeFinite(swapTotal) || !isNonNegativeFinite(swapFree)) return null;
+    if (swapFree > swapTotal) return null;
+    return { usedMb: (swapTotal - swapFree) / 1024, totalMb: swapTotal / 1024 };
+  } catch {
+    return null;
+  }
 }

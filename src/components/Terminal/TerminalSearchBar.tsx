@@ -338,13 +338,18 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
             aria-invalid={searchStatus === "invalidRegex" || undefined}
             data-terminal-search-input
             className={cn(
-              "w-44 px-2 py-1 text-sm rounded transition-colors",
+              // Theme radius, not a bare `rounded` — that resolves to the
+              // rounded-lg value rather than the scale this control belongs to.
+              "w-44 px-2 py-1 text-sm rounded-[var(--radius-sm)] transition-colors",
               "bg-surface-canvas border",
-              "focus:outline-hidden focus:ring-1",
               "text-text-primary placeholder:text-text-placeholder",
-              searchStatus === "invalidRegex"
-                ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
-                : "border-border-default focus:ring-status-info"
+              // The ring is component-owned — only its transition is global —
+              // so this is the shared `Input` treatment rather than nothing.
+              // The previous ring was a `focus:ring-*` box-shadow in a status
+              // colour: forced-colors discards box-shadow entirely, and the
+              // colour was a second vocabulary. An `outline` survives there.
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+              searchStatus === "invalidRegex" ? "border-status-error" : "border-border-default"
             )}
           />
         </TooltipTrigger>
@@ -358,10 +363,10 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
           <button
             onClick={handleCaseSensitiveToggle}
             className={cn(
-              "px-1.5 py-1 text-xs rounded transition-colors",
+              "px-1.5 py-1 text-xs rounded-[var(--radius-sm)] border transition-colors",
               caseSensitive
-                ? "bg-status-info text-surface-canvas"
-                : "text-text-secondary hover:text-text-primary hover:bg-overlay-medium"
+                ? "border-text-secondary bg-border-default text-text-primary"
+                : "border-transparent text-text-secondary hover:text-text-primary hover:bg-overlay-medium"
             )}
             aria-label="Toggle case sensitivity"
             aria-pressed={caseSensitive}
@@ -377,10 +382,10 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
           <button
             onClick={handleRegexToggle}
             className={cn(
-              "px-1.5 py-1 text-xs font-mono rounded transition-colors",
+              "px-1.5 py-1 text-xs font-mono rounded-[var(--radius-sm)] border transition-colors",
               regexEnabled
-                ? "bg-status-info text-surface-canvas"
-                : "text-text-secondary hover:text-text-primary hover:bg-overlay-medium"
+                ? "border-text-secondary bg-border-default text-text-primary"
+                : "border-transparent text-text-secondary hover:text-text-primary hover:bg-overlay-medium"
             )}
             aria-label="Toggle regex mode"
             aria-pressed={regexEnabled}
@@ -396,10 +401,10 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
           <button
             onClick={handleWholeWordToggle}
             className={cn(
-              "px-1.5 py-1 text-xs rounded transition-colors",
+              "px-1.5 py-1 text-xs rounded-[var(--radius-sm)] border transition-colors",
               wholeWord
-                ? "bg-status-info text-surface-canvas"
-                : "text-text-secondary hover:text-text-primary hover:bg-overlay-medium"
+                ? "border-text-secondary bg-border-default text-text-primary"
+                : "border-transparent text-text-secondary hover:text-text-primary hover:bg-overlay-medium"
             )}
             aria-label="Toggle whole word"
             aria-pressed={wholeWord}
@@ -417,8 +422,12 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               <span
                 data-terminal-search-status
                 className={cn(
+                  // "No results" and "Invalid regex" step up in ink, not into
+                  // status red: severity-coloured prose is a settled no here, the
+                  // words already say what happened, and the invalid case marks
+                  // the field's own border.
                   "text-xs px-1.5 cursor-help underline decoration-dotted underline-offset-2",
-                  searchStatus === "found" ? "text-text-secondary" : "text-status-error"
+                  searchStatus === "found" ? "text-text-secondary" : "text-text-primary"
                 )}
               >
                 {statusText}
@@ -433,7 +442,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
             data-terminal-search-status
             className={cn(
               "text-xs px-1.5",
-              searchStatus === "found" ? "text-text-secondary" : "text-status-error"
+              searchStatus === "found" ? "text-text-secondary" : "text-text-primary"
             )}
           >
             {statusText}
@@ -451,7 +460,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               onClick={() => performSearch(searchTerm, "prev")}
               disabled={!searchTerm}
               className={cn(
-                "p-1 rounded transition-colors",
+                "p-1 rounded-[var(--radius-sm)] transition-colors",
                 "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-medium",
                 "disabled:opacity-40 disabled:pointer-events-none"
               )}
@@ -471,7 +480,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               onClick={() => performSearch(searchTerm, "next")}
               disabled={!searchTerm}
               className={cn(
-                "p-1 rounded transition-colors",
+                "p-1 rounded-[var(--radius-sm)] transition-colors",
                 "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-medium",
                 "disabled:opacity-40 disabled:pointer-events-none"
               )}
@@ -489,7 +498,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
           <button
             onClick={handleClose}
             className={cn(
-              "p-1 rounded transition-colors",
+              "p-1 rounded-[var(--radius-sm)] transition-colors",
               "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-medium"
             )}
             aria-label="Close search"

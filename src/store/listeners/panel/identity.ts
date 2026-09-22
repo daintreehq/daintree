@@ -89,6 +89,33 @@ export function setupIdentityListeners(): DisposableStore {
           return;
         }
 
+        // Applied before the state it belongs to, so a fresh `idle` is never
+        // briefly readable beside its predecessor's session count (#12535).
+        // The host owns the value and this only copies it — including
+        // *downward*. A pty-host crash replays the spawn under the same
+        // terminal id against a fresh record starting at zero, and a panel that
+        // refused to follow it down would go on naming a session that no longer
+        // exists while the replacement climbed back towards it. Out-of-order
+        // events are already dropped above by `lastStateChange`, so following
+        // the host is the safer of the two ways to be wrong: a count that
+        // disagrees refuses the delivery, a count that lies permits it.
+        const observedIncarnation = data.agentIncarnation;
+        if (
+          observedIncarnation !== undefined &&
+          observedIncarnation !== terminal.agentIncarnation
+        ) {
+          usePanelStore.setState((st) => {
+            const panel = st.panelsById[terminalId];
+            if (!panel || !isPtyPanel(panel)) return st;
+            return {
+              panelsById: {
+                ...st.panelsById,
+                [terminalId]: { ...panel, agentIncarnation: observedIncarnation },
+              },
+            };
+          });
+        }
+
         terminalInstanceService.setAgentState(terminalId, state);
 
         if (terminal.agentState === "directing" && state === "waiting") {
@@ -125,6 +152,26 @@ export function setupIdentityListeners(): DisposableStore {
               panelsById: {
                 ...s.panelsById,
                 [terminalId]: { ...panel, lastCheckResult: checkResult },
+              },
+            };
+          });
+        }
+
+        // Same for a handback marker (#12488): present only on the settle where
+        // the agent's marker for a request was first seen. Leaving `exited`
+        // starts another session in the same PTY, whose predecessor's handback
+        // no longer describes it — the pty-host drops its own copy on that
+        // respawn, so the panel does too.
+        const handback = data.lastHandback;
+        const leftExited = previousState === "exited" && state !== "exited";
+        if (handback || (leftExited && terminal.lastHandback)) {
+          usePanelStore.setState((s) => {
+            const panel = s.panelsById[terminalId];
+            if (!panel || !isPtyPanel(panel)) return s;
+            return {
+              panelsById: {
+                ...s.panelsById,
+                [terminalId]: { ...panel, lastHandback: handback },
               },
             };
           });
@@ -274,6 +321,7 @@ export function setupIdentityListeners(): DisposableStore {
             nextDetectedAgentId,
             nextDetectedProcessId,
             nextEverDetectedAgent,
+            nextAgentIncarnation: data.agentIncarnation,
             timestamp,
           });
 

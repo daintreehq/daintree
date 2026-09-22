@@ -25,6 +25,7 @@ function createCtx(overrides: Partial<HostContext> = {}): HostContext {
     pauseCoordinators: new Map(),
     rendererConnections: new Map(),
     windowProjectMap: new Map(),
+    fallbackEligibleProjects: new Set(),
     windowFocusedTerminalMap: new Map(),
     ipcDataMirrorTerminals: new Set(),
     visualBuffers: [],
@@ -185,6 +186,14 @@ describe("mapTerminalInfo", () => {
     expect(result.worktreeId).toBeUndefined();
   });
 
+  it("forwards the output-progress timestamp, and leaves an unobserved one absent (#12428)", () => {
+    const ctx = createCtx();
+    expect(
+      mapTerminalInfo(makeTerminal({ lastOutputChangeAt: 4242 }), ctx).lastOutputChangeAt
+    ).toBe(4242);
+    expect(mapTerminalInfo(makeTerminal(), ctx).lastOutputChangeAt).toBeUndefined();
+  });
+
   it("emits exactly the field set the host response type declares", () => {
     // Compile-time only. Nearly every field on PtyHostTerminalInfo is optional,
     // so dropping one from the mapper still type-checks at all four call sites
@@ -285,6 +294,26 @@ describe("mapTerminalInfo submission projection (#12337)", () => {
 
     expect(getSubmission).toHaveBeenCalledWith("term-1", "tok-1");
     expect(result.submission).toEqual({ token: "tok-1", phase: "pty_written", at: 9 });
+  });
+
+  it("carries the derived output observation through untouched (#12478)", () => {
+    // Derived by the queue at read time; the mapper must forward the whole
+    // record rather than re-projecting the fields it happens to know about.
+    const getSubmission = vi.fn(() => ({
+      token: "tok-1",
+      phase: "pty_written",
+      at: 9,
+      outputChangeAfterWriteAt: 1_500,
+    }));
+
+    const result = mapTerminalInfo(makeTerminal(), ctxWith(getSubmission), "tok-1");
+
+    expect(result.submission).toEqual({
+      token: "tok-1",
+      phase: "pty_written",
+      at: 9,
+      outputChangeAfterWriteAt: 1_500,
+    });
   });
 
   it("does not look up a submission when no token was named", () => {

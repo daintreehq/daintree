@@ -54,7 +54,9 @@ export function FindBar({ find }: FindBarProps) {
       : "No results";
 
   return (
-    <div className="absolute top-2 right-2 z-20 flex items-center gap-1 rounded-md bg-surface-panel-elevated border border-border-default shadow-[var(--theme-shadow-floating)] px-2 py-1">
+    // `z-40`: above a dev preview tool drawer floating over the page (`z-30`),
+    // which otherwise covers this corner while Find has the focus.
+    <div className="absolute top-2 right-2 z-40 flex items-center gap-1 rounded-md bg-surface-panel-elevated border border-border-default shadow-[var(--theme-shadow-floating)] px-2 py-1">
       <input
         ref={inputRef}
         type="text"
@@ -91,10 +93,14 @@ export function FindBar({ find }: FindBarProps) {
             type="button"
             onClick={toggleMatchCase}
             onMouseDown={(e) => e.preventDefault()}
-            className={`px-1 rounded text-xs font-medium transition-colors ${
+            // Same control as the terminal's find bar, so the same treatment.
+            // "On" is membership, not the one load-bearing signal in the
+            // region, so it stays off the accent — both states carry a border
+            // so the button does not resize when toggled.
+            className={`px-1 rounded-[var(--radius-sm)] border text-xs font-medium transition-colors ${
               matchCase
-                ? "text-accent-primary bg-accent-primary/10"
-                : "text-text-secondary hover:text-text-primary hover:bg-overlay-medium"
+                ? "border-text-secondary bg-border-default text-text-primary"
+                : "border-transparent text-text-secondary hover:text-text-primary hover:bg-overlay-medium"
             }`}
             aria-label="Match case"
             aria-pressed={matchCase}

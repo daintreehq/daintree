@@ -172,7 +172,7 @@ function resolveFilePanelPath(path: string, rootPath: string | undefined): strin
 export function registerFileActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("file.view", () => ({
     id: "file.view",
-    title: "View File",
+    title: "View file",
     description:
       "Show a file to the user in a temporary read-only viewer dialog, optionally scrolled to a line. The dialog is deliberately ephemeral — it is never restored on restart. Open it as a grid panel instead when it should persist, or read the file directly when the content is for you rather than the user. This displays a file; it does not return its contents.",
     category: "files",
@@ -217,7 +217,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
 
   actions.set("file.read", () => ({
     id: "file.read",
-    title: "Read File",
+    title: "Read file",
     description:
       "Read a text file's contents. Only files inside the current project or one of its worktrees are readable — anything outside fails, so this cannot reach arbitrary paths on the machine. Files that are binary, too large, or stored as large-file pointers fail with a specific reason rather than returning partial text. Open a viewer panel instead when the goal is to show the file to the user.",
     category: "files",
@@ -265,7 +265,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
 
   actions.set("file.openPanel", () => ({
     id: "file.openPanel",
-    title: "Open File Panel",
+    title: "Open file panel",
     description:
       "Show a file to the user in a persistent read-only panel in the grid. Markdown and HTML can be shown as source or rendered, with rendered HTML sandboxed. It reuses an existing grid or dock panel showing the same file rather than duplicating it, but will not revive a trashed or backgrounded one. Read the file directly when the content is for you rather than the user.",
     category: "files",
@@ -342,7 +342,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
 
   actions.set("file.openDiff", () => ({
     id: "file.openDiff",
-    title: "Open Diff",
+    title: "Open diff",
     description:
       "Open a file's working-tree diff in the in-app side-by-side diff viewer dialog. The dialog is ephemeral — it is never persisted, never counts toward the panel limit, and is never restored on restart; use its 'Open as panel' control to keep it in the grid. Args: `path` (required) — absolute or repo-relative file path; `worktreePath` (optional) — worktree root the diff is computed against (defaults to the current project path); `status` (optional git status, defaults to `modified`). Returns { panelId }. Open a plain file viewer instead when no diff is wanted.",
     category: "files",
@@ -380,7 +380,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
 
   actions.set("file.openInEditor", () => ({
     id: "file.openInEditor",
-    title: "Open in Editor",
+    title: "Open in editor",
     description:
       "Open a file in the user's configured external editor, optionally at a line. This hands off to another application on the user's machine and returns nothing about the file. Read the file directly, or open an in-app viewer panel, when the content is needed here rather than by the user.",
     category: "files",
@@ -397,7 +397,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
 
   actions.set("file.openInBrowser", () => ({
     id: "file.openInBrowser",
-    title: "Open in Browser",
+    title: "Open in browser",
     description:
       "Open a file with the OS default handler for its type — for HTML files this is the default web browser. Args: `path` (required) — absolute file path. Open the file in the configured external editor instead when that is what you want.",
     category: "files",
@@ -413,7 +413,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
 
   actions.set("file.openImageViewer", () => ({
     id: "file.openImageViewer",
-    title: "Open in Image Viewer",
+    title: "Open in image viewer",
     description: "Open an image file in the system image viewer or a configured custom viewer",
     category: "files",
     kind: "command",
@@ -428,7 +428,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
 
   actions.set("file.showItemInFolder", () => ({
     id: "file.showItemInFolder",
-    title: "Reveal in File Manager",
+    title: "Reveal in file manager",
     description:
       "Reveal a file or directory in the OS file manager (Finder on macOS, Explorer on Windows, the default file manager on Linux) with the item selected. Args: `path` (required) — absolute file or directory path; `allowOutsideRoots` (optional, default false) — when containment refuses the path, retry through a guarded fallback that skips project-root containment but still refuses executable targets, so it cannot reveal everything a root-contained reveal can. Plugins may not set it. Reveals only; it never opens or launches the item. Errors when the path is missing, no longer exists, or sits outside your project roots without `allowOutsideRoots`.",
     category: "files",

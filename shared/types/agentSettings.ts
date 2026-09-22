@@ -1,6 +1,7 @@
 import { AGENT_REGISTRY, getEffectiveAgentConfig } from "../config/agentRegistry.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import { escapeShellArg, escapeShellArgOptional } from "../utils/shellEscape.js";
+import { systemPromptArgPositions } from "../utils/agentSystemPrompt.js";
 
 /**
  * Tri-state permission-bypass intent. `"on"`/`"off"` are explicit user choices
@@ -497,10 +498,17 @@ export function reconcileBypassFlags(
     }
   }
   if (stripTokens.size === 0) return [...flags];
+  // A standing instruction is free text that can equal a bypass token, and
+  // Codex's shares a `-c` with config-override bypass args (#12431). Stripping
+  // either half would orphan the other — a lone value becomes the first-turn
+  // prompt — so both are left alone.
+  const instruction = systemPromptArgPositions(flags, agentId);
+  const isStripped = (flag: string, index: number) =>
+    !instruction.has(index) && stripTokens.has(flag);
 
   if (!effectiveBypass || !resolved) {
     // Bypass not wanted: drop every occurrence of the canonical token(s).
-    return flags.filter((flag) => !stripTokens.has(flag));
+    return flags.filter((flag, index) => !isStripped(flag, index));
   }
 
   // Bypass wanted: replace the first canonical occurrence in place with the
@@ -510,8 +518,8 @@ export function reconcileBypassFlags(
   const resolvedTokens = resolved.split(/\s+/).filter(Boolean);
   const reconciled: string[] = [];
   let inserted = false;
-  for (const flag of flags) {
-    if (stripTokens.has(flag)) {
+  for (const [index, flag] of flags.entries()) {
+    if (isStripped(flag, index)) {
       if (!inserted) {
         reconciled.push(...resolvedTokens);
         inserted = true;
@@ -622,6 +630,11 @@ export interface GenerateAgentCommandOptions {
   clipboardDirectory?: string;
   /** Model ID to pass via --model flag (e.g., "claude-opus-4-6") */
   modelId?: string;
+  /**
+   * Raw argv pair carrying a standing instruction (#12431), from
+   * `resolveSystemPromptArgs` or `extractSystemPromptArgs`. Quoted here.
+   */
+  systemPromptArgs?: readonly string[];
   /** Additional CLI arguments from recipe terminal (whitespace-separated string) */
   recipeArgs?: string;
   /** Additional CLI arguments from agent preset (whitespace-separated string) */
@@ -752,6 +765,14 @@ export function generateAgentCommand(
     } else {
       parts.push(escapeShellArg(flag));
     }
+  }
+
+  // The caller's standing instruction (#12431) goes after preset, recipe and
+  // settings args so it wins over one they carry — the CLI keeps the last. It
+  // is one argv token even when it holds spaces, so it is quoted whole rather
+  // than split like the preset/recipe strings above.
+  for (const arg of options?.systemPromptArgs ?? []) {
+    parts.push(arg.startsWith("-") ? arg : escapeShellArg(arg));
   }
 
   // Add initial prompt if provided
@@ -926,6 +947,7 @@ export function buildAgentLaunchFlags(
   agentId: string,
   options?: {
     modelId?: string;
+    systemPromptArgs?: readonly string[];
     presetArgs?: string[];
     globalSkipPermissions?: boolean;
     globalUseAltScreen?: boolean;
@@ -965,6 +987,13 @@ export function buildAgentLaunchFlags(
     globalSkipPermissions: options?.globalSkipPermissions,
   });
   flags.push(...settingsFlags);
+
+  // Standing instruction (#12431), last for the same reason as in
+  // generateAgentCommand. The CLI doesn't carry it into a resumed session on
+  // its own, so it is persisted with the rest.
+  if (options?.systemPromptArgs?.length) {
+    flags.push(...options.systemPromptArgs);
+  }
 
   // generateAgentFlags dedupes the decorations pair against its own output
   // only; a preset's args (pushed above) can carry it too. Converge on one.
@@ -1124,6 +1153,18 @@ export function supportsExactSessionCapture(agentId: string | undefined): boolea
 }
 
 /**
+ * Whether an exact-id resume of `agentId` runs in the launch directory even
+ * when the conversation began elsewhere (#12434). The gate for cold-launching a
+ * moved pane in its destination worktree, and for holding it for recovery when
+ * its conversation can't be named.
+ */
+export function supportsCrossDirectoryResume(agentId: string | undefined): boolean {
+  if (!agentId) return false;
+  const resume = getEffectiveAgentConfig(agentId)?.resume;
+  return resume?.kind === "session-id" && resume.crossDirectoryResume === true;
+}
+
+/**
  * Whether `agentId` lets Daintree choose the session id at launch, making the
  * teardown scrape unnecessary for it (#11782).
  */
@@ -1140,7 +1181,9 @@ export function supportsSessionIdAssignment(agentId: string | undefined): boolea
  * Always mint per launch — never reuse a persisted id here. Re-assigning an
  * existing id is rejected by the CLI ("Session ID <id> is already in use"),
  * which would take down the launch, so a duplicated pane and a restore that
- * falls through to a fresh start each need their own new id.
+ * falls through to a fresh start each need their own new id. The one exception
+ * is an id the CLI never wrote a conversation for, which it accepts again — see
+ * {@link relaunchResumeAsAssignedSession}.
  */
 export function mintAssignedSessionId(agentId: string | undefined): string | undefined {
   return supportsSessionIdAssignment(agentId) ? crypto.randomUUID() : undefined;
@@ -1161,7 +1204,7 @@ const SESSION_ID_SLOT = " daintree-session-id-slot ";
  * `'\''` for every apostrophe: read without them, that sequence leaves the
  * quote state inverted and splits an ordinary prompt like `don't` mid-word.
  */
-function splitShellWords(command: string): string[] {
+function scanShellWords(command: string): { words: string[]; unterminated: boolean } {
   const words: string[] = [];
   let current = "";
   let started = false;
@@ -1204,7 +1247,11 @@ function splitShellWords(command: string): string[] {
     started = true;
   }
   if (started) words.push(current);
-  return words;
+  return { words, unterminated: quote !== null };
+}
+
+function splitShellWords(command: string): string[] {
+  return scanShellWords(command).words;
 }
 
 /** Does one command word fill this slot of the agent's assigning-arg shape? */
@@ -1253,6 +1300,91 @@ export function stripAssignedSessionIdArgs(command: string, agentId: string | un
     }
   }
   return command;
+}
+
+const ASSIGNABLE_SESSION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Drop one layer of matching quotes, the kind `escapeShellArg` wraps a word in. */
+function unquoteShellWord(word: string): string {
+  const quote = word[0];
+  if (word.length >= 2 && (quote === "'" || quote === '"') && word.endsWith(quote)) {
+    return word.slice(1, -1);
+  }
+  return word;
+}
+
+export interface AssignedSessionRelaunch {
+  /** The id the command was resuming. */
+  sessionId: string;
+  /** The same command, assigning that id to a new conversation instead. */
+  command: string;
+}
+
+/**
+ * Rewrites an exact-id resume into an assignment of that same id (#12371).
+ *
+ * An agent that takes its id at launch only writes the conversation once the
+ * user sends something, so a pane nobody typed into leaves an id `--resume`
+ * can't find. The CLI still accepts that id for a NEW conversation — the "already
+ * in use" rejection {@link mintAssignedSessionId} warns about only applies once a
+ * conversation exists — so the pane can come back as a working fresh session
+ * under the id the rest of the app already has on record. Proving no
+ * conversation exists is the caller's job; this only reshapes the command.
+ *
+ * Matches the agent's own resume args on shell words, like
+ * {@link stripAssignedSessionIdArgs}, so a prompt that merely mentions the flag
+ * is left alone. Only a UUID qualifies, since the CLI assigns nothing else.
+ *
+ * Returns `undefined` when the agent can't assign ids or the command resumes no
+ * such id.
+ */
+export function relaunchResumeAsAssignedSession(
+  command: string,
+  agentId: string | undefined
+): AssignedSessionRelaunch | undefined {
+  if (!command || !agentId || !supportsSessionIdAssignment(agentId)) return undefined;
+  const resume = getEffectiveAgentConfig(agentId)?.resume;
+  if (resume?.kind !== "session-id") return undefined;
+  const shape = resume.args(SESSION_ID_SLOT);
+  const slotOffset = shape.findIndex((token) => token.includes(SESSION_ID_SLOT));
+  if (slotOffset === -1) return undefined;
+  const [prefix = "", suffix = ""] = (shape[slotOffset] ?? "").split(SESSION_ID_SLOT);
+
+  const { words, unterminated } = scanShellWords(command);
+  // A quote left open reads differently in a POSIX shell, where a backslash can
+  // escape it, than in PowerShell, where it can't. There is no telling which
+  // words are real arguments then, so nothing is rewritten.
+  if (unterminated) return undefined;
+  const matchesAt = (tokens: readonly string[], at: number): boolean =>
+    tokens.length > 0 &&
+    tokens.every((token, offset) => shapeWordMatches(token, words[at + offset] ?? ""));
+
+  // One unambiguous selector or nothing. A second resume, an id already being
+  // assigned, or a resume-latest flag each mean the CLI picks the conversation
+  // some other way, and swapping one flag would leave it contradicting the rest.
+  const resumeAt = words.flatMap((_, at) => (matchesAt(shape, at) ? [at] : []));
+  const [at] = resumeAt;
+  if (at === undefined || resumeAt.length > 1) return undefined;
+  const assignShape = resume.assignSessionIdArgs?.(SESSION_ID_SLOT) ?? [];
+  const latestShape = resume.resumeLatestArgs ?? [];
+  if (words.some((_, i) => matchesAt(assignShape, i) || matchesAt(latestShape, i))) {
+    return undefined;
+  }
+
+  const slotWord = words[at + slotOffset] ?? "";
+  const sessionId = unquoteShellWord(
+    slotWord.slice(prefix.length, slotWord.length - suffix.length)
+  );
+  if (!ASSIGNABLE_SESSION_ID_PATTERN.test(sessionId)) return undefined;
+  const assigning = buildAssignedSessionIdArgs(agentId, sessionId);
+  if (!assigning?.length) return undefined;
+  words.splice(
+    at,
+    shape.length,
+    ...assigning.map((arg) => (arg.startsWith("-") ? arg : escapeShellArgOptional(arg)))
+  );
+  return { sessionId, command: words.join(" ") };
 }
 
 export interface BuildLaunchCommandFromFlagsOptions {

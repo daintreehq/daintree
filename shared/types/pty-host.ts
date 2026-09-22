@@ -7,9 +7,11 @@
  * All types are serializable (no functions, no circular refs) for IPC transport.
  */
 
+import type { HostLogEvent } from "./host-log.js";
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
 import type { PanelKind, TerminalFlowStatus, PanelTitleMode } from "./panel.js";
 import type { ResourceProfile } from "./resourceProfile.js";
+import type { PowerPolicyLevel } from "./powerPolicy.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { AgentConfig } from "../config/agentRegistry.js";
 import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
@@ -17,6 +19,7 @@ import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js
 import type { WorkerResourceSnapshot } from "./workerGovernance.js";
 import type { SerializedTerminalSnapshot } from "./terminal.js";
 import type { TerminalSubmissionRecord } from "./terminalSubmission.js";
+import type { TerminalHandback } from "./handback.js";
 
 export type { TerminalFlowStatus };
 
@@ -118,6 +121,13 @@ export interface PtyHostSpawnOptions {
    * PTY (#11341).
    */
   postSpawnInput?: string;
+  /**
+   * Handback code minted for this launch's initial prompt (#12488), already
+   * appended to the prompt the command carries. Registered on the terminal as
+   * delivered at spawn — the prompt is an argument, so there is no submission
+   * to wait on. Absent for every launch that did not ask.
+   */
+  handbackCode?: string;
 }
 
 /** Per-project terminal-workload memory, deduplicated by PID. */
@@ -221,8 +231,19 @@ export type PtyHostRequest =
   | { type: "resize"; id: string; cols: number; rows: number }
   | { type: "write"; id: string; data: string; traceId?: string }
   | { type: "broadcast-write"; ids: string[]; data: string }
-  | { type: "submit"; id: string; text: string; submissionToken?: string }
+  | {
+      type: "submit";
+      id: string;
+      text: string;
+      submissionToken?: string;
+      /** Handback code minted for this submission (#12488); its instruction is already in `text`. */
+      handbackCode?: string;
+      /** Admission check run when the submission reaches the lane (#12491). */
+      guard?: TerminalSubmitGuard;
+    }
   | { type: "stage"; id: string; text: string }
+  /** Take back a guarded submission before its Enter (#12491). Ordinary ones are unaffected. */
+  | { type: "withdraw-submission"; id: string; submissionToken: string }
   | { type: "batch-double-escape"; ids: string[] }
   | { type: "kill"; id: string; reason?: string; escalationDelayMs?: number }
   | { type: "trash"; id: string }
@@ -273,6 +294,13 @@ export type PtyHostRequest =
       projectPath?: string;
     }
   | { type: "set-focused-terminal"; windowId: number; id: string | null }
+  // Projects with at least one view that holds no MessagePort (#12557) — a
+  // cached duplicate, or one mid-transport-handoff. A window's single
+  // connection belongs to whichever view is active, so the IPC fallback is the
+  // only path that can reach the others. The host cannot infer this:
+  // `windowProjectMap` holds one active project per window and says nothing
+  // about the views behind it. Main owns the answer and pushes it on change.
+  | { type: "set-fallback-eligible-projects"; projectIds: string[] }
   | { type: "disconnect-port"; windowId: number }
   | { type: "kill-by-project"; projectId: string; requestId: string }
   | { type: "get-project-stats"; projectId: string; requestId: string }
@@ -319,7 +347,12 @@ export type PtyHostRequest =
       analysisBuffer: SharedArrayBuffer;
       visualSignalBuffer: SharedArrayBuffer;
     }
-  | { type: "connect-port"; windowId: number }
+  // `holderWebContentsId` is the view Main delivered the renderer end to. The
+  // host stores it opaquely and echoes it on every chunk that port accepts
+  // (#12557), so Main can exclude the exact recipient instead of re-deriving
+  // one from a window mapping that may have moved on since. Absent for
+  // synthetic connections (SurfacePortBroker) that own no project view.
+  | { type: "connect-port"; windowId: number; holderWebContentsId?: number }
   // Dedicated per-terminal worker-ingest ports (issue #10960): the port rides
   // the postMessage transfer list, exactly like connect-port.
   | { type: "connect-terminal-port"; windowId: number; id: string }
@@ -347,10 +380,29 @@ export type PtyHostRequest =
       preserveSession?: boolean;
     }
   | { type: "trim-state"; targetLines: number; requestId: string; scope: TrimStateScope }
+  /**
+   * Quit-time producer barrier for `agent-session-captured` (#12433): deliver
+   * every capture the host has already observed, skipping the best-effort
+   * branch stamp, then reply. Permanent for the host — nothing after it waits
+   * on enrichment again.
+   */
+  | { type: "finish-session-captures"; requestId: string; budgetMs: number }
   | { type: "set-resource-monitoring"; enabled: boolean }
   | { type: "set-session-persist-suppressed"; suppressed: boolean }
   | { type: "set-resource-profile"; profile: ResourceProfile }
   | { type: "set-process-tree-poll-interval"; ms: number }
+  /**
+   * Main's power-policy level (#12515). Independent of the resource profile:
+   * the profile answers memory pressure, this answers "is anyone watching,
+   * and is the machine on battery". Stretches the host's optional cadences —
+   * ActivityMonitor quiet polling and watchdog, governor FD sweeps, analysis
+   * worker memory samples — never the output-triggered paths.
+   */
+  | {
+      type: "set-power-policy";
+      level: PowerPolicyLevel;
+      observationLevel: PowerPolicyLevel;
+    }
   /**
    * Mirror the main-process plugin-agent registry into the pty-host (#10587).
    * The pty-host runs the activity monitor and resolves `getEffectiveAgentConfig`
@@ -523,7 +575,50 @@ export interface PtyHostTerminalSnapshot {
  */
 export type PtyHostEvent =
   | PluginPtyHostEvent
-  | { type: "data"; id: string; data: string }
+  // A structured logger entry the host already wrote to the shared log file.
+  // Main mirrors it into its buffer/renderer without writing it again.
+  | HostLogEvent
+  // `portDeliveredWebContentsIds` names the VIEWS whose MessagePort batcher
+  // already accepted this chunk, echoed from the `connect-port` that brokered
+  // each connection. Non-empty only when the fallback fired anyway to reach a
+  // view holding no port (#12557); Main drops exactly these WebContents from
+  // the fan-out so a view that read the chunk off its port never parses it a
+  // second time. Carrying the identity — rather than a windowId Main would
+  // have to re-resolve — is what makes this correct across a project switch,
+  // where the window's holder can change between the host sending the chunk
+  // and Main routing it. Absent/empty = nobody got it on a port, i.e. the
+  // original unrestricted project-scoped fallback.
+  //
+  // `portRecoveryWebContentsId` inverts the routing: this chunk was already
+  // delivered everywhere EXCEPT this view, whose port threw mid-flush, so Main
+  // sends it to that view alone. A plain re-broadcast would re-deliver to every
+  // sibling that took it on its own port and to every port-less view the
+  // supplementary fallback already fed.
+  | {
+      type: "data";
+      id: string;
+      data: string;
+      portDeliveredWebContentsIds?: number[];
+      portRecoveryWebContentsId?: number;
+    }
+  // A window's renderer connection is gone (#12557). Main clears its record of
+  // that window's port holder so the view stops being treated as reachable by
+  // MessagePort and becomes eligible for the IPC fallback again. Widening
+  // eligibility is always safe here: chunk routing excludes recipients by the
+  // identity the host echoes, never by this record, so a late or redundant
+  // notice costs one extra fallback event and can never double-deliver.
+  | {
+      type: "port-disconnected";
+      windowId: number;
+      reason: string;
+      // The view that held the departing port, echoed back from its
+      // `connect-port`. A "port-replace" teardown is processed by the host
+      // AFTER Main has already registered the replacement holder, so Main
+      // matches on this before clearing — otherwise the replacement's record
+      // is wiped and the window is left with no holder for the rest of its
+      // life.
+      holderWebContentsId?: number;
+    }
   // Main-process-only copy of a chunk the renderer already received on its
   // visual path (MessagePort) or that the background gate suppressed. Consumed
   // by Main-side monitors (DevPreviewSessionService/UrlDetector) and NEVER
@@ -559,6 +654,11 @@ export type PtyHostEvent =
       state: AgentState;
       previousState: AgentState;
       timestamp: number;
+      /**
+       * Observed new-agent-in-this-PTY count (#12535). Absent from an older
+       * producer, where absent means unobserved rather than zero.
+       */
+      agentIncarnation?: number;
       traceId?: string;
       trigger: string;
       confidence: number;
@@ -583,6 +683,8 @@ export type PtyHostEvent =
       heatAdded?: number;
       /** Number of changed characters in the most recent sample. */
       changedChars?: number;
+      /** Handback marker first seen at this settle (#12488). */
+      lastHandback?: TerminalHandback;
     }
   | {
       type: "agent-state-transition-dropped";
@@ -613,6 +715,11 @@ export type PtyHostEvent =
       /** Default title derived from detection — written into panel.title when titleMode === "default". */
       defaultTitle?: string;
       timestamp: number;
+      /**
+       * Observed new-agent-in-this-PTY count (#12535). Absent from an older
+       * producer, where absent means unobserved rather than zero.
+       */
+      agentIncarnation?: number;
     }
   | {
       type: "agent-exited";
@@ -645,6 +752,7 @@ export type PtyHostEvent =
       type: "agent-session-captured";
       terminalId: string;
       launchGeneration?: number | null;
+      boundary: AgentSessionCaptureBoundary;
       record: Omit<AgentSessionRecord, "savedAt">;
     }
   | { type: "terminal-pid"; id: string; pid: number }
@@ -668,6 +776,11 @@ export type PtyHostEvent =
   | { type: "all-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "memory-rollup"; requestId: string; rollup: MemoryRollup }
   | { type: "trim-state-result"; requestId: string; result: TrimStateResult }
+  | {
+      type: "session-captures-finished";
+      requestId: string;
+      result: AgentSessionCaptureFinishResult;
+    }
   | {
       type: "semantic-search-result";
       requestId: string;
@@ -739,15 +852,7 @@ export type PtyHostEvent =
       projectId: string;
       result: { id: string; agentSessionId: string | null };
     }
-  | {
-      type: "fd-leak-warning";
-      fdCount: number;
-      activeTerminals: number;
-      estimatedLeaked: number;
-      orphanedPids: number[];
-      ptmxLimit: number | null;
-      timestamp: number;
-    }
+  | ({ type: "fd-growth" } & FdGrowthPayload)
   | {
       type: "resource-metrics";
       metrics: TerminalResourceBatchPayload;
@@ -768,12 +873,49 @@ export type PtyHostEvent =
       snapshot: PtyHostWorkerGovernanceSnapshot;
     };
 
-export interface FdLeakWarningPayload {
+/** Open descriptors in the pty-host grouped by what `fstat` reports for each. */
+export interface FdTypeCounts {
+  charDevice: number;
+  socket: number;
+  fifo: number;
+  file: number;
+  directory: number;
+  other: number;
+  /** Closed between listing and inspection, or not inspectable. */
+  unavailable: number;
+}
+
+/** Processes and threads in the pty-host that hold descriptors by design. */
+export interface FdOwnerCounts {
+  /** Terminals whose PTY is still open (exited, preserved terminals excluded). */
+  terminals: number;
+  pooledPtys: number;
+  pluginPtys: number;
+  analysisWorkers: number;
+}
+
+/**
+ * One pty-host's descriptor count moving away from, or back to, its
+ * post-restore baseline. Emitted once per transition, never per sample, and
+ * it records what was observed — whether the growth is a leak is left to the
+ * reader.
+ */
+export interface FdGrowthPayload extends FdOwnerCounts {
+  state: "elevated" | "recovered";
+  hostPid: number;
   fdCount: number;
-  activeTerminals: number;
-  estimatedLeaked: number;
-  orphanedPids: number[];
-  ptmxLimit: number | null;
+  /** Descriptors the owners above account for. */
+  expectedFds: number;
+  /** `fdCount - expectedFds` once the host settled after restore. */
+  baselineFds: number;
+  /** `fdCount - expectedFds - baselineFds` on this sample. */
+  growth: number;
+  /** Consecutive samples on this side of the threshold. */
+  sustainedSamples: number;
+  sampleIntervalMs: number;
+  episodeStartedAt: number;
+  /** Only on `elevated`: the type breakdown when the episode began. */
+  descriptorTypes?: FdTypeCounts;
   timestamp: number;
 }
 
@@ -802,6 +944,21 @@ export type PtyHostResponseEvent = Exclude<
  */
 export interface GracefulKillResult {
   sessionId: string | null;
+}
+
+/**
+ * Which lifecycle boundary produced an `agent-session-captured` record. Only
+ * `exit` — the PTY incarnation ending for good — identifies a session the
+ * saved pane can own; a demotion leaves a live shell that may host another
+ * conversation, and trash expiry belongs to a pane the user already closed.
+ */
+export type AgentSessionCaptureBoundary = "exit" | "demotion" | "trash-expiry";
+
+/** Reply to `finish-session-captures`: whether every observed capture was delivered. */
+export interface AgentSessionCaptureFinishResult {
+  complete: boolean;
+  /** Captures still undelivered when the budget ran out. */
+  pending: number;
 }
 
 /**
@@ -882,8 +1039,15 @@ export interface PtyHostTerminalInfo {
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;
+  /**
+   * When the visible content last changed, ignoring recognised spinner and
+   * timer redraws (#12428). Absent until a change has been observed.
+   */
+  lastOutputChangeAt?: number;
   /** Activity timestamps idle detection runs on; absent means "unknown activity", not "idle". */
   lastInputTime?: number;
+  /** Last input that could have put text in the composer, ignoring xterm's own reports (#12491). */
+  lastTypedInputAt?: number;
   lastOutputTime?: number;
   spawnedAt: number;
   isTrashed?: boolean;
@@ -916,10 +1080,21 @@ export interface PtyHostTerminalInfo {
   originalAgentPresetId?: string;
   /** Set once on first runtime agent detection; never cleared. Sticky across agent exit/re-enter within session. */
   everDetectedAgent?: boolean;
+  /**
+   * Observed count of new agent sessions taking over this PTY after a prior
+   * one exited (#12535). Absent means the surface could not observe it; zero
+   * means none was observed. Reset with the record when the PTY is replaced.
+   */
+  agentIncarnation?: number;
   /** Runtime-detected agent identity (cleared when the agent exits). */
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
   detectedProcessId?: string;
+  /**
+   * The most recent handback marker observed for a request this terminal held
+   * (#12488). Read off the record so main can report it without a renderer.
+   */
+  lastHandback?: TerminalHandback;
 }
 
 /** Payload for agent:spawned event */
@@ -1052,6 +1227,17 @@ export type TerminalSubmitStatusState = "slow" | "stalled" | "settled" | "failed
 
 /** Payload for submit-status events. One in-flight submit per terminal, so the
  *  terminal id is a sufficient correlator — no submission id is needed. */
+/**
+ * A condition a submission must still meet when it reaches the terminal's
+ * submit lane (#12491), checked before any byte is written.
+ *
+ * `settled-prompt` admits only an agent waiting at a prompt with nothing typed
+ * since it settled there (`evaluateWakeGate`), and abandons the trailing Enter
+ * if input arrives between the body and the Enter. A refusal finalises the
+ * submission `cancelled` with nothing written.
+ */
+export type TerminalSubmitGuard = "settled-prompt";
+
 export interface TerminalSubmitStatusPayload {
   id: string;
   state: TerminalSubmitStatusState;
@@ -1089,6 +1275,23 @@ export interface HostThrottlePayload {
   duration?: number;
   forced?: boolean;
   timestamp: number;
+}
+
+/**
+ * The terminal hosts' memory pause as one app-wide reading for the UI (#12375),
+ * ORed across every host shard by `HostMemoryPauseTracker`.
+ */
+export interface HostMemoryPauseSnapshot {
+  /**
+   * A pressure episode is open on at least one host: it paused output and its
+   * pressure hasn't cleared since. A forced resume keeps the episode open while
+   * that host still reports high memory.
+   */
+  active: boolean;
+  /** At least one host has output paused right now. */
+  paused: boolean;
+  /** An episode has stayed open long enough to count as a stalled recovery. */
+  stalled: boolean;
 }
 
 /** Payload for terminal reliability metrics (backpressure/suspend) */

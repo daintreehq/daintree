@@ -113,16 +113,50 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
       );
     });
 
-    it("has renderLeftButtons helper that inserts group dividers", () => {
-      expect(source).toContain("renderLeftButtons");
+    it("has one grouped renderer that inserts group dividers", () => {
+      expect(source).toContain("renderGroupedButtons");
+      // The old right-side renderer drew no dividers and read the persisted
+      // order; both sides go through the grouped one now.
+      expect(source).not.toMatch(/const renderButtons\s*=/);
     });
 
-    it("uses renderLeftButtons for the left button group", () => {
-      expect(source).toContain("renderLeftButtons(effectiveLeftButtons");
+    it("renders both sides through the grouped renderer", () => {
+      expect(source).toContain("renderGroupedButtons(effectiveLeftButtons");
+      expect(source).toContain("renderGroupedButtons(effectiveRightButtons");
+    });
+
+    it("orders the right buttons by declared group too, so a moved button keeps the divider rules", () => {
+      const rightMemo = source.match(
+        /const positionedRightButtons = useMemo\(\(\) => \{[\s\S]*?\n {2}\}, \[/
+      );
+      expect(rightMemo).not.toBeNull();
+      expect(rightMemo![0]).toContain("orderToolbarButtonsByGroup(");
     });
 
     it("divider element has aria-hidden for accessibility", () => {
       expect(source).toMatch(/group-divider[\s\S]{0,200}aria-hidden="true"/);
+    });
+  });
+
+  describe("Empty-space context menu — issue #12355", () => {
+    // The menu's behaviour is covered for real in ToolbarButtonsContextMenu and
+    // toolbarVisibilityMenu tests; these only pin Toolbar.tsx's wiring to it.
+    it("hands the menu the toolbar root itself, which it clones rather than wraps", () => {
+      expect(source).toMatch(
+        /<ToolbarButtonsContextMenu[^>]*>\s*<div\s+ref=\{toolbarRef\}\s+role="toolbar"/
+      );
+    });
+
+    it("builds the rows from the side lists before the visibility filter", () => {
+      // Built from `effective*Buttons` instead, a hidden button would drop out of
+      // the one menu that exists to bring it back.
+      expect(source).toMatch(
+        /buildToolbarVisibilityMenuRows\(\s*positionedLeftButtons,\s*positionedRightButtons/
+      );
+    });
+
+    it("routes a menu toggle through the helper Settings → Toolbar uses", () => {
+      expect(source).toMatch(/setToolbarButtonOnToolbar\(\s*buttonId,\s*side,\s*onToolbar,/);
     });
   });
 
@@ -268,7 +302,8 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
 
     it("collapses the spacer to zero width when entering fullscreen", () => {
-      expect(source).toMatch(/isFullscreen\s*&&\s*"w-0"/);
+      // Extra classes may ride along (the gap fold); the width must go to 0.
+      expect(source).toMatch(/isFullscreen\s*&&\s*"w-0(\s[^"]*)?"/);
     });
 
     it("places the spacer inside the right toolbar group, after the portal toggle", () => {

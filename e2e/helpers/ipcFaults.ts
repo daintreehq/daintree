@@ -145,3 +145,28 @@ export async function getRendererListenerSnapshot(
 export async function getMemoryUsage(app: ElectronApplication): Promise<NodeJS.MemoryUsage> {
   return app.evaluate(() => process.memoryUsage());
 }
+
+/**
+ * Answer `channel` with a fixed value instead of running its real handler. The renderer
+ * above the boundary is untouched, so the real client, store, hook and component all run
+ * on top of the stubbed answer — which is what makes the resulting screenshot evidence
+ * about shipping code rather than about a mock.
+ *
+ * `delayMs` holds the answer back the way `injectDelay` holds back a real one.
+ */
+export async function injectStub(
+  app: ElectronApplication,
+  channel: string,
+  value: unknown,
+  delayMs?: number
+): Promise<void> {
+  await app.evaluate(
+    (_modules, { channel, value, delayMs }) => {
+      const registry = globalThis.__daintreeFaultRegistry;
+      if (!registry)
+        throw new Error("Fault mode not enabled — launch with DAINTREE_E2E_FAULT_MODE=1");
+      registry[channel] = { kind: "stub", value, ...(delayMs ? { delayMs } : {}) };
+    },
+    { channel, value, delayMs }
+  );
+}

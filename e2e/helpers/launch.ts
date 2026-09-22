@@ -40,8 +40,9 @@ export interface LaunchOptions {
   waitForSelector?: string;
   extraArgs?: string[];
   /**
-   * When set to a digit 1-9, launches Electron with --force-device-scale-factor=N
-   * so the renderer paints at NxCSS pixels. Used by the marketing-screenshot
+   * When set to a single digit 1-9 with an optional fractional part (`3`, `2.5`),
+   * launches Electron with --force-device-scale-factor=N so the renderer paints
+   * at NxCSS pixels. Anything else is ignored. Used by the marketing-screenshot
    * pipeline to capture 4K-grade PNGs from a 1280x720 logical window on a
    * 1920x1080-capped CI display. Defaults to process.env.DAINTREE_SCREENSHOT_SCALE.
    */
@@ -346,7 +347,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
     // device-pixel output. windows-latest GitHub runners cap the OS display
     // at 1920x1080, so render-side scaling is the only path to 4K-grade PNGs.
     const screenshotScale = options.screenshotScale ?? process.env.DAINTREE_SCREENSHOT_SCALE;
-    if (screenshotScale && /^[1-9]$/.test(screenshotScale)) {
+    if (screenshotScale && /^[1-9](\.\d+)?$/.test(screenshotScale)) {
       const scaleIdx = args.findIndex((a) => a.startsWith("--force-device-scale-factor"));
       if (scaleIdx >= 0) {
         args[scaleIdx] = `--force-device-scale-factor=${screenshotScale}`;
@@ -357,7 +358,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
 
     let app: ElectronApplication | null = null;
     try {
-      const launchEnv = {
+      const launchEnv: NodeJS.ProcessEnv = {
         ...process.env,
         ...options.env,
         NODE_ENV: "production",
@@ -377,9 +378,9 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         ...(isWindowsCI
           ? {
               // Playwright already owns CDP sessions for WebContentsView
-              // targets on Windows CI. Cached-view CPU throttling is a memory
-              // optimization only; skip it in e2e so LRU tests don't collide
-              // with Playwright's debugger attachment.
+              // targets on Windows CI. The cached-view CDP memory purge and
+              // CPU-rate reset are optimizations only; skip them in e2e so LRU
+              // tests don't collide with Playwright's debugger attachment.
               DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE: "1",
             }
           : {}),
@@ -414,7 +415,11 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
       // connecting, which flakes under release-runner fanout.
       app = await electron.launch({
         args,
-        env: launchEnv,
+        env: Object.fromEntries(
+          Object.entries(launchEnv).filter(
+            (entry): entry is [string, string] => entry[1] !== undefined
+          )
+        ),
         timeout: attemptTimeout(attempt),
       });
 
@@ -487,6 +492,22 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
       // always visible regardless of toolbar overflow or window size.
       const readySelector = options.waitForSelector ?? '[aria-label="Toggle Sidebar"]';
       await window.locator(readySelector).waitFor({ state: "visible", timeout: launchTimeout });
+
+      if (process.env.BACKGROUND_ENERGY_SPINNER_OVERRIDE === "paused") {
+        const installEnergyStyle = () => {
+          const install = () => {
+            if (document.getElementById("energy-experiment-spinner")) return;
+            const style = document.createElement("style");
+            style.id = "energy-experiment-spinner";
+            style.textContent = ".animate-spin-slow { animation-play-state: paused !important; }";
+            document.head.append(style);
+          };
+          if (document.head) install();
+          else document.addEventListener("DOMContentLoaded", install, { once: true });
+        };
+        await window.context().addInitScript(installEnergyStyle);
+        for (const page of app.windows()) await page.evaluate(installEnergyStyle);
+      }
 
       disposeTelemetry();
       return { app, window, userDataDir };

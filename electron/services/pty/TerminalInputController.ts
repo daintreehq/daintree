@@ -1,4 +1,6 @@
 import type { TerminalInfo } from "./types.js";
+import type { TerminalSubmitGuard } from "../../../shared/types/pty-host.js";
+import { evaluateWakeGate, type WakeGateSnapshot } from "../../../shared/utils/terminalWakeGate.js";
 import type { AnalysisBackend } from "./analysis/AnalysisBackend.js";
 import { IdentityWatcher, normalizeShellCommandText } from "./IdentityWatcher.js";
 import { WriteQueue, type SubmitExecutionContext } from "./WriteQueue.js";
@@ -11,14 +13,14 @@ import {
   getSubmitEnterDelay,
   isBracketedPaste,
   isFocusReport,
+  isTerminalReportOnly,
   delay,
-  BRACKETED_PASTE_START,
-  BRACKETED_PASTE_END,
   PASTE_THRESHOLD_CHARS,
   OUTPUT_SETTLE_DEBOUNCE_MS,
   OUTPUT_SETTLE_MAX_WAIT_MS,
   OUTPUT_SETTLE_POLL_INTERVAL_MS,
 } from "./terminalInput.js";
+import { formatWithBracketedPaste } from "../../../shared/utils/terminalInputProtocol.js";
 
 export interface TerminalInputControllerHost {
   readonly id: string;
@@ -27,6 +29,18 @@ export interface TerminalInputControllerHost {
   readonly identityWatcher: IdentityWatcher;
   readonly writeQueue: WriteQueue;
   logWriteError(error: unknown, context: { operation: string; traceId?: string }): void;
+}
+
+function wakeGateSnapshot(terminal: TerminalInfo): WakeGateSnapshot {
+  return {
+    agentState: terminal.agentState,
+    waitingReason: terminal.waitingReason,
+    lastStateChange: terminal.lastStateChange,
+    lastTypedInputAt: terminal.lastTypedInputAt,
+    detectedAgentId: terminal.detectedAgentId,
+    isExited: terminal.isExited,
+    hasPty: !terminal.wasKilled && !!terminal.ptyProcess,
+  };
 }
 
 export class TerminalInputController {
@@ -116,6 +130,7 @@ export class TerminalInputController {
     }
 
     terminal.lastInputTime = Date.now();
+    if (!isTerminalReportOnly(data)) terminal.lastTypedInputAt = terminal.lastInputTime;
     if (traceId !== undefined) {
       terminal.traceId = traceId || undefined;
     }
@@ -167,6 +182,11 @@ export class TerminalInputController {
       return false;
     }
     terminal.lastInputTime = Date.now();
+    // `rethrow` is the submit lane's own body and Enter, which leave the
+    // composer empty once the Enter lands; only raw input can leave a draft.
+    if (!rethrow && !isTerminalReportOnly(data)) {
+      terminal.lastTypedInputAt = terminal.lastInputTime;
+    }
 
     if (terminal.isExited) {
       return false;
@@ -257,7 +277,12 @@ export class TerminalInputController {
     return true;
   }
 
-  submit(text: string, token?: string): void {
+  submit(
+    text: string,
+    token?: string,
+    onPtyWritten?: () => void,
+    guard?: TerminalSubmitGuard
+  ): void {
     if (this.isInputLocked || this.host.terminalInfo.isExited) {
       // Refused before the lane sees it, so `WriteQueue` never mints a record.
       // Answer the token here instead of leaving the caller to read `unknown`.
@@ -269,11 +294,21 @@ export class TerminalInputController {
     // state transitions before the async write sequence in performSubmit().
     // Without this, the split between body write and Enter write causes the
     // character-by-character detection in onInput() to miss the submission.
-    if (this.host.analysis.hasMonitor() && text.trim().length > 0) {
+    //
+    // Not for a guarded submission (#12491): marking the agent working here
+    // would fail its own admission check. performSubmit notifies at execution
+    // time, which for a guarded line is only once it has been admitted.
+    if (guard === undefined && this.host.analysis.hasMonitor() && text.trim().length > 0) {
       this.host.analysis.notifySubmission();
     }
 
-    this.host.writeQueue.submit(text, token);
+    const admit =
+      guard === "settled-prompt"
+        ? () =>
+            !this.isInputLocked &&
+            evaluateWakeGate(wakeGateSnapshot(this.host.terminalInfo)).kind === "ready"
+        : undefined;
+    this.host.writeQueue.submit(text, token, onPtyWritten, admit);
   }
 
   /**
@@ -299,8 +334,10 @@ export class TerminalInputController {
     terminal.lastInputTime = Date.now();
     const useBracketedPaste = body.includes("\n") || body.length > PASTE_THRESHOLD_CHARS;
     if (useBracketedPaste && supportsBracketedPaste(terminal)) {
-      const pasteBody = body.replace(/\n/g, "\r");
-      this.write(`${BRACKETED_PASTE_START}${pasteBody}${BRACKETED_PASTE_END}`);
+      // The shared formatter, not a hand-built wrapper: it neutralises ESC in
+      // the body, so text carrying its own `ESC[201~` cannot end the paste
+      // early and hand the rest to the program as typed input.
+      this.write(formatWithBracketedPaste(body.replace(/\n/g, "\r")));
     } else if (body.includes("\n")) {
       this.write(body.replace(/\n/g, getSoftNewlineSequence(terminal)));
     } else {
@@ -357,8 +394,10 @@ export class TerminalInputController {
 
     let bodyWritten: boolean;
     if (useBracketedPaste && supportsBracketedPaste(terminal)) {
-      const pasteBody = body.replace(/\n/g, "\r");
-      const payload = `${BRACKETED_PASTE_START}${pasteBody}${BRACKETED_PASTE_END}`;
+      // See `stage`: an unsanitised body could close the paste itself, and
+      // whatever follows would reach the agent as keystrokes, submits included.
+      // Page-derived text (DOM ids, labels) reaches here from SvelteKit Tools.
+      const payload = formatWithBracketedPaste(body.replace(/\n/g, "\r"));
       bodyWritten = this.writeStrict(payload);
     } else if (body.includes("\n") && !supportsBracketedPaste(terminal)) {
       const softNewline = getSoftNewlineSequence(terminal);
@@ -373,6 +412,7 @@ export class TerminalInputController {
     if (!bodyWritten) {
       return;
     }
+    const typedAtBodyWrite = terminal.lastTypedInputAt;
 
     if (this.isInputLocked || this.inputGeneration !== generation) {
       return;
@@ -393,6 +433,21 @@ export class TerminalInputController {
     }
 
     if (this.isInputLocked || this.inputGeneration !== generation) {
+      return;
+    }
+
+    // The user typed into the composer while this body sat there waiting for
+    // its Enter. Submitting now would send their keystrokes as part of a line
+    // they did not write, so the Enter is dropped and the record says so.
+    if (
+      ctx?.abandonEnterOnInput === true &&
+      this.host.terminalInfo.lastTypedInputAt !== typedAtBodyWrite
+    ) {
+      return;
+    }
+    // Its requester took it back — the user stopped the watches, or turned
+    // pane wakes off — while the body waited for its Enter.
+    if (ctx?.isWithdrawn?.() === true) {
       return;
     }
 

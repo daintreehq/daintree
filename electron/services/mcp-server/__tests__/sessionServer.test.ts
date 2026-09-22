@@ -24,6 +24,8 @@ import type { SessionStore } from "../sessionStore.js";
 import { SessionStore as RealSessionStore } from "../sessionStore.js";
 import { GrantCache } from "../grantCache.js";
 import { ResourceOwnershipLedger } from "../resourceOwnership.js";
+import type { AgentLastMessageResult } from "../../../../shared/types/agentLastMessage.js";
+import { encodeMessageCursor } from "../../claude/ClaudeMessageCursor.js";
 import {
   buildToolError,
   buildMcpErrorPayload,
@@ -176,6 +178,10 @@ function fakeDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
     handleTerminalGetStatusViewless: vi
       .fn()
       .mockResolvedValue({ terminals: [], source: "pty", unavailableFields: [] }),
+    handleTerminalReadLastMessageOwned: vi
+      .fn()
+      .mockResolvedValue({ status: "unavailable", reason: "no-message" }),
+    isTerminalIdInUse: vi.fn(() => false),
     appendAuditRecord: vi.fn(),
     getCachedManifest: vi.fn(() => null),
     ...overrides,
@@ -620,6 +626,23 @@ describe("sessionServer prompt handler", () => {
     // waitingReason discrimination must survive future edits
     expect(text).toContain('"prompt"');
     expect(text).toContain('"question"');
+    // The recipe used to say "send the selection keys, not free text" for an
+    // approval, but sendCommand types text and then presses Enter. It must
+    // point at reading the dialog and at the user's authority instead.
+    expect(text).toMatch(/"approval"[^\n]*within authority the user already gave/);
+    expect(text).not.toMatch(/send the selection keys|keys, not prose/);
+    // `prompt` is also the classifier's fallback when nothing more specific
+    // matched (WaitingReasonClassifier's default branch), so the recipe must
+    // not present it as a safe thing to drive unseen. Policy, not wording:
+    // the reassurance must be gone and some confirm-first instruction present.
+    expect(text).not.toMatch(/safe to auto-drive/);
+    expect(text).toMatch(/confirm against output/i);
+    // `includeOutput` also fills `lastOutputChangeAt` (#12495). The recipe must
+    // keep both of the field's limits: absence is unknown, and a still screen
+    // is not a hang.
+    expect(text).toMatch(/includeOutput[^\n]*lastOutputChangeAt/);
+    expect(text).toMatch(/lastOutputChangeAt[^\n]*absent when no change was observed/);
+    expect(text).toMatch(/lastOutputChangeAt[^\n]*NOT a hang verdict/);
   });
 
   it("does not dispatch worktree.getCurrent for triage_terminals (static prompt)", async () => {
@@ -772,6 +795,127 @@ describe("skills.search / skills.load short-circuit (#10892)", () => {
     await expect(callTool(server, { name: "skills.load", arguments: { id: "x" } })).rejects.toThrow(
       /No skill found/
     );
+  });
+});
+
+describe("terminal watch short-circuit (#12491)", () => {
+  const OWN_PANE = { key: "pane\u0000principal-1", terminalId: "own-pane" };
+
+  function watchDeps(overrides?: Partial<SessionServerDeps>) {
+    const terminalWatch = {
+      register: vi.fn().mockResolvedValue({
+        watchId: "w_12345678",
+        terminalIds: ["t-a"],
+        conditions: ["state"],
+        maxDeliveries: 25,
+      }),
+      list: vi.fn(() => ({ watches: [], pendingEvents: 0, delivery: { status: "idle" as const } })),
+      readEvents: vi.fn(() => ({ events: [], droppedEvents: 0, remainingEvents: 0 })),
+      cancel: vi.fn((_pane: unknown, watchId: string) => ({ watchId, cancelled: false })),
+    };
+    const dispatchAction = vi.fn();
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("action"),
+      terminalWatch,
+      resolveOwnPane: () => OWN_PANE,
+      dispatchAction,
+      ...overrides,
+    });
+    return { deps, terminalWatch, dispatchAction };
+  }
+
+  it("registers a watch in main for the caller's own pane, never through a renderer", async () => {
+    const { deps, terminalWatch, dispatchAction } = watchDeps();
+    const server = createSessionServer("session-watch", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "terminal.registerWatch",
+      arguments: { terminalIds: ["t-a"], conditions: ["state"] },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(terminalWatch.register).toHaveBeenCalledWith(OWN_PANE, {
+      terminalIds: ["t-a"],
+      conditions: ["state"],
+    });
+    expect(result.structuredContent).toMatchObject({ watchId: "w_12345678" });
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "terminal.registerWatch" })
+    );
+  });
+
+  it.each([
+    ["terminal.listWatches", {}, "list"],
+    ["terminal.getWatchEvents", { clear: false }, "readEvents"],
+    ["terminal.cancelWatch", { watchId: "w_1" }, "cancel"],
+  ] as const)("routes %s to the watch service", async (name, args, handler) => {
+    const { deps, terminalWatch } = watchDeps();
+    const server = createSessionServer("session-watch-route", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name, arguments: { ...args } });
+
+    expect(result.isError).not.toBe(true);
+    expect(terminalWatch[handler]).toHaveBeenCalledTimes(1);
+    expect(terminalWatch[handler].mock.calls[0]?.[0]).toEqual(OWN_PANE);
+  });
+
+  it("refuses a connection with no pane of its own", async () => {
+    const { deps, terminalWatch } = watchDeps({ resolveOwnPane: () => null });
+    const server = createSessionServer("session-watch-no-pane", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "terminal.registerWatch",
+      arguments: { terminalIds: ["t-a"] },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(toolErrorPayload(result).code).toBe("WATCH_NOT_ELIGIBLE");
+    expect(terminalWatch.register).not.toHaveBeenCalled();
+  });
+
+  it("keeps the tools from an api-key session altogether", async () => {
+    const { deps, terminalWatch } = watchDeps({ sessionStore: fakeSessionStore("external") });
+    const server = createSessionServer("session-watch-external", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: "terminal.listWatches", arguments: {} });
+
+    expect(result.isError).toBe(true);
+    expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
+    expect(terminalWatch.list).not.toHaveBeenCalled();
+  });
+
+  it("returns a refusal under its own code", async () => {
+    const { TerminalWatchError } = await import("../terminalWatch.js");
+    const { deps } = watchDeps();
+    (deps.terminalWatch!.register as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new TerminalWatchError("WATCH_WAKE_DISABLED", "Turned off.")
+    );
+    const server = createSessionServer("session-watch-disabled", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "terminal.registerWatch",
+      arguments: { terminalIds: ["t-a"] },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(toolErrorPayload(result).code).toBe("WATCH_WAKE_DISABLED");
+  });
+
+  it("rejects malformed arguments before the service sees them", async () => {
+    const { deps, terminalWatch } = watchDeps();
+    const server = createSessionServer("session-watch-invalid", deps);
+    await server.connect(makeMockTransport());
+
+    await expect(
+      callTool(server, { name: "terminal.registerWatch", arguments: { terminalIds: [] } })
+    ).rejects.toThrow(/terminal\.registerWatch/);
+    expect(terminalWatch.register).not.toHaveBeenCalled();
   });
 });
 
@@ -3108,6 +3252,9 @@ describe("MCP_DEDUP_ALLOWLIST exclusion boundary (#8468)", () => {
     async (tool) => {
       const dispatchAction = twoDistinctDispatches();
       const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+      // Unscoped submission is only reachable from the assistant's own origin
+      // (#12407); what this pins is the dedup boundary, not that reservation.
+      deps.sessionStore.sessionOriginMap.set(`bounded-8468-${tool}`, "help");
       const server = createSessionServer(`bounded-8468-${tool}`, deps);
 
       const args = { target: "x" };
@@ -3206,6 +3353,7 @@ describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
     "forge.openIssues",
     "forge.openPRs",
     "forge.openCommits",
+    "forge.openRepo",
     "forge.assignIssue",
   ];
 
@@ -4048,6 +4196,32 @@ describe("sessionServer introspection tier filtering", () => {
     const text = (res.content as Array<{ text: string }>)[0]!.text;
     expect(text).not.toContain("git.push");
     expect(res.structuredContent).toEqual(JSON.parse(text));
+  });
+
+  // The same allowlist the call gate reads, narrowed by origin (#12407): an
+  // agent pane's bearer at `action` must not discover unscoped terminal input
+  // its dispatch would refuse, while the assistant at that tier still does.
+  it("narrows discovery of unscoped terminal input by origin, not tier", async () => {
+    const manifest = {
+      actions: [
+        entry("terminal.sendCommand"),
+        entry("terminal.sendCommandOwned"),
+        entry("copyTree.injectToTerminal"),
+      ],
+    };
+    const ids = async (origin: "help" | "external") => {
+      const deps = introspectionDeps("action", manifest);
+      deps.sessionStore.sessionOriginMap.set("s1", origin);
+      const server = createSessionServer("s1", deps);
+      const res = await callTool(server, { name: "actions.list" });
+      return payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id);
+    };
+    expect(await ids("external")).toEqual(["terminal.sendCommandOwned"]);
+    expect(await ids("help")).toEqual([
+      "terminal.sendCommand",
+      "terminal.sendCommandOwned",
+      "copyTree.injectToTerminal",
+    ]);
   });
 
   it("returns strictly more to a higher tier", async () => {
@@ -5526,7 +5700,12 @@ describe("workspace-bound external sessions (#11789)", () => {
       // production set below rather than restated beside it.
       const MAIN_PROCESS_CALLS: Record<
         string,
-        { args: Record<string, unknown>; handler?: keyof SessionServerDeps }
+        {
+          args: Record<string, unknown>;
+          handler?: keyof SessionServerDeps;
+          /** An owned tool answers only for a panel the session created. */
+          ownsTerminal?: string;
+        }
       > = {
         "terminal.waitUntilIdle": {
           args: { terminalId: "t-1" },
@@ -5544,7 +5723,26 @@ describe("workspace-bound external sessions (#11789)", () => {
           args: { projectId: "p-1", runnerId: "test" },
           handler: "handleProjectRunCheck",
         },
+        "terminal.readLastMessageOwned": {
+          args: { terminalId: "t-1" },
+          handler: "handleTerminalReadLastMessageOwned",
+          ownsTerminal: "t-1",
+        },
+        // Executed through the injected watch service rather than a named dep.
+        "terminal.registerWatch": { args: { terminalIds: ["t-1"] } },
+        "terminal.listWatches": { args: {} },
+        "terminal.getWatchEvents": { args: {} },
+        "terminal.cancelWatch": { args: { watchId: "w_00000000" } },
       };
+
+      function viewlessDepsFor(name: string): SessionServerDeps {
+        const deps = viewlessDeps();
+        const owned = MAIN_PROCESS_CALLS[name]!.ownsTerminal;
+        if (owned !== undefined) {
+          deps.sessionStore.resourceOwnership.record(SESSION, [{ kind: "terminal", id: owned }]);
+        }
+        return deps;
+      }
 
       it("covers every tool the production bypass set names", () => {
         // The guard below is only a drift guard if the cases come from the set
@@ -5566,7 +5764,7 @@ describe("workspace-bound external sessions (#11789)", () => {
 
       eachMainProcessTool("does not need a live view to settle %s", async (name) => {
         const { args, handler } = MAIN_PROCESS_CALLS[name]!;
-        const deps = viewlessDeps();
+        const deps = viewlessDepsFor(name);
         const server = createSessionServer(SESSION, deps);
         await server.connect(makeMockTransport());
 
@@ -5590,7 +5788,7 @@ describe("workspace-bound external sessions (#11789)", () => {
       eachMainProcessTool("does not resolve the bound manifest to admit %s", async (name) => {
         // The ceiling asked the manifest a question about renderer dispatch.
         // A tool that never reaches a renderer should not pay for the answer.
-        const deps = viewlessDeps();
+        const deps = viewlessDepsFor(name);
         const server = createSessionServer(SESSION, deps);
         await server.connect(makeMockTransport());
 
@@ -6605,6 +6803,22 @@ describe("session-scoped resource ownership (#11909)", () => {
         kind: "command",
         danger: "safe" as const,
       },
+      // With an outputSchema, so the submission receipt is checked on the
+      // structuredContent block the owned tool advertises, not only the text.
+      {
+        ...makeManifestEntry("terminal.sendCommandOwned"),
+        kind: "command",
+        danger: "safe" as const,
+        outputSchema: {
+          type: "object",
+          properties: { sent: { type: "boolean" }, submissionToken: { type: "string" } },
+        },
+      },
+      {
+        ...makeManifestEntry("terminal.injectOwned"),
+        kind: "command",
+        danger: "safe" as const,
+      },
       {
         ...makeManifestEntry("worktree.deleteOwned"),
         kind: "command",
@@ -7153,6 +7367,473 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(dispatchAction).not.toHaveBeenCalled();
     });
   });
+  describe("terminal.readLastMessageOwned (#12479)", () => {
+    const READ_RESULT: AgentLastMessageResult = {
+      status: "ok",
+      provider: "claude",
+      message: {
+        id: "msg_1",
+        text: "Verdict: ship it.",
+        truncated: false,
+        recordedAt: 1,
+        stopReason: "end_turn",
+        nextCursor: null,
+      },
+      unansweredToolUses: [],
+      newerRecordsFollow: false,
+      fileUpdatedAt: 1,
+    };
+
+    function readHarness(
+      sessionId: string,
+      read: SessionServerDeps["handleTerminalReadLastMessageOwned"] = () =>
+        Promise.resolve(READ_RESULT)
+    ) {
+      const handleTerminalReadLastMessageOwned = vi.fn(read);
+      const h = harness(sessionId, {}, { handleTerminalReadLastMessageOwned });
+      h.store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+      return { ...h, handleTerminalReadLastMessageOwned };
+    }
+
+    it("runs in main on the checked id and the call's signal, never reaching a renderer", async () => {
+      const { server, deps, dispatchAction, handleTerminalReadLastMessageOwned } =
+        readHarness("s-read");
+
+      const result = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(result.structuredContent).toEqual(READ_RESULT);
+      expect(payloadOf(result)).toEqual(READ_RESULT);
+      expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledWith(
+        "terminal-1",
+        {},
+        expect.any(AbortSignal)
+      );
+      expect(dispatchAction).not.toHaveBeenCalled();
+      expect(deps.requestManifest).not.toHaveBeenCalled();
+    });
+
+    // No path, session id or agent crosses from the caller: the host resolves
+    // all of it, so there is nothing else for an argument to steer.
+    it("hands the executor the id and nothing else the caller sent", async () => {
+      const { server, handleTerminalReadLastMessageOwned } = readHarness("s-read-strip");
+
+      await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: {
+          terminalId: "terminal-1",
+          sessionId: "someone-elses",
+          path: "/etc/passwd",
+          maxScanBytes: 1e9,
+        },
+      });
+
+      expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledTimes(1);
+      expect(handleTerminalReadLastMessageOwned.mock.calls[0]).toEqual([
+        "terminal-1",
+        {},
+        expect.any(AbortSignal),
+      ]);
+    });
+
+    // How much of which message is the caller's to choose (#12496), and the
+    // only thing beyond the id that reaches the executor.
+    it("forwards the read options it validated", async () => {
+      const { server, handleTerminalReadLastMessageOwned } = readHarness("s-read-options");
+      const cursor = encodeMessageCursor("msg_1", "Text before the page.", 5);
+
+      await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-1", maxBytes: 49152, messageIndex: 2 },
+      });
+      await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-1", cursor, path: "/etc/passwd" },
+      });
+
+      expect(handleTerminalReadLastMessageOwned.mock.calls.map((call) => call[1])).toEqual([
+        { maxBytes: 49152, messageIndex: 2 },
+        { cursor },
+      ]);
+    });
+
+    // Nothing else validates a main-executed call, so an out-of-contract value
+    // is refused here rather than read with.
+    it("refuses read options out of contract, without reading, and audits the refusal", async () => {
+      const { server, deps, handleTerminalReadLastMessageOwned } = readHarness("s-read-invalid");
+
+      for (const extra of [
+        { maxBytes: 1_000_000 },
+        { messageIndex: -1 },
+        { cursor: "made-up" },
+        { cursor: encodeMessageCursor("msg_1", "Text.", 2), messageIndex: 0 },
+      ]) {
+        const result = await callTool(server, {
+          name: "terminal.readLastMessageOwned",
+          arguments: { terminalId: "terminal-1", ...extra },
+        });
+        expect(result.isError).toBe(true);
+        expect(toolErrorPayload(result).code).toBe("VALIDATION_ERROR");
+      }
+
+      expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+      expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: {
+            kind: "result",
+            value: expect.objectContaining({
+              ok: false,
+              error: expect.objectContaining({ code: "VALIDATION_ERROR" }),
+            }),
+          },
+        })
+      );
+    });
+
+    // Ownership is decided first, so a malformed request for someone else's
+    // panel learns nothing more than a well-formed one would.
+    it("refuses a panel the session did not create before looking at its options", async () => {
+      const { server, handleTerminalReadLastMessageOwned } = readHarness("s-read-foreign-options");
+
+      const result = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-theirs", maxBytes: "lots" },
+      });
+
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(errorText(result)).not.toContain("maxBytes");
+      expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+    });
+
+    it("refuses a panel the session did not create, without reading anything", async () => {
+      const { store, server, handleTerminalReadLastMessageOwned } = readHarness("s-read-foreign");
+      store.resourceOwnership.record("other-session", [
+        { kind: "terminal", id: "terminal-theirs" },
+      ]);
+
+      const result = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-theirs" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+    });
+
+    it("refuses a call that names no panel", async () => {
+      const { server, handleTerminalReadLastMessageOwned } = readHarness("s-read-blank");
+
+      const result = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "  " },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("VALIDATION_ERROR");
+      expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+    });
+
+    it("keeps ownership, so the panel can be read again", async () => {
+      const { store, server, handleTerminalReadLastMessageOwned } = readHarness("s-read-twice");
+      const args = {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-1" },
+      };
+
+      expect((await callTool(server, args)).isError).toBeUndefined();
+      expect((await callTool(server, args)).isError).toBeUndefined();
+
+      expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledTimes(2);
+      expect(store.resourceOwnership.owns("s-read-twice", "terminal", "terminal-1")).toBe(true);
+    });
+
+    // An unavailable answer is still an answer — the caller asked and was told
+    // why not — so it is a structured success, not a tool error.
+    it("returns an unavailable answer as a structured result", async () => {
+      const unavailable: AgentLastMessageResult = {
+        status: "unavailable",
+        reason: "store-unknown",
+      };
+      const { server } = readHarness("s-read-unavailable", () => Promise.resolve(unavailable));
+
+      const result = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(result.structuredContent).toEqual(unavailable);
+    });
+
+    it("audits a read once, as the result the executor returned", async () => {
+      const { server, deps } = readHarness("s-read-audit");
+
+      await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(deps.appendAuditRecord).toHaveBeenCalledTimes(1);
+      expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolId: "terminal.readLastMessageOwned",
+          outcome: { kind: "result", value: { ok: true, result: READ_RESULT } },
+        })
+      );
+    });
+
+    // Ownership records carry the workspace the panel was created in, and a
+    // session rebound elsewhere is refused before anything is read.
+    it("refuses a panel recorded under another workspace, without reading", async () => {
+      const { store, server, handleTerminalReadLastMessageOwned } = readHarness("s-read-rebound");
+      store.resourceOwnership.record(
+        "s-read-rebound",
+        [{ kind: "terminal", id: "terminal-a" }],
+        "ws-a"
+      );
+      store.sessionWorkspaceMap.set("s-read-rebound", "ws-b");
+
+      const result = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-a" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+    });
+
+    it("slides a native grant that covered the read, as the delegated owned tools do", async () => {
+      const { store, server } = readHarness("s-read-grant");
+      const grant = store.grantCache.issueNativeGrant({
+        sessionId: "s-read-grant",
+        actorId: "help-1",
+        actorType: "help-session",
+        allowedTools: ["terminal.readLastMessageOwned"],
+        maxUses: 3,
+      });
+      const refresh = vi.spyOn(store.grantCache, "refreshNativeGrant");
+
+      const result = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(refresh).toHaveBeenCalledWith(grant.id);
+    });
+
+    it("reports a failed read as an execution error, audited as a throw", async () => {
+      const { server, deps } = readHarness("s-read-throw", () =>
+        Promise.reject(new Error("pty host unavailable"))
+      );
+
+      const result = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("EXECUTION_ERROR");
+      expect(deps.appendAuditRecord).toHaveBeenCalledTimes(1);
+      expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: expect.objectContaining({ kind: "throw" }) })
+      );
+    });
+  });
+
+  describe("owned terminal input (#12407)", () => {
+    const SUBMIT_RESULT = {
+      sent: true,
+      terminalId: "terminal-1",
+      command: "ls",
+      submissionToken: "token-1",
+      message: "Submission queued.",
+    };
+
+    function inputHarness(sessionId: string) {
+      const h = harness(sessionId, {
+        "terminal.sendCommand": { result: { ok: true, result: SUBMIT_RESULT } },
+        "terminal.inject": { result: { ok: true, result: undefined } },
+      });
+      h.store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+      return h;
+    }
+
+    it("submits to a terminal the session created with only the id and the text", async () => {
+      const { server, dispatchAction } = inputHarness("s-submit");
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: "terminal-1", command: "npm test\nnpm run lint" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.sendCommand",
+        { terminalId: "terminal-1", command: "npm test\nnpm run lint" },
+        expect.anything()
+      );
+      expect(result.structuredContent).toMatchObject({ sent: true, submissionToken: "token-1" });
+    });
+
+    // The rebuilt arguments are the enforcement: whatever else the caller
+    // sends, the delegate sees the checked id and the text, so no extra field
+    // can retarget the submission or pre-approve anything.
+    it("strips every other argument, including ones that name another target", async () => {
+      const { server, dispatchAction } = inputHarness("s-submit-strip");
+
+      await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: {
+          terminalId: "terminal-1",
+          command: "ls",
+          id: "user-shell",
+          terminalIds: ["user-shell"],
+          worktreeId: "/tmp/other",
+          confirmed: true,
+        },
+      });
+
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
+      const [actionId, delegated, confirmed] = dispatchAction.mock.calls[0]!;
+      expect(actionId).toBe("terminal.sendCommand");
+      expect(delegated).toStrictEqual({ terminalId: "terminal-1", command: "ls" });
+      // A caller's `confirmed` is an argument like any other, not an approval.
+      expect(confirmed).toBe(false);
+    });
+
+    // #12488: whether to ask for a handback is the one other field it carries.
+    it("forwards a handback request alongside the text", async () => {
+      const { server, dispatchAction } = inputHarness("s-submit-handback");
+
+      await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: "terminal-1", command: "fix it", handback: true },
+      });
+
+      const delegated = dispatchAction.mock.calls[0]![1] as Record<string, unknown>;
+      expect(delegated).toStrictEqual({
+        terminalId: "terminal-1",
+        command: "fix it",
+        handback: true,
+      });
+    });
+
+    // An absent field is left absent rather than forwarded as `undefined`, so
+    // the delegate's own schema is what rejects the missing text.
+    it("forwards nothing for a field the caller left out", async () => {
+      const { server, dispatchAction } = inputHarness("s-submit-nocommand");
+
+      await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      const delegated = dispatchAction.mock.calls[0]![1] as Record<string, unknown>;
+      expect(delegated).toStrictEqual({ terminalId: "terminal-1" });
+      expect(Object.hasOwn(delegated, "command")).toBe(false);
+    });
+
+    it("injects into a terminal the session created with only the id", async () => {
+      const { server, dispatchAction } = inputHarness("s-inject");
+
+      const result = await callTool(server, {
+        name: "terminal.injectOwned",
+        arguments: { terminalId: "terminal-1", worktreeId: "/tmp/other", text: "rm -rf /" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.inject",
+        { terminalId: "terminal-1" },
+        expect.anything()
+      );
+    });
+
+    it.each(["terminal.sendCommandOwned", "terminal.injectOwned"])(
+      "%s refuses the user's terminal and another session's, without dispatching",
+      async (tool) => {
+        const { store, server, dispatchAction } = inputHarness(`s-foreign-${tool}`);
+        store.resourceOwnership.record("other-session", [
+          { kind: "terminal", id: "terminal-theirs" },
+        ]);
+
+        for (const terminalId of ["terminal-theirs", "user-shell"]) {
+          const result = await callTool(server, {
+            name: tool,
+            arguments: { terminalId, command: "ls" },
+          });
+          expect(result.isError).toBe(true);
+          expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+        }
+        expect(dispatchAction).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(["terminal.sendCommandOwned", "terminal.injectOwned"])(
+      "%s rejects a missing id before anything reaches the renderer",
+      async (tool) => {
+        const { server, dispatchAction } = inputHarness(`s-noid-${tool}`);
+
+        const result = await callTool(server, { name: tool, arguments: { command: "ls" } });
+
+        expect(result.isError).toBe(true);
+        expect(errorText(result)).toContain("VALIDATION_ERROR");
+        expect(dispatchAction).not.toHaveBeenCalled();
+      }
+    );
+
+    // Submitting is not a claim the panel stopped existing, and a repeat is a
+    // second submission rather than a replay to absorb.
+    it.each([
+      ["terminal.sendCommandOwned", "terminal.sendCommand"],
+      ["terminal.injectOwned", "terminal.inject"],
+    ])("%s keeps ownership and dispatches a repeat again", async (tool, delegate) => {
+      const sessionId = `s-twice-${tool}`;
+      // The delegate claims the panel closed, so only `releasesOwnership: false`
+      // keeps the record — the structural `closedIds` check would otherwise
+      // mask a wrong flag, as it does for the interrupt above.
+      const { store, server, dispatchAction } = harness(sessionId, {
+        [delegate]: {
+          result: { ok: true, result: { ...SUBMIT_RESULT, closedIds: ["terminal-1"] } },
+        },
+      });
+      store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+      const args = { name: tool, arguments: { terminalId: "terminal-1", command: "ls" } };
+
+      expect((await callTool(server, args)).isError).toBeUndefined();
+      expect((await callTool(server, args)).isError).toBeUndefined();
+
+      expect(dispatchAction.mock.calls.filter((c: unknown[]) => c[0] === delegate)).toHaveLength(2);
+      expect(store.resourceOwnership.owns(sessionId, "terminal", "terminal-1")).toBe(true);
+    });
+
+    it("reaches a terminal the session opened through terminal.new", async () => {
+      const { server, dispatchAction } = harness("s-new-then-submit", {
+        "terminal.new": { result: { ok: true, result: { terminalId: "terminal-9" } } },
+        "terminal.sendCommand": { result: { ok: true, result: SUBMIT_RESULT } },
+      });
+
+      await callTool(server, { name: "terminal.new", arguments: {} });
+      const result = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: "terminal-9", command: "ls" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.sendCommand",
+        { terminalId: "terminal-9", command: "ls" },
+        expect.anything()
+      );
+    });
+  });
+
   describe("terminal.revealOwned (#12315)", () => {
     /**
      * A reveal harness with the bridge's reveal route wired. One dep, because
@@ -7966,5 +8647,874 @@ describe("session-scoped resource ownership (#11909)", () => {
 
       expect(listedIds(result)).toEqual(["terminal-new"]);
     });
+  });
+
+  // #12487 — a pane bearer's records belong to its principal, so a pane whose
+  // session is replaced (reconnect, idle reap, server restart) still acts on
+  // the agents it launched through the next session on the same bearer.
+  describe("pane bearer across a session replacement (#12487)", () => {
+    const PRINCIPAL = "principal-pane";
+
+    /** A live pane session bound to PRINCIPAL, as the handshake would leave it. */
+    function paneSession(
+      store: RealSessionStore,
+      sessionId: string,
+      dispatchAction: SessionServerDeps["dispatchAction"],
+      principal: string = PRINCIPAL
+    ) {
+      seedLiveSession(store, sessionId, "action");
+      store.sessionOriginMap.set(sessionId, "external");
+      store.resourceOwnership.bindPrincipal(sessionId, principal);
+      return createSessionServer(
+        sessionId,
+        fakeDeps({
+          sessionStore: store,
+          dispatchAction,
+          requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+          getCachedManifest: vi.fn(() => ownedManifest()),
+        })
+      );
+    }
+
+    function listedIds(result: { content: unknown }): string[] {
+      return payloadOf<{ terminals: Array<{ id: string }> }>(result).terminals.map((t) => t.id);
+    }
+
+    function routedDispatch() {
+      return vi.fn().mockImplementation((actionId: string) => {
+        if (actionId === "terminal.new") {
+          return Promise.resolve({ result: { ok: true, result: { terminalId: "terminal-1" } } });
+        }
+        if (actionId === "terminal.list") {
+          return Promise.resolve({
+            result: {
+              ok: true,
+              result: { terminals: [{ id: "terminal-1" }, { id: "terminal-users-own" }] },
+            },
+          });
+        }
+        if (actionId === "terminal.close") {
+          return Promise.resolve({ result: { ok: true, result: { closedIds: ["terminal-1"] } } });
+        }
+        return Promise.resolve({ result: { ok: true, result: null } });
+      });
+    }
+
+    /** Hold `terminal.new` until the test releases it. */
+    function heldCreation() {
+      let release: (() => void) | undefined;
+      const dispatchAction = vi.fn().mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            release = () => resolve({ result: { ok: true, result: { terminalId: "terminal-1" } } });
+          })
+      );
+      return {
+        dispatchAction,
+        async started() {
+          for (let i = 0; i < 50 && !release; i++) await Promise.resolve();
+          expect(release).toBeTypeOf("function");
+        },
+        release: () => release!(),
+      };
+    }
+
+    it("lists and acts on what the previous session launched, and the two agree", async () => {
+      const store = makeStore();
+      const dispatchAction = routedDispatch();
+      const first = paneSession(store, "s-pane-1", dispatchAction);
+      await callTool(first, { name: "terminal.new", arguments: {} });
+
+      store.revokeSession("s-pane-1");
+      const second = paneSession(store, "s-pane-2", dispatchAction);
+
+      const listed = await callTool(second, {
+        name: "terminal.list",
+        arguments: { owned: true },
+      });
+      expect(listedIds(listed)).toEqual(["terminal-1"]);
+
+      const closed = await callTool(second, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+      expect(closed.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.close",
+        { terminalId: "terminal-1" },
+        expect.anything()
+      );
+      // Released under the principal, so no session on this bearer holds it.
+      expect(store.resourceOwnership.list(store.resourceOwnership.ownerOf("s-pane-2"))).toEqual([]);
+    });
+
+    it("survives a server drain, which revokes no pane bearer", async () => {
+      const store = makeStore();
+      const dispatchAction = routedDispatch();
+      const first = paneSession(store, "s-pane-1", dispatchAction);
+      await callTool(first, { name: "terminal.new", arguments: {} });
+
+      store.drain();
+      const second = paneSession(store, "s-pane-2", dispatchAction);
+
+      const listed = await callTool(second, {
+        name: "terminal.list",
+        arguments: { owned: true },
+      });
+      expect(listedIds(listed)).toEqual(["terminal-1"]);
+    });
+
+    it("records a creation that completes after the session that asked for it dropped", async () => {
+      const store = makeStore();
+      const held = heldCreation();
+      const first = paneSession(store, "s-pane-1", held.dispatchAction);
+      const inFlight = callTool(first, { name: "terminal.new", arguments: {} });
+      await held.started();
+
+      store.revokeSession("s-pane-1");
+      held.release();
+      await inFlight;
+
+      paneSession(store, "s-pane-2", routedDispatch());
+      expect(
+        store.resourceOwnership.owns(
+          store.resourceOwnership.ownerOf("s-pane-2"),
+          "terminal",
+          "terminal-1"
+        )
+      ).toBe(true);
+    });
+
+    it("records nothing for a creation whose bearer was revoked while it was in flight", async () => {
+      const store = makeStore();
+      const held = heldCreation();
+      const first = paneSession(store, "s-pane-1", held.dispatchAction);
+      const inFlight = callTool(first, { name: "terminal.new", arguments: {} });
+      await held.started();
+
+      store.resourceOwnership.revokePrincipal(PRINCIPAL);
+      held.release();
+      await inFlight;
+
+      expect(store.resourceOwnership.list(store.resourceOwnership.ownerOf("s-pane-1"))).toEqual([]);
+      // The id is free: nothing the relaunched pane's new bearer can see.
+      paneSession(store, "s-pane-2", routedDispatch(), "principal-relaunched");
+      expect(
+        store.resourceOwnership.owns(
+          store.resourceOwnership.ownerOf("s-pane-2"),
+          "terminal",
+          "terminal-1"
+        )
+      ).toBe(false);
+    });
+
+    it("lists exactly what the owned tools accept, workspace check included", async () => {
+      const store = makeStore();
+      const dispatchAction = vi.fn().mockImplementation((actionId: string) =>
+        Promise.resolve(
+          actionId === "terminal.list"
+            ? {
+                result: {
+                  ok: true,
+                  result: { terminals: [{ id: "terminal-elsewhere" }, { id: "terminal-here" }] },
+                },
+              }
+            : { result: { ok: true, result: { closedIds: ["terminal-elsewhere"] } } }
+        )
+      );
+      const server = paneSession(store, "s-pane", dispatchAction);
+      store.sessionWorkspaceMap.set("s-pane", "ws-here");
+      const owner = store.resourceOwnership.ownerOf("s-pane");
+      store.resourceOwnership.record(
+        owner,
+        [{ kind: "terminal", id: "terminal-elsewhere" }],
+        "ws-x"
+      );
+      store.resourceOwnership.record(owner, [{ kind: "terminal", id: "terminal-here" }], "ws-here");
+
+      const listed = await callTool(server, {
+        name: "terminal.list",
+        arguments: { owned: true },
+      });
+      const refused = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-elsewhere" },
+      });
+
+      expect(listedIds(listed)).toEqual(["terminal-here"]);
+      expect(refused.isError).toBe(true);
+      expect(errorText(refused)).toContain("RESOURCE_NOT_OWNED");
+    });
+
+    it("keeps a record the same bearer re-created while a close was in flight", async () => {
+      const store = makeStore();
+      let releaseClose: (() => void) | undefined;
+      const dispatchAction = vi.fn().mockImplementation((actionId: string) => {
+        if (actionId === "terminal.close") {
+          return new Promise((resolve) => {
+            releaseClose = () =>
+              resolve({ result: { ok: true, result: { closedIds: ["terminal-1"] } } });
+          });
+        }
+        return Promise.resolve({ result: { ok: true, result: { terminalId: "terminal-1" } } });
+      });
+      const first = paneSession(store, "s-pane-1", dispatchAction);
+      const second = paneSession(store, "s-pane-2", dispatchAction);
+      await callTool(first, { name: "terminal.new", arguments: {} });
+
+      const closing = callTool(first, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+      for (let i = 0; i < 50 && !releaseClose; i++) await Promise.resolve();
+      // The other session on this bearer creates a panel under the same id
+      // before the close reports back.
+      await callTool(second, {
+        name: "terminal.new",
+        arguments: { spawnedBy: { kind: "user" } },
+      });
+      releaseClose!();
+      await closing;
+
+      expect(
+        store.resourceOwnership.owns(
+          store.resourceOwnership.ownerOf("s-pane-2"),
+          "terminal",
+          "terminal-1"
+        )
+      ).toBe(true);
+    });
+
+    it("still drops an api-key session's creation that completes after it ended", async () => {
+      const store = makeStore();
+      const held = heldCreation();
+      seedLiveSession(store, "s-api", "external");
+      store.sessionOriginMap.set("s-api", "external");
+      const server = createSessionServer(
+        "s-api",
+        fakeDeps({
+          sessionStore: store,
+          dispatchAction: held.dispatchAction,
+          requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+          getCachedManifest: vi.fn(() => ownedManifest()),
+        })
+      );
+      const inFlight = callTool(server, { name: "terminal.new", arguments: {} });
+      await held.started();
+
+      store.revokeSession("s-api");
+      held.release();
+      await inFlight;
+
+      expect(store.resourceOwnership.list("s-api")).toEqual([]);
+    });
+  });
+
+  // #12490 — a terminal the user handed to an orchestrating pane is driven
+  // through the non-destructive `*Owned` tools as if the pane had launched it,
+  // and never through the cleanup ones.
+  describe("terminals the user handed over (#12490)", () => {
+    const PRINCIPAL = "principal-orchestrator";
+
+    function orchestratorSession(
+      store: RealSessionStore,
+      sessionId: string,
+      dispatchAction: SessionServerDeps["dispatchAction"],
+      principal: string = PRINCIPAL
+    ) {
+      seedLiveSession(store, sessionId, "action");
+      store.sessionOriginMap.set(sessionId, "external");
+      store.resourceOwnership.bindPrincipal(sessionId, principal);
+      return createSessionServer(
+        sessionId,
+        fakeDeps({
+          sessionStore: store,
+          dispatchAction,
+          requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+          getCachedManifest: vi.fn(() => ownedManifest()),
+        })
+      );
+    }
+
+    function handOver(store: RealSessionStore, terminalId: string, principal = PRINCIPAL) {
+      const outcome = store.terminalAdoption.adopt({
+        terminalId,
+        orchestratorPaneId: "orchestrator-pane",
+        principalId: principal,
+        workspaceId: "ws-a",
+      });
+      expect(outcome.ok).toBe(true);
+    }
+
+    function listingDispatch() {
+      return vi.fn().mockImplementation((actionId: string) => {
+        if (actionId === "terminal.list") {
+          return Promise.resolve({
+            result: {
+              ok: true,
+              result: { terminals: [{ id: "terminal-handed" }, { id: "terminal-users-own" }] },
+            },
+          });
+        }
+        if (actionId === "terminal.close") {
+          return Promise.resolve({
+            result: { ok: true, result: { closedIds: ["terminal-handed"] } },
+          });
+        }
+        return Promise.resolve({ result: { ok: true, result: null } });
+      });
+    }
+
+    it("submits to, interrupts and injects into a handed-over terminal", async () => {
+      const store = makeStore();
+      const dispatchAction = listingDispatch();
+      const server = orchestratorSession(store, "s-orch", dispatchAction);
+      handOver(store, "terminal-handed");
+
+      const sent = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: "terminal-handed", command: "1" },
+      });
+      const interrupted = await callTool(server, {
+        name: "terminal.interruptOwned",
+        arguments: { terminalId: "terminal-handed" },
+      });
+      const injected = await callTool(server, {
+        name: "terminal.injectOwned",
+        arguments: { terminalId: "terminal-handed" },
+      });
+
+      expect(sent.isError).toBeUndefined();
+      expect(interrupted.isError).toBeUndefined();
+      expect(injected.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.sendCommand",
+        { command: "1", terminalId: "terminal-handed" },
+        expect.anything()
+      );
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.interrupt",
+        { terminalId: "terminal-handed" },
+        expect.anything()
+      );
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.inject",
+        { terminalId: "terminal-handed" },
+        expect.anything()
+      );
+    });
+
+    it("reads a handed-over agent's last message", async () => {
+      const store = makeStore();
+      seedLiveSession(store, "s-orch", "action");
+      store.sessionOriginMap.set("s-orch", "external");
+      store.resourceOwnership.bindPrincipal("s-orch", PRINCIPAL);
+      handOver(store, "terminal-handed");
+      const handleTerminalReadLastMessageOwned = vi
+        .fn()
+        .mockResolvedValue({ status: "unavailable", reason: "no-message" });
+      const server = createSessionServer(
+        "s-orch",
+        fakeDeps({
+          sessionStore: store,
+          handleTerminalReadLastMessageOwned,
+          requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+          getCachedManifest: vi.fn(() => ownedManifest()),
+        })
+      );
+
+      const result = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-handed" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledWith(
+        "terminal-handed",
+        {},
+        expect.any(AbortSignal)
+      );
+
+      // Paging (#12496) reaches an adopted terminal exactly as it reaches an
+      // owned one: the adoption gate runs before the options are validated.
+      const paged = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-handed", maxBytes: 49152, messageIndex: 2 },
+      });
+
+      expect(paged.isError).toBeUndefined();
+      expect(handleTerminalReadLastMessageOwned).toHaveBeenLastCalledWith(
+        "terminal-handed",
+        { maxBytes: 49152, messageIndex: 2 },
+        expect.any(AbortSignal)
+      );
+    });
+
+    it("reveals a handed-over terminal in the workspace it lives in", async () => {
+      const store = makeStore();
+      const revealOwnedRun = vi.fn().mockResolvedValue({
+        envelope: { result: { ok: true, result: null } },
+        raised: true,
+      });
+      seedLiveSession(store, "s-orch", "action");
+      store.sessionOriginMap.set("s-orch", "external");
+      store.resourceOwnership.bindPrincipal("s-orch", PRINCIPAL);
+      handOver(store, "terminal-handed");
+      const server = createSessionServer(
+        "s-orch",
+        fakeDeps({
+          sessionStore: store,
+          revealOwnedRun,
+          requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+          getCachedManifest: vi.fn(() => ownedManifest()),
+        })
+      );
+
+      const result = await callTool(server, {
+        name: "terminal.revealOwned",
+        arguments: { terminalId: "terminal-handed" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(revealOwnedRun).toHaveBeenCalledWith(
+        "ws-a",
+        "pilot.openRun",
+        { runId: "terminal-handed", workspaceId: "ws-a" },
+        expect.anything()
+      );
+    });
+
+    it("never closes a handed-over terminal", async () => {
+      const store = makeStore();
+      const dispatchAction = listingDispatch();
+      const server = orchestratorSession(store, "s-orch", dispatchAction);
+      handOver(store, "terminal-handed");
+
+      const result = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-handed" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalledWith(
+        "terminal.close",
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it("lists handed-over terminals as ones the pane can drive", async () => {
+      const store = makeStore();
+      const server = orchestratorSession(store, "s-orch", listingDispatch());
+      handOver(store, "terminal-handed");
+
+      const result = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+
+      expect(
+        payloadOf<{ terminals: Array<{ id: string }> }>(result).terminals.map((t) => t.id)
+      ).toEqual(["terminal-handed"]);
+    });
+
+    it("survives a reconnect on the same bearer", async () => {
+      const store = makeStore();
+      const dispatchAction = listingDispatch();
+      orchestratorSession(store, "s-orch-1", dispatchAction);
+      handOver(store, "terminal-handed");
+
+      store.revokeSession("s-orch-1");
+      const second = orchestratorSession(store, "s-orch-2", dispatchAction);
+      const result = await callTool(second, {
+        name: "terminal.interruptOwned",
+        arguments: { terminalId: "terminal-handed" },
+      });
+
+      expect(result.isError).toBeUndefined();
+    });
+
+    it("refuses another pane, and the pane once its bearer is revoked", async () => {
+      const store = makeStore();
+      const dispatchAction = listingDispatch();
+      const other = orchestratorSession(store, "s-other", dispatchAction, "principal-other");
+      const orchestrator = orchestratorSession(store, "s-orch", dispatchAction);
+      handOver(store, "terminal-handed");
+
+      const byOther = await callTool(other, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: "terminal-handed", command: "1" },
+      });
+      expect(byOther.isError).toBe(true);
+      expect(errorText(byOther)).toContain("RESOURCE_NOT_OWNED");
+
+      store.resourceOwnership.revokePrincipal(PRINCIPAL);
+      store.terminalAdoption.revokePrincipal(PRINCIPAL);
+      const afterRevoke = await callTool(orchestrator, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: "terminal-handed", command: "1" },
+      });
+      expect(afterRevoke.isError).toBe(true);
+      expect(dispatchAction).not.toHaveBeenCalledWith(
+        "terminal.sendCommand",
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it("sends nothing when the user takes the terminal back while the call waits", async () => {
+      const store = makeStore();
+      const dispatchAction = listingDispatch();
+      seedLiveSession(store, "s-orch", "action");
+      store.sessionOriginMap.set("s-orch", "external");
+      store.resourceOwnership.bindPrincipal("s-orch", PRINCIPAL);
+      handOver(store, "terminal-handed");
+      const server = createSessionServer(
+        "s-orch",
+        fakeDeps({
+          sessionStore: store,
+          dispatchAction,
+          // No cached manifest, so the call waits on a fetch after the gate —
+          // the window a take-back can land in.
+          getCachedManifest: vi.fn(() => null),
+          requestManifest: vi.fn().mockImplementation(async () => {
+            store.terminalAdoption.release("terminal-handed");
+            return ownedManifest();
+          }),
+        })
+      );
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: "terminal-handed", command: "1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalledWith(
+        "terminal.sendCommand",
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it("refuses input and drops the terminal from the listing once the user takes it back", async () => {
+      const store = makeStore();
+      const dispatchAction = listingDispatch();
+      const server = orchestratorSession(store, "s-orch", dispatchAction);
+      handOver(store, "terminal-handed");
+
+      store.terminalAdoption.release("terminal-handed");
+      const sent = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: "terminal-handed", command: "1" },
+      });
+      const interrupted = await callTool(server, {
+        name: "terminal.interruptOwned",
+        arguments: { terminalId: "terminal-handed" },
+      });
+      const listed = await callTool(server, { name: "terminal.list", arguments: { owned: true } });
+
+      expect(errorText(sent)).toContain("RESOURCE_NOT_OWNED");
+      expect(errorText(interrupted)).toContain("RESOURCE_NOT_OWNED");
+      expect(payloadOf<{ terminals: unknown[] }>(listed).terminals).toEqual([]);
+      expect(dispatchAction).not.toHaveBeenCalledWith(
+        "terminal.sendCommand",
+        expect.anything(),
+        expect.anything()
+      );
+      expect(dispatchAction).not.toHaveBeenCalledWith(
+        "terminal.interrupt",
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it("does not carry a call across a take-back and a fresh hand-over", async () => {
+      const store = makeStore();
+      const dispatchAction = listingDispatch();
+      seedLiveSession(store, "s-orch", "action");
+      store.sessionOriginMap.set("s-orch", "external");
+      store.resourceOwnership.bindPrincipal("s-orch", PRINCIPAL);
+      handOver(store, "terminal-handed");
+      const server = createSessionServer(
+        "s-orch",
+        fakeDeps({
+          sessionStore: store,
+          dispatchAction,
+          getCachedManifest: vi.fn(() => null),
+          requestManifest: vi.fn().mockImplementation(async () => {
+            // The consent the call was admitted under ends, and a new one
+            // begins, while it waits.
+            store.terminalAdoption.release("terminal-handed");
+            handOver(store, "terminal-handed");
+            return ownedManifest();
+          }),
+        })
+      );
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: "terminal-handed", command: "1" },
+      });
+
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalledWith(
+        "terminal.sendCommand",
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it("ends the hand-over when a creation reuses the id", async () => {
+      const store = makeStore();
+      const dispatchAction = vi.fn().mockResolvedValue({
+        result: { ok: true, result: { terminalId: "terminal-handed" } },
+      });
+      const server = orchestratorSession(store, "s-other", dispatchAction, "principal-other");
+      handOver(store, "terminal-handed");
+
+      await callTool(server, { name: "terminal.new", arguments: {} });
+
+      // The id now names the creator's new terminal: one driver, not two.
+      expect(store.terminalAdoption.getForTerminal("terminal-handed")).toBeUndefined();
+      expect(
+        store.resourceOwnership.owns(
+          store.resourceOwnership.ownerOf("s-other"),
+          "terminal",
+          "terminal-handed"
+        )
+      ).toBe(true);
+    });
+
+    it("never matches an api-key session, which has no pane to hand anything to", async () => {
+      const store = makeStore();
+      const dispatchAction = listingDispatch();
+      seedLiveSession(store, "s-api", "external");
+      store.sessionOriginMap.set("s-api", "external");
+      handOver(store, "terminal-handed");
+      const server = createSessionServer(
+        "s-api",
+        fakeDeps({
+          sessionStore: store,
+          dispatchAction,
+          requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+          getCachedManifest: vi.fn(() => ownedManifest()),
+        })
+      );
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: "terminal-handed", command: "1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalledWith(
+        "terminal.sendCommand",
+        expect.anything(),
+        expect.anything()
+      );
+    });
+  });
+});
+
+// #12407 — the ladder tiers reach agent panes as well as the assistant. A Claude
+// pane's bearer holds the project's tier with an `external` origin, and at
+// `action` that used to include input into any terminal. The tier still decides
+// what a session could reach; the origin now decides whether unscoped terminal
+// input is part of it, at both gates.
+describe("unscoped terminal input by session origin (#12407)", () => {
+  const RESERVED = ["terminal.sendCommand", "terminal.inject", "copyTree.injectToTerminal"];
+
+  function originDeps(origin: "help" | "assistant-pane" | "external", tier: "action" | "system") {
+    const manifest = [
+      ...RESERVED.map((id) => ({ ...makeManifestEntry(id), kind: "command" as const })),
+      { ...makeManifestEntry("terminal.sendCommandOwned"), kind: "command" as const },
+      { ...makeManifestEntry("terminal.injectOwned"), kind: "command" as const },
+      makeManifestEntry("mcp.surface"),
+    ];
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore(tier),
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      getCachedManifest: vi.fn(() => manifest),
+    });
+    deps.sessionStore.sessionOriginMap.set("s-origin", origin);
+    return deps;
+  }
+
+  it.each(["action", "system"] as const)(
+    "lists only the owned forms to an agent pane's bearer at %s",
+    async (tier) => {
+      const server = createSessionServer("s-origin", originDeps("external", tier));
+      const names = (await listTools(server)).tools.map((t) => t.name).sort();
+      expect(names).toEqual(["mcp.surface", "terminal.injectOwned", "terminal.sendCommandOwned"]);
+    }
+  );
+
+  // `mcp.surface` builds from its own policy object rather than the listing's,
+  // so the origin has to reach it separately — and the two must agree.
+  it.each([
+    ["external", false],
+    ["help", true],
+    ["assistant-pane", true],
+  ] as const)("reports the same surface as tools/list for a %s session", async (origin, full) => {
+    const server = createSessionServer("s-origin", originDeps(origin, "action"));
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, { name: "mcp.surface" })) as {
+      structuredContent: { tools: Array<{ id: string }> };
+    };
+    const reported = result.structuredContent.tools.map((t) => t.id);
+    for (const id of RESERVED) expect(reported.includes(id)).toBe(full);
+    expect(reported).toContain("terminal.sendCommandOwned");
+  });
+
+  it.each(["help", "assistant-pane"] as const)(
+    "lists unscoped terminal input to the assistant's %s session",
+    async (origin) => {
+      const server = createSessionServer("s-origin", originDeps(origin, "action"));
+      const names = (await listTools(server)).tools.map((t) => t.name);
+      for (const id of RESERVED) expect(names).toContain(id);
+    }
+  );
+
+  it.each(RESERVED)(
+    "refuses %s from a non-renderer-owned session without dispatching",
+    async (tool) => {
+      const deps = originDeps("external", "action");
+      const server = createSessionServer("s-origin", deps);
+
+      const result = await callTool(server, {
+        name: tool,
+        arguments: { terminalId: "user-shell", command: "ls" },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = JSON.stringify(result.content);
+      expect(text).toContain("TIER_NOT_PERMITTED");
+      // Names the actual reason: the session holds the tier this tool sits at.
+      expect(text).toContain("reserved for Daintree's own assistant");
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    }
+  );
+
+  // Only a tool the tier admits is described as reserved; anything above the
+  // tier keeps the ordinary tier explanation.
+  it("keeps the plain tier refusal when the tier itself does not admit the tool", async () => {
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("workbench") });
+    const server = createSessionServer("s-origin", deps);
+
+    const result = await callTool(server, {
+      name: "terminal.sendCommand",
+      arguments: { terminalId: "user-shell", command: "ls" },
+    });
+
+    const text = JSON.stringify(result.content);
+    expect(text).toContain("not permitted for the 'workbench' tier");
+    expect(text).not.toContain("reserved");
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it.each(["help", "assistant-pane"] as const)(
+    "dispatches unscoped submission for the assistant's %s session",
+    async (origin) => {
+      const deps = originDeps(origin, "action");
+      const server = createSessionServer("s-origin", deps);
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "user-agent", command: "run the tests" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(deps.dispatchAction).toHaveBeenCalledWith(
+        "terminal.sendCommand",
+        { terminalId: "user-agent", command: "run the tests" },
+        expect.anything()
+      );
+    }
+  );
+
+  // A caller-chosen id that is already live does not create a terminal — the
+  // spawn is refused and the original keeps running — so recording it would
+  // hand the session a panel it never opened.
+  it("refuses a launch under the id of a terminal that already exists, for any origin", async () => {
+    for (const origin of ["external", "help"] as const) {
+      const deps = originDeps(origin, "action");
+      deps.isTerminalIdInUse = vi.fn((id: string) => id === "user-shell");
+      const server = createSessionServer("s-origin", deps);
+
+      const result = await callTool(server, {
+        name: "agent.launch",
+        arguments: { agentId: "claude", requestedId: "user-shell" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain("VALIDATION_ERROR");
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+      expect(deps.sessionStore.resourceOwnership.owns("s-origin", "terminal", "user-shell")).toBe(
+        false
+      );
+    }
+  });
+
+  it("launches under a requested id no terminal is using", async () => {
+    const deps = originDeps("external", "action");
+    const server = createSessionServer("s-origin", deps);
+
+    const result = await callTool(server, {
+      name: "agent.launch",
+      arguments: { agentId: "claude", requestedId: "fresh-id" },
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(deps.isTerminalIdInUse).toHaveBeenCalledWith("fresh-id");
+    expect(deps.dispatchAction).toHaveBeenCalledTimes(1);
+  });
+
+  // Launching the assistant mints its pinned, renderer-owned bearer — the one
+  // origin that still carries unscoped terminal input.
+  it.each(["agent.launch", "workflow.startWorkOnIssue"])(
+    "%s will not start Daintree's own assistant for a non-renderer-owned session",
+    async (tool) => {
+      const deps = originDeps("external", "action");
+      const server = createSessionServer("s-origin", deps);
+
+      const result = await callTool(server, {
+        name: tool,
+        arguments: { agentId: "daintree-assistant", issueNumber: 1 },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = JSON.stringify(result.content);
+      expect(text).toContain("TIER_NOT_PERMITTED");
+      // The tier admits both tools, so this is the launch guard refusing, not
+      // the tier gate.
+      expect(text).toContain("cannot start Daintree's own assistant");
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    }
+  );
+
+  it("still lets a non-renderer-owned session start an ordinary agent", async () => {
+    const deps = originDeps("external", "action");
+    const server = createSessionServer("s-origin", deps);
+
+    const result = await callTool(server, {
+      name: "agent.launch",
+      arguments: { agentId: "claude" },
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(deps.dispatchAction).toHaveBeenCalledTimes(1);
+  });
+
+  // A session whose origin was never recorded — or was already torn down — is
+  // the least-privileged classification, so it gets the narrower surface.
+  it("treats an unrecorded origin as not renderer-owned", async () => {
+    const deps = originDeps("help", "action");
+    deps.sessionStore.sessionOriginMap.delete("s-origin");
+    const server = createSessionServer("s-origin", deps);
+
+    const names = (await listTools(server)).tools.map((t) => t.name);
+    for (const id of RESERVED) expect(names).not.toContain(id);
   });
 });

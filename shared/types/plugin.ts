@@ -22,6 +22,67 @@ import type { AgentState, WaitingReason } from "./agent.js";
 import type { AgentDetectionConfig } from "../config/agentRegistry.js";
 import type { z } from "zod";
 
+/**
+ * One `contributes.fileEditors` entry (#12323). Declares that the plugin's
+ * renderer registers an editor view for files with the listed extensions,
+ * offered by the host file panel as its writable **Edit** mode.
+ *
+ * `slot` names a builtin view id the plugin's renderer entry registers with
+ * `registerBuiltinView`; the host resolves it enable-aware, so disabling the
+ * plugin removes the mode live. Built-in plugins only in v1: the builtin view
+ * registry is compiled into the host bundle, which an installed plugin's
+ * renderer cannot reach, so the host refuses the contribution from any other
+ * origin at load.
+ */
+export interface FileEditorContribution {
+  /** Namespaced at runtime as `{pluginId}.{id}`. */
+  id: string;
+  /** Builtin view id the plugin's renderer registers for the editor surface. */
+  slot: string;
+  /** Lower-case extensions without the dot (`["md", "markdown"]`), matched case-insensitively. */
+  extensions: string[];
+  /** Largest file the editor accepts, in bytes. Absent means the host's default cap. */
+  maxBytes?: number;
+}
+
+/**
+ * One `contributes.previewTools` entry: a tool the dev-preview panel offers in
+ * its toolbar, with the host owning the chrome and the session lifecycle.
+ *
+ * The components stay a renderer-side registration (`registerDevPreviewTool`) —
+ * they are host-bundled, so nothing else can supply them. This declaration is
+ * what makes the tool admissible: `src/registry/devPreviewToolRegistry.ts`
+ * hides a registered tool whose plugin's manifest does not name its id, so a
+ * module side effect alone can no longer put a tool in the toolbar. Built-in
+ * plugins only.
+ */
+export interface PreviewToolContribution {
+  /** Fully qualified and prefixed with the plugin name — the host does not namespace it. */
+  id: string;
+  /** User-facing name for the tool. */
+  title: string;
+  /** Lucide icon id for the toolbar toggle. */
+  iconId?: string;
+  /** A {@link PluginGuestAdapterContribution} id this same manifest declares. */
+  guestAdapter?: string;
+}
+
+/**
+ * One `contributes.guestAdapters` entry: a browser bundle the host reads back as
+ * text and installs into a previewed page through the site-preview bridge.
+ *
+ * `entry` is the plugin-relative source; the built asset's path is derived from
+ * the id rather than declared, so the build and the startup registration cannot
+ * disagree about where the bundle landed. Built-in plugins only — the body runs
+ * with full DOM access inside the previewed site.
+ */
+export interface PluginGuestAdapterContribution {
+  /** Fully qualified and prefixed with the plugin name; the renderer binds by this literal. */
+  id: string;
+  /** Plugin-relative POSIX path to the bundle's source entry. */
+  entry: string;
+}
+
 export interface PanelContribution {
   id: string;
   name: string;
@@ -102,6 +163,10 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   // excluded from CONFIRM_TRIGGERING_CAPABILITIES: elevating on a token the
   // host cannot enforce would buy friction without buying safety.
   "socket:connect",
+  // Serve `contributes.agentMcp` tools to terminal agents over the host's MCP
+  // listener. Declaring it exposes nothing by itself: each endpoint stays dark
+  // until the user enables it for a specific project.
+  "mcp:expose",
 ] as const;
 
 export type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
@@ -506,6 +571,98 @@ export interface McpServerContribution {
 }
 
 /**
+ * One `contributes.agentMcp` entry: an MCP tools endpoint the plugin serves to
+ * agents running in Daintree's terminals — the inbound direction, unlike
+ * {@link McpServerContribution}, where Daintree is the client.
+ *
+ * The host owns everything but the tools: the transport (a plugin-only path on
+ * the existing loopback listener), the per-terminal credential, the project
+ * binding and revocation. The plugin supplies the tool roster at activation via
+ * {@link PluginMcpApi.registerTools}. Requires the `mcp:expose` capability, and
+ * an endpoint reaches no agent until the user enables it for a project.
+ */
+export interface PluginAgentMcpContribution {
+  id: string;
+  /** Shown in the per-project enablement UI. Agents never see it; their server key derives from the ids. */
+  name: string;
+  description?: string;
+  /** Host-managed tools. The only mode today; kept explicit so a later mode is additive. */
+  mode: "tools";
+}
+
+/** Most tools one `agentMcp` endpoint may register. Client tool caps are app-wide, not per server. */
+export const AGENT_MCP_MAX_TOOLS_PER_ENDPOINT = 8;
+/** Most `agentMcp` endpoints one manifest may declare. */
+export const AGENT_MCP_MAX_ENDPOINTS_PER_PLUGIN = 1;
+/**
+ * Tool name grammar — the subset every MCP client accepts unmangled. Capped at
+ * 32 characters because Claude exposes a server's tools as
+ * `mcp__<server>__<tool>` under a 64-character tool-name limit, and the host's
+ * server key for a plugin endpoint takes up to 25 of what is left.
+ */
+export const AGENT_MCP_TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{0,31}$/;
+/** UTF-8 byte cap on a tool description, matching the host's own MCP authoring budget. */
+export const AGENT_MCP_MAX_DESCRIPTION_BYTES = 400;
+/** UTF-8 byte cap on one tool's serialized input or output schema. */
+export const AGENT_MCP_MAX_SCHEMA_BYTES = 8 * 1024;
+/** UTF-8 byte cap on one serialized tool result. */
+export const AGENT_MCP_MAX_RESULT_BYTES = 256 * 1024;
+/** Wall-clock budget for one tool call before the host aborts it. */
+export const AGENT_MCP_CALL_TIMEOUT_MS = 60_000;
+
+/**
+ * Who a tool call came from, as far as the host can say. Provenance, not
+ * identity: the grant was issued for a launch in this terminal and project, but
+ * any process that read the credential can present it. `launchAgentIdHint` is
+ * what the terminal was launched as — never proof of what is calling.
+ */
+export interface PluginMcpCaller {
+  /** Stable correlation id for the credential. Never the credential itself. */
+  readonly credentialId: string;
+  readonly projectId: string;
+  readonly terminalId: string;
+  readonly launchAgentIdHint?: string;
+}
+
+/** A JSON Schema object describing a tool's arguments or result. Must be `type: "object"`. */
+export type PluginMcpJsonSchema = { type: "object" } & Record<string, unknown>;
+
+/**
+ * One tool on an `agentMcp` endpoint. `execute` receives the arguments the
+ * agent sent (validated only as a JSON object — checking them against
+ * `inputSchema` is the plugin's job), the caller's provenance, and a signal
+ * aborted when the call is cancelled, times out, or the plugin unloads. The
+ * return value must be JSON-serializable; it reaches the agent as the tool
+ * result. A thrown error becomes a tool error carrying its message.
+ */
+export interface PluginMcpToolDefinition {
+  description: string;
+  inputSchema: PluginMcpJsonSchema;
+  outputSchema?: PluginMcpJsonSchema;
+  execute(
+    args: Record<string, unknown>,
+    caller: PluginMcpCaller,
+    signal: AbortSignal
+  ): unknown | Promise<unknown>;
+}
+
+/** Host API for serving `contributes.agentMcp` endpoints. Requires `mcp:expose`. */
+export interface PluginMcpApi {
+  /**
+   * Bind the tool roster for an endpoint declared in `contributes.agentMcp`,
+   * keyed by tool name. An undeclared endpoint id, a roster over
+   * {@link AGENT_MCP_MAX_TOOLS_PER_ENDPOINT}, or a tool breaking the name,
+   * description or schema limits is rejected whole. Calling it again for the
+   * same endpoint replaces the roster. Returns a disposer; every roster is
+   * dropped when the plugin unloads. Must be called during `activate()`.
+   */
+  registerTools(
+    endpointId: string,
+    tools: Record<string, PluginMcpToolDefinition>
+  ): Promise<() => void>;
+}
+
+/**
  * One `contributes.skills` entry (#10892). A skill is a markdown file the plugin
  * ships — instructions/knowledge (not executable code) that Daintree's built-in
  * MCP server surfaces to agents through the `skills.search` / `skills.load`
@@ -827,6 +984,12 @@ export interface PluginManifest {
     views: ViewContribution[];
     mcpServers: McpServerContribution[];
     /**
+     * MCP tools endpoints this plugin serves to terminal agents. Requires the
+     * `mcp:expose` capability. Optional in the type but always materialized by
+     * the manifest schema's `.default([])`, for the same reason as `surfaces`.
+     */
+    agentMcp?: PluginAgentMcpContribution[];
+    /**
      * Plugin-contributed skills (#10892) — markdown knowledge/instruction files
      * surfaced to agents via the built-in MCP server's `skills.search` /
      * `skills.load` tools. Inert declarative content; no capability required.
@@ -835,6 +998,33 @@ export interface PluginManifest {
     skills: SkillContribution[];
     forgeProviders: ForgeProviderContribution[];
     fileDecorationProviders: FileDecorationContribution[];
+    /**
+     * Plugin-contributed file editors (#12323): an extra, writable mode on the
+     * host's file panel for the declared extensions. Built-in plugins only in
+     * v1 — the slot resolves through the host-bundled builtin view registry,
+     * which an installed plugin's renderer cannot reach. Empty unless the
+     * plugin ships an editor.
+     */
+    fileEditors: FileEditorContribution[];
+    /**
+     * Dev-preview tools this plugin offers (built-in only). The renderer
+     * registry admits a registered tool only when its plugin's manifest names
+     * the tool id here, so the manifest — not a module side effect — is what
+     * puts a tool in the preview toolbar.
+     *
+     * Optional in the type but always materialized by the manifest schema's
+     * `.default([])`, for the same reason as `agentMcp` — the hand-built
+     * manifest literals in tests and tooling predate the field.
+     */
+    previewTools?: PreviewToolContribution[];
+    /**
+     * Guest runtimes this plugin ships as standalone browser assets (built-in
+     * only). Main registers one site-preview guest adapter per entry at
+     * startup; the build derives the bundle's entry and output from the same
+     * declaration. Optional in the type for the same reason as
+     * `previewTools`.
+     */
+    guestAdapters?: PluginGuestAdapterContribution[];
     /**
      * Plugin-contributed launchable agents (#9560). Each entry registers an
      * {@link PluginAgentContribution} into the effective agent registry at load
@@ -2252,6 +2442,46 @@ export interface PluginFsStat {
 }
 
 /**
+ * Options for the checked write path of {@link PluginFsApi.writeFile}
+ * (#12323). Passing any options object selects the checked path.
+ */
+export interface PluginFsWriteOptions {
+  /**
+   * The revision the caller last read — the sha256 hex of the file's bytes,
+   * as returned by an earlier write or computed by the caller from
+   * {@link PluginFsApi.readFileBytes}. The write is refused with
+   * `REVISION_MISMATCH` when the file's current bytes hash differently; the
+   * error carries the current revision so the caller can enter a conflict
+   * state without a second read. `null` means the file must not exist yet
+   * (a create-new write, refused with `TARGET_EXISTS` otherwise). Omit it to
+   * write atomically without a freshness check.
+   */
+  expectedRevision?: string | null;
+}
+
+export interface PluginFsWriteResult {
+  /** sha256 hex of the bytes written — the caller's next `expectedRevision`. */
+  revision: string;
+}
+
+/**
+ * Error codes a checked {@link PluginFsApi.writeFile} rejects with, carried on
+ * the error's `code` property alongside a `message` that starts with the same
+ * token. In-process callers (built-in plugins) receive the error object
+ * intact; an error crossing the plugin worker port or the renderer bridge
+ * keeps only its message, so a caller behind either boundary should match on
+ * the message prefix.
+ */
+export type PluginFsWriteErrorCode =
+  "REVISION_MISMATCH" | "TARGET_UNAVAILABLE" | "TARGET_EXISTS" | "TARGET_IS_SYMLINK";
+
+export interface PluginFsRevisionMismatchError extends Error {
+  code: "REVISION_MISMATCH";
+  /** The revision of the bytes on disk at the moment the write was refused. */
+  currentRevision: string;
+}
+
+/**
  * Host-mediated, scope-contained filesystem surface on {@link PluginHostApi.fs}.
  *
  * Every path argument is resolved against the plugin's declared
@@ -2298,8 +2528,28 @@ export interface PluginFsApi {
    * already exist within scope). Rejects on a missing write capability or an
    * out-of-scope path. Recorded in the audit trail. No cancellation signal —
    * partial-write semantics are deliberately out of scope.
+   *
+   * Without `options` this is the plain write it has always been. Passing an
+   * `options` object — even an empty one — selects the checked write
+   * (#12323): the host serialises writes per resolved path, refuses a symlink
+   * target, replaces the file atomically (sibling temp file, flush, rename,
+   * original mode preserved), and compares the file's current bytes against
+   * {@link PluginFsWriteOptions.expectedRevision} before touching it. Either
+   * path resolves the revision of the bytes actually written, so the next
+   * `expectedRevision` needs no re-read.
+   *
+   * What the checked write promises: it never clobbers a change the caller has
+   * not seen, never leaves a partial file, and serialises every host-mediated
+   * writer. What it does not promise: a lock against an uncooperative external
+   * process — a write that lands between the hash check and the rename is
+   * overwritten. The window is small, and callers that care keep their own
+   * copy of what they asked to write.
    */
-  writeFile(filePath: string, contents: string): Promise<void>;
+  writeFile(
+    filePath: string,
+    contents: string,
+    options?: PluginFsWriteOptions
+  ): Promise<PluginFsWriteResult>;
   /**
    * List a directory's immediate children. Rejects on a missing read capability
    * or an out-of-scope path.
@@ -2747,6 +2997,20 @@ export interface PluginActivationApi {
    *   is revoked and the subscription is rejected.
    */
   onDidWake(callback: (event: PluginSystemWakeEvent) => void): Promise<() => void>;
+  /**
+   * Serve the tool rosters of the endpoints declared in `contributes.agentMcp`
+   * to agents running in Daintree's terminals. Gated on the `mcp:expose`
+   * capability. See {@link PluginMcpApi}.
+   *
+   * `registerTools` is revoke-guarded — call it during `activate()`. The tools'
+   * `execute` functions run for the plugin's whole lifetime; only binding the
+   * roster is restricted to the activation window.
+   *
+   * @throws {Error} `PERMISSION_REQUIRED:` from `registerTools` if the plugin
+   *   did not declare the `mcp:expose` capability, and a revoked-host error if
+   *   it is called after activation resolves or times out.
+   */
+  readonly mcp: PluginMcpApi;
 }
 
 /**
@@ -3168,6 +3432,97 @@ export interface PluginHostApi extends PluginActivationApi {
    * NOT revoke-guarded — same membership lifetime as {@link fs}.
    */
   readonly system: PluginSystemApi;
+}
+
+/**
+ * The project and worktree a built-in plugin's filesystem handle is pinned to
+ * for the life of that handle — see {@link BuiltinPluginHostApi.fsForWorkspace}.
+ */
+export interface PluginWorkspaceScope {
+  readonly projectId: string;
+  readonly worktreeId: string;
+}
+
+/** Options for {@link BuiltinPluginFsApi.readFileBounded}. */
+export interface PluginFsBoundedReadOptions extends PluginHostCallOptions {
+  /**
+   * Byte ceiling the read itself obeys: the host stops after `limitBytes + 1`
+   * bytes and reports `too-large` rather than handing back a truncated file,
+   * so a caller never has to decide whether short bytes mean "small file" or
+   * "gave up".
+   */
+  limitBytes: number;
+}
+
+/**
+ * Outcome of {@link BuiltinPluginFsApi.readFileBounded}. A path that cannot be
+ * opened at all still rejects, exactly as {@link PluginFsApi.readFileBytes}
+ * does — the union describes files the host reached and refused, not errors.
+ */
+export type PluginFsBoundedRead =
+  | { status: "ok"; bytes: Uint8Array }
+  | { status: "too-large" }
+  /** The open descriptor is a directory, FIFO, socket or device — never read. */
+  | { status: "not-a-file" };
+
+/**
+ * The filesystem surface a BUILT-IN plugin holds through
+ * {@link BuiltinPluginHostApi.fsForWorkspace}: everything {@link PluginFsApi}
+ * offers, plus a read that refuses before it allocates.
+ *
+ * `readFileBounded` is optional so every existing {@link PluginFsApi} — the
+ * out-of-process proxy, test doubles — still satisfies this type. A caller
+ * feature-detects it and keeps a stat-then-read fallback; the in-process host
+ * always provides it.
+ */
+export interface BuiltinPluginFsApi extends PluginFsApi {
+  /**
+   * Read at most `limitBytes + 1` bytes of a regular file through one opened
+   * descriptor. The regular-file check is an `fstat` on that descriptor rather
+   * than a `stat` on the path, so nothing decided before the open can go stale
+   * between the two, and the open itself is non-blocking — a FIFO standing
+   * where a file was cannot leave the read pending.
+   *
+   * Same capability gate, realpath containment and cancellation as
+   * {@link PluginFsApi.readFileBytes}. It does not replace that method: an
+   * uncapped read stays uncapped.
+   */
+  readFileBounded?(
+    filePath: string,
+    options: PluginFsBoundedReadOptions
+  ): Promise<PluginFsBoundedRead>;
+}
+
+/**
+ * The host as a BUILT-IN plugin sees it. Deliberately absent from
+ * `shared/types/plugin-sdk.ts`: it is not part of `@daintreehq/plugin-sdk`, and
+ * the out-of-process host proxy third-party plugins talk to never carries it.
+ *
+ * A built-in is app-global — it has no project binding of its own — so its
+ * `host.fs` resolves `${project}` / `${worktree}` from whichever window is
+ * focused at each call. That is right for a plugin acting on "the project the
+ * user is looking at" and wrong for one holding long-lived state about a named
+ * worktree: the roots move under it the moment focus does.
+ */
+export interface BuiltinPluginHostApi extends PluginHostApi {
+  /**
+   * A {@link PluginFsApi} whose `${project}` / `${worktree}` roots are pinned
+   * to `scope` instead of the focused window: `${worktree}` is the worktree
+   * with that id, `${project}` that project's main worktree. Every gate
+   * `host.fs` applies still applies — capability class, realpath containment,
+   * the implicit data dir, the write audit trail. A project that is not open
+   * contributes no token roots at all; an id matching none of its worktrees
+   * drops `${worktree}` alone (`${project}` still names that project's main
+   * worktree, as the manifest asked for). Nothing falls back to focus.
+   *
+   * A caller must only name a scope it was invoked for: the workspace scope is
+   * supplied by a renderer, so validate it against the handler's
+   * {@link PluginIpcContext} (`args.projectId === ctx.projectId`) before asking.
+   *
+   * Watchers taken through the returned handle are torn down on unload exactly
+   * like `host.fs.watch` ones.
+   */
+  fsForWorkspace(scope: PluginWorkspaceScope): BuiltinPluginFsApi;
 }
 
 /**

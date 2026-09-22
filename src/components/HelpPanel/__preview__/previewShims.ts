@@ -53,11 +53,20 @@ function namespace(): unknown {
  * genuine bridge — the harness is served by Vite today and could be opened inside the
  * app tomorrow, where the real one must win.
  */
-export function installPreviewShims(): void {
+export function installPreviewShims(overrides: Record<string, unknown> = {}): void {
   // Reflect rather than an assertion. `window.electron` is globally declared with the
   // real bridge's type (src/types/electron.d.ts), so assigning a Proxy to it needs a
   // cast that claims this scaffolding IS that bridge — the single most misleading line
   // this file could contain.
   if (Reflect.get(window, "electron")) return;
-  Reflect.set(window, "electron", new Proxy({}, { get: () => namespace() }));
+  // `overrides` are the few namespaces a harness needs to answer for real — a
+  // fixture list behind `agentSessionHistory.list`, say. Every other name still
+  // degrades to inert.
+  Reflect.set(
+    window,
+    "electron",
+    new Proxy(overrides, {
+      get: (target, key) => (key in target ? Reflect.get(target, key) : namespace()),
+    })
+  );
 }

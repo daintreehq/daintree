@@ -50,6 +50,7 @@ import type {
   SystemOpenPathPayload,
   SystemOpenInEditorPayload,
   SystemWakePayload,
+  SystemMemoryPressurePayload,
   CliAvailability,
   AgentCliDetails,
   AgentVersionInfo,
@@ -107,9 +108,9 @@ import type {
   TerminalStatusPayload,
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
-  FdLeakWarningPayload,
 } from "../pty-host.js";
 import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
+import type { KeepAwakeState } from "./keepAwake.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
 import type { AppThemeConfig } from "../appTheme.js";
@@ -1408,8 +1409,12 @@ export interface IpcEventMap {
   };
   "terminal:status": TerminalStatusPayload;
   "terminal:submit-status": TerminalSubmitStatusPayload;
+  // Every terminal currently handed to an orchestrating pane (#12490). The
+  // whole list on each change: it is small and rarely changes.
+  "terminal:adoptions-changed": import("./mcpServer.js").TerminalAdoptionEntry[];
+  // A pane's terminal watches changed (#12491); project-scoped send.
+  "terminal:watch-state": import("../terminalWatch.js").PaneWatchState;
   "terminal:reliability-metric": TerminalReliabilityMetricPayload;
-  "terminal:fd-leak-warning": FdLeakWarningPayload;
   "terminal:resource-metrics": { metrics: TerminalResourceBatchPayload; timestamp: number };
   "terminal:broadcast-write-result": BroadcastWriteResultPayload;
   "terminal:send-key": [id: string, key: string];
@@ -1428,6 +1433,9 @@ export interface IpcEventMap {
     timestamp: number;
   };
   "terminal:backend-ready": void;
+  // App-wide terminal-host memory pause (#12375), sent to each window's active
+  // view on every change. Views that missed it pull `terminal:get-host-memory-pause`.
+  "terminal:host-memory-pause": import("../pty-host.js").HostMemoryPauseSnapshot;
   "terminal:reduce-scrollback": { terminalIds: string[]; targetLines: number };
   "terminal:restore-scrollback": { terminalIds: string[] };
 
@@ -1694,6 +1702,10 @@ export interface IpcEventMap {
 
   // System events
   "system:wake": SystemWakePayload;
+  // Sustained system memory pressure opened or cleared (window-scoped)
+  "system:memory-pressure": SystemMemoryPressurePayload;
+  // Power policy changed — battery, focus, visibility, or screen lock (#12515)
+  "system:power-policy-changed": import("../powerPolicy.js").PowerPolicySnapshot;
 
   // Portal events
   "portal:nav-event": import("../portal.js").PortalNavEvent;
@@ -1753,6 +1765,7 @@ export interface IpcEventMap {
   // Dev Preview events
   "dev-preview:state-changed": DevPreviewStateChangedPayload;
   "dev-preview:all-sessions-changed": DevPreviewAllSessionsPayload;
+  "site-preview:event": import("./sitePreview.js").SitePreviewPushPayload;
 
   // Webview console events
   "webview:console-message": import("./webviewConsole.js").SerializedConsoleRow;
@@ -1851,6 +1864,9 @@ export interface IpcEventMap {
 
   // Hibernation events
   "hibernation:project-hibernated": HibernationProjectHibernatedPayload;
+
+  // Keep-awake events
+  "keep-awake:state-changed": KeepAwakeState;
 
   // Idle terminal notification events
   "idle-terminal:notify": IdleTerminalNotifyPayload;
@@ -2131,6 +2147,10 @@ export type IpcEventBusMap = Pick<
   | "window:sample-renderer-elu"
   // System wake (per-webContents)
   | "system:wake"
+  // System memory pressure episode edges (window-scoped)
+  | "system:memory-pressure"
+  // Power policy (global broadcast, replayed on view load)
+  | "system:power-policy-changed"
   // Resource profile (global broadcast)
   | "resource:profile-changed"
   // Sound cancel (global broadcast)
@@ -2189,12 +2209,17 @@ export type IpcEventBusMap = Pick<
   | "terminal:backend-crashed"
   | "terminal:backend-recovering"
   | "terminal:backend-ready"
+  // Terminal-host memory pause, one snapshot for the whole app (window-scoped)
+  | "terminal:host-memory-pause"
   | "terminal:spawn-result"
   // Terminal observability
   | "terminal:resize-result"
   | "terminal:reliability-metric"
   | "terminal:status"
   | "terminal:submit-status"
+  // Terminals handed to an orchestrating pane (global broadcast)
+  | "terminal:adoptions-changed"
+  | "terminal:watch-state"
   // Agent session journaled — resume surfaces refetch (global broadcast)
   | "agent-session:recorded"
   // A gated park auto-released — the ready-again hand-back (global broadcast)

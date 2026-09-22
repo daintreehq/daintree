@@ -5,6 +5,11 @@ vi.mock("node-pty", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
+const markHostPerformanceMock = vi.fn();
+vi.mock("../../../utils/hostPerformance.js", () => ({
+  markHostPerformance: (...args: unknown[]) => markHostPerformanceMock(...args),
+}));
+
 import { acquirePtyProcess } from "../terminalSpawn.js";
 import { shouldEnablePtyPool, type PtyPool } from "../../PtyPool.js";
 import type { PtySpawnOptions } from "../types.js";
@@ -98,6 +103,7 @@ describe("acquirePtyProcess pool handling", () => {
   // The single "skips the pool on Windows" test below overrides this explicitly.
   beforeEach(() => {
     spawnMock.mockReset();
+    markHostPerformanceMock.mockReset();
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
   });
 
@@ -457,5 +463,121 @@ describe("acquirePtyProcess pool handling", () => {
 
     expect(acquireByKey).not.toHaveBeenCalled();
     expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  describe("credential-bearing intentional env", () => {
+    function createHittingPool() {
+      const acquireByKey = vi.fn(() => ({
+        process: createFakePooledPty(),
+        prelude: "",
+        dataHandoff: createFakeDataHandoff(),
+      }));
+      const warmForKey =
+        vi.fn<(cwd: string, env: Record<string, string> | undefined, envHash: string) => void>();
+      const pool = createFakePool({ defaultCwd: "/repo", acquireByKey, warmForKey });
+      return { pool, acquireByKey, warmForKey };
+    }
+
+    it("takes a fresh spawn carrying the token instead of a pooled shell, and does not warm", () => {
+      const { pool, acquireByKey, warmForKey } = createHittingPool();
+      const spawnedPty = createFakeSpawnedPty();
+      spawnMock.mockReturnValue(spawnedPty);
+      const builtEnv = { PATH: "/usr/bin", DAINTREE_MCP_TOKEN: "tok-1" };
+
+      const result = acquirePtyProcess(
+        "cred1",
+        { ...baseOptions, env: { DAINTREE_MCP_TOKEN: "tok-1" } },
+        builtEnv,
+        "/usr/local/bin/fish",
+        [],
+        pool,
+        () => {}
+      );
+
+      expect(acquireByKey).not.toHaveBeenCalled();
+      expect(warmForKey).not.toHaveBeenCalled();
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({
+        env: { DAINTREE_MCP_TOKEN: "tok-1" },
+      });
+      expect(result.ptyProcess).toBe(spawnedPty);
+      expect(markHostPerformanceMock.mock.calls[0]?.[1]).toMatchObject({
+        reason: "ineligible-sensitive-env",
+      });
+    });
+
+    it("bypasses the pool for a user-set secret-named project env var alongside ordinary ones", () => {
+      const { pool, acquireByKey, warmForKey } = createHittingPool();
+      spawnMock.mockReturnValue(createFakeSpawnedPty());
+
+      acquirePtyProcess(
+        "cred2",
+        { ...baseOptions, env: { NODE_ENV: "development", MY_SERVICE_TOKEN: "abc" } },
+        {},
+        "/bin/bash",
+        [],
+        pool,
+        () => {}
+      );
+
+      expect(acquireByKey).not.toHaveBeenCalled();
+      expect(warmForKey).not.toHaveBeenCalled();
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps pooling when only the built (inherited) env holds secrets", () => {
+      const { pool, acquireByKey } = createHittingPool();
+
+      const result = acquirePtyProcess(
+        "inh1",
+        { ...baseOptions, env: { NODE_ENV: "development" } },
+        { PATH: "/usr/bin", GITHUB_TOKEN: "ghp-inherited" },
+        "/bin/bash",
+        [],
+        pool,
+        () => {}
+      );
+
+      expect(acquireByKey).toHaveBeenCalledTimes(1);
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(result.prelude).toBe("");
+    });
+
+    it("keeps pooling when a secret-named key is present but undefined", () => {
+      const { pool, acquireByKey } = createHittingPool();
+
+      acquirePtyProcess(
+        "undef1",
+        { ...baseOptions, env: { GITHUB_TOKEN: undefined } as unknown as Record<string, string> },
+        {},
+        "/bin/bash",
+        [],
+        pool,
+        () => {}
+      );
+
+      expect(acquireByKey).toHaveBeenCalledTimes(1);
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it("still reports the custom-shell reason when a credential launch also sets shell/args", () => {
+      const { pool, acquireByKey } = createHittingPool();
+      spawnMock.mockReturnValue(createFakeSpawnedPty());
+
+      acquirePtyProcess(
+        "cred3",
+        { ...baseOptions, shell: "/bin/zsh", env: { DAINTREE_MCP_TOKEN: "t" } },
+        {},
+        "/bin/zsh",
+        [],
+        pool,
+        () => {}
+      );
+
+      expect(acquireByKey).not.toHaveBeenCalled();
+      expect(markHostPerformanceMock.mock.calls[0]?.[1]).toMatchObject({
+        reason: "ineligible-custom-shell",
+      });
+    });
   });
 });

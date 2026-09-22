@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
 
 // 30-second cadence keeps minute-boundary refreshes within at most 30 s of
 // the actual transition while only firing twice per minute.
@@ -7,6 +8,7 @@ const INTERVAL_MS = 30_000;
 let globalTick = 0;
 const listeners = new Set<(tick: number) => void>();
 let intervalId: number | null = null;
+let unsubscribeObservability: (() => void) | null = null;
 
 function emitTick() {
   globalTick++;
@@ -24,12 +26,12 @@ function stopGlobalTicker() {
   intervalId = null;
 }
 
-function handleVisibility() {
-  if (document.hidden) {
-    stopGlobalTicker();
-  } else {
+function handleObservability(observable: boolean) {
+  if (observable) {
     emitTick();
     startGlobalTicker();
+  } else {
+    stopGlobalTicker();
   }
 }
 
@@ -39,8 +41,8 @@ export function useGlobalMinuteTicker(): number {
   useEffect(() => {
     listeners.add(setTick);
     if (listeners.size === 1) {
-      document.addEventListener("visibilitychange", handleVisibility);
-      if (!document.hidden) {
+      unsubscribeObservability = subscribeProjectViewObservability(handleObservability);
+      if (isProjectViewObservable()) {
         startGlobalTicker();
       }
     }
@@ -49,7 +51,8 @@ export function useGlobalMinuteTicker(): number {
       listeners.delete(setTick);
       if (listeners.size === 0) {
         stopGlobalTicker();
-        document.removeEventListener("visibilitychange", handleVisibility);
+        unsubscribeObservability?.();
+        unsubscribeObservability = null;
       }
     };
   }, []);

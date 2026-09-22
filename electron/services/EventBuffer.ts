@@ -10,7 +10,12 @@ import { safeStringify } from "../utils/safeStringify.js";
 
 export type { EventRecord };
 
-const SENSITIVE_EVENT_TYPES = new Set<keyof DaintreeEventMap>(["agent:output"]);
+const SENSITIVE_EVENT_TYPES = new Set<keyof DaintreeEventMap>([
+  "agent:output",
+  "agent:state-changed",
+]);
+
+const REDACTED = "[REDACTED - May contain sensitive information]";
 
 export interface FilterOptions {
   types?: Array<keyof DaintreeEventMap>;
@@ -63,7 +68,20 @@ export class EventBuffer {
     if (eventType === "agent:output" && payload && typeof payload.data === "string") {
       return {
         ...payload,
-        data: "[REDACTED - May contain sensitive information]",
+        data: REDACTED,
+      };
+    }
+
+    // A handback message is text the agent wrote (#12488). The rest of the
+    // transition, and the fact that a marker was seen, stay inspectable.
+    if (
+      eventType === "agent:state-changed" &&
+      payload?.lastHandback &&
+      typeof payload.lastHandback.message === "string"
+    ) {
+      return {
+        ...payload,
+        lastHandback: { ...payload.lastHandback, message: REDACTED },
       };
     }
 

@@ -366,6 +366,15 @@ interface AgentSessionIdResumeBase {
    * `sessionIdPattern` teardown scrape as their sole capture path.
    */
   assignSessionIdArgs?: (sessionId: string) => string[];
+  /**
+   * `args(id)` resumes the conversation in the directory the process is
+   * launched in, even when the conversation began in another one (#12434).
+   * Declare only when that is verified against the real CLI — a pane moved
+   * onto another worktree is cold-launched there on the strength of it, and an
+   * agent whose resume is path-coupled (Claude, Gemini: #4781) would reopen
+   * nothing, or prompt, instead.
+   */
+  crossDirectoryResume?: true;
 }
 
 /**
@@ -663,6 +672,16 @@ export interface AgentConfig {
      * the Settings copy for the toggle.
      */
     decorations?: { offArgs: string[]; label: string; description: string };
+    /**
+     * How the CLI takes a standing instruction appended to its own system
+     * prompt — the agent-neutral `systemPrompt` argument of `agent.launch`
+     * (#12431). `flag` is followed by the text itself or, when `configKey` is
+     * set, by a TOML `configKey="text"` override (Codex's `-c`). Declare it only
+     * for a true append: a CLI that can only replace its whole system prompt
+     * (Gemini's `GEMINI_SYSTEM_MD`) leaves it undeclared, so the launch is
+     * refused rather than silently discarding the CLI's own instructions.
+     */
+    appendSystemPrompt?: { flag: string; configKey?: string };
     /** Whether the agent CLI supports bracketed paste input (default: true) */
     supportsBracketedPaste?: boolean;
     /** Escape sequence sent for Shift+Enter / soft newline (default: "\x1b\r") */
@@ -761,13 +780,16 @@ export interface AgentConfig {
    * Absolute filesystem paths to probe when PATH-based lookup (`which`/`where`)
    * fails. Used to detect agents installed by native installers into locations
    * the Electron process may not inherit in PATH — notably `~/.local/bin/claude`
-   * for Anthropic's native installer on macOS/Linux, and
-   * `%LOCALAPPDATA%\claude-code\bin\claude.exe` on Windows.
+   * for Anthropic's native installer, and WinGet's
+   * `%LOCALAPPDATA%\Microsoft\WinGet\Links\claude.exe` on Windows.
    *
    * Tilde (`~`) is expanded to `os.homedir()` and Windows `%VAR%` tokens are
    * expanded against `process.env` by CliAvailabilityService before probing
-   * (see `expandWindowsEnvVars()` in electron/setup/environment.ts). Paths are
-   * tried in listed order; first accessible file wins.
+   * (see `expandWindowsEnvVars()` in electron/setup/environment.ts). On Windows
+   * an entry without a launchable extension is probed with `.cmd`, `.exe`,
+   * `.bat` and `.com` appended instead of as written, so a POSIX-style entry
+   * also covers a Windows install that shares its layout. Paths are tried in
+   * listed order; first accessible file wins.
    */
   nativePaths?: string[];
   /**

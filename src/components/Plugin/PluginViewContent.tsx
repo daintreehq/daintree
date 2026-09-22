@@ -1,6 +1,7 @@
 import {
   Suspense,
   createContext,
+  createElement,
   lazy,
   useCallback,
   useContext,
@@ -19,6 +20,7 @@ import {
   reportViewMounted,
   reportViewRenderFailed,
 } from "@/services/plugin/pluginPanelLifecycle";
+import { Package } from "lucide-react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { ErrorFallbackProps } from "@/components/ErrorBoundary/ErrorFallback";
 import { Skeleton, SkeletonHint } from "@/components/ui/Skeleton";
@@ -38,6 +40,10 @@ import {
   preparePluginStyles,
   registerPluginStyleRoot,
 } from "@/services/plugin/pluginStyleContract";
+import { useBuiltinPanelView } from "@/registry/builtinRendererRegistry";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { actionService } from "@/services/ActionService";
 
 /**
  * The resolved subset of `PanelKindConfig` a plugin view actually needs. Both
@@ -290,6 +296,46 @@ export function makePluginViewContent(
   // recovery generation, which is exactly the granularity main mints it at.
   let recoveryComponentPath: string | undefined;
 
+  /**
+   * A built-in plugin's panel view is compiled into the host bundle and
+   * registered in-process under this kind id (#11244), so there is no module to
+   * fetch. It still goes through `lazy()` and the same activation + timeout, so
+   * the plugin's `activate()` has run before first render and the loading,
+   * failure, and retry paths are the ones an installed view gets. Recovery never
+   * asks main for a fresh `plugin://` generation: nothing was imported, so there
+   * is no poisoned specifier to replace.
+   */
+  const createBuiltinLazyView = (
+    component: ComponentType<PanelViewProps>
+  ): LazyExoticComponent<ComponentType<PanelViewProps>> =>
+    lazy<ComponentType<PanelViewProps>>(async () => {
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        (async () => {
+          await window.electron?.plugin?.activateForView?.(kindId);
+        })().finally(() => {
+          if (timeoutId !== undefined) clearTimeout(timeoutId);
+        }),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(
+              new Error(
+                `Plugin "${pluginId}" view activation timed out after ${PLUGIN_VIEW_IMPORT_TIMEOUT_MS}ms`
+              )
+            );
+          }, PLUGIN_VIEW_IMPORT_TIMEOUT_MS);
+        }),
+      ]);
+      // A builtin keeps its view out of the host bundle by registering a
+      // `lazy()` component, and React rejects a lazy that resolves to another
+      // lazy (#306). Rendering it from a plain component lets it suspend on its
+      // own chunk inside this same boundary. `createElement`, not JSX: the React
+      // Compiler folds a capitalised alias of a lowercase binding back into the
+      // binding, and `<component />` then renders an intrinsic element.
+      const BuiltinPanelView = (props: PanelViewProps) => createElement(component, props);
+      return { default: BuiltinPanelView };
+    });
+
   const createLazyView = (
     requestRecoveryPath = false
   ): LazyExoticComponent<ComponentType<PanelViewProps>> =>
@@ -390,6 +436,14 @@ export function makePluginViewContent(
       return { default: mod.default };
     });
 
+  const createAttempt = (
+    requestRecoveryPath: boolean,
+    builtinComponent: ComponentType<PanelViewProps> | null
+  ): LazyExoticComponent<ComponentType<PanelViewProps>> =>
+    builtinComponent
+      ? createBuiltinLazyView(builtinComponent)
+      : createLazyView(requestRecoveryPath);
+
   /**
    * Reports "a view is live for this panel" as a commit-time effect. Rendered as
    * a sibling of the resolved view inside the same boundary, so if the view
@@ -415,6 +469,21 @@ export function makePluginViewContent(
     panelRemovedSignal: panelRemovedSignalOverride,
     readRecoveryState,
   }: PluginViewContentProps) {
+    // Resolved before any attempt is built so the first attempt already takes
+    // the right path. Reactive, because a slot registered after this panel
+    // mounted must still take over — see the rebind effect below.
+    const builtinResolution = useBuiltinPanelView(kindId, pluginId);
+    const builtinComponent =
+      builtinResolution.status === "ready" ? builtinResolution.component : null;
+    const builtinDisabled = builtinResolution.status === "disabled";
+    // Read by `replaceAttempt`, which runs from effects and handlers, so a retry
+    // builds its attempt for the path currently resolved rather than the one
+    // captured when the callback was created.
+    const builtinComponentRef = useRef(builtinComponent);
+    useEffect(() => {
+      builtinComponentRef.current = builtinComponent;
+    }, [builtinComponent]);
+
     // Frozen at the first render of this mount rather than forwarded live.
     // `extensionState` reaches this component straight off the panel record, so
     // once a view can WRITE that record through `persistState` the prop would
@@ -438,8 +507,13 @@ export function makePluginViewContent(
     // `setLazyView(() => createLazyView())` on reset) keeps exhaustive-deps
     // happy and lets the React Compiler optimize this component.
     const [LazyView, setLazyView] = useState<LazyExoticComponent<ComponentType<PanelViewProps>>>(
-      () => createLazyView()
+      () => createAttempt(false, builtinComponent)
     );
+    // Which path the held attempt was built for. Between a resolution change and
+    // the effect that replaces the attempt there is one render where the two
+    // disagree; rendering the stale attempt then would start a `plugin://`
+    // import for a builtin (or mount a builtin for a kind that lost its slot).
+    const [attemptBuiltin, setAttemptBuiltin] = useState(() => builtinComponent);
     // Drive the ErrorBoundary's `resetKeys` independently — the reset
     // counter is observable to the boundary even though the lazy ref lives
     // in its own slot.
@@ -593,7 +667,9 @@ export function makePluginViewContent(
         // what failed (#11728) — a new `lazy()` wrapper alone cannot recover
         // that, because the poisoned entry belongs to the specifier, not the
         // wrapper. Activation failures and render throws still just remount.
-        setLazyView(() => createLazyView(requestRecoveryPath));
+        const builtin = builtinComponentRef.current;
+        setLazyView(() => createAttempt(requestRecoveryPath, builtin));
+        setAttemptBuiltin(() => builtin);
         setRetryCount((c) => c + 1);
         // The retry is under way, so the panel is no longer failed — it is
         // loading. Clearing here (rather than waiting for the next commit) keeps
@@ -607,6 +683,23 @@ export function makePluginViewContent(
     const handleReset = (): void => {
       replaceAttempt(lastErrorWasImportStage.current);
     };
+
+    // The path this attempt was built for. A change — a slot registering after
+    // mount, a builtin re-registering its component, or its plugin toggling —
+    // discards the attempt through the same single path a retry uses, so the
+    // outgoing view's `disposeSignal` aborts and the boundary remounts. The
+    // first observation adopts silently, like the worker generation below.
+    const boundBuiltinPath = useRef<{
+      component: ComponentType<PanelViewProps> | null;
+      disabled: boolean;
+    } | null>(null);
+    useEffect(() => {
+      const previous = boundBuiltinPath.current;
+      boundBuiltinPath.current = { component: builtinComponent, disabled: builtinDisabled };
+      if (previous === null) return;
+      if (previous.component === builtinComponent && previous.disabled === builtinDisabled) return;
+      replaceAttempt(false);
+    }, [builtinComponent, builtinDisabled, replaceAttempt]);
 
     // Warm the runtime-health mirror at mount. Idempotent and module-level, so
     // every panel of every plugin shares one subscription and one hydration.
@@ -738,89 +831,133 @@ export function makePluginViewContent(
             suppressed: focus arrives here programmatically, and a visible ring
             is what tells the user where it went. */}
         <div ref={statusRef} tabIndex={-1}>
-          <PluginViewRuntimeStatus
-            presentation={presentation}
-            panelDisplayName={displayName}
-            onRestartPlugin={handleRestartPlugin}
-            restarting={restarting}
-          />
+          {/* Worker state, which a plugin the user switched off does not have —
+              and a "Plugin stopped / Restart" line over the explanation below
+              would offer to restart something nobody asked to run. The wrapper
+              stays either way: it is where focus is rescued to. */}
+          {builtinDisabled ? null : (
+            <PluginViewRuntimeStatus
+              presentation={presentation}
+              panelDisplayName={displayName}
+              onRestartPlugin={handleRestartPlugin}
+              restarting={restarting}
+            />
+          )}
         </div>
-        <ErrorBoundary
-          // The attempt counter is the boundary's KEY, not its `resetKeys`.
-          //
-          // A fresh `lazy()` wrapper alone does not remount anything: React
-          // compares the RESOLVED type, so a wrapper that resolves to the same
-          // module export reuses the existing fiber — the view keeps its state
-          // and its `deps: []` subscriptions while `replaceAttempt` has already
-          // aborted the `disposeSignal` those subscriptions were tied to. That
-          // combination is worse than not recovering at all. Remounting the
-          // whole boundary subtree is what makes an attempt genuinely new.
-          //
-          // It also gives attempt replacement a single owner. `resetKeys` made
-          // `componentDidUpdate` call `onReset` whenever the key changed while
-          // the fallback was up — so a backend rebind landing on a crashed view
-          // built the attempt twice. A remounted boundary starts with no error,
-          // so there is nothing left for an auto-reset to do.
-          key={retryCount}
-          variant="component"
-          // `kindId` is already `${pluginId}.${panel.id}` (PluginService builds
-          // it that way), so prefixing pluginId again doubled it.
-          componentName={`PluginView:${kindId}`}
-          fallback={PluginViewFallback}
-          onError={handleRenderError}
-          onReset={handleReset}
-        >
-          <Suspense
-            fallback={
-              // Content-only bones: the presentation host already paints the real
-              // header, so a skeleton carrying its own (BrowserPaneSkeleton) would
-              // double it. Mirrors DevPreviewPaneFallback's quiet canvas — a
-              // plugin's content shape is unknowable, so bones must not imply one.
-              <div className="relative h-full">
-                <Skeleton label={`Loading ${displayName}`} className="h-full bg-surface-canvas" />
-                <SkeletonHint className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto" />
-              </div>
-            }
+        {/* A disabled builtin renders no view — but a header over an empty pane
+            says nothing about why, so the pane says it instead, and points at
+            the one place the plugin can be switched back on. Outside the style
+            root, the boundary and the Suspense: none of them belong to a view
+            that was never built. */}
+        {builtinDisabled ? (
+          <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+            <EmptyState
+              variant="zero-data"
+              scale="canvas"
+              className="my-auto w-full shrink-0"
+              icon={<Package />}
+              title="Enable this plugin"
+              // Unnamed on purpose: `displayName` is the panel kind's name, not
+              // the plugin's, so naming it here would send the user looking for
+              // "Site Inspector" in a manager that lists "SvelteKit Tools".
+              description="This plugin's turned off. Enable it in the plugin manager to use this view."
+              action={
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    void actionService.dispatch("app.pluginManager", undefined, {
+                      source: "user",
+                    });
+                  }}
+                >
+                  Manage plugins
+                </Button>
+              }
+            />
+          </div>
+        ) : null}
+        {/* It must not fall through to the `plugin://` path either: a builtin
+            ships no bundle there to import. A stale attempt waits one commit
+            for the rebind effect. */}
+        {builtinDisabled || attemptBuiltin !== builtinComponent ? null : (
+          <ErrorBoundary
+            // The attempt counter is the boundary's KEY, not its `resetKeys`.
+            //
+            // A fresh `lazy()` wrapper alone does not remount anything: React
+            // compares the RESOLVED type, so a wrapper that resolves to the same
+            // module export reuses the existing fiber — the view keeps its state
+            // and its `deps: []` subscriptions while `replaceAttempt` has already
+            // aborted the `disposeSignal` those subscriptions were tied to. That
+            // combination is worse than not recovering at all. Remounting the
+            // whole boundary subtree is what makes an attempt genuinely new.
+            //
+            // It also gives attempt replacement a single owner. `resetKeys` made
+            // `componentDidUpdate` call `onReset` whenever the key changed while
+            // the fallback was up — so a backend rebind landing on a crashed view
+            // built the attempt twice. A remounted boundary starts with no error,
+            // so there is nothing left for an auto-reset to do.
+            key={retryCount}
+            variant="component"
+            // `kindId` is already `${pluginId}.${panel.id}` (PluginService builds
+            // it that way), so prefixing pluginId again doubled it.
+            componentName={`PluginView:${kindId}`}
+            fallback={PluginViewFallback}
+            onError={handleRenderError}
+            onReset={handleReset}
           >
-            <ContentFadeIn
-              className={cn("flex flex-col flex-1 min-h-0 w-full", contentInert && "opacity-60")}
-              // Native `inert`, not `pointer-events-none` + `aria-hidden`: the
-              // CSS pair stops the mouse but leaves every control tabbable and
-              // Enter-activatable, and `aria-hidden` around a focused element is
-              // the exact shape Chromium refuses to hide. `inert` removes the
-              // subtree from focus, hit-testing and the accessibility tree in one
-              // go, which is the whole claim being made about stale content.
-              inert={contentInert}
-              onFocus={() => {
-                focusWasInsideContent.current = true;
-              }}
-              onBlur={(e) => {
-                // Not while going inert: applying the attribute is itself what
-                // blurred the descendant, and clearing here would erase the very
-                // fact the rescue above needs.
-                if (contentInert) return;
-                if (!e.currentTarget.contains(e.relatedTarget)) {
-                  focusWasInsideContent.current = false;
-                }
-              }}
-              ref={styleRootRef}
-              {...PLUGIN_STYLE_ROOT_PROPS}
+            <Suspense
+              fallback={
+                // Content-only bones: the presentation host already paints the real
+                // header, so a skeleton carrying its own (BrowserPaneSkeleton) would
+                // double it. Mirrors DevPreviewPaneFallback's quiet canvas — a
+                // plugin's content shape is unknowable, so bones must not imply one.
+                <div className="relative h-full">
+                  <Skeleton label={`Loading ${displayName}`} className="h-full bg-surface-canvas" />
+                  <SkeletonHint className="absolute bottom-8 left-1/2 -translate-x-1/2 pointer-events-auto" />
+                </div>
+              }
             >
-              <LazyView
-                panelId={panelId}
-                pluginId={pluginId}
-                disposeSignal={controller.signal}
-                panelRemovedSignal={panelRemovedSignal}
-                initialArgs={mountArgs}
-                stateVersion={mountStateVersion}
-                persistState={persistState}
-                worktreeId={worktreeId}
-                styleRootAttributes={PLUGIN_STYLE_ROOT_PROPS}
-              />
-              <PluginViewMountReporter panelId={panelId} />
-            </ContentFadeIn>
-          </Suspense>
-        </ErrorBoundary>
+              <ContentFadeIn
+                className={cn("flex flex-col flex-1 min-h-0 w-full", contentInert && "opacity-60")}
+                // Native `inert`, not `pointer-events-none` + `aria-hidden`: the
+                // CSS pair stops the mouse but leaves every control tabbable and
+                // Enter-activatable, and `aria-hidden` around a focused element is
+                // the exact shape Chromium refuses to hide. `inert` removes the
+                // subtree from focus, hit-testing and the accessibility tree in one
+                // go, which is the whole claim being made about stale content.
+                inert={contentInert}
+                onFocus={() => {
+                  focusWasInsideContent.current = true;
+                }}
+                onBlur={(e) => {
+                  // Not while going inert: applying the attribute is itself what
+                  // blurred the descendant, and clearing here would erase the very
+                  // fact the rescue above needs.
+                  if (contentInert) return;
+                  if (!e.currentTarget.contains(e.relatedTarget)) {
+                    focusWasInsideContent.current = false;
+                  }
+                }}
+                ref={styleRootRef}
+                {...PLUGIN_STYLE_ROOT_PROPS}
+              >
+                <LazyView
+                  panelId={panelId}
+                  pluginId={pluginId}
+                  disposeSignal={controller.signal}
+                  panelRemovedSignal={panelRemovedSignal}
+                  initialArgs={mountArgs}
+                  stateVersion={mountStateVersion}
+                  persistState={persistState}
+                  worktreeId={worktreeId}
+                  styleRootAttributes={PLUGIN_STYLE_ROOT_PROPS}
+                />
+                <PluginViewMountReporter panelId={panelId} />
+              </ContentFadeIn>
+            </Suspense>
+          </ErrorBoundary>
+        )}
       </PluginViewCloseContext.Provider>
     );
   }

@@ -124,7 +124,7 @@ function isAbsence(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
-function isSafeSessionId(value: string): boolean {
+export function isSafeSessionId(value: string): boolean {
   return /^[A-Za-z0-9._-]{1,128}$/.test(value) && value !== "." && value !== "..";
 }
 
@@ -190,7 +190,7 @@ async function realpathOrNull(target: string): Promise<string | null> {
 }
 
 /** True only for a real directory that resolves to somewhere under `rootReal`. */
-async function isContainedDirectory(target: string, rootReal: string): Promise<boolean> {
+export async function isContainedDirectory(target: string, rootReal: string): Promise<boolean> {
   if (!(await isDirectory(target))) return false;
   const real = await realpathOrNull(target);
   if (!real) return false;

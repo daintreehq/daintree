@@ -432,7 +432,7 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
  * Start the 1 Hz cleanup sweep.
  *
  * A cached project view keeps reporting `visibilityState === "visible"` while
- * main has it detached, CPU-throttled and (absent a live agent) frozen, so the
+ * main has it detached, hidden and (absent a live agent) frozen, so the
  * `visibilitychange` catch-up this used to rely on is dead code for exactly the
  * case that matters (#11212). The sweep therefore stops while cached and
  * catches up on the way back, mirroring `TerminalReconciliationWatchdog`; the

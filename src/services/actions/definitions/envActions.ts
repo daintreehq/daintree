@@ -16,7 +16,7 @@ const resourceEnvSchema = z.object({
 export function registerEnvActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("env.global.get", () => ({
     id: "env.global.get",
-    title: "Get Global Environment Variables",
+    title: "Get global environment variables",
     description: "Read all global environment variables",
     category: "settings",
     kind: "query",
@@ -30,7 +30,7 @@ export function registerEnvActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("env.global.set", () => ({
     id: "env.global.set",
-    title: "Set Global Environment Variables",
+    title: "Set global environment variables",
     description: "Replace the global environment variables map",
     category: "settings",
     kind: "command",
@@ -48,7 +48,7 @@ export function registerEnvActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("env.project.get", () => ({
     id: "env.project.get",
-    title: "Get Project Environment Variables",
+    title: "Get project environment variables",
     description: "Read a project's environment variables",
     category: "settings",
     kind: "query",
@@ -65,7 +65,7 @@ export function registerEnvActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("env.project.set", () => ({
     id: "env.project.set",
-    title: "Set Project Environment Variables",
+    title: "Set project environment variables",
     description: "Merge variables into a project's environment variables",
     category: "settings",
     kind: "command",
@@ -95,7 +95,7 @@ export function registerEnvActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("worktree.resource.config.get", () => ({
     id: "worktree.resource.config.get",
-    title: "Get Resource Environments Config",
+    title: "Get resource environments config",
     description: "Read a project's resource environments configuration",
     category: "worktree",
     kind: "query",
@@ -112,7 +112,7 @@ export function registerEnvActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("worktree.resource.config.set", () => ({
     id: "worktree.resource.config.set",
-    title: "Set Resource Environments Config",
+    title: "Set resource environments config",
     description: "Replace a project's resource environments configuration",
     category: "worktree",
     kind: "command",

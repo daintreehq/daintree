@@ -1,5 +1,6 @@
 import type { AgentState, WaitingReason } from "./agent.js";
 import type { TerminalCheckResult } from "./checkResult.js";
+import type { TerminalHandback } from "./handback.js";
 import type { TerminalSubmissionRecord } from "./terminalSubmission.js";
 
 /**
@@ -24,11 +25,21 @@ export type TerminalStatusSource = "renderer" | "pty";
  * observed-and-absent. Without this a `pty` answer's missing `armed` reads as
  * "not armed", which is an interpretation main has no evidence for.
  *
- * It cuts both ways. `hasPty` is the one field the reduced `pty` answer reports
- * and the richer `renderer` answer cannot, so a surface listing nothing is not
- * the same as a surface that saw everything.
+ * It cuts both ways. `hasPty` and `lastOutputChangeAt` are read in the
+ * pty-host, so the reduced `pty` answer reports them and the richer `renderer`
+ * answer cannot — a surface listing nothing is not the same as a surface that
+ * saw everything. The renderer reads `lastOutputChangeAt` only when the call
+ * asked for output (#12495), so it drops out of this list for those calls.
  */
-export type TerminalStatusUnavailableField = "armed" | "lastCheckResult" | "exitCode" | "hasPty";
+export type TerminalStatusUnavailableField =
+  "armed" | "lastCheckResult" | "exitCode" | "hasPty" | "lastOutputChangeAt";
+
+/**
+ * Model-facing description of `lastOutputChangeAt`, shared by the status and
+ * wait output schemas so the three copies cannot drift apart.
+ */
+export const LAST_OUTPUT_CHANGE_AT_DESCRIPTION =
+  "Epoch ms the visible screen last changed, ignoring recognized spinner/timer redraws. Absent if unobserved. Not a hang verdict.";
 
 /** One terminal's status, in the shape `TerminalStatusEntrySchema` publishes. */
 export interface TerminalStatusEntry {
@@ -37,10 +48,51 @@ export interface TerminalStatusEntry {
   agentState: AgentState | null;
   waitingReason?: WaitingReason;
   lastTransitionAt?: number;
+  /**
+   * When the terminal's visible content last changed, ignoring recognised
+   * spinner and timer redraws (#12428). An observation for the caller to act
+   * on, never a hang verdict: long reasoning leaves the screen just as still.
+   * Read in the pty-host, so the `renderer` answer reports it only when the
+   * call asked for output (#12495).
+   */
+  lastOutputChangeAt?: number;
   exitCode?: number | null;
   spawnedAt?: number;
+  /**
+   * How many new agent sessions this terminal's PTY has been observed taking on
+   * after a prior one exited (#12535).
+   *
+   * `spawnedAt` is the PTY generation and cannot move when an agent exits and
+   * the user relaunches one in the shell it left behind — the PTY, its pid and
+   * its restart count all hold. This is the field that moves for that, so a
+   * caller holding an earlier reading can tell the session it saw from its
+   * successor. An observation of boundaries the detector caught, never proof of
+   * process identity: a relaunch it never classified leaves this unchanged.
+   *
+   * Zero is a real reading — none observed in this PTY generation. Absent means
+   * the surface could not observe it, which is not zero — except on the
+   * `renderer` answer, which reports zero for any pane it holds, including one
+   * it adopted without ever being told the count. One counter exists and the
+   * pty-host owns it; the `renderer` answer is a cache of what the host has
+   * told this view, so it can lag a `pty` answer for the same terminal and can
+   * read zero before the first reading reaches it. Compare readings from one
+   * source rather than across a `pty`/`renderer` switch.
+   */
+  agentIncarnation?: number;
   lastCheckResult?: TerminalCheckResult;
+  /**
+   * The handback marker the agent most recently printed for a submission that
+   * asked for one (#12488). Read on both surfaces: the renderer from its panel
+   * record, main from the pty-host record.
+   */
+  lastHandback?: TerminalHandback;
   recentOutput?: string | null;
+  /**
+   * `true` when older output was left out of `recentOutput`, by the requested
+   * line count or by the shared response budget (#12450). Never sent as
+   * `false`: absent beside a string `recentOutput` means the tail is complete.
+   */
+  recentOutputTruncated?: boolean;
   armed?: boolean;
   hasPty?: boolean;
   /**
@@ -50,6 +102,19 @@ export interface TerminalStatusEntry {
   submission?: TerminalSubmissionRecord;
   error?: string;
 }
+
+/**
+ * One terminal's `lastOutputChangeAt` as read for the renderer's
+ * `terminal.getStatus` (#12495).
+ *
+ * `read` with no timestamp says the terminal was read and no content change has
+ * been observed yet; `unreadable` says nothing was observed at all — gone, not
+ * owned by the caller, or its backend query failed. Folding the second into the
+ * first would present a failed read as a screen that was watched and never
+ * changed.
+ */
+export type TerminalOutputActivityLookup =
+  { status: "read"; lastOutputChangeAt?: number } | { status: "unreadable" };
 
 export interface TerminalStatusResult {
   terminals: TerminalStatusEntry[];

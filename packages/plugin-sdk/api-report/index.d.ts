@@ -178,6 +178,12 @@ interface AuthValidation {
     /** Epoch milliseconds, or `null` when the token does not expire. */
     expiresAt?: number | null;
     error?: string;
+    /**
+     * Login of the account the credential authenticates as, when the provider
+     * learns it during validation. Display-only: the host shows it next to a
+     * saved credential and never derives behavior from it.
+     */
+    account?: string;
 }
 /**
  * Opaque credential the host passes through without inspecting. Token
@@ -983,6 +989,85 @@ interface CloneCapability {
     cloneRepository?(url: string, targetDir: string, opts: CloneRequestOptions): Promise<void>;
 }
 /**
+ * Why a credential import could not produce a credential. A closed set on
+ * purpose: the raw material behind a failure (CLI stdout, stderr, exec errors)
+ * can carry the credential itself, so nothing but one of these codes may cross
+ * back to the host.
+ */
+type CredentialImportFailureReason = 
+/** The provider's CLI is not installed or not on PATH. */
+"cli-not-found"
+/** The CLI did not answer in time — e.g. waiting on an OS keychain prompt. */
+ | "cli-timeout"
+/** The CLI ran but holds no credential for the forge's host. */
+ | "not-signed-in"
+/** The CLI printed something that is not a credential. */
+ | "invalid-output"
+/** Any other failure launching or running the CLI. */
+ | "cli-failed"
+/** The forge rejected the credential, or could not be reached to check it. */
+ | "validation-failed"
+/** The CLI's active account changed between preview and commit. */
+ | "account-changed"
+/** The host's signal aborted the operation. */
+ | "cancelled";
+/** Failure result shared by {@link CredentialImportCapability} methods. */
+interface CredentialImportUnavailable {
+    unavailable: true;
+    reason: CredentialImportFailureReason;
+}
+/**
+ * What an import would save, without the credential itself. Safe to show the
+ * user: this is everything the confirm step displays.
+ */
+interface CredentialImportPreview {
+    unavailable?: false;
+    /** Login the credential authenticates as, from a live validation. */
+    account: string;
+    /** Scopes the forge reported for the credential; empty means unknown. */
+    scopes: string[];
+    /** Required scopes the credential lacks. Never populated when `scopes` is empty. */
+    missingScopes: string[];
+    /** The tool the credential came from, e.g. `"gh"`. */
+    source: string;
+}
+/** What the user confirmed, bound into {@link CredentialImportCapability.commit}. */
+interface CredentialImportExpected {
+    /** Account shown in the preview. A different active account aborts the commit. */
+    account: string;
+}
+/**
+ * Secret-bearing commit result. Main-process only: the host persists it
+ * through the same path a pasted credential takes and never forwards it to a
+ * renderer, a log, or an action result.
+ */
+interface CredentialImportCandidate {
+    unavailable?: false;
+    /** Credential record keyed by the provider's declared `credentialFields` ids. */
+    credentials: Record<string, string>;
+    /** The live validation the commit just ran; `valid` is always `true`. */
+    validation: AuthValidation;
+}
+/**
+ * Optional one-time import of a credential a local tool already holds (e.g.
+ * the GitHub CLI's login), so a user who is signed in there does not have to
+ * copy a token by hand. It is an import, not a live dependency: after commit
+ * the provider authenticates with the saved copy like any pasted credential.
+ *
+ * Both methods run in main and must catch every failure internally, returning
+ * a {@link CredentialImportUnavailable} rather than throwing. {@link preview}
+ * reads and validates the credential, then discards it. {@link commit} reads
+ * it again, validates again, and refuses with `"account-changed"` when the
+ * account differs from `expected`; the host then persists the result — the
+ * provider never writes credential storage itself. Reading may trigger an OS
+ * keychain prompt, so the host only calls either method on an explicit user
+ * action. Both must honor `signal`.
+ */
+interface CredentialImportCapability {
+    preview(signal?: AbortSignal): Promise<CredentialImportPreview | CredentialImportUnavailable>;
+    commit(expected: CredentialImportExpected, signal?: AbortSignal): Promise<CredentialImportCandidate | CredentialImportUnavailable>;
+}
+/**
  * Runtime contract a forge plugin implements and registers via
  * `host.registerForgeProvider`. Every provider implements the base methods;
  * optional capabilities are sibling fields the host probes at runtime.
@@ -1028,6 +1113,14 @@ interface ForgeProviderImpl {
         state?: string;
     }): string;
     buildCommitsUrl(repo: RepoRef, branch?: string): string;
+    /**
+     * Optional. Build the repository's home page on the forge — what "View
+     * repository" in the toolbar's forge stats menu and the `forge.openRepo`
+     * action open. Omit the field when the forge has no page for the repository
+     * as a whole; the host then hides that menu entry and `forge.openRepo`
+     * rejects rather than guessing a URL.
+     */
+    buildRepoUrl?(repo: RepoRef): string;
     /**
      * Optional. Build a deep-link to a specific file's entry on a PR's
      * "Files changed" view. The provider knows its own anchor algorithm
@@ -1212,6 +1305,7 @@ interface ForgeProviderImpl {
     avatars?: AvatarCapability;
     healthEvents?: HealthEventsCapability;
     clone?: CloneCapability;
+    credentialImport?: CredentialImportCapability;
 }
 /**
  * Suggested capability vocabulary surfaced in the manifest's `capabilities`
@@ -1444,7 +1538,7 @@ type WorktreeSwitchIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 type WorktreeSwitchAction = `worktree.switch${WorktreeSwitchIndex}`;
 type BuiltInKeyAction = "nav.up" | "nav.down" | "nav.left" | "nav.right" | "nav.pageUp" | "nav.pageDown" | "nav.home" | "nav.end" | "nav.expand" | "nav.collapse" | "nav.primary" | "nav.toggleSidebar" | "nav.toggleFocusMode" | "nav.quickSwitcher" | "nav.focusRegion.next" | "nav.focusRegion.prev" | "file.open" | "file.copyPath" | "file.copyTree" | "ui.refresh" | "ui.escape" | "git.commit" | "git.push" | "git.stageAll" | "git.toggle" | "worktree.next" | "worktree.previous" | "worktree.panel" | WorktreeSwitchAction | "worktree.up" | "worktree.down" | "worktree.upVim" | "worktree.downVim" | "worktree.home" | "worktree.end" | "worktree.select" | "worktree.selectSpace" | "worktree.copyTree" | "worktree.openChanges" | "worktree.openEditor" | "worktree.openFileBrowser" | "worktree.openFileBrowserPanel" | "worktree.openPalette" | "worktree.createDialog.open" | "worktree.overview" | "worktree.sessions.minimizeAll" | "worktree.sessions.maximizeAll" | "worktree.sessions.restartAll" | "worktree.sessions.endAll" | "worktree.sessions.closeCompleted" | "worktree.sessions.trashAll" | "worktree.sessions.resetRenderers" | "tab.next" | "tab.previous" | "terminal.close" | "terminal.closeAll" | "terminal.killAll" | "terminal.restartAll" | "terminal.toggleDock" | "terminal.toggleDockAll" | "terminal.new" | "terminal.reopenLast" | "terminal.resumeSessions" | "terminal.maximize" | "terminal.inject" | "terminal.focusNext" | "terminal.focusPrevious" | "terminal.focusAlternate" | "terminal.focusUp" | "terminal.focusDown" | "terminal.focusLeft" | "terminal.focusRight" | "terminal.focusDock" | "terminal.focusIndex1" | "terminal.focusIndex2" | "terminal.focusIndex3" | "terminal.focusIndex4" | "terminal.focusIndex5" | "terminal.focusIndex6" | "terminal.focusIndex7" | "terminal.focusIndex8" | "terminal.focusIndex9" | "terminal.moveLeft" | "terminal.moveRight" | "terminal.moveUp" | "terminal.moveDown" | "terminal.moveToDock" | "terminal.moveToGrid" | "terminal.watch" | "terminal.duplicate" | "terminal.background" | "terminal.contextMenu" | "terminal.stashInput" | "terminal.popStash" | "terminal.scrollToLastActivity" | "terminal.sendToAgent" | "terminal.bulkCommand" | "terminal.armDefault" | "terminal.disarmAll" | "terminal.kill" | "terminal.restart" | "terminal.forceResume" | "terminal.redraw" | "terminal.rename" | "fleet.accept" | "fleet.reject" | "fleet.interrupt" | "fleet.restart" | "fleet.kill" | "fleet.trash" | "fleet.armFocused" | "fleet.armAll" | "agent.palette" | AgentKeyAction | "agent.terminal" | "agent.browser" | "agent.focusNextWaiting" | "agent.focusNextWaitingGlobal" | "agent.focusNextWorking" | "agent.focusNextAgent" | "agent.focusPreviousAgent" | "dock.focusNextWaiting" | "find.inFocusedPanel" | "window.zoomIn" | "window.zoomOut" | "window.zoomReset" | "panel.palette" | "panel.toggleDiagnostics" | "panel.togglePortal" | "panel.diagnosticsLogs" | "panel.diagnosticsEvents" | "panel.diagnosticsMessages" | "notifications.toggle" | "portal.newTab" | "portal.closeTab" | "portal.nextTab" | "portal.prevTab" | "devPreview.reloadPreview" | "action.palette" | "action.palette.open" | "action.repeatLast" | "pilot.toggle" | "pilot.openProject" | "project.switcherPalette" | "project.mruCycleOlder" | "help.shortcuts" | "help.shortcutsAlt" | "help.launchAgent" | "help.togglePanel" | "app.settings" | "app.theme.toggle" | "app.theme.pick" | "voiceInput.toggle" | "voiceInput.toggleAssistant" | "voiceInput.togglePause" | "voiceInput.lockTarget" | "voiceInput.unlockTarget" | "voiceInput.recallRecentTarget" | "layout.undo" | "layout.redo" | "app.newWindow" | "app.quit" | "app.forceQuit" | "modal.close";
 
-declare const BUILT_IN_ACTION_IDS: readonly ["terminal.list", "terminal.getOutput", "terminal.getStatus", "terminal.sendCommand", "terminal.waitUntilIdle", "terminal.waitUntilIdleBatch", "terminal.resumeSessions", "terminal.setClientMetadata", "panel.list", "panel.focus", "panel.focusIndex", "panel.openPluginPanel", "panel.palette", "panel.gridLayout.setStrategy", "panel.gridLayout.setValue", "worktree.list", "worktree.getCurrent", "worktree.refresh", "worktree.reconcileTopology", "worktree.refreshPullRequests", "worktree.restartService", "worktree.retryProjectLoad", "worktree.setActive", "worktree.create", "worktree.delete", "worktree.deleteOwned", "worktree.listBranches", "worktree.getDefaultPath", "worktree.reveal", "worktree.openIssue", "worktree.openPR", "worktree.copyContext", "worktree.inject", "worktree.getAvailableBranch", "worktree.waitUntilReady", "worktree.createWithRecipe", "worktree.compareDiff", "worktree.reviewReadiness", "worktree.switchIndex", "worktree.quickCreate", "worktree.createDialog.open", "worktree.select", "worktree.copyTree", "worktree.openEditor", "worktree.openReviewHub", "worktree.openFileBrowser", "worktree.openFileBrowserPanel", "worktree.openChanges", "worktree.overview.open", "worktree.overview.close", "worktree.resource.provision", "worktree.resource.teardown", "worktree.resource.resume", "worktree.resource.pause", "worktree.resource.status", "worktree.resource.connect", "worktree.resource.config.get", "worktree.resource.config.set", "worktree.lifecycle.retrySetup", "worktree.sessions.minimizeAll", "worktree.sessions.maximizeAll", "worktree.sessions.restartAll", "worktree.sessions.resetRenderers", "worktree.sessions.closeCompleted", "worktree.sessions.trashAll", "worktree.sessions.endAll", "worktree.sessions.clearHistory", "worktree.bulk.closeSessions", "worktree.bulk.remove", "workflow.startWorkOnIssue", "workflow.prepBranchForReview", "workflow.focusNextAttention", "system.openExternal", "system.openPath", "system.checkCommand", "system.checkDirectory", "system.getHomeDir", "system.getResourceProfileSnapshot", "cliAvailability.get", "cliAvailability.refresh", "sessionRestore.getConfig", "sessionRestore.updateConfig", "hibernation.getConfig", "hibernation.updateConfig", "idleTerminalNotify.getConfig", "idleTerminalNotify.updateConfig", "idleTerminalNotify.closeProject", "idleTerminalNotify.muteProject", "idleBackgroundAutoClose.getConfig", "idleBackgroundAutoClose.updateConfig", "agentSettings.get", "agentSettings.set", "agentSettings.reset", "keybinding.getOverrides", "keybinding.setOverride", "keybinding.removeOverride", "keybinding.resetAll", "terminalConfig.get", "terminalConfig.setScrollback", "terminalConfig.setPerformanceMode", "terminalConfig.setFontSize", "terminalConfig.setFontFamily", "terminalConfig.setHybridInputEnabled", "terminalConfig.setHybridInputAutoFocus", "terminalConfig.setScreenReaderMode", "terminalConfig.setCachedProjectViews", "worktreeConfig.get", "worktreeConfig.setPattern", "files.search", "file.view", "file.read", "file.openDiff", "file.openInEditor", "file.openInBrowser", "file.openImageViewer", "file.showItemInFolder", "file.openPanel", "slashCommands.list", "skills.search", "skills.load", "artifact.saveToFile", "artifact.applyPatch", "copyTree.generate", "copyTree.generateAndCopyFile", "copyTree.injectToTerminal", "copyTree.isAvailable", "copyTree.cancel", "copyTree.getFileTree", "git.getProjectPulse", "git.getFileDiff", "git.listCommits", "git.stageFile", "git.unstageFile", "git.stageAll", "git.unstageAll", "git.commit", "git.push", "git.pullRebase", "git.fetch", "git.rebaseOntoBase", "git.mergeBaseIntoBranch", "git.abortRepositoryOperation", "git.continueRepositoryOperation", "git.forcePushWithLease", "git.markSafeDirectory", "git.getStagingStatus", "preferences.showProjectPulse.set", "preferences.showDeveloperTools.set", "preferences.showGridAgentHighlights.set", "preferences.showDockAgentHighlights.set", "preferences.showAgentTaskTitles.set", "preferences.reduceAnimations.set", "window.toggleFullscreen", "window.reload", "window.forceReload", "window.toggleDevTools", "window.zoomIn", "window.zoomOut", "window.zoomReset", "window.close", "forge.openIssues", "forge.openPRs", "forge.openCommits", "forge.openIssue", "forge.openPR", "forge.assignIssue", "forge.unassignIssue", "forge.approvePR", "forge.requestChanges", "forge.dismissReview", "forge.requestReviewers", "forge.createIssue", "forge.closeIssue", "forge.reopenIssue", "forge.editIssue", "forge.addIssueComment", "forge.addIssueLabel", "forge.removeIssueLabel", "forge.validateToken", "forge.getRepoStats", "forge.listIssues", "forge.listPRs", "forge.getIssue", "forge.listIssueComments", "forge.getChecks", "forge.getPR", "forge.getPRs", "forge.getCIStatus", "forge.createPR", "forge.closePR", "forge.reopenPR", "forge.mergePR", "forge.convertPRToDraft", "forge.markPRReadyForReview", "forge.commentOnPR", "forge.editPR", "pilot.toggle", "pilot.openProject", "pilot.openRun", "project.getAll", "project.getCurrent", "project.add", "project.switch", "project.update", "project.remove", "project.close", "project.closeActive", "project.openDialog", "project.getSettings", "project.saveSettings", "project.muteNotifications", "project.silenceNotificationKind", "project.detectRunners", "project.runCheck", "workspace.list", "plugin.validate", "plugin.diagnostics", "plugin.reloadProject", "plugin.reloadWindow", "project.getStats", "project.settings.open", "project.cloneRepo", "app.pluginManager", "app.reloadConfig", "app.exportConfig", "app.importConfig", "app.developerMode.set", "app.theme.pick", "app.theme.toggle", "app.theme.browser.open", "logs.openFile", "logs.clear", "logs.setVerbose", "logs.getVerbose", "logs.getAll", "logs.getSources", "logs.setLogLevel", "logs.getLevelOverrides", "logs.setLevelOverrides", "logs.clearLevelOverrides", "logs.getRegistry", "diagnostics.openReview", "diagnostics.openWhySlow", "errors.clearAll", "errors.openLogs", "errors.recent", "notifications.recent", "notifications.toggle", "eventInspector.getEvents", "eventInspector.getFiltered", "eventInspector.subscribe", "eventInspector.unsubscribe", "eventInspector.clear", "telemetry.togglePreview", "telemetry.clearPreview", "recipe.run", "recipe.list", "recipe.editor.open", "recipe.editor.openFromLayout", "recipe.manager.open", "recipe.saveToRepo", "recipe.delete", "agent.launch", "agent.terminal", "agent.focusNextWaiting", "agent.focusNextWorking", "agent.focusNextAgent", "agent.focusPreviousAgent", "agent.getState", "agent.listToolbar", "agent.listAvailable", "agent.listPresets", "agentSessionHistory.list", "agentSessionHistory.resume", "session.bookmarkAndClose", "session.bookmark.promote", "session.bookmark.rename", "session.bookmark.delete", "session.bookmarks.list", "app.settings.openTab", "action.palette.open", "action.repeatLast", "actions.list", "actions.getContext", "actions.persistedStores", "actions.search", "actions.getSchema", "mcp.surface", "terminal.restart", "terminal.redraw", "terminal.forceResume", "terminal.toggleInputLock", "terminal.viewInfo", "terminal.restartService", "watchdog.restart", "terminal.new", "terminal.moveToDock", "terminal.moveToGrid", "terminal.toggleDock", "terminal.toggleDockAll", "terminal.toggleMaximize", "terminal.duplicate", "terminal.rename", "terminal.close", "terminal.closeOwned", "terminal.revealOwned", "terminal.trash", "terminal.kill", "terminal.killBatch", "terminal.closeAll", "terminal.killAll", "terminal.moveToWorktree", "terminal.moveToNewWorktree", "terminal.watch", "terminal.gridLayout.setStrategy", "terminal.gridLayout.setValue", "terminal.copy", "terminal.paste", "terminal.copyLink", "terminal.contextMenu", "terminal.sendToAgent", "terminal.inject", "terminal.bulkCommand", "terminal.interrupt", "terminal.interruptOwned", "terminal.stashInput", "terminal.popStash", "terminal.arm", "terminal.disarm", "terminal.disarmAll", "terminal.armByState", "terminal.armAll", "terminal.armDefault", "terminal.openWorktreeEditor", "terminal.openWorktreeIssue", "terminal.openWorktreePR", "terminal.info.open", "terminal.info.get", "browser.reload", "browser.navigate", "browser.openUrl", "browser.back", "browser.forward", "browser.openExternal", "browser.copyUrl", "browser.setZoomLevel", "browser.captureScreenshot", "browser.toggleConsole", "browser.clearConsole", "browser.getConsoleMessages", "browser.toggleDevTools", "browser.hardReload", "nav.toggleFocusMode", "nav.quickSwitcher", "find.inFocusedPanel", "portal.toggle", "portal.closeTab", "portal.nextTab", "portal.prevTab", "portal.newTab", "portal.closeAllTabs", "portal.activateTab", "portal.openLaunchpad", "portal.openUrl", "portal.goBack", "portal.goForward", "portal.reload", "portal.copyUrl", "portal.openExternal", "portal.duplicateTab", "portal.reloadTab", "portal.copyTabUrl", "portal.openTabExternal", "portal.closeOthers", "portal.closeToRight", "portal.resetWidth", "portal.width.set", "portal.setDefaultNewTab", "portal.links.add", "portal.links.remove", "portal.links.update", "portal.links.toggle", "portal.links.reorder", "portal.tabs.reorder", "portal.listTabs", "portal.toggleDevDashboard", "help.gettingStarted.show", "help.displayImage", "help.openCommandsFolder", "ui.sidebar.resetWidth", "devServer.start", "devPreview.stop", "devPreview.reloadPreview", "devPreview.restart", "devPreview.restartAndClearCache", "devPreview.reinstallAndRestart", "devPreview.promoteToPortal", "env.global.get", "env.global.set", "env.project.get", "env.project.set", "fleet.accept", "fleet.reject", "fleet.interrupt", "fleet.restart", "fleet.kill", "fleet.trash", "fleet.armAll", "fleet.armFocused", "fleet.scope.enter", "fleet.scope.exit", "fleet.armMatchingFilter", "fleet.retryFailures", "fleet.saveNamedFleet", "fleet.recallNamedFleet", "fleet.deleteNamedFleet", "fleet.getRunStatus"];
+declare const BUILT_IN_ACTION_IDS: readonly ["terminal.list", "terminal.getOutput", "terminal.getStatus", "terminal.sendCommand", "terminal.sendCommandOwned", "terminal.waitUntilIdle", "terminal.waitUntilIdleBatch", "terminal.readLastMessageOwned", "terminal.resumeSessions", "terminal.registerWatch", "terminal.listWatches", "terminal.getWatchEvents", "terminal.cancelWatch", "terminal.setClientMetadata", "panel.list", "panel.focus", "panel.focusIndex", "panel.openPluginPanel", "panel.palette", "panel.gridLayout.setStrategy", "panel.gridLayout.setValue", "worktree.list", "worktree.getCurrent", "worktree.refresh", "worktree.reconcileTopology", "worktree.refreshPullRequests", "worktree.restartService", "worktree.retryProjectLoad", "worktree.setActive", "worktree.create", "worktree.delete", "worktree.deleteOwned", "worktree.listBranches", "worktree.getDefaultPath", "worktree.reveal", "worktree.openIssue", "worktree.openPR", "worktree.copyContext", "worktree.inject", "worktree.getAvailableBranch", "worktree.waitUntilReady", "worktree.createWithRecipe", "worktree.compareDiff", "worktree.reviewReadiness", "worktree.switchIndex", "worktree.quickCreate", "worktree.createDialog.open", "worktree.select", "worktree.copyTree", "worktree.openEditor", "worktree.openReviewHub", "worktree.openFileBrowser", "worktree.openFileBrowserPanel", "worktree.openChanges", "worktree.overview.open", "worktree.overview.close", "worktree.resource.provision", "worktree.resource.teardown", "worktree.resource.resume", "worktree.resource.pause", "worktree.resource.status", "worktree.resource.connect", "worktree.resource.config.get", "worktree.resource.config.set", "worktree.lifecycle.retrySetup", "worktree.sessions.minimizeAll", "worktree.sessions.maximizeAll", "worktree.sessions.restartAll", "worktree.sessions.resetRenderers", "worktree.sessions.closeCompleted", "worktree.sessions.trashAll", "worktree.sessions.endAll", "worktree.sessions.clearHistory", "worktree.bulk.closeSessions", "worktree.bulk.remove", "workflow.startWorkOnIssue", "workflow.prepBranchForReview", "workflow.focusNextAttention", "system.openExternal", "system.openPath", "system.checkCommand", "system.checkDirectory", "system.getHomeDir", "system.getResourceProfileSnapshot", "cliAvailability.get", "cliAvailability.refresh", "sessionRestore.getConfig", "sessionRestore.updateConfig", "hibernation.getConfig", "hibernation.updateConfig", "idleTerminalNotify.getConfig", "idleTerminalNotify.updateConfig", "idleTerminalNotify.closeProject", "idleTerminalNotify.muteProject", "idleBackgroundAutoClose.getConfig", "idleBackgroundAutoClose.updateConfig", "agentSettings.get", "agentSettings.set", "agentSettings.reset", "keybinding.getOverrides", "keybinding.setOverride", "keybinding.removeOverride", "keybinding.resetAll", "terminalConfig.get", "terminalConfig.setScrollback", "terminalConfig.setPerformanceMode", "terminalConfig.setFontSize", "terminalConfig.setFontFamily", "terminalConfig.setHybridInputEnabled", "terminalConfig.setHybridInputAutoFocus", "terminalConfig.setScreenReaderMode", "terminalConfig.setCachedProjectViews", "worktreeConfig.get", "worktreeConfig.setPattern", "files.search", "file.view", "file.read", "file.openDiff", "file.openInEditor", "file.openInBrowser", "file.openImageViewer", "file.showItemInFolder", "file.openPanel", "slashCommands.list", "skills.search", "skills.load", "artifact.saveToFile", "artifact.applyPatch", "copyTree.generate", "copyTree.generateAndCopyFile", "copyTree.injectToTerminal", "copyTree.isAvailable", "copyTree.cancel", "copyTree.getFileTree", "git.getProjectPulse", "git.getFileDiff", "git.listCommits", "git.stageFile", "git.unstageFile", "git.stageAll", "git.unstageAll", "git.commit", "git.push", "git.pullRebase", "git.fetch", "git.rebaseOntoBase", "git.mergeBaseIntoBranch", "git.abortRepositoryOperation", "git.continueRepositoryOperation", "git.forcePushWithLease", "git.markSafeDirectory", "git.getStagingStatus", "preferences.showProjectPulse.set", "preferences.showDeveloperTools.set", "preferences.showGridAgentHighlights.set", "preferences.showDockAgentHighlights.set", "preferences.showAgentTaskTitles.set", "preferences.reduceAnimations.set", "window.toggleFullscreen", "window.reload", "window.forceReload", "window.toggleDevTools", "window.zoomIn", "window.zoomOut", "window.zoomReset", "window.close", "forge.openIssues", "forge.openPRs", "forge.openCommits", "forge.openRepo", "forge.openIssue", "forge.openPR", "forge.assignIssue", "forge.unassignIssue", "forge.approvePR", "forge.requestChanges", "forge.dismissReview", "forge.requestReviewers", "forge.createIssue", "forge.closeIssue", "forge.reopenIssue", "forge.editIssue", "forge.addIssueComment", "forge.addIssueLabel", "forge.removeIssueLabel", "forge.validateToken", "forge.getRepoStats", "forge.listIssues", "forge.listPRs", "forge.getIssue", "forge.listIssueComments", "forge.getChecks", "forge.getPR", "forge.getPRs", "forge.getCIStatus", "forge.createPR", "forge.closePR", "forge.reopenPR", "forge.mergePR", "forge.convertPRToDraft", "forge.markPRReadyForReview", "forge.commentOnPR", "forge.editPR", "pilot.toggle", "pilot.openProject", "pilot.openRun", "project.getAll", "project.getCurrent", "project.add", "project.switch", "project.update", "project.remove", "project.close", "project.closeActive", "project.openDialog", "project.getSettings", "project.saveSettings", "project.muteNotifications", "project.silenceNotificationKind", "project.detectRunners", "project.runCheck", "workspace.list", "plugin.validate", "plugin.diagnostics", "plugin.reloadProject", "plugin.reloadWindow", "project.getStats", "project.settings.open", "project.cloneRepo", "app.pluginManager", "app.reloadConfig", "app.exportConfig", "app.importConfig", "app.developerMode.set", "app.theme.pick", "app.theme.toggle", "app.theme.browser.open", "logs.openFile", "logs.clear", "logs.setVerbose", "logs.getVerbose", "logs.getAll", "logs.getSources", "logs.setLogLevel", "logs.getLevelOverrides", "logs.setLevelOverrides", "logs.clearLevelOverrides", "logs.getRegistry", "diagnostics.openReview", "diagnostics.openWhySlow", "errors.clearAll", "errors.openLogs", "errors.recent", "notifications.recent", "notifications.toggle", "eventInspector.getEvents", "eventInspector.getFiltered", "eventInspector.subscribe", "eventInspector.unsubscribe", "eventInspector.clear", "telemetry.togglePreview", "telemetry.clearPreview", "recipe.run", "recipe.list", "recipe.editor.open", "recipe.editor.openFromLayout", "recipe.manager.open", "recipe.saveToRepo", "recipe.delete", "agent.launch", "agent.terminal", "agent.focusNextWaiting", "agent.focusNextWorking", "agent.focusNextAgent", "agent.focusPreviousAgent", "agent.getState", "agent.listToolbar", "agent.listAvailable", "agent.listPresets", "agentSessionHistory.list", "agentSessionHistory.resume", "session.bookmarkAndClose", "session.bookmark.promote", "session.bookmark.rename", "session.bookmark.delete", "session.bookmarks.list", "app.settings.openTab", "action.palette.open", "action.repeatLast", "actions.list", "actions.getContext", "actions.persistedStores", "actions.search", "actions.getSchema", "mcp.surface", "terminal.restart", "terminal.redraw", "terminal.forceResume", "terminal.toggleInputLock", "terminal.viewInfo", "terminal.restartService", "watchdog.restart", "terminal.new", "terminal.moveToDock", "terminal.moveToGrid", "terminal.toggleDock", "terminal.toggleDockAll", "terminal.toggleMaximize", "terminal.duplicate", "terminal.rename", "terminal.close", "terminal.closeOwned", "terminal.revealOwned", "terminal.trash", "terminal.kill", "terminal.killBatch", "terminal.closeAll", "terminal.killAll", "terminal.moveToWorktree", "terminal.moveToNewWorktree", "terminal.watch", "terminal.gridLayout.setStrategy", "terminal.gridLayout.setValue", "terminal.copy", "terminal.paste", "terminal.copyLink", "terminal.contextMenu", "terminal.sendToAgent", "terminal.inject", "terminal.injectOwned", "terminal.bulkCommand", "terminal.interrupt", "terminal.interruptOwned", "terminal.stashInput", "terminal.popStash", "terminal.arm", "terminal.disarm", "terminal.disarmAll", "terminal.armByState", "terminal.armAll", "terminal.armDefault", "terminal.openWorktreeEditor", "terminal.openWorktreeIssue", "terminal.openWorktreePR", "terminal.info.open", "terminal.info.get", "browser.reload", "browser.navigate", "browser.openUrl", "browser.back", "browser.forward", "browser.openExternal", "browser.copyUrl", "browser.setZoomLevel", "browser.captureScreenshot", "browser.toggleConsole", "browser.clearConsole", "browser.getConsoleMessages", "browser.toggleDevTools", "browser.hardReload", "nav.toggleFocusMode", "nav.quickSwitcher", "find.inFocusedPanel", "portal.toggle", "portal.closeTab", "portal.nextTab", "portal.prevTab", "portal.newTab", "portal.closeAllTabs", "portal.activateTab", "portal.openLaunchpad", "portal.openUrl", "portal.goBack", "portal.goForward", "portal.reload", "portal.copyUrl", "portal.openExternal", "portal.duplicateTab", "portal.reloadTab", "portal.copyTabUrl", "portal.openTabExternal", "portal.closeOthers", "portal.closeToRight", "portal.resetWidth", "portal.width.set", "portal.setDefaultNewTab", "portal.links.add", "portal.links.remove", "portal.links.update", "portal.links.toggle", "portal.links.reorder", "portal.tabs.reorder", "portal.listTabs", "portal.toggleDevDashboard", "help.gettingStarted.show", "help.displayImage", "help.openCommandsFolder", "ui.sidebar.resetWidth", "devServer.start", "devPreview.stop", "devPreview.toggleTool", "devPreview.reloadPreview", "devPreview.restart", "devPreview.restartAndClearCache", "devPreview.reinstallAndRestart", "devPreview.promoteToPortal", "env.global.get", "env.global.set", "env.project.get", "env.project.set", "fleet.accept", "fleet.reject", "fleet.interrupt", "fleet.restart", "fleet.kill", "fleet.trash", "fleet.armAll", "fleet.armFocused", "fleet.scope.enter", "fleet.scope.exit", "fleet.armMatchingFilter", "fleet.retryFailures", "fleet.saveNamedFleet", "fleet.recallNamedFleet", "fleet.deleteNamedFleet", "fleet.getRunStatus"];
 type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];
 
 type ActionKind = "command" | "query";
@@ -1555,7 +1649,7 @@ type AgentState = "idle" | "working" | "waiting" | "directing" | "completed" | "
 /**
  * Classification of why an agent is in the "waiting" state.
  *
- * - `"prompt"` — empty input prompt visible; safe to auto-drive.
+ * - `"prompt"` — usually an empty input prompt, but also the fallback when nothing more specific matched; confirm against output before driving it.
  * - `"question"` — agent asked a free-form question; verify before replying.
  * - `"approval"` — permission/approval selector visible (tool approval, y/n
  *   confirm, trust dialog); a specific choice is required, not free text.
@@ -1650,6 +1744,64 @@ interface AgentDetectionConfig {
     };
 }
 
+/**
+ * One `contributes.fileEditors` entry (#12323). Declares that the plugin's
+ * renderer registers an editor view for files with the listed extensions,
+ * offered by the host file panel as its writable **Edit** mode.
+ *
+ * `slot` names a builtin view id the plugin's renderer entry registers with
+ * `registerBuiltinView`; the host resolves it enable-aware, so disabling the
+ * plugin removes the mode live. Built-in plugins only in v1: the builtin view
+ * registry is compiled into the host bundle, which an installed plugin's
+ * renderer cannot reach, so the host refuses the contribution from any other
+ * origin at load.
+ */
+interface FileEditorContribution {
+    /** Namespaced at runtime as `{pluginId}.{id}`. */
+    id: string;
+    /** Builtin view id the plugin's renderer registers for the editor surface. */
+    slot: string;
+    /** Lower-case extensions without the dot (`["md", "markdown"]`), matched case-insensitively. */
+    extensions: string[];
+    /** Largest file the editor accepts, in bytes. Absent means the host's default cap. */
+    maxBytes?: number;
+}
+/**
+ * One `contributes.previewTools` entry: a tool the dev-preview panel offers in
+ * its toolbar, with the host owning the chrome and the session lifecycle.
+ *
+ * The components stay a renderer-side registration (`registerDevPreviewTool`) —
+ * they are host-bundled, so nothing else can supply them. This declaration is
+ * what makes the tool admissible: `src/registry/devPreviewToolRegistry.ts`
+ * hides a registered tool whose plugin's manifest does not name its id, so a
+ * module side effect alone can no longer put a tool in the toolbar. Built-in
+ * plugins only.
+ */
+interface PreviewToolContribution {
+    /** Fully qualified and prefixed with the plugin name — the host does not namespace it. */
+    id: string;
+    /** User-facing name for the tool. */
+    title: string;
+    /** Lucide icon id for the toolbar toggle. */
+    iconId?: string;
+    /** A {@link PluginGuestAdapterContribution} id this same manifest declares. */
+    guestAdapter?: string;
+}
+/**
+ * One `contributes.guestAdapters` entry: a browser bundle the host reads back as
+ * text and installs into a previewed page through the site-preview bridge.
+ *
+ * `entry` is the plugin-relative source; the built asset's path is derived from
+ * the id rather than declared, so the build and the startup registration cannot
+ * disagree about where the bundle landed. Built-in plugins only — the body runs
+ * with full DOM access inside the previewed site.
+ */
+interface PluginGuestAdapterContribution {
+    /** Fully qualified and prefixed with the plugin name; the renderer binds by this literal. */
+    id: string;
+    /** Plugin-relative POSIX path to the bundle's source entry. */
+    entry: string;
+}
 interface PanelContribution {
     id: string;
     name: string;
@@ -1702,7 +1854,7 @@ type PluginPanelBadge = {
 };
 type MenuItemLocation = "terminal" | "file" | "view" | "help";
 type ContextMenuLocation = "worktree" | "terminal" | "file";
-declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect"];
+declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose"];
 type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
 type PluginCapability = BuiltInPluginCapability;
 interface MenuItemContribution {
@@ -1990,6 +2142,68 @@ interface McpServerContribution {
     command: string;
     args?: string[];
     env?: Record<string, string>;
+}
+/**
+ * One `contributes.agentMcp` entry: an MCP tools endpoint the plugin serves to
+ * agents running in Daintree's terminals — the inbound direction, unlike
+ * {@link McpServerContribution}, where Daintree is the client.
+ *
+ * The host owns everything but the tools: the transport (a plugin-only path on
+ * the existing loopback listener), the per-terminal credential, the project
+ * binding and revocation. The plugin supplies the tool roster at activation via
+ * {@link PluginMcpApi.registerTools}. Requires the `mcp:expose` capability, and
+ * an endpoint reaches no agent until the user enables it for a project.
+ */
+interface PluginAgentMcpContribution {
+    id: string;
+    /** Shown in the per-project enablement UI. Agents never see it; their server key derives from the ids. */
+    name: string;
+    description?: string;
+    /** Host-managed tools. The only mode today; kept explicit so a later mode is additive. */
+    mode: "tools";
+}
+/**
+ * Who a tool call came from, as far as the host can say. Provenance, not
+ * identity: the grant was issued for a launch in this terminal and project, but
+ * any process that read the credential can present it. `launchAgentIdHint` is
+ * what the terminal was launched as — never proof of what is calling.
+ */
+interface PluginMcpCaller {
+    /** Stable correlation id for the credential. Never the credential itself. */
+    readonly credentialId: string;
+    readonly projectId: string;
+    readonly terminalId: string;
+    readonly launchAgentIdHint?: string;
+}
+/** A JSON Schema object describing a tool's arguments or result. Must be `type: "object"`. */
+type PluginMcpJsonSchema = {
+    type: "object";
+} & Record<string, unknown>;
+/**
+ * One tool on an `agentMcp` endpoint. `execute` receives the arguments the
+ * agent sent (validated only as a JSON object — checking them against
+ * `inputSchema` is the plugin's job), the caller's provenance, and a signal
+ * aborted when the call is cancelled, times out, or the plugin unloads. The
+ * return value must be JSON-serializable; it reaches the agent as the tool
+ * result. A thrown error becomes a tool error carrying its message.
+ */
+interface PluginMcpToolDefinition {
+    description: string;
+    inputSchema: PluginMcpJsonSchema;
+    outputSchema?: PluginMcpJsonSchema;
+    execute(args: Record<string, unknown>, caller: PluginMcpCaller, signal: AbortSignal): unknown | Promise<unknown>;
+}
+/** Host API for serving `contributes.agentMcp` endpoints. Requires `mcp:expose`. */
+interface PluginMcpApi {
+    /**
+     * Bind the tool roster for an endpoint declared in `contributes.agentMcp`,
+     * keyed by tool name. An undeclared endpoint id, a roster over
+     * {@link AGENT_MCP_MAX_TOOLS_PER_ENDPOINT}, or a tool breaking the name,
+     * description or schema limits is rejected whole. Calling it again for the
+     * same endpoint replaces the roster. Returns a disposer; every roster is
+     * dropped when the plugin unloads. Must be called during `activate()`.
+     */
+    registerTools(endpointId: string, tools: Record<string, PluginMcpToolDefinition>): Promise<() => void>;
 }
 /**
  * One `contributes.skills` entry (#10892). A skill is a markdown file the plugin
@@ -2285,6 +2499,12 @@ interface PluginManifest {
         views: ViewContribution[];
         mcpServers: McpServerContribution[];
         /**
+         * MCP tools endpoints this plugin serves to terminal agents. Requires the
+         * `mcp:expose` capability. Optional in the type but always materialized by
+         * the manifest schema's `.default([])`, for the same reason as `surfaces`.
+         */
+        agentMcp?: PluginAgentMcpContribution[];
+        /**
          * Plugin-contributed skills (#10892) — markdown knowledge/instruction files
          * surfaced to agents via the built-in MCP server's `skills.search` /
          * `skills.load` tools. Inert declarative content; no capability required.
@@ -2293,6 +2513,33 @@ interface PluginManifest {
         skills: SkillContribution[];
         forgeProviders: ForgeProviderContribution[];
         fileDecorationProviders: FileDecorationContribution[];
+        /**
+         * Plugin-contributed file editors (#12323): an extra, writable mode on the
+         * host's file panel for the declared extensions. Built-in plugins only in
+         * v1 — the slot resolves through the host-bundled builtin view registry,
+         * which an installed plugin's renderer cannot reach. Empty unless the
+         * plugin ships an editor.
+         */
+        fileEditors: FileEditorContribution[];
+        /**
+         * Dev-preview tools this plugin offers (built-in only). The renderer
+         * registry admits a registered tool only when its plugin's manifest names
+         * the tool id here, so the manifest — not a module side effect — is what
+         * puts a tool in the preview toolbar.
+         *
+         * Optional in the type but always materialized by the manifest schema's
+         * `.default([])`, for the same reason as `agentMcp` — the hand-built
+         * manifest literals in tests and tooling predate the field.
+         */
+        previewTools?: PreviewToolContribution[];
+        /**
+         * Guest runtimes this plugin ships as standalone browser assets (built-in
+         * only). Main registers one site-preview guest adapter per entry at
+         * startup; the build derives the bundle's entry and output from the same
+         * declaration. Optional in the type for the same reason as
+         * `previewTools`.
+         */
+        guestAdapters?: PluginGuestAdapterContribution[];
         /**
          * Plugin-contributed launchable agents (#9560). Each entry registers an
          * {@link PluginAgentContribution} into the effective agent registry at load
@@ -3174,6 +3421,27 @@ interface PluginFsStat {
     mtimeMs: number;
 }
 /**
+ * Options for the checked write path of {@link PluginFsApi.writeFile}
+ * (#12323). Passing any options object selects the checked path.
+ */
+interface PluginFsWriteOptions {
+    /**
+     * The revision the caller last read — the sha256 hex of the file's bytes,
+     * as returned by an earlier write or computed by the caller from
+     * {@link PluginFsApi.readFileBytes}. The write is refused with
+     * `REVISION_MISMATCH` when the file's current bytes hash differently; the
+     * error carries the current revision so the caller can enter a conflict
+     * state without a second read. `null` means the file must not exist yet
+     * (a create-new write, refused with `TARGET_EXISTS` otherwise). Omit it to
+     * write atomically without a freshness check.
+     */
+    expectedRevision?: string | null;
+}
+interface PluginFsWriteResult {
+    /** sha256 hex of the bytes written — the caller's next `expectedRevision`. */
+    revision: string;
+}
+/**
  * Host-mediated, scope-contained filesystem surface on {@link PluginHostApi.fs}.
  *
  * Every path argument is resolved against the plugin's declared
@@ -3220,8 +3488,24 @@ interface PluginFsApi {
      * already exist within scope). Rejects on a missing write capability or an
      * out-of-scope path. Recorded in the audit trail. No cancellation signal —
      * partial-write semantics are deliberately out of scope.
+     *
+     * Without `options` this is the plain write it has always been. Passing an
+     * `options` object — even an empty one — selects the checked write
+     * (#12323): the host serialises writes per resolved path, refuses a symlink
+     * target, replaces the file atomically (sibling temp file, flush, rename,
+     * original mode preserved), and compares the file's current bytes against
+     * {@link PluginFsWriteOptions.expectedRevision} before touching it. Either
+     * path resolves the revision of the bytes actually written, so the next
+     * `expectedRevision` needs no re-read.
+     *
+     * What the checked write promises: it never clobbers a change the caller has
+     * not seen, never leaves a partial file, and serialises every host-mediated
+     * writer. What it does not promise: a lock against an uncooperative external
+     * process — a write that lands between the hash check and the rename is
+     * overwritten. The window is small, and callers that care keep their own
+     * copy of what they asked to write.
      */
-    writeFile(filePath: string, contents: string): Promise<void>;
+    writeFile(filePath: string, contents: string, options?: PluginFsWriteOptions): Promise<PluginFsWriteResult>;
     /**
      * List a directory's immediate children. Rejects on a missing read capability
      * or an out-of-scope path.
@@ -3636,6 +3920,20 @@ interface PluginActivationApi {
      *   is revoked and the subscription is rejected.
      */
     onDidWake(callback: (event: PluginSystemWakeEvent) => void): Promise<() => void>;
+    /**
+     * Serve the tool rosters of the endpoints declared in `contributes.agentMcp`
+     * to agents running in Daintree's terminals. Gated on the `mcp:expose`
+     * capability. See {@link PluginMcpApi}.
+     *
+     * `registerTools` is revoke-guarded — call it during `activate()`. The tools'
+     * `execute` functions run for the plugin's whole lifetime; only binding the
+     * roster is restricted to the activation window.
+     *
+     * @throws {Error} `PERMISSION_REQUIRED:` from `registerTools` if the plugin
+     *   did not declare the `mcp:expose` capability, and a revoked-host error if
+     *   it is called after activation resolves or times out.
+     */
+    readonly mcp: PluginMcpApi;
 }
 /**
  * The full host surface handed to a plugin's `activate()`. Extends
@@ -4186,4 +4484,4 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
+export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };

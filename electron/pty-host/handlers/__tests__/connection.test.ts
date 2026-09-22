@@ -12,6 +12,7 @@ function makeCtx(stateRef: {
   const ptyManager = {
     setSabMode: vi.fn(),
     isSabMode: vi.fn(() => true),
+    resize: vi.fn(),
   } as unknown as HostContext["ptyManager"];
 
   return {
@@ -27,6 +28,7 @@ function makeCtx(stateRef: {
     pauseCoordinators: new Map(),
     rendererConnections: new Map(),
     windowProjectMap: new Map(),
+    fallbackEligibleProjects: new Set(),
     windowFocusedTerminalMap: new Map(),
     ipcDataMirrorTerminals: new Set(),
     // Mirror the production wiring: getter/setter pairs read & write the
@@ -136,6 +138,65 @@ describe("init-buffers handler", () => {
     expect(ctx.windowProjectMap.get(1)).toBe("proj-a");
     expect(ctx.recomputeActivityTiers).toHaveBeenCalledTimes(1);
     expect(ctx.recomputeActivityTiers).toHaveBeenCalledWith("proj-a");
+  });
+
+  it("set-fallback-eligible-projects replaces the set rather than merging (#12557)", () => {
+    const stateRef = {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+    const ctx = makeCtx(stateRef);
+    const handlers = createConnectionHandlers(ctx);
+
+    handlers["set-fallback-eligible-projects"]({ projectIds: ["proj-a", "proj-b"] });
+    expect([...ctx.fallbackEligibleProjects]).toEqual(["proj-a", "proj-b"]);
+
+    // Main recomputes the whole set from its registry, so this is a replace:
+    // merging would keep the IPC fallback open for proj-b forever.
+    handlers["set-fallback-eligible-projects"]({ projectIds: ["proj-c"] });
+    expect([...ctx.fallbackEligibleProjects]).toEqual(["proj-c"]);
+
+    // An empty list is a legitimate "nothing is eligible any more".
+    handlers["set-fallback-eligible-projects"]({ projectIds: [] });
+    expect([...ctx.fallbackEligibleProjects]).toEqual([]);
+  });
+
+  it("set-fallback-eligible-projects rejects a malformed list outright (#12557)", () => {
+    // Filtering junk out of a partly-valid list would silently narrow the set
+    // and starve whatever it dropped. Reject the payload and keep the last
+    // known-good one instead.
+    const stateRef = {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+    const ctx = makeCtx(stateRef);
+    const handlers = createConnectionHandlers(ctx);
+    handlers["set-fallback-eligible-projects"]({ projectIds: ["proj-a", "proj-b"] });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    handlers["set-fallback-eligible-projects"]({ projectIds: ["proj-a", "", 7, null] });
+    warn.mockRestore();
+
+    expect([...ctx.fallbackEligibleProjects]).toEqual(["proj-a", "proj-b"]);
+  });
+
+  it("set-fallback-eligible-projects leaves the set alone when projectIds is not an array (#12557)", () => {
+    const stateRef = {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+    const ctx = makeCtx(stateRef);
+    const handlers = createConnectionHandlers(ctx);
+    ctx.fallbackEligibleProjects.add("proj-a");
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    handlers["set-fallback-eligible-projects"]({});
+    warn.mockRestore();
+
+    expect([...ctx.fallbackEligibleProjects]).toEqual(["proj-a"]);
   });
 
   it("project-switch handler updates the window→project map and recomputes activity tiers scoped to the new project (#10857)", () => {
@@ -399,7 +460,7 @@ describe("set-active-project non-empty envHash warming (#9810)", () => {
     const pool = makeFakePool();
     const handlers = createConnectionHandlers(makePoolCtx(pool));
 
-    const projectEnv = { MY_API_KEY: "x", NODE_ENV: "production" };
+    const projectEnv = { APP_MODE: "x", NODE_ENV: "production" };
     handlers["set-active-project"]({
       windowId: 1,
       projectId: "proj-a",
@@ -430,6 +491,27 @@ describe("set-active-project non-empty envHash warming (#9810)", () => {
     // `computePoolEnvHash` (forgetting `filterSensitiveOnly`, shadowing the
     // import, etc.) is caught here.
     expect(envHashA).toBe(computePoolEnvHash(projectEnv));
+  });
+
+  it("warms no panel cwds when projectEnv carries a secret-named variable", async () => {
+    const pool = makeFakePool();
+    const handlers = createConnectionHandlers(makePoolCtx(pool));
+
+    // Launches carrying this env bypass the pool (the pool would strip the
+    // secret), so a shell warmed for its key could never be taken.
+    handlers["set-active-project"]({
+      windowId: 1,
+      projectId: "proj-a",
+      projectPath: "/repo",
+      panelCwds: ["/repo/wt-a"],
+      projectEnv: { MY_API_KEY: "x", NODE_ENV: "production" },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(pool.drainAndRefill).toHaveBeenCalledWith("/repo");
+    expect(pool.warmForKey).not.toHaveBeenCalled();
   });
 
   it("falls back to env-empty warm (callerEnv undefined) when projectEnv is null", async () => {
@@ -678,5 +760,65 @@ describe("worker-ingest dedicated ports (#10960)", () => {
       "term-9",
       "explicit-disconnect"
     );
+  });
+});
+
+describe("resize transport attribution (#12442)", () => {
+  function makeStateRef() {
+    return {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+  }
+
+  function makeNodePort() {
+    const listeners = new Map<string, Set<(arg?: unknown) => void>>();
+    return {
+      start() {},
+      close() {},
+      postMessage() {},
+      on(event: string, handler: (arg?: unknown) => void) {
+        let set = listeners.get(event);
+        if (!set) {
+          set = new Set();
+          listeners.set(event, set);
+        }
+        set.add(handler);
+      },
+      removeListener(event: string, handler: (arg?: unknown) => void) {
+        listeners.get(event)?.delete(handler);
+      },
+      emit(event: string, arg?: unknown) {
+        listeners.get(event)?.forEach((handler) => handler(arg));
+      },
+    };
+  }
+
+  it("names the MessagePort as the transport for a resize it delivers", () => {
+    // The renderer's MessagePort reaches this process without passing through
+    // Main, so when a collapsed grid is refused at the boundary the log has to
+    // say which of the two doors it arrived through — the issue asks for the
+    // caller to be named, and this is the half the host owns.
+    const ctx = makeCtx(makeStateRef());
+    vi.mocked(ctx.createPortQueueManager).mockReturnValue({
+      removeBytes: vi.fn(),
+      tryResume: vi.fn(),
+      isAtCapacity: vi.fn(() => false),
+      addBytes: vi.fn(),
+      applyBackpressure: vi.fn(),
+      getUtilization: vi.fn(() => 0),
+      getPausedTerminalIds: vi.fn(() => []),
+      resumeAll: vi.fn(),
+      dispose: vi.fn(),
+    } as unknown as ReturnType<HostContext["createPortQueueManager"]>);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const handlers = createConnectionHandlers(ctx);
+    const port = makeNodePort();
+
+    handlers["connect-port"]({ windowId: 1 }, [port] as never);
+    port.emit("message", { data: { type: "resize", id: "term-1", cols: 100, rows: 30 } });
+
+    expect(ctx.ptyManager.resize).toHaveBeenCalledWith("term-1", 100, 30, "renderer-message-port");
   });
 });

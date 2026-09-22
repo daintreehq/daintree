@@ -223,6 +223,8 @@ const LIVENESS_TIMEOUT_MS = process.platform === "win32" ? 30 * 60_000 : 15 * 60
 interface DriverResult {
   id: string;
   exitCode: number | null;
+  /** Set when the child died to a signal; `exitCode` is then null. */
+  signal: NodeJS.Signals | null;
   timedOut: boolean;
   stdout: string;
   stderr: string;
@@ -273,9 +275,9 @@ function runScenario(id: string): Promise<DriverResult> {
       child.kill("SIGKILL");
     }, CHILD_TIMEOUT_MS);
 
-    child.on("close", (exitCode) => {
+    child.on("close", (exitCode, signal) => {
       clearTimeout(timer);
-      resolve({ id, exitCode, timedOut, stdout, stderr, elapsedMs: Date.now() - started });
+      resolve({ id, exitCode, signal, timedOut, stdout, stderr, elapsedMs: Date.now() - started });
     });
   });
 }
@@ -331,8 +333,13 @@ function explain(result: DriverResult): string {
     .map((raw) => raw.trim())
     .filter(Boolean)
     .slice(0, 5);
-  if (stderrLines.length === 0) return `exit code ${String(result.exitCode)} with no output`;
-  return `died before the scenario ran (exit ${String(result.exitCode)}): ${stderrLines.join(" | ")}`;
+  // A signal death is named, because it points somewhere else entirely: this
+  // guard only ever sends SIGKILL on timeout (reported above), so a SIGKILL here
+  // came from outside the scenario; on CI the kernel OOM killer is the usual sender.
+  const exit =
+    result.signal !== null ? `killed by ${result.signal}` : `exit code ${String(result.exitCode)}`;
+  if (stderrLines.length === 0) return `${exit} with no output`;
+  return `died before the scenario ran (${exit}): ${stderrLines.join(" | ")}`;
 }
 
 /** The driver's JSON line. Everything it reports is judged below, not there. */

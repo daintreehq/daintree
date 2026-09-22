@@ -59,7 +59,7 @@ Adding a new agent requires three things:
 
 Both prompt files share the same answer workflow, tone, and topic coverage. They diverge on what the assistant is allowed to do beyond docs search:
 
-- **`CLAUDE.md`** — Tier-aware. Describes the `workbench` / `action` / `system` model exposed by the local `daintree` MCP server (see Tier Model below) and tells Claude to prefer the least-privileged path. Also carries the Claude-only task recipes and the `terminal.getStatus` fleet-polling recipe.
+- **`CLAUDE.md`** — Tier-aware. Describes the `workbench` / `action` / `system` model exposed by the local `daintree` MCP server (see Tier Model below) and tells Claude to prefer the least-privileged path. Also carries the fuller Claude task recipes and the `ScheduleWakeup`-paced fleet-polling recipe.
 - **`AGENTS.md`** (Codex, and the experimental Copilot integration) — Connects to the local `daintree` MCP when local MCP is enabled; capabilities follow the selected tier, so the default `action` tier gives full in-app orchestration. Unlike Claude, Codex has no bundled tool-layer deny list and its session directory is writable, so "don't mutate anything locally, don't route around the tier with the shell" is carried by the prompt rather than enforced by a sandbox — the server-side tier gate remains the real boundary.
 
 Both share:
@@ -76,15 +76,19 @@ Both share:
 
 ```
 scripts/help-src/
-├── SHARED.md           # canonical body (How to Answer, tool discovery, readiness checks, Topics, forge, MCP docs, IDK pattern)
-├── CLAUDE.head.md      # Claude title + What You Can Do
-├── CLAUDE.tasks.md     # Claude-only worked-example task recipes (read/spawn/send/close)
-├── CLAUDE.tier.md      # Claude-only tier model (workbench / action / system)
-├── CLAUDE.tail.md      # Claude-only terminal-watching recipe
-└── AGENTS.head.md      # Codex Role Override + What You Can Do
+├── SHARED.md              # canonical body (How to Answer, tool discovery, launched-agent dialogs, readiness checks)
+├── SHARED.tail.md         # shared closing sections (Topics, ideas, forge, IDK pattern, MCP docs)
+├── CLAUDE.head.md         # Claude title + What You Can Do
+├── CLAUDE.tasks.md        # Claude-only worked-example task recipes (read/spawn/send/close)
+├── CLAUDE.tier.md         # Claude-only tier model (workbench / action / system)
+├── CLAUDE.transcript.md   # Claude session-transcript lookup
+├── CLAUDE.tail.md         # Claude-only terminal-watching recipe (ScheduleWakeup pacing)
+├── AGENTS.head.md         # Codex Role Override + What You Can Do
+├── AGENTS.tasks.md        # Codex operations recipes (launch/status/send/wait/close), no Claude harness pacing
+└── AGENTS.transcript.md   # Codex session-transcript lookup
 ```
 
-`CLAUDE.md` is `CLAUDE.head` + `CLAUDE.tasks` + `CLAUDE.tier` + `SHARED` + `CLAUDE.tail`; `AGENTS.md` is `AGENTS.head` + `SHARED`. Anything both assistants need therefore belongs in `SHARED.md` — the Claude-only partials never reach Codex.
+`CLAUDE.md` is `CLAUDE.head` + `CLAUDE.tasks` + `CLAUDE.tier` + `SHARED` + `CLAUDE.transcript` + `SHARED.tail` + `CLAUDE.tail`; `AGENTS.md` is `AGENTS.head` + `AGENTS.tasks` + `SHARED` + `AGENTS.transcript` + `SHARED.tail`. Anything both assistants need therefore belongs in `SHARED.md` or `SHARED.tail.md` — the Claude-only partials never reach Codex. Keep `AGENTS.md` well under Codex's 32 KiB `project_doc_max_bytes` ceiling (the build test caps it at 24 KiB); Codex truncates past it without telling the model.
 
 After editing any partial, run:
 

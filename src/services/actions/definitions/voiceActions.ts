@@ -42,7 +42,7 @@ function resolveTargetForPanel(panelId: string): {
 export function registerVoiceActions(actions: ActionRegistry): void {
   actions.set("voiceInput.toggle", () => ({
     id: "voiceInput.toggle",
-    title: "Toggle Voice Dictation",
+    title: "Toggle voice dictation",
     description: "Start or stop dictation for the focused terminal input",
     category: "voice",
     kind: "command",
@@ -56,7 +56,7 @@ export function registerVoiceActions(actions: ActionRegistry): void {
 
   actions.set("voiceInput.toggleAssistant", () => ({
     id: "voiceInput.toggleAssistant",
-    title: "Toggle Voice Dictation in Assistant",
+    title: "Toggle voice dictation in assistant",
     description: "Start or stop dictation in the Daintree Assistant from anywhere",
     category: "voice",
     kind: "command",
@@ -84,7 +84,7 @@ export function registerVoiceActions(actions: ActionRegistry): void {
 
   actions.set("voiceInput.lockTarget", () => ({
     id: "voiceInput.lockTarget",
-    title: "Lock Voice Dictation to Panel",
+    title: "Lock voice dictation to panel",
     description: "Pin voice dictation to a specific panel so focus changes don't redirect it",
     category: "voice",
     kind: "command",
@@ -125,7 +125,7 @@ export function registerVoiceActions(actions: ActionRegistry): void {
 
   actions.set("voiceInput.unlockTarget", () => ({
     id: "voiceInput.unlockTarget",
-    title: "Unlock Voice Dictation",
+    title: "Unlock voice dictation",
     description: "Release the pinned dictation target so voice follows focus again",
     category: "voice",
     kind: "command",
@@ -143,7 +143,7 @@ export function registerVoiceActions(actions: ActionRegistry): void {
 
   actions.set("voiceInput.recallRecentTarget", () => ({
     id: "voiceInput.recallRecentTarget",
-    title: "Toggle Voice Dictation on Recent Target",
+    title: "Toggle voice dictation on recent target",
     description: "Start or stop dictation on a recently used panel by id",
     category: "voice",
     kind: "command",

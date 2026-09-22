@@ -648,6 +648,38 @@ describe("recipeStore", () => {
     expect(spawned.command).toContain("sonnet");
   });
 
+  // #12431: an in-memory recipe carries a live pane's captured flags; the
+  // standing instruction among them must reach the launch it spawns.
+  it("runRecipe applies a captured standing instruction to the spawned command", async () => {
+    const pair = ["--append-system-prompt", "Infer the best option"];
+    useRecipeStore.setState({
+      recipes: [
+        {
+          id: "recipe-standing",
+          name: "Cloned Layout",
+          projectId: "project-1",
+          terminals: [
+            {
+              type: "claude",
+              title: "Claude",
+              agentLaunchFlags: ["--verbose", ...pair],
+              env: {},
+            },
+          ],
+          createdAt: Date.now(),
+        },
+      ],
+      isLoading: false,
+      currentProjectId: "project-1",
+    });
+
+    await useRecipeStore.getState().runRecipe("recipe-standing", "/tmp/worktree", "worktree-1");
+
+    const spawned = addTerminalMock.mock.calls[0]?.[0];
+    expect(spawned.command).toMatch(/--append-system-prompt ['"]Infer the best option['"]/);
+    expect(spawned.agentLaunchFlags).toEqual(["--verbose", ...pair]);
+  });
+
   it("runRecipe uses the availability-resolved agent executable", async () => {
     refreshCliAvailabilityMock.mockImplementation(async () => {
       cliAvailabilityState.details = {
@@ -935,6 +967,41 @@ describe("recipeStore", () => {
       expect(results.failed).toHaveLength(0);
       expect(results.spawned[0]).toEqual({ index: 0, terminalId: "terminal-1" });
       expect(results.spawned[1]).toEqual({ index: 1, terminalId: "terminal-2" });
+    });
+
+    // An assistant-only agent is never a standalone launch (#12407): running it
+    // from a recipe would mint the assistant's pinned bearer for whoever ran
+    // the recipe. Refused per terminal, so the rest of the recipe still spawns.
+    it("refuses an assistant-only agent terminal and spawns the rest", async () => {
+      addTerminalMock.mockResolvedValue("terminal-1");
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-assistant",
+            name: "Recipe With Assistant",
+            projectId: "project-1",
+            terminals: [
+              { type: "terminal", title: "Shell", command: "npm test", env: {} },
+              { type: "daintree-assistant", title: "Assistant", env: {} },
+            ],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      const results = await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-assistant", "/tmp/worktree", "worktree-1");
+
+      expect(results.spawned.map((s) => s.index)).toEqual([0]);
+      expect(results.failed).toHaveLength(1);
+      expect(results.failed[0]!.index).toBe(1);
+      expect(results.failed[0]!.error).toContain("only runs as Daintree's assistant");
+      expect(addTerminalMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ launchAgentId: "daintree-assistant" })
+      );
     });
 
     it("reports partial failures with correct indices", async () => {

@@ -17,14 +17,20 @@ import { normalizeTerminalGridDimension } from "../../../../shared/types/termina
 import { normalizeObservedTitle } from "../../../../shared/utils/isUselessTitle.js";
 import { isPanelTitleMode, type PanelTitleMode } from "../../../../shared/types/panel.js";
 import { events } from "../../../services/events.js";
-import { getProjectForWebContents } from "../../../window/webContentsRegistry.js";
+import {
+  getProjectForWebContents,
+  getWebContentsForProject,
+  isCachedViewWebContents,
+} from "../../../window/webContentsRegistry.js";
 import { defineIpcNamespace, op } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import { isHandbackCode } from "../../../../shared/utils/handback.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import type { TerminalSubmissionLookup } from "../../../../shared/types/terminalSubmission.js";
+import type { TerminalOutputActivityLookup } from "../../../../shared/types/terminalStatus.js";
 
 /** Mirrors `terminal.getStatus`'s own `terminalIds` bound. */
-const MAX_SUBMISSION_LOOKUP_IDS = 256;
+const MAX_TERMINAL_LOOKUP_IDS = 256;
 /** Mirrors the bound `terminal.sendCommand`/`getStatus` put on the token. */
 const MAX_SUBMISSION_TOKEN_LENGTH = 128;
 
@@ -106,7 +112,8 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   const handleTerminalSubmit = async (
     id: string,
     text: string,
-    submissionToken?: string
+    submissionToken?: string,
+    handbackCode?: string
   ): Promise<void> => {
     try {
       if (typeof id !== "string" || typeof text !== "string") {
@@ -124,6 +131,15 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
         throw new AppError({
           code: "VALIDATION",
           message: `submissionToken must be a non-empty string of at most ${MAX_SUBMISSION_TOKEN_LENGTH} characters`,
+          context: { terminalId: id },
+        });
+      }
+      // Minted by the caller's action (#12488) and kept on the pty-host as a
+      // literal to search for, so hold it to the grammar the markers promise.
+      if (handbackCode !== undefined && !isHandbackCode(handbackCode)) {
+        throw new AppError({
+          code: "VALIDATION",
+          message: "handbackCode must be six characters from [a-z0-9]",
           context: { terminalId: id },
         });
       }
@@ -163,7 +179,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
           context: { terminalId: id },
         });
       }
-      ptyClient.submit(id, text, submissionToken);
+      ptyClient.submit(id, text, submissionToken, handbackCode);
     } catch (error) {
       // Preserve AppError shape so the renderer sees the embedded errno
       // token in the message — wrapping would lose the prefix.
@@ -198,8 +214,22 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   ipcMain.on(CHANNELS.TERMINAL_RESIZE, handleTerminalResize);
   handlers.push(() => ipcMain.removeListener(CHANNELS.TERMINAL_RESIZE, handleTerminalResize));
 
+  /**
+   * The pty-host keeps one cadence per terminal and the last writer wins. The
+   * same project can be open in two windows, so a cached view demoting its
+   * terminals would slow the ones another window is still showing.
+   */
+  const isShadowedCachedViewDemotion = (senderId: number, terminalId: string): boolean => {
+    if (!isCachedViewWebContents(senderId)) return false;
+    const projectId = ptyClient.getTerminalProjectId(terminalId);
+    if (projectId === null) return false;
+    return getWebContentsForProject(projectId).some(
+      (wc) => wc.id !== senderId && !isCachedViewWebContents(wc.id)
+    );
+  };
+
   const handleTerminalSetActivityTier = (
-    _event: Electron.IpcMainEvent,
+    event: Electron.IpcMainEvent,
     payload: { id: string; tier: PtyHostActivityTier; pollingIntervalMs?: number }
   ) => {
     try {
@@ -209,6 +239,9 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       const { id, tier, pollingIntervalMs } = payload;
       if (typeof id !== "string" || !id) return;
       const effectiveTier: PtyHostActivityTier = tier === "background" ? "background" : "active";
+      if (effectiveTier === "background" && isShadowedCachedViewDemotion(event.sender.id, id)) {
+        return;
+      }
       // The renderer may send a cadence hint (issue #8596 — 200ms for VISIBLE-
       // unfocused). Guard against malformed values; the PTY host falls back to
       // the tier default when the field is missing or invalid.
@@ -449,11 +482,69 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   };
 
   /**
+   * Validate a batch of terminal ids from a renderer and split out the ones the
+   * sender's own project owns.
+   *
+   * Ownership is settled before any terminal-keyed RPC is issued, mirroring the
+   * viewless status reader: routing a foreign id would confirm it exists by its
+   * latency even when the payload says nothing. It uses the same two oracles
+   * too. `getTerminalProjectId` is a free main-side read, but it answers `null`
+   * for a terminal main has stopped tracking — a natural exit drops the spawn
+   * entry while the pane and its pty-host record live on — so for a
+   * project-bound sender those fall through to the project's own inventory.
+   */
+  const resolveOwnedLookupIds = async (
+    ctx: IpcContext,
+    terminalIds: string[]
+  ): Promise<{ uniqueIds: string[]; owned: string[] }> => {
+    if (!Array.isArray(terminalIds)) {
+      throw new AppError({ code: "VALIDATION", message: "terminalIds must be an array" });
+    }
+    // Rejected, not truncated: silently dropping the tail would answer
+    // `unreadable` for ids the caller asked about and never learn why. Bounded
+    // before dedup so the raw fan-out is what is capped.
+    if (terminalIds.length > MAX_TERMINAL_LOOKUP_IDS) {
+      throw new AppError({
+        code: "VALIDATION",
+        message: `terminalIds accepts at most ${MAX_TERMINAL_LOOKUP_IDS} entries`,
+      });
+    }
+    const uniqueIds = [
+      ...new Set(terminalIds.filter((id): id is string => typeof id === "string" && id !== "")),
+    ];
+    // Null is an identity here, not a wildcard, matching the ingest-port gate
+    // above: an unbound window (the project picker) sits on a null project and
+    // its own terminals carry no owner either, so null must match null or those
+    // windows can never read back their own terminals.
+    const placed = new Set<string>();
+    const untracked: string[] = [];
+    for (const id of uniqueIds) {
+      const owner = ptyClient.getTerminalProjectId(id);
+      if (owner === ctx.projectId) placed.add(id);
+      // A non-null foreign owner is settled here and never routed.
+      else if (owner === null) untracked.push(id);
+    }
+    if (untracked.length > 0 && ctx.projectId !== null) {
+      // A failed inventory folds to `[]`, leaving those ids `unreadable`.
+      const inventory = new Set(await ptyClient.getTerminalsForProjectAsync(ctx.projectId));
+      for (const id of untracked) if (inventory.has(id)) placed.add(id);
+    }
+    return { uniqueIds, owned: uniqueIds.filter((id) => placed.has(id)) };
+  };
+
+  /**
+   * The record's own owner has the last word. Main answers `null` for a
+   * terminal whose spawn entry it dropped on exit, which an unbound sender's
+   * `null` project would otherwise match whichever project the terminal is
+   * really in.
+   */
+  const isRecordOwnedBy = (info: { projectId?: string }, ctx: IpcContext): boolean =>
+    (info.projectId ?? null) === ctx.projectId;
+
+  /**
    * Resolve one submission token against a set of terminals (#12337).
    *
-   * Scoped to the sender's own project before any terminal-keyed RPC is issued,
-   * mirroring the viewless status reader: routing a foreign id would confirm it
-   * exists by its latency even when the payload says nothing.
+   * Scoped to the sender's own project by {@link resolveOwnedLookupIds}.
    *
    * Answers all three outcomes rather than folding them to two. `absent` says
    * the terminal was read and holds nothing for this token; `unreadable` says
@@ -483,26 +574,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
         message: `submissionToken must be a non-empty string of at most ${MAX_SUBMISSION_TOKEN_LENGTH} characters`,
       });
     }
-    if (!Array.isArray(terminalIds)) {
-      throw new AppError({ code: "VALIDATION", message: "terminalIds must be an array" });
-    }
-    // Rejected, not truncated: silently dropping the tail would answer
-    // `unreadable` for ids the caller asked about and never learn why. Bounded
-    // before dedup so the raw fan-out is what is capped.
-    if (terminalIds.length > MAX_SUBMISSION_LOOKUP_IDS) {
-      throw new AppError({
-        code: "VALIDATION",
-        message: `terminalIds accepts at most ${MAX_SUBMISSION_LOOKUP_IDS} entries`,
-      });
-    }
-    const uniqueIds = [
-      ...new Set(terminalIds.filter((id): id is string => typeof id === "string" && id !== "")),
-    ];
-    // Null is an identity here, not a wildcard, matching the ingest-port gate
-    // above: an unbound window (the project picker) sits on a null project and
-    // its own terminals carry no owner either, so null must match null or those
-    // windows can never confirm a submission they made.
-    const owned = uniqueIds.filter((id) => ptyClient.getTerminalProjectId(id) === ctx.projectId);
+    const { uniqueIds, owned } = await resolveOwnedLookupIds(ctx, terminalIds);
     const records = await Promise.all(
       owned.map((id) => ptyClient.getTerminalAsync(id, submissionToken))
     );
@@ -515,8 +587,40 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       // `getTerminalAsync` folds an RPC failure into `null`, so a null record
       // is genuinely "not observed" and must not become `absent`.
       if (!info) return;
+      if (!isRecordOwnedBy(info, ctx)) return;
       const record = info.submission;
       out[id] = record === undefined ? { status: "absent" } : { status: "found", record };
+    });
+    return out;
+  };
+
+  /**
+   * Read `lastOutputChangeAt` for a set of terminals (#12495), for a
+   * `terminal.getStatus` call that asked for output. The timestamp lives on the
+   * pty-host's viewport tracker, so this is the hop the default poll never
+   * makes.
+   *
+   * Same gate and reply shape as submission lookup: every requested id gets an
+   * entry, and anything not read — foreign, unknown, or a failed RPC — is
+   * `unreadable` rather than a `read` with no timestamp.
+   */
+  const handleTerminalGetOutputActivity = async (
+    ctx: IpcContext,
+    terminalIds: string[]
+  ): Promise<Record<string, TerminalOutputActivityLookup>> => {
+    const { uniqueIds, owned } = await resolveOwnedLookupIds(ctx, terminalIds);
+    const records = await Promise.all(owned.map((id) => ptyClient.getTerminalAsync(id)));
+    const out: Record<string, TerminalOutputActivityLookup> = {};
+    for (const id of uniqueIds) out[id] = { status: "unreadable" };
+    owned.forEach((id, index) => {
+      const info = records[index];
+      // `getTerminalAsync` folds an RPC failure into `null`.
+      if (!info) return;
+      if (!isRecordOwnedBy(info, ctx)) return;
+      out[id] =
+        info.lastOutputChangeAt === undefined
+          ? { status: "read" }
+          : { status: "read", lastOutputChangeAt: info.lastOutputChangeAt };
     });
     return out;
   };
@@ -528,6 +632,11 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       getSubmissions: op(CHANNELS.TERMINAL_GET_SUBMISSIONS, handleTerminalGetSubmissions, {
         withContext: true,
       }),
+      getOutputActivity: op(
+        CHANNELS.TERMINAL_GET_OUTPUT_ACTIVITY,
+        handleTerminalGetOutputActivity,
+        { withContext: true }
+      ),
       forceResume: op(CHANNELS.TERMINAL_FORCE_RESUME, handleTerminalForceResume),
       requestWorkerIngestPort: op(
         CHANNELS.TERMINAL_REQUEST_WORKER_INGEST_PORT,

@@ -383,7 +383,8 @@ export function setupBrowserWindow(
     // When the id is missing, the project row is gone, or the read fails, the
     // anonymous gray skeleton (the prior behavior) remains the fallback. Mirrors
     // the cold-switch handler in ProjectViewManager, minus instantReveal (the
-    // 400ms Doherty gate belongs on the initial launch).
+    // skeleton's 400ms Doherty gate and entrance fades belong on the initial
+    // launch).
     const initialProject = projectId ? readLastActiveProjectIdentitySync(projectId) : null;
     const precomputedSkeletonCss = buildSkeletonCss(initialProject, themeConfig);
     let firstDomReady = true;
@@ -396,11 +397,11 @@ export function setupBrowserWindow(
         crashReload && projectId ? readLastActiveProjectIdentitySync(projectId) : initialProject;
       firstDomReady = false;
       if (!crashReload) {
-        insertSkeletonCss(appWebContents, precomputedSkeletonCss);
+        void insertSkeletonCss(appWebContents, precomputedSkeletonCss);
       } else {
         // Rebuild fresh so the skeleton reflects current theme/sidebar/focus
         // state, keeping the persisted project's accent.
-        injectSkeletonCss(appWebContents, project);
+        void injectSkeletonCss(appWebContents, project);
       }
       // Repaint name/emoji on every parse so crash reloads stay identified.
       injectSkeletonProjectIdentity(appWebContents, project);

@@ -630,7 +630,7 @@ test("settings dialog scope review — global, project, search, deep link and tr
       }
     }
   } finally {
-    if (ctx) await closeApp(ctx).catch(() => {});
+    if (ctx) await closeApp(ctx.app).catch(() => {});
     repo.cleanup();
     rmSync(userDataDir, { recursive: true, force: true });
   }

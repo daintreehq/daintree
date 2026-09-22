@@ -170,14 +170,18 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
       );
     });
 
-    it("routes the visible button to the panel, not to the immediate copy (#11733)", () => {
+    it("routes the visible button to the menu, not to the immediate copy (#11733)", () => {
       // The half of the split that is easy to regress: re-pointing the trigger
       // back at the immediate handler would restore one-click copying and
-      // silently strand the panel. Asserted on the block rather than the file
+      // silently strand the menu. Asserted on the block rather than the file
       // because the immediate handler still legitimately appears elsewhere.
       const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
       expect(copyTreeBlock).not.toBeNull();
-      expect(copyTreeBlock![0]).toContain("onClick={handleCopyTreeToggle}");
+      // The button is the menu's trigger, and the menu's open state is what
+      // the toolbar controls — not a click handler on the button.
+      expect(copyTreeBlock![0]).toContain("<DropdownMenuTrigger asChild>");
+      expect(copyTreeBlock![0]).toContain("onOpenChange={handleCopyTreeOpenChange}");
+      expect(copyTreeBlock![0]).not.toContain("onClick={handleCopyTreeClick}");
     });
 
     it("no longer raises its own copy-tree toast in the toolbar", () => {

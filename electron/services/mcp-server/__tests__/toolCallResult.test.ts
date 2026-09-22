@@ -5,6 +5,11 @@ import {
   buildToolCallResult,
   buildToolCallTextResult,
 } from "../toolCallResult.js";
+import {
+  boundTerminalStatusOutput,
+  fitTerminalOutputResult,
+} from "../../../../shared/utils/terminalOutputBudget.js";
+import type { TerminalStatusResult } from "../../../../shared/types/terminalStatus.js";
 
 function textOf(result: { content: { type: string; text?: string }[] }): string {
   return result.content[0]?.text ?? "";
@@ -301,5 +306,59 @@ describe("SDK conformance", () => {
     expect(parsed.success).toBe(true);
     expect(parsed.data?.structuredContent).toBeUndefined();
     expect(parsed.data?.isError).toBe(true);
+  });
+});
+
+describe("terminal tails fitted before the cap (#12450)", () => {
+  const linesFor = (id: string) =>
+    Array.from({ length: 1000 }, (_, i) => `${id} row ${i} `.padEnd(160, "│"));
+
+  it("ships an oversized getOutput tail whole: parseable, structured, not an error", () => {
+    const lines = linesFor("t-1");
+    const fitted = fitTerminalOutputResult(
+      { terminalId: "t-1", content: lines.join("\n"), lineCount: 1000, truncated: false },
+      TOOL_RESULT_TEXT_MAX_BYTES
+    );
+    const result = buildToolCallResult(fitted, { structuredContent: fitted });
+
+    expect(result.isError).toBeUndefined();
+    expect(byteLength(result)).toBeLessThanOrEqual(TOOL_RESULT_TEXT_MAX_BYTES);
+    const parsed = JSON.parse(textOf(result)) as typeof fitted;
+    expect(parsed).toEqual(result.structuredContent);
+    const kept = parsed.content.split("\n");
+    expect(kept).toEqual(lines.slice(-kept.length));
+    expect(parsed.lineCount).toBe(kept.length);
+    expect(parsed.truncated).toBe(true);
+  });
+
+  it("ships an oversized status snapshot whole with every tail's own newest line", () => {
+    const ids = ["a", "b", "c"];
+    const status: TerminalStatusResult = {
+      terminals: ids.map((id) => ({
+        terminalId: id,
+        agentId: "claude",
+        agentState: "working",
+        recentOutput: linesFor(id).slice(-50).join("\n"),
+      })),
+      source: "pty",
+      unavailableFields: ["armed", "lastCheckResult"],
+    };
+    const bounded = boundTerminalStatusOutput(status, TOOL_RESULT_TEXT_MAX_BYTES);
+    const result = buildToolCallResult(bounded, {
+      structuredContent: bounded as unknown as Record<string, unknown>,
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(byteLength(result)).toBeLessThanOrEqual(TOOL_RESULT_TEXT_MAX_BYTES);
+    const parsed = JSON.parse(textOf(result)) as TerminalStatusResult;
+    expect(parsed).toEqual(result.structuredContent);
+    expect(parsed.terminals.map((t) => t.terminalId)).toEqual(ids);
+    for (const entry of parsed.terminals) {
+      const lines = linesFor(entry.terminalId);
+      const kept = (entry.recentOutput as string).split("\n");
+      expect(entry.recentOutput).not.toBe("");
+      expect(kept).toEqual(lines.slice(-kept.length));
+      expect(entry.recentOutputTruncated).toBe(true);
+    }
   });
 });

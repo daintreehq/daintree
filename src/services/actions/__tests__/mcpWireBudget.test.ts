@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { findWireStrippedKeywords } from "@shared/utils/mcpWireSchema";
 import { measureWireSurface, type WireTool } from "./helpers/wireSurface";
+import { TerminalSubmissionRecordSchema } from "../definitions/schemas";
 
 /**
  * The context-condensation budgets — see `docs/architecture/mcp-context-condensation.md`.
@@ -52,8 +53,14 @@ const MAX_PROPERTY_DESCRIPTION_BYTES = 320;
  * in a commit message with a reason. This is what makes the target load-bearing
  * without pretending every field can reach it — a new over-target description
  * fails the suite unless an existing one is brought under.
+ *
+ * 49 → 50 for #12354's `forge.openRepo`. Its one over-target property is the
+ * shared `projectId` selector (204 B) that every project-scoped forge open action
+ * already carries, reused verbatim rather than worded afresh. Bringing that under
+ * would mean cutting its unknown-id caveat from every tool that shares it — the
+ * protected content the target is not allowed to buy back.
  */
-const MAX_PROPERTIES_OVER_TARGET = 49;
+const MAX_PROPERTIES_OVER_TARGET = 50;
 
 /**
  * Total bytes spent above {@link PROPERTY_DESCRIPTION_TARGET_BYTES}, summed over
@@ -221,6 +228,18 @@ describe("MCP wire budget — property descriptions (§4.3)", () => {
 
     const stale = Object.keys(OVERSIZED_PROPERTY_ALLOWLIST).filter((key) => !stillOver.has(key));
     expect(stale).toEqual([]);
+  });
+
+  it("holds the submission record's output observation to the one-clause target", () => {
+    // The collector above walks input schemas only, so an output property
+    // escapes the target unless it is pinned by name. #12478 was allowed onto a
+    // tool at its description cap on the condition that it fit here.
+    const description = TerminalSubmissionRecordSchema.shape.outputChangeAfterWriteAt.description;
+
+    expect(description).toBeDefined();
+    expect(Buffer.byteLength(description ?? "", "utf8")).toBeLessThanOrEqual(
+      PROPERTY_DESCRIPTION_TARGET_BYTES
+    );
   });
 });
 
@@ -422,7 +441,69 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // on develop under this branch. This PR's own spend is unchanged at 1_811 B
   // over whatever develop measures; the step from 54_100 is that constant plus
   // #12346's inherited baseline, not a wider spend here.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 55_900;
+  //
+  // 55_900 → 56_400 for #12428, measured at 56_400 B. `lastOutputChangeAt` lands
+  // on `terminal.getStatus` and both wait tools: 567 B, three copies of one
+  // 126 B description plus the `unavailableFields` enum member. The field is the
+  // whole fix. A spinner redraws for as long as a frozen turn sits there, so
+  // `agentState` and `lastTransitionAt` never change, and without this a caller
+  // can only tell a stalled agent from a busy one by pulling scrollback every
+  // round. The description stays on all three because the name alone reads as
+  // raw output time, and spinner redraws are exactly what it leaves out. It was
+  // trimmed from 152 B before raising.
+  //
+  // 56_400 → 56_450, measured at 56_449 B. The `waitingReason` enum's `"prompt"`
+  // arm used to read "empty input prompt (safe to auto-drive)". It is also the
+  // classifier's fallback when nothing more specific matched
+  // (`WaitingReasonClassifier`'s default branch), so a model that took the old
+  // wording at face value would drive a wait it had not identified. Same
+  // argument as the `pty_written` spend above: the length is the fix, because
+  // the short version is the one that reads as a reassurance. Trimmed from
+  // 144 B to 99 B before raising, for a net 49 B.
+  //
+  // 56_450 → 56_700 for #12478, measured at 56_662 B: 213 B for
+  // `submission.outputChangeAfterWriteAt` on `terminal.getStatus`, most of it the
+  // field's 151 B description. A submission can reach `pty_written` and be
+  // dropped by an agent that has not finished starting, and a caller holding the
+  // token had no way to see that the screen never moved after the Enter short of
+  // pulling scrollback. The description has to say the value is an ordering and
+  // not attribution, or a startup repaint reads as the agent taking the turn.
+  // The tool description, at 383 of its 400 B, is untouched; what a caller
+  // should do with an absent value lives in the help partials instead.
+  // 56_700 → 59_650 for #12479's `terminal.readLastMessageOwned`, measured at
+  // 59_609 B. Nearly all of it is the output schema, and that is the contract a
+  // main-process tool has no other check on: nothing between the reader and the
+  // client validates the result, so the client's AJV pass against these two
+  // closed arms is what catches an `ok` missing its fields or an `unavailable`
+  // carrying them. What the prose carries is what a caller would otherwise get
+  // wrong — that `stopReason` is raw, that an unanswered tool call is not proof
+  // the agent is waiting on it, and that `search-cap-reached` withholds an older
+  // reply rather than passing it off as current. The reason and question-input
+  // descriptions were trimmed before raising.
+  // 59_650 → 61_350 for #12488's handback, measured at 61_306 B: a `handback`
+  // argument on `terminal.sendCommandOwned` and `agent.launch`, and
+  // `lastHandback` on the status entry and both wait results. The wait schemas carry only the
+  // shared field description, never the per-message one, and every new
+  // description sits under the 160-byte target. What stays is what a caller
+  // would otherwise get wrong: that the marker is an observation rather than a
+  // finish verdict, that its message is the agent's own lossy claim, that its
+  // absence never means the agent is still working, and where it is refused.
+  // 61_350 → 61_950 for #12496, measured at 61_940 B: `maxBytes`, `messageIndex`
+  // and `cursor` on `terminal.readLastMessageOwned`, `message.nextCursor` on its
+  // result, and the `message-not-found` reason. Without them an orchestrator
+  // cannot reach the head of a long report or the report before a short reply,
+  // and falls back to asking the agent to re-print it. The bounds are in the
+  // descriptions because the wire strips `minimum`/`maximum`, and a caller that
+  // misses them is refused rather than clamped. The tool description is
+  // untouched.
+  // 61_950 → 62_200 for #12535, measured at 62_181 B: `agentIncarnation` on
+  // `terminal.getStatus`'s output. It is the only field that moves when an agent
+  // exits and another is launched in the shell it left behind — `spawnedAt` is
+  // the pty generation and holds, as do the pid and the restart count. A caller
+  // holding an earlier reading has nothing else to tell that session from its
+  // successor, and would otherwise go on addressing a conversation that ended.
+  // Its description was written under the property target rather than over it.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 62_200;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -487,7 +568,61 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // external tier, so this total moves by the same 1_811 B as the external one
   // above and was re-measured over #12346's landing; it needs no separate
   // justification beyond the entry above.
-  const MAX_COHORT_PAYLOAD_BYTES = 211_400;
+  //
+  // 211_400 → 212_000 for #12354's `forge.openRepo`, measured at 211_981 B. In-app
+  // only — no forge tool is on the external tier — so the external ceiling above
+  // does not move. The spend is its 168 B description plus the
+  // `withProjectLocation` schema every project-scoped forge open action already
+  // carries, and the tool is on this surface at all because every forge action has
+  // to be reachable by the in-app assistant (`tierAuth.test.ts`).
+  //
+  // 212_000 → 214_000 for #12407's `terminal.sendCommandOwned` and
+  // `terminal.injectOwned`, measured at 213_924 B — 1_943 B over the 211_981 B
+  // before them. They sit on the action tier beside the unscoped pair, which the
+  // assistant keeps, so this cohort carries both: 557 B of description, 659 B
+  // of input schema and 727 B for the submission's output schema, repeated
+  // rather than trimmed because the owned tool returns the delegate's receipt
+  // and a client needs the `submissionToken` in validated structured content to
+  // check delivery at all. The external ceiling above does not move — there the
+  // owned pair replaced the unscoped one.
+  //
+  // 214_000 → 214_300 for #12450, measured at 214_286 B. Terminal tails are now
+  // fitted under the 50 KiB response budget instead of being cut into unparseable
+  // JSON, so fewer lines can come back than were asked for, and the only way a
+  // caller can tell is the output schema: `terminal.getStatus` gains
+  // `recentOutputTruncated` and both `truncated` flags say what cut the tail.
+  // Without that a short answer reads as a quiet terminal, which is the
+  // misreading the issue was filed over. Both tools are on the external tier,
+  // which absorbed the same spend inside its existing headroom.
+  //
+  // 214_300 → 214_900 for #12428, measured at 214_853 B: the same 567 B as the
+  // external ceiling above, since all three tools are on both surfaces.
+  //
+  // 214_900 → 214_950 for the `waitingReason` `"prompt"` rewording, measured at
+  // 214_902 B: the same 49 B as the external ceiling above, on one tool.
+  //
+  // 214_950 → 215_150 for #12478, measured at 215_115 B: the same 213 B as the
+  // external ceiling above, since `terminal.getStatus` is on both surfaces. Both
+  // figures were re-measured on top of #12477's `waitingReason` rewording, which
+  // landed on develop first and is included in them.
+  // 215_150 → 218_100 for #12479, measured at 218_062 B: the same tool as the
+  // external raise above, carried at the workbench floor for the subset
+  // invariant — the external surface may not reach past the assistant's.
+  // 218_100 → 219_950 for #12488, measured at 219_927 B: the external raise
+  // above plus the same argument on `terminal.sendCommand`, which is in-app
+  // only.
+  // 219_950 → 220_600 for #12496, measured at 220_561 B: the same spend as the
+  // external raise above, on a tool that is on both surfaces.
+  // 220_600 → 226_350 for #12491's four terminal-watch tools, measured at
+  // 226_301 B. In-app only — an api-key client has no pane to wake, so the
+  // external ceiling above does not move. The spend is 1_101 B of description,
+  // the watch arguments, and output schemas for all four: the observations and
+  // the wake's standing are read back as structured content, and a client that
+  // validates it needs the schema to accept it at all. Their property
+  // descriptions were cut to the target before measuring.
+  // 226_350 → 226_600 for #12535, measured at 226_541 B: the same spend as the
+  // external raise above, on a tool that is on both surfaces.
+  const MAX_COHORT_PAYLOAD_BYTES = 226_600;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

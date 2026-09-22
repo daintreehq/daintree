@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo, useId } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo, useId, type ReactNode } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -59,6 +59,10 @@ interface BrowserToolbarProps {
   isLoading: boolean;
   zoomFactor?: number;
   isConsoleOpen?: boolean;
+  // Whether each action can do anything right now. The caller owns the predicate
+  // so it stays next to the handler's own guard (#12395).
+  canOpenExternal: boolean;
+  canToggleConsole?: boolean;
   isWebviewReady?: boolean;
   viewportPreset?: ViewportPresetId;
   viewportRotated?: boolean;
@@ -81,6 +85,8 @@ interface BrowserToolbarProps {
   onViewportRotateToggle?: () => void;
   onViewportDprChange?: (dpr: 1 | 2 | 3) => void;
   onViewportFitToggle?: () => void;
+  /** Buttons the host adds after the address bar, before the page actions (dev preview tools). */
+  extraActions?: ReactNode;
 }
 
 export function BrowserToolbar({
@@ -95,11 +101,14 @@ export function BrowserToolbar({
   isLoading,
   zoomFactor = 1.0,
   isConsoleOpen = false,
+  canOpenExternal,
+  canToggleConsole = false,
   isWebviewReady = false,
   viewportPreset,
   viewportRotated = false,
   viewportDpr = 1,
   viewportFit = false,
+  extraActions,
   validateUrl,
   onNavigate,
   onBack,
@@ -122,6 +131,8 @@ export function BrowserToolbar({
   const [isEditing, setIsEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const selectOnFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [screenshotCopied, setScreenshotCopied] = useState(false);
   const screenshotCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
@@ -181,11 +192,15 @@ export function BrowserToolbar({
     return () => document.removeEventListener("mousedown", handleClick, true);
   }, [longPressDir]);
 
-  // Cleanup long-press timer on unmount
+  // Every timer this component schedules has to die with it: a feedback reset
+  // that outlives the mount sets state on a gone tree, and under vitest it can
+  // fire after the jsdom environment is torn down ("window is not defined").
   useEffect(() => {
     return () => {
       if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
       if (screenshotCopiedTimerRef.current) clearTimeout(screenshotCopiedTimerRef.current);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+      if (selectOnFocusTimerRef.current) clearTimeout(selectOnFocusTimerRef.current);
     };
   }, []);
 
@@ -374,7 +389,8 @@ export function BrowserToolbar({
   const handleFocus = useCallback(() => {
     setIsEditing(true);
     setInputValue(url);
-    setTimeout(() => inputRef.current?.select(), 0);
+    if (selectOnFocusTimerRef.current) clearTimeout(selectOnFocusTimerRef.current);
+    selectOnFocusTimerRef.current = setTimeout(() => inputRef.current?.select(), 0);
   }, [url]);
 
   const handleBlur = useCallback(
@@ -454,7 +470,8 @@ export function BrowserToolbar({
         throw new Error(result.error.message);
       }
       setCopied(true);
-      setTimeout(() => setCopied(false), COPIED_FEEDBACK_RESET_MS);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = setTimeout(() => setCopied(false), COPIED_FEEDBACK_RESET_MS);
     } catch (err) {
       logError("Failed to copy URL", err);
     }
@@ -534,6 +551,41 @@ export function BrowserToolbar({
 
   const buttonClass =
     "toolbar-icon-button p-1.5 rounded disabled:opacity-30 disabled:cursor-not-allowed";
+
+  // The stored preference survives the dev server stopping, but with no terminal
+  // behind it there is no drawer to show, so the toggle must not read as pressed.
+  const isConsoleShown = canToggleConsole && isConsoleOpen;
+
+  // A disabled button receives no pointer events, so its tooltip needs a wrapper to
+  // hover. Only while disabled: focus-restore suppression marks the focused element,
+  // and an enabled button wrapped in a span would never match its own trigger.
+  const consoleButton = (
+    <button
+      type="button"
+      onClick={onToggleConsole}
+      disabled={!canToggleConsole}
+      className={cn(
+        buttonClass,
+        "disabled:pointer-events-none",
+        isConsoleShown && "text-text-primary"
+      )}
+      aria-label="Toggle console"
+      aria-pressed={isConsoleShown}
+    >
+      <SquareTerminal className="w-4 h-4" />
+    </button>
+  );
+  const openExternalButton = (
+    <button
+      type="button"
+      onClick={onOpenExternal}
+      disabled={!canOpenExternal}
+      className={cn(buttonClass, "disabled:pointer-events-none")}
+      aria-label="Open in browser"
+    >
+      <ExternalLink className="w-4 h-4" />
+    </button>
+  );
 
   return (
     <div className="flex items-center gap-1.5 px-2 py-1.5 bg-surface border-b border-overlay">
@@ -990,7 +1042,7 @@ export function BrowserToolbar({
                         setHighlightedIndex(remaining - 1);
                       }
                     }}
-                    className="shrink-0 p-0.5 rounded opacity-0 group-hover/row:opacity-100 hover:bg-overlay-strong transition-opacity text-daintree-text/40 hover:text-daintree-text/70"
+                    className="shrink-0 p-0.5 rounded opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 hover:bg-overlay-strong transition-opacity text-daintree-text/40 hover:text-daintree-text/70"
                     aria-label={`Remove ${getDisplayUrl(entry.url)} from history`}
                   >
                     <X className="w-3 h-3" />
@@ -1004,6 +1056,7 @@ export function BrowserToolbar({
 
       {/* Action buttons */}
       <div aria-hidden="true" className="toolbar-divider w-px h-5 shrink-0" />
+      {extraActions}
       <Tooltip>
         <TooltipTrigger asChild>
           <button type="button" onClick={handleCopy} className={buttonClass} aria-label="Copy URL">
@@ -1044,18 +1097,14 @@ export function BrowserToolbar({
       {onToggleConsole && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={onToggleConsole}
-              className={cn(buttonClass, isConsoleOpen && "text-text-primary")}
-              aria-label="Toggle console"
-              aria-pressed={isConsoleOpen}
-            >
-              <SquareTerminal className="w-4 h-4" />
-            </button>
+            {canToggleConsole ? (
+              consoleButton
+            ) : (
+              <span className="inline-flex">{consoleButton}</span>
+            )}
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {isConsoleOpen ? "Hide console" : "Show console"}
+            {isConsoleShown ? "Hide console" : "Show console"}
           </TooltipContent>
         </Tooltip>
       )}
@@ -1099,14 +1148,11 @@ export function BrowserToolbar({
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={onOpenExternal}
-            className={buttonClass}
-            aria-label="Open in browser"
-          >
-            <ExternalLink className="w-4 h-4" />
-          </button>
+          {canOpenExternal ? (
+            openExternalButton
+          ) : (
+            <span className="inline-flex">{openExternalButton}</span>
+          )}
         </TooltipTrigger>
         <TooltipContent side="bottom">Open in browser</TooltipContent>
       </Tooltip>

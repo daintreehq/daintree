@@ -18,19 +18,47 @@ export interface ResumeSessionItem {
   id: string;
   /** The underlying journal record, forwarded to the resume launcher. */
   session: AgentSessionRecord;
-  /** Row title — `Resume: <title>` when meaningful, else `Resume <agent>`. */
+  /**
+   * Bare display title: the agent's own task title when it had one, else
+   * `<Agent> session`. This is what a surface dedicated to resuming shows —
+   * "Resume" is that surface's title, not every row's.
+   */
+  title: string;
+  /** Whether {@link title} is the agent's task title rather than the untitled fallback. */
+  hasTitle: boolean;
+  /**
+   * Action label for surfaces that list resuming beside other verbs (the panel
+   * palette, the launcher line): `Resume: <title>` / `Resume <Agent> session`.
+   */
   name: string;
+  /**
+   * Agent display name. The glyph carries it visually; this is for the
+   * accessible name, since the glyph is `aria-hidden` and two agents' rows
+   * would otherwise read identically.
+   */
+  agentName: string;
   /** Agent icon id for {@link PanelKindIcon}. */
   iconId: string;
   /** Agent accent color for the icon. */
   color: string;
-  /** Second metadata line: model · agent · location · time-ago. */
+  /** Readable model label, when the record carries a model id. */
+  modelName: string | null;
+  /**
+   * Where the session ran: the live worktree's name, else the branch it was
+   * captured on, else the cwd's last segment. Null when nothing was recorded.
+   * A stale row's location is what was recorded — the section it sits in says
+   * the worktree is gone, so the row does not have to.
+   */
+  location: string | null;
+  /** Coarse relative age of the record ("5m ago"). */
+  timeAgo: string;
+  /** One-line metadata for surfaces without a time column: location · model · time-ago. */
   description: string;
   /** Extra fuzzy-search haystack (agent, model, branch, worktree, cwd). */
   searchAliases: string[];
   /**
    * Recorded worktree no longer resolves in the live map (deleted/removed).
-   * Rendered greyed-out with a "Worktree removed" badge and excluded from
+   * Rendered muted under a "Worktree removed" heading and excluded from
    * keyboard navigation / launch (#10851).
    */
   isStale: boolean;
@@ -48,6 +76,30 @@ export interface ResumeWorktreeLike {
   path?: string;
 }
 
+/**
+ * An agent's own product name is as empty a title as its binary: Claude Code
+ * sits on "Claude Code" until it has a task to summarise, and a resume row
+ * titled that way says nothing the agent glyph beside it does not. Exact
+ * matches only — a task that merely mentions the product is a task.
+ *
+ * Deliberately NOT in `isUselessTitle`: the live pane title treats the same
+ * echo as an identity to show in place of the default one, and that surface
+ * has its own ruling.
+ */
+export function isAgentPlaceholderTitle(
+  title: string,
+  agent: { name?: string; command?: string } | undefined
+): boolean {
+  const normalized = title.trim().toLowerCase();
+  const labels = [agent?.name, agent?.command]
+    .filter((label): label is string => !!label)
+    .map((label) => label.toLowerCase());
+  return labels.some(
+    (label) =>
+      normalized === label || normalized === `${label} code` || normalized === `${label} cli`
+  );
+}
+
 /** Last path segment of a POSIX or Windows path (for cwd-derived labels). */
 export function pathBasename(p: string | null | undefined): string {
   if (!p) return "";
@@ -62,8 +114,12 @@ export function prettifyModelId(modelId: string): string {
   if (slashIdx >= 0) name = name.slice(slashIdx + 1);
   name = name
     .replace(/^claude-/, "")
+    // A dash between short digit runs is a version separator ("opus-4-8"),
+    // not a word break; a long run after it is a date stamp and stays apart.
+    .replace(/(\d)-(?=\d{1,2}(?:-|$))/g, "$1.")
     .replace(/-/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .replace(/^Gpt\b/, "GPT");
   return name;
 }
 
@@ -104,13 +160,18 @@ export function buildResumeSessionItems(
     .map(({ session, resolvedWorktreeId }) => {
       const agentConfig = getEffectiveAgentConfig(session.agentId);
       const timeAgo = formatTimeAgo(session.savedAt);
-      const modelPart = session.agentModelId ? prettifyModelId(session.agentModelId) : null;
+      const modelName = session.agentModelId ? prettifyModelId(session.agentModelId) : null;
       const agentName = agentConfig?.name ?? session.agentId;
       // Glyph-stripped so the resume label matches how the live tab rendered
       // the same task title.
       const taskTitle = cleanTaskTitle(session.title);
-      const hasMeaningfulTitle = !!taskTitle && !isUselessTitle(taskTitle);
-      const name = hasMeaningfulTitle ? `Resume: ${taskTitle}` : `Resume ${agentName}`;
+      const hasTitle =
+        !!taskTitle &&
+        !isUselessTitle(taskTitle) &&
+        // An unregistered agent is named by its id, so that is its placeholder too.
+        !isAgentPlaceholderTitle(taskTitle, agentConfig ?? { name: agentName, command: agentName });
+      const title = hasTitle ? taskTitle : `${agentName} session`;
+      const name = hasTitle ? `Resume: ${title}` : `Resume ${title}`;
 
       const liveWorktree = resolvedWorktreeId ? worktrees.get(resolvedWorktreeId) : undefined;
       // Stale means the RECORDED worktree no longer resolves — an inferred id
@@ -120,15 +181,17 @@ export function buildResumeSessionItems(
       const worktreeName = liveWorktree?.name;
       const branchName = liveWorktree?.branch ?? session.branch;
 
-      const locationPart = isStale ? "Worktree removed" : (worktreeName ?? branchName ?? null);
-      const description = [modelPart, hasMeaningfulTitle ? agentName : null, locationPart, timeAgo]
+      const location = worktreeName ?? branchName ?? pathBasename(session.cwd) ?? null;
+      // The agent is not in here: every surface that shows this line draws
+      // the agent glyph beside it, and the word said what the glyph already had.
+      const description = [location || null, modelName, timeAgo]
         .filter((part): part is string => !!part)
         .join(" · ");
 
       const searchAliases = [
         session.agentId,
         agentName,
-        modelPart,
+        modelName,
         worktreeName,
         branchName,
         pathBasename(session.cwd),
@@ -137,9 +200,15 @@ export function buildResumeSessionItems(
       return {
         id: `resume:${session.sessionId}`,
         session,
+        title,
+        hasTitle,
         name,
+        agentName,
         iconId: agentConfig?.iconId ?? "terminal",
         color: agentConfig?.color ?? "var(--color-text-primary)",
+        modelName,
+        location: location || null,
+        timeAgo,
         description,
         searchAliases,
         isStale,

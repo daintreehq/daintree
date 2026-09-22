@@ -69,7 +69,10 @@ export function WindowControlsInsetProvider({
   const inset = useMemo<CSSProperties>(() => {
     if (isFullscreen) return EMPTY;
     if (isMac()) return { paddingLeft: "5rem" };
-    if (isWindows()) return { paddingRight: `${WINDOWS_CAPTION_WIDTH_PX}px` };
+    // A gutter past the caption strip: the surface's own dismiss is an × too,
+    // and flush against the minimize backplate it reads as one more caption
+    // glyph rather than the banner's control.
+    if (isWindows()) return { paddingRight: `${WINDOWS_CAPTION_WIDTH_PX + 12}px` };
     return EMPTY;
   }, [isFullscreen]);
 

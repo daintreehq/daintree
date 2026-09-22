@@ -15,6 +15,7 @@ import { isIpcEnvelope } from "../shared/types/ipc/errors.js";
 import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 import type { AppErrorCode } from "../shared/types/appError.js";
 import type { PanelTitleMode } from "../shared/types/panel.js";
+import type { HostMemoryPauseSnapshot } from "../shared/types/pty-host.js";
 import type {
   McpRuntimeSnapshot,
   McpGrantLifecyclePayload,
@@ -61,6 +62,7 @@ import { buildMilestonesPreloadBindings } from "./ipc/handlers/milestones.preloa
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
 import { buildShortcutHintsPreloadBindings } from "./ipc/handlers/shortcutHints.preload.js";
 import { buildForgeRecommendationPreloadBindings } from "./ipc/handlers/forgeRecommendation.preload.js";
+import { buildForgeCredentialImportPreloadBindings } from "./ipc/handlers/forgeCredentialImport.preload.js";
 import { buildSentryPreloadBindings } from "./ipc/handlers/sentry.preload.js";
 import { buildPrivacyPreloadBindings } from "./ipc/handlers/privacy.preload.js";
 import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.js";
@@ -70,6 +72,7 @@ import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.prel
 import { buildFileWatchPreloadBindings } from "./ipc/handlers/fileWatch.preload.js";
 import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.preload.js";
 import { buildSessionRestorePreloadBindings } from "./ipc/handlers/sessionRestore.preload.js";
+import { buildKeepAwakePreloadBindings } from "./ipc/handlers/keepAwake.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idleBackgroundAutoClose.preload.js";
 import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
@@ -82,6 +85,7 @@ import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.
 import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
 import { buildWorkspaceResidencyPreloadBindings } from "./ipc/handlers/workspaceResidency.preload.js";
+import { buildPluginAgentMcpPreloadBindings } from "./ipc/handlers/pluginAgentMcp.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
 import { buildWindowChromePreloadBindings } from "./ipc/handlers/windowChrome.preload.js";
@@ -92,6 +96,7 @@ import { buildProjectRelocationPreloadBindings } from "./ipc/handlers/projectRel
 import { buildPaintFabricSurfacePreloadBindings } from "./ipc/handlers/paintFabricSurface.preload.js";
 import { buildWebviewNavigationPreloadBindings } from "./ipc/handlers/webviewNavigation.preload.js";
 import { buildWebviewCapturePreloadBindings } from "./ipc/handlers/webviewCapture.preload.js";
+import { buildSitePreviewPreloadBindings } from "./ipc/handlers/sitePreview.preload.js";
 import { buildWebviewEmulationPreloadBindings } from "./ipc/handlers/webviewEmulation.preload.js";
 import { buildWorktreeConfigPreloadBindings } from "./ipc/handlers/worktreeConfig.preload.js";
 import { buildTerminalLayoutPreloadBindings } from "./ipc/handlers/terminalLayout.preload.js";
@@ -154,14 +159,15 @@ import type {
   DevPreviewStateChangedPayload,
   DevPreviewAllSessionsPayload,
 } from "../shared/types/ipc.js";
+import type { SitePreviewPushPayload } from "../shared/types/ipc/sitePreview.js";
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
+import type { PaneWatchState } from "../shared/types/terminalWatch.js";
 import type {
   TerminalStatusPayload,
   TerminalSubmitStatusPayload,
   SpawnResult,
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
-  FdLeakWarningPayload,
   TerminalReliabilityMetricPayload,
   TerminalResizeResult,
 } from "../shared/types/pty-host.js";
@@ -671,9 +677,16 @@ class WorktreePortClient {
 
 const worktreePortClient = new WorktreePortClient();
 
-ipcRenderer.on("worktree-port", (event: Electron.IpcRendererEvent) => {
+ipcRenderer.on("worktree-port", (event: Electron.IpcRendererEvent, payload: unknown) => {
   if (!event.ports || event.ports.length === 0) return;
   worktreePortClient.attach(event.ports[0]);
+  // Main can't observe delivery — a port posted before this listener existed
+  // is dropped silently — so it only reuses a channel this receipt confirms
+  // (#12576). Sent after attach so the ready callbacks have already run.
+  const token = (payload as { token?: unknown } | null | undefined)?.token;
+  if (typeof token === "number") {
+    ipcRenderer.send(CHANNELS.WORKTREE_PORT_ACK, { token });
+  }
 });
 
 // Main broadcasts this on every host exit.  Only the fatal payload is acted
@@ -881,6 +894,13 @@ let _eventBusWired = false;
 const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:deep-link",
   "window:disk-space-status",
+  // Pushed once per episode edge (#12462), so a view whose listener has not
+  // mounted yet must still see the latest edge rather than lose the notice.
+  "system:memory-pressure",
+  // Latest-wins policy level, delivered at did-finish-load before the motion
+  // hook has mounted; losing it would animate at the foreground rate until
+  // the next transition.
+  "system:power-policy-changed",
   "plugin:archive-install-intent",
   // Project-local plugin trust: both are pushed during `onProjectOpened`, which
   // on a cold project view runs before the React tree that subscribes has
@@ -1211,8 +1231,8 @@ function buildElectronApi(): ElectronAPI {
 
       write: (id: string, data: string) => ipcRenderer.send(CHANNELS.TERMINAL_INPUT, id, data),
 
-      submit: (id: string, text: string, submissionToken?: string) =>
-        _unwrappingInvoke(CHANNELS.TERMINAL_SUBMIT, id, text, submissionToken),
+      submit: (id: string, text: string, submissionToken?: string, handbackCode?: string) =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_SUBMIT, id, text, submissionToken, handbackCode),
 
       /**
        * Resolve one submission token across several terminals (#12337). A
@@ -1221,6 +1241,10 @@ function buildElectronApi(): ElectronAPI {
        */
       getSubmissions: (terminalIds: string[], submissionToken: string) =>
         _unwrappingInvoke(CHANNELS.TERMINAL_GET_SUBMISSIONS, terminalIds, submissionToken),
+
+      /** Read `lastOutputChangeAt` across several terminals (#12495). */
+      getOutputActivity: (terminalIds: string[]) =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_GET_OUTPUT_ACTIVITY, terminalIds),
 
       resize: (id: string, cols: number, rows: number) =>
         ipcRenderer.send(CHANNELS.TERMINAL_RESIZE, { id, cols, rows }),
@@ -1318,6 +1342,9 @@ function buildElectronApi(): ElectronAPI {
       forceResume: (id: string): Promise<void> =>
         _unwrappingInvoke(CHANNELS.TERMINAL_FORCE_RESUME, id),
 
+      getHostMemoryPause: (): Promise<HostMemoryPauseSnapshot> =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_GET_HOST_MEMORY_PAUSE),
+
       requestWorkerIngestPort: (id: string): Promise<{ token: string } | null> =>
         _unwrappingInvoke(CHANNELS.TERMINAL_REQUEST_WORKER_INGEST_PORT, id),
 
@@ -1329,6 +1356,9 @@ function buildElectronApi(): ElectronAPI {
 
       onSubmitStatus: (callback: (data: TerminalSubmitStatusPayload) => void): (() => void) =>
         _eventBusOn("terminal:submit-status", callback),
+
+      onWatchState: (callback: (data: PaneWatchState) => void): (() => void) =>
+        _eventBusOn("terminal:watch-state", callback),
 
       onReliabilityMetric: (
         callback: (data: TerminalReliabilityMetricPayload) => void
@@ -1342,9 +1372,6 @@ function buildElectronApi(): ElectronAPI {
       onResourceMetrics: (
         callback: (data: { metrics: TerminalResourceBatchPayload; timestamp: number }) => void
       ) => _typedOn(CHANNELS.TERMINAL_RESOURCE_METRICS, callback),
-
-      onFdLeakWarning: (callback: (data: FdLeakWarningPayload) => void) =>
-        _typedOn(CHANNELS.TERMINAL_FD_LEAK_WARNING, callback),
 
       onBackendCrashed: (
         callback: (data: {
@@ -1410,6 +1437,9 @@ function buildElectronApi(): ElectronAPI {
 
       onReclaimMemory: (callback: () => void) =>
         _eventBusOn("window:reclaim-memory", () => callback()),
+
+      onHostMemoryPause: (callback: (snapshot: HostMemoryPauseSnapshot) => void) =>
+        _eventBusOn("terminal:host-memory-pause", callback),
     },
 
     // Files API
@@ -2095,6 +2125,15 @@ function buildElectronApi(): ElectronAPI {
         _typedOn(CHANNELS.DEV_PREVIEW_ALL_SESSIONS_CHANGED, callback),
     },
 
+    // Site Preview bridge API. No `evaluate` method by design — the guest
+    // runtime is supplied once at bind time and nothing else runs in the page.
+    sitePreview: {
+      ...buildSitePreviewPreloadBindings(_unwrappingInvoke),
+
+      onEvent: (callback: (payload: SitePreviewPushPayload) => void) =>
+        _typedOn(CHANNELS.SITE_PREVIEW_EVENT, callback),
+    },
+
     // Git API
     git: {
       getFileDiff: (
@@ -2397,6 +2436,15 @@ function buildElectronApi(): ElectronAPI {
       ...buildSessionRestorePreloadBindings(_unwrappingInvoke),
     },
 
+    // Keep-awake API
+    keepAwake: {
+      ...buildKeepAwakePreloadBindings(_unwrappingInvoke),
+
+      onStateChanged: (
+        callback: (state: import("../shared/types/ipc/keepAwake.js").KeepAwakeState) => void
+      ): (() => void) => _typedOn(CHANNELS.KEEP_AWAKE_STATE_CHANGED, callback),
+    },
+
     hibernation: {
       ...buildHibernationPreloadBindings(_unwrappingInvoke),
 
@@ -2650,6 +2698,9 @@ function buildElectronApi(): ElectronAPI {
 
     workspaceResidency: buildWorkspaceResidencyPreloadBindings(_unwrappingInvoke),
 
+    // Per-project consent for plugin agent tools. Renderer-only by design.
+    pluginAgentMcp: buildPluginAgentMcpPreloadBindings(_unwrappingInvoke),
+
     // Commands API
     commands: buildCommandsPreloadBindings(_unwrappingInvoke),
 
@@ -2852,6 +2903,7 @@ function buildElectronApi(): ElectronAPI {
     forgeRecommendation: buildForgeRecommendationPreloadBindings(_unwrappingInvoke),
 
     forge: {
+      ...buildForgeCredentialImportPreloadBindings(_unwrappingInvoke),
       getSettings: () => _unwrappingInvoke(CHANNELS.FORGE_GET_SETTINGS),
       setDefaultProvider: (providerId: string | null) =>
         _unwrappingInvoke(CHANNELS.FORGE_SET_DEFAULT_PROVIDER, providerId),
@@ -2868,6 +2920,9 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_OPEN_ISSUE, payload),
       getIssueUrl: (payload: { cwd: string; issueNumber: number }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE_URL, payload),
+      openRepo: (payload: { cwd: string }) => _unwrappingInvoke(CHANNELS.FORGE_OPEN_REPO, payload),
+      getRepoUrl: (payload: { cwd: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_URL, payload),
       assignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_ASSIGN_ISSUE, payload),
       unassignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>

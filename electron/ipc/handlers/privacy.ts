@@ -1,5 +1,5 @@
 // eager-import-allow: reads privacy settings via store.get synchronously in the IPC handler
-import { app, shell, session } from "electron";
+import { app, shell } from "electron";
 import { store } from "../../store.js";
 import {
   closeTelemetry,
@@ -7,6 +7,7 @@ import {
   hasTelemetryPromptBeenShown,
   setTelemetryLevel,
 } from "../../services/TelemetryService.js";
+import { clearAllSessionCaches } from "../../services/sessionCacheCleaner.js";
 import { typedBroadcast } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { PRIVACY_METHOD_CHANNELS } from "./privacy.preload.js";
@@ -36,8 +37,10 @@ export const privacyNamespace = defineIpcNamespace({
       async (level: "off" | "errors" | "full"): Promise<void> => {
         if (typeof level !== "string" || !VALID_LEVELS.includes(level)) return;
         await setTelemetryLevel(level);
+        // A newer request may have changed the level while this one awaited
+        // init — broadcast what is stored, not what this request asked for.
         typedBroadcast("privacy:telemetry-consent-changed", {
-          level,
+          level: getTelemetryLevel(),
           hasSeenPrompt: hasTelemetryPromptBeenShown(),
         });
       }
@@ -49,10 +52,10 @@ export const privacyNamespace = defineIpcNamespace({
     openDataFolder: op(PRIVACY_METHOD_CHANNELS.openDataFolder, (): void => {
       shell.showItemInFolder(app.getPath("userData"));
     }),
-    clearCache: op(PRIVACY_METHOD_CHANNELS.clearCache, async (): Promise<void> => {
-      await session.defaultSession.clearCache();
-      await session.defaultSession.clearCodeCaches({});
-    }),
+    clearCache: op(
+      PRIVACY_METHOD_CHANNELS.clearCache,
+      (): Promise<{ cleared: number; failed: number }> => clearAllSessionCaches()
+    ),
     resetAllData: op(PRIVACY_METHOD_CHANNELS.resetAllData, async (): Promise<void> => {
       app.relaunch({ args: process.argv.slice(1).concat(["--reset-data"]) });
       await closeTelemetry();

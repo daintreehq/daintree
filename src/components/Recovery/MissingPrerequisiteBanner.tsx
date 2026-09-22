@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import type { AgentInstallBlock } from "@shared/config/agentRegistry";
 import type { PrerequisiteCheckResult } from "@shared/types";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -62,20 +62,40 @@ function pickGuidance(result: PrerequisiteCheckResult): Guidance | null {
   };
 }
 
+/** What actually stops working without each fatal tool; the spec carries no such field. */
+const CONSEQUENCE: Record<string, string> = {
+  git: "git operations",
+  node: "agent launches",
+};
+
+/** One tool's own condition — a missing Git and an outdated Node are not the same sentence. */
+function condition(m: PrerequisiteCheckResult): string {
+  if (!m.available) return `${m.label} is not installed or not on PATH`;
+  if (m.minVersion)
+    return `${m.label} ${m.version ?? "?"} is installed and ${m.minVersion} is needed`;
+  return `${m.label} is below the version Daintree needs`;
+}
+
 function describe(missing: PrerequisiteCheckResult[]): string {
-  const names = missing.map((m) => m.label).join(", ");
   const isOne = missing.length === 1;
   const subject = isOne ? "it's" : "they're";
-  const outdated = missing.every((m) => m.available);
-  const problem = outdated
-    ? `${names} ${isOne ? "is" : "are"} below the version Daintree needs`
-    : `${names} ${isOne ? "is" : "are"} not installed or not on PATH`;
-  return `${problem}, so git operations and agent launches will fail until ${subject} sorted.`;
+  const problem = missing.map(condition).join("; ");
+  const consequences = [...new Set(missing.map((m) => CONSEQUENCE[m.tool] ?? "some features"))];
+  const consequence =
+    consequences.length === 1
+      ? consequences[0]
+      : `${consequences.slice(0, -1).join(", ")} and ${consequences[consequences.length - 1]}`;
+  return `${problem}, so ${consequence} will fail until ${subject} sorted.`;
 }
 
 function title(missing: PrerequisiteCheckResult[]): string {
   const only = missing.length === 1 ? missing[0] : undefined;
-  if (!only) return "Required tools are missing";
+  if (!only) {
+    // Two or more tools, each in its own state — the description says which.
+    return missing.every((m) => !m.available)
+      ? "Required tools are missing"
+      : "Required tools need attention";
+  }
   return only.available ? `${only.label} is out of date` : `${only.label} is missing`;
 }
 
@@ -276,7 +296,8 @@ export function MissingPrerequisiteBanner() {
   const description = handedOff
     ? "Finish the macOS installer, then re-check"
     : failed
-      ? install.error
+      ? // The tool's own "Error:" prefix says nothing the red band doesn't.
+        install.error?.replace(/^error:\s*/i, "")
       : describe(missing);
 
   const contextLine = isRunning
@@ -333,16 +354,25 @@ export function MissingPrerequisiteBanner() {
     // The job carries the tool id; the banner speaks the display name.
     const failedLabel =
       missing.find((m) => m.tool === install.tool)?.label ?? guidance?.result.label ?? "the tool";
+    // The failure answers the user's own click, so they are already looking:
+    // a polite announcement is enough. Retry is the one action; the guide is
+    // the way out when retrying the same command cannot help.
     return (
       <InlineStatusBanner
-        icon={AlertTriangle}
         title={`Couldn't install ${failedLabel}`}
         description={description}
         contextLine={command}
         severity="error"
-        role="alert"
+        role="status"
         onClose={dismiss}
         closeAriaLabel="Dismiss missing tool warning"
+        trailingSlot={
+          guidance?.result.installUrl ? (
+            <Button variant="ghost" size="sm" onClick={openInstallUrl}>
+              View install guide
+            </Button>
+          ) : undefined
+        }
         action={{
           id: "retry",
           label: "Retry",
@@ -355,12 +385,15 @@ export function MissingPrerequisiteBanner() {
 
   return (
     <InlineStatusBanner
-      icon={AlertTriangle}
       title={title(missing)}
       description={description}
       contextLine={contextLine}
       severity="warning"
       role="status"
+      // While the package manager streams, the context line changes on every
+      // chunk and a status region would read each one aloud. The button is
+      // busy and the finish is a toast; nothing here needs announcing.
+      ariaLive={isRunning ? "off" : undefined}
       onClose={dismiss}
       closeAriaLabel="Dismiss missing tool warning"
       actions={[action]}

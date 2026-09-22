@@ -1,7 +1,6 @@
-import { AlertTriangle } from "lucide-react";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
-import { getRestoreConfirmationTitle } from "./recoveryCopy";
+import { RESTORE_CONFIRMATION_TITLE, getRestoreConfirmationDescription } from "./recoveryCopy";
 
 const AUTO_DISMISS_MS = 10_000;
 
@@ -12,16 +11,20 @@ export function RestoreConfirmationBanner() {
 
   if (!visible) return null;
 
+  // A clean recovery is news, not a problem: it says so in the info tier and
+  // leaves on its own. Once panels are implicated it is a warning that stands
+  // until the user has read it.
+  const description = getRestoreConfirmationDescription(suspectCount);
   return (
     <InlineStatusBanner
-      icon={AlertTriangle}
-      title={getRestoreConfirmationTitle(suspectCount)}
-      severity="warning"
+      title={RESTORE_CONFIRMATION_TITLE}
+      description={description}
+      severity={description ? "warning" : "info"}
       role="status"
       actions={[]}
       onClose={dismiss}
       closeAriaLabel="Dismiss recovery confirmation"
-      autoDismissAfter={suspectCount > 0 ? undefined : AUTO_DISMISS_MS}
+      autoDismissAfter={description ? undefined : AUTO_DISMISS_MS}
     />
   );
 }

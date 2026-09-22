@@ -77,6 +77,7 @@ function makeDelegate(): WorkerAnalysisDelegate {
     getProcessState: () => null,
     getAgentContext: () => ({ agentLive: false, agentState: undefined }),
     onMirrorGeometry: vi.fn(),
+    onViewport: vi.fn(),
   };
 }
 
@@ -278,6 +279,23 @@ describe("AnalysisWorkerPool", () => {
 
     pool.createBackend(makeSpec("t2"), makeDelegate());
     expect(workers[1].messagesOfType("plugin-agent-registry")).toHaveLength(1);
+  });
+
+  it("forwards power-policy changes to live workers and replays a saving level to new ones", () => {
+    pool.createBackend(makeSpec("t1"), makeDelegate());
+    // A worker boots at `active`, so the pool only speaks up for a change.
+    expect(workers[0].messagesOfType("power-policy")).toHaveLength(0);
+
+    pool.setPowerLevel("deep", "deep");
+    pool.setPowerLevel("deep", "deep");
+    expect(workers[0].messagesOfType("power-policy")).toEqual([
+      { type: "power-policy", level: "deep", observationLevel: "deep" },
+    ]);
+
+    pool.createBackend(makeSpec("t2"), makeDelegate());
+    expect(workers[1].messagesOfType("power-policy")).toEqual([
+      { type: "power-policy", level: "deep", observationLevel: "deep" },
+    ]);
   });
 
   it("holds feeds above the high watermark and flushes them coalesced once acks drop below low", () => {

@@ -34,6 +34,26 @@ const serviceMock = vi.hoisted(() => ({
   listActiveBearers: vi.fn(() => []),
   disconnectBearer: vi.fn((tokenHash: string) => ({ tokenHash, disconnected: true })),
   resetDenialCounts: vi.fn(),
+  onTerminalAdoptionsChange: vi.fn(() => () => {}),
+  adoptTerminal: vi.fn(() => ({ status: "refused" as const, reason: "self" as const })),
+  releaseTerminalAdoption: vi.fn(() => true),
+  listTerminalAdoptions: vi.fn(() => []),
+  filterOrchestratorPanes: vi.fn((panes: Array<{ paneId: string }>) =>
+    panes.map((pane) => pane.paneId)
+  ),
+  isPaneWakeEnabled: vi.fn(() => false),
+  setPaneWakeEnabled: vi.fn((enabled: boolean) => enabled),
+  getPaneWatchState: vi.fn(() => null),
+  stopPaneWatches: vi.fn(),
+}));
+
+const paneConfigMock = vi.hoisted(() => ({
+  getOrchestratorPane: vi.fn((paneId: string) =>
+    paneId === "pane-orchestrator" ? { principalId: "principal-1", tier: "action" as const } : null
+  ),
+  listOrchestratorPanes: vi.fn(() => [
+    { paneId: "pane-orchestrator", principalId: "principal-1", tier: "action" as const },
+  ]),
 }));
 
 vi.mock("electron", () => ({
@@ -44,6 +64,9 @@ vi.mock("electron", () => ({
   BrowserWindow: { fromWebContents: () => null },
 }));
 vi.mock("../../../services/McpServerService.js", () => ({ mcpServerService: serviceMock }));
+vi.mock("../../../services/McpPaneConfigService.js", () => ({
+  mcpPaneConfigService: paneConfigMock,
+}));
 
 import { registerMcpServerHandlers } from "../mcpServer.js";
 import { CHANNELS } from "../../channels.js";
@@ -154,6 +177,33 @@ describe("mcpServer IPC adversarial", () => {
       /boolean/
     );
     expect(serviceMock.setAuditEnabled).not.toHaveBeenCalled();
+  });
+
+  it("setPaneWakeEnabled rejects non-boolean values (#12491)", async () => {
+    for (const value of ["true", 1, null]) {
+      await expect(
+        getHandler(CHANNELS.MCP_SERVER_SET_PANE_WAKE_ENABLED)(fakeEvent(), value)
+      ).rejects.toThrow(/boolean/);
+    }
+    expect(serviceMock.setPaneWakeEnabled).not.toHaveBeenCalled();
+    await expect(
+      getHandler(CHANNELS.MCP_SERVER_SET_PANE_WAKE_ENABLED)(fakeEvent(), true)
+    ).resolves.toBe(true);
+  });
+
+  it.each([
+    ["getPaneWatchState", CHANNELS.MCP_SERVER_GET_PANE_WATCH_STATE],
+    ["stopPaneWatches", CHANNELS.MCP_SERVER_STOP_PANE_WATCHES],
+  ] as const)("%s rejects an empty or non-string terminal id (#12491)", async (method, channel) => {
+    for (const terminalId of ["", 42, null, undefined]) {
+      await expect(getHandler(channel)(fakeEvent(), terminalId)).rejects.toThrow(/terminalId/);
+    }
+    expect(serviceMock[method]).not.toHaveBeenCalled();
+  });
+
+  it("stopPaneWatches forwards the pane to the service (#12491)", async () => {
+    await getHandler(CHANNELS.MCP_SERVER_STOP_PANE_WATCHES)(fakeEvent(), "pane-1");
+    expect(serviceMock.stopPaneWatches).toHaveBeenCalledWith("pane-1");
   });
 
   it("setAuditMaxRecords rejects non-integer or out-of-range values", async () => {
@@ -307,9 +357,78 @@ describe("mcpServer IPC adversarial", () => {
     expect(serviceMock.resetDenialCounts).toHaveBeenCalledWith("sess-7", 77);
   });
 
-  it("cleanup removes all twenty-six registered handlers", () => {
-    // 24 baseline + issueNativeGrant + revokeNativeGrant (#10648).
-    expect(ipcHandlers.size).toBe(26);
+  describe("terminal hand-over (#12490)", () => {
+    it("rejects malformed ids before resolving anything", async () => {
+      const adopt = getHandler(CHANNELS.MCP_SERVER_ADOPT_TERMINAL);
+      for (const payload of [
+        null,
+        "terminal-1",
+        { terminalId: "", orchestratorPaneId: "pane-orchestrator" },
+        { terminalId: "terminal-1", orchestratorPaneId: 7 },
+        { terminalId: "x".repeat(513), orchestratorPaneId: "pane-orchestrator" },
+      ]) {
+        await expect(adopt(fakeEvent(), payload)).rejects.toThrow(/Invalid/);
+      }
+      expect(paneConfigMock.getOrchestratorPane).not.toHaveBeenCalled();
+      expect(serviceMock.adoptTerminal).not.toHaveBeenCalled();
+    });
+
+    it("resolves the orchestrator's identity in main, never from the payload", async () => {
+      await getHandler(CHANNELS.MCP_SERVER_ADOPT_TERMINAL)(fakeEvent(), {
+        terminalId: "terminal-1",
+        orchestratorPaneId: "pane-orchestrator",
+        // Smuggled fields a hostile renderer might try: ignored.
+        principalId: "principal-forged",
+        orchestrator: { principalId: "principal-forged", tier: "system" },
+      });
+
+      expect(serviceMock.adoptTerminal).toHaveBeenCalledWith({
+        terminalId: "terminal-1",
+        orchestratorPaneId: "pane-orchestrator",
+        orchestrator: { principalId: "principal-1", tier: "action" },
+      });
+    });
+
+    it("hands the service a null identity for a pane with no bearer", async () => {
+      await getHandler(CHANNELS.MCP_SERVER_ADOPT_TERMINAL)(fakeEvent(), {
+        terminalId: "terminal-1",
+        orchestratorPaneId: "pane-shell",
+      });
+
+      expect(serviceMock.adoptTerminal).toHaveBeenCalledWith(
+        expect.objectContaining({ orchestrator: null })
+      );
+    });
+
+    it("lists only the panes the service keeps", async () => {
+      serviceMock.filterOrchestratorPanes.mockReturnValueOnce([]);
+
+      const result = await getHandler(CHANNELS.MCP_SERVER_LIST_ORCHESTRATOR_PANES)(fakeEvent());
+
+      expect(result).toEqual([]);
+      expect(serviceMock.filterOrchestratorPanes).toHaveBeenCalledWith(
+        paneConfigMock.listOrchestratorPanes.mock.results[0]?.value
+      );
+    });
+
+    it("validates the id a take-back names", async () => {
+      await expect(
+        getHandler(CHANNELS.MCP_SERVER_RELEASE_TERMINAL_ADOPTION)(fakeEvent(), { terminalId: "" })
+      ).rejects.toThrow(/Invalid terminalId/);
+      expect(serviceMock.releaseTerminalAdoption).not.toHaveBeenCalled();
+
+      await getHandler(CHANNELS.MCP_SERVER_RELEASE_TERMINAL_ADOPTION)(fakeEvent(), {
+        terminalId: "terminal-1",
+      });
+      expect(serviceMock.releaseTerminalAdoption).toHaveBeenCalledWith("terminal-1");
+    });
+  });
+
+  it("cleanup removes all thirty-four registered handlers", () => {
+    // 24 baseline + issueNativeGrant + revokeNativeGrant (#10648) + the four
+    // terminal hand-over operations (#12490) + the pane wake setting's get/set
+    // and a pane's watch state/stop (#12491).
+    expect(ipcHandlers.size).toBe(34);
     cleanup();
     expect(ipcHandlers.size).toBe(0);
   });

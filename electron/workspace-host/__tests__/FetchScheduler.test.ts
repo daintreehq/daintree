@@ -3,6 +3,7 @@ import { FetchScheduler, type FetchSchedulerHost } from "../FetchScheduler.js";
 
 interface MutableHost {
   isRunning: boolean;
+  pollingEnabled: boolean;
   isCurrent: boolean;
   hasInitialStatus: boolean;
   hasFetchCallback: boolean;
@@ -13,6 +14,7 @@ interface MutableHost {
 function makeHost(overrides: Partial<MutableHost> = {}): MutableHost {
   return {
     isRunning: true,
+    pollingEnabled: true,
     isCurrent: true,
     hasInitialStatus: true,
     hasFetchCallback: true,
@@ -470,5 +472,83 @@ describe("FetchScheduler", () => {
     scheduler.schedule(true);
     await vi.advanceTimersByTimeAsync(6_000);
     expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
+  });
+
+  describe("paused host (project backgrounded)", () => {
+    it("does not schedule while polling is paused", async () => {
+      const host = makeHost({ pollingEnabled: false });
+      const scheduler = new FetchScheduler(host as FetchSchedulerHost);
+
+      scheduler.schedule(true);
+      scheduler.reschedule(false);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+
+      expect(host.onExecuteFetch).not.toHaveBeenCalled();
+    });
+
+    it("drops an armed timer that fires after the host paused", async () => {
+      const host = makeHost();
+      const scheduler = new FetchScheduler(host as FetchSchedulerHost);
+
+      scheduler.schedule(true);
+      host.pollingEnabled = false;
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(host.onExecuteFetch).not.toHaveBeenCalled();
+    });
+
+    it("does not re-arm the cadence when a fetch in flight at pause completes", async () => {
+      let resolveFetch!: () => void;
+      const host = makeHost({
+        onExecuteFetch: vi.fn().mockImplementation(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveFetch = resolve;
+            })
+        ),
+      });
+      const scheduler = new FetchScheduler(host as FetchSchedulerHost);
+
+      scheduler.schedule(true);
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
+      expect(scheduler.isFetchInFlight).toBe(true);
+
+      host.pollingEnabled = false;
+      resolveFetch();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(scheduler.isFetchInFlight).toBe(false);
+      // Nothing armed at all — not merely a timer that declines when it fires.
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("still runs an explicit forced fetch, without re-arming the cadence after it", async () => {
+      const host = makeHost({ pollingEnabled: false });
+      const scheduler = new FetchScheduler(host as FetchSchedulerHost);
+
+      await scheduler.triggerNow();
+      expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
+      expect(host.onExecuteFetch).toHaveBeenCalledWith(true, undefined);
+      expect(vi.getTimerCount()).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("schedules again once polling resumes", async () => {
+      const host = makeHost({ pollingEnabled: false });
+      const scheduler = new FetchScheduler(host as FetchSchedulerHost);
+      scheduler.schedule(true);
+
+      host.pollingEnabled = true;
+      scheduler.schedule(true);
+      await vi.advanceTimersByTimeAsync(5_001);
+
+      expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
+    });
   });
 });

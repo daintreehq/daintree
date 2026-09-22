@@ -129,23 +129,25 @@ vi.mock("ws", () => {
   return { default: ctor };
 });
 
-// ── Mock the VAD worker (`node:worker_threads`) ──────────────────────────────
+// ── Mock the VAD process (`electron` utilityProcess) ────────────────────────
 //
-// The provider spawns `new Worker(...)` running Silero VAD. We replace the
-// Worker with a controllable stub so tests can drive speech-start/speech-end
-// events synchronously and assert the resulting commit/clear behavior without
-// loading ONNX. The constructor can be forced to throw to exercise the degraded
-// fallback path.
+// The provider forks a utility process running Silero VAD. We replace the fork
+// with a controllable stub so tests can drive speech-start/speech-end events
+// synchronously and assert the resulting commit/clear behavior without loading
+// ONNX. The fork can be forced to throw to exercise the degraded fallback path.
 
 type VadListener = (...args: unknown[]) => void;
 
+let nextVadPid = 41_000;
+
 class MockVadWorker {
   posted: Array<Record<string, unknown>> = [];
-  unrefCalls = 0;
-  terminateCalls = 0;
+  transfers: unknown[] = [];
+  killCalls = 0;
+  readonly pid = nextVadPid++;
   private listeners: Map<string, Set<VadListener>> = new Map();
 
-  constructor(_path: string | URL) {
+  constructor(_modulePath: string) {
     vadWorkers.push(this);
   }
 
@@ -155,24 +157,14 @@ class MockVadWorker {
     return this;
   }
 
-  removeAllListeners(event?: string): this {
-    if (event) this.listeners.delete(event);
-    else this.listeners.clear();
-    return this;
-  }
-
-  postMessage(message: Record<string, unknown>): void {
+  postMessage(message: Record<string, unknown>, transfer?: unknown): void {
     this.posted.push(message);
+    this.transfers.push(transfer);
   }
 
-  unref(): this {
-    this.unrefCalls++;
-    return this;
-  }
-
-  terminate(): Promise<number> {
-    this.terminateCalls++;
-    return Promise.resolve(0);
+  kill(): boolean {
+    this.killCalls++;
+    return true;
   }
 
   private fire(event: string, ...args: unknown[]): void {
@@ -181,7 +173,11 @@ class MockVadWorker {
     for (const listener of set) listener(...args);
   }
 
-  // Test helpers — simulate the messages openaiVadWorker posts back.
+  // Test helpers — simulate the process lifecycle and the messages
+  // openaiVadWorker posts back.
+  emitSpawn(): void {
+    this.fire("spawn");
+  }
   emitReady(): void {
     this.fire("message", { type: "ready" });
   }
@@ -194,8 +190,8 @@ class MockVadWorker {
   emitWorkerError(message = "vad failed"): void {
     this.fire("message", { type: "error", message });
   }
-  emitThreadError(err: Error = new Error("worker crashed")): void {
-    this.fire("error", err);
+  emitDrained(): void {
+    this.fire("message", { type: "drained" });
   }
   emitExit(code: number): void {
     this.fire("exit", code);
@@ -205,11 +201,13 @@ class MockVadWorker {
 const vadWorkers: MockVadWorker[] = [];
 let throwOnVadConstruct = false;
 
-vi.mock("node:worker_threads", () => ({
-  Worker: function (this: unknown, scriptPath: string | URL) {
-    if (throwOnVadConstruct) throw new Error("worker spawn failed");
-    return new MockVadWorker(scriptPath);
-  } as unknown as new (scriptPath: string | URL) => MockVadWorker,
+vi.mock("electron", () => ({
+  utilityProcess: {
+    fork: (modulePath: string) => {
+      if (throwOnVadConstruct) throw new Error("VAD spawn failed");
+      return new MockVadWorker(modulePath);
+    },
+  },
 }));
 
 function latestVadWorker(): MockVadWorker {
@@ -323,10 +321,14 @@ describe("OpenAITranscriptionProvider", () => {
     vadWorkers.length = 0;
     throwOnVadConstruct = false;
     logCalls.length = 0;
+    // Retirement arms a real SIGKILL backstop; fake pids must never reach the OS.
+    vi.spyOn(process, "kill").mockImplementation(() => true);
     vi.useFakeTimers();
   });
 
   afterEach(() => {
+    // End every fake VAD process so none lingers in the module's retiring set.
+    for (const worker of vadWorkers) worker.emitExit(0);
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -824,7 +826,7 @@ describe("OpenAITranscriptionProvider", () => {
     service.stop();
   });
 
-  it("feeds the VAD a copy of the chunk, not the buffer sent to OpenAI", async () => {
+  it("feeds the VAD without transferring the buffer still sent to OpenAI", async () => {
     const service = new OpenAITranscriptionProvider();
     await bringSessionReady(service);
     const worker = latestVadWorker();
@@ -832,12 +834,13 @@ describe("OpenAITranscriptionProvider", () => {
     const chunk = new Uint8Array(64).fill(3).buffer;
     service.sendAudioChunk(chunk);
 
-    const audioMsg = worker.posted.find((m) => m.type === "audio");
-    expect(audioMsg).toBeDefined();
-    // Must be a distinct ArrayBuffer (chunk.slice(0)) so the transfer to the
-    // worker doesn't detach the buffer still needed for the OpenAI send.
-    expect(audioMsg!.pcm).not.toBe(chunk);
-    expect((audioMsg!.pcm as ArrayBuffer).byteLength).toBe(chunk.byteLength);
+    const audioIndex = worker.posted.findIndex((m) => m.type === "audio");
+    expect(audioIndex).toBeGreaterThanOrEqual(0);
+    // UtilityProcess.postMessage structured-clones the payload and only accepts
+    // MessagePorts in a transfer list, so the chunk goes over untransferred and
+    // stays intact for the OpenAI send.
+    expect(worker.transfers[audioIndex]).toBeUndefined();
+    expect(chunk.byteLength).toBe(64);
 
     service.stop();
   });
@@ -989,9 +992,8 @@ describe("OpenAITranscriptionProvider", () => {
     const worker = latestVadWorker();
 
     worker.emitWorkerError("model load failed");
-    expect(worker.terminateCalls).toBe(0);
     expect(worker.posted).toContainEqual({ type: "destroy" });
-    expect(worker.unrefCalls).toBe(1);
+    expect(worker.killCalls).toBe(0);
     // Degraded mode: no speech events, audio still streams, backstop commits.
     feedCommittableAudio(service);
     vi.advanceTimersByTime(8_000);
@@ -1040,15 +1042,129 @@ describe("OpenAITranscriptionProvider", () => {
     service.stop();
   });
 
-  it("requests native VAD cleanup without terminating pending work on stop", async () => {
+  it("requests native VAD cleanup without killing pending work on stop", async () => {
+    const kill = vi.mocked(process.kill);
     const service = new OpenAITranscriptionProvider();
     await bringSessionReady(service);
     const worker = latestVadWorker();
-    expect(worker.terminateCalls).toBe(0);
     service.stop();
-    expect(worker.terminateCalls).toBe(0);
     expect(worker.posted).toContainEqual({ type: "destroy" });
-    expect(worker.unrefCalls).toBe(1);
+    expect(worker.killCalls).toBe(0);
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  // ── VAD process isolation (#12577) ───────────────────────────────────────
+
+  // 6: a native ONNX abort (Electron 42 reports the SIGABRT'd child as 6).
+  // 1: the child's own fatal-error handler. 0: a child that simply went away.
+  it.each([6, 1, 0])(
+    "degrades instead of failing when the VAD process exits with code %i mid-session",
+    async (code) => {
+      const service = new OpenAITranscriptionProvider();
+      const events: VoiceTranscriptionEvent[] = [];
+      service.onEvent((event) => events.push(event));
+      const { socket } = await bringSessionReady(service);
+      const worker = latestVadWorker();
+      worker.emitSpawn();
+      worker.emitReady();
+
+      worker.emitExit(code);
+
+      // The dead process is not sent a destroy, and nothing more is fed to it.
+      expect(worker.posted).not.toContainEqual({ type: "destroy" });
+      const postedBefore = worker.posted.length;
+      feedCommittableAudio(service);
+      expect(worker.posted).toHaveLength(postedBefore);
+      // Dictation carries on at the backstop cadence, with nothing surfaced to
+      // the user as a failure.
+      vi.advanceTimersByTime(8_000);
+      expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(
+        1
+      );
+      expect(events.some((event) => event.type === "error")).toBe(false);
+      const exitLog = logCalls.find(([message]) =>
+        String(message).includes("VAD process exited unexpectedly")
+      );
+      expect(exitLog?.at(-1)).toMatchObject({ code });
+
+      service.stop();
+    }
+  );
+
+  it("ignores the exit of a VAD process retired by an earlier session", async () => {
+    const service = new OpenAITranscriptionProvider();
+    await bringSessionReady(service);
+    const staleWorker = latestVadWorker();
+
+    const secondPromise = service.start(BASE_SETTINGS);
+    await Promise.resolve();
+    const secondSocket = latestInstance();
+    secondSocket.simulateOpen();
+    secondSocket.simulateMessage("session.updated");
+    await secondPromise;
+    const currentWorker = latestVadWorker();
+    expect(currentWorker).not.toBe(staleWorker);
+
+    staleWorker.emitExit(6);
+
+    // The live session keeps its VAD: audio still reaches it and a speech-end
+    // still commits.
+    vadCommitSegment(service, currentWorker);
+    expect(currentWorker.posted.some((m) => m.type === "audio")).toBe(true);
+    expect(
+      secondSocket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")
+    ).toHaveLength(1);
+
+    service.stop();
+  });
+
+  it("logs each VAD lifecycle transition with no audio or transcript content", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    worker.emitSpawn();
+    worker.emitReady();
+    vadCommitSegment(service, worker);
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-secret",
+      transcript: "the secret transcript",
+    });
+
+    service.stop();
+    worker.emitDrained();
+    worker.emitExit(0);
+
+    const lifecycle = logCalls
+      .map(([message]) => String(message))
+      .filter((message) => message.includes("VAD"));
+    const order = [
+      "VAD process spawned",
+      "VAD session ready",
+      "VAD destroy requested",
+      "VAD drained",
+      "VAD process exited",
+    ].map((step) => lifecycle.findIndex((message) => message.includes(step)));
+    expect(order.every((index) => index >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+
+    // Structural, not textual: an ArrayBuffer stringifies to `{}`, so a string
+    // search alone would miss logged audio.
+    const carriesAudio = (value: unknown, depth = 0): boolean => {
+      if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return true;
+      if (Array.isArray(value) && value.length > 16 && value.every((v) => typeof v === "number")) {
+        return true;
+      }
+      if (value && typeof value === "object" && depth < 4) {
+        return Object.values(value).some((v) => carriesAudio(v, depth + 1));
+      }
+      return false;
+    };
+    const vadEntries = logCalls.filter(([message]) => String(message).includes("VAD"));
+    expect(vadEntries.length).toBeGreaterThan(0);
+    for (const args of vadEntries) {
+      expect(args.some((arg) => carriesAudio(arg))).toBe(false);
+      expect(JSON.stringify(args)).not.toContain("secret transcript");
+    }
   });
 
   it("commitParagraphBoundary flushes the current segment when enough audio has streamed", async () => {

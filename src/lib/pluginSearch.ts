@@ -11,13 +11,18 @@ const DESCRIPTION_WEIGHT = 0.5;
  * `@cap:<value>` and `@cat:<value>` carry a value (a capability id / a
  * category id from `PLUGIN_CATEGORY_IDS`); the boolean flags don't.
  */
-export type PluginFilterOperator = "builtin" | "installed" | "enabled" | "disabled" | "cap" | "cat";
+export type PluginFilterOperator =
+  "builtin" | "installed" | "enabled" | "disabled" | "problem" | "cap" | "cat";
 
 const KNOWN_OPERATORS: ReadonlySet<string> = new Set([
   "builtin",
   "installed",
   "enabled",
   "disabled",
+  // Anything the user would call broken: it failed to load, or the host
+  // blocked it. Both are states the user did not choose and cannot infer from
+  // the switch, which is why the manager's health summary filters through this.
+  "problem",
   "cap",
   "cat",
 ]);
@@ -85,14 +90,24 @@ function matchesOperator(
   op: { key: PluginFilterOperator; value: string | null }
 ): boolean {
   switch (op.key) {
+    // Provenance and state are independent axes. These two used to AND in
+    // `!disabled`, which made `@builtin @disabled` — the obvious way to ask
+    // "which built-ins did I turn off?" — unsatisfiable, because operators
+    // AND-combine and the pair reduced to `!disabled && disabled`.
     case "builtin":
-      return plugin.isBuiltin && !plugin.disabled;
+      return plugin.isBuiltin;
     case "installed":
-      return !plugin.isBuiltin && !plugin.disabled;
+      return !plugin.isBuiltin;
+    // `enabled` means what the row's switch means. The row computes
+    // `disabled !== true && !blocklisted`, so a blocklisted plugin renders with
+    // its switch off; matching it here would have returned rows that visibly
+    // contradict the filter that found them.
     case "enabled":
-      return !plugin.disabled;
+      return plugin.disabled !== true && plugin.blocklisted !== true;
     case "disabled":
       return plugin.disabled === true;
+    case "problem":
+      return plugin.loadError != null || plugin.blocklisted === true;
     case "cap": {
       if (!op.value) return false; // `@cap:` with no value matches nothing
       return (plugin.manifest.capabilities ?? []).some((c) => c.toLowerCase() === op.value);

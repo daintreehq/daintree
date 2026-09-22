@@ -12,6 +12,12 @@ vi.mock("@/store", () => ({
   usePanelStore: { getState: () => panelState },
 }));
 
+// The real module pulls WorktreeStoreContext and its whole renderer graph
+// (actionService, clients, four stores) into this node-environment suite.
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStoreOptional: vi.fn(),
+}));
+
 vi.mock("@/store/paletteStore", () => ({
   usePaletteStore: { getState: () => ({ openPalette }) },
 }));
@@ -24,9 +30,6 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 }));
 
 vi.mock("@/clients", () => ({ terminalClient: { write: vi.fn() } }));
-vi.mock("@shared/utils/terminalInputProtocol", () => ({
-  formatWithBracketedPaste: (t: string) => t,
-}));
 vi.mock("@shared/config/panelKindRegistry", () => ({ panelKindHasPty: () => true }));
 vi.mock("@/utils/terminalChrome", () => ({ deriveTerminalChrome: () => ({ label: "" }) }));
 vi.mock("./useSearchablePalette", () => ({ useSearchablePalette: () => ({}) }));

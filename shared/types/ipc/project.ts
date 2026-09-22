@@ -116,6 +116,11 @@ export interface ProjectSwitchPayload {
   entryPoint?: ProjectSwitchEntryPoint;
   /** True when the view was reactivated from the LRU cache rather than cold-started. */
   cacheHit?: boolean;
+  /**
+   * Wall-clock (`Date.now()`) deadline for this view's worktree status-timing
+   * report; absent when main is not timing the switch.
+   */
+  statusTimingDeadlineAt?: number;
   /** If the workspace host failed to load worktrees (e.g. non-git directory) */
   worktreeLoadError?: string;
   /** Pre-built hydration data to skip the redundant APP_HYDRATE IPC round-trip */

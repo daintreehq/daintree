@@ -23,15 +23,21 @@ import { scheduleOpenWindowsSave } from "../../../window/openWindowsTracker.js";
 import { notificationService } from "../../../services/NotificationService.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { logInfo } from "../../../utils/logger.js";
+import {
+  projectSwitchStatusTiming,
+  type HostLoadKind,
+} from "../../../services/ProjectSwitchStatusTiming.js";
 import { isPerformanceCaptureEnabled, markPerformance } from "../../../utils/performance.js";
 import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 import {
+  appliedSessionIdentityClaims,
   sanitizeTerminals,
   sanitizeTerminalSizes,
   sanitizeDraftInputs,
   sanitizeFieldEdits,
   TERMINAL_FIELD_LEVEL_MERGE,
 } from "../terminalLayout.js";
+import { noteRendererSessionIdentityEdits } from "../../../services/pty/agentSessionCapturePersistence.js";
 import { sanitizeTabGroups } from "../../../schemas/index.js";
 import {
   decodeIdArrayDelta,
@@ -69,6 +75,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
 
     const operation = captureSwitchOperation(deps, ctx, projectId, "project:switch");
     const trace = resolveSwitchTrace(options?.trace);
+    const requestedAt = Date.now();
     markMainReceived(trace, operation);
 
     // After the capture but before anything acts on it. The capture is a pure
@@ -103,6 +110,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
           logPrefix: "[ProjectSwitch]",
           resumeWorkspace: true,
           trace,
+          requestedAt,
         });
         await persistOutgoing;
       } finally {
@@ -164,6 +172,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
 
     const operation = captureSwitchOperation(deps, ctx, projectId, "project:reopen");
     const trace = resolveSwitchTrace(options?.trace);
+    const requestedAt = Date.now();
     markMainReceived(trace, operation);
 
     await assertProjectRepositoryIntact(project);
@@ -189,6 +198,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
           markActive: true,
           resumeWorkspace: true,
           trace,
+          requestedAt,
         });
         await persistOutgoing;
       } finally {
@@ -444,15 +454,30 @@ async function persistOutgoingProjectState(
           `${logLabel}/pre-apply(${previousProjectId})`
         ) as TabGroup[])
       : undefined;
+  const terminalDelta = outgoingState.terminalDelta;
+  const decodedTerminalDelta =
+    terminalDelta && outgoingState.terminals
+      ? decodeIdArrayDelta(terminalDelta, outgoingState.terminals)
+      : undefined;
+  const terminalFieldEdits = decodedTerminalDelta
+    ? sanitizeFieldEdits(decodedTerminalDelta.fieldEdits)
+    : undefined;
+  if (decodedTerminalDelta && validTerminals) {
+    // Same identity authority as an ordinary save, taken before the queue for
+    // the same reason (#12433).
+    noteRendererSessionIdentityEdits(
+      appliedSessionIdentityClaims(
+        validTerminals,
+        decodedTerminalDelta.changedIds,
+        decodedTerminalDelta.removedIds,
+        terminalFieldEdits
+      )
+    );
+  }
   // Queued so the read-merge-write can't clobber concurrent queued writers
   // (terminalLayout handlers) now that the persist runs alongside the swap.
   await projectStore.enqueueProjectStateUpdate(previousProjectId, (existing) => {
-    const terminalDelta = outgoingState.terminalDelta;
     const tabGroupDelta = outgoingState.tabGroupDelta;
-    const decodedTerminalDelta =
-      terminalDelta && outgoingState.terminals
-        ? decodeIdArrayDelta(terminalDelta, outgoingState.terminals)
-        : undefined;
     const decodedTabGroupDelta =
       tabGroupDelta && outgoingState.tabGroups
         ? decodeIdArrayDelta(tabGroupDelta, outgoingState.tabGroups)
@@ -475,7 +500,7 @@ async function persistOutgoingProjectState(
                 // stale outgoing snapshot must not erase a session id Main
                 // captured on shutdown (#11461).
                 fieldLevelMerge: TERMINAL_FIELD_LEVEL_MERGE,
-                fieldEdits: sanitizeFieldEdits(decodedTerminalDelta.fieldEdits),
+                fieldEdits: terminalFieldEdits,
               }
             )
           : validTerminals;
@@ -500,7 +525,15 @@ async function persistOutgoingProjectState(
       validSizes === undefined
         ? undefined
         : (() => {
-            const merged = { ...(existing?.terminalSizes ?? {}), ...validSizes };
+            // Sanitize the EXISTING side too, not just the incoming one. The
+            // entries written before #12442 are already on disk — three of the
+            // reporter's panes persisted at `2x1` — and a merge that only
+            // filters what arrives preserves every one of them for the next
+            // restore to rebuild from.
+            const merged = {
+              ...sanitizeTerminalSizes((existing?.terminalSizes ?? {}) as Record<string, unknown>),
+              ...validSizes,
+            };
             if (mergedTerminals === undefined) return merged;
             const liveIds = new Set(mergedTerminals.map((t) => t.id));
             return Object.fromEntries(
@@ -539,6 +572,8 @@ type ActivateOptions = {
   markActive?: boolean;
   resumeWorkspace?: boolean;
   trace: ProjectSwitchTrace;
+  /** `Date.now()` when main received the request — the origin of the status timing. */
+  requestedAt: number;
 };
 
 async function activateProjectView(
@@ -571,15 +606,28 @@ async function activateProjectView(
   // surfaced here: the await below owns forward-fail (#8400). Reopen requires
   // the host to be resumed BEFORE loadProject so it is ready to accept
   // worktree IPC from the newly-active view.
-  let loadWorktrees: Promise<void> | null = null;
+  let loadWorktrees: Promise<HostLoadKind> | null = null;
+  let statusTimingDeadlineAt: number | undefined;
   if (deps.worktreeService && windowId !== undefined) {
+    statusTimingDeadlineAt = projectSwitchStatusTiming.begin(
+      trace.switchId,
+      projectId,
+      windowId,
+      options.requestedAt
+    );
     if (options.resumeWorkspace) {
       deps.worktreeService.resumeProject(project.path);
     }
     loadWorktrees = deps.worktreeService.loadProject(project.path, windowId);
-    // Observed at the await below; without this a load rejection while the
-    // swap is still in flight would be an unhandled rejection.
-    loadWorktrees.catch(() => {});
+    // Observed at the await below; without the rejection handler a load
+    // failure while the swap is still in flight would be an unhandled
+    // rejection. The timing is settled here, as the load settles, rather than
+    // at the await, which only runs once the swap is done.
+    const { switchId } = trace;
+    loadWorktrees.then(
+      (hostLoad) => projectSwitchStatusTiming.hostReady(switchId, hostLoad),
+      () => projectSwitchStatusTiming.fail(switchId, "load-failed")
+    );
   }
 
   // Multi-view path: swap WebContentsViews instead of resetting stores
@@ -610,9 +658,10 @@ async function activateProjectView(
       // window names someone else's project and would re-point the mapping at it.
       //
       // Deliberately NOT pvm.getActiveProjectId(): the rollback it performs on a
-      // cold-start failure looks like the right answer, but a warm activation
-      // that throws leaves the INCOMING project active with no rollback, and the
-      // manager itself may be another window's under the deps fallback (#11100).
+      // cold-start or unpainted warm failure looks like the right answer, but any
+      // other warm activation that throws leaves the INCOMING project active with
+      // no rollback, and the manager itself may be another window's under the
+      // deps fallback (#11100).
       // The captured id is the one thing here that cannot be wrong about which
       // window sent the request.
       const previousPath = outgoingProjectId
@@ -636,6 +685,7 @@ async function activateProjectView(
           );
         });
     }
+    projectSwitchStatusTiming.fail(trace.switchId, "swap-failed");
     throw error;
   }
   const { view, isNew } = swapResult;
@@ -724,6 +774,7 @@ async function activateProjectView(
       switchId: trace.switchId,
       entryPoint: trace.entryPoint,
       cacheHit: !isNew,
+      ...(statusTimingDeadlineAt !== undefined && { statusTimingDeadlineAt }),
     });
   }
 
@@ -796,6 +847,7 @@ async function activateProjectView(
       } catch (err) {
         console.error(`${options.logPrefix} Failed to load worktrees:`, err);
         worktreeLoadError = formatErrorMessage(err, "Failed to load worktrees");
+        projectSwitchStatusTiming.fail(trace.switchId, "load-failed");
       }
       if (!view.webContents.isDestroyed()) {
         view.webContents.send(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, {
@@ -817,6 +869,7 @@ async function activateProjectView(
   const totalMs = Math.round(performance.now() - activateStart);
   logInfo("projectswitch.settled", {
     projectId,
+    switchId: trace.switchId,
     isNew,
     swapMs,
     totalMs,

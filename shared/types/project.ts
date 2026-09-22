@@ -12,6 +12,8 @@ import type {
   FileBrowserSortDirection,
   FileBrowserSortKey,
   FileBrowserTreeSnapshot,
+  TerminalSpawnSource,
+  PanelRestoreRecovery,
 } from "./panel.js";
 import type { PersistedPanelKindRef } from "../config/panelKindRegistry.js";
 import type { CommandOverride } from "./commands.js";
@@ -286,6 +288,13 @@ export interface PanelSnapshot {
   env?: Record<string, string>;
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /**
+   * Which surface spawned this terminal, captured once at creation. Persisted
+   * so Terminal Info can still name the origin after a restart and QuickRun
+   * panes stay in Running Tasks (#12419). Absent on legacy snapshots — there
+   * is no way to infer it after the fact, so those stay unattributed.
+   */
+  spawnedBy?: TerminalSpawnSource;
   /** Preset ID active at launch time, used to restore colored icon on reload */
   agentPresetId?: string;
   /** Preset hex color captured at launch time; fallback when preset is later deleted */
@@ -296,6 +305,16 @@ export interface PanelSnapshot {
   isUsingFallback?: boolean;
   /** How many fallback hops have been consumed from the primary's chain. */
   fallbackChainIndex?: number;
+  /**
+   * Directory the pane's conversation began in, recorded only once the pane
+   * runs somewhere else (#12434). Session lookup searches here.
+   */
+  conversationCwd?: string;
+  /**
+   * The pane was held for recovery rather than launched (#12434), so the next
+   * restore holds it again instead of starting a fresh conversation.
+   */
+  restoreRecovery?: PanelRestoreRecovery;
   /** Last known agent state for crash recovery display */
   agentState?: AgentState;
   /** Timestamp of last agent state change */
@@ -767,7 +786,7 @@ export interface ProjectSettings {
    * Tier of Daintree MCP access exposed to agents launched in this project's worktrees.
    * - `off` (default): no MCP server injected
    * - `workbench`: read-only introspection (worktree/files/terminal output, project state, history)
-   * - `action`: workbench + in-app orchestration (create worktrees from recipes, inject context, send terminal commands, confirm-gated worktree cleanup)
+   * - `action`: workbench + in-app orchestration (create worktrees from recipes, open terminals and send input to the ones the agent's own session opened, confirm-gated worktree cleanup)
    * - `system`: action + worktree creation at an explicit root, terminal arm/disarm, git stage/fetch/commit/push, clipboard and CopyTree-to-disk writes, forge reads and writes
    */
   daintreeMcpTier?: DaintreeMcpTier;

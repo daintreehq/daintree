@@ -3,6 +3,8 @@ import { Trash2 } from "lucide-react";
 import type { FleetSavedScope } from "@shared/types";
 import { actionService } from "@/services/ActionService";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
+import { FLEET_RIBBON_ICON_BUTTON_CLASS } from "./fleetRibbonStyles";
 
 interface SavedFleetRowProps {
   scope: FleetSavedScope;
@@ -28,10 +30,12 @@ export function SavedFleetRow({
         void actionService.dispatch("fleet.recallNamedFleet", { id: scope.id }, { source: "user" });
       }}
       data-testid="fleet-saved-row"
-      className={isStale ? "flex items-center gap-2 opacity-50" : "flex items-center gap-2"}
+      className="flex items-center gap-2"
     >
-      <span className="flex-1 truncate">{scope.name}</span>
-      <span className="text-3xs text-text-secondary tabular-nums">
+      {/* Only the recall half fades when a snapshot is stale — Delete is
+          exactly the action a dead snapshot still wants. */}
+      <span className={cn("flex-1 truncate", isStale && "opacity-50")}>{scope.name}</span>
+      <span className={cn("text-3xs text-text-secondary tabular-nums", isStale && "opacity-50")}>
         {count} · {flavorLabel}
       </span>
       <button
@@ -52,7 +56,7 @@ export function SavedFleetRow({
           // delete from triggering recall by stopping propagation early.
           e.stopPropagation();
         }}
-        className="inline-flex shrink-0 items-center rounded p-0.5 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-text-primary"
+        className={FLEET_RIBBON_ICON_BUTTON_CLASS}
       >
         <Trash2 className="h-3 w-3" />
       </button>

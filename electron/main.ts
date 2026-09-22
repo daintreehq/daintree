@@ -13,7 +13,7 @@ import { app, BrowserWindow, crashReporter, protocol } from "electron";
 nodeV8.setHeapSnapshotNearHeapLimit(2);
 import { registerGlobalErrorHandlers } from "./setup/globalErrorHandlers.js";
 import { startDevDiagnostics } from "./setup/devDiagnostics.js";
-import { isE2EFaultMode, isE2EMode } from "./setup/runtimeFlags.js";
+import { isE2EFaultMode, isE2EMode, isIdleHarness } from "./setup/runtimeFlags.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import { PERF_MARKS } from "../shared/perf/marks.js";
@@ -21,6 +21,7 @@ import { getOsToAppBootMs, markPerformance } from "./utils/performance.js";
 import { getCompileCacheMeta } from "./utils/hostPerformance.js";
 import { startPerformanceTraceIfEnabled } from "./utils/performanceTrace.js";
 import { enforceIpcSenderValidation, setupPermissionLockdown } from "./setup/security.js";
+import { startSessionCacheTracking } from "./services/sessionCacheCleaner.js";
 import {
   registerAppProtocol,
   registerDaintreeFileProtocol,
@@ -59,6 +60,7 @@ import { helpSessionService } from "./services/HelpSessionService.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
 import { distributePortsToView } from "./window/portDistribution.js";
+import { deliverOpenSystemMemoryPressure } from "./window/systemMemoryPressureDelivery.js";
 import { toDisposable } from "./utils/lifecycle.js";
 import {
   setupWindowServices,
@@ -253,17 +255,17 @@ app.commandLine.appendSwitch(
 );
 
 // Allow autoplay without user gesture (voice input, media panels).
-// Per-view CPU throttling for cached views is managed by ProjectViewManager
-// via CDP Emulation.setCPUThrottlingRate (per-renderer; window-wide
-// setBackgroundThrottling is unsuitable since Electron 28 — #8599).
+// Cached-view background cost is managed per view by ProjectViewManager —
+// hide, cache IPC, guarded CDP freeze. Window-wide setBackgroundThrottling is
+// unsuitable since Electron 28 (#8599), and CDP CPU throttling busy-spins the
+// renderer it "slows" (#12456).
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 // BackForwardCache wastes memory in an Electron app (no browser navigation history).
 // Translate: Chrome's page-translate feature has no surface in Electron and we never
 // invoke it — disabling skips its startup wiring. The feature is "Translate" (the
 // old "TranslateUI" name was renamed in Chromium ~M86 and is a no-op now).
 // (CalculateNativeWinOcclusion was considered and rejected: it's a runtime power
-// lever, not a boot win, and disabling it fights the per-view CDP throttling
-// ProjectViewManager already does.)
+// lever, not a boot win.)
 const disabledFeatures = ["BackForwardCache", "Translate"];
 app.commandLine.appendSwitch("disable-features", disabledFeatures.join(","));
 
@@ -298,7 +300,9 @@ if (!gotTheLock) {
   initializeCrashLoopGuard();
   registerGlobalErrorHandlers();
 
-  if (!app.isPackaged) {
+  // Dev-only listener and fd sweeps are not part of what users run, so the
+  // idle harness (#12521) keeps them out of its reading.
+  if (!app.isPackaged && !isIdleHarness) {
     startDevDiagnostics();
   }
 
@@ -355,6 +359,7 @@ if (!gotTheLock) {
   const lastActiveProjectId = readLastActiveProjectIdSync();
 
   let powerMonitorInitialized = false;
+  let idleHarnessStarted = false;
 
   async function createWindow(
     initialProjectPath?: string | null,
@@ -455,9 +460,9 @@ if (!gotTheLock) {
           });
       },
       onViewCached: (wcId) => {
-        // Same producer cleanup as eviction: a cached view becomes
-        // freeze-eligible once CPU throttling lands. Live worktree/workspace
-        // ports would otherwise queue messages into a frozen renderer
+        // Same producer cleanup as eviction: a cached view is freeze-eligible
+        // the moment it is parked. Live worktree/workspace ports would
+        // otherwise queue messages into a frozen renderer
         // (#6273). Reactivation re-brokers a fresh port via
         // activateProjectView in projectCrud/switch.ts.
         // Each cleanup is isolated so a throw in one path can't leave the
@@ -517,6 +522,7 @@ if (!gotTheLock) {
             });
           }
         }
+        deliverOpenSystemMemoryPressure(win, wc);
         // Refresh workspace direct port (preload context is reset on reload)
         getWorkspaceClientRef()?.attachDirectPort(win.id, wc);
 
@@ -695,6 +701,22 @@ if (!gotTheLock) {
     registerWindowForFocusThrottle(win);
     registerWindowSessionEndHandler(win);
 
+    // Idle harness (#12521). Started here rather than beside the freeze harness
+    // in setupWindowServices: the agent-state cache the freeze-skip reads and
+    // the window-focus throttle the blurred cells measure are wired just above.
+    // Loaded lazily so a normal boot never evaluates it. Once per process: a
+    // second window would build a second fixture on the same services.
+    if (isIdleHarness && !idleHarnessStarted) {
+      idleHarnessStarted = true;
+      void import("./services/idleHarness.js").then(
+        ({ runIdleHarnessAndExit }) => runIdleHarnessAndExit(win, pvm, appView),
+        (error: unknown) => {
+          console.error("[IDLE-HARNESS] FAILED — could not load the harness:", error);
+          app.exit(1);
+        }
+      );
+    }
+
     return "ok";
   }
 
@@ -724,6 +746,10 @@ if (!gotTheLock) {
     setStopDiskSpaceMonitor,
     windowRegistry,
   });
+
+  // Before whenReady so the eagerly created persist:daintree / persist:portal
+  // sessions are recorded for Settings → Clear cache (#12562).
+  startSessionCacheTracking();
 
   app.whenReady().then(async () => {
     try {

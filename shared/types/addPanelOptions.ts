@@ -10,6 +10,7 @@ import type {
   FileBrowserSortKey,
   FileBrowserTreeSnapshot,
   SessionLostReason,
+  PanelRestoreRecovery,
 } from "./panel.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
@@ -153,12 +154,22 @@ export interface AddPanelOptionsBase {
   exitBehavior?: PanelExitBehavior;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
+  /**
+   * Handback code minted for an `agent.launch` prompt (#12488), handed to the
+   * spawn and never stored on the panel — a restart does not re-ask.
+   */
+  handbackCode?: string;
   /** Process-level flags captured at launch time, persisted for session resume */
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
   /** Sticky "runtime agent ever detected" flag, rehydrated from backend during reconnect. */
   everDetectedAgent?: boolean;
+  /**
+   * Observed respawn count for the live PTY (#12535). Absent when unobserved —
+   * never read absence as zero.
+   */
+  agentIncarnation?: number;
   /** Runtime-detected agent identity at hydration time; cleared when the agent exits. Rehydrated from backend reconnect payload. */
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.) at hydration time; cleared when the process exits. */
@@ -186,6 +197,20 @@ export interface AddPanelOptionsBase {
    * `serializePtyPanel` (intentionally omitted).
    */
   sessionLostOnRestore?: SessionLostReason;
+  /** PTY-only. Where the conversation began, when the pane runs elsewhere (#12434). */
+  conversationCwd?: string;
+  /**
+   * PTY-only. Commit the pane held for recovery (#12434): no startup slot, no
+   * prewarm, no spawn. See `PtyPanelData.restoreRecovery`.
+   */
+  restoreRecovery?: PanelRestoreRecovery;
+  /**
+   * PTY-only. This launch replaces a pane held for recovery under the same
+   * `requestedId`. The replacement is dropped when that pane was closed, or
+   * already launched, while this call was awaiting — a late click must never
+   * resurrect a pane or start a second process in it.
+   */
+  replacesRestoreRecovery?: boolean;
   /**
    * User-initiated focus timestamp from the saved snapshot, propagated
    * from the hydration boundary (`statePatcher.ts:buildArgsFor*` →

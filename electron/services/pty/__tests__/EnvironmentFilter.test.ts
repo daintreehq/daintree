@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import {
   isSensitiveVar,
   filterEnvironment,
+  filterSensitiveOnly,
   injectDaintreeMetadata,
   ensureUtf8Locale,
   shouldInjectForceColor,
@@ -151,6 +152,21 @@ describe("filterEnvironment", () => {
     expect(result.ANTHROPIC_API_KEY).toBeUndefined();
     expect(result.DATABASE_URL).toBeUndefined();
     expect(result.GITHUB_TOKEN).toBeUndefined();
+  });
+
+  it("drops the host's NODE_ENV so project tools run in their own mode", () => {
+    const result = filterEnvironment({ PATH: "/usr/bin", NODE_ENV: "production" });
+
+    expect(result).toEqual({ PATH: "/usr/bin" });
+  });
+
+  it("keeps a differently-cased variable on POSIX, where it is a different variable", () => {
+    if (process.platform === "win32") return;
+    expect(filterEnvironment({ node_env: "custom" })).toEqual({ node_env: "custom" });
+  });
+
+  it("leaves a caller-supplied NODE_ENV alone", () => {
+    expect(filterSensitiveOnly({ NODE_ENV: "test" })).toEqual({ NODE_ENV: "test" });
   });
 
   it("strips undefined values", () => {

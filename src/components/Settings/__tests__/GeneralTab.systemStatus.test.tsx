@@ -26,6 +26,12 @@ vi.mock("../SettingsSection", () => ({
 
 vi.mock("../SettingsSubtabBar", () => ({
   SettingsSubtabBar: () => null,
+  subtabPanelProps: (group: string, activeId: string) => ({
+    role: "tabpanel",
+    id: `settings-subtabpanel-${group}-${activeId}`,
+    "aria-labelledby": `settings-subtab-${group}-${activeId}`,
+    tabIndex: -1,
+  }),
 }));
 
 vi.mock("@/components/Settings/SettingsSwitchCard", () => ({
@@ -56,7 +62,14 @@ vi.mock("@/config/agents", () => ({
   getAgentIds: () => ["claude", "gemini", "codex", "opencode", "cursor"],
   getAgentConfig: (id: string) => ({
     name: id.charAt(0).toUpperCase() + id.slice(1),
+    color: "#888888",
+    // Identifiable so a test can prove the row actually rendered THIS agent's mark
+    // rather than some other glyph that happens to be an svg.
+    icon: () => <svg data-brand-mark={id} />,
   }),
+  // GeneralTab now renders each row through AgentCard's `resolveIdentity`, which reads
+  // the brand mark, colour and blurb as well as the name.
+  AGENT_DESCRIPTIONS: {} as Record<string, string>,
 }));
 
 const mockDispatch = vi.fn();
@@ -320,11 +333,10 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
 
     await renderGeneralTab();
 
-    const rowFor = (name: string) =>
-      screen.getByLabelText(new RegExp(`^Go to ${name} agent settings\\b`));
+    const rowFor = (name: string) => screen.getByLabelText(new RegExp(`^${name} \u2014 `));
     const attention = [
       { name: "Claude", label: "Blocked" },
-      { name: "Gemini", label: "Login required" },
+      { name: "Gemini", label: "No credentials detected" },
       { name: "Codex", label: "Needs setup" },
     ];
 
@@ -335,23 +347,86 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     // Each attention state must own both its label and a glyph nothing else uses.
     const glyphs = attention.map(({ name, label }) => {
       const row = rowFor(name);
-      expect(row.textContent).toContain(label);
+      const chip = row.querySelector("[data-agent-status]");
+      expect(chip).toBeTruthy();
+      expect(chip!.getAttribute("data-agent-status")).toBe(label);
+      expect(chip!.textContent).toContain(label);
       // The row's aria-label overrides its inner text for assistive tech, so
       // the state has to be repeated there or it is announced as nothing.
       expect(row.getAttribute("aria-label")).toContain(label);
-      const svg = row.querySelector("svg");
+      const svg = chip!.querySelector("svg");
       expect(svg).toBeTruthy();
       return svg!.innerHTML;
     });
     expect(new Set(glyphs).size).toBe(3);
 
+    // Ready is the expected state and carries no chip at all — the section's summary
+    // line is where "these are fine" gets said, once, rather than on every row.
     const readyRow = rowFor("Opencode");
-    expect(readyRow.querySelector("svg")).toBeNull();
+    expect(readyRow.querySelector("[data-agent-status]")).toBeNull();
     for (const { label } of attention) {
       expect(readyRow.textContent).not.toContain(label);
       expect(readyRow.getAttribute("aria-label")).not.toContain(label);
     }
-    expect(readyRow.textContent).not.toContain("Ready");
+  });
+
+  // The row used to be a bare name. Eighteen unfamiliar brands is a reading task
+  // without a mark to recognise, so every row must carry its own — and it must be
+  // ITS own, not a shared fallback glyph.
+  it("renders each agent's own brand mark in its row", async () => {
+    setupDispatchMock(
+      {
+        claude: "ready",
+        gemini: "unauthenticated",
+        codex: "ready",
+        opencode: "missing",
+        cursor: "missing",
+      },
+      { agents: {} } as unknown as AgentSettings
+    );
+
+    await renderGeneralTab();
+
+    const rowFor = (name: string) => screen.getByLabelText(new RegExp(`^${name} \u2014 `));
+
+    await waitFor(() => {
+      expect(rowFor("Claude")).toBeTruthy();
+    });
+
+    for (const [name, id] of [
+      ["Claude", "claude"],
+      ["Gemini", "gemini"],
+      ["Codex", "codex"],
+    ] as const) {
+      const mark = rowFor(name).querySelector(`[data-brand-mark="${id}"]`);
+      expect(mark).toBeTruthy();
+    }
+  });
+
+  // The rows a user can act on are why they opened the section, so they lead — but
+  // within each group the registry order holds, or the roster reshuffles between visits.
+  it("lists agents needing attention before ready ones, preserving registry order within each", async () => {
+    // Registry order (from the mock): claude, gemini, codex, opencode, cursor.
+    setupDispatchMock(
+      {
+        claude: "ready",
+        gemini: "unauthenticated",
+        codex: "ready",
+        opencode: "blocked",
+        cursor: "ready",
+      },
+      { agents: {} } as unknown as AgentSettings
+    );
+
+    await renderGeneralTab();
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("listitem").length).toBe(5);
+    });
+    const order = screen
+      .getAllByRole("listitem")
+      .map((li) => li.querySelector("[data-agent-row]")!.getAttribute("data-agent-row"));
+    expect(order).toEqual(["gemini", "opencode", "claude", "codex", "cursor"]);
   });
 
   it("renders empty-state CTA when no agents installed", async () => {
@@ -369,7 +444,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     await renderGeneralTab();
 
     await waitFor(() => {
-      expect(screen.getByText("No agents installed yet.")).toBeTruthy();
+      expect(screen.getByText(/No agent CLIs found on this machine/)).toBeTruthy();
     });
 
     expect(screen.getByText("Run setup wizard")).toBeTruthy();
@@ -455,7 +530,37 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
 
     await waitFor(() => {
       const desc = screen.getByTestId("section-desc-System status");
-      expect(desc.textContent).toBe("Agents ready to use on your system.");
+      // Two installed, both ready. The rule: the description reports what the probe
+      // actually returned rather than asserting a fixed claim, and it never uses
+      // dependency-check framing ("requirements", "missing dependencies").
+      expect(desc.textContent).toContain("2");
+      expect(desc.textContent).toMatch(/ready/i);
+      expect(desc.textContent).not.toMatch(/depend|requirement|missing/i);
+    });
+  });
+
+  it("reports the attention count in the section description when agents need it", async () => {
+    setupDispatchMock(
+      {
+        claude: "ready",
+        gemini: "unauthenticated",
+        codex: "blocked",
+        opencode: "missing",
+        cursor: "missing",
+      },
+      { agents: {} } as unknown as AgentSettings
+    );
+
+    await renderGeneralTab();
+
+    await waitFor(() => {
+      const desc = screen.getByTestId("section-desc-System status");
+      // Three installed, one ready, two wanting something. The description has to
+      // separate those two numbers — a single total would hide the problem.
+      expect(desc.textContent).toContain("1");
+      expect(desc.textContent).toContain("3");
+      expect(desc.textContent).toContain("2");
+      expect(desc.textContent).toMatch(/attention/i);
     });
   });
 });

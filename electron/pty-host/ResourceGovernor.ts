@@ -1,13 +1,15 @@
 import type { AgentState } from "../../shared/types/agent.js";
 import type {
+  FdOwnerCounts,
   PtyHostEvent,
   ResourceGovernorSnapshot,
   TerminalFlowStatus,
 } from "../../shared/types/pty-host.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
+import type { PowerPolicyLevel } from "../../shared/types/powerPolicy.js";
 import { SCROLLBACK_MIN } from "../../shared/config/scrollback.js";
 import type { WorkerMemoryAccounting } from "../services/pty/analysis/AnalysisWorkerPool.js";
-import { FdMonitor } from "./FdMonitor.js";
+import { FdMonitor, isProcessAlive } from "./FdMonitor.js";
 import { metricsEnabled } from "./metrics.js";
 import type { PtyPauseCoordinator } from "./PtyPauseCoordinator.js";
 
@@ -21,7 +23,8 @@ export interface TerminalActivityInfo {
 export interface ResourceGovernorDeps {
   getTerminalIds: () => string[];
   getPauseCoordinator: (id: string) => PtyPauseCoordinator | undefined;
-  getTerminalCount: () => number;
+  /** What in the host holds descriptors by design, for FD growth sampling. */
+  getFdOwners: () => FdOwnerCounts;
   incrementPauseCount: (count: number) => void;
   sendEvent: (event: PtyHostEvent) => void;
   emitTerminalStatus: (
@@ -137,6 +140,20 @@ const TOTAL_PROCESS_BUDGET_MB = HEAP_BUDGET_MB + EXTERNAL_HEADROOM_MB;
 // delayed ticks on a busy worker event loop without letting a wedged worker's
 // last reading steer trims/pauses forever.
 const WORKER_SAMPLE_MAX_AGE_MS = 10_000;
+// How far the descriptor sample's own interval stretches by power-policy
+// level. The sample is a readdir of the process FD table — diagnostic work
+// that can run far less often while nobody is watching, but never stops: a
+// laptop spends most of its life on battery, and a leak that only shows up
+// unplugged is exactly the one worth seeing. Same floors as
+// `powerPolicyPollMultiplier` gives each level. The orphan-PID sweep and the
+// memory and bounded-pause checks stay on every 2s tick.
+export const FD_SAMPLE_POWER_MULTIPLIER: Record<Exclude<PowerPolicyLevel, "active">, number> = {
+  saving: 2,
+  deep: 10,
+};
+// Descriptor growth builds over open/close cycles, not seconds, so it is
+// sampled far less often than memory pressure.
+export const FD_SAMPLE_INTERVAL_MS = 30000;
 
 export class ResourceGovernor {
   private readonly MEMORY_LIMIT_PERCENT = 85;
@@ -168,10 +185,14 @@ export class ResourceGovernor {
   private readonly BYTES_PER_CELL = 12;
   private isThrottling = false;
   private checkInterval: NodeJS.Timeout | null = null;
+  private fdSampleInterval: NodeJS.Timeout | null = null;
+  private fdSampleFailureLogged = false;
   private throttleStartTime = 0;
   private readonly fdMonitor: FdMonitor;
   private readonly killedPids = new Map<number, number>();
   private readonly ORPHAN_GRACE_MS = 4000;
+  private powerLevel: PowerPolicyLevel = "active";
+  private lastFdSampleAt = 0;
   private hasThroughputBaseline = false;
   private prevPauseCount = 0;
   private readonly pausedTerminalIds = new Set<string>();
@@ -193,6 +214,7 @@ export class ResourceGovernor {
     this.checkInterval = setInterval(() => this.checkResources(), this.CHECK_INTERVAL_MS);
     console.log("[ResourceGovernor] Started monitoring memory usage");
     if (this.fdMonitor.supported) {
+      this.fdSampleInterval = setInterval(() => this.sampleFdUsage(), FD_SAMPLE_INTERVAL_MS);
       console.log("[ResourceGovernor] FD monitoring enabled");
     }
   }
@@ -228,6 +250,36 @@ export class ResourceGovernor {
     } else {
       console.log(`[ResourceGovernor] Profile set to ${profile} — using default thresholds`);
     }
+  }
+
+  setPowerLevel(level: PowerPolicyLevel): void {
+    this.powerLevel = level;
+  }
+
+  /** The descriptor sample's effective spacing at the current power level. */
+  private get fdSampleIntervalMs(): number {
+    if (this.powerLevel === "active") return FD_SAMPLE_INTERVAL_MS;
+    return FD_SAMPLE_INTERVAL_MS * FD_SAMPLE_POWER_MULTIPLIER[this.powerLevel];
+  }
+
+  /**
+   * Sample on every interval at the `active` level and whenever something is
+   * already going wrong — memory pressure or a warning, where descriptor
+   * growth is evidence — otherwise at the level's stretched cadence.
+   */
+  private isFdSampleDue(now: number): boolean {
+    const elapsed = now - this.lastFdSampleAt;
+    const due =
+      this.powerLevel === "active" ||
+      this.isThrottling ||
+      this.isWarning ||
+      // A clock stepped backwards would otherwise hold the sample off until
+      // real time caught up, which is exactly the stretch of unobserved time
+      // the monitor needs to see for itself.
+      elapsed < 0 ||
+      elapsed >= this.fdSampleIntervalMs;
+    if (due) this.lastFdSampleAt = now;
+    return due;
   }
 
   private get memoryLimitPercent(): number {
@@ -415,11 +467,15 @@ export class ResourceGovernor {
         utilizationPercent < resumePercent && !this.hasStaleAliveWorkerSample();
 
       if (maxPauseExceeded || belowThreshold) {
-        this.disengageThrottle(combinedMb, utilizationPercent, maxPauseExceeded);
+        // Forced means the bound released the pause while pressure held. When
+        // utilization also cleared the resume threshold on this tick, it's an
+        // ordinary recovery — reporting it as forced would tell consumers the
+        // pressure outlasted the pause when it didn't (#12375).
+        this.disengageThrottle(combinedMb, utilizationPercent, maxPauseExceeded && !belowThreshold);
       }
     }
 
-    this.checkFdUsage();
+    this.sweepKilledPids();
     this.emitPendingBytesGauge();
     this.emitThroughputRateGauge();
     this.emitPausedDurationGauge();
@@ -585,56 +641,73 @@ export class ResourceGovernor {
     });
   }
 
-  private checkFdUsage(): void {
+  private sweepKilledPids(): void {
     const now = Date.now();
 
-    // Collect orphan candidates: PIDs killed long enough ago to have exited.
-    // Runs unconditionally — `killedPids` is populated on every platform via
-    // `trackKilledPid`, but FD monitoring is unsupported on Windows. Gating the
-    // sweep behind `fdMonitor.supported` (as before) leaked the map there until
-    // `dispose()`; prune first, then bail out of the FD-leak check (#10842).
-    const orphanCandidates: number[] = [];
+    // Prune on every platform: `killedPids` fills everywhere via
+    // `trackKilledPid`, and gating the sweep on FD support leaked the map on
+    // Windows until `dispose()` (#10842). The liveness probe keeps its
+    // previous scope — platforms with FD monitoring.
+    const expiredPids: number[] = [];
     for (const [pid, killedAt] of this.killedPids) {
       if (now - killedAt > this.ORPHAN_GRACE_MS) {
-        orphanCandidates.push(pid);
+        expiredPids.push(pid);
         this.killedPids.delete(pid);
       }
     }
 
-    if (!this.fdMonitor.supported) return;
+    if (expiredPids.length === 0 || !this.fdMonitor.supported) return;
 
-    const result = this.fdMonitor.checkForLeaks(this.deps.getTerminalCount(), orphanCandidates);
+    const orphanedPids = expiredPids.filter((pid) => isProcessAlive(pid));
+    if (orphanedPids.length > 0) {
+      console.warn(
+        `[ResourceGovernor] Orphaned PTY PIDs detected (killed but still alive): ${orphanedPids.join(", ")}`
+      );
+    }
+  }
+
+  private sampleFdUsage(): void {
+    const now = Date.now();
+    // The timer keeps its 30s period; the power level decides which firings
+    // actually take a reading, so a level change takes effect on the next one
+    // without rearming the interval.
+    if (!this.isFdSampleDue(now)) return;
+
+    let owners: FdOwnerCounts;
+    try {
+      owners = this.deps.getFdOwners();
+    } catch (error) {
+      // An exception escaping this timer would reach the host's
+      // uncaughtException handler and take every terminal down with it.
+      // Skip the sample and say so once per failure run.
+      if (!this.fdSampleFailureLogged) {
+        this.fdSampleFailureLogged = true;
+        console.warn("[ResourceGovernor] FD owner accounting failed; skipping samples:", error);
+      }
+      return;
+    }
+    this.fdSampleFailureLogged = false;
+
+    const sample = this.fdMonitor.sample(owners, now);
+    if (!sample) return;
 
     if (metricsEnabled()) {
       console.log(
-        `[ResourceGovernor] FDs: ${result.totalFds} total, ` +
-          `~${result.estimatedTerminalFds} terminal-related, ` +
-          `${result.activeTerminals} active terminals` +
-          (result.ptmxLimit != null ? `, ptmx limit: ${result.ptmxLimit}` : "")
+        `[ResourceGovernor] FDs: ${sample.fdCount} open, ${sample.expectedFds} expected ` +
+          `(${owners.terminals} terminals, ${owners.pooledPtys} pooled PTYs, ` +
+          `${owners.pluginPtys} plugin PTYs, ${owners.analysisWorkers} analysis workers), ` +
+          `baseline ${sample.baselineFds ?? "not yet calibrated"}`
       );
     }
 
-    // Log orphaned PIDs (killed but still alive after grace period)
-    if (result.orphanedPids.length > 0) {
-      console.warn(
-        `[ResourceGovernor] Orphaned PTY PIDs detected (killed but still alive): ${result.orphanedPids.join(", ")}`
-      );
-    }
-
-    if (result.isWarning) {
-      console.warn(
-        `[ResourceGovernor] FD leak warning: ${result.totalFds} open FDs ` +
-          `(baseline: ${result.baselineFds}, ~${result.estimatedTerminalFds} terminal-related) ` +
-          `with only ${result.activeTerminals} active terminals`
-      );
-
+    // Main writes the log record; logging here as well would put a second
+    // copy in the same log through the host's forwarded output.
+    if (sample.transition) {
       this.deps.sendEvent({
-        type: "fd-leak-warning",
-        fdCount: result.totalFds,
-        activeTerminals: result.activeTerminals,
-        estimatedLeaked: Math.max(0, result.estimatedTerminalFds - result.activeTerminals),
-        orphanedPids: result.orphanedPids,
-        ptmxLimit: result.ptmxLimit,
+        type: "fd-growth",
+        ...sample.transition,
+        hostPid: process.pid,
+        sampleIntervalMs: this.fdSampleIntervalMs,
         timestamp: now,
       });
     }
@@ -917,6 +990,10 @@ export class ResourceGovernor {
     if (this.checkInterval) {
       clearInterval(this.checkInterval);
       this.checkInterval = null;
+    }
+    if (this.fdSampleInterval) {
+      clearInterval(this.fdSampleInterval);
+      this.fdSampleInterval = null;
     }
     if (this.isThrottling) {
       // Iterate only governor-paused terminals so we don't emit spurious

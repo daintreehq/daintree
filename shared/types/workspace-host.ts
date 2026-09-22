@@ -11,6 +11,7 @@
  * All types are serializable (no functions, no circular refs) for IPC transport.
  */
 
+import type { HostLogEvent } from "./host-log.js";
 import type { BranchInfo, CreateWorktreeOptions, RepoState, WorktreeChanges } from "./git.js";
 import type {
   Worktree,
@@ -25,6 +26,7 @@ import type {
 import type { CIStatusState, Credentials, RepoRef } from "./forge.js";
 import type { ForgeProviderMatcher } from "../utils/forgeHostnames.js";
 import type { PluginWorktreeLinked } from "./plugin.js";
+import type { WorkspacePollingPolicy } from "./powerPolicy.js";
 import type {
   CopyTreeOptions,
   CopyTreeProgress,
@@ -283,6 +285,9 @@ export interface WorktreeSnapshot {
   /** Whether the resource config has a provision command */
   hasProvisionCommand?: boolean;
 
+  /** Repository-supplied commands are waiting for approval (mirrors `Worktree.lifecycleCommandsNeedApproval`). */
+  lifecycleCommandsNeedApproval?: boolean;
+
   /** Worktree environment mode ("local" or an environment key from resourceEnvironments) */
   worktreeMode?: string;
 
@@ -348,6 +353,12 @@ export interface MonitorConfig {
    * fall back to the adaptive poll path. See `ResourceProfileConfig`.
    */
   backgroundGitWatcherCap?: number;
+  /**
+   * Profile-aware cap on the number of agent-active worktrees allowed to hold
+   * a recursive watcher concurrently (per workspace-host). Agents past it fall
+   * back to `git-only`. See `ResourceProfileConfig`.
+   */
+  agentRecursiveWatcherCap?: number;
 }
 
 /**
@@ -473,7 +484,17 @@ export type WorkspaceHostRequest =
   | { type: "get-monitor"; requestId: string; worktreeId: string }
   // Worktree operations
   | { type: "set-active"; requestId: string; worktreeId: string; silent?: boolean }
-  | { type: "refresh"; requestId: string; worktreeId?: string }
+  | {
+      type: "refresh";
+      requestId: string;
+      worktreeId?: string;
+      /**
+       * `focus` marks the automatic revalidation main fires when the user
+       * comes back. Only that one is throttled — a manual refresh, a project
+       * activation and an owed wake recovery must always run.
+       */
+      reason?: "manual" | "focus";
+    }
   | { type: "refresh-on-wake"; requestId: string }
   | { type: "refresh-prs"; requestId: string }
   | { type: "get-pr-status"; requestId: string }
@@ -523,8 +544,9 @@ export type WorkspaceHostRequest =
       offset?: number;
       maxBytes?: number;
     }
-  // Polling control
-  | { type: "set-polling-enabled"; enabled: boolean }
+  // App-wide workspace power policy. The host keeps it as a separate input
+  // from its own project-lifecycle state and derives permissions from both.
+  | { type: "set-workspace-power-policy"; policy: WorkspacePollingPolicy }
   // PR polling cadence control (window-focus aware)
   | { type: "set-pr-poll-cadence"; focused: boolean }
   // WSL-routed git opt-in / banner dismissal (Windows only)
@@ -696,13 +718,60 @@ export type ForgeResolveProviderResult =
   | { status: "not-ready" };
 
 /**
+ * Wall-clock (`Date.now()`) stamps of the host's most recent project load and
+ * of each live monitor's first status-bearing snapshot. Absolute rather than
+ * relative so main can measure them against its own switch-requested instant.
+ * Counts and timings only — never ids or paths.
+ */
+export interface HostStatusTimingMarks {
+  loadStartedAt: number | null;
+  enumeratedAt: number | null;
+  firstSnapshotAt: number | null;
+  /** One entry per live monitor that has emitted a status, unordered. */
+  firstStatusAt: number[];
+  monitorCount: number;
+}
+
+/**
  * Events sent from Workspace Host → Main.
  * Includes both responses to requests and spontaneous updates.
  */
+/**
+ * What a disposing host is still waiting on, as last observed by the host.
+ * Scalars only — it rides a message the parent logs if it has to kill.
+ */
+export interface WorkspaceHostDisposePending {
+  /** Parcel subscriptions registered and not yet asked to unsubscribe. */
+  parcelSubscriptions: number;
+  /** Serialized native subscribe/unsubscribe operations running or queued. */
+  parcelLifecycleOps: number;
+}
+
+export type WorkspaceHostDisposePhase = "disposing-services" | "settling" | "write-tail";
+
 export type WorkspaceHostEvent =
   // Lifecycle events
   | { type: "ready" }
   | { type: "pong" }
+  // A structured logger entry the host already wrote to the shared log file.
+  // Main mirrors it into its buffer/renderer without writing it again.
+  | HostLogEvent
+  // Teardown reports, sent only after the parent's `dispose` request. The
+  // parent keeps the latest progress so a force-kill can say what the host was
+  // stuck on, and treats `disposed` as the host's promise to exit next tick.
+  | {
+      type: "dispose-progress";
+      phase: WorkspaceHostDisposePhase;
+      elapsedMs: number;
+      pending: WorkspaceHostDisposePending;
+    }
+  | {
+      type: "disposed";
+      elapsedMs: number;
+      /** False when the watcher drain hit its bound rather than finishing. */
+      settled: boolean;
+      pending: WorkspaceHostDisposePending;
+    }
   | { type: "error"; error: string; requestId?: string }
   // Project lifecycle responses
   | { type: "load-project-result"; requestId: string; success: boolean; error?: string }
@@ -821,12 +890,15 @@ export type WorkspaceHostEvent =
   // that explicitly marked the activation silent (the renderer IPC path)
   // do not double-notify subscribers that the legacy
   // `CHANNELS.WORKTREE_ACTIVATED` path already suppresses.
+  // `origin` echoes the `set-active` request's origin tag, when it carried one,
+  // so a view can recognise the echo of its own selection (#12370).
   | {
       type: "worktree-activated";
       worktreeId: string;
       epoch: string;
       seq: number;
       silent?: boolean;
+      origin?: string;
     }
   // Per-worktree lifecycle setup failure surfaced to the renderer's error
   // banner. Emitted from sites that previously swallowed errors to
@@ -857,6 +929,19 @@ export type WorkspaceHostEvent =
   // Re-armed by `retry-auth-fetch` / credential rotation so a later
   // re-confirmation can re-signal.
   | { type: "fetch-auth-failure-confirmed"; reason: import("./ipc/errors.js").GitOperationReason }
+  // A switched-to view's report that its worktree statuses landed (or that its
+  // deadline passed first), relayed by the host with its own load marks
+  // attached. Main folds it into the switch's `projectswitch.status-timing`
+  // record. Relayed on this port rather than sent to main directly so it stays
+  // FIFO behind every status the host emitted before it (#12461).
+  | {
+      type: "switch-status-timing";
+      switchId: string;
+      /** Wall-clock ms the view saw every worktree with a status; null on deadline. */
+      rendererAppliedAt: number | null;
+      rendererStatusCount: number;
+      host: HostStatusTimingMarks;
+    }
   // Fired when the topology watcher goes "dark": either the `@parcel/watcher`
   // subscribe() rejected at cold start (no events will ever arrive), or a 5s
   // pending-event safety valve expired without the watcher delivering the

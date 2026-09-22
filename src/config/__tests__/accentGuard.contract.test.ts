@@ -131,28 +131,17 @@ const DURABLE_ALLOWLIST = new Set([
   // Theme browser accent display (theme content, not app chrome)
   "src/components/ThemeBrowser/ThemeBrowser.tsx",
 
-  // Primary CTA (QuickRun button) + bg-accent-soft autocomplete + fill-daintree-accent Pin icon
-  "src/components/Project/QuickRun.tsx",
-
-  // PluginManagerView selected-row left-edge accent stripe in the master-detail
-  // list, plus the detail subtab active-tab underline (single primary anchor per
-  // active focus region)
-  "src/components/Plugin/PluginManagerView.tsx",
-
-  // Project-plugin rows share the plugin manager's master list, so they carry the
-  // same selected-row left-edge accent stripe — one row is selected at a time
-  // across both sections, so it stays a single primary anchor per active focus
-  // region rather than a second signal beside PluginManagerView's
-  "src/components/Plugin/ProjectPluginSection.tsx",
+  // The plugin manager's two row components used to sit here for their
+  // selected-row accent stripe. Selection is neutral now: it persists while
+  // focus moves, so an accent stripe on one row plus an accent focus ring on
+  // another put two accents in the same focus region. The accent is the focus
+  // anchor alone, and both files came off this list.
 
   // PresetColorPicker Done CTA (primary commit action) + focus-visible ring
   "src/components/Settings/PresetColorPicker.tsx",
 
   // Current rebase step indicator in the conflict UI (single primary anchor per active focus region)
   "src/components/Worktree/ReviewHub/ConflictPanel.tsx",
-
-  // Find bar match-case toggle active state (single primary anchor per active focus region)
-  "src/components/Browser/FindBar.tsx",
 
   // File-browser tree-column resize handle: focus ring + grip accent mark the
   // one keyboard-focusable separator (single focus anchor per active focus
@@ -182,7 +171,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/DevPreview/DevPreviewEmptyStates.tsx",
     "src/components/Diagnostics/DiagnosticsDock.tsx",
     "src/components/Diagnostics/TelemetryContent.tsx",
-    "src/components/Fleet/FleetArmingRibbon.tsx",
     "src/components/KeyboardShortcuts/SettingsShortcutCapture.tsx",
     "src/components/Layout/DockedNonPtyPanelItem.tsx",
     "src/components/Layout/DockedTabGroup.tsx",
@@ -190,7 +178,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Layout/Sidebar.tsx",
     "src/components/Layout/VoiceRecordingToolbarButton.tsx",
     "src/components/Onboarding/GettingStartedChecklist.tsx",
-    "src/components/Panel/PanelHeader.tsx",
     "src/components/Panel/PanelTransitionOverlay.tsx",
     "src/components/Panel/TabButton.tsx",
     "src/components/Portal/PortalDock.tsx",
@@ -213,7 +200,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Settings/TerminalSettingsTab.tsx",
     "src/components/Settings/WorktreeSettingsTab.tsx",
     "src/components/Terminal/ContentGridDefault.tsx",
-    "src/components/Terminal/ContentGridTwoPaneSplit.tsx",
     "src/components/Terminal/HybridInputBar.tsx",
     "src/components/Terminal/RecipeRunner/RecipeRunnerGrid.tsx",
     "src/components/Terminal/RecipeRunner/RecipeRunnerItem.tsx",
@@ -223,7 +209,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/TerminalRecipe/RecipeEditor.tsx",
     "src/components/Worktree/QuickCreatePalette.tsx",
     "src/components/Worktree/WorktreeCard/WorktreeTerminalSection.tsx",
-    "src/components/Worktree/WorktreeFilterPopover.tsx",
     "src/hooks/useUpdateListener.tsx",
   ],
 };

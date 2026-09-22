@@ -5,6 +5,7 @@ import type { AgentId } from "../agent.js";
 import type { TabGroup, PanelTitleMode } from "../panel.js";
 import type { WorktreeState } from "../worktree.js";
 import type { TerminalSubmissionLookup } from "../terminalSubmission.js";
+import type { TerminalOutputActivityLookup } from "../terminalStatus.js";
 import type {
   Project,
   ProjectAddOptions,
@@ -145,6 +146,7 @@ import type {
 } from "./forge.js";
 import type { TerminalConfig } from "./config.js";
 import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
+import type { KeepAwakeState } from "./keepAwake.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
 import type { KeyAction } from "../keymap.js";
@@ -163,7 +165,7 @@ import type {
   SpawnResult,
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
-  FdLeakWarningPayload,
+  HostMemoryPauseSnapshot,
   TerminalReliabilityMetricPayload,
   TerminalResizeResult,
 } from "../pty-host.js";
@@ -286,9 +288,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * Submit text as one submission. `submissionToken` is the caller's own
      * correlator (#12337): pass it here and read the outcome back through
      * `getSubmissions` or `terminal.getStatus`. Untokened submits are not
-     * tracked and retain nothing.
+     * tracked and retain nothing. `handbackCode` is the code minted for a
+     * submission that asked for a handback (#12488), whose instruction is
+     * already in `text`.
      */
-    submit(id: string, text: string, submissionToken?: string): Promise<void>;
+    submit(
+      id: string,
+      text: string,
+      submissionToken?: string,
+      handbackCode?: string
+    ): Promise<void>;
     /**
      * Resolve one submission token across several terminals (#12337). Answers
      * `found` / `absent` / `unreadable` per id — a terminal that could not be
@@ -298,6 +307,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       terminalIds: string[],
       submissionToken: string
     ): Promise<Record<string, TerminalSubmissionLookup>>;
+    /**
+     * Read `lastOutputChangeAt` across several terminals (#12495). Answers
+     * `read` / `unreadable` per id — a terminal that could not be read is never
+     * reported as one whose screen has not changed.
+     */
+    getOutputActivity(terminalIds: string[]): Promise<Record<string, TerminalOutputActivityLookup>>;
     resize(id: string, cols: number, rows: number): void;
     kill(id: string): Promise<void>;
     gracefulKill(id: string): Promise<string | null>;
@@ -338,6 +353,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onTrashed(callback: (data: { id: string; expiresAt: number }) => void): () => void;
     onRestored(callback: (data: { id: string }) => void): () => void;
     forceResume(id: string): Promise<void>;
+    /** Main's current terminal-host memory pause, ORed across every host shard (#12375). */
+    getHostMemoryPause(): Promise<HostMemoryPauseSnapshot>;
     /**
      * Mint a dedicated worker-ingest MessagePort for this terminal (issue
      * #10960). Resolves with the handshake token; the port itself arrives via
@@ -349,6 +366,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Submit-lane status for one terminal (#11875). Fires only for submits that
      *  cross the slow/stalled threshold or fail. */
     onSubmitStatus(callback: (data: TerminalSubmitStatusPayload) => void): () => void;
+    /** A pane's terminal watches changed (#12491). Callers filter by `terminalId`. */
+    onWatchState(
+      callback: (data: import("../terminalWatch.js").PaneWatchState) => void
+    ): () => void;
     onReliabilityMetric(callback: (data: TerminalReliabilityMetricPayload) => void): () => void;
     /**
      * Geometry the PTY actually holds after each resize it processed. Compare
@@ -358,7 +379,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onResourceMetrics(
       callback: (data: { metrics: TerminalResourceBatchPayload; timestamp: number }) => void
     ): () => void;
-    onFdLeakWarning(callback: (data: FdLeakWarningPayload) => void): () => void;
     onBackendCrashed(
       callback: (data: {
         crashType: string;
@@ -391,6 +411,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onRestoreScrollback(callback: (data: { terminalIds: string[] }) => void): () => void;
     restartService(): Promise<void>;
     onReclaimMemory(callback: () => void): () => void;
+    /**
+     * Terminal-host memory pause changes. Main pushes only to each window's
+     * active view, so pair with `getHostMemoryPause`.
+     */
+    onHostMemoryPause(callback: (snapshot: HostMemoryPauseSnapshot) => void): () => void;
   };
   files: {
     search(payload: FileSearchPayload): Promise<FileSearchResult>;
@@ -932,6 +957,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onStateChanged(callback: (data: DevPreviewStateChangedPayload) => void): () => void;
     onAllSessionsChanged(callback: (data: DevPreviewAllSessionsPayload) => void): () => void;
   };
+  // bind / detach / setMode / getState come from GeneratedElectronAPI; onEvent
+  // is the renderer-only push subscription for validated guest observations.
+  sitePreview: GeneratedElectronAPI["sitePreview"] & {
+    onEvent(
+      callback: (data: import("./sitePreview.js").SitePreviewPushPayload) => void
+    ): () => void;
+  };
   git: GeneratedElectronAPI["git"] & {
     getFileDiff(
       cwd: string,
@@ -1201,6 +1233,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): Promise<import("../browser.js").BrowserNavigationHistorySnapshot>;
     /** Navigate to a specific index in Chromium's navigation history */
     goToHistoryIndex(webContentsId: number, index: number): Promise<void>;
+  };
+  // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
+  keepAwake: GeneratedElectronAPI["keepAwake"] & {
+    onStateChanged(callback: (state: KeepAwakeState) => void): () => void;
   };
   // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
   hibernation: GeneratedElectronAPI["hibernation"] & {
@@ -1549,7 +1585,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   };
   // milestones is generated — see GeneratedElectronAPI.
   // shortcutHints is generated — see GeneratedElectronAPI.
-  forge: {
+  // previewCredentialImport / commitCredentialImport are generated.
+  forge: GeneratedElectronAPI["forge"] & {
     /** Read the persisted forge settings (global default provider id). */
     getSettings(): Promise<{ defaultProviderId: string | null }>;
     /**
@@ -1587,6 +1624,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     openIssue(payload: { cwd: string; issueNumber: number }): Promise<void>;
     /** Resolve the canonical URL for a single issue via the resolved forge provider. */
     getIssueUrl(payload: { cwd: string; issueNumber: number }): Promise<string>;
+    /**
+     * Open the repository's home page via the resolved forge provider. Rejects
+     * when the provider doesn't implement the optional `buildRepoUrl`.
+     */
+    openRepo(payload: { cwd: string }): Promise<void>;
+    /**
+     * Resolve the repository's home page URL via the resolved forge provider,
+     * or `null` when the provider doesn't implement the optional `buildRepoUrl`.
+     */
+    getRepoUrl(payload: { cwd: string }): Promise<string | null>;
     /**
      * Assign an issue to a user via the resolved forge provider, returning the
      * issue's resulting assignee list. Forges may silently drop an assignee the

@@ -1,0 +1,118 @@
+import { useRef, useState } from "react";
+import { BatteryMedium } from "lucide-react";
+import { Coffee } from "@/components/icons";
+import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
+import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
+import { keepAwakeClient } from "@/clients/keepAwakeClient";
+import { loadKeepAwakeState } from "@/hooks/useKeepAwakeSync";
+import { useKeepAwakeStore } from "@/store/keepAwakeStore";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { logError } from "@/utils/logger";
+import type { KeepAwakeConfig } from "@shared/types";
+
+/** Shown, locked, until main's state arrives — the stored defaults. */
+const DEFAULT_CONFIG: KeepAwakeConfig = { enabled: true, onBattery: false };
+
+interface SaveFailure {
+  patch: Partial<KeepAwakeConfig>;
+  message: string;
+}
+
+/**
+ * Whether Daintree holds off idle sleep while agents work, and whether that
+ * extends to battery power (#12516). The description reports what main is
+ * doing right now rather than what the switches ask for, so it only changes
+ * once main has acted.
+ */
+export function KeepAwakeSection() {
+  const state = useKeepAwakeStore((s) => s.state);
+  const loadError = useKeepAwakeStore((s) => s.loadError);
+  const [pendingPatch, setPendingPatch] = useState<Partial<KeepAwakeConfig> | null>(null);
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const savingRef = useRef(false);
+
+  // The patch holds absolute values, so a retry resends exactly what failed
+  // rather than flipping whatever the switch shows by then. Promise chaining
+  // rather than try/finally, which the React Compiler can't lower.
+  const save = (patch: Partial<KeepAwakeConfig>): Promise<void> => {
+    if (savingRef.current || !useKeepAwakeStore.getState().state) return Promise.resolve();
+    savingRef.current = true;
+    setPendingPatch(patch);
+    setSaveFailure(null);
+    return Promise.resolve()
+      .then(() => keepAwakeClient.updateConfig(patch))
+      .then(
+        (next) => {
+          useKeepAwakeStore.getState().applyState(next);
+        },
+        (error: unknown) => {
+          logError("Failed to update keep-awake config", error);
+          setSaveFailure({
+            patch,
+            message: formatErrorMessage(error, "The setting couldn't be written."),
+          });
+        }
+      )
+      .finally(() => {
+        savingRef.current = false;
+        setPendingPatch(null);
+      });
+  };
+
+  // Only the field being saved is overridden, so a change another window makes
+  // to the other one still shows while this save is in flight.
+  const config = { ...(state?.config ?? DEFAULT_CONFIG), ...pendingPatch };
+  const locked = state === null || pendingPatch !== null;
+
+  return (
+    <SettingsSection
+      icon={Coffee}
+      title="Keep awake"
+      description={
+        state === null
+          ? "Whether Daintree keeps this machine awake while agents work"
+          : state.isBlocking
+            ? "Daintree is keeping this machine awake right now"
+            : "Daintree isn't keeping this machine awake right now"
+      }
+      id="general-keep-awake"
+    >
+      {state === null && loadError !== null ? (
+        <SettingsLoadErrorBanner
+          title="Couldn't load keep-awake settings"
+          message={loadError}
+          onRetry={() => void loadKeepAwakeState()}
+        />
+      ) : (
+        <>
+          <SettingsSwitchCard
+            icon={Coffee}
+            title="Keep awake while agents work"
+            subtitle="Holds off idle sleep while an agent is working — the display can still turn off"
+            isEnabled={config.enabled}
+            onChange={() => void save({ enabled: !config.enabled })}
+            ariaLabel="Keep awake while agents work"
+            disabled={locked}
+          />
+          <SettingsSwitchCard
+            icon={BatteryMedium}
+            title="Keep awake on battery"
+            subtitle="Also holds off idle sleep when this machine is unplugged, which drains its battery"
+            isEnabled={config.onBattery}
+            onChange={() => void save({ onBattery: !config.onBattery })}
+            ariaLabel="Keep awake on battery"
+            disabled={locked || !config.enabled}
+          />
+          {saveFailure && (
+            <SettingsLoadErrorBanner
+              title="Couldn't save keep-awake setting"
+              message={saveFailure.message}
+              onRetry={() => void save(saveFailure.patch)}
+            />
+          )}
+        </>
+      )}
+    </SettingsSection>
+  );
+}

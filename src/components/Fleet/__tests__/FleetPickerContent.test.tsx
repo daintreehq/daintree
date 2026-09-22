@@ -544,13 +544,111 @@ describe("FleetPickerContent + useFleetPicker", () => {
     });
   });
 
+  describe("tree navigation", () => {
+    it("gives the whole tree one tab stop across headings and rows", async () => {
+      // Every group heading used to be its own native tab stop, so Tab walked
+      // the headings instead of entering the list once.
+      seedTerminals([
+        makeTerminal("a", { title: "alpha", worktreeId: "wt-1" }),
+        makeTerminal("b", { title: "beta", worktreeId: "wt-2" }),
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      renderHarness([makeWorktreeSnap("wt-1", "main"), makeWorktreeSnap("wt-2", "feature")], {
+        mode: "cold-start",
+        onCommit: () => {},
+      });
+      await act(async () => {});
+
+      const nodes = screen.getAllByRole("treeitem");
+      expect(nodes.length).toBeGreaterThan(1);
+      const tabbable = nodes.filter((n) => n.getAttribute("tabindex") === "0");
+      expect(tabbable).toHaveLength(1);
+    });
+
+    it("Shift+ArrowDown from a focused row extends the selection", async () => {
+      // The unified heading+row navigation must still carry range selection;
+      // an earlier version moved focus and silently dropped the extension.
+      const onCommit = vi.fn();
+      seedTerminals([
+        makeTerminal("a", { title: "alpha", worktreeId: "wt-1" }),
+        makeTerminal("b", { title: "beta", worktreeId: "wt-1" }),
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      renderHarness([makeWorktreeSnap("wt-1", "main")], { mode: "cold-start", onCommit });
+      await act(async () => {});
+
+      const rowA = screen.getByTestId("fp-row-a");
+      await act(async () => {
+        fireEvent.click(rowA);
+      });
+      await act(async () => {
+        fireEvent.keyDown(rowA, { key: "ArrowDown", shiftKey: true });
+      });
+      await act(async () => {
+        fireEvent.keyDown(screen.getByTestId("fp-row-b"), { key: "Enter" });
+      });
+
+      expect(onCommit).toHaveBeenCalledTimes(1);
+      expect([...onCommit.mock.calls[0]![0]].sort()).toEqual(["a", "b"]);
+    });
+
+    it("a heading focused by Home becomes the tree's tab stop", async () => {
+      seedTerminals([
+        makeTerminal("a", { title: "alpha", worktreeId: "wt-1" }),
+        makeTerminal("b", { title: "beta", worktreeId: "wt-2" }),
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      renderHarness([makeWorktreeSnap("wt-1", "main"), makeWorktreeSnap("wt-2", "feature")], {
+        mode: "cold-start",
+        onCommit: () => {},
+      });
+      await act(async () => {});
+
+      const rowB = screen.getByTestId("fp-row-b");
+      await act(async () => {
+        fireEvent.click(rowB);
+      });
+      await act(async () => {
+        fireEvent.keyDown(rowB, { key: "Home" });
+      });
+
+      const tabbable = screen
+        .getAllByRole("treeitem")
+        .filter((n) => n.getAttribute("tabindex") === "0");
+      expect(tabbable).toHaveLength(1);
+      expect(tabbable[0]?.hasAttribute("data-group-header")).toBe(true);
+    });
+
+    it("distinguishes two same-named terminals in one worktree", async () => {
+      seedTerminals([
+        makeTerminal("pane-aaaaaa", { title: "Claude", worktreeId: "wt-1" }),
+        makeTerminal("pane-bbbbbb", { title: "Claude", worktreeId: "wt-1" }),
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      renderHarness([makeWorktreeSnap("wt-1", "main")], {
+        mode: "cold-start",
+        onCommit: () => {},
+      });
+      await act(async () => {});
+
+      // The rule: identical titles inside one group must not be
+      // indistinguishable. Assert the rows differ, not what the suffix says.
+      const rows = screen
+        .getAllByRole("treeitem")
+        .filter((n) => n.hasAttribute("data-terminal-id"));
+      expect(rows).toHaveLength(2);
+      expect(rows[0]?.textContent).not.toBe(rows[1]?.textContent);
+    });
+  });
+
   describe("empty state", () => {
-    it("renders 'No terminals available' when there are no eligibles", async () => {
+    it("names the next action when there are no eligibles", async () => {
       seedTerminals([]);
       useWorktreeSelectionStore.setState({ activeWorktreeId: null });
       renderHarness([], { mode: "cold-start", onCommit: () => {} });
       await act(async () => {});
-      expect(screen.getByText("No terminals available")).toBeTruthy();
+      // Empty states name the next action, not the absence.
+      expect(screen.getByText("Open a terminal in the grid to arm it")).toBeTruthy();
     });
 
     it("renders 'No terminals match' when the search filters out all eligibles", async () => {
@@ -570,7 +668,128 @@ describe("FleetPickerContent + useFleetPicker", () => {
       });
       await act(async () => {});
       expect(screen.getByText("No terminals match")).toBeTruthy();
-      expect(screen.queryAllByRole("option")).toHaveLength(0);
+      expect(screen.queryAllByRole("treeitem")).toHaveLength(0);
+    });
+
+    it("offers a recovery action from the filtered-empty state", async () => {
+      seedTerminals([makeTerminal("t1", { title: "alpha" })]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      renderHarness([makeWorktreeSnap("wt-1", "main")], {
+        mode: "cold-start",
+        onCommit: () => {},
+      });
+      await act(async () => {});
+      const search = screen.getByTestId("fp-search") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(search, { target: { value: "zzz-no-match" } });
+      });
+      await act(async () => {});
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("fp-clear-search"));
+      });
+      await act(async () => {});
+
+      expect(search.value).toBe("");
+      expect(screen.queryAllByRole("treeitem").length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("keyboard entry from the search field", () => {
+    it("ArrowDown in the search input moves focus into the list", async () => {
+      // The dialog opens with the search input focused and the footer
+      // advertises "↑↓ Move", so this is the first thing a keyboard user tries.
+      seedTerminals([
+        makeTerminal("t1", { title: "alpha" }),
+        makeTerminal("t2", { title: "beta" }),
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      renderHarness([makeWorktreeSnap("wt-1", "main")], {
+        mode: "cold-start",
+        onCommit: () => {},
+      });
+      await act(async () => {});
+
+      // The real dialog autofocuses this input; the test harness does not, so
+      // put focus where the user's would be before pressing the key.
+      const search = screen.getByTestId("fp-search") as HTMLInputElement;
+      search.focus();
+      expect(document.activeElement).toBe(search);
+
+      await act(async () => {
+        fireEvent.keyDown(search, { key: "ArrowDown" });
+      });
+      await act(async () => {});
+
+      expect(document.activeElement).not.toBe(search);
+      expect((document.activeElement as HTMLElement)?.getAttribute("role")).toBe("treeitem");
+    });
+
+    it("ArrowDown in the search input lands on the first group heading", async () => {
+      // The hand-off enters at the same node the tree container's own ArrowDown
+      // does. Skipping straight to the first row would strand the heading above
+      // the only keyboard route into the list.
+      seedTerminals([
+        makeTerminal("a", { title: "alpha", worktreeId: "wt-1" }),
+        makeTerminal("b", { title: "beta", worktreeId: "wt-2" }),
+      ]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+      renderHarness([makeWorktreeSnap("wt-1", "main"), makeWorktreeSnap("wt-2", "feature")], {
+        mode: "cold-start",
+        onCommit: () => {},
+      });
+      await act(async () => {});
+
+      const search = screen.getByTestId("fp-search") as HTMLInputElement;
+      search.focus();
+      await act(async () => {
+        fireEvent.keyDown(search, { key: "ArrowDown" });
+      });
+      await act(async () => {});
+
+      const active = document.activeElement as HTMLElement | null;
+      expect(active?.getAttribute("role")).toBe("treeitem");
+      expect(active?.getAttribute("data-group-header")).toBe("wt-1");
+    });
+
+    it("Enter on the filtered-empty recovery button clears instead of committing", async () => {
+      // That button lives inside the tree's key-handler container. Before the
+      // guard, its Enter was swallowed and turned into a commit — so the user's
+      // attempt to recover from an empty filter armed the very selection the
+      // filter was hiding.
+      const onCommit = vi.fn();
+      seedTerminals([makeTerminal("t1", { title: "alpha", worktreeId: "wt-1" })]);
+      renderHarness([makeWorktreeSnap("wt-1", "main")], { mode: "cold-start", onCommit });
+      await act(async () => {});
+
+      const search = screen.getByTestId("fp-search") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(search, { target: { value: "zzz-no-match" } });
+      });
+      await act(async () => {});
+
+      const clear = screen.getByTestId("fp-clear-search");
+      await act(async () => {
+        fireEvent.keyDown(clear, { key: "Enter" });
+      });
+      await act(async () => {});
+
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+
+    it("Enter in the search input commits the selection", async () => {
+      const onCommit = vi.fn();
+      seedTerminals([makeTerminal("t1", { title: "alpha", worktreeId: "wt-1" })]);
+      renderHarness([makeWorktreeSnap("wt-1", "main")], { mode: "cold-start", onCommit });
+      await act(async () => {});
+
+      const search = screen.getByTestId("fp-search") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.keyDown(search, { key: "Enter" });
+      });
+      await act(async () => {});
+
+      expect(onCommit).toHaveBeenCalledWith(["t1"]);
     });
   });
 });

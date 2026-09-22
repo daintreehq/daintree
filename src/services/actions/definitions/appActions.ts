@@ -50,7 +50,7 @@ function getAppConfigReloadListenerState(): AppConfigReloadListenerState {
 export function registerAppActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("app.newWindow", () => ({
     id: "app.newWindow",
-    title: "New Window",
+    title: "New window",
     description: "Open a new Daintree window",
     category: "app",
     kind: "command",
@@ -65,7 +65,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
 
   actions.set("app.settings", () => ({
     id: "app.settings",
-    title: "Open Settings",
+    title: "Open settings",
     description: "Open the settings modal",
     category: "app",
     kind: "command",
@@ -80,7 +80,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
 
   actions.set("app.pluginManager", () => ({
     id: "app.pluginManager",
-    title: "Open Plugin Manager",
+    title: "Open plugin manager",
     description: "Open the plugin manager to install, enable, disable, and update plugins",
     category: "app",
     kind: "command",
@@ -95,7 +95,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
 
   actions.set("app.settings.openTab", () => ({
     id: "app.settings.openTab",
-    title: "Open Settings Tab",
+    title: "Open settings tab",
     description: "Open a specific settings tab",
     category: "app",
     kind: "command",
@@ -110,7 +110,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
 
   actions.set("app.reloadConfig", () => ({
     id: "app.reloadConfig",
-    title: "Reload Configuration",
+    title: "Reload configuration",
     description: "Reload config from disk and refresh agent, keybinding, CLI, and menu state.",
     category: "app",
     kind: "command",
@@ -125,7 +125,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
 
   actions.set("app.exportConfig", () => ({
     id: "app.exportConfig",
-    title: "Export Configuration…",
+    title: "Export configuration…",
     description:
       "Write the portable configuration — custom agents, agent settings, keyboard shortcuts, theme, notification preferences, worktree path pattern, and global recipes — to a JSON file. Opens a save dialog. Secret-bearing values are left out.",
     category: "app",
@@ -171,7 +171,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
 
   actions.set("app.importConfig", () => ({
     id: "app.importConfig",
-    title: "Import Configuration…",
+    title: "Import configuration…",
     description:
       "Merge a previously exported Daintree configuration bundle into this installation. Opens a file dialog, then asks the user to confirm what will be replaced before anything is written. Overwrites existing settings, so it takes over the foreground and should not run during other work.",
     category: "app",
@@ -214,7 +214,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
 
   actions.set("app.theme.pick", () => ({
     id: "app.theme.pick",
-    title: "Pick Theme…",
+    title: "Pick theme…",
     description:
       "Open the theme palette so the user can browse and preview themes. This is a user-facing chooser, not a way to set a theme programmatically — nothing changes until the user picks something. It takes over the foreground, so avoid opening it during other work.",
     category: "app",
@@ -230,7 +230,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
 
   actions.set("app.theme.browser.open", () => ({
     id: "app.theme.browser.open",
-    title: "Browse Themes…",
+    title: "Browse themes…",
     description:
       "Open the theme browser so the user can preview themes in full and commit to one. This is a user-facing chooser — nothing changes until the user decides. It takes over the foreground, so avoid opening it during other work.",
     category: "app",
@@ -246,7 +246,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
 
   actions.set("app.theme.toggle", () => ({
     id: "app.theme.toggle",
-    title: "Toggle Dark/Light Theme",
+    title: "Toggle dark/light theme",
     description:
       "Switch between the user's preferred dark and light themes. This changes the appearance of the whole app immediately and is reversible by calling it again. It flips whichever way the app currently is rather than setting a specific mode.",
     category: "app",
@@ -292,7 +292,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
 
   actions.set("app.developerMode.set", () => ({
     id: "app.developerMode.set",
-    title: "Set Developer Mode",
+    title: "Set developer mode",
     description: "Update developer mode settings",
     category: "app",
     kind: "command",

@@ -1,4 +1,5 @@
 import { logWarn } from "@/utils/logger";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import type { AuthoritySnapshot } from "./parseAuthority";
 import { applySnapshotToMirror, type MirrorTarget } from "./mirrorApply";
 import type { AuthorityResponse, AuthorityTransport } from "./parseTransport";
@@ -43,6 +44,7 @@ export class WorkerParseSession {
   private cadenceTimer: ReturnType<typeof setInterval> | undefined;
   private tickInFlight = false;
   private unsubscribe: () => void;
+  private readonly offViewLifecycle: () => void;
   private readonly cadenceMs: number;
   private readonly boundedScrollbackLines: number;
   private cols: number;
@@ -59,6 +61,19 @@ export class WorkerParseSession {
     this.cols = options.cols;
     this.rows = options.rows;
     this.unsubscribe = transport.onResponse(this.onResponse);
+    // The cadence only repaints the mirror, which nobody can see while the
+    // project view is cached (#12514); the authority keeps parsing either way.
+    // Resuming catches the mirror up once rather than waiting out an interval.
+    this.offViewLifecycle = subscribeProjectViewLifecycle((phase) => {
+      if (this.disposed) return;
+      if (phase === "cached") {
+        this.stopCadence();
+        return;
+      }
+      if (this.mode !== "worker" || this.cadenceTimer !== undefined) return;
+      void this.tick();
+      this.startCadence();
+    });
     transport.send({
       type: "init",
       cols: options.cols,
@@ -150,6 +165,7 @@ export class WorkerParseSession {
     this.disposed = true;
     this.stopCadence();
     this.unsubscribe();
+    this.offViewLifecycle();
     // Resolve any in-flight waits so a promote caller never hangs.
     for (const resolve of this.pendingSnapshots.values()) resolve(null);
     this.pendingSnapshots.clear();
@@ -195,6 +211,7 @@ export class WorkerParseSession {
 
   private tick = async (): Promise<void> => {
     if (this.disposed || this.mode !== "worker" || this.promoting || this.tickInFlight) return;
+    if (isProjectViewCached()) return;
     this.tickInFlight = true;
     try {
       const snapshot = await this.requestSnapshot(this.boundedScrollbackLines);
@@ -209,6 +226,7 @@ export class WorkerParseSession {
 
   private startCadence(): void {
     if (this.cadenceMs <= 0 || this.cadenceTimer !== undefined) return;
+    if (isProjectViewCached()) return;
     this.cadenceTimer = setInterval(() => void this.tick(), this.cadenceMs);
   }
 

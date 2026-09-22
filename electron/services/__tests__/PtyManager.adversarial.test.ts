@@ -23,6 +23,9 @@ interface SpawnOptionsShape extends PtyHostSpawnOptions {
 interface TerminalCallbacks {
   emitData: (id: string, data: string | Uint8Array) => void;
   onExit: (id: string, exitCode: number) => void;
+  openGracefulCapture?: (
+    id: string
+  ) => { shouldDiscard(data: string): boolean; close(): void } | null;
 }
 
 type MockPtyProcess = Pick<IPty, "kill" | "pid" | "cols" | "rows" | "process">;
@@ -309,6 +312,33 @@ describe("PtyManager adversarial", () => {
 
     expect(exits).toEqual([{ id: "t1", code: 0 }]);
     expect(manager.hasTerminal("t1")).toBe(false);
+  });
+
+  it("GRACEFUL_CAPTURE_OPENS_ONLY_FOR_THE_CURRENT_INCARNATION", () => {
+    const manager = new PtyManager();
+    const lease = { shouldDiscard: vi.fn(() => false), close: vi.fn() };
+    const open = vi.fn((_id: string) => lease);
+
+    manager.spawn("t1", spawnOptions({ projectId: "project-a" }));
+    const oldTerminal = shared.created[0]!;
+    // No host registered: teardowns run under ordinary holds.
+    expect(oldTerminal.callbacks.openGracefulCapture?.("t1")).toBeNull();
+
+    manager.setGracefulCaptureHost({ open });
+    expect(oldTerminal.callbacks.openGracefulCapture?.("t1")).toBe(lease);
+    expect(open).toHaveBeenCalledWith("t1");
+
+    oldTerminal.info.wasKilled = true;
+    manager.spawn("t1", spawnOptions({ projectId: "project-a" }));
+    const newTerminal = shared.created[1]!;
+    open.mockClear();
+
+    // The replaced incarnation cannot open a window on its successor's id.
+    expect(oldTerminal.callbacks.openGracefulCapture?.("t1")).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+
+    expect(newTerminal.callbacks.openGracefulCapture?.("t1")).toBe(lease);
+    expect(open).toHaveBeenCalledTimes(1);
   });
 
   it("ACTIVE_PROJECT_FILTER_GATES_DATA_EMISSION", () => {

@@ -5,6 +5,7 @@ import {
   PASTE_THRESHOLD_CHARS,
   getSoftNewlineSequence as getSoftNewlineSequenceShared,
   containsFullBracketedPaste,
+  neutralizeControlCharacters,
 } from "../../../shared/utils/terminalInputProtocol.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 
@@ -19,8 +20,25 @@ export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * The submission text boundary: every path that puts a *body* into a terminal
+ * goes through here, and nothing downstream of it may assume the text is safe.
+ *
+ * Line endings fold to `\n` first — the submission paths re-encode that into
+ * whichever newline protocol the destination speaks — and then every remaining
+ * control character is neutralised. Doing it here rather than per branch is the
+ * point: bracketed paste already defended itself, but the soft-newline branch
+ * (agents that declare no bracketed paste, Gemini among them) and the plain
+ * short-text branch wrote the body through untouched, so page-derived text —
+ * DOM ids and class names SvelteKit Tools quotes into a prompt — could reach
+ * the agent as terminal input rather than as prompt text.
+ *
+ * Trusted protocol bytes are added AFTER this runs, by the caller that means
+ * them. Raw keystrokes never come through here at all.
+ */
 export function normalizeSubmitText(text: string): string {
-  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const folded = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  return neutralizeControlCharacters(folded);
 }
 
 export function splitTrailingNewlines(text: string): { body: string; enterCount: number } {
@@ -79,4 +97,23 @@ export function isBracketedPaste(data: string): boolean {
 // occasional sequence whose payload happens to contain CSI I/O (#8865).
 export function isFocusReport(data: string): boolean {
   return data === "\x1b[I" || data === "\x1b[O";
+}
+
+// Sequences xterm writes on its own behalf: focus and mouse reports, and the
+// replies to cursor-position (plain and DEC-private), device-status (including
+// the colour-scheme report), device-attribute, mode, window, OSC and DCS
+// queries. None of them puts text in a composer.
+const TERMINAL_REPORT_SEQUENCE =
+  // eslint-disable-next-line no-control-regex -- matching escape sequences is the point
+  /\x1b\[(?:[IO]|M[\s\S]{3}|<\d+;\d+;\d+[Mm]|\??\d+;\d+(?:;\d+)?R|\??[\d;]*n|[?>][\d;]*c|\??[\d;]*\$y|[\d;]*t)|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\/g;
+
+/**
+ * True when `data` consists only of terminal-generated reports (#12491).
+ *
+ * Deliberately narrow: anything it does not recognise counts as typing, so an
+ * unfamiliar key sequence errs toward "the composer may hold something".
+ */
+export function isTerminalReportOnly(data: string): boolean {
+  if (data.length === 0) return true;
+  return data.replace(TERMINAL_REPORT_SEQUENCE, "").length === 0;
 }

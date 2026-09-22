@@ -2,7 +2,7 @@
 import os from "node:os";
 import { type WebContents } from "electron";
 import path from "path";
-import { WorkspaceHostProcess } from "../WorkspaceHostProcess.js";
+import { WorkspaceHostProcess, type WorkspaceHostDisposeReason } from "../WorkspaceHostProcess.js";
 import { store } from "../../store.js";
 import { computeDefaultWarmWorkspaceHosts } from "../../utils/warmWorkspaceHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
@@ -12,6 +12,8 @@ import type { WorkspaceClientConfig } from "../../../shared/types/workspace-host
 import type { ForgeProviderMatcher } from "../../../shared/utils/forgeHostnames.js";
 import { projectStore } from "../ProjectStore.js";
 import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
+import type { HostLoadKind } from "../ProjectSwitchStatusTiming.js";
+import type { WorkspacePollingPolicy } from "../../../shared/types/powerPolicy.js";
 
 const CLEANUP_GRACE_MS = 180_000;
 
@@ -19,10 +21,11 @@ const CLEANUP_GRACE_MS = 180_000;
 // GiB). The old fixed 3 meant cycling 5+ projects evicted/respawned a host on
 // nearly every switch (utility-process fork + a full git rescan each time) —
 // churn that shows up as workspace-host spawn storms. Switch-away hosts are
-// paused (background: polling/PR/fetch timers stopped) and every dormant host
-// still expires after CLEANUP_GRACE_MS, so a larger pool mainly avoids
-// respawns on switch-back. The cost is bounded-resident (a few more paused
-// utility processes + their health checks), not steady-state polling.
+// paused (background: polling/PR/fetch timers stopped) and a dormant host
+// expires within one CLEANUP_GRACE_MS of the last view of its project going
+// away, so a larger pool mainly avoids respawns on switch-back. The cost is
+// bounded-resident (a few more paused utility processes + their health
+// checks), not steady-state polling.
 //
 // The ladder lives in computeDefaultWarmWorkspaceHosts rather than being
 // borrowed from computeDefaultCachedViews, which it used to call: see that
@@ -81,6 +84,11 @@ export interface WorkspaceHostPoolDeps {
   config: WorkspaceClientConfig;
   emit: EmitFn;
   onProjectSwitch?: (windowId: number) => void;
+  /**
+   * Whether any window still holds a live (active or cached) view of the
+   * project. A dormant host backed by one outlives the idle grace (#12519).
+   */
+  hasLiveProjectView?: (projectId: string) => boolean;
 }
 
 export class WorkspaceHostPool {
@@ -117,8 +125,16 @@ export class WorkspaceHostPool {
   private monitorConfigCache:
     import("../../../shared/types/workspace-host.js").MonitorConfig | null = null;
 
+  /** App-wide workspace power policy — seeded into hosts created after the
+   * last push. Without it a new or prewarmed host boots fully permissioned
+   * while the attenuated cadence from `monitorConfigCache` reaches it, so it
+   * would watch, fetch and poll behind a locked screen until the next policy
+   * change happened to fire. `null` until the first push. */
+  private workspacePolicyCache: WorkspacePollingPolicy | null = null;
+
   private emit: EmitFn;
   private onProjectSwitch?: (windowId: number) => void;
+  private hasLiveProjectView: (projectId: string) => boolean;
   private routeHostEventFn: RouteHostEventFn | null = null;
 
   constructor(deps: WorkspaceHostPoolDeps) {
@@ -134,6 +150,7 @@ export class WorkspaceHostPool {
       Number.isFinite(cap) && cap >= 0 ? Math.floor(cap) : DEFAULT_CONFIG.maxWarmEntries;
     this.emit = deps.emit;
     this.onProjectSwitch = deps.onProjectSwitch;
+    this.hasLiveProjectView = deps.hasLiveProjectView ?? (() => false);
   }
 
   setRouteHostEvent(fn: RouteHostEventFn): void {
@@ -225,7 +242,8 @@ export class WorkspaceHostPool {
     })();
   }
 
-  async loadProject(rootPath: string, windowId: number): Promise<void> {
+  /** Resolves with whether an existing host was reused ("warm") or one was spawned ("cold"). */
+  async loadProject(rootPath: string, windowId: number): Promise<HostLoadKind> {
     const normalizedPath = this.normalizeProjectPath(rootPath);
     const seq = (this.windowLoadSeq.get(windowId) ?? 0) + 1;
     this.windowLoadSeq.set(windowId, seq);
@@ -243,9 +261,15 @@ export class WorkspaceHostPool {
       // Superseded while waiting on the entry's readiness — the newer request
       // owns the mapping and all attachment bookkeeping (including disposing a
       // ready-failed entry, which it detects itself on the same code path).
-      if (isStale()) return;
+      if (isStale()) return "warm";
+      // No reference is held across that wait, so the entry was still dormant
+      // and a reclaim, the warm cap or the grace timer may have disposed it.
+      // Re-inserting it would attach the window to a dead host; start over.
+      if (this.entries.get(normalizedPath) !== existingEntry) {
+        return this.loadProject(rootPath, windowId);
+      }
       if (isReadyFailed) {
-        existingEntry.host.dispose();
+        existingEntry.host.dispose("ready-failed");
         this.entries.delete(normalizedPath);
       } else {
         this.entries.delete(normalizedPath);
@@ -266,13 +290,17 @@ export class WorkspaceHostPool {
         // without each having to remember to foreground first. `resume()` is
         // idempotent, so this is harmless when the host was never paused.
         existingEntry.host.send({ type: "foreground" });
+        // A withdrawal reaches every host; the matching grant reaches only the
+        // attached ones, so a host that was dormant across both re-attaches
+        // holding the withdrawal and would reconcile status work off for good.
+        existingEntry.host.flushWorkspacePowerPolicy();
         this.windowToProject.set(windowId, normalizedPath);
 
         if (isSwitching) {
           this.onProjectSwitch?.(windowId);
           this.releaseOldProject(windowId, oldProjectPath);
         }
-        return;
+        return "warm";
       }
     }
 
@@ -284,6 +312,9 @@ export class WorkspaceHostPool {
     }
     if (this.monitorConfigCache !== null) {
       host.updateMonitorConfig(this.monitorConfigCache);
+    }
+    if (this.workspacePolicyCache !== null) {
+      host.setWorkspacePowerPolicy(this.workspacePolicyCache, true);
     }
 
     const projectId = projectStore.resolveProjectIdForPath(normalizedPath);
@@ -311,7 +342,7 @@ export class WorkspaceHostPool {
         this.entries.delete(normalizedPath);
         newEntry.windowIds.delete(windowId);
         newEntry.refCount--;
-        newEntry.host.dispose();
+        newEntry.host.dispose("init-failed");
       }
       throw error;
     }
@@ -333,7 +364,7 @@ export class WorkspaceHostPool {
           this.scheduleDormantCleanup(normalizedPath, newEntry);
         }
       }
-      return;
+      return "cold";
     }
 
     this.windowToProject.set(windowId, normalizedPath);
@@ -342,6 +373,7 @@ export class WorkspaceHostPool {
       this.onProjectSwitch?.(windowId);
       this.releaseOldProject(windowId, oldProjectPath);
     }
+    return "cold";
   }
 
   prewarmProject(rootPath: string): void {
@@ -357,6 +389,9 @@ export class WorkspaceHostPool {
     }
     if (this.monitorConfigCache !== null) {
       host.updateMonitorConfig(this.monitorConfigCache);
+    }
+    if (this.workspacePolicyCache !== null) {
+      host.setWorkspacePowerPolicy(this.workspacePolicyCache, true);
     }
 
     const projectId = projectStore.resolveProjectIdForPath(normalizedPath);
@@ -381,7 +416,7 @@ export class WorkspaceHostPool {
     initPromise.catch(() => {
       if (this.entries.get(normalizedPath) === entry) {
         this.entries.delete(normalizedPath);
-        entry.host.dispose();
+        entry.host.dispose("init-failed");
       }
     });
   }
@@ -428,6 +463,7 @@ export class WorkspaceHostPool {
     }
 
     if (entry.refCount <= 0) {
+      this.backgroundIfDormant(projectPath, entry);
       this.scheduleDormantCleanup(projectPath, entry);
     }
   }
@@ -484,6 +520,17 @@ export class WorkspaceHostPool {
     });
   }
 
+  /**
+   * Push forge settings to every host. For the global default provider, which
+   * no per-project settings save carries and which a host otherwise reads only
+   * at `load-project` — stale for as long as a retained host lives (#12519).
+   */
+  async updateForgeSettingsForAll(): Promise<void> {
+    await Promise.allSettled(
+      [...this.entries.values()].map((entry) => this.updateForgeSettings(entry.projectPath))
+    );
+  }
+
   // ── Eviction / dormant management ──
 
   /**
@@ -498,7 +545,7 @@ export class WorkspaceHostPool {
     const normalized = this.normalizeProjectPath(projectPath);
     const entry = this.entries.get(normalized);
     if (!entry || entry.refCount > 0) return false;
-    this.evictEntry(normalized, entry);
+    this.evictEntry(normalized, entry, "evicted");
     return true;
   }
 
@@ -517,49 +564,119 @@ export class WorkspaceHostPool {
   evictProjectForRelocation(projectPath: string): void {
     const normalized = this.normalizeProjectPath(projectPath);
     const entry = this.entries.get(normalized);
-    if (entry) this.evictEntry(normalized, entry);
+    if (entry) this.evictEntry(normalized, entry, "relocation");
     for (const [worktreePath, rootPath] of this.worktreePathToProject) {
       if (rootPath === normalized) this.worktreePathToProject.delete(worktreePath);
     }
   }
 
-  private evictEntry(projectPath: string, entry: ProcessEntry): void {
+  private evictEntry(
+    projectPath: string,
+    entry: ProcessEntry,
+    reason: WorkspaceHostDisposeReason
+  ): void {
     if (entry.cleanupTimeout) {
       clearTimeout(entry.cleanupTimeout);
       entry.cleanupTimeout = null;
     }
-    entry.host.dispose();
+    entry.host.dispose(reason);
     this.entries.delete(projectPath);
   }
 
-  private enforceDormantCap(): void {
-    let dormantCount = 0;
-    for (const entry of this.entries.values()) {
-      if (entry.refCount <= 0 && entry.cleanupTimeout !== null) {
-        dormantCount++;
-      }
-    }
-
-    while (dormantCount > this.config.maxWarmEntries) {
-      for (const [path, entry] of this.entries) {
-        if (entry.refCount <= 0 && entry.cleanupTimeout !== null) {
-          this.evictEntry(path, entry);
-          dormantCount--;
-          break;
-        }
-      }
+  private isViewBacked(entry: ProcessEntry): boolean {
+    try {
+      return this.hasLiveProjectView(entry.projectId);
+    } catch {
+      // Unknown residency must not pin a host: fall back to the plain grace.
+      return false;
     }
   }
 
+  private enforceDormantCap(): void {
+    const dormant: Array<[string, ProcessEntry]> = [];
+    for (const [path, entry] of this.entries) {
+      if (entry.refCount <= 0 && entry.cleanupTimeout !== null) {
+        dormant.push([path, entry]);
+      }
+    }
+
+    const excess = dormant.length - this.config.maxWarmEntries;
+    if (excess <= 0) return;
+
+    // LRU within each group (Map order is re-attach order), but a host whose
+    // project no longer has a view goes before one that does: a switch back
+    // to a cached view is the reveal a warm host exists to serve.
+    const viewBacked = dormant.map(([, entry]) => this.isViewBacked(entry));
+    const ordered = [
+      ...dormant.filter((_, i) => !viewBacked[i]),
+      ...dormant.filter((_, i) => viewBacked[i]),
+    ];
+    for (const [path, entry] of ordered.slice(0, excess)) {
+      this.evictEntry(path, entry, "warm-cap");
+    }
+  }
+
+  /**
+   * A released host is paused (`background`) and then kept for at least
+   * CLEANUP_GRACE_MS. While any window still caches a view of the project it
+   * is kept past that too, re-checking once per grace period (#12519): the
+   * view is the likeliest switch-back, and reaping its host bought a fork, a
+   * native reload and a full worktree rescan for a paused process's memory.
+   * Retention stays bounded: the warm cap still counts these hosts, view
+   * eviction (LRU, or pressure) hands a host back to the plain grace, and the
+   * pressure ladder's forced tier reclaims them outright (`reclaimDormantHosts`).
+   */
   private scheduleDormantCleanup(projectPath: string, entry: ProcessEntry): void {
     if (entry.cleanupTimeout) {
       clearTimeout(entry.cleanupTimeout);
     }
+    this.armDormantTimer(projectPath, entry);
+    this.enforceDormantCap();
+  }
+
+  private armDormantTimer(projectPath: string, entry: ProcessEntry): void {
     entry.cleanupTimeout = setTimeout(() => {
-      entry.host.dispose();
+      entry.cleanupTimeout = null;
+      if (this.entries.get(projectPath) !== entry || entry.refCount > 0) return;
+      if (this.isViewBacked(entry)) {
+        // Re-asserted each period rather than trusted: a prewarm nobody
+        // attached to was never paused, and neither is a process that
+        // restarted after its last pause.
+        this.backgroundIfDormant(projectPath, entry);
+        this.armDormantTimer(projectPath, entry);
+        return;
+      }
+      entry.host.dispose("idle-grace");
       this.entries.delete(projectPath);
     }, CLEANUP_GRACE_MS);
-    this.enforceDormantCap();
+  }
+
+  /**
+   * Dispose every host no window holds, view-backed or not — the pool's lever
+   * for the memory-pressure ladder's forced tier (#12519). Deliberately not
+   * reached from any reading of its own: that ladder is the one authority for
+   * "pressure is real" (#11477). A dormant host is paused and fully
+   * re-derivable, so dropping it costs a cold start and nothing else.
+   */
+  reclaimDormantHosts(): number {
+    let reclaimed = 0;
+    for (const [path, entry] of [...this.entries]) {
+      if (entry.refCount > 0) continue;
+      this.evictEntry(path, entry, "memory-pressure");
+      reclaimed++;
+    }
+    return reclaimed;
+  }
+
+  /**
+   * Pause a host that is dormant. A switch-away does this inline; the other
+   * ways in (window close, a prewarm nobody attached to, a crash restart) go
+   * through here, since a view-backed host can sit dormant for hours and must
+   * not poll meanwhile. `pause()` is idempotent host-side.
+   */
+  private backgroundIfDormant(projectPath: string, entry: ProcessEntry): void {
+    if (this.entries.get(projectPath) !== entry || entry.refCount > 0) return;
+    entry.host.send({ type: "background" });
   }
 
   // ── Direct port management ──
@@ -619,6 +736,9 @@ export class WorkspaceHostPool {
         entry.directPortViews.delete(wcId);
       }
     }
+
+    // A restarted process comes back foregrounded.
+    this.backgroundIfDormant(entry.projectPath, entry);
 
     this.emit("host-restarted", {
       projectPath: entry.projectPath,
@@ -702,6 +822,24 @@ export class WorkspaceHostPool {
     }
   }
 
+  // ── Workspace power policy ──
+
+  /**
+   * Push the app-wide workspace power policy and cache it for hosts created
+   * later. A policy that withdraws a permission reaches every host; one that
+   * grants reaches only the attached ones — a dormant host retained behind a
+   * cached view must not be woken by a focus return. Every host caches it
+   * regardless, so a restart replays the policy in force.
+   */
+  setWorkspacePowerPolicy(policy: WorkspacePollingPolicy): void {
+    this.workspacePolicyCache = { ...policy };
+    const grantsOnly = policy.statusAllowed && policy.backgroundWorkAllowed;
+    const deliverTo = new Set(grantsOnly ? this.attachedEntries() : [...this.entries.values()]);
+    for (const entry of this.entries.values()) {
+      entry.host.setWorkspacePowerPolicy(policy, deliverTo.has(entry));
+    }
+  }
+
   // ── Forge provider matchers ──
 
   relayForgeProviderMatchers(matchers: ForgeProviderMatcher[]): void {
@@ -719,6 +857,16 @@ export class WorkspaceHostPool {
     }
   }
 
+  /**
+   * Hosts some window currently holds. App-wide focus and wake passes must not
+   * reach the rest: a dormant host is paused, and waking it on every focus
+   * would undo the pause for as long as its cached view keeps it resident
+   * (#12519). It catches up when a window re-attaches and foregrounds it.
+   */
+  attachedEntries(): ProcessEntry[] {
+    return [...this.entries.values()].filter((entry) => entry.refCount > 0);
+  }
+
   // ── Disposal ──
 
   dispose(): void {
@@ -726,7 +874,7 @@ export class WorkspaceHostPool {
       if (entry.cleanupTimeout) {
         clearTimeout(entry.cleanupTimeout);
       }
-      entry.host.dispose();
+      entry.host.dispose("pool-dispose");
     }
     this.entries.clear();
     this.windowToProject.clear();

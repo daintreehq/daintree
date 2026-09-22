@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { AlertTriangle } from "lucide-react";
 import { useSafeModeStore } from "@/store/safeModeStore";
+import { Button } from "@/components/ui/button";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -46,8 +46,10 @@ function QuarantinedPanelRow({ panel }: QuarantinedPanelRowProps) {
   const displayTitle = panel.title.trim().length > 0 ? panel.title : "Untitled panel";
   // Prefer worktree context when present; cwd is verbose and often a long
   // absolute path that wraps the popover badly. Either way it's a single
-  // secondary line so the panel is identifiable across collisions.
-  const subtitle = panel.worktreeId ?? panel.cwd ?? null;
+  // secondary line so the panel is identifiable across collisions — unless
+  // the title already says it, in which case a second copy is noise.
+  const context = panel.worktreeId ?? panel.cwd ?? null;
+  const subtitle = context && !displayTitle.includes(context) ? context : null;
 
   return (
     <li className="flex items-start justify-between gap-3 py-1.5">
@@ -62,13 +64,9 @@ function QuarantinedPanelRow({ panel }: QuarantinedPanelRowProps) {
         )}
       </div>
       {state === "idle" && (
-        <button
-          type="button"
-          onClick={handleRestore}
-          className="shrink-0 rounded border border-[var(--color-status-warning)]/30 px-2 py-0.5 text-3xs transition-colors hover:bg-[var(--color-status-warning)]/10"
-        >
-          Restore panel
-        </button>
+        <Button variant="outline" size="xs" onClick={handleRestore} className="shrink-0">
+          Restore on next launch
+        </Button>
       )}
       {state === "clearing" && (
         <span className="shrink-0 text-3xs text-text-secondary">Clearing…</span>
@@ -77,13 +75,9 @@ function QuarantinedPanelRow({ panel }: QuarantinedPanelRowProps) {
         <span className="shrink-0 text-3xs text-text-secondary">Restoring on next launch</span>
       )}
       {state === "failed" && (
-        <button
-          type="button"
-          onClick={handleRestore}
-          className="shrink-0 rounded border border-[var(--color-status-warning)]/30 px-2 py-0.5 text-3xs transition-colors hover:bg-[var(--color-status-warning)]/10"
-        >
+        <Button variant="outline" size="xs" onClick={handleRestore} className="shrink-0">
           Retry
-        </button>
+        </Button>
       )}
     </li>
   );
@@ -140,16 +134,15 @@ export function SafeModeBanner() {
 
   const detailsPopover = hasDetails ? (
     <Popover>
-      <PopoverTrigger
-        type="button"
-        className="text-xs px-2 py-1 rounded border border-[var(--color-status-warning)]/30 hover:bg-[var(--color-status-warning)]/10 transition-colors shrink-0"
-      >
-        Show details
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="sm" className="shrink-0">
+          Show details
+        </Button>
       </PopoverTrigger>
       <PopoverContent
         align="end"
         sideOffset={8}
-        className="p-3 text-xs max-w-xs space-y-2 text-text-primary"
+        className="p-3 text-xs max-w-sm space-y-2 text-text-primary"
       >
         {crashMetaText && <p className="font-medium">{crashMetaText}</p>}
         {hasQuarantineList ? (
@@ -183,7 +176,6 @@ export function SafeModeBanner() {
   return (
     <>
       <InlineStatusBanner
-        icon={AlertTriangle}
         title={SAFE_MODE_BANNER_COPY.title}
         severity="warning"
         role="status"

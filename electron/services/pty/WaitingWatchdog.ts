@@ -20,6 +20,8 @@ export interface WaitingWatchdogProbeInputs {
   lastDataTimestamp: number;
   terminalId: string;
   spawnedAt: number;
+  /** Time since the previous probe. Absent means the 5s active cadence. */
+  sinceLastProbeMs?: number;
 }
 
 export class WaitingWatchdog {
@@ -66,12 +68,16 @@ export class WaitingWatchdog {
     // Veto when PTY data arrived during the current waiting period AND the
     // arrival was recent. The `> idleSince` guard rejects the field's
     // construction-time default (set equal to idleSince) and any stale value
-    // carried over from a prior busy cycle; the recency window
-    // (workingIndicatorTtlMs, matched to the 5s watchdog cadence) decays so
-    // a single mid-cycle data event doesn't pin the streak open forever.
+    // carried over from a prior busy cycle; the recency window decays so a
+    // single mid-cycle data event doesn't pin the streak open forever. It
+    // spans at least the gap since the previous probe: the power policy
+    // stretches the cadence to 10s/15s and re-times it on every level change,
+    // and a window shorter than the gap would miss output that landed between
+    // probes and vote a live agent dead.
+    const dataRecencyMs = Math.max(this.workingIndicatorTtlMs, inputs.sinceLastProbeMs ?? 0);
     if (
       inputs.lastDataTimestamp > inputs.idleSince &&
-      now - inputs.lastDataTimestamp < this.workingIndicatorTtlMs
+      now - inputs.lastDataTimestamp < dataRecencyMs
     ) {
       this.failCount = 0;
       return;

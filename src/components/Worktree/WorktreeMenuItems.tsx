@@ -67,6 +67,8 @@ import {
 } from "@/components/icons";
 import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
 import { fileManagerRevealLabel } from "@/lib/platform";
+import { BrandMark } from "@/components/icons/BrandMark";
+import { getBrandColorHex } from "@/lib/colorUtils";
 import { useMenuActionSource, type MenuActionSourceValue } from "@/components/ui/menu-source";
 import { actionService } from "@/services/ActionService";
 import type { ActionId } from "@shared/types/actions";
@@ -348,7 +350,13 @@ export function WorktreeMenuItems({
               disabled={!onLaunchAgent || !agent.isEnabled}
               aria-label={agent.isEnabled ? agent.name : `${agent.name}, not installed`}
             >
-              <Icon className={ICON} />
+              {/* Through `BrandMark` like every other agent menu in the app.
+                  Bare, the glyph inherits menu-text `currentColor`, so this was
+                  the one list where the marks that exist to tell agents apart
+                  all came out the same grey. */}
+              <BrandMark brandColor={getBrandColorHex(agent.id)}>
+                <Icon className={ICON} />
+              </BrandMark>
               {agent.name}
               {!agent.isEnabled && <C.Meta>Not installed</C.Meta>}
             </C.Item>

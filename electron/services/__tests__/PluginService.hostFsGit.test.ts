@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, existsSync } from "node:fs";
 import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 import path from "node:path";
@@ -19,10 +20,26 @@ vi.mock("electron", () => ({
   webContents: { getAllWebContents: vi.fn(() => []) },
 }));
 
+// A workspace-scoped fs resolves its project's root through the project store,
+// never through a window, so the scoped tests register their projects here.
+const projectStoreMock = vi.hoisted(() => ({
+  paths: {} as Record<string, string>,
+  closed: new Set<string>(),
+}));
 vi.mock("../ProjectStore.js", () => ({
   projectStore: {
     getAllProjects: vi.fn(() => []),
     getCurrentProjectId: vi.fn(() => null),
+    getProjectById: vi.fn((id: string) =>
+      projectStoreMock.paths[id]
+        ? {
+            id,
+            path: projectStoreMock.paths[id],
+            // A closed project keeps its row, so the row carries the status.
+            status: projectStoreMock.closed.has(id) ? "closed" : "open",
+          }
+        : undefined
+    ),
   },
 }));
 
@@ -63,7 +80,11 @@ import {
   _resetPluginCapabilityServicesForTest,
 } from "../plugin-capability/instances.js";
 import type { SimpleGit } from "simple-git";
-import type { PluginManifest, PluginHostApi } from "../../../shared/types/plugin.js";
+import type {
+  PluginManifest,
+  PluginHostApi,
+  BuiltinPluginHostApi,
+} from "../../../shared/types/plugin.js";
 
 let svc: PluginService;
 let baseDir: string;
@@ -797,7 +818,10 @@ describe("JIT capability consent gating (#10524)", () => {
     const bridge = vi.fn(async () => "rejected" as const);
     getPluginCapabilityConsentService().setConsentBridge(bridge);
     const host = registerWith(true);
-    await expect(host.fs.writeFile(join(allowed, "builtin.txt"), "x")).resolves.toBeUndefined();
+    // Resolves the written revision (#12323) rather than void, for every caller.
+    await expect(host.fs.writeFile(join(allowed, "builtin.txt"), "x")).resolves.toEqual({
+      revision: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
     expect(bridge).not.toHaveBeenCalled();
   });
 
@@ -990,5 +1014,399 @@ describe("a bound plugin's ${project}/${worktree} allowlist roots", () => {
 
     // Fails closed: the token contributes no root rather than falling back.
     await expect(host.fs.readFile(join(ambient, "a.txt"))).rejects.toThrow();
+  });
+});
+
+// #12174 follow-up: a built-in has no project binding, so its `${worktree}` /
+// `${project}` roots otherwise track the focused window. `fsForWorkspace` pins
+// them to one named project + worktree for the life of the handle.
+describe("a built-in's workspace-scoped host.fs (fsForWorkspace)", () => {
+  const PROJECT_A = "a".repeat(64);
+  const PROJECT_B = "b".repeat(64);
+
+  interface Tree {
+    id: string;
+    path: string;
+    isCurrent?: boolean;
+    isMainWorktree?: boolean;
+  }
+
+  /**
+   * A workspace client whose per-project read answers each project's own trees
+   * and whose ambient (focused-window) read answers `focused`. A scoped handle
+   * that consulted focus would land on `focused`.
+   */
+  function setProjects(perProject: Record<string, Tree[]>, focused: Tree[]) {
+    projectStoreMock.paths = Object.fromEntries(
+      Object.keys(perProject).map((id) => [id, join(baseDir, id.slice(0, 6))])
+    );
+    (svc as unknown as { setWorkspaceClient(c: unknown): void }).setWorkspaceClient({
+      getAllStatesAsync: async () => focused,
+      getAllStatesResultAsync: async () => ({
+        status: "ok",
+        projectId: "project-focused",
+        states: focused,
+      }),
+      getAllStatesForProjectAsync: async (_root: string, projectId: string) =>
+        perProject[projectId] ?? [],
+      getAllStatesForProjectResultAsync: async (_root: string, projectId: string) =>
+        projectId in perProject
+          ? { status: "ok", projectId, states: perProject[projectId] }
+          : { status: "unavailable", reason: "project-unavailable" },
+      on: vi.fn(),
+      off: vi.fn(),
+    });
+  }
+
+  function registerBuiltin(capabilities: string[], allowedPaths: string[]): BuiltinPluginHostApi {
+    const seam = svc as unknown as {
+      _registerFakePluginForTests(p: FakeLoadedPlugin): void;
+      _createBuiltinHostForTests(id: string): BuiltinPluginHostApi;
+    };
+    seam._registerFakePluginForTests({
+      manifest: makeManifest(capabilities, allowedPaths),
+      dir: baseDir,
+      loadedAt: 0,
+      isBuiltin: true,
+    });
+    return seam._createBuiltinHostForTests("acme.fsgit");
+  }
+
+  /** `${dir}/a.txt` holding `dir`'s basename, so a read says which tree it came from. */
+  async function tree(name: string): Promise<Tree> {
+    const dir = join(baseDir, name);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(join(dir, "a.txt"), name, "utf8");
+    return { id: `wt-${name}`, path: dir };
+  }
+
+  afterEach(() => {
+    projectStoreMock.paths = {};
+    projectStoreMock.closed.clear();
+    windowScopeMock.hasActiveView = true;
+  });
+
+  it("resolves ${worktree} to the named worktree, not the current one", async () => {
+    const mine = await tree("mine");
+    const current = await tree("current");
+    setProjects({ [PROJECT_A]: [mine, { ...current, isCurrent: true }] }, [
+      { ...current, isCurrent: true },
+    ]);
+    const host = registerBuiltin(["fs:project-read"], ["${worktree}"]);
+
+    const scoped = host.fsForWorkspace({ projectId: PROJECT_A, worktreeId: mine.id });
+    expect(await scoped.readFile(join(mine.path, "a.txt"))).toBe("mine");
+    // The project's OWN current worktree is outside this handle's root, which
+    // is the whole point: the handle is about one worktree.
+    await expect(scoped.readFile(join(current.path, "a.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+    // Ambient `host.fs` still follows the current worktree — the scoped handle
+    // narrows one handle, it does not change the plugin's other roots.
+    expect(await host.fs.readFile(join(current.path, "a.txt"))).toBe("current");
+  });
+
+  it("does not move when another project is focused, or when no window resolves", async () => {
+    const mine = await tree("scoped-mine");
+    const theirs = await tree("scoped-theirs");
+    setProjects({ [PROJECT_A]: [mine], [PROJECT_B]: [{ ...theirs, isCurrent: true }] }, [
+      { ...theirs, isCurrent: true },
+    ]);
+    const host = registerBuiltin(["fs:project-read"], ["${worktree}"]);
+    const scoped = host.fsForWorkspace({ projectId: PROJECT_A, worktreeId: mine.id });
+
+    expect(await scoped.readFile(join(mine.path, "a.txt"))).toBe("scoped-mine");
+    await expect(scoped.readFile(join(theirs.path, "a.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+
+    // No resolvable window at all — which denies every ambient token root —
+    // leaves the scoped handle untouched, because it never asked a window.
+    windowScopeMock.hasActiveView = false;
+    expect(await scoped.readFile(join(mine.path, "a.txt"))).toBe("scoped-mine");
+    await expect(host.fs.readFile(join(theirs.path, "a.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+
+  it("resolves ${project} to the named project's main worktree", async () => {
+    const main = await tree("scoped-main");
+    const feature = await tree("scoped-feature");
+    setProjects(
+      {
+        [PROJECT_A]: [
+          { ...main, isMainWorktree: true },
+          { ...feature, isCurrent: true },
+        ],
+      },
+      []
+    );
+    const host = registerBuiltin(["fs:project-read"], ["${project}"]);
+
+    const scoped = host.fsForWorkspace({ projectId: PROJECT_A, worktreeId: feature.id });
+    expect(await scoped.readFile(join(main.path, "a.txt"))).toBe("scoped-main");
+    await expect(scoped.readFile(join(feature.path, "a.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+
+  it("fails closed for an unknown project and for an unknown worktree", async () => {
+    const mine = await tree("closed-mine");
+    setProjects({ [PROJECT_A]: [mine] }, [{ ...mine, isCurrent: true }]);
+    const host = registerBuiltin(["fs:project-read"], ["${worktree}"]);
+
+    // A project the store does not know: no root, so containment denies rather
+    // than falling back to the focused project (which would read here).
+    await expect(
+      host
+        .fsForWorkspace({ projectId: PROJECT_B, worktreeId: mine.id })
+        .readFile(join(mine.path, "a.txt"))
+    ).rejects.toThrow(/PATH_NOT_ALLOWED/);
+
+    await expect(
+      host
+        .fsForWorkspace({ projectId: PROJECT_A, worktreeId: "wt-does-not-exist" })
+        .readFile(join(mine.path, "a.txt"))
+    ).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+
+  it("keeps every capability, containment and liveness gate host.fs applies", async () => {
+    const mine = await tree("gated");
+    setProjects({ [PROJECT_A]: [mine] }, []);
+    const scope = { projectId: PROJECT_A, worktreeId: mine.id };
+
+    // A project path with only user-data caps: denied on class, not on path.
+    const uncapable = registerBuiltin(["fs:user-data-read"], ["${worktree}"]);
+    await expect(
+      uncapable.fsForWorkspace(scope).readFile(join(mine.path, "a.txt"))
+    ).rejects.toThrow(/PERMISSION_REQUIRED/);
+    svc.unloadPlugin("acme.fsgit");
+
+    const host = registerBuiltin(["fs:project-read", "fs:project-write"], ["${worktree}"]);
+    const scoped = host.fsForWorkspace(scope);
+    // A symlink out of the scoped root is rejected by the same realpath check.
+    const secret = join(baseDir, "scoped-secret.txt");
+    await fs.writeFile(secret, "TOPSECRET", "utf8");
+    await fs.symlink(secret, join(mine.path, "link.txt"));
+    await expect(scoped.readFile(join(mine.path, "link.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+    // Writes are audited exactly like host.fs writes.
+    appendSpy.mockClear();
+    await scoped.writeFile(join(mine.path, "written.txt"), "x");
+    expect(
+      appendSpy.mock.calls.filter(
+        (c) => (c[0] as { channel: string }).channel === "plugin:fs-write"
+      ).length
+    ).toBe(1);
+    // And the data dir stays reachable to a plugin holding user-data caps only
+    // through its own class gate, never through the scope.
+    await expect(scoped.writeFile(join(dataDir(), "x.txt"), "x")).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+
+    svc.unloadPlugin("acme.fsgit");
+    await expect(scoped.readFile(join(mine.path, "a.txt"))).rejects.toThrow(/PLUGIN_UNLOADED/);
+  });
+
+  it("registers scoped watchers in the plugin's teardown set", async () => {
+    const mine = await tree("watched");
+    setProjects({ [PROJECT_A]: [mine] }, []);
+    const host = registerBuiltin(["fs:project-read"], ["${worktree}"]);
+    const scoped = host.fsForWorkspace({ projectId: PROJECT_A, worktreeId: mine.id });
+
+    const dispose = await scoped.watch([join(mine.path, "a.txt")], () => {});
+    const watcherMap = (svc as unknown as { pluginFsWatchers: Map<string, Set<unknown>> })
+      .pluginFsWatchers;
+    expect(watcherMap.get("acme.fsgit")?.size ?? 0).toBe(1);
+    svc.unloadPlugin("acme.fsgit");
+    expect(watcherMap.has("acme.fsgit")).toBe(false);
+    expect(() => dispose()).not.toThrow();
+  });
+
+  it("denies a project the user has closed, even while its host is still warm", async () => {
+    const mine = await tree("closing");
+    // The pool entry (and so the snapshots) outlive the close by design; the
+    // persisted row going `closed` is what has to end the scope's authority.
+    setProjects({ [PROJECT_A]: [mine] }, []);
+    const host = registerBuiltin(["fs:project-read"], ["${worktree}"]);
+    const scope = { projectId: PROJECT_A, worktreeId: mine.id };
+    // One handle throughout: a fresh handle after the close would not notice
+    // an old one keeping the roots it was minted with.
+    const scoped = host.fsForWorkspace(scope);
+    expect(await scoped.readFile(join(mine.path, "a.txt"))).toBe("closing");
+
+    projectStoreMock.closed.add(PROJECT_A);
+    await expect(scoped.readFile(join(mine.path, "a.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+
+  it("pins the handle to the scope it was minted with, not to the caller's object", async () => {
+    const mine = await tree("pinned");
+    const other = await tree("repointed");
+    setProjects({ [PROJECT_A]: [mine, other] }, []);
+    const host = registerBuiltin(["fs:project-read"], ["${worktree}"]);
+
+    const scope = { projectId: PROJECT_A, worktreeId: mine.id };
+    const scoped = host.fsForWorkspace(scope);
+    // The caller keeps its object; mutating it must not redirect a live handle.
+    (scope as { worktreeId: string }).worktreeId = other.id;
+
+    expect(await scoped.readFile(join(mine.path, "a.txt"))).toBe("pinned");
+    await expect(scoped.readFile(join(other.path, "a.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+
+  it("rejects a malformed scope instead of silently expanding to nothing", async () => {
+    const host = registerBuiltin(["fs:project-read"], ["${worktree}"]);
+    expect(() => host.fsForWorkspace({ projectId: "", worktreeId: "wt" })).toThrow(
+      /fsForWorkspace/
+    );
+    expect(() =>
+      host.fsForWorkspace({ projectId: PROJECT_A } as unknown as {
+        projectId: string;
+        worktreeId: string;
+      })
+    ).toThrow(/fsForWorkspace/);
+  });
+});
+
+// #12323: the checked write. Any options object selects it; without options
+// the call is the plain write it has always been (plus a revision result).
+describe("host.fs.writeFile checked path (#12323)", () => {
+  const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+
+  it("plain writes keep their behaviour and now report the written revision", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "plain.txt");
+    const result = await host.fs.writeFile(target, "hello");
+    expect(result).toEqual({ revision: sha("hello") });
+    expect(await fs.readFile(target, "utf-8")).toBe("hello");
+  });
+
+  it("writes atomically when the expected revision matches and returns the new one", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "doc.md");
+    await fs.writeFile(target, "v1");
+    const result = await host.fs.writeFile(target, "v2", { expectedRevision: sha("v1") });
+    expect(result.revision).toBe(sha("v2"));
+    expect(await fs.readFile(target, "utf-8")).toBe("v2");
+    // No temp file left beside the target.
+    const siblings = await fs.readdir(allowed);
+    expect(siblings.filter((name) => name.includes(".tmp"))).toEqual([]);
+  });
+
+  it("refuses a stale revision with REVISION_MISMATCH carrying the current revision, and writes nothing", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "doc.md");
+    await fs.writeFile(target, "on disk");
+    let caught: (Error & { code?: string; currentRevision?: string }) | null = null;
+    try {
+      await host.fs.writeFile(target, "mine", { expectedRevision: sha("what I read") });
+    } catch (error) {
+      caught = error as Error & { code?: string; currentRevision?: string };
+    }
+    expect(caught?.code).toBe("REVISION_MISMATCH");
+    expect(caught?.message.startsWith("REVISION_MISMATCH:")).toBe(true);
+    expect(caught?.currentRevision).toBe(sha("on disk"));
+    expect(await fs.readFile(target, "utf-8")).toBe("on disk");
+  });
+
+  it("serialises competing checked writers to one winner", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "doc.md");
+    await fs.writeFile(target, "base");
+    const base = sha("base");
+    const results = await Promise.allSettled([
+      host.fs.writeFile(target, "A", { expectedRevision: base }),
+      host.fs.writeFile(target, "B", { expectedRevision: base }),
+    ]);
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    const loser = rejected[0] as PromiseRejectedResult;
+    expect((loser.reason as { code?: string }).code).toBe("REVISION_MISMATCH");
+    const onDisk = await fs.readFile(target, "utf-8");
+    expect(["A", "B"]).toContain(onDisk);
+    expect((fulfilled[0] as PromiseFulfilledResult<{ revision: string }>).value.revision).toBe(
+      sha(onDisk)
+    );
+  });
+
+  it("reports a missing target as TARGET_UNAVAILABLE rather than treating it as empty", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "gone.md");
+    await expect(
+      host.fs.writeFile(target, "x", { expectedRevision: sha("") })
+    ).rejects.toMatchObject({ code: "TARGET_UNAVAILABLE" });
+    await expect(fs.stat(target)).rejects.toThrow();
+  });
+
+  it("creates a new file when expectedRevision is null and refuses an existing one", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "fresh.md");
+    const result = await host.fs.writeFile(target, "new", { expectedRevision: null });
+    expect(result.revision).toBe(sha("new"));
+    await expect(
+      host.fs.writeFile(target, "again", { expectedRevision: null })
+    ).rejects.toMatchObject({ code: "TARGET_EXISTS" });
+    expect(await fs.readFile(target, "utf-8")).toBe("new");
+  });
+
+  it("create-new refuses a directory at the target without opening it", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "dir.md");
+    await fs.mkdir(target);
+    await expect(host.fs.writeFile(target, "x", { expectedRevision: null })).rejects.toMatchObject({
+      code: "TARGET_EXISTS",
+    });
+    expect((await fs.stat(target)).isDirectory()).toBe(true);
+  });
+
+  it("an options-only write replaces atomically without reading the target", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "opaque.md");
+    await fs.writeFile(target, "v1");
+    const readSpy = vi.spyOn(fs, "readFile");
+    try {
+      const result = await host.fs.writeFile(target, "v2", {});
+      expect(result.revision).toBe(sha("v2"));
+      expect(readSpy.mock.calls.some((call) => call[0] === target)).toBe(false);
+    } finally {
+      readSpy.mockRestore();
+    }
+    expect(await fs.readFile(target, "utf-8")).toBe("v2");
+  });
+
+  it("refuses to write through a symlink on the checked path", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const real = join(allowed, "real.md");
+    await fs.writeFile(real, "real");
+    const link = join(allowed, "link.md");
+    await fs.symlink(real, link);
+    await expect(host.fs.writeFile(link, "x", {})).rejects.toMatchObject({
+      code: "TARGET_IS_SYMLINK",
+    });
+    expect(await fs.readFile(real, "utf-8")).toBe("real");
+  });
+
+  it("preserves the file mode across an atomic replace", async () => {
+    if (process.platform === "win32") return;
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "script.md");
+    await fs.writeFile(target, "v1");
+    await fs.chmod(target, 0o640);
+    await host.fs.writeFile(target, "v2", { expectedRevision: sha("v1") });
+    const stat = await fs.stat(target);
+    expect(stat.mode & 0o777).toBe(0o640);
+  });
+
+  it("rejects a malformed expectedRevision up front", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "doc.md");
+    await fs.writeFile(target, "v1");
+    await expect(host.fs.writeFile(target, "v2", { expectedRevision: "nope" })).rejects.toThrow(
+      /expectedRevision/
+    );
+    expect(await fs.readFile(target, "utf-8")).toBe("v1");
+  });
+
+  it("audits a checked write once, like a plain one", async () => {
+    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+    const target = join(allowed, "doc.md");
+    await host.fs.writeFile(target, "v1", {});
+    const writeAudits = appendSpy.mock.calls.filter(
+      (c) => (c[0] as { channel: string }).channel === "plugin:fs-write"
+    );
+    expect(writeAudits.length).toBe(1);
   });
 });

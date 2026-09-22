@@ -25,6 +25,7 @@ export {
   CircleSlash, // agent stopped on an error, distinct in shape from a waiting one (Pilot's blocked band)
   CircleX, // CI that failed — the cross the PR badge already uses, enclosed so a glyph standing alone reads as a verdict rather than a dismiss control
   Clock, // recency sort order (most recently opened first)
+  Coffee, // Daintree keeping the machine from idle-sleeping while agents work — the long-standing keep-awake metaphor
   FileText, // view selected file path in the read-only file viewer
   FolderGit2, // git worktree (single)
   FolderOpen, // reveal in file manager (Finder / Explorer / file manager)
@@ -34,17 +35,21 @@ export {
   GitBranchPlus, // per-project worktree setup — creating branches, not browsing them
   GitPullRequest, // forge provider / code-host plugin category
   History, // resume closed session / session history
+  Joystick, // a terminal the user handed to an orchestrating agent pane, which drives it until taken back
   KeyRound, // forge credentials that stopped working — a key names what has to be fixed, and it shares a silhouette with nothing else here, so it survives forced colors
   Layers, // worktree overview (multiple worktrees, stacked)
   LayoutPanelTop, // workspace plugin category (panels, notes)
   Link2Off, // detach the issue linked to a worktree
   ListChecks, // bulk selection of forge rows — the preset picker that selects many issues or PRs at once
+  MemoryStick, // a terminal host's own memory budget — the governor's app-wide output pause
   Menu, // the application menu, surfaced in-app where the native menu bar can't render
   Moon, // sleep a project — shut it down the way quitting does, restored on reopen
   Network, // Subagent tree — a parent session's spawned child sessions
   Package, // plugin (a packaged extension) — plugin tray, unresolved plugin glyphs
+  Paperclip, // attach files to a composer draft — the same references a drop or a paste inserts
   Plug, // agent (integration that plugs into the host system)
   Plus, // the toolbar launcher — "make me a new thing" (agent, panel)
+  Radar, // an agent pane watching other terminals, which Daintree may wake when they change — distinct from BellDot, the user's own watch alert
   ServerCog, // a worktree's runtime — dev-server and remote-environment lifecycle
   Sprout, // origin / first step (main worktree, first agent launch)
   TriangleAlert, // a setting failing validation — a shape, not a hue, so it survives forced colors

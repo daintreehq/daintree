@@ -13,6 +13,7 @@ import {
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
 } from "../types/plugin.js";
+import { createHash } from "node:crypto";
 import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import type {
   ActionDispatchResult,
@@ -36,6 +37,7 @@ import type {
   PluginIdentity,
   PluginInputBoxOptions,
   PluginIpcHandler,
+  PluginMcpToolDefinition,
   PluginProcessHandle,
   PluginProcessSpawnOptions,
   PluginProcessApi,
@@ -122,6 +124,16 @@ export interface RegisteredFileDecorationProviderRecord {
   impl: FileDecorationProviderImpl;
 }
 
+/**
+ * A roster bound through `host.mcp.registerTools`. `tools` is the plugin's own
+ * roster, `execute` functions included, so a test can call a tool directly with
+ * a caller and signal of its choosing.
+ */
+export interface RegisteredMcpToolsRecord {
+  endpointId: string;
+  tools: Record<string, PluginMcpToolDefinition>;
+}
+
 export interface InvalidationRecord {
   scope: string;
   paths: string[] | undefined;
@@ -171,6 +183,8 @@ export interface MockHostState {
   readonly sentToActiveAgentCalls: ReadonlyArray<SentToActiveAgentRecord>;
   readonly registeredForgeProviders: ReadonlyArray<RegisteredForgeProviderRecord>;
   readonly registeredFileDecorationProviders: ReadonlyArray<RegisteredFileDecorationProviderRecord>;
+  /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
+  readonly registeredMcpTools: ReadonlyArray<RegisteredMcpToolsRecord>;
   readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
   readonly setPanelBadgeCalls: ReadonlyArray<SetPanelBadgeRecord>;
   readonly showQuickPickCalls: ReadonlyArray<ShowQuickPickRecord>;
@@ -498,6 +512,21 @@ function isInvalidChannel(channel: unknown, allowEmpty: boolean): boolean {
   return channel.includes(":");
 }
 
+/**
+ * The revision the mock reports for a text: sha256 hex of its UTF-8 bytes,
+ * the same shape the real host returns, so a plugin can hand it straight back
+ * as `expectedRevision`.
+ */
+function mockRevision(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+function fsWriteError(code: string, message: string): Error & { code: string } {
+  const error = new Error(`${code}: ${message}`) as Error & { code: string };
+  error.code = code;
+  return error;
+}
+
 export function createMockHost(options: CreateMockHostOptions = {}): PluginHostApi & MockHostState {
   const pluginId = options.pluginId ?? "test.mock";
   let activeWorktree: PluginWorktreeSnapshot | null = options.activeWorktree ?? null;
@@ -513,6 +542,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const sentToActiveAgentCalls: SentToActiveAgentRecord[] = [];
   const registeredForgeProviders: RegisteredForgeProviderRecord[] = [];
   const registeredFileDecorationProviders: RegisteredFileDecorationProviderRecord[] = [];
+  const registeredMcpTools: RegisteredMcpToolsRecord[] = [];
   const invalidationCalls: InvalidationRecord[] = [];
   const setPanelBadgeCalls: SetPanelBadgeRecord[] = [];
   const showQuickPickCalls: ShowQuickPickRecord[] = [];
@@ -1114,6 +1144,41 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       };
       return Promise.resolve(dispose);
     },
+    mcp: {
+      registerTools(endpointId, tools) {
+        // Structural checks only. The mock has no manifest model (#9878), so the
+        // `mcp:expose` and declared-endpoint gates are skipped, and the roster
+        // budget (tool count, name grammar, description and schema sizes) is
+        // enforced by the real host rather than duplicated here. Re-registering
+        // an endpoint replaces its roster; a replaced roster's disposer is inert.
+        if (typeof endpointId !== "string" || endpointId.length === 0) {
+          throw new Error("mcp.registerTools: endpointId must be a non-empty string");
+        }
+        if (!tools || typeof tools !== "object") {
+          throw new Error("mcp.registerTools: tools must be an object keyed by tool name");
+        }
+        for (const [name, tool] of Object.entries(tools)) {
+          if (!tool || typeof tool !== "object" || typeof tool.execute !== "function") {
+            throw new Error(`mcp.registerTools: tool "${name}" must provide an execute() function`);
+          }
+        }
+        const record: RegisteredMcpToolsRecord = { endpointId, tools };
+        const existing = registeredMcpTools.findIndex((r) => r.endpointId === endpointId);
+        if (existing >= 0) {
+          registeredMcpTools[existing] = record;
+        } else {
+          registeredMcpTools.push(record);
+        }
+        let disposed = false;
+        const dispose = () => {
+          if (disposed) return;
+          disposed = true;
+          const i = registeredMcpTools.indexOf(record);
+          if (i >= 0) registeredMcpTools.splice(i, 1);
+        };
+        return Promise.resolve(dispose);
+      },
+    },
     invalidateFileDecorations(scope, paths) {
       // Mirror production's non-empty-scope guard (#10617): reject (not throw),
       // matching the host's Promise contract. The declared-scope gate production
@@ -1290,9 +1355,35 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         // to exercise a plugin's byte path without modelling binary storage.
         return new TextEncoder().encode(v);
       },
-      async writeFile(filePath, contents) {
+      async writeFile(filePath, contents, options) {
+        // The checked-write contract (#12323), modelled just far enough for a
+        // plugin's conflict path to be exercised: `expectedRevision` compares
+        // against the stored text's revision, `null` means create-new.
+        const existing = fsFiles.get(filePath);
+        if (options !== undefined) {
+          const expected = options.expectedRevision;
+          if (expected === null && existing !== undefined) {
+            throw fsWriteError("TARGET_EXISTS", `mock fs: "${filePath}" already exists`);
+          }
+          if (typeof expected === "string") {
+            if (existing === undefined) {
+              throw fsWriteError("TARGET_UNAVAILABLE", `mock fs: "${filePath}" does not exist`);
+            }
+            const currentRevision = mockRevision(existing);
+            if (currentRevision !== expected) {
+              throw Object.assign(
+                fsWriteError(
+                  "REVISION_MISMATCH",
+                  `mock fs: "${filePath}" changed since it was read`
+                ),
+                { currentRevision }
+              );
+            }
+          }
+        }
         fsFiles.set(filePath, contents);
         fsWriteCalls.push({ path: filePath, contents });
+        return { revision: mockRevision(contents) };
       },
       async readdir(dirPath, options) {
         options?.signal?.throwIfAborted();
@@ -1447,6 +1538,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     sentToActiveAgentCalls,
     registeredForgeProviders,
     registeredFileDecorationProviders,
+    registeredMcpTools,
     invalidationCalls,
     setPanelBadgeCalls,
     showQuickPickCalls,

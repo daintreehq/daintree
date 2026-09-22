@@ -28,7 +28,7 @@ export function activeWorkspaceIdentity(
       ariaLabel: `Open project switcher for scratch ${currentScratch.name}`,
     };
   }
-  return { kind: "none", name: "Open project", ariaLabel: "Open project" };
+  return { kind: "none", name: "Select project", ariaLabel: "Open project switcher" };
 }
 
 /**
@@ -53,7 +53,7 @@ export function branchChipState(
   if (kind === "scratch" || !gitBacked) return "hidden";
   // `branchName` rides the worktree selection, which closing a project does not
   // clear — so it can outlive `currentProject`. Requiring a project keeps a closed
-  // project's branch from lingering beside the "Open project" empty state.
+  // project's branch from lingering beside the "Select project" empty state.
   if (kind !== "project" || !branchName) return "reserved";
   return "visible";
 }

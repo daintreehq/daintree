@@ -58,6 +58,7 @@ const EMPTY_CONTRIBUTES: PluginManifest["contributes"] = {
   contextMenus: [],
   forgeProviders: [],
   fileDecorationProviders: [],
+  fileEditors: [],
   agents: [],
   processTools: [],
   recipes: [],
@@ -150,7 +151,13 @@ beforeEach(() => {
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
-    value: { plugin: pluginApi },
+    value: {
+      plugin: pluginApi,
+      pluginAgentMcp: {
+        listProjectEndpoints: vi.fn().mockResolvedValue({ endpoints: [], mcpServerEnabled: true }),
+        setProjectEndpointEnabled: vi.fn(),
+      },
+    },
   });
 });
 

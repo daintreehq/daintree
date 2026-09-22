@@ -1,5 +1,21 @@
 import type { BenchmarkClass, BenchmarkFidelity, BenchmarkKind } from "../types";
 
+/** Standalone real-window benchmark, outside the in-process scenario matrix. */
+export const FOREGROUND_TERMINAL_CLASS: BenchmarkClass = {
+  kind: "mechanism",
+  family: "foreground agent terminal",
+  fidelity: {
+    entryPoint: "user-event",
+    renderer: "real",
+    electronTransport: "real",
+    pty: "real",
+    processTopology: "e2e-build",
+    externalDependencies: "hermetic",
+  },
+  claim:
+    "App-process CPU and device GPU time while a fixture agent launched through the toolbar renders deterministic output in visible WebGL terminals. Real working/waiting transitions are checked using OSC heartbeats. This does not measure model inference, arbitrary live-agent detection accuracy, other applications, or WindowServer's compositing cost. GPU time is not GPU-core occupancy.",
+};
+
 /**
  * What each scenario's numbers are allowed to be claimed to mean.
  *

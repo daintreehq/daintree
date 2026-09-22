@@ -611,6 +611,12 @@ export type DaintreeEventMap = {
     waitingReason?: import("../../shared/types/agent.js").WaitingReason;
     sessionCost?: number;
     sessionTokens?: number;
+    /**
+     * Observed new-agent-in-this-PTY count at this transition (#12535).
+     * Carried on every transition, not just the respawn that moves it, so a
+     * subscriber applies the state and the session it belongs to together.
+     */
+    agentIncarnation?: number;
     /** Process exit code on completed/exited transitions; null on a signal kill with no numeric code. */
     exitCode?: number | null;
     /** Raw OS signal number on completed/exited transitions, when applicable. */
@@ -623,6 +629,8 @@ export type DaintreeEventMap = {
     changedChars?: number;
     /** Parsed test/lint/build result captured at this transition (#10682). Best-effort, not an authoritative exit code. */
     lastCheckResult?: import("../../shared/types/checkResult.js").TerminalCheckResult;
+    /** Handback marker first seen at this settle (#12488). `message` is terminal text — never log it. */
+    lastHandback?: import("../../shared/types/handback.js").TerminalHandback;
   }>;
 
   /**
@@ -678,6 +686,11 @@ export type DaintreeEventMap = {
     processName: string;
     defaultTitle?: string;
     timestamp: number;
+    /**
+     * Observed new-agent-in-this-PTY count at the moment of detection
+     * (#12535). Absent when the producer could not report it.
+     */
+    agentIncarnation?: number;
   };
 
   /**
@@ -899,6 +912,12 @@ export type DaintreeEventMap = {
      * produce several records.
      */
     launchGeneration?: number | null;
+    /**
+     * Where the capture came from. Explicit rather than read off a `null`
+     * generation, which also means "frozen but unknown"; only `exit` may
+     * write the id back to the saved pane.
+     */
+    boundary: import("../../shared/types/pty-host.js").AgentSessionCaptureBoundary;
     record: Omit<
       import("../../shared/types/ipc/agentSessionHistory.js").AgentSessionRecord,
       "savedAt"

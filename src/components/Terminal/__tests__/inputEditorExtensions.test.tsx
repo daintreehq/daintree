@@ -180,6 +180,122 @@ describe("createAutoSize integration", () => {
     view.destroy();
   });
 
+  /**
+   * The composer shell reads this marker with `:has()` to decide whether a
+   * narrow pane should move its trailing controls onto their own row. The rule
+   * is "marked exactly when the canvas is taller than a single line" — not any
+   * particular height or class — so it survives the layout being redesigned
+   * again. Without it, narrow panes either starve the draft or put a near-empty
+   * button row under every single-line composer in a tiled fleet.
+   */
+  describe("multiline marker", () => {
+    function mountWithHeight(contentHeight: number) {
+      const parent = document.createElement("div");
+      const view = new EditorView({
+        parent,
+        state: EditorState.create({
+          doc: "",
+          extensions: [createAutoSize({ lineHeightPx: 10, maxHeightPx: 30 })],
+        }),
+      });
+      Object.defineProperty(view, "contentHeight", {
+        get: () => contentHeight,
+        configurable: true,
+      });
+      const originalRequestMeasure = view.requestMeasure.bind(view);
+      vi.spyOn(view, "requestMeasure").mockImplementation((measure: any) => {
+        if (measure?.read && measure?.write) {
+          measure.write(measure.read());
+        } else {
+          originalRequestMeasure(measure);
+        }
+      });
+      return view;
+    }
+
+    it("leaves a single-line canvas unmarked", () => {
+      const view = mountWithHeight(11);
+      view.dispatch({ changes: { from: 0, insert: "hello" } });
+
+      // 11 - 2 epsilon = 9 → one 10px line. One line is not multiline.
+      expect(view.dom.style.height).toBe("10px");
+      expect(view.dom.dataset.composerMultiline).toBeUndefined();
+
+      view.destroy();
+    });
+
+    it("marks a canvas that has wrapped past one line", () => {
+      const view = mountWithHeight(25);
+      view.dispatch({ changes: { from: 0, insert: "hello" } });
+
+      expect(view.dom.style.height).toBe("30px");
+      expect(view.dom.dataset.composerMultiline).toBe("true");
+
+      view.destroy();
+    });
+
+    /**
+     * The anti-oscillation rule, and the reason the marker latches at all.
+     *
+     * Moving the controls to their own row widens the canvas, which can make
+     * the very draft that wrapped fit on one line again. If the marker cleared
+     * on that, the controls would go back inline, re-narrow the canvas and
+     * re-wrap the draft, forever. The rule is that the decision may not be
+     * undone by its own consequence — so a canvas that reports one line after
+     * having wrapped stays marked.
+     */
+    it("stays marked when the extra width makes the draft fit one line again", () => {
+      const view = mountWithHeight(25);
+      view.dispatch({ changes: { from: 0, insert: "hello" } });
+      expect(view.dom.dataset.composerMultiline).toBe("true");
+
+      // The rail appeared and the canvas got wider: same non-empty draft, now
+      // measuring a single line.
+      Object.defineProperty(view, "contentHeight", { get: () => 11, configurable: true });
+      view.dispatch({ changes: { from: 0, insert: "!" } });
+
+      expect(view.dom.dataset.composerMultiline).toBe("true");
+
+      view.destroy();
+    });
+
+    it("clears the mark when the draft is emptied", () => {
+      const view = mountWithHeight(25);
+      view.dispatch({ changes: { from: 0, insert: "hello" } });
+      expect(view.dom.dataset.composerMultiline).toBe("true");
+
+      // Emptying is the one release condition, because it is the one thing no
+      // layout change can manufacture. Sending clears the draft, so an
+      // ordinary submit resets the arrangement.
+      Object.defineProperty(view, "contentHeight", { get: () => 0, configurable: true });
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
+
+      expect(view.dom.dataset.composerMultiline).toBeUndefined();
+
+      view.destroy();
+    });
+
+    /**
+     * `useHostReparent` installs a fresh instance of the extension on every
+     * move between the compact bar and the Expanded Editor. A fresh instance
+     * that started from nothing would clear a marker the old one had set — on
+     * collapse, a draft that fits one line beside the rail would lose the
+     * rail, re-wrap without it, and set the marker again. The DOM attribute is
+     * the durable copy of the latch, and a new instance must adopt it.
+     */
+    it("carries the mark across a reinstalled extension", () => {
+      const view = mountWithHeight(11);
+      view.dom.dataset.composerMultiline = "true";
+
+      // First measurement of the fresh instance: one line, non-empty draft.
+      view.dispatch({ changes: { from: 0, insert: "hello" } });
+
+      expect(view.dom.dataset.composerMultiline).toBe("true");
+
+      view.destroy();
+    });
+  });
+
   it("caps height and shows overflow for large content", () => {
     const parent = document.createElement("div");
     const view = new EditorView({

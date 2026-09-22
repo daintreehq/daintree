@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
+import type { ReactNode } from "react";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProjectPluginTrustBanner } from "../ProjectPluginTrustBanner";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   __resetProjectPluginStoreForTesting,
   useProjectPluginStore,
@@ -31,6 +33,16 @@ function button(label: string): HTMLElement {
   return match;
 }
 
+/** The app mounts one TooltipProvider at its root; the banner's × explains itself through it. */
+function renderBanner(siblings?: ReactNode) {
+  return render(
+    <TooltipProvider>
+      {siblings}
+      <ProjectPluginTrustBanner />
+    </TooltipProvider>
+  );
+}
+
 beforeEach(() => {
   setProjectPluginTrust.mockReset().mockResolvedValue(undefined);
   Object.defineProperty(window, "electron", {
@@ -44,21 +56,20 @@ afterEach(() => {
   __resetProjectPluginStoreForTesting();
 });
 
-function openPrompt() {
+function openPrompt(
+  plugins: { id: string; displayName: string }[] = [
+    { id: "acme.dashboard", displayName: "Acme Dashboard" },
+    { id: "acme.deploy-board", displayName: "Deploy Board" },
+  ]
+) {
   act(() => {
-    useProjectPluginStore.getState().openPrompt({
-      projectId: "proj-a",
-      plugins: [
-        { id: "acme.dashboard", displayName: "Acme Dashboard" },
-        { id: "acme.deploy-board", displayName: "Deploy Board" },
-      ],
-    });
+    useProjectPluginStore.getState().openPrompt({ projectId: "proj-a", plugins });
   });
 }
 
 describe("ProjectPluginTrustBanner", () => {
   it("renders nothing until the trust prompt arrives", () => {
-    const { container } = render(<ProjectPluginTrustBanner />);
+    const { container } = renderBanner();
     expect(container.textContent).toBe("");
 
     openPrompt();
@@ -66,7 +77,7 @@ describe("ProjectPluginTrustBanner", () => {
   });
 
   it("names every plugin it is asking about rather than counting them", () => {
-    render(<ProjectPluginTrustBanner />);
+    renderBanner();
     openPrompt();
 
     const text = document.body.textContent ?? "";
@@ -75,7 +86,7 @@ describe("ProjectPluginTrustBanner", () => {
   });
 
   it("states plainly that the code is unsandboxed and names agents", () => {
-    render(<ProjectPluginTrustBanner />);
+    renderBanner();
     openPrompt();
 
     const text = (document.body.textContent ?? "").toLowerCase();
@@ -84,13 +95,38 @@ describe("ProjectPluginTrustBanner", () => {
     expect(text).toContain("agents");
   });
 
+  it("keeps the plugin's own words apart from ours, and never lets them hide the warning", () => {
+    const name =
+      "Acme Dashboard (official, verified, safe to enable, reviewed by the team, trusted)";
+    renderBanner();
+    openPrompt([{ id: "acme.dashboard", displayName: name }]);
+
+    // The name is quoted and carries its full text as a title, so a bounded
+    // render still discloses the whole string. The quotes sit outside the
+    // element that holds the name, so a cut name still closes. Whether the
+    // name actually clips, and the warning never does, is pixel geometry —
+    // the capture harness owns that.
+    const quoted = screen.getByTitle(name);
+    expect(quoted.textContent).toBe(`'${name}'`);
+    expect(quoted.firstElementChild?.textContent).toBe(name);
+  });
+
+  it("falls back to the plugin id when the manifest's name has nothing visible in it", () => {
+    renderBanner();
+    openPrompt([{ id: "acme.dashboard", displayName: "   " }]);
+
+    expect(screen.getByTitle("acme.dashboard").textContent).toBe("'acme.dashboard'");
+  });
+
   it("offers exactly the three answers, and no per-capability choice", () => {
-    render(<ProjectPluginTrustBanner />);
+    renderBanner();
     openPrompt();
 
     expect(button("Keep disabled")).toBeTruthy();
     expect(button("Enable for this session")).toBeTruthy();
     expect(button("Always enable")).toBeTruthy();
+    // Three answers and the dismiss: nothing else is a button here.
+    expect(screen.getAllByRole("button")).toHaveLength(4);
 
     // A capability list here would read as a set of togglable permissions.
     // There is no sandbox behind them, so the gate must not imply one.
@@ -99,12 +135,23 @@ describe("ProjectPluginTrustBanner", () => {
     expect(text).not.toContain("deny");
   });
 
+  it("puts the three answers before 'Decide later' in tab order", () => {
+    renderBanner();
+    openPrompt();
+
+    const buttons = screen
+      .getAllByRole("button")
+      .map((el) => el.getAttribute("aria-label") ?? el.textContent?.trim());
+    expect(buttons.indexOf("Decide later")).toBe(buttons.length - 1);
+    expect(buttons.indexOf("Keep disabled")).toBeLessThan(buttons.indexOf("Decide later"));
+  });
+
   it.each([
     ["Keep disabled", "disabled"],
     ["Enable for this session", "session"],
     ["Always enable", "enabled"],
   ])("sends %s as %s", async (label, decision) => {
-    render(<ProjectPluginTrustBanner />);
+    renderBanner();
     openPrompt();
 
     await act(async () => {
@@ -116,7 +163,7 @@ describe("ProjectPluginTrustBanner", () => {
   });
 
   it("records nothing when it is dismissed without an answer", () => {
-    const { container } = render(<ProjectPluginTrustBanner />);
+    const { container } = renderBanner();
     openPrompt();
 
     act(() => {
@@ -129,12 +176,7 @@ describe("ProjectPluginTrustBanner", () => {
   });
 
   it("leaves terminal focus alone when the prompt arrives", () => {
-    render(
-      <>
-        <input aria-label="Terminal input" />
-        <ProjectPluginTrustBanner />
-      </>
-    );
+    renderBanner(<input aria-label="Terminal input" />);
     const terminal = screen.getByRole("textbox");
     terminal.focus();
     openPrompt();
@@ -143,12 +185,15 @@ describe("ProjectPluginTrustBanner", () => {
 
   it("keeps a failed decision visible and lets the user retry", async () => {
     setProjectPluginTrust.mockRejectedValueOnce(new Error("Couldn't save plugin trust"));
-    render(<ProjectPluginTrustBanner />);
+    renderBanner();
     openPrompt();
 
     await act(async () => button("Always enable").click());
 
-    expect(screen.getByRole("alert").textContent).toContain("Couldn't save plugin trust");
+    // The failure is announced through the banner's own polite region, not a
+    // second, assertive live region nested inside it.
+    expect(screen.getByRole("status").textContent).toContain("Couldn't save plugin trust");
+    expect(document.querySelector('[role="alert"]')).toBeNull();
     expect(useProjectPluginStore.getState().prompt).not.toBeNull();
     await act(async () => button("Always enable").click());
     expect(setProjectPluginTrust).toHaveBeenCalledTimes(2);
@@ -163,7 +208,7 @@ describe("ProjectPluginTrustBanner", () => {
           resolve = done;
         })
     );
-    render(<ProjectPluginTrustBanner />);
+    renderBanner();
     openPrompt();
     const enable = button("Always enable");
     enable.focus();
@@ -171,7 +216,12 @@ describe("ProjectPluginTrustBanner", () => {
 
     expect(document.activeElement).toBe(enable);
     expect(enable.getAttribute("aria-busy")).toBe("true");
-    expect(screen.queryByRole("button", { name: "Decide later" })).toBeNull();
+    // Decide later stays in the row — inert, so the controls beside it do not
+    // shift — and it cannot hide a decision that is still being saved.
+    const later = screen.getByRole("button", { name: "Decide later" });
+    expect(later.hasAttribute("disabled")).toBe(true);
+    act(() => later.click());
+    expect(useProjectPluginStore.getState().prompt).not.toBeNull();
     act(() => button("Keep disabled").click());
     expect(setProjectPluginTrust).toHaveBeenCalledTimes(1);
     await act(async () => resolve());
@@ -179,7 +229,7 @@ describe("ProjectPluginTrustBanner", () => {
   });
 
   it("does not block: it renders as a status region, never a dialog", () => {
-    render(<ProjectPluginTrustBanner />);
+    renderBanner();
     openPrompt();
 
     // The whole point of #12212 was that a modal stole focus from the terminal

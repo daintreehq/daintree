@@ -52,6 +52,25 @@ Tests are split into twelve Playwright projects:
 
 It is a second config rather than a thirteenth project on purpose: `npm run test:e2e` is a bare `npx playwright test`, which runs _every_ project in `playwright.config.ts`, and these generate several hundred megabytes of encoded fixtures per run. Don't fold it in.
 
+### Live plugin checks (separate config)
+
+`playwright.plugins.config.ts` drives a plugin through the real app against the real toolchain it targets, on request only — never in a suite, a release gate or `npm run test:e2e`, for the same reason as the mechanism checks. One spec per plugin under `e2e/plugins/`:
+
+```bash
+npm run build:e2e && npm run test:e2e:plugins                                                         # every plugin
+npm run build:e2e && npx playwright test --config=playwright.plugins.config.ts e2e/plugins/sveltekit-builder.spec.ts
+```
+
+- **`sveltekit-builder.spec.ts`** creates a throwaway SvelteKit 2 + Svelte 5 + Tailwind 4 app and installs its dependencies from the registry (network on a cold npm cache), runs it in a dev preview, and walks SvelteKit Tools: enable, switch it on with its command so it opens a dev preview and starts the site, close it and switch it back on from the preview's own toolbar button, click an element in the preview, walk up to the component that drew it with Option+Up, then send the component to an agent terminal and wait for the site to change. The agent is a deterministic fake `claude` (`e2e/plugins/helpers/siteAgent.ts`) that applies the requested edit only at the source location the prompt names, so a pass proves the context SvelteKit Tools sent.
+
+Things these specs have to handle that bucket specs don't:
+
+- **Plugin commands can confirm.** A plugin whose manifest holds a high-risk capability (any `fs:*-write`, for one) gets a "Run '…'?" dialog on every command unless the command declares the capabilities it actually uses with `requires` — `[]` for one that only opens a panel. The dispatch stays pending until the dialog is answered.
+- **Built-ins are default-off.** Enable with `window.electron.plugin.setEnabled(id, true)` and poll `getPanelKinds()` / `getActions()`.
+- **The preview's page is only reachable from main.** The host renderer's Trusted Types policy rejects `webview.executeJavaScript`; use `app.evaluate` over `webContents.getAllWebContents()` filtered to `getType() === "webview"`. Click at the element's real position: the webview's bounding box plus the element's client rect.
+- **A fixture project's `package.json` type applies to scripts in it.** An extensionless fake CLI inside a `"type": "module"` project loads as ESM, so `require` throws; use `process.getBuiltinModule`.
+- **Print diagnostics on failure.** A blank panel or a silent preview has no assertion message worth reading; the SvelteKit Tools spec dumps the builder's text, the renderer console, the preview's console (collected from `web-contents-created`) and what the agent received.
+
 | Project         | testDir                 | retries (CI) | workers |
 | --------------- | ----------------------- | ------------ | ------- |
 | core            | `./e2e/core`            | 2            | 1-2     |
@@ -184,11 +203,11 @@ A separate workflow for fine-grained ad-hoc runs of a single test file with conf
 
 ### `stabilize.yml` (cross-platform validation)
 
-The comprehensive cross-platform surface, dispatched on demand by the `stabilize` skill (`.agents/skills/stabilize/`) — it replaced the old scheduled nightly. `workflow_dispatch` only (no cron), input `platform` defaulting to `linux-windows` (also `windows` | `linux` | `all` | `non-windows` | `macos`). One run executes `check`, unit `test`, `build` + smoke, `integration-test`, `knip`, and every E2E suite (`core`, all seven `full-*` buckets, `online`, and the `nightly` memory-leak soak) across the chosen platforms. It opens no issues — the driving agent triages results from the per-shard `failed-specs-*` / `failure-report-*` artifacts and the `stabilize-merged-playwright-report`. Watch the single `stabilize-ok` gate for the overall verdict. The skill runs the full gate locally first on macOS, so CI defaults to `linux-windows` (no macOS); `windows` alone is the usual iteration target, and `all` (adds macOS-on-CI) is reserved for the rare macOS issue that can't be reproduced locally.
+The comprehensive cross-platform surface, dispatched on demand by the `stabilize` skill (`.agents/skills/stabilize/`) — it replaced the old scheduled nightly. `workflow_dispatch` only (no cron), input `platform` defaulting to `linux-windows` (also `windows` | `linux` | `all` | `non-windows` | `macos`). One run executes `check`, unit `test`, `build` + smoke, `integration-test` (Linux legs only), and every E2E suite (`core`, all seven `full-*` buckets, `online`, and the `nightly` memory-leak soak) across the chosen platforms. All of those start in parallel — `check`/`test` do not gate E2E — so a single run surfaces every failure at once, and the app is built once per OS (`e2e-build`) and handed to every shard through `e2e.yml`'s `prebuilt_artifact` input. A second input, `only`, scopes a re-run to named pieces (e.g. `-f only='test full-terminal'`; aliases `full` and `e2e`), and the `stabilize-ok` gate accepts `skipped` only from pieces the run deliberately left out (via `only`, or `integration-test` on a run with no Linux leg). `knip` is not part of the workflow: it is OS-agnostic, so the skill runs it once locally. It opens no issues — the driving agent triages results from the per-shard `failed-specs-*` / `failure-report-*` artifacts and the `stabilize-merged-playwright-report`. Watch the single `stabilize-ok` gate for the overall verdict. The skill runs the full gate locally first on macOS, so CI defaults to `linux-windows` (no macOS); `windows` alone is the usual iteration target, and `all` (adds macOS-on-CI) is reserved for the rare macOS issue that can't be reproduced locally.
 
 ### Release Gating
 
-Releases run as three independent per-OS workflows (`release-macos.yml`, `release-linux.yml`, `release-windows.yml`, #8052), each triggered by the same `v*` tag. Every workflow runs checks, unit tests, and that OS's e2e gates (`core` + the seven `full-*` buckets fanned out as a matrix + `online`) before that OS's platform packaging starts, then publishes that OS's artifacts to R2 the moment its own pipeline is green — a failed or hung OS only delays itself. Because each `full-*` bucket auto-shards inside `e2e.yml` (#8053 — Windows buckets fan out up to 16–32 ways), a full Windows bucket finishes in ~10min wall-time instead of ~39min serial, so Windows `full-*` now gates the Windows release (it no longer takes ~5–6 hours). Pre-release cross-platform confidence beyond what the release tag itself runs comes from `stabilize.yml` (the `stabilize` skill — normally `platform=linux-windows`, since the mandatory local run already covers macOS; `platform=all` only when a macOS-on-CI check is genuinely essential), not from a scheduled nightly — the test-nightly was retired and only `nightly-publish.yml` (binary publish, smoke only) still runs on a cron.
+Releases run as three independent per-OS workflows (`release-macos.yml`, `release-linux.yml`, `release-windows.yml`, #8052), each triggered by the same `v*` tag. Every workflow runs checks, unit tests, and that OS's e2e gates (`core` + the seven `full-*` buckets fanned out as a matrix + `online`) before that OS's platform packaging starts, then publishes that OS's artifacts to R2 the moment its own pipeline is green — a failed or hung OS only delays itself. Because each `full-*` bucket auto-shards inside `e2e.yml` (#8053 — Windows buckets fan out 8–12 ways, `full-plugins` 4), a full Windows bucket finishes in ~10min wall-time instead of ~39min serial, so Windows `full-*` now gates the Windows release (it no longer takes ~5–6 hours). Pre-release cross-platform confidence beyond what the release tag itself runs comes from `stabilize.yml` (the `stabilize` skill — normally `platform=linux-windows`, since the mandatory local run already covers macOS; `platform=all` only when a macOS-on-CI check is genuinely essential), not from a scheduled nightly — the test-nightly was retired and only `nightly-publish.yml` (binary publish, smoke only) still runs on a cron.
 
 ### Cross-Platform Matrix
 
@@ -219,7 +238,7 @@ Two distinct smoke checks run at different points in the pipeline:
 
 ## `test:freeze-harness` — why it can't be a Playwright spec
 
-`npm run test:freeze-harness` (`scripts/run-freeze-harness.mjs` + `electron/services/freezeHarness.ts`) measures whether a cached project view's renderer genuinely stops executing tasks when the efficiency-freeze path freezes it, and resumes when it is thawed.
+`npm run test:freeze-harness` (`scripts/run-freeze-harness.mjs` + `electron/services/freezeHarness.ts`) measures whether a cached project view's renderer genuinely stops executing tasks when the efficiency-freeze path freezes it, resumes when it is thawed, and costs close to no CPU while cached and idle.
 
 **Do not port this to Playwright.** Playwright sends `Emulation.setFocusEmulationEnabled` to every page target it attaches to. That handler takes out a `WebContents` capturer with `stay_hidden=false`, which permanently tells the renderer it is user-visible. `Page.setWebLifecycleState(frozen)` calls `WasHidden()` internally, so on a forced-visible page it no-ops — while still returning success. A freeze assertion written in Playwright passes whether or not freeze works, in every project view, always (#11846). A second CDP session can't undo it either: `capture_handle_` and `focus_emulation_enabled_` are per-session handler state.
 
@@ -232,11 +251,13 @@ npm run build && npm run test:freeze-harness
 FREEZE_HARNESS_RUNS=5 npm run test:freeze-harness   # variance
 ```
 
+The idle-CPU leg is the one deliberate bound (#12456). Task counts cannot see a CDP CPU throttle: `Emulation.setCPUThrottlingRate` busy-spins the renderer main thread from a signal handler, outside any task and frozen or not, so the freeze legs passed while every cached view burned 25–40% of a core. After the freeze legs the harness switches back to A, so B — never probed — is freshly cached with efficiency freeze off, then reads B's renderer `cpu.cumulativeCPUUsage` from `app.getAppMetrics()` across a 10 s window and requires under 10% of one core. It fails on a missing counter, a replaced process, a pid shared with the active view, or a window that closes past B's purge deadline. `percentCPUUsage` is not used because every other `getAppMetrics()` caller resets its interval.
+
 All three measurement windows have to close before the cached view's first memory purge (`CACHED_VIEW_PURGE_DELAY_MS`, armed as the view is parked), or the purge perturbs the throughput being measured. The planned schedule is checked against the elapsed clock just before the control leg, and the actual finish is checked again after the last window — so widening `DAINTREE_FREEZE_HARNESS_WINDOW_MS` past what fits, or timers running long on a loaded box, fails the run with the shortfall rather than reporting a number measured across a purge.
 
 Reference numbers (macOS, Electron 42, 3s windows): control ~54,000 ticks, frozen **0**, recovered ~52,000. With `freezeWebContents` neutered the same run reads control 54,026 / frozen 53,875 — a ratio of 1.0x against 54,000x, so the harness is discriminating by a wide margin.
 
-**Measured on macOS only.** The mechanism is Chromium/CDP semantics and should be platform-independent, but that is an inference; Windows is unverified and is the platform most likely to differ. The harness is not wired into any workflow yet — run it on demand.
+**Freeze legs measured on macOS only.** The mechanism is Chromium/CDP semantics and should be platform-independent, but that is an inference; Windows is unverified and is the platform most likely to differ. The idle-CPU leg has not been run on any platform yet: its 10% ceiling comes from the 25–40% spin measured in #12456, so record the first real reading here. The harness is not wired into any workflow yet — run it on demand.
 
 ## Smoke Audit Cadence
 

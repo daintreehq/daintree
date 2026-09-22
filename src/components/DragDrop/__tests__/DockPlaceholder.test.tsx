@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render } from "@testing-library/react";
 
 const mockUseDndPlaceholder = vi.fn();
-vi.mock("../DndProvider", () => ({
+vi.mock("../dndPlaceholderContext", () => ({
   useDndPlaceholder: () => mockUseDndPlaceholder(),
 }));
 vi.mock("@/utils/terminalChrome", () => ({

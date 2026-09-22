@@ -1,7 +1,11 @@
 import { session, type BrowserWindow } from "electron";
 import type { HandlerDependencies } from "../ipc/types.js";
 import { sendToRenderer } from "../ipc/handlers.js";
-import { getAppWebContents } from "./webContentsRegistry.js";
+import {
+  clearPortHolderWebContentsIfCurrent,
+  getAppWebContents,
+  setFallbackEligibleProjectsListener,
+} from "./webContentsRegistry.js";
 import { distributePortsToView, releaseAllTerminalWorkerPorts } from "./portDistribution.js";
 import { resolveInitialColorSchemeId } from "./skeletonCss.js";
 import { resolveAppTheme } from "../../shared/theme/index.js";
@@ -20,6 +24,7 @@ import { notificationService } from "../services/NotificationService.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { logInfo } from "../utils/logger.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
+import type { HostMemoryPauseSnapshot } from "../../shared/types/pty-host.js";
 import { isDemoMode } from "../setup/environment.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { registerDeferredTask, finalizeDeferredRegistration } from "./deferredInitQueue.js";
@@ -145,6 +150,25 @@ export async function initPerWindowServices(
       deferStart: true,
     });
     setPtyClientRef(ptyClient);
+
+    // Keep the host's fallback-eligible project set current (#12557). The
+    // registry spans every window, and `ptyClient` is a process-wide singleton,
+    // so this is installed once beside its construction rather than per window.
+    // Fires immediately with the current set, which is empty this early — the
+    // real value arrives as views register and broker their ports.
+    setFallbackEligibleProjectsListener((projectIds) => {
+      ptyClient?.setFallbackEligibleProjects(projectIds);
+    });
+
+    // A window whose port the host tore down has no reachable view any more,
+    // so the record is cleared to re-open the IPC fallback for it. Identity-
+    // guarded: a "port-replace" teardown is processed by the host only after
+    // Main has already registered the replacement holder, so clearing blindly
+    // would wipe the live record and leave the window permanently holderless —
+    // every chunk of its project then taking a fallback nobody acks.
+    ptyClient.on("port-disconnected", (windowId, _reason, holderWebContentsId) => {
+      clearPortHolderWebContentsIfCurrent(windowId, holderWebContentsId);
+    });
 
     const versionSvc = new AgentVersionService(cliAvailabilityService);
     setAgentVersionService(versionSvc);
@@ -305,6 +329,24 @@ export async function initPerWindowServices(
       void ptyClient!.trimState(SCROLLBACK_BACKGROUND, "all").catch(() => {
         /* non-critical */
       });
+    });
+    // The memory pause reaches the UI once, app-wide, never per pane (#12375).
+    // Sent on every change, the release included, to each window's active view;
+    // a cached view pulls the snapshot when it's revealed.
+    ptyClient.on("host-memory-pause-changed", (snapshot: HostMemoryPauseSnapshot) => {
+      if (!windowRegistry) return;
+      for (const wCtx of windowRegistry.all()) {
+        const w = wCtx.browserWindow;
+        if (w.isDestroyed()) continue;
+        try {
+          sendToRenderer(w, CHANNELS.EVENTS_PUSH, {
+            name: "terminal:host-memory-pause",
+            payload: snapshot,
+          });
+        } catch {
+          /* non-critical */
+        }
+      }
     });
     ptyClient.setPortRefreshCallback((windowId) => {
       // Called with no windowId on a full host restart (refresh every window)

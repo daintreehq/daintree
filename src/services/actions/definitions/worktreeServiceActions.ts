@@ -7,13 +7,34 @@ import { worktreeClient } from "@/clients";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
+/**
+ * A load failure worth retrying: one main or the port watchdog reported, or an
+ * open project whose worktree store settled without ever receiving a snapshot.
+ * The second has no error of its own to show, which is why it used to read as
+ * an empty repository instead of a connection failure (#12576). A workspace
+ * service error is excluded — a crashed host needs `worktree.restartService`,
+ * which Retry's reload can't stand in for.
+ */
+function hasRetryableWorktreeLoadFailure(): boolean {
+  const { worktreeLoadError, currentProject } = useProjectStore.getState();
+  if (worktreeLoadError !== null) return true;
+  if (!currentProject) return false;
+  const viewState = getCurrentViewStoreOrNull()?.getState();
+  return (
+    viewState !== undefined &&
+    !viewState.isInitialized &&
+    !viewState.isLoading &&
+    viewState.error === null
+  );
+}
+
 export function registerWorktreeServiceActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
 ): void {
   actions.set("worktree.refresh", () => ({
     id: "worktree.refresh",
-    title: "Refresh Sidebar",
+    title: "Refresh sidebar",
     description:
       "Re-read worktree state, pull requests and forge statistics from disk and the provider, discarding what is cached. Use this after changes made outside the app leave stale data on screen. It costs provider round trips against your rate limit, so prefer it over routine polling rather than as a habit.",
     category: "worktree",
@@ -71,7 +92,7 @@ export function registerWorktreeServiceActions(
 
   actions.set("worktree.refreshPullRequests", () => ({
     id: "worktree.refreshPullRequests",
-    title: "Refresh Pull Requests",
+    title: "Refresh pull requests",
     description: "Refresh PR information for all worktrees",
     category: "worktree",
     kind: "command",
@@ -85,7 +106,7 @@ export function registerWorktreeServiceActions(
 
   actions.set("worktree.restartService", () => ({
     id: "worktree.restartService",
-    title: "Restart Workspace Service",
+    title: "Restart workspace service",
     description:
       "Restart the workspace host. Available after the service has crashed and could not recover automatically.",
     category: "worktree",
@@ -120,11 +141,9 @@ export function registerWorktreeServiceActions(
     scope: "renderer",
     nonRepeatable: true,
     keywords: ["reload", "recover", "switch", "worktree"],
-    isEnabled: () => useProjectStore.getState().worktreeLoadError !== null,
+    isEnabled: () => hasRetryableWorktreeLoadFailure(),
     disabledReason: () =>
-      useProjectStore.getState().worktreeLoadError === null
-        ? "No worktree load failure to retry"
-        : undefined,
+      hasRetryableWorktreeLoadFailure() ? undefined : "No worktree load failure to retry",
     run: async () => {
       const retriedError = useProjectStore.getState().worktreeLoadError;
       await worktreeClient.retryProjectLoad();
@@ -141,7 +160,7 @@ export function registerWorktreeServiceActions(
   actions.set("worktree.setActive", () =>
     defineAction({
       id: "worktree.setActive",
-      title: "Set Active Worktree",
+      title: "Set active worktree",
       description:
         "Switch which worktree is the active one, changing the default target for everything scoped to 'the current worktree' and moving what the user sees. Call this deliberately — subsequent actions that omit a worktree will follow it, so switching mid-task can silently retarget later work.",
       category: "worktree",

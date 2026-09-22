@@ -446,8 +446,24 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       expect(removeButtonSlice).toMatch(/variant="destructive"/);
     });
 
-    it("renders a ConfirmDialog with typedNameTarget for the D3 bulk remove gate", () => {
-      expect(modalSource).toMatch(/typedNameTarget=\{bulkRemove\.typedNameTarget\}/);
+    it("hands the whole hook to the extracted bulk-remove dialog", () => {
+      // The confirm moved out of this 1,500-line modal when it grew a real
+      // per-target preview (#12416). The modal still owns the hook; the D3
+      // gate itself is contracted in `WorktreeBulkRemoveDialog.test.tsx`,
+      // which asserts the rendered DOM rather than this file's source.
+      expect(modalSource).toMatch(
+        /import\s*\{[^}]*\bWorktreeBulkRemoveDialog\b[^}]*\}\s*from\s*"\.\/WorktreeBulkRemoveDialog"/
+      );
+      expect(modalSource).toMatch(/<WorktreeBulkRemoveDialog\s+bulkRemove=\{bulkRemove\}\s*\/>/);
+    });
+
+    it("keeps the D3 typed-count gate wired in the extracted dialog", async () => {
+      const dialogSource = await fs.readFile(
+        path.resolve(__dirname, "../WorktreeBulkRemoveDialog.tsx"),
+        "utf-8"
+      );
+      expect(dialogSource).toMatch(/typedNameTarget=\{[^}]*bulkRemove\.typedNameTarget/);
+      expect(dialogSource).toMatch(/variant="destructive"/);
     });
 
     it("renders a separate ConfirmDialog for the D1 close-sessions gate (variant='default')", () => {

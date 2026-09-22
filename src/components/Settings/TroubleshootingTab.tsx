@@ -77,7 +77,9 @@ function SystemHealthSection() {
         disabled={isChecking}
         className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary mb-3"
       >
-        <RotateCw className={cn("w-4 h-4", isChecking && "animate-spin")} />
+        <span className={cn("inline-flex shrink-0", isChecking && "animate-spin")}>
+          <RotateCw className="w-4 h-4" />
+        </span>
         {isChecking ? "Checking…" : result ? "Re-run Check" : "Run Health Check"}
       </Button>
       {checkError && <p className="text-xs text-status-error mb-3">{checkError}</p>}

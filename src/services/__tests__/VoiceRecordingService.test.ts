@@ -813,6 +813,29 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     );
   });
 
+  it("never aims dictation at a focused pane held for recovery (#12434)", async () => {
+    setupGlobals();
+    const { macro, panel } = await importMocks();
+    macro.isAssistantFocused.mockReturnValue(false);
+    panel.__state.focusedId = "held-1";
+    panel.__state.panelsById = {
+      "held-1": {
+        id: "held-1",
+        kind: "terminal",
+        title: "Codex",
+        location: "grid",
+        restoreRecovery: { reason: "session-unresolved" },
+      },
+    };
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(toggleSpy).not.toHaveBeenCalled();
+  });
+
   it("toggleAssistant opens the assistant and toasts when no terminal exists", async () => {
     setupGlobals();
     const { help } = await importMocks();

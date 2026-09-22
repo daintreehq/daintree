@@ -303,7 +303,12 @@ export function MissingCliGate({
               onClick={() => void handleRefresh()}
               disabled={isRefreshing}
             >
-              <SpinningIcon icon={RefreshCw} active={isRefreshing} size={14} className="mr-1.5" />
+              <SpinningIcon
+                icon={RefreshCw}
+                active={isRefreshing}
+                size={14}
+                wrapperClassName="mr-1.5"
+              />
               Re-check
             </Button>
             <Button size="sm" variant="outline" onClick={onRunAnyway}>

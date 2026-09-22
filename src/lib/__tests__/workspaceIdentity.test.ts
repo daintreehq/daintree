@@ -43,7 +43,7 @@ describe("activeWorkspaceIdentity", () => {
 
   it("labels the empty state with an action verb, not brand text", () => {
     const identity = activeWorkspaceIdentity(null, null);
-    expect(identity.name).toMatch(/^Open\b/);
+    expect(identity.name).toMatch(/^Select\b/);
     expect(identity.name).not.toMatch(/daintree/i);
   });
 
@@ -79,7 +79,7 @@ describe("branchChipState", () => {
 
   it("reserves rather than shows in the empty state, even with a stale branch", () => {
     // Closing a project nulls it without clearing the worktree selection, so the
-    // branch outlives it. It must not linger visibly beside "Open project".
+    // branch outlives it. It must not linger visibly beside "Select project".
     expect(branchChipState("none", undefined)).toBe("reserved");
     expect(branchChipState("none", "feature/x")).toBe("reserved");
   });

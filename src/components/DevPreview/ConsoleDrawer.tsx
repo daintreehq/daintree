@@ -41,6 +41,12 @@ interface ConsoleDrawerProps {
   onRequestRestartAndClearCache?: () => void;
   onRequestReinstallAndRestart?: () => void;
   onStop?: () => void;
+  /**
+   * False while the host panel is parked (docked with its popover closed). The
+   * drawer stays mounted there, so without this the Output terminal would keep
+   * its visible refresh tier behind a closed popover.
+   */
+  isPanelVisible?: boolean;
 }
 
 const STATUS_LABEL: Record<
@@ -148,6 +154,7 @@ export function ConsoleDrawer({
   onRequestRestartAndClearCache,
   onRequestReinstallAndRestart,
   onStop,
+  isPanelVisible = true,
 }: ConsoleDrawerProps) {
   const [uncontrolledIsOpen, setUncontrolledIsOpen] = useState(defaultOpen);
   const isOpen = controlledIsOpen ?? uncontrolledIsOpen;
@@ -217,7 +224,7 @@ export function ConsoleDrawer({
     [selectTab]
   );
 
-  const isOutputVisible = isOpen && activeTab === "output";
+  const isOutputVisible = isPanelVisible && isOpen && activeTab === "output";
 
   useEffect(() => {
     terminalInstanceService.setVisible(terminalId, isOutputVisible);

@@ -162,6 +162,64 @@ describe("routeHostEvent", () => {
     expect(errorListener).toHaveBeenCalledWith("t1", "boom");
   });
 
+  it("forwards the host's delivered-view list on a data event (#12557)", () => {
+    // Main uses it to drop the views that already read the chunk off their
+    // MessagePort, so the cached duplicate the fallback exists for is the only
+    // one that parses it. Dropping the list here would double-deliver instead.
+    const { deps, emitter } = makeDeps();
+    const dataListener = vi.fn();
+    emitter.on("data", dataListener);
+
+    routeHostEvent({ type: "data", id: "t1", data: "x", portDeliveredWebContentsIds: [303] }, deps);
+
+    expect(dataListener).toHaveBeenCalledWith("t1", "x", {
+      portDeliveredWebContentsIds: [303],
+      portRecoveryWebContentsId: undefined,
+    });
+  });
+
+  it("forwards a port-flush recovery view on a data event (#12557)", () => {
+    const { deps, emitter } = makeDeps();
+    const dataListener = vi.fn();
+    emitter.on("data", dataListener);
+
+    routeHostEvent({ type: "data", id: "t1", data: "x", portRecoveryWebContentsId: 202 }, deps);
+
+    expect(dataListener).toHaveBeenCalledWith("t1", "x", {
+      portDeliveredWebContentsIds: undefined,
+      portRecoveryWebContentsId: 202,
+    });
+  });
+
+  it("forwards a port-disconnected notice so Main can drop its holder (#12557)", () => {
+    // Main uses it to stop treating that window's view as reachable by
+    // MessagePort; without it a failed port leaves the view ineligible for the
+    // IPC fallback it now depends on.
+    const { deps, emitter } = makeDeps();
+    const listener = vi.fn();
+    emitter.on("port-disconnected", listener);
+
+    routeHostEvent({ type: "port-disconnected", windowId: 4, reason: "postMessage-error" }, deps);
+
+    expect(listener).toHaveBeenCalledWith(4, "postMessage-error", undefined);
+  });
+
+  it("forwards the departing holder id so Main can identity-match the clear (#12557)", () => {
+    // A port-replace teardown reaches Main after the replacement holder is
+    // already registered; without the departing identity Main cannot tell the
+    // two apart and wipes the live record.
+    const { deps, emitter } = makeDeps();
+    const listener = vi.fn();
+    emitter.on("port-disconnected", listener);
+
+    routeHostEvent(
+      { type: "port-disconnected", windowId: 4, reason: "port-replace", holderWebContentsId: 101 },
+      deps
+    );
+
+    expect(listener).toHaveBeenCalledWith(4, "port-replace", 101);
+  });
+
   it("emits submit-status as a single typed payload, not an error string", () => {
     // #11875. The state has to survive the host->Main hop as a closed union the
     // renderer can switch on; folding it into the `error` string carrier is
@@ -447,34 +505,49 @@ describe("routeHostEvent", () => {
     expect(spawnListener).toHaveBeenCalled();
   });
 
-  it("emits fd-leak-warning and returns true", () => {
-    const { deps, emitter } = makeDeps();
-    const listener = vi.fn();
-    emitter.on("fd-leak-warning", listener);
+  it.each(["elevated", "recovered"] as const)(
+    "forwards a %s fd-growth transition without the discriminant",
+    (state) => {
+      const { deps, emitter } = makeDeps();
+      const listener = vi.fn();
+      emitter.on("fd-growth", listener);
 
-    const handled = routeHostEvent(
-      {
-        type: "fd-leak-warning",
-        fdCount: 50,
-        activeTerminals: 5,
-        estimatedLeaked: 30,
-        orphanedPids: [],
-        ptmxLimit: 511,
+      const payload = {
+        state,
+        hostPid: 4242,
+        terminals: 25,
+        pooledPtys: 2,
+        pluginPtys: 1,
+        analysisWorkers: 3,
+        fdCount: 140,
+        expectedFds: 62,
+        baselineFds: 37,
+        growth: 41,
+        sustainedSamples: 3,
+        sampleIntervalMs: 30000,
+        episodeStartedAt: 900,
+        ...(state === "elevated"
+          ? {
+              descriptorTypes: {
+                charDevice: 30,
+                socket: 4,
+                fifo: 60,
+                file: 40,
+                directory: 4,
+                other: 1,
+                unavailable: 1,
+              },
+            }
+          : {}),
         timestamp: 1000,
-      },
-      deps
-    );
+      };
+      const handled = routeHostEvent({ type: "fd-growth", ...payload }, deps);
 
-    expect(handled).toBe(true);
-    expect(listener).toHaveBeenCalledWith({
-      fdCount: 50,
-      activeTerminals: 5,
-      estimatedLeaked: 30,
-      orphanedPids: [],
-      ptmxLimit: 511,
-      timestamp: 1000,
-    });
-  });
+      expect(handled).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith(payload);
+    }
+  );
 
   it("emits resource-metrics with timestamp", () => {
     const { deps, emitter } = makeDeps();
@@ -539,6 +612,24 @@ describe("routeHostEvent", () => {
 
     expect(handled).toBe(true);
     expect(brokerCalls).toEqual([{ requestId: "trim-7", result: { trimmed: 3, skipped: 4 } }]);
+  });
+
+  it("resolves a session-captures-finished reply to its pending request (#12433)", () => {
+    const { deps, brokerCalls } = makeDeps();
+
+    const handled = routeHostEvent(
+      {
+        type: "session-captures-finished",
+        requestId: "finish-3",
+        result: { complete: false, pending: 1 },
+      },
+      deps
+    );
+
+    expect(handled).toBe(true);
+    expect(brokerCalls).toEqual([
+      { requestId: "finish-3", result: { complete: false, pending: 1 } },
+    ]);
   });
 
   it("logs and returns false for unknown event types", () => {

@@ -37,7 +37,20 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
       return `req-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
     }
 
-    send = vi.fn(() => true);
+    send = vi.fn((_msg?: unknown) => true);
+
+    // Mirrors the real host: the policy is cached for replay on every host and
+    // only delivered to the ones the client chose.
+    cachedWorkspacePolicy: unknown = null;
+    setWorkspacePowerPolicy = vi.fn((policy: unknown, deliver: boolean) => {
+      this.cachedWorkspacePolicy = policy;
+      if (deliver) this.send({ type: "set-workspace-power-policy", policy });
+    });
+
+    flushWorkspacePowerPolicy = vi.fn(() => {
+      if (this.cachedWorkspacePolicy === null) return;
+      this.send({ type: "set-workspace-power-policy", policy: this.cachedWorkspacePolicy });
+    });
 
     // `timeoutMs` mirrors the real WorkspaceHostProcess signature so callers
     // that scope a request's budget can be asserted on.
@@ -122,6 +135,18 @@ vi.mock("../events.js", () => ({
     emit: vi.fn(),
   },
 }));
+
+// Project ids that currently have a live (active or cached) view in some
+// window — the residency signal that keeps a dormant host past its grace.
+const { liveViewProjectIds, liveViewsFor, getWebContentsForProject } = vi.hoisted(() => {
+  const liveViewProjectIds = new Set<string>();
+  const liveViewsFor = (projectId: string) =>
+    liveViewProjectIds.has(projectId) ? [{ id: 1 }] : [];
+  const getWebContentsForProject = vi.fn(liveViewsFor);
+  return { liveViewProjectIds, liveViewsFor, getWebContentsForProject };
+});
+
+vi.mock("../../window/webContentsRegistry.js", () => ({ getWebContentsForProject }));
 
 // `WorkspaceHostPool` reads forge settings via `projectStore` to plumb into
 // the `load-project` payload (#8316). Stub it so importing the pool doesn't
@@ -349,6 +374,64 @@ describe("WorkspaceClient multi-process manager", () => {
       const load3 = client.loadProject("/project-a", 1);
       await load3;
       expect(h(0).send).toHaveBeenCalledWith({ type: "foreground" });
+    });
+
+    it("seeds a newly created host with the workspace power policy in force", async () => {
+      const withdrawn = { statusAllowed: false, backgroundWorkAllowed: false, attenuated: true };
+      client.setWorkspacePowerPolicy(withdrawn);
+
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      // Without this the host boots fully permissioned while the attenuated
+      // monitor config reaches it — watching and fetching behind a lock screen.
+      expect(h(0).setWorkspacePowerPolicy).toHaveBeenCalledWith(withdrawn, true);
+    });
+
+    it("seeds a prewarmed host with the workspace power policy in force", async () => {
+      const withdrawn = { statusAllowed: false, backgroundWorkAllowed: false, attenuated: true };
+      client.setWorkspacePowerPolicy(withdrawn);
+
+      client.prewarmProject("/project-a");
+
+      expect(h(0).setWorkspacePowerPolicy).toHaveBeenCalledWith(withdrawn, true);
+    });
+
+    it("re-delivers the cached policy when a dormant host is re-attached", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
+
+      const load2 = client.loadProject("/project-b", 1);
+      await readyAndResolveLoad(1);
+      await load2;
+
+      // Withdrawal reaches every host, including the now-dormant project-a.
+      const withdrawn = { statusAllowed: false, backgroundWorkAllowed: false, attenuated: true };
+      client.setWorkspacePowerPolicy(withdrawn);
+      expect(h(0).send).toHaveBeenCalledWith({
+        type: "set-workspace-power-policy",
+        policy: withdrawn,
+      });
+
+      // The matching grant reaches only the attached host — project-a keeps
+      // caching the withdrawal without being woken.
+      const granted = { statusAllowed: true, backgroundWorkAllowed: true, attenuated: false };
+      client.setWorkspacePowerPolicy(granted);
+      expect(h(0).send).not.toHaveBeenCalledWith({
+        type: "set-workspace-power-policy",
+        policy: granted,
+      });
+
+      // Re-attaching foregrounds it, and the host reconciles against the
+      // policy it holds — so the grant has to land with the foreground.
+      const load3 = client.loadProject("/project-a", 1);
+      await load3;
+      expect(h(0).send).toHaveBeenCalledWith({
+        type: "set-workspace-power-policy",
+        policy: granted,
+      });
     });
   });
 
@@ -1967,7 +2050,7 @@ describe("WorkspaceClient multi-process manager", () => {
     it("loadProject resolves without error", async () => {
       const load = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
-      await expect(load).resolves.toBeUndefined();
+      await expect(load).resolves.toBe("cold");
     });
   });
 
@@ -2524,6 +2607,271 @@ describe("WorkspaceClient multi-process manager", () => {
       // Make project-0 dormant — now 1 dormant + 3 active, under cap
       client.unregisterWindow(1);
       expect(h(0).dispose).not.toHaveBeenCalled();
+    });
+
+    describe("view-backed retention (#12519)", () => {
+      const projectIdFor = (p: string) => `id-for-${path.resolve(p)}`;
+
+      afterEach(() => {
+        liveViewProjectIds.clear();
+        getWebContentsForProject.mockReset();
+        getWebContentsForProject.mockImplementation(liveViewsFor);
+      });
+
+      async function loadOn(projectPath: string, windowId: number, hostIndex: number) {
+        const load = client.loadProject(projectPath, windowId);
+        await readyAndResolveLoadFake(hostIndex);
+        await load;
+      }
+
+      it("keeps a switched-away host past the grace while its view is cached, and reuses it", async () => {
+        await loadOn("/project-a", 1, 0);
+        liveViewProjectIds.add(projectIdFor("/project-a"));
+        await loadOn("/project-b", 1, 1);
+
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+        expect(h(0).dispose).not.toHaveBeenCalled();
+
+        const kind = await client.loadProject("/project-a", 1);
+        expect(kind).toBe("warm");
+        expect(mockHosts).toHaveLength(2);
+        expect(h(0).send).toHaveBeenLastCalledWith({ type: "foreground" });
+      });
+
+      it("reaps the host within one grace period of its last view going away", async () => {
+        await loadOn("/project-a", 1, 0);
+        liveViewProjectIds.add(projectIdFor("/project-a"));
+        client.unregisterWindow(1);
+
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+        expect(h(0).dispose).not.toHaveBeenCalled();
+
+        liveViewProjectIds.delete(projectIdFor("/project-a"));
+        await vi.advanceTimersByTimeAsync(180_000);
+        expect(h(0).dispose).toHaveBeenCalledTimes(1);
+        expect(h(0).dispose).toHaveBeenCalledWith("idle-grace");
+      });
+
+      it("still counts view-backed hosts against the warm cap", async () => {
+        for (let i = 0; i < 4; i++) {
+          await loadOn(`/project-${i}`, i + 1, i);
+          liveViewProjectIds.add(projectIdFor(`/project-${i}`));
+        }
+        for (let i = 1; i <= 4; i++) client.unregisterWindow(i);
+
+        expect(h(0).dispose).toHaveBeenCalledWith("warm-cap");
+        expect(h(1).dispose).not.toHaveBeenCalled();
+        expect(h(2).dispose).not.toHaveBeenCalled();
+        expect(h(3).dispose).not.toHaveBeenCalled();
+      });
+
+      it("evicts a view-less dormant host before an older view-backed one at the cap", async () => {
+        for (let i = 0; i < 4; i++) {
+          await loadOn(`/project-${i}`, i + 1, i);
+        }
+        // project-0 is the LRU dormant host but its view is still cached;
+        // project-1's view is gone, so it is the host the cap should take.
+        liveViewProjectIds.add(projectIdFor("/project-0"));
+        liveViewProjectIds.add(projectIdFor("/project-2"));
+        liveViewProjectIds.add(projectIdFor("/project-3"));
+        for (let i = 1; i <= 4; i++) client.unregisterWindow(i);
+
+        expect(h(0).dispose).not.toHaveBeenCalled();
+        expect(h(1).dispose).toHaveBeenCalledWith("warm-cap");
+        expect(h(2).dispose).not.toHaveBeenCalled();
+        expect(h(3).dispose).not.toHaveBeenCalled();
+      });
+
+      it("pauses a host whose last window closed", async () => {
+        await loadOn("/project-a", 1, 0);
+        h(0).send.mockClear();
+
+        client.unregisterWindow(1);
+
+        expect(h(0).send).toHaveBeenCalledWith({ type: "background" });
+      });
+
+      it("does not pause a host another window still holds", async () => {
+        await loadOn("/project-a", 1, 0);
+        await client.loadProject("/project-a", 2);
+        h(0).send.mockClear();
+
+        client.unregisterWindow(1);
+
+        expect(h(0).send).not.toHaveBeenCalledWith({ type: "background" });
+      });
+
+      it("pauses a view-backed prewarm nobody attached to once it outlives the grace", async () => {
+        client.prewarmProject("/project-a");
+        await readyAndResolveLoadFake(0);
+        liveViewProjectIds.add(projectIdFor("/project-a"));
+        expect(h(0).send).not.toHaveBeenCalledWith({ type: "background" });
+
+        await vi.advanceTimersByTimeAsync(180_000);
+
+        expect(h(0).dispose).not.toHaveBeenCalled();
+        expect(h(0).send).toHaveBeenCalledWith({ type: "background" });
+      });
+
+      it("reclaims every dormant host — view-backed included — and spares attached ones", async () => {
+        await loadOn("/project-a", 1, 0);
+        await loadOn("/project-b", 2, 1);
+        await loadOn("/project-c", 3, 2);
+        liveViewProjectIds.add(projectIdFor("/project-a"));
+        client.unregisterWindow(1);
+        client.unregisterWindow(2);
+
+        const timersBefore = vi.getTimerCount();
+        expect(client.reclaimDormantHosts()).toBe(2);
+        expect(h(0).dispose).toHaveBeenCalledWith("memory-pressure");
+        expect(h(1).dispose).toHaveBeenCalledWith("memory-pressure");
+        expect(h(2).dispose).not.toHaveBeenCalled();
+        // Both grace timers cancelled, not merely rendered harmless.
+        expect(vi.getTimerCount()).toBe(timersBefore - 2);
+
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+        expect(h(0).dispose).toHaveBeenCalledTimes(1);
+        expect(h(1).dispose).toHaveBeenCalledTimes(1);
+      });
+
+      it("a warm load does not re-attach a host reclaimed while it waited on readiness", async () => {
+        client.prewarmProject("/project-a");
+        const load = client.loadProject("/project-a", 1);
+
+        // Still dormant while the load waits: the reclaim takes it.
+        expect(client.reclaimDormantHosts()).toBe(1);
+        await readyAndResolveLoadFake(0);
+
+        // The load starts over on a fresh host instead of the disposed one.
+        expect(mockHosts).toHaveLength(2);
+        await readyAndResolveLoadFake(1);
+        expect(await load).toBe("cold");
+        expect(h(1).dispose).not.toHaveBeenCalled();
+
+        const next = client.loadProject("/project-a", 2);
+        expect(await next).toBe("warm");
+        expect(mockHosts).toHaveLength(2);
+      });
+
+      it("pushes forge settings to every live host, dormant ones included", async () => {
+        await loadOn("/project-a", 1, 0);
+        liveViewProjectIds.add(projectIdFor("/project-a"));
+        await loadOn("/project-b", 1, 1);
+        h(0).send.mockClear();
+        h(1).send.mockClear();
+
+        await client.updateForgeSettingsForAllProjects();
+
+        for (const host of [h(0), h(1)]) {
+          expect(host.send).toHaveBeenCalledWith(
+            expect.objectContaining({ type: "update-forge-settings" })
+          );
+        }
+      });
+
+      it("re-pauses a dormant host that restarted after a crash", async () => {
+        await loadOn("/project-a", 1, 0);
+        liveViewProjectIds.add(projectIdFor("/project-a"));
+        await loadOn("/project-b", 1, 1);
+        h(0).send.mockClear();
+
+        h(0).emit("restarted");
+        await vi.advanceTimersByTimeAsync(0);
+        const req = h(0).getLastRequest()!;
+        expect(req.type).toBe("load-project");
+        h(0).resolveRequest(req.requestId);
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(h(0).send).toHaveBeenCalledWith({ type: "background" });
+      });
+
+      it("does not pause a restarted host a window still holds", async () => {
+        await loadOn("/project-a", 1, 0);
+        h(0).send.mockClear();
+
+        h(0).emit("restarted");
+        await vi.advanceTimersByTimeAsync(0);
+        h(0).resolveRequest(h(0).getLastRequest()!.requestId);
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(h(0).send).not.toHaveBeenCalledWith({ type: "background" });
+      });
+
+      describe("app-wide focus and wake passes skip dormant hosts", () => {
+        async function oneAttachedOneDormant(): Promise<void> {
+          await loadOn("/project-a", 1, 0);
+          liveViewProjectIds.add(projectIdFor("/project-a"));
+          await loadOn("/project-b", 1, 1);
+          h(0).send.mockClear();
+          h(0).sendWithResponse.mockClear();
+          h(1).send.mockClear();
+          h(1).sendWithResponse.mockClear();
+        }
+
+        const requestTypes = (host: MockHost) =>
+          host.sendWithResponse.mock.calls.map(([req]: any) => req.type);
+
+        it("grants permissions only to attached hosts, but withdraws them everywhere", async () => {
+          await oneAttachedOneDormant();
+
+          const active = {
+            statusAllowed: true,
+            backgroundWorkAllowed: true,
+            attenuated: false,
+          };
+          client.setWorkspacePowerPolicy(active);
+          expect(h(0).send).not.toHaveBeenCalled();
+          expect(h(1).send).toHaveBeenCalledWith({
+            type: "set-workspace-power-policy",
+            policy: active,
+          });
+          // The dormant host is not woken, but it still records the policy so a
+          // restart comes back holding it rather than the permissive default.
+          expect(h(0).setWorkspacePowerPolicy).toHaveBeenCalledWith(active, false);
+
+          // Attenuation is not a grant: a host that keeps watching still has to
+          // hear that it may stop fetching, dormant or not.
+          const unwatched = {
+            statusAllowed: true,
+            backgroundWorkAllowed: false,
+            attenuated: true,
+          };
+          client.setWorkspacePowerPolicy(unwatched);
+          expect(h(0).send).toHaveBeenCalledWith({
+            type: "set-workspace-power-policy",
+            policy: unwatched,
+          });
+          expect(h(1).send).toHaveBeenCalledWith({
+            type: "set-workspace-power-policy",
+            policy: unwatched,
+          });
+        });
+
+        it("refresh, refreshOnWake and refreshPullRequests reach only attached hosts", async () => {
+          await oneAttachedOneDormant();
+
+          void client.refresh();
+          void client.refreshOnWake();
+          void client.refreshPullRequests();
+          await vi.advanceTimersByTimeAsync(0);
+
+          expect(requestTypes(h(0))).toEqual([]);
+          expect(requestTypes(h(1))).toEqual(
+            expect.arrayContaining(["refresh", "refresh-on-wake", "refresh-prs"])
+          );
+        });
+      });
+
+      it("falls back to the plain grace when the residency read throws", async () => {
+        await loadOn("/project-a", 1, 0);
+        getWebContentsForProject.mockImplementation(() => {
+          throw new Error("registry unavailable");
+        });
+        client.unregisterWindow(1);
+
+        await vi.advanceTimersByTimeAsync(180_000);
+        expect(h(0).dispose).toHaveBeenCalledWith("idle-grace");
+      });
     });
 
     it("dispose clears pending grace timers — no delayed disposals fire", async () => {

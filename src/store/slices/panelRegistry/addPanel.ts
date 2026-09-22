@@ -51,8 +51,9 @@ import {
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { buildAgentLaunchContext } from "./agentLaunchContext";
 import { countPanelsTowardLimit } from "./panelCount";
-import { isValidTerminalGeometry } from "@shared/types/terminal";
+import { isUsableTerminalGeometry } from "@shared/types/terminal";
 
 // Lazy accessor to break circular dependency: addPanel -> projectStore -> panelPersistence -> addPanel.
 // Resolved on first call (after app init), then cached.
@@ -169,6 +170,15 @@ function countNonTrashTerminals(state: PanelRegistrySlice): number {
   return countPanelsTowardLimit(state.panelsById, state.panelIds);
 }
 
+function isHeldForRecovery(panel: CarrierPanel | undefined): boolean {
+  return (
+    panel !== undefined &&
+    panel.location !== "trash" &&
+    isPtyPanel(panel) &&
+    panel.restoreRecovery !== undefined
+  );
+}
+
 const TERMINAL_STARTUP_ATTACH_TIMEOUT_MS = 2500;
 
 // Chrome allowance for the overlay (help panel) grid estimate: horizontal =
@@ -188,7 +198,24 @@ const OVERLAY_CHROME_Y_PX = 240;
 function getAttachedGridDims(id: string): { cols: number; rows: number } | null {
   const managed = terminalInstanceService.get(id);
   if (!managed?.terminal.element?.isConnected) return null;
-  return { cols: managed.terminal.cols, rows: managed.terminal.rows };
+  const grid = { cols: managed.terminal.cols, rows: managed.terminal.rows };
+  // Attached is not the same as laid out. A pane attached into a container that
+  // has not laid out yet holds whatever grid it was constructed on, and the
+  // post-spawn re-assert would then hand that to the PTY as the pane's real
+  // size — one of the routes to #12442. A collapsed grid is treated as no
+  // measurement at all, so the caller keeps the spawn dims and the first real
+  // fit corrects both halves. Anything above that is taken at face value: this
+  // often IS the fitted grid, and second-guessing it would discard the very
+  // measurement the re-assert exists to deliver.
+  if (!isUsableTerminalGeometry(grid)) {
+    logWarn("[TerminalStore] Ignoring a collapsed attached grid", {
+      id,
+      cols: managed.terminal.cols,
+      rows: managed.terminal.rows,
+    });
+    return null;
+  }
+  return grid;
 }
 
 /**
@@ -282,7 +309,13 @@ export const createAddPanelActions = (
     // no upper bound) is the right calibration, not a focus-stealing modal. The
     // blocking confirm survives only for batch spawns (`preflightSpawnBatchLimit`),
     // where the blast radius of many panels at once warrants it. See #10547.
-    if (!options.bypassLimits) {
+    // Launching a pane held for recovery replaces it rather than adding one, so
+    // it must not be refused by a limit the held pane already counts toward.
+    const replacesHeldPane =
+      options.replacesRestoreRecovery === true &&
+      options.requestedId !== undefined &&
+      isHeldForRecovery(get().panelsById[options.requestedId]);
+    if (!options.bypassLimits && !replacesHeldPane) {
       const { softWarningLimit, confirmationLimit, hardLimit } = usePanelLimitStore.getState();
       const globalCount = countNonTrashTerminals(get());
       const tier = evaluatePanelLimit(globalCount, {
@@ -539,12 +572,36 @@ export const createAddPanelActions = (
     // any async work (env fetch, spawn IPC). #5789: commit-then-spawn collapses
     // six rapid agent clicks from serialized spawns into six parallel placeholders.
     const id = options.existingId ?? options.requestedId ?? `${kind}-${crypto.randomUUID()}`;
+    // A held pane has no process until the user picks one (#12434): it commits
+    // like any other pane and stops there — no startup slot, no ledger launch,
+    // no prewarm, no spawn.
+    const isRecoveryHold = options.restoreRecovery !== undefined && !isReconnect;
+
+    // Checked after the last await before the commit: the pane may have been
+    // closed, or already launched by another click, while this call waited, and
+    // replacing it then would resurrect it or start a second process in it.
+    if (options.replacesRestoreRecovery && !isHeldForRecovery(get().panelsById[id])) {
+      logWarn("[TerminalStore] Dropped a launch for a pane no longer held for recovery", { id });
+      return null;
+    }
+    // The reverse: a saved hold replayed after the user already launched that
+    // pane would hide a running agent behind a gate. Only another hold may be
+    // re-committed over.
+    if (isRecoveryHold) {
+      const existing = get().panelsById[id];
+      if (existing !== undefined && !isHeldForRecovery(existing)) {
+        logWarn("[TerminalStore] Kept a launched pane over a stale recovery hold", { id });
+        return id;
+      }
+    }
 
     // For reconnects, use the backend's state directly - don't default to "working".
     // For new spawns, start with "working" in UI to show spinner immediately during boot.
     const agentState = isReconnect
       ? options.agentState
-      : (options.agentState ?? (isAgent ? "working" : undefined));
+      : isRecoveryHold
+        ? undefined
+        : (options.agentState ?? (isAgent ? "working" : undefined));
     // Reason restored from the backend snapshot survives only while the
     // resolved state is still "waiting" — mirrors the main-process rule that
     // clears it on any other state.
@@ -584,8 +641,13 @@ export const createAddPanelActions = (
     const ptyExtensionStateVersion =
       options.extensionStateVersion ??
       (options.extensionState !== undefined ? ptyKindConfig?.stateVersion : undefined);
-    // Reconnects don't go through a fresh spawn — mark them "ready" directly.
-    const spawnStatus: "spawning" | "ready" | "failed" = isReconnect ? "ready" : "spawning";
+    // Reconnects don't go through a fresh spawn — mark them "ready" directly. A
+    // held pane has no spawn at all; `restoreRecovery` drives its rendering.
+    const spawnStatus: "spawning" | "ready" | undefined = isReconnect
+      ? "ready"
+      : isRecoveryHold
+        ? undefined
+        : "spawning";
 
     // Overlay terminals boot at ~their real grid instead of the 80×24 spawn
     // default so the assistant CLI never paints its startup banner at a width
@@ -605,7 +667,7 @@ export const createAddPanelActions = (
     // XtermAdapter is about to fit to, and the two never co-occur (an overlay
     // is never a restore). Re-validated here because `addPanel` is also reached
     // from plugins and MCP.
-    const restoredDims = isValidTerminalGeometry(options.initialTerminalGeometry)
+    const restoredDims = isUsableTerminalGeometry(options.initialTerminalGeometry)
       ? options.initialTerminalGeometry
       : null;
     const constructionDims = overlayDims ?? restoredDims;
@@ -617,10 +679,14 @@ export const createAddPanelActions = (
     // because TerminalPane reads it on first render. Burst spawns (queue
     // busy) keep the gate so panels realize with bounded concurrency (#5789).
     const eagerAttach =
-      !isReconnect && location === "grid" && isInActiveWorktree && terminalStartupQueue.isIdle;
-    // Every non-reconnect PTY panel reaches the enqueue below (prewarm and
-    // dock-wake failures are caught), so each reserve pairs with one enqueue.
-    if (!isReconnect) terminalStartupQueue.reserve();
+      !isReconnect &&
+      !isRecoveryHold &&
+      location === "grid" &&
+      isInActiveWorktree &&
+      terminalStartupQueue.isIdle;
+    // Every non-reconnect, non-held PTY panel reaches the enqueue below (prewarm
+    // and dock-wake failures are caught), so each reserve pairs with one enqueue.
+    if (!isReconnect && !isRecoveryHold) terminalStartupQueue.reserve();
 
     const terminal = {
       id,
@@ -644,13 +710,14 @@ export const createAddPanelActions = (
       // Initialize grid terminals as visible to avoid initial under-throttling
       // IntersectionObserver will update this once mounted
       isVisible: location === "grid" ? true : false,
-      runtimeStatus,
+      runtimeStatus: isRecoveryHold ? undefined : runtimeStatus,
       isInputLocked: options.isInputLocked,
       exitBehavior: options.exitBehavior,
       agentSessionId: options.agentSessionId,
       agentLaunchFlags: options.agentLaunchFlags,
       agentModelId: options.agentModelId,
       everDetectedAgent: options.everDetectedAgent,
+      agentIncarnation: options.agentIncarnation,
       detectedAgentId: options.detectedAgentId,
       detectedProcessId: options.detectedProcessId,
       runtimeIdentity:
@@ -677,6 +744,10 @@ export const createAddPanelActions = (
       isUsingFallback: options.isUsingFallback,
       fallbackChainIndex: options.fallbackChainIndex,
       sessionLostOnRestore: options.sessionLostOnRestore,
+      ...(options.conversationCwd && { conversationCwd: options.conversationCwd }),
+      // `hasPty: false` is what keeps fleet broadcast, interrupt and the other
+      // live-process consumers off a pane that has nothing to write to.
+      ...(isRecoveryHold && { restoreRecovery: options.restoreRecovery, hasPty: false }),
       extensionState: options.extensionState,
       extensionStateVersion: ptyExtensionStateVersion,
       pluginId: ptyPluginId,
@@ -684,7 +755,7 @@ export const createAddPanelActions = (
       focusPolicy: options.focusPolicy,
       excludeFromPersistence: options.excludeFromPersistence,
       removeOnExit: options.removeOnExit,
-      startedAt: Date.now(),
+      startedAt: isRecoveryHold ? undefined : Date.now(),
       spawnStatus,
       ...(eagerAttach && { eagerAttach: true }),
       // Preserve the saved `lastActiveAt` from the snapshot so the
@@ -705,7 +776,9 @@ export const createAddPanelActions = (
     // PtyPanelData shape at runtime so the re-assertion is safe here.
     const ptyTerminal = terminal as PtyPanelData;
 
-    if (isHydrationBatchActive()) {
+    // A launch over a held pane adds no id, so a batch's deferred flush — which
+    // only persists when ids were added — would never write the new record.
+    if (isHydrationBatchActive() && !options.replacesRestoreRecovery) {
       // Batched path: commit `panelsById` immediately; defer `panelIds` append.
       set((state) => {
         const existing = state.panelsById[id];
@@ -734,6 +807,13 @@ export const createAddPanelActions = (
                     : existing.extensionStateVersion,
                 // Sticky: once detected, never downgrade on a partial reconnect payload.
                 everDetectedAgent: ptyTerminal.everDetectedAgent || existingPty?.everDetectedAgent,
+                // `??`, not `||`: zero is a real reading of this pty, and the
+                // backend read outranks what the panel learned from an event.
+                agentIncarnation: ptyTerminal.agentIncarnation ?? existingPty?.agentIncarnation,
+                // Stamped once at creation and never re-derivable: an orphan or
+                // partial reconnect payload carries none, so keep what we have
+                // rather than letting the spread blank it (#12419).
+                spawnedBy: ptyTerminal.spawnedBy ?? existingPty?.spawnedBy,
                 // Prefer the fresh reconnect value if present; otherwise keep an existing
                 // live detection (live IPC event may have landed before reconnect flush).
                 detectedAgentId: ptyTerminal.detectedAgentId ?? existingPty?.detectedAgentId,
@@ -796,6 +876,13 @@ export const createAddPanelActions = (
                     : existing.extensionStateVersion,
                 // Sticky: once detected, never downgrade on a partial reconnect payload.
                 everDetectedAgent: ptyTerminal.everDetectedAgent || existingPty2?.everDetectedAgent,
+                // `??`, not `||`: zero is a real reading of this pty, and the
+                // backend read outranks what the panel learned from an event.
+                agentIncarnation: ptyTerminal.agentIncarnation ?? existingPty2?.agentIncarnation,
+                // Stamped once at creation and never re-derivable: an orphan or
+                // partial reconnect payload carries none, so keep what we have
+                // rather than letting the spread blank it (#12419).
+                spawnedBy: ptyTerminal.spawnedBy ?? existingPty2?.spawnedBy,
                 // Prefer the fresh reconnect value if present; otherwise keep an existing
                 // live detection (live IPC event may have landed before reconnect flush).
                 detectedAgentId: ptyTerminal.detectedAgentId ?? existingPty2?.detectedAgentId,
@@ -860,6 +947,8 @@ export const createAddPanelActions = (
         return { panelsById: newById, panelIds: newIds, panelIdsByWorktreeId: newIndex };
       });
     }
+
+    if (isRecoveryHold) return id;
 
     markRendererPerformance("agentlaunch.committed", { id });
 
@@ -1140,10 +1229,19 @@ export const createAddPanelActions = (
             agentPresetId: options.agentPresetId,
             agentPresetColor: options.agentPresetColor,
             originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
-            // Launch-time context for the daintree-assistant pinned session
-            // (#10647). Threaded straight through; the main-process handler only
-            // consumes it for that agent and ignores it otherwise.
-            actionContext: options.actionContext,
+            handbackCode: options.handbackCode,
+            // Launch-time context the pane's MCP session replays: the
+            // assistant's is supplied by its caller (#10647), a Claude pane's
+            // is captured here for its own worktree (#12486). Main ignores it
+            // for every other agent.
+            actionContext:
+              options.actionContext ??
+              buildAgentLaunchContext({
+                launchAgentId,
+                terminalId: id,
+                title: _p1.title,
+                worktreeId: spawnWorktreeId,
+              }),
           });
 
           markRendererPerformance("agentlaunch.spawn-ipc-resolved", { id });

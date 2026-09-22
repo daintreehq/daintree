@@ -700,13 +700,14 @@ describe("DockLaunchButton", () => {
       expect(text.indexOf("Open in grid")).toBeLessThan(text.indexOf("Review"));
     });
 
-    it("lists Terminal, Browser and File Viewer under the dock heading", () => {
+    it("lists Terminal, Browser, File Viewer and Dev Preview under the dock heading", () => {
       const { container } = renderButton();
       const text = container.textContent ?? "";
       const dockAt = text.indexOf("Open in dock");
       const gridAt = text.indexOf("Open in grid");
 
-      for (const name of ["Terminal", "Browser", "File Viewer"]) {
+      // Dev Preview joined the dock section when it became dockable (#12397).
+      for (const name of ["Terminal", "Browser", "File Viewer", "Dev Preview"]) {
         const at = text.indexOf(name);
         expect(at).toBeGreaterThan(dockAt);
         expect(at).toBeLessThan(gridAt);

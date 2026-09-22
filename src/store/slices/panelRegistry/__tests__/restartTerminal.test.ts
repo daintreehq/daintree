@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { PtyPanelData } from "@shared/types/panel";
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 
 const mockSpawn = vi.fn().mockResolvedValue({ id: "test-1" });
 const mockKill = vi.fn().mockResolvedValue(undefined);
@@ -211,6 +211,36 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
     expect(payload.kind).toBe("terminal");
     expect(payload.launchAgentId).toBe("claude");
     expect(payload.agentLaunchFlags).toEqual(["--persisted-flag"]);
+  });
+
+  it("carries a launch context into a Claude restart, since the fresh bearer binds to it (#12486)", async () => {
+    const active = { ...agentPanelBase, agentState: "working" as const };
+    usePanelStore.setState({
+      panelsById: { [active.id]: active },
+      panelIds: [active.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.actionContext).toMatchObject({
+      activeWorktreeId: "wt-1",
+      focusedWorktreeId: "wt-1",
+      focusedTerminalId: "test-1",
+      focusedTerminalKind: "terminal",
+    });
+  });
+
+  it("sends no launch context when the restart demotes to a plain shell", async () => {
+    const demoted = { ...agentPanelBase, agentState: "exited" as const, exitCode: 0 };
+    usePanelStore.setState({
+      panelsById: { [demoted.id]: demoted },
+      panelIds: [demoted.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].actionContext).toBeUndefined();
   });
 
   it("restarts as agent terminal when a failed-to-start spawn is retried (#10816)", async () => {
@@ -647,6 +677,142 @@ describe("restartTerminal resume-latest fallback (#8787)", () => {
     // Existing fallback chain (persisted flags / generated command)
     expect(payload.command).toBeDefined();
     expect(payload.command).not.toBe("claude --continue");
+  });
+});
+
+describe("restartTerminal and panes that run away from their conversation (#12434)", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getMergedPresetMock.mockReturnValue(undefined);
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+    mockGracefulKill.mockResolvedValue(null);
+    const { agentSettingsClient, projectClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockResolvedValue({ agents: {} });
+    vi.mocked(projectClient.getSettings).mockResolvedValue({ runCommands: [] });
+    const { reset } = usePanelStore.getState();
+    await reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  function ptyAfterRestart(): PtyPanelData {
+    const panel = usePanelStore.getState().panelsById["test-1"];
+    if (!panel || !isPtyPanel(panel)) throw new Error("restarted pane is gone");
+    return panel;
+  }
+
+  const movedPane = {
+    ...agentPanelBase,
+    launchAgentId: "codex",
+    cwd: "/worktrees/task-a",
+    worktreeId: "/worktrees/task-a",
+    conversationCwd: "/repo",
+    agentState: "working" as const,
+  };
+
+  it("leaves a pane held for recovery untouched", async () => {
+    const held: PtyPanelData = {
+      ...movedPane,
+      agentState: undefined,
+      hasPty: false,
+      restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
+    };
+    usePanelStore.setState({ panelsById: { [held.id]: held }, panelIds: [held.id] });
+    // The store reset in `beforeEach` kills what the previous case left behind.
+    mockKill.mockClear();
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockKill).not.toHaveBeenCalled();
+    expect(mockGracefulKill).not.toHaveBeenCalled();
+    const after = ptyAfterRestart();
+    expect(after.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
+    expect(after.isRestarting).toBeFalsy();
+  });
+
+  it("never runs resume-latest from a folder the conversation didn't begin in", async () => {
+    const { buildResumeLatestCommand } = await import("@shared/types");
+    vi.mocked(buildResumeLatestCommand).mockReturnValue("codex resume --last");
+    usePanelStore.setState({
+      panelsById: { [movedPane.id]: movedPane },
+      panelIds: [movedPane.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(buildResumeLatestCommand).not.toHaveBeenCalled();
+    expect(mockSpawn.mock.calls[0]![0].command).not.toBe("codex resume --last");
+    // A new conversation begins where the pane runs.
+    const after = ptyAfterRestart();
+    expect(after.conversationCwd).toBeUndefined();
+  });
+
+  it("forgets the conversation's folder when a fallback preset starts a new conversation", async () => {
+    getMergedPresetMock.mockReturnValue({
+      id: "amber-provider",
+      name: "Amber Provider",
+      color: "#ffbb33",
+      args: ["--provider", "amber"],
+    });
+    const pane = { ...movedPane, agentPresetId: "blue-provider" };
+    usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
+
+    await usePanelStore
+      .getState()
+      .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
+
+    expect(mockSpawn).toHaveBeenCalled();
+    expect(ptyAfterRestart().conversationCwd).toBeUndefined();
+  });
+
+  it("refuses a fallback hop for a pane held for recovery", async () => {
+    // A resolvable preset, so only the hold can stop the hop.
+    getMergedPresetMock.mockReturnValue({
+      id: "amber-provider",
+      name: "Amber Provider",
+      color: "#ffbb33",
+      args: ["--provider", "amber"],
+    });
+    const held: PtyPanelData = {
+      ...movedPane,
+      agentState: undefined,
+      hasPty: false,
+      restoreRecovery: { reason: "session-unresolved" },
+    };
+    usePanelStore.setState({ panelsById: { [held.id]: held }, panelIds: [held.id] });
+
+    const result = await usePanelStore
+      .getState()
+      .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
+
+    expect(result).toEqual({ success: false, error: "panel is held for recovery" });
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(ptyAfterRestart().restoreRecovery).toEqual({ reason: "session-unresolved" });
+    expect(ptyAfterRestart().isRestarting).toBeFalsy();
+  });
+
+  it("keeps pointing at the conversation's folder when it resumes that conversation", async () => {
+    const { buildResumeCommand } = await import("@shared/types");
+    vi.mocked(buildResumeCommand).mockReturnValue("codex resume sess-a -C '.'");
+    const pane = { ...movedPane, agentSessionId: "sess-a" };
+    usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("codex resume sess-a -C '.'");
+    expect(payload.cwd).toBe("/worktrees/task-a");
+    const after = ptyAfterRestart();
+    expect(after.conversationCwd).toBe("/repo");
   });
 });
 
@@ -1328,5 +1494,105 @@ describe("restartTerminal carries the run's worktree onto the new pty record", (
     await usePanelStore.getState().restartTerminal("test-1");
 
     expect(mockSpawn.mock.calls[0]![0].worktreeId).toBeUndefined();
+  });
+});
+
+/**
+ * A standing instruction comes from the launch caller, not from settings, so
+ * the respawns that rebuild flags from settings have to carry it over (#12431).
+ */
+describe("restartTerminal keeps the launch's standing instruction", () => {
+  const pair = ["--append-system-prompt", "Infer the best option"];
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getMergedPresetMock.mockReturnValue(undefined);
+    buildAgentLaunchFlagsMock.mockImplementation(
+      (_entry: unknown, _agentId: unknown, options?: { systemPromptArgs?: string[] }) => [
+        "--rebuilt",
+        ...(options?.systemPromptArgs ?? []),
+      ]
+    );
+    // No saved settings: every rebuilt flag comes from the mock above.
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockReset();
+    const { reset } = usePanelStore.getState();
+    await reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  afterAll(() => {
+    buildAgentLaunchFlagsMock.mockReset();
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+  });
+
+  it("replays persisted flags unchanged on an ordinary restart", async () => {
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentLaunchFlags: ["--persisted-flag", ...pair],
+    };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].agentLaunchFlags).toEqual(["--persisted-flag", ...pair]);
+  });
+
+  it("carries it through the rebuild when the panel's preset has gone stale", async () => {
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentPresetId: "deleted-preset",
+      agentLaunchFlags: ["--provider", "gone", ...pair],
+    };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.agentLaunchFlags).toEqual(["--rebuilt", ...pair]);
+    expect(payload.agentLaunchFlags).not.toContain("gone");
+    expect(usePanelStore.getState().panelsById["test-1"]).toMatchObject({
+      agentLaunchFlags: ["--rebuilt", ...pair],
+    });
+  });
+
+  it("carries it across a preset fallback hop", async () => {
+    getMergedPresetMock.mockReturnValue({
+      id: "amber-provider",
+      name: "Amber Provider",
+      color: "#ffbb33",
+      args: ["--provider", "amber"],
+    });
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentPresetId: "blue-provider",
+      agentLaunchFlags: ["--provider", "blue", ...pair],
+    };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    await usePanelStore
+      .getState()
+      .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
+
+    const { generateAgentCommand } = await import("@shared/types");
+    expect(vi.mocked(generateAgentCommand)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.anything(),
+      "claude",
+      expect.objectContaining({ systemPromptArgs: pair, presetArgs: "--provider amber" })
+    );
+    expect(mockSpawn.mock.calls[0]![0].agentLaunchFlags).toEqual(["--rebuilt", ...pair]);
   });
 });

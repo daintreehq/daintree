@@ -5,6 +5,7 @@ import { useState } from "react";
 import { PilotFilterBar } from "../PilotFilterBar";
 import type { PilotBandFilter, PilotBandFilterCounts } from "../pilotRows";
 import { emptyBandCounts, type FleetBandCounts } from "@/lib/fleetAttention";
+import { glyphBox } from "@/components/icons/__tests__/glyphBox";
 
 function counts(overrides: Partial<PilotBandFilterCounts> = {}): PilotBandFilterCounts {
   return {
@@ -144,7 +145,7 @@ describe("PilotFilterBar", () => {
     // the demands escalate to the worst member, the completions fall back to
     // the quiet one when nothing is outstanding.
     const glyphOfSegment = (name: RegExp) =>
-      screen.getByRole("radio", { name }).querySelector("svg")?.getAttribute("class") ?? "";
+      glyphBox(screen.getByRole("radio", { name }))?.getAttribute("class") ?? "";
 
     it("escalates Needs you to the blocked mark, and names the blocked runs", () => {
       renderBar("all", counts({ all: 2, "needs-you": 2 }), bands({ blocked: 1, "needs-you": 1 }));
@@ -292,7 +293,7 @@ describe("PilotFilterBar", () => {
   describe("empty buckets", () => {
     /** The glyph a segment renders, if it has one. */
     function glyphOf(name: RegExp): Element | null {
-      return screen.getByRole("radio", { name }).querySelector("svg");
+      return glyphBox(screen.getByRole("radio", { name }));
     }
 
     it("keeps a zero segment selectable and still counted", () => {
@@ -363,8 +364,7 @@ describe("PilotFilterBar", () => {
      * colour entirely would still have compared as different.
      */
     function toneOf(name: RegExp): string {
-      const cls =
-        screen.getByRole("radio", { name }).querySelector("svg")?.getAttribute("class") ?? "";
+      const cls = glyphBox(screen.getByRole("radio", { name }))?.getAttribute("class") ?? "";
       return cls
         .split(/\s+/)
         .filter((token) => token.startsWith("text-"))

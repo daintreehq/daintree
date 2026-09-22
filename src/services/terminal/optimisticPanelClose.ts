@@ -17,6 +17,7 @@
 // cheap optimistic hide must not run every panelStore subscriber selector.
 import { panelStoreApi } from "@/store";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { consultPanelCloseGuards, hasPanelCloseGuard } from "@/services/panelCloseGuard";
 import { logError } from "@/utils/logger";
 
 // The canonical teardown runs in idle time — after the optimistic removal has
@@ -45,6 +46,12 @@ export interface PanelCloseRequest {
   hideIds: string[];
   /** The canonical teardown, run once after paint (e.g. `trashPanelGroup`). */
   commit: () => void;
+  /**
+   * Whether the close went ahead (#12323). Called synchronously for an
+   * unguarded close; after the prompt for a guarded one. `false` means a
+   * close guard cancelled it and nothing was hidden.
+   */
+  onOutcome?: (accepted: boolean) => void;
 }
 
 const EMPTY: ReadonlySet<string> = new Set<string>();
@@ -258,11 +265,45 @@ export function flushOptimisticCloses(): void {
 /**
  * Hide the requested panels from the grid now; run the canonical teardown
  * after paint, coalesced with any other close in the same burst.
+ *
+ * A panel holding unsaved work registers a close guard (#12323). When any of
+ * the requested panels has one, the guards are consulted first and nothing is
+ * hidden until they answer — a cancel leaves the panel exactly where it was,
+ * focus included. Without a guard the close is the synchronous path it always
+ * was, so the common case gains no await.
  */
 export function requestPanelClose(request: PanelCloseRequest): void {
   const fresh = request.hideIds.filter((id) => !closingIds.has(id));
   if (fresh.length === 0) return; // already closing — ignore the duplicate
 
+  if (fresh.some(hasPanelCloseGuard)) {
+    void consultPanelCloseGuards(fresh).then((proceed) => {
+      if (!proceed) {
+        request.onOutcome?.(false);
+        return;
+      }
+      // The prompt took time; the panel may have gone elsewhere meanwhile —
+      // removed, already trashed by another path, or closing.
+      const state = panelStoreApi.getState();
+      const stillOpen = request.hideIds.filter((id) => {
+        const panel = state.panelsById[id];
+        return panel !== undefined && panel.location !== "trash" && !closingIds.has(id);
+      });
+      if (stillOpen.length === 0) {
+        request.onOutcome?.(false);
+        return;
+      }
+      hideAndCommit({ hideIds: stillOpen, commit: request.commit });
+      request.onOutcome?.(true);
+    });
+    return;
+  }
+
+  hideAndCommit(request);
+  request.onOutcome?.(true);
+}
+
+function hideAndCommit(request: PanelCloseRequest): void {
   const next = new Set(closingIds);
   for (const id of request.hideIds) next.add(id);
   setClosingIdsSilently(next);

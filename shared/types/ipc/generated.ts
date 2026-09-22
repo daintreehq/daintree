@@ -130,6 +130,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./system.js").CliInstallStatus;
   };
+  "clipboard:pick-attachments": {
+    args: [];
+    result: string[];
+  };
   "clipboard:read-selection": {
     args: [];
     result: { text: string };
@@ -493,6 +497,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; prNumber: number; body: string }];
     result: import("../forge.js").IssueComment;
   };
+  "forge:commit-credential-import": {
+    args: [providerId: string, expected: import("../forge.js").CredentialImportExpected];
+    result: import("./forge.js").ForgeCredentialImportCommitResult;
+  };
   "forge:convert-pr-to-draft": {
     args: [payload: { cwd: string; prNumber: number }];
     result: import("../forge.js").PRDraftStateResult;
@@ -579,6 +587,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; bypassCache?: boolean | undefined }];
     result: import("./forge.js").ForgeRepositoryStats;
   };
+  "forge:get-repo-url": {
+    args: [payload: { cwd: string }];
+    result: string | null;
+  };
   "forge:get-token-health": {
     args: [payload: { providerId: string }];
     result: import("../forge.js").ForgeTokenHealthState | null;
@@ -612,6 +624,14 @@ export interface GeneratedIpcInvokeMap {
   "forge:open-pr": {
     args: [payload: { cwd: string; prNumber: number }];
     result: void;
+  };
+  "forge:open-repo": {
+    args: [payload: { cwd: string }];
+    result: void;
+  };
+  "forge:preview-credential-import": {
+    args: [providerId: string];
+    result: import("./forge.js").ForgeCredentialImportPreviewResult;
   };
   "forge:remove-issue-label": {
     args: [payload: { cwd: string; issueNumber: number; label: string }];
@@ -844,6 +864,14 @@ export interface GeneratedIpcInvokeMap {
     args: [config: Partial<import("./idleTerminals.js").IdleTerminalNotifyConfig>];
     result: import("./idleTerminals.js").IdleTerminalNotifyConfig;
   };
+  "keep-awake:get-state": {
+    args: [];
+    result: import("./keepAwake.js").KeepAwakeState;
+  };
+  "keep-awake:update-config": {
+    args: [config: Partial<import("./keepAwake.js").KeepAwakeConfig>];
+    result: import("./keepAwake.js").KeepAwakeState;
+  };
   "logs:get-default-level": {
     args: [];
     result: string;
@@ -857,6 +885,10 @@ export interface GeneratedIpcInvokeMap {
       }[],
     ];
     result: void;
+  };
+  "mcp-server:adopt-terminal": {
+    args: [payload: { terminalId: string; orchestratorPaneId: string }];
+    result: import("./mcpServer.js").TerminalAdoptionResult;
   };
   "mcp-server:clear-audit-log": {
     args: [];
@@ -893,6 +925,14 @@ export interface GeneratedIpcInvokeMap {
   "mcp-server:get-log-records": {
     args: [];
     result: import("./mcpServer.js").McpLogRecord[];
+  };
+  "mcp-server:get-pane-wake-enabled": {
+    args: [];
+    result: boolean;
+  };
+  "mcp-server:get-pane-watch-state": {
+    args: [terminalId: string];
+    result: import("../terminalWatch.js").PaneWatchState | null;
   };
   "mcp-server:get-runtime-state": {
     args: [];
@@ -933,6 +973,18 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./mcpServer.js").HelpSessionBearerRecord[];
   };
+  "mcp-server:list-orchestrator-panes": {
+    args: [];
+    result: string[];
+  };
+  "mcp-server:list-terminal-adoptions": {
+    args: [];
+    result: import("./mcpServer.js").TerminalAdoptionEntry[];
+  };
+  "mcp-server:release-terminal-adoption": {
+    args: [payload: { terminalId: string }];
+    result: boolean;
+  };
   "mcp-server:reset-denial-counts": {
     args: [payload: { sessionId: string }];
     result: void;
@@ -961,6 +1013,10 @@ export interface GeneratedIpcInvokeMap {
     args: [enabled: boolean];
     result: import("./mcpServer.js").McpServerStatusSnapshot;
   };
+  "mcp-server:set-pane-wake-enabled": {
+    args: [enabled: boolean];
+    result: boolean;
+  };
   "mcp-server:set-port": {
     args: [port: number | null];
     result: import("./mcpServer.js").McpServerStatusSnapshot;
@@ -968,6 +1024,10 @@ export interface GeneratedIpcInvokeMap {
   "mcp-server:set-session-tier": {
     args: [payload: { sessionId: string; tier: "action" | "workbench" | "system" }];
     result: { sessionId: string; tier: "action" | "workbench" | "system" };
+  };
+  "mcp-server:stop-pane-watches": {
+    args: [terminalId: string];
+    result: void;
   };
   "menu:show-application": {
     args: [payload?: import("../menu.js").ShowApplicationMenuPayload | undefined];
@@ -1065,6 +1125,14 @@ export interface GeneratedIpcInvokeMap {
       },
     ];
     result: void;
+  };
+  "plugin-agent-mcp:list-project-endpoints": {
+    args: [];
+    result: import("./pluginAgentMcp.js").ProjectAgentToolsSnapshot;
+  };
+  "plugin-agent-mcp:set-project-endpoint-enabled": {
+    args: [payload: { pluginInstanceId: string; endpointId: string; enabled: boolean }];
+    result: import("./pluginAgentMcp.js").ProjectAgentToolsSnapshot;
   };
   "plugin-capability:acknowledge-consent": {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityAcknowledgeConsentInput];
@@ -1400,7 +1468,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "privacy:clear-cache": {
     args: [];
-    result: void;
+    result: { cleared: number; failed: number };
   };
   "privacy:get-data-folder-path": {
     args: [];
@@ -1607,6 +1675,46 @@ export interface GeneratedIpcInvokeMap {
     args: [keys: string[]];
     result: void;
   };
+  "site-preview:bind": {
+    args: [payload: { panelId: string; adapterId: string; mode?: "browse" | "select" | undefined }];
+    result: import("./sitePreview.js").SitePreviewBindingState;
+  };
+  "site-preview:clear-hover": {
+    args: [payload: { sessionId: string }];
+    result: void;
+  };
+  "site-preview:clear-selection": {
+    args: [payload: { sessionId: string }];
+    result: void;
+  };
+  "site-preview:detach": {
+    args: [payload: { sessionId: string }];
+    result: void;
+  };
+  "site-preview:get-state": {
+    args: [payload: { sessionId: string }];
+    result: import("./sitePreview.js").SitePreviewBindingState | null;
+  };
+  "site-preview:list-candidates": {
+    args: [];
+    result: import("./sitePreview.js").SitePreviewCandidate[];
+  };
+  "site-preview:reselect": {
+    args: [
+      payload: {
+        sessionId: string;
+        loc: { file: string; line: number; column: number };
+        index?: number | undefined;
+        component?: { file: string; line: number; column: number } | undefined;
+        occurrence?: string | undefined;
+      },
+    ];
+    result: boolean;
+  };
+  "site-preview:set-mode": {
+    args: [payload: { sessionId: string; mode: "browse" | "select" }];
+    result: import("./sitePreview.js").SitePreviewBindingState;
+  };
   "slash-commands:list": {
     args: [payload: { agentId: string; projectPath?: string | undefined }];
     result: import("../slashCommands.js").SlashCommand[];
@@ -1648,10 +1756,6 @@ export interface GeneratedIpcInvokeMap {
         countsByTier: Record<string, number>;
       },
     ];
-    result: void;
-  };
-  "system:request-interactive-override": {
-    args: [durationMs: number];
     result: void;
   };
   "system:show-item-in-folder": {
@@ -1770,9 +1874,17 @@ export interface GeneratedIpcInvokeMap {
     args: [projectId: string];
     result: import("./terminal.js").BackendTerminalInfo[];
   };
+  "terminal:get-host-memory-pause": {
+    args: [];
+    result: import("../pty-host.js").HostMemoryPauseSnapshot;
+  };
   "terminal:get-info": {
     args: [id: string];
     result: import("./terminal.js").TerminalInfoPayload;
+  };
+  "terminal:get-output-activity": {
+    args: [terminalIds: string[]];
+    result: Record<string, import("../terminalStatus.js").TerminalOutputActivityLookup>;
   };
   "terminal:get-serialized-state": {
     args: [terminalId: string];
@@ -1856,6 +1968,7 @@ export interface GeneratedIpcInvokeMap {
         agentPresetId?: string | undefined;
         agentPresetColor?: string | undefined;
         originalAgentPresetId?: string | undefined;
+        handbackCode?: string | undefined;
         actionContext?:
           | {
               projectId?: string | undefined;
@@ -1884,7 +1997,12 @@ export interface GeneratedIpcInvokeMap {
     result: string;
   };
   "terminal:submit": {
-    args: [id: string, text: string, submissionToken?: string | undefined];
+    args: [
+      id: string,
+      text: string,
+      submissionToken?: string | undefined,
+      handbackCode?: string | undefined,
+    ];
     result: void;
   };
   "terminal:trash": {

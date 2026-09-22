@@ -396,8 +396,8 @@ test.describe.serial("Core: Terminal & Panels", () => {
         })
         .toBe(0);
 
-      // The trigger opens a recents panel rather than copying (#11733); the
-      // helper follows through to the panel's "Copy full context" row so the
+      // The trigger opens a menu rather than copying (#11733); the helper
+      // follows through to the menu's "Copy full context" entry so the
       // serial clipboard assertion below still has a copy to observe.
       await copyFullContextFromToolbar(window, T_MEDIUM);
       await expectToolbarButtonReachable(window, SEL.toolbar.copyContext, T_LONG);

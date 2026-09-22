@@ -339,8 +339,11 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       // Read the early-return condition specifically, not the whole callback —
       // its dependency array names the same identifiers, so a body-wide
       // substring check would still pass with the guard deleted.
+      // The guard lives on the open transition: the trigger is aria-disabled
+      // rather than disabled so its tooltip still shows, so refusing to open
+      // is what keeps a "disabled" button from producing a live menu.
       const earlyReturn = source.match(
-        /const handleCopyTreeToggle = useCallback\(\(\) => \{\s*if \(([^)]+)\) return;/
+        /const handleCopyTreeOpenChange = useCallback\(\s*\(open: boolean\) => \{\s*if \(open\) \{\s*if \(([^)]+)\) return;/
       );
       expect(earlyReturn).not.toBeNull();
       for (const term of disablingTerms) {

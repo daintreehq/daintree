@@ -95,7 +95,10 @@ export function getWorktreeType(worktree: Worktree | WorktreeState): WorktreeTyp
   const prefix = branch.split(/[/-]/)[0];
   if (!prefix) return "other";
 
-  const branchType = BRANCH_PREFIX_MAP[prefix];
+  // Own keys only: a branch like `constructor-injection` would otherwise read an
+  // inherited member off the plain-object table, and its missing `id` becomes a
+  // group no section renders — dropping the worktree from grouped orderings.
+  const branchType = Object.hasOwn(BRANCH_PREFIX_MAP, prefix) ? BRANCH_PREFIX_MAP[prefix] : null;
   if (branchType) {
     return branchType.id as WorktreeTypeId;
   }
@@ -138,6 +141,25 @@ export function scoreWorktree(worktree: Worktree | WorktreeState, query: string)
   );
 }
 
+/**
+ * The sidebar's text search as a predicate: a bare number (`123` or `#123`)
+ * matches only the issue or linked PR with that number, anything else has to
+ * score. Every surface that promises "finds what the sidebar's search box
+ * finds" reads this rather than restating it.
+ *
+ * An empty query matches everything. Whitespace is not trimmed here, because
+ * the sidebar never has: a query of spaces scores nothing and so hides every
+ * row. A caller that wants whitespace to read as empty trims first.
+ */
+export function matchesWorktreeQuery(worktree: Worktree | WorktreeState, query: string): boolean {
+  if (query.length === 0) return true;
+  const exactNum = parseExactNumber(query);
+  if (exactNum !== null) {
+    return worktree.issueNumber === exactNum || worktree.linked?.pr?.ref.number === exactNum;
+  }
+  return scoreWorktree(worktree, query) > 0;
+}
+
 export function computeStatus(
   worktree: Worktree | WorktreeState,
   isActive: boolean
@@ -176,19 +198,7 @@ export function matchesFilters(
   isActive: boolean,
   sessionsByWorktreeId?: Record<string, DevPreviewSessionState>
 ): boolean {
-  // Text search
-  if (filters.query.length > 0) {
-    const exactNum = parseExactNumber(filters.query);
-    if (exactNum !== null) {
-      if (worktree.issueNumber !== exactNum && worktree.linked?.pr?.ref.number !== exactNum) {
-        return false;
-      }
-    } else {
-      if (scoreWorktree(worktree, filters.query) === 0) {
-        return false;
-      }
-    }
-  }
+  if (!matchesWorktreeQuery(worktree, filters.query)) return false;
 
   // Status filters (OR within category)
   if (filters.statusFilters.size > 0) {
@@ -481,6 +491,55 @@ export function groupByType<T extends Worktree | WorktreeState>(
   }
 
   return sections;
+}
+
+/** The sidebar ordering preferences, as `worktreeFilterStore` holds them. */
+export interface SidebarOrderPrefs {
+  orderBy: OrderBy;
+  groupByType: boolean;
+  pinnedWorktrees: string[];
+  manualOrder: string[];
+}
+
+/**
+ * The sidebar's row order for any set of worktrees: worktrees flagged
+ * `isMainWorktree` first, then the list exactly as the sidebar lays it out.
+ * Nothing is dropped — callers filter before or after.
+ *
+ * One function owns the whole "main, external, pinned, orderBy, tiebreak,
+ * group" decision, so a compact surface can show the same worktrees in the
+ * same order the sidebar shows them without re-deriving any of it.
+ *
+ * What it deliberately does not reproduce is the sidebar's fallback of
+ * promoting its first worktree to the main card when none is flagged. That
+ * choice belongs to a caller holding the whole project; promoting the first
+ * element of an arbitrary subset would invent a main worktree out of whichever
+ * rows a filter happened to leave behind.
+ */
+export function orderWorktreesLikeSidebar<T extends Worktree | WorktreeState>(
+  worktrees: T[],
+  prefs: SidebarOrderPrefs
+): T[] {
+  // A pin for a worktree that is no longer here must not occupy a slot in the
+  // pin ordering — the sidebar's `validPinnedWorktrees` step.
+  const existingIds = new Set(worktrees.map((worktree) => worktree.id));
+  const validPinned = prefs.pinnedWorktrees.filter((id) => existingIds.has(id));
+
+  const sorted = sortWorktrees(worktrees, prefs.orderBy, validPinned, prefs.manualOrder);
+  if (!prefs.groupByType) return sorted;
+
+  // Main is lifted out before grouping rather than left to `sortWorktrees`:
+  // `groupByType` reads `isExternal` ahead of the branch type, so a main
+  // worktree git reports from outside the project would otherwise sink into the
+  // trailing "Outside the project" section. The sidebar renders main as its own
+  // card above every section, which is what this reproduces.
+  const main = sorted.filter((worktree) => worktree.isMainWorktree);
+  const rest = sorted.filter((worktree) => !worktree.isMainWorktree);
+
+  return [
+    ...main,
+    ...groupByType(rest, prefs.orderBy, validPinned).flatMap((section) => section.worktrees),
+  ];
 }
 
 export function hasAnyFilters(filters: FilterState): boolean {

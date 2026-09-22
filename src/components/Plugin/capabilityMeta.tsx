@@ -109,6 +109,11 @@ export const CAPABILITY_META = {
     description: "Talk to local services like the Docker socket",
     severity: "warning",
   },
+  "mcp:expose": {
+    label: "Serve tools to agents",
+    description: "Offer tools to agents in projects where you turn it on",
+    severity: "warning",
+  },
 } satisfies Record<BuiltInPluginCapability, CapabilityMeta>;
 
 export const SEVERITY_TEXT_CLASS: Record<CapabilitySeverity, string> = {

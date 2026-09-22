@@ -28,6 +28,15 @@ export const APP_THEME_TOKEN_KEYS = [
   "border-strong",
   "border-divider",
   "border-interactive",
+  // The resting boundary of a text-entry control (`Input`, `Textarea`).
+  //
+  // Its own key rather than a reuse of `border-strong` because an input's border
+  // is a user-interface component boundary under WCAG 1.4.11 and owes 3:1
+  // against both the field fill and the surface around it, while `border-strong`
+  // is a separation value shared with dividers and card edges that would read as
+  // hard lines at that weight. Defaults to `border-strong`, so a theme only
+  // moves when it sets this explicitly.
+  "border-input",
   // The ink of the leading rail that marks "this is the row Enter will act on"
   // in the palettes. Named for the outline it used to draw around all four sides
   // of the row; the geometry moved to a rail, the job did not.

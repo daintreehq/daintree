@@ -111,7 +111,7 @@ export function SortableTerminal({
         style={sortableStyle}
         className={cn(
           "h-full min-w-0 contain-layout contain-style",
-          isDragging && "ring-2 ring-daintree-text/20 rounded"
+          isDragging && "rounded-lg ring-2 ring-text-primary/20"
         )}
       >
         <m.div

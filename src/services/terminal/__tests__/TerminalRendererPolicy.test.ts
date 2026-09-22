@@ -118,6 +118,7 @@ describe("TerminalRendererPolicy", () => {
       const callOrder: string[] = [];
       const applyDeferredResize = vi.fn(() => {
         callOrder.push("applyDeferredResize");
+        return true;
       });
       mockDeps.applyDeferredResize = applyDeferredResize;
       const terminal = mockManagedTerminal.terminal as unknown as {
@@ -435,6 +436,114 @@ describe("TerminalRendererPolicy", () => {
       vi.advanceTimersByTime(1000);
       expect(mockManagedTerminal.lastAppliedTier).toBe(TerminalRefreshTier.FOCUSED);
       expect(policy.getLastBackendTier("test-id")).toBe("active");
+    });
+  });
+
+  describe("cached project view (#12514)", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      // Hysteresis timers are armed via window.setTimeout; point window at the
+      // faked globals so the node env can run them.
+      vi.stubGlobal("window", globalThis);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    });
+
+    it("clamps any requested tier to BACKGROUND and applies it without hysteresis", async () => {
+      const { terminalClient } = await import("@/clients");
+      const onTierApplied = vi.fn();
+      mockDeps.onTierApplied = onTierApplied;
+      mockDeps.isViewCached = () => true;
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+
+      // The write-burst path requests BURST on every chunk a cached agent
+      // streams; it must land as BACKGROUND, not as a foreground upgrade.
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.BURST);
+
+      expect(mockManagedTerminal.lastAppliedTier).toBe(TerminalRefreshTier.BACKGROUND);
+      expect(mockManagedTerminal.tierChangeTimer).toBeUndefined();
+      expect(onTierApplied).toHaveBeenCalledWith(
+        "test-id",
+        TerminalRefreshTier.BACKGROUND,
+        mockManagedTerminal
+      );
+      expect(terminalClient.setActivityTier).toHaveBeenCalledWith("test-id", "background", 500);
+    });
+
+    it("cancels a pending foreground downgrade timer when the view is cached", async () => {
+      let cached = false;
+      mockDeps.isViewCached = () => cached;
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.VISIBLE);
+      expect(mockManagedTerminal.tierChangeTimer).toBeDefined();
+
+      cached = true;
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.VISIBLE);
+
+      expect(mockManagedTerminal.lastAppliedTier).toBe(TerminalRefreshTier.BACKGROUND);
+      expect(mockManagedTerminal.tierChangeTimer).toBeUndefined();
+      expect(mockManagedTerminal.pendingTier).toBeUndefined();
+      // The stale VISIBLE timer must not fire and re-promote the cached view.
+      vi.advanceTimersByTime(1000);
+      expect(mockManagedTerminal.lastAppliedTier).toBe(TerminalRefreshTier.BACKGROUND);
+    });
+
+    it("upgrades through the ordinary repaint path once the view is back", async () => {
+      const { terminalClient } = await import("@/clients");
+      let cached = true;
+      const onResumeFlush = vi.fn();
+      mockDeps.onResumeFlush = onResumeFlush;
+      mockDeps.isViewCached = () => cached;
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+      expect(policy.getLastBackendTier("test-id")).toBe("background");
+
+      cached = false;
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+
+      expect(mockManagedTerminal.lastAppliedTier).toBe(TerminalRefreshTier.FOCUSED);
+      expect(terminalClient.setActivityTier).toHaveBeenLastCalledWith("test-id", "active", 50);
+      expect(onResumeFlush).toHaveBeenCalledWith("test-id");
+    });
+
+    it("reasserts background to the host even when its record says active", async () => {
+      // A cold-created BACKGROUND pane records its backend tier as "active" on
+      // purpose; replaying that record on cache would send "active".
+      const { terminalClient } = await import("@/clients");
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+      policy.initializeBackendTier("test-id", "active");
+
+      policy.reassertBackgroundTier("test-id");
+      policy.reassertBackgroundTier("test-id");
+
+      expect(vi.mocked(terminalClient.setActivityTier).mock.calls).toEqual([
+        ["test-id", "background", 500],
+        ["test-id", "background", 500],
+      ]);
+      expect(policy.getLastBackendTier("test-id")).toBe("background");
+    });
+
+    it("keeps downgrade hysteresis for a view that is not cached", async () => {
+      mockDeps.isViewCached = () => false;
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.BACKGROUND);
+
+      expect(mockManagedTerminal.lastAppliedTier).toBe(TerminalRefreshTier.FOCUSED);
+      expect(mockManagedTerminal.pendingTier).toBe(TerminalRefreshTier.BACKGROUND);
     });
   });
 

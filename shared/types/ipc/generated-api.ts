@@ -55,6 +55,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["cli:install"]["result"]>;
   };
   clipboard: {
+    pickAttachments(
+      ...args: IpcInvokeMap["clipboard:pick-attachments"]["args"]
+    ): Promise<IpcInvokeMap["clipboard:pick-attachments"]["result"]>;
     readSelection(
       ...args: IpcInvokeMap["clipboard:read-selection"]["args"]
     ): Promise<IpcInvokeMap["clipboard:read-selection"]["result"]>;
@@ -222,6 +225,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["fleet:unsnooze-run"]["args"]
     ): Promise<IpcInvokeMap["fleet:unsnooze-run"]["result"]>;
   };
+  forge: {
+    commitCredentialImport(
+      ...args: IpcInvokeMap["forge:commit-credential-import"]["args"]
+    ): Promise<IpcInvokeMap["forge:commit-credential-import"]["result"]>;
+    previewCredentialImport(
+      ...args: IpcInvokeMap["forge:preview-credential-import"]["args"]
+    ): Promise<IpcInvokeMap["forge:preview-credential-import"]["result"]>;
+  };
   forgeAudit: {
     clearLog(
       ...args: IpcInvokeMap["forge-audit:clear-log"]["args"]
@@ -318,7 +329,18 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["hibernation:update-config"]["args"]
     ): Promise<IpcInvokeMap["hibernation:update-config"]["result"]>;
   };
+  keepAwake: {
+    getState(
+      ...args: IpcInvokeMap["keep-awake:get-state"]["args"]
+    ): Promise<IpcInvokeMap["keep-awake:get-state"]["result"]>;
+    updateConfig(
+      ...args: IpcInvokeMap["keep-awake:update-config"]["args"]
+    ): Promise<IpcInvokeMap["keep-awake:update-config"]["result"]>;
+  };
   mcpServer: {
+    adoptTerminal(
+      ...args: IpcInvokeMap["mcp-server:adopt-terminal"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:adopt-terminal"]["result"]>;
     clearAuditLog(
       ...args: IpcInvokeMap["mcp-server:clear-audit-log"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:clear-audit-log"]["result"]>;
@@ -346,6 +368,12 @@ export interface GeneratedElectronAPI {
     getLogRecords(
       ...args: IpcInvokeMap["mcp-server:get-log-records"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:get-log-records"]["result"]>;
+    getPaneWakeEnabled(
+      ...args: IpcInvokeMap["mcp-server:get-pane-wake-enabled"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:get-pane-wake-enabled"]["result"]>;
+    getPaneWatchState(
+      ...args: IpcInvokeMap["mcp-server:get-pane-watch-state"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:get-pane-watch-state"]["result"]>;
     getRuntimeState(
       ...args: IpcInvokeMap["mcp-server:get-runtime-state"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:get-runtime-state"]["result"]>;
@@ -370,6 +398,15 @@ export interface GeneratedElectronAPI {
     listHelpSessionBearers(
       ...args: IpcInvokeMap["mcp-server:list-help-session-bearers"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:list-help-session-bearers"]["result"]>;
+    listOrchestratorPanes(
+      ...args: IpcInvokeMap["mcp-server:list-orchestrator-panes"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:list-orchestrator-panes"]["result"]>;
+    listTerminalAdoptions(
+      ...args: IpcInvokeMap["mcp-server:list-terminal-adoptions"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:list-terminal-adoptions"]["result"]>;
+    releaseTerminalAdoption(
+      ...args: IpcInvokeMap["mcp-server:release-terminal-adoption"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:release-terminal-adoption"]["result"]>;
     resetDenialCounts(
       ...args: IpcInvokeMap["mcp-server:reset-denial-counts"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:reset-denial-counts"]["result"]>;
@@ -391,12 +428,18 @@ export interface GeneratedElectronAPI {
     setEnabled(
       ...args: IpcInvokeMap["mcp-server:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:set-enabled"]["result"]>;
+    setPaneWakeEnabled(
+      ...args: IpcInvokeMap["mcp-server:set-pane-wake-enabled"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:set-pane-wake-enabled"]["result"]>;
     setPort(
       ...args: IpcInvokeMap["mcp-server:set-port"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:set-port"]["result"]>;
     setSessionTier(
       ...args: IpcInvokeMap["mcp-server:set-session-tier"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:set-session-tier"]["result"]>;
+    stopPaneWatches(
+      ...args: IpcInvokeMap["mcp-server:stop-pane-watches"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:stop-pane-watches"]["result"]>;
   };
   menu: {
     showApplication(
@@ -647,6 +690,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["plugin:validate-manifest"]["args"]
     ): Promise<IpcInvokeMap["plugin:validate-manifest"]["result"]>;
   };
+  pluginAgentMcp: {
+    listProjectEndpoints(
+      ...args: IpcInvokeMap["plugin-agent-mcp:list-project-endpoints"]["args"]
+    ): Promise<IpcInvokeMap["plugin-agent-mcp:list-project-endpoints"]["result"]>;
+    setProjectEndpointEnabled(
+      ...args: IpcInvokeMap["plugin-agent-mcp:set-project-endpoint-enabled"]["args"]
+    ): Promise<IpcInvokeMap["plugin-agent-mcp:set-project-endpoint-enabled"]["result"]>;
+  };
   pluginCapability: {
     acknowledgeConsent(
       ...args: IpcInvokeMap["plugin-capability:acknowledge-consent"]["args"]
@@ -798,6 +849,32 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["shortcut-hints:set-hinted-hover"]["args"]
     ): Promise<IpcInvokeMap["shortcut-hints:set-hinted-hover"]["result"]>;
   };
+  sitePreview: {
+    bind(
+      ...args: IpcInvokeMap["site-preview:bind"]["args"]
+    ): Promise<IpcInvokeMap["site-preview:bind"]["result"]>;
+    clearHover(
+      ...args: IpcInvokeMap["site-preview:clear-hover"]["args"]
+    ): Promise<IpcInvokeMap["site-preview:clear-hover"]["result"]>;
+    clearSelection(
+      ...args: IpcInvokeMap["site-preview:clear-selection"]["args"]
+    ): Promise<IpcInvokeMap["site-preview:clear-selection"]["result"]>;
+    detach(
+      ...args: IpcInvokeMap["site-preview:detach"]["args"]
+    ): Promise<IpcInvokeMap["site-preview:detach"]["result"]>;
+    getState(
+      ...args: IpcInvokeMap["site-preview:get-state"]["args"]
+    ): Promise<IpcInvokeMap["site-preview:get-state"]["result"]>;
+    listCandidates(
+      ...args: IpcInvokeMap["site-preview:list-candidates"]["args"]
+    ): Promise<IpcInvokeMap["site-preview:list-candidates"]["result"]>;
+    reselect(
+      ...args: IpcInvokeMap["site-preview:reselect"]["args"]
+    ): Promise<IpcInvokeMap["site-preview:reselect"]["result"]>;
+    setMode(
+      ...args: IpcInvokeMap["site-preview:set-mode"]["args"]
+    ): Promise<IpcInvokeMap["site-preview:set-mode"]["result"]>;
+  };
   slashCommands: {
     list(
       ...args: IpcInvokeMap["slash-commands:list"]["args"]
@@ -819,9 +896,6 @@ export interface GeneratedElectronAPI {
     reportTerminalRendererDiagnostics(
       ...args: IpcInvokeMap["system:report-terminal-renderer-diagnostics"]["args"]
     ): Promise<IpcInvokeMap["system:report-terminal-renderer-diagnostics"]["result"]>;
-    requestInteractiveOverride(
-      ...args: IpcInvokeMap["system:request-interactive-override"]["args"]
-    ): Promise<IpcInvokeMap["system:request-interactive-override"]["result"]>;
   };
   systemSleep: {
     getAwakeTime(

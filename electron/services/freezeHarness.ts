@@ -1,7 +1,8 @@
 /**
  * Freeze harness (#11846) — Playwright-free, real-app measurement of whether a
  * cached project view's renderer actually stops executing tasks when the
- * production efficiency-freeze path freezes it.
+ * production efficiency-freeze path freezes it, and whether an idle cached
+ * renderer costs close to nothing (#12456).
  *
  * Why this exists rather than an E2E spec: Playwright sends
  * `Emulation.setFocusEmulationEnabled` to every page target it attaches to,
@@ -20,8 +21,8 @@
  *    and is swallowed — the harness would suppress the freeze it came to
  *    observe. The renderer counts its own tasks instead, and
  *    `webContents.executeJavaScript` (Blink script execution, not CDP) moves
- *    the numbers out. The CPU throttle and memory purge the app itself attaches
- *    for are part of the production path and are deliberately left alone.
+ *    the numbers out. The freeze and memory purge the app itself attaches for
+ *    are part of the production path and are deliberately left alone.
  *
  * 2. A frozen renderer cannot answer. `executeJavaScript` will not return while
  *    the page is frozen, so nothing can be read *during* the frozen window. The
@@ -38,6 +39,14 @@
  * subject to background throttling, which would confound "frozen" with "merely
  * throttled"; `MessageChannel` tasks are not throttled, so a collapse to zero
  * isolates freeze specifically.
+ *
+ * The idle-CPU leg is the one deliberate bound. Task counts cannot see it: CDP
+ * `Emulation.setCPUThrottlingRate` busy-spins the renderer main thread from a
+ * signal handler, outside any task, frozen or not — the freeze legs passed
+ * while every cached view burned 25-40% of a core. So it reads the renderer's
+ * cumulative CPU time from `app.getAppMetrics()` across a quiet window on a
+ * view that never ran the probe. An idle renderer's own CPU does not rise on a
+ * loaded box, so this bound does not share the flakiness the ratios avoid.
  */
 
 import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
@@ -48,6 +57,7 @@ import { promisify } from "util";
 import type { ProjectViewManager } from "../window/ProjectViewManager.js";
 import { CACHED_VIEW_PURGE_DELAY_MS } from "../window/ProjectViewLifecycleController.js";
 import { projectStore } from "./ProjectStore.js";
+import { refreshAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 const execFileAsync = promisify(execFile);
@@ -112,6 +122,20 @@ const PURGE_BUDGET_GUARD_MS = 1_000;
  * the behavior under test — that assertion is the ratio below.
  */
 export const MIN_CONTROL_TICKS = 1_000;
+/**
+ * Lets a freshly cached view finish its parking work (cache IPC, idle GC,
+ * storage flush) before the idle-CPU window opens.
+ */
+const IDLE_CPU_SETTLE_MS = 2_000;
+/** The idle-CPU window. Long enough that a periodic tick cannot dominate it. */
+export const IDLE_CPU_WINDOW_MS = 10_000;
+/**
+ * Ceiling for an idle cached renderer, in percent of one core. The CDP CPU
+ * throttle's spin measured 25-40% (#12456); a renderer with nothing to do sits
+ * in low single digits. Ten keeps a wide margin on both sides.
+ */
+export const MAX_IDLE_CACHED_CPU_PERCENT = 10;
+
 /** Reference gap is ~113,000 against 0. A hundredfold is the conservative floor. */
 export const MIN_FREEZE_RATIO = 100;
 export const MIN_RECOVERY_RATIO = 100;
@@ -131,6 +155,23 @@ export interface FreezeMeasurement {
   controlTicks: number;
   frozenTicks: number;
   recoveredTicks: number;
+}
+
+export interface CpuSample {
+  pid: number;
+  /** Process creation time — with the pid, identifies one process instance. */
+  creationTime: number;
+  /** `cpu.cumulativeCPUUsage`: CPU seconds since the process started. */
+  cumulativeCpuSeconds: number;
+  /** Wall-clock `Date.now()` of the sweep, on the same clock as `lastUsed`. */
+  atMs: number;
+}
+
+export interface IdleCpuVerdict {
+  passed: boolean;
+  failures: string[];
+  /** Mean CPU over the window, in percent of one core. NaN when unmeasurable. */
+  cpuPercent: number;
 }
 
 export interface FreezeVerdict {
@@ -288,12 +329,106 @@ export function evaluateFreezeMeasurement(measurement: FreezeMeasurement): Freez
   return { passed: failures.length === 0, failures, freezeRatio, recoveryRatio, recoveryFraction };
 }
 
+/**
+ * Pull one process's cumulative CPU time out of an `app.getAppMetrics()` sweep.
+ * Null when the process is absent or Electron reported no cumulative counter —
+ * a missing measurement must never read as zero CPU.
+ */
+export function readCpuSample(
+  metrics: readonly Electron.ProcessMetric[],
+  pid: number,
+  atMs: number
+): CpuSample | null {
+  const metric = metrics.find((entry) => entry.pid === pid);
+  const cumulative = metric?.cpu?.cumulativeCPUUsage;
+  if (!metric || typeof cumulative !== "number" || !Number.isFinite(cumulative)) return null;
+  return { pid, creationTime: metric.creationTime, cumulativeCpuSeconds: cumulative, atMs };
+}
+
+/**
+ * Did the cached renderer stay idle? Mean CPU is the cumulative-CPU delta over
+ * the wall-clock delta — not `percentCPUUsage`, which is "since the last
+ * `getAppMetrics()` call" and so reset by every other sampler in the app.
+ *
+ * The window also has to close before the view's first memory purge, which is
+ * real CPU work the renderer does on main's schedule, not idle cost.
+ */
+export function evaluateIdleCpu({
+  start,
+  end,
+  cachedAtMs,
+  minWindowMs = IDLE_CPU_WINDOW_MS,
+  maxPercent = MAX_IDLE_CACHED_CPU_PERCENT,
+  purgeDelayMs = CACHED_VIEW_PURGE_DELAY_MS,
+  guardMs = PURGE_BUDGET_GUARD_MS,
+}: {
+  start: CpuSample | null;
+  end: CpuSample | null;
+  cachedAtMs: number;
+  minWindowMs?: number;
+  maxPercent?: number;
+  purgeDelayMs?: number;
+  guardMs?: number;
+}): IdleCpuVerdict {
+  if (!start || !end) {
+    return {
+      passed: false,
+      failures: [
+        "no cumulative CPU counter for the cached renderer — app.getAppMetrics() did not report " +
+          "the process or its cpu.cumulativeCPUUsage.",
+      ],
+      cpuPercent: Number.NaN,
+    };
+  }
+  if (start.pid !== end.pid || start.creationTime !== end.creationTime) {
+    return {
+      passed: false,
+      failures: [
+        `the cached renderer was replaced mid-window (pid ${start.pid} -> ${end.pid}); ` +
+          `its CPU time is not one process's idle cost.`,
+      ],
+      cpuPercent: Number.NaN,
+    };
+  }
+
+  const failures: string[] = [];
+  const elapsedMs = end.atMs - start.atMs;
+  const cpuSeconds = end.cumulativeCpuSeconds - start.cumulativeCpuSeconds;
+  const cpuPercent = elapsedMs > 0 ? (cpuSeconds / (elapsedMs / 1000)) * 100 : Number.NaN;
+
+  if (elapsedMs < minWindowMs) {
+    failures.push(`idle window was ${elapsedMs}ms, shorter than the ${minWindowMs}ms required.`);
+  }
+  if (cpuSeconds < 0) {
+    failures.push(
+      `cumulative CPU went backwards (${cpuSeconds.toFixed(3)}s) — the counter is unusable.`
+    );
+  }
+  const finishMs = end.atMs - cachedAtMs;
+  const deadlineMs = purgeDelayMs - guardMs;
+  if (finishMs > deadlineMs) {
+    failures.push(
+      `idle window closed ${finishMs}ms after caching, past the ${deadlineMs}ms guarded purge deadline — ` +
+        `the purge's GC may be inside the number.`
+    );
+  }
+  if (!(cpuPercent < maxPercent)) {
+    failures.push(
+      `idle cached renderer used ${Number.isFinite(cpuPercent) ? cpuPercent.toFixed(1) : "?"}% of a core ` +
+        `over ${elapsedMs}ms (need < ${maxPercent}%). A CDP CPU throttle's busy-spin reads 25-40% (#12456).`
+    );
+  }
+
+  return { passed: failures.length === 0, failures, cpuPercent };
+}
+
 const PROBE_START_JS = `(() => {
   if (window.__daintreeFreezeProbe) return "already-running";
   const probe = { total: 0, buckets: new Map() };
   window.__daintreeFreezeProbe = probe;
   const channel = new MessageChannel();
   channel.port1.onmessage = () => {
+    if (probe.stopped) return;
     probe.total++;
     const bucket = Math.floor(Date.now() / ${BUCKET_MS});
     probe.buckets.set(bucket, (probe.buckets.get(bucket) || 0) + 1);
@@ -312,6 +447,13 @@ const PROBE_READ_JS = `(() => {
     visibilityState: document.visibilityState,
     hasFocus: document.hasFocus(),
   };
+})()`;
+
+/** Ends the self-posting loop so the probed view stops burning a core. */
+const PROBE_STOP_JS = `(() => {
+  const probe = window.__daintreeFreezeProbe;
+  if (probe) probe.stopped = true;
+  return "stopped";
 })()`;
 
 function delay(ms: number): Promise<void> {
@@ -349,6 +491,90 @@ async function createHarnessRepo(root: string, name: string): Promise<string> {
 }
 
 /**
+ * Idle-CPU leg: switch back to A so B — active all run, never probed — is
+ * freshly cached with its own purge budget, then read B's renderer CPU across
+ * a quiet window. Efficiency freeze is forced off first: an unfrozen cached
+ * view (what a live agent or MCP binding keeps) is the harder idle case, and
+ * the spin this guards against runs frozen or not.
+ */
+async function measureIdleCachedCpu(
+  pvm: ProjectViewManager,
+  activeProjectId: string,
+  activePath: string,
+  cachedProjectId: string
+): Promise<boolean> {
+  pvm.setEfficiencyFreeze(false);
+  await pvm.switchTo(activeProjectId, activePath);
+
+  const cached = pvm.getAllViews().find((entry) => entry.projectId === cachedProjectId);
+  const active = pvm.getAllViews().find((entry) => entry.projectId === activeProjectId);
+  if (!cached || cached.state !== "cached" || cached.view.webContents.isDestroyed()) {
+    log("FAILED — project B's view is %s, expected a live cached view", cached?.state ?? "missing");
+    return false;
+  }
+  const cachedWc = cached.view.webContents;
+  const pid = cachedWc.getOSProcessId();
+  const activePid =
+    active && !active.view.webContents.isDestroyed() ? active.view.webContents.getOSProcessId() : 0;
+  if (pid === activePid) {
+    log(
+      "FAILED — cached and active views share renderer pid %d; the cached view's idle CPU is not separable",
+      pid
+    );
+    return false;
+  }
+
+  await delay(IDLE_CPU_SETTLE_MS);
+  const freezeAtStart = pvm.efficiencyFreezeEnabled;
+  const start = readCpuSample(refreshAppMetricsSnapshot(), pid, Date.now());
+  await delay(IDLE_CPU_WINDOW_MS);
+  const end = readCpuSample(refreshAppMetricsSnapshot(), pid, Date.now());
+  const freezeAtEnd = pvm.efficiencyFreezeEnabled;
+
+  if (cached.state !== "cached" || cachedWc.isDestroyed()) {
+    log("FAILED — project B's view left the cached state mid-window (%s)", cached.state);
+    return false;
+  }
+  // `ResourceProfileService` can turn efficiency back on at any point. A frozen
+  // B would not hide the #12456 spin, which runs frozen or not, but it would
+  // hide ordinary task work — and this leg claims an unfrozen idle view.
+  if (freezeAtStart || freezeAtEnd) {
+    log(
+      "FAILED — efficiency freeze was re-enabled around the idle window (start=%s end=%s); " +
+        "the reading may be of a frozen view",
+      String(freezeAtStart),
+      String(freezeAtEnd)
+    );
+    return false;
+  }
+
+  const verdict = evaluateIdleCpu({ start, end, cachedAtMs: cached.lastUsed });
+  log(
+    "IDLE-CPU %s",
+    JSON.stringify({
+      pid,
+      windowMs: start && end ? end.atMs - start.atMs : null,
+      cpuSeconds:
+        start && end
+          ? Number((end.cumulativeCpuSeconds - start.cumulativeCpuSeconds).toFixed(3))
+          : null,
+      cpuPercent: Number.isFinite(verdict.cpuPercent)
+        ? Number(verdict.cpuPercent.toFixed(2))
+        : null,
+      maxPercent: MAX_IDLE_CACHED_CPU_PERCENT,
+    })
+  );
+  if (!verdict.passed) {
+    for (const failure of verdict.failures) {
+      log("FAILED — %s", failure);
+    }
+    return false;
+  }
+  log("CHECK: idle cached CPU — OK");
+  return true;
+}
+
+/**
  * Drives the real freeze path on one cached view and reports whether the
  * renderer genuinely stopped. Returns false on any failed assertion or setup
  * error; the caller maps that to the process exit code.
@@ -373,8 +599,8 @@ export async function runFreezeHarness(pvm: ProjectViewManager): Promise<boolean
     createdProjectIds.push(projectB.id);
 
     // Real activation path: A becomes active, then B displaces it. `switchTo`
-    // runs `deactivateEntry` on A — detach, setVisible(false), CPU throttle,
-    // cached state — which is exactly the state a freeze acts on in production.
+    // runs `deactivateEntry` on A — detach, setVisible(false), cached state —
+    // which is exactly the state a freeze acts on in production.
     await pvm.switchTo(projectA.id, pathA);
     await delay(VIEW_SETTLE_MS);
     await pvm.switchTo(projectB.id, pathB);
@@ -539,15 +765,29 @@ export async function runFreezeHarness(pvm: ProjectViewManager): Promise<boolean
       })
     );
 
-    if (!verdict.passed) {
+    if (verdict.passed) {
+      log("CHECK: freeze ratio — OK");
+      log("CHECK: recovery — OK");
+    } else {
       for (const failure of verdict.failures) {
         log("FAILED — %s", failure);
       }
-      return false;
     }
 
-    log("CHECK: freeze ratio — OK");
-    log("CHECK: recovery — OK");
+    // Stop A's probe before A goes active again, or it spins a core for the
+    // rest of the run. Best-effort: a stuck probe only costs CPU in A's
+    // process, which the idle leg below refuses to share anyway.
+    await withTimeout(
+      cachedWc.executeJavaScript(PROBE_STOP_JS, true) as Promise<string>,
+      PROBE_READ_TIMEOUT_MS,
+      "probe stop timed out"
+    ).catch(() => {});
+
+    // Independent of the freeze verdict: a spin and a failed freeze are
+    // different bugs, and one red run should report both.
+    const idleCpuPassed = await measureIdleCachedCpu(pvm, projectA.id, pathA, projectB.id);
+    if (!verdict.passed || !idleCpuPassed) return false;
+
     log("PASS");
     return true;
   } catch (error) {

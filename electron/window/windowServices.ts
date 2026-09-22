@@ -20,6 +20,8 @@ import { runSmokeFunctionalChecks } from "../services/smokeTest.js";
 import { runFreezeHarness } from "../services/freezeHarness.js";
 import { markPerformance } from "../utils/performance.js";
 import { getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
+import { deliverOpenSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
+import { deliverPowerPolicy } from "./powerPolicyDelivery.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { isCleaningUp } from "../lifecycle/shutdownCoordinator.js";
 import {
@@ -44,7 +46,7 @@ import {
   queuePendingOpenDirPath,
 } from "../setup/environment.js";
 import { shouldDeferRendererLoadForE2E } from "./earlyRenderer.js";
-import { isE2EFaultMode, isFreezeHarness } from "../setup/runtimeFlags.js";
+import { isE2EFaultMode, isFreezeHarness, isIdleHarness } from "../setup/runtimeFlags.js";
 import {
   extractCliPath,
   hasCliPathFlag,
@@ -266,6 +268,8 @@ export async function setupWindowServices(
           payload: diskStatus,
         });
       }
+      deliverOpenSystemMemoryPressure(win, appWc);
+      deliverPowerPolicy(appWc);
     });
 
     opts.loadRenderer(reason, opts.initialProjectId);
@@ -639,13 +643,16 @@ export async function setupWindowServices(
     }
 
     initializeAgentAvailabilityStore();
-    initializePowerSaveBlockerService();
+    initializePowerSaveBlockerService(pty);
     console.log("[MAIN] AgentAvailabilityStore and PowerSaveBlocker initialized");
 
     const processArgvCli = !getProcessArgvCliHandled()
       ? extractCliPath(process.argv, process.cwd())
       : null;
+    // The idle harness measures a fixture it builds itself; an extra login
+    // shell in the home directory would be unowned cost in every reading.
     const skipDefaultSpawn =
+      isIdleHarness ||
       opts.initialProjectPath ||
       processArgvCli ||
       getPendingCliPath() ||
@@ -800,7 +807,9 @@ export async function setupWindowServices(
     // worktree port (Phase 1).
     const outcome = await runStartupWorktreeLoad({
       loadProject: workspaceClient
-        ? () => workspaceClient.loadProject(projectPathForWorktrees, win.id)
+        ? async () => {
+            await workspaceClient.loadProject(projectPathForWorktrees, win.id);
+          }
         : null,
       getPortTarget: () => opts.initialAppView?.webContents ?? getAppWebContents(win) ?? null,
       getHost: () => workspaceClient?.getHostForProject(projectPathForWorktrees),

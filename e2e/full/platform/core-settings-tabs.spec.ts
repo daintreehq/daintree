@@ -241,7 +241,8 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
 
     // Switch to "Terminal" subtab
     await window
-      .locator(`${SEL.settings.subtabNav} button[role="tab"]`, { hasText: "Terminal" })
+      .getByRole("tablist", { name: "Appearance settings sections" })
+      .getByRole("tab", { name: "Terminal" })
       .click();
 
     const fontSizeInput = window.locator(SEL.settings.fontSizeInput);
@@ -368,7 +369,8 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
 
     // Switch to "Data & Storage" subtab
     await window
-      .locator(`${SEL.settings.subtabNav} button[role="tab"]`, { hasText: "Data & Storage" })
+      .getByRole("tablist", { name: "Privacy and data sections" })
+      .getByRole("tab", { name: "Data & Storage" })
       .click();
 
     // Verify Clear Cache button is visible

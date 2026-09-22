@@ -1,6 +1,54 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { LanguageDescription } from "@codemirror/language";
-import { CODEMIRROR_LANGUAGES } from "../codeMirrorLanguages";
+import { CODEMIRROR_LANGUAGES, loadMarkdownSupport } from "../codeMirrorLanguages";
+
+// Wraps the real `markdown()` so the configuration it receives is observable
+// while the parse-tree assertions below still exercise the real grammar.
+const { markdownSpy } = vi.hoisted(() => ({
+  markdownSpy: vi.fn<(config?: Record<string, unknown>) => unknown>(),
+}));
+vi.mock("@codemirror/lang-markdown", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@codemirror/lang-markdown")>();
+  markdownSpy.mockImplementation((config) => actual.markdown(config));
+  return { ...actual, markdown: markdownSpy };
+});
+
+describe("loadMarkdownSupport — the one Markdown configuration (#12323)", () => {
+  const nodeNames = (tree: { cursor(): { name: string; next(): boolean } }): string[] => {
+    const names: string[] = [];
+    const cursor = tree.cursor();
+    do names.push(cursor.name);
+    while (cursor.next());
+    return names;
+  };
+
+  it("parses GFM, not just CommonMark", async () => {
+    const support = await loadMarkdownSupport();
+    const tree = support.language.parser.parse(
+      "~~gone~~\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n- [ ] todo\n"
+    );
+    const names = nodeNames(tree);
+    expect(names).toContain("Strikethrough");
+    expect(names).toContain("Table");
+    expect(names).toContain("Task");
+  });
+
+  it("the Markdown registry entry loads the same configuration", async () => {
+    const desc = CODEMIRROR_LANGUAGES.find((d) => d.name === "Markdown");
+    const support = await desc!.load();
+    const names = nodeNames(support.language.parser.parse("~~x~~"));
+    expect(names).toContain("Strikethrough");
+  });
+
+  it("hands fences the viewer registry and turns off the two rewriting options", async () => {
+    await loadMarkdownSupport();
+    expect(markdownSpy).toHaveBeenCalled();
+    const config = markdownSpy.mock.calls.at(-1)?.[0];
+    expect(config?.codeLanguages).toBe(CODEMIRROR_LANGUAGES);
+    expect(config?.completeHTMLTags).toBe(false);
+    expect(config?.pasteURLAsLink).toBe(false);
+  });
+});
 
 describe("CODEMIRROR_LANGUAGES — curated registry shape", () => {
   it("is a non-empty array of LanguageDescription instances", () => {

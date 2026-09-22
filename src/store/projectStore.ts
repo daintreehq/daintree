@@ -48,7 +48,7 @@ import { beginSwitchTrace, consumeSwitchTrace, markSwitch } from "@/utils/switch
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { isEphemeralPanel } from "./slices/panelRegistry/panelCount";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { isValidTerminalGeometry } from "@shared/types/terminal";
+import { isUsableTerminalGeometry } from "@shared/types/terminal";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -100,9 +100,15 @@ function collectTerminalSizes(
       managed.isSerializedRestoreInProgress && managed.pendingRestoreGeometry
         ? managed.pendingRestoreGeometry
         : { cols: managed.terminal.cols, rows: managed.terminal.rows };
-    // Main sanitizes too, but an implausible grid should never reach the wire:
-    // a rejected entry restores at the default, a bad one restores wrong.
-    if (isValidTerminalGeometry(grid)) {
+    // Main sanitizes too, but a collapsed grid should never reach the wire: a
+    // rejected entry restores at the default, a bad one restores wrong. Three
+    // of the panes in #12442 persisted at 2x1 through the structural check.
+    //
+    // Only the collapse floor. This is a RECORD of the grid xterm holds, so a
+    // stricter one would drop a small pane's real size — and because Main
+    // merges rather than replaces, that pane would then restore at an older,
+    // wronger entry instead of at no entry at all.
+    if (isUsableTerminalGeometry(grid)) {
       sizes[panel.id] = grid;
     }
   }
@@ -645,7 +651,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         component: "projectStore",
         details: { path: resolvedPath || path },
       });
-      const errorMessage = formatErrorMessage(error, "Couldn't add project");
+      const errorMessage = formatErrorMessage(error, "Couldn't open project");
 
       // Absolute-path check: POSIX (/...), Windows drive letter (C:\... / C:/...),
       // and Windows UNC (\\server\share...) are all "absolute" here.
@@ -738,7 +744,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       const pickAnother = classified?.recovery === "choose-folder";
       notify({
         type: "error",
-        title: "Couldn't add project",
+        title: "Couldn't open project",
         message,
         actions: [
           {

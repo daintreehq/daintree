@@ -49,7 +49,7 @@ export function registerTerminalMetaActions(
 ): void {
   actions.set("terminal.setClientMetadata", () => ({
     id: "terminal.setClientMetadata",
-    title: "Set Terminal Client Metadata",
+    title: "Set terminal client metadata",
     description:
       "Attach your own JSON record to a terminal, so a reconnecting client can tell which panel is which instead of keeping a sidecar that goes stale. It outlives your connection, survives a restart, and is deleted with the panel. Read it back from the terminal listing; null clears it. Shared namespace: every external client sees the same record, and it confers no ownership.",
     category: "terminal",

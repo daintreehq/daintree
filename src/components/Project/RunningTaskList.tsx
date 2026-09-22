@@ -277,30 +277,33 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
   const truncatedCommand = command.length > 28 ? command.slice(0, 28) + "…" : command;
 
   return (
+    // The row used to be a `role="button"` wrapping these action buttons, which
+    // is both an invalid content model and a live trap: the inner buttons only
+    // stopped propagation on click, so an Enter on Stop bubbled to the row's
+    // handler, got `preventDefault()`ed, and focused the terminal instead of
+    // stopping it. The row is now a plain container and the command label is the
+    // button, so every action is a sibling and owns its own keys.
     <div
+      data-task-row={terminal.id}
       className={cn(
         "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-sm)] text-2xs font-mono group",
-        "hover:bg-tint/[0.04] transition-colors cursor-pointer",
+        "hover:bg-tint/[0.04] transition-colors",
         status === "failed" && "border-l-2 border-status-error",
         status === "success" && "opacity-60"
       )}
-      onClick={() => onFocus(terminal.id)}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onFocus(terminal.id);
-        }
-      }}
     >
       {/* Status indicator */}
       <StatusDot status={status} />
 
       {/* Command */}
-      <span className="flex-1 truncate text-text-secondary" title={command}>
+      <button
+        type="button"
+        onClick={() => onFocus(terminal.id)}
+        className="flex-1 truncate text-left text-text-secondary hover:text-text-primary transition-colors cursor-pointer min-w-0"
+        title={command}
+      >
         {truncatedCommand}
-      </span>
+      </button>
 
       {/* Elapsed time */}
       {isActive && (
@@ -317,7 +320,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
               e.stopPropagation();
               onStop(terminal.id);
             }}
-            className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-status-error"
+            className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-status-error"
             aria-label="Stop task"
           >
             <X className="h-3 w-3" />
@@ -331,7 +334,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
                   e.stopPropagation();
                   onRestart(terminal.id);
                 }}
-                className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-text-primary"
+                className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
                 aria-label="Restart task"
               >
                 <RotateCw className="h-3 w-3" />
@@ -342,7 +345,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
                 e.stopPropagation();
                 onDismiss(terminal.id);
               }}
-              className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-text-primary"
+              className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
               aria-label="Dismiss"
             >
               <X className="h-3 w-3" />
@@ -354,7 +357,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
             e.stopPropagation();
             onFocus(terminal.id);
           }}
-          className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-text-primary"
+          className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
           aria-label="Focus terminal"
         >
           <Eye className="h-3 w-3" />

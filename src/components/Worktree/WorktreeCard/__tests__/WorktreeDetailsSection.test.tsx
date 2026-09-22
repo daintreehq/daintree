@@ -9,6 +9,7 @@ import type { WorktreeState } from "@/types";
 import type { WorktreeChanges } from "@shared/types/git";
 import type { ComputedSubtitle } from "../hooks/useWorktreeStatus";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { actionService } from "@/services/ActionService";
 import {
   WorktreeDetailsSection,
   WorktreeDeleteErrorBanner,
@@ -46,6 +47,16 @@ vi.mock("react-dom", async () => {
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn() },
+}));
+
+vi.mock("../../LifecycleCommandApprovalDialog", () => ({
+  LifecycleCommandApprovalDialog: (props: { isOpen: boolean; setupAwaitingApproval: boolean }) =>
+    props.isOpen ? (
+      <div
+        data-testid="approval-dialog"
+        data-setup-awaiting-approval={String(props.setupAwaitingApproval)}
+      />
+    ) : null,
 }));
 
 const noop = () => {};
@@ -516,5 +527,111 @@ describe("worktree error banners (issue #12087)", () => {
     rerender(<WorktreeIssueErrorBanner message="disk on fire" mutationType="detach-issue" />);
     expect(screen.getByRole("alert").textContent).toContain("disk on fire");
     expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  // #12418. The host stopped cutting git's stderr at the first newline, so the
+  // banner now receives multi-line text. The later lines are the ones that name
+  // the worktree still holding the branch, so they have to reach the DOM whole
+  // — and the actions have to stay reachable underneath them.
+  it("renders a multi-line delete error without dropping or merging its lines", () => {
+    const message =
+      "Worktree removed. Couldn't delete branch 'feature/x': error: Cannot delete branch 'feature/x' checked out at '/other/tree'\nhint: remove that worktree first";
+    const onRetry = vi.fn();
+    const onDismiss = vi.fn();
+    render(<WorktreeDeleteErrorBanner message={message} onRetry={onRetry} onDismiss={onDismiss} />);
+
+    // Read `textContent` directly: Testing Library's matchers normalise
+    // whitespace, which would collapse the newline this test exists to prove.
+    const text = screen.getByTestId("worktree-delete-error-banner").textContent ?? "";
+    expect(text).toContain(message);
+    expect(text).toContain("\nhint: remove that worktree first");
+
+    expect(screen.getByRole("button", { name: "Retry" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Dismiss" })).not.toBeNull();
+  });
+});
+
+describe("WorktreeDetailsSection — repository command approval", () => {
+  beforeEach(() => {
+    vi.mocked(actionService.dispatch).mockClear();
+  });
+
+  it("offers a review when the host reports commands waiting for approval", async () => {
+    const onCardClick = vi.fn();
+    render(
+      <div onClick={onCardClick}>
+        <TooltipProvider>
+          <WorktreeDetailsSection
+            {...baseProps}
+            worktree={{
+              ...baseWorktree,
+              lifecycleCommandsNeedApproval: true,
+              lifecycleStatus: {
+                phase: "setup",
+                state: "needs-approval",
+                startedAt: 1,
+                completedAt: 1,
+              },
+            }}
+          />
+        </TooltipProvider>
+      </div>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /review commands/i }));
+
+    const dialog = await screen.findByTestId("approval-dialog");
+    expect(dialog.getAttribute("data-setup-awaiting-approval")).toBe("true");
+    expect(onCardClick).not.toHaveBeenCalled();
+    expect(actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("runs a skipped setup once its commands are already approved", () => {
+    renderSection({
+      worktree: {
+        ...baseWorktree,
+        lifecycleStatus: { phase: "setup", state: "needs-approval", startedAt: 1, completedAt: 1 },
+      },
+    });
+
+    expect(screen.queryByRole("button", { name: /review commands/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /run setup/i }));
+
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "worktree.lifecycle.retrySetup",
+      { worktreeId: baseWorktree.id },
+      expect.objectContaining({ source: "user" })
+    );
+  });
+
+  it("keeps the approval request visible while Details is expanded", () => {
+    renderSection({
+      isExpanded: true,
+      worktree: { ...baseWorktree, lifecycleCommandsNeedApproval: true },
+    });
+
+    expect(screen.getByRole("button", { name: /review commands/i })).toBeDefined();
+  });
+
+  it("still offers the skipped setup after a resource action overwrote the lifecycle slot", () => {
+    renderSection({
+      worktree: {
+        ...baseWorktree,
+        setupStatus: { state: "needs-approval", stage: "setup-script", startedAt: 1 },
+        lifecycleStatus: {
+          phase: "resource-status",
+          state: "success",
+          startedAt: 2,
+          completedAt: 3,
+        },
+      },
+    });
+
+    expect(screen.getByRole("button", { name: /run setup/i })).toBeDefined();
+  });
+
+  it("stays out of the way when nothing needs approval", () => {
+    renderSection();
+    expect(screen.queryByTestId("worktree-command-approval")).toBeNull();
   });
 });

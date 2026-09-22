@@ -1,5 +1,6 @@
 import { HostCrashBanner } from "./HostCrashBanner";
 import { WatchdogDisabledBanner } from "./WatchdogDisabledBanner";
+import { HostMemoryStallBanner } from "./HostMemoryStallBanner";
 import { SafeModeBanner } from "./SafeModeBanner";
 import { RestoreConfirmationBanner } from "./RestoreConfirmationBanner";
 import { MissingPrerequisiteBanner } from "./MissingPrerequisiteBanner";
@@ -28,6 +29,8 @@ function activeBanner(slot: ReturnType<typeof useGlobalBannerPriority>) {
       return <HostCrashBanner />;
     case "watchdog-disabled":
       return <WatchdogDisabledBanner />;
+    case "host-memory-stall":
+      return <HostMemoryStallBanner />;
     case "safe-mode":
       return <SafeModeBanner />;
     case "restore-confirmation":

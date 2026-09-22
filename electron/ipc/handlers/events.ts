@@ -43,6 +43,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "window:sample-blink-memory": "external",
   "window:sample-renderer-elu": "external",
   "system:wake": "external",
+  "system:memory-pressure": "external",
+  "system:power-policy-changed": "external",
   "app-agent:dispatch-action-request": "external",
   "app-agent:confirmation-request": "external",
   "plugin-mcp:consent-request": "external",
@@ -50,6 +52,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "terminal:backend-crashed": "external",
   "terminal:backend-recovering": "external",
   "terminal:backend-ready": "external",
+  "terminal:host-memory-pause": "external",
   "watchdog:disabled": "external",
   "watchdog:active": "external",
 
@@ -62,6 +65,11 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   // loop — it has no EVENTS_PUSH producer, so no renderer delivery at all.
   "terminal:status": "external",
   "terminal:submit-status": "external",
+  // Broadcast by the MCP server handlers whenever a hand-over starts or ends.
+  "terminal:adoptions-changed": "external",
+
+  // Sent project-scoped by the MCP terminal-watch service (#12491).
+  "terminal:watch-state": "external",
 
   // Agent session journaled (relayed from TypedEventBus; emitted by the main
   // close paths and bridged from the pty-host's trash-expiry capture)

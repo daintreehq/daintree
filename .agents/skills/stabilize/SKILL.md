@@ -1,14 +1,14 @@
 ---
 name: stabilize
 disable-model-invocation: true
-description: "USE ONLY WHEN A HUMAN EXPLICITLY INVOKES IT — never auto-select or run this proactively: not after adding a feature, fixing a bug, or finishing a task, not as a routine or ambient health check, and not as a step inside another workflow. This is a deliberate, multi-hour overnight workflow. Once a human explicitly starts it with /stabilize (Claude Code) or $stabilize (Codex) — typically the night before a release, or as a one-off whole-tree validation — it drives Daintree to a fully green, stable state across every check we can run: typecheck/lint/format, unit, integration, knip, build, smoke, and the full Playwright E2E surface (core, all seven full-* buckets, online, and the nightly memory-leak soak). Local-first and strictly serial by OS — the local Mac (macOS) to green first, then the cross-platform stabilize.yml GitHub workflow one OS at a time, Linux to green then Windows to green — fixing real failures and intelligently re-running flaky E2E at each stage, plus release dry-runs when releasing. Never run Linux and Windows in parallel; a bug caught on Linux that also breaks Windows would waste an expensive Windows run."
+description: "USE ONLY WHEN A HUMAN EXPLICITLY INVOKES IT — never auto-select or run this proactively: not after adding a feature, fixing a bug, or finishing a task, not as a routine or ambient health check, and not as a step inside another workflow. This is a deliberate, expensive workflow. Once a human explicitly starts it with /stabilize (Claude Code) or $stabilize (Codex) — typically the night before a release, or as a one-off whole-tree validation — it drives Daintree to a fully green, stable state across every check we can run: typecheck/lint/format, unit, integration, knip (local only), build, smoke, and the full Playwright E2E surface (core, all seven full-* buckets, online, and the nightly memory-leak soak). Local-first and strictly serial by OS — the local Mac (macOS) to green first, then the cross-platform stabilize.yml GitHub workflow one OS at a time, Linux to green then Windows to green — fixing real failures in batches and re-validating each fix with the narrowest run that proves it, plus release dry-runs when releasing. The budget is ONE full stabilize.yml run per OS; everything after it is a scoped re-run. Never run Linux and Windows in parallel; a bug caught on Linux that also breaks Windows would waste an expensive Windows run."
 ---
 
 # Stabilize
 
-> **Run this ONLY when a human explicitly invokes it.** Stabilize is a deliberate, multi-hour, overnight workflow — not an ambient health check and not a finishing step. Do NOT trigger it proactively: not after adding a feature, not after fixing a bug, not on completing a task, and not as a stage folded into another workflow. This is enforced, not merely requested — the frontmatter sets `disable-model-invocation: true`, so the model cannot auto-select it; a human starts it explicitly with `/stabilize` (Claude Code) or `$stabilize` (Codex), typically the night before a release or as a one-off whole-tree validation. If you are here because you just finished some other work, that is not a reason to stabilize — stop.
+> **Run this ONLY when a human explicitly invokes it.** Stabilize is a deliberate, expensive workflow — not an ambient health check and not a finishing step. Do NOT trigger it proactively: not after adding a feature, not after fixing a bug, not on completing a task, and not as a stage folded into another workflow. This is enforced, not merely requested — the frontmatter sets `disable-model-invocation: true`, so the model cannot auto-select it; a human starts it explicitly with `/stabilize` (Claude Code) or `$stabilize` (Codex), typically the night before a release or as a one-off whole-tree validation. If you are here because you just finished some other work, that is not a reason to stabilize — stop.
 
-Drive the Daintree tree to green and keep it there. This is the replacement for the old scheduled nightly: instead of a dumb cron that runs everything once and opens a low-signal `[Nightly] Tests failed` issue every time an E2E flake trips, an agent runs the whole surface, reads the results, tells flakes apart from real regressions, re-runs intelligently, fixes the real failures, and only reports when the work is actually done. Treat this as a durable, multi-hour, overnight loop. The work proceeds strictly one OS at a time — macOS (local) → Linux (CI) → Windows (CI) — each driven fully green before the next begins, so no GitHub runner time is wasted re-discovering a failure an earlier stage would have caught. All the work happens on a dedicated stabilize branch off `origin/develop`. The job is complete only when the full local gate is green AND `stabilize.yml` has passed for Linux and then Windows on the branch (plus release dry-runs when stabilizing for a release) AND — if any fixes were made — they have been squashed into a single commit, merged into `develop`, and pushed to origin, with the working tree left back on `develop`. A run that needed no fixes commits nothing and simply deletes its branch. See **Finalization** for both close-out cases and their "done means" checklists.
+Drive the Daintree tree to green and keep it there. This is the replacement for the old scheduled nightly: instead of a dumb cron that runs everything once and opens a low-signal `[Nightly] Tests failed` issue every time an E2E flake trips, an agent runs the whole surface, reads the results, tells flakes apart from real regressions, re-runs intelligently, fixes the real failures, and only reports when the work is actually done. Treat this as a durable loop that should finish in hours, not a day — the clock is dominated by how many times you re-run things, so read **Run Budget** before you start. The work proceeds strictly one OS at a time — macOS (local) → Linux (CI) → Windows (CI) — each driven fully green before the next begins, so no GitHub runner time is wasted re-discovering a failure an earlier stage would have caught. All the work happens on a dedicated stabilize branch off `origin/develop`. The job is complete only when the full local gate is green AND every `stabilize.yml` piece has passed on Linux and then on Windows on the branch (see **What "green" means**) (plus release dry-runs when stabilizing for a release) AND — if any fixes were made — they have been squashed into a single commit, merged into `develop`, and pushed to origin, with the working tree left back on `develop`. A run that needed no fixes commits nothing and simply deletes its branch. See **Finalization** for both close-out cases and their "done means" checklists.
 
 There is no issue-creation step anywhere in this flow. You are the triage. Do not open or update a `nightly-failure` issue — that mechanism was retired with the scheduled nightly.
 
@@ -17,7 +17,7 @@ There is no issue-creation step anywhere in this flow. You are the triage. Do no
 ## What "stabilize" covers
 
 - **Every local check:** `npm run check` (typecheck + lint + format + channel/IPC/confirm-wiring guards), `npm run test` (unit), `npm run test:integration`, `npm run knip`, `npm run build`, `npm run test:smoke`, and ALL end-to-end suites — `core`, every `full-*` bucket, `online`, and the serialized `nightly` memory-leak soak.
-- **The cross-platform surface that the local Mac cannot cover:** Linux + Windows for check/unit/build/smoke and all E2E, via the `stabilize.yml` GitHub workflow.
+- **The cross-platform surface that the local Mac cannot cover:** Linux + Windows for check/unit/build/smoke and all E2E, via the `stabilize.yml` GitHub workflow. `knip` is deliberately absent from CI — it is a static, OS-agnostic report, so the local run is the only run.
 - **Release packaging/signing/notarization/Store/R2/update-metadata** (when stabilizing for a release): via the per-OS release dry-runs (`release-macos.yml` / `release-linux.yml` / `release-windows.yml` with `dry_run=true`).
 
 Nightly BINARY publishing is NOT part of stabilize. `nightly-publish.yml` builds and ships the macOS + Linux nightly auto-update channel on its own cron; it runs no test suites (only a launch smoke before publishing) and you never drive it to "green." Leave it alone.
@@ -29,12 +29,40 @@ Nightly BINARY publishing is NOT part of stabilize. `nightly-publish.yml` builds
 - **No empty or marker commits, ever.** Every commit this skill produces must carry an actual fix (a changed file). If the run validates clean with no fixes, it ends with zero commits — not a "stabilize develop" placeholder. `git commit --allow-empty` is forbidden.
 - Prefer fixing Daintree over relaxing tests. Update a test only when it is stale, over-specific, or asserting behavior the product no longer promises. A flaky test is still a real signal — stabilize it (state-based waits, scoped locators, `expect.poll`), don't delete it.
 - **Local-first is the default, not an option.** This repo is worked on from a powerful local Mac, so the full local suite is the primary validation line. Everything that can run locally must pass locally before any GitHub Actions run is dispatched. GitHub Actions is reserved for what genuinely cannot run locally: the non-macOS platforms (Linux, Windows) and CI-only packaging/signing/notarization/Store/R2/update-metadata steps. Do not use a GitHub macOS run to discover failures the local Mac can surface in full — it is slower and costs runner money.
+- **Every re-run has a price; pay the smallest one that proves the fix.** A full `stabilize.yml` dispatch costs 30–45 minutes of wall-clock plus your triage time, and a full local E2E pass costs about the same again. See **Run Budget**: one full run per OS, then scoped re-runs only.
+- **Batch fixes.** Harvest every failure from a run, fix all of them, prove each one narrowly, and only then dispatch again. One fix per dispatch is the single most expensive habit in this workflow.
 - **Triage before you re-run.** Never blindly re-run a failing job. Either you fixed something (code/test/workflow) and are re-validating, or you have positively classified the failure as a flake (see "Intelligent flake triage") and are confirming it with a scoped re-run. Re-running the same red job hoping for green is not allowed.
 - Never allow more than one active `stabilize.yml` run on the branch. For release dry runs, at most three full release runs may be active at once: one each of `release-macos.yml`, `release-linux.yml`, `release-windows.yml`. Before dispatching a replacement, list active runs for that workflow and cancel or wait for the superseded one (macOS runner cost matters).
-- Expect several hours of iteration. Do not stop after the first fixed test, the first green single-spec run, or the first green job. The task is complete only when the full local gate is green and the full `stabilize.yml` workflow passes on the branch (and the release dry-runs when targeting a release).
+- Do not stop after the first fixed test, the first green single-spec run, or the first green job. The task is complete only when the full local gate has been green and every `stabilize.yml` piece has passed on Linux and on Windows on the branch (and the release dry-runs when targeting a release).
 - After each full-workflow failure, harvest every failed job before editing. Fix the earliest/root failure first, but keep the others in a visible queue so secondary failures are not lost.
 - Before touching production code, read the relevant project instructions (`AGENTS.md`, and `CLAUDE.md` if present) and preserve Daintree architectural invariants.
 - Do not modify user-owned agent config such as `~/.claude`, `~/.codex`, `~/.gemini`, or shell hooks. CI may create isolated runner config; local fixes should not.
+
+## Run Budget
+
+The stabilization of 2026-09-19/20 took 26 hours of CI iteration to land a handful of fixes. Almost none of that was fixing. It was 23 `stabilize.yml` dispatches: every Windows-only fix re-ran the whole Linux surface first (ten Linux runs, seven of them pure re-validation), three consecutive Windows runs died at a unit-test shard that gated E2E so the Windows E2E result stayed invisible for nine hours, and one failing shard (`full-terminal` 4/32) was re-tested three times by re-dispatching the entire 100-minute Windows run. The workflow has since been restructured so none of that is necessary, and this section is the discipline that goes with it.
+
+**The budget: one full run per OS.** One full local gate on macOS, one full `stabilize.yml -f platform=linux`, one full `stabilize.yml -f platform=windows`. These are discovery runs — their job is to show you every failure at once, which they now do because no job waits on another's verdict. Everything after a discovery run is a scoped re-run of what failed.
+
+**The re-run ladder.** After a fix, climb only as high as the fix requires:
+
+| Rung | Command | Cost | Use when |
+| --- | --- | --- | --- |
+| 1 | local narrow spec / unit file | 1–3 min | always first, for anything reproducible on macOS |
+| 2 | `e2e-single.yml` — one spec on the target OS | ~8 min | an OS-specific E2E failure, or confirming a flake |
+| 3 | `e2e.yml -f suite=<s> -f shard=<n> -f shard_total=<N>` — one shard | ~8 min | the fix could affect neighbours in that shard |
+| 4 | `stabilize.yml -f only='<pieces>'` — just the failed pieces | 10–20 min | several failures across suites, or unit/check/build failures on that OS |
+| 5 | full `stabilize.yml` | 30–45 min | see below — rare |
+
+A second full run on an OS is justified only when a fix changed production code that many suites exercise AND you cannot name the suites it could affect. A change to a spec, a test helper used by one suite, a workflow file, or production code with an obvious blast radius never qualifies — re-run the affected pieces with `only`. If you catch yourself about to dispatch a full run "to be safe," name what it could find that the scoped run cannot; if you can't, don't.
+
+**What "green" means.** An OS is green when every piece of the surface has passed on that OS on the branch — in the discovery run, or in a later scoped run after its fix. Green is cumulative across runs, tracked in your ledger. It is NOT "a single run in which everything passed at the final SHA," and you must not chase that.
+
+**A green OS stays green for everything the fix cannot reach.** Fixes made during the Windows stage do not re-open Linux, and fixes made during the Linux stage do not re-open the local macOS gate. Spec, helper, and workflow fixes never reach back. A production-code fix reaches back only as far as you can name: prove it with rung 1 locally, and if it touches something OS-sensitive (path casing or separators, shell/process spawning, filesystem behaviour — note the Mac is case-insensitive and Linux is not) or is shared by a suite that already passed, re-run just those specs or suites on the affected OS at rungs 2–4. Never re-dispatch a full Linux run because Windows needed a fix.
+
+**Dropping back to Phase A means rung 1, not the full local gate.** Re-running the entire local E2E surface after each fix is as wasteful as re-dispatching CI. Re-run the spec, then the owning suite only if production code changed.
+
+**Flakes are cheap to confirm and expensive to chase.** A failure with a timing/infrastructure shape that passes one clean scoped re-run is a flake: note it and move on — one confirmation is the default, not three. The exception is credible product evidence (a crash, unhandled rejection, native-module or IPC error): a later pass does not erase that, so treat it as real. Harden a flaky spec only if it failed in two or more separate runs, and iterate that hardening on rungs 1–3, never by re-dispatching a full run to see whether it sticks.
 
 ## Long-Running Loop Discipline
 
@@ -46,7 +74,8 @@ Track:
 
 - Current branch and pushed SHA.
 - Which OS stage you are in (A macOS-local / B Linux-CI / C Windows-CI), and whether the earlier stages are confirmed green.
-- Last `stabilize.yml` run URL and conclusion for the OS currently in flight (watch the `stabilize-ok` gate job for the verdict), plus the URL/conclusion of the already-green Linux run once you move on to Windows.
+- The green ledger: per OS, which pieces (`check`, `test`, `build`, `integration`, `core`, each `full-*`, `online`, `nightly`) have passed and in which run URL. This is what proves the OS green — see **Run Budget**. A piece closes when everything in it has passed somewhere: the specs that passed in the discovery run plus a successful scoped confirmation (any rung) of each spec that failed — you do not need to re-run the whole bucket to close it. `integration` is Linux-only; mark it not-applicable for Windows. Pieces that never executed (their `e2e-build` failed) stay pending, not green.
+- Full-run count per OS against the budget of one, with the justification for any second one.
 - Any active release dry-run URLs and conclusions.
 - Failure queue: job, platform, step, suite/spec, suspected cause, flake-vs-real classification, current status.
 - Narrow validation commands already run.
@@ -66,6 +95,7 @@ Three OS stages, run strictly in order. Each must be fully green before the next
    npm run knip
    npm run build
    npm run test:smoke
+   npm run build:e2e   # E2E launches the BUILT app — without this it tests whatever bundle was there before
    # E2E — the release-gated surface in one Playwright invocation:
    npx playwright test \
      --project=core \
@@ -76,15 +106,15 @@ Three OS stages, run strictly in order. Each must be fully green before the next
    npm run test:e2e:nightly
    ```
 
-2. For each failure, reproduce the narrowest surface locally, classify it (real vs flake — see below), then fix the app/test/workflow and re-run that narrow surface until it is consistently green.
-3. Re-run the broader local suite that owns the fix to catch regressions.
-4. Repeat until the entire local gate is green. Do not dispatch any GitHub run while a locally-runnable surface is still red.
+2. Work the whole failure list as one batch. Playwright launches the built app and never rebuilds it, so after any fix that touches app code run `npm run build:e2e` once (with the app not running) before re-running specs — one rebuild per batch, reused for every spec in it; otherwise the "proof" is a pass against the old bundle. For each failure, reproduce the narrowest surface locally, classify it (real vs flake — see below), then fix the app/test/workflow and re-run that narrow surface until it is consistently green.
+3. After the batch is fixed, re-run the failed specs; re-run a whole owning suite only when a production-code fix plausibly reaches the rest of it. Do NOT re-run the full local gate: suites that passed in the baseline stay passed unless a production-code fix reaches them, in which case add just those suites.
+4. Local is green when every piece has passed — in the baseline or in a step-3 re-run. Do not dispatch any GitHub run while a locally-runnable surface is still red. `knip` and everything else OS-agnostic is now finished for good; it is not repeated on CI.
 
 ### Phase B — Linux on CI
 
 Only after the full local gate is green do you touch GitHub Actions, and the first CI OS is **Linux**, on its own. Linux is cheaper and faster than Windows and surfaces the GitHub-Actions-specific failures (path/env/filesystem/runner differences) that the local Mac can't. Drive Linux fully green before Windows is ever dispatched — fixing it here means those same fixes are already in place when Windows runs, instead of being rediscovered on the slowest, most expensive runner.
 
-**Do NOT run macOS on GitHub.** Phase A already ran the full gate on this macOS host, completely — a GitHub macOS run just pays for the priciest runner to redo what you proved locally and tells you nothing new. (macOS signing/notarization is validated by the release dry-runs, not here.) Reach for `platform=all`/`non-windows` only if you have a concrete reason to believe a macOS regression exists that the local run somehow missed — most stabilizations never dispatch macOS on CI at all.
+**Do NOT run macOS on GitHub.** Phase A already ran the full gate on this macOS host, completely — a GitHub macOS run just pays for the priciest runner to redo what you proved locally and tells you nothing new. (macOS signing/notarization is validated by the release dry-runs, not here.) Only if you have a concrete reason to believe a macOS regression exists that the local run somehow missed, dispatch `platform=macos` with `only` scoped to the affected pieces — never `all`/`non-windows`, which would re-run OSes that have their own stage. Most stabilizations never dispatch macOS on CI at all.
 
 5. Push the branch and dispatch `stabilize.yml` scoped to Linux only:
 
@@ -100,7 +130,7 @@ Only after the full local gate is green do you touch GitHub Actions, and the fir
    gh run watch "$RUN_ID" --exit-status
    ```
 
-7. On failure, inspect every failed job and pull the structured failure artifacts:
+7. On failure, inspect every failed job and pull the structured failure artifacts. check/test gate nothing, so this one run holds the complete failure list for the OS — harvest all of it before editing anything. The only dependency left is that E2E needs its OS's `e2e-build` bundle; if that build failed, the E2E surface never executed and is still pending, so fix the build and re-run with `only=e2e`:
 
    ```bash
    gh run view "$RUN_ID" --json status,conclusion,headBranch,headSha,url,jobs
@@ -111,10 +141,16 @@ Only after the full local gate is green do you touch GitHub Actions, and the fir
    The `failure-report-*` artifacts (one per shard, each containing a `failure-report.json`) list the failing specs with `projectName` + `titlePath`; the `failed-specs-*` artifacts hold the `--test-list` input for a scoped re-run. The merged `stabilize-merged-playwright-report` artifact has traces/screenshots.
 
 8. Classify each failure (real vs flake), then act:
-   - **Real, reproducible on a local-runnable surface (macOS/Linux-agnostic):** drop back to Phase A — reproduce, fix, and prove it locally before redispatching.
+   - **Real, reproducible on a local-runnable surface (macOS/Linux-agnostic):** reproduce, fix, and prove it locally with the narrow spec (rung 1) — not the full local gate.
    - **Real, genuinely Linux-specific:** iterate that one spec on Linux with `e2e-single.yml` (`-f platform=linux`, below); fix; reconfirm.
    - **Flake:** confirm with a scoped re-run (below). If it passes consistently, note it and move on; if a spec keeps flaking, harden it (treat the flake as the bug) or, if it is already tracked as known-flaky, leave it to the quarantine flow (`.github/workflows/stale-quarantine.yml`).
-9. Push fixes and re-run the narrow surface first, then re-dispatch `stabilize.yml -f platform=linux`. Repeat from step 6 until Linux is green.
+9. Once the whole batch is fixed, push and re-run ONLY the pieces that failed, at the lowest rung of the re-run ladder that covers them — typically one scoped dispatch:
+
+   ```bash
+   gh workflow run stabilize.yml --ref <branch> -f platform=linux -f only='test full-panels'
+   ```
+
+   Mark each piece green in the ledger as it passes. Linux is green when every piece has passed once; do not dispatch a confirming full run.
 
 ### Phase C — Windows on CI
 
@@ -126,7 +162,7 @@ Only after Linux is fully green do you dispatch Windows. Windows is always the l
     gh workflow run stabilize.yml --ref <branch> -f platform=windows
     ```
 
-    The heavy Windows `full-*` buckets auto-shard (up to 16–32 ways) so each lands in ~10min wall-time, but the Windows memory-leak `nightly` soak still runs long — hence the overnight design. Repeat fix → re-dispatch until Windows is green.
+    A full Windows run is ~35–45 minutes (the memory-leak `nightly` soak is the long pole at ~20). That is the one Windows discovery run. After it, fix the batch and re-run only what failed — `-f platform=windows -f only='<pieces>'`, or a single shard/spec — until every piece is green in the ledger. Windows fixes never re-open Linux (see **Run Budget**).
 
 11. When stabilizing for a release, additionally run the per-OS release dry-runs and drive each to green (see "Release dry runs"). These are independent per OS, so they need not be serialized the way the test stages are.
 
@@ -154,7 +190,8 @@ How to confirm a flake without blindly re-running the whole job:
 
 - **Locally:** re-run the exact spec in isolation a few times. `npx playwright test --project=<suite> <path/to/spec.spec.ts> --workers=1 --repeat-each=3`. Consistent green = flake; any deterministic red = treat as real.
 - **In CI, scoped to one spec on the failing OS:** `e2e-single.yml` (see below) with `retries=0` to see the raw flake rate, or `retries=2` to mirror CI's own retry budget.
-- **In CI, scoped to a job's prior failures:** GitHub "Re-run failed jobs" re-runs only the failed shards, and `e2e.yml` automatically scopes the retry to the prior attempt's `failed-specs.txt` via `--test-list` (it drops `--shard` for that attempt). Use this to cheaply confirm whether a shard's failures evaporate on re-run.
+- **In CI, scoped to one shard on a new SHA:** `gh workflow run e2e.yml --ref <branch> -f platform=<os> -f suite=<suite> -f shard=<n> -f shard_total=<N>` re-runs exactly the shard that failed (read `<n>/<N>` off the failed job name) in ~8 minutes. Note `e2e.yml` cancels an in-progress run of the same suite/platform/ref, so don't fire it while a `stabilize.yml` run on the branch is still executing that suite.
+- **In CI, scoped to a job's prior failures (same SHA only):** GitHub "Re-run failed jobs" re-runs only the failed shards, and `e2e.yml` automatically scopes the retry to the prior attempt's `failed-specs.txt` via `--test-list` (it drops `--shard` for that attempt). Use this to cheaply confirm whether a shard's failures evaporate on re-run. It does NOT scope `nightly` or `online` (a retried `nightly` job repeats the whole ~15–20 minute soak) or a run with no failed-specs artifact — for those, confirm the one spec with `e2e-single.yml` instead.
 
 A flake is not "free to ignore." If a spec flakes repeatedly, the durable fix is to stabilize that spec (replace sleeps with state-based waits, scope locators, add helper-level readiness gates) — that is real stabilization work and belongs in the branch. Only genuinely intermittent, already-tracked flakes are left to the quarantine flow.
 
@@ -162,7 +199,7 @@ A flake is not "free to ignore." If a spec flakes repeatedly, the durable fix is
 
 Authoritative files:
 
-- `.github/workflows/stabilize.yml` — the cross-platform validation surface (this skill's GitHub side). `workflow_dispatch` only, input `platform` (the workflow's own default is `linux-windows`; also `windows` | `linux` | `all` | `non-windows` | `macos`). This skill never relies on that default — it dispatches one OS at a time, `platform=linux` then `platform=windows`, so Linux is fully green before Windows starts. macOS is normally skipped on CI because the local run covers it. Runs `check`, `test`, `build` (+ smoke), `integration-test`, `knip`, `e2e-core`, `e2e-full` (seven buckets), `e2e-online`, `e2e-nightly` (memory-leak), a non-gating `merge-playwright-reports`, and the `stabilize-ok` gate. No cron, no issue creation, no publish.
+- `.github/workflows/stabilize.yml` — the cross-platform validation surface (this skill's GitHub side). `workflow_dispatch` only, input `platform` (the workflow's own default is `linux-windows`; also `windows` | `linux` | `all` | `non-windows` | `macos`). This skill never relies on that default — it dispatches one OS at a time, `platform=linux` then `platform=windows`, so Linux is fully green before Windows starts. macOS is normally skipped on CI because the local run covers it. Second input `only` scopes a re-run to named pieces (`check test build integration core full-terminal … full-plugins online nightly`, aliases `full` and `e2e`; empty = everything). Runs `check`, `test`, `build` (+ smoke), `integration-test` (Linux legs only), `e2e-build` (one app bundle per OS, shared by every shard), `e2e-core`, `e2e-full` (seven buckets), `e2e-online`, `e2e-nightly` (memory-leak), a non-gating `merge-playwright-reports`, and the `stabilize-ok` gate. All jobs start in parallel — check/test do not gate E2E — and the gate accepts `skipped` only from pieces the run deliberately left out (`only`, or `integration` on a run with no Linux leg); a selection that would run nothing is rejected up front. No `knip` (local only), no cron, no issue creation, no publish.
 - `.github/workflows/nightly-publish.yml` — publish-only nightly binaries (macOS + Linux) to the auto-update channel. Cron + manual dispatch, no tests. Not part of stabilization; don't drive it.
 - `.github/workflows/e2e.yml` — the unified suite runner. Valid `suite`: `full`, `core`, `full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`, `full-plugins`, `online`, `nightly`, `demo`.
 - `.github/workflows/e2e-single.yml` — the preferred CI loop for one failing spec. Accepts `platform`, `suite`, `test_file`, optional `grep`, `workers`, `retries`.
@@ -195,7 +232,7 @@ npx playwright test --project=<suite> <path/to/spec.spec.ts> --workers=1 --repea
 npx playwright test --project=core --project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience --project=full-plugins --project=online
 ```
 
-The multi-project Playwright command above is the mandatory local broad pass before any GitHub run: it matches `core`, all `full-*`, and `online`. Add `--project=nightly` (serialized, `--workers=1`) for the memory-leak soak. Because the local machine is a full macOS host, this fully covers the macOS surface — do not lean on a GitHub macOS run to find these failures.
+The multi-project Playwright command above is the Phase A discovery pass — required once, before the first Linux dispatch, and not repeated after fixes (validation from then on follows the re-run ladder). It matches `core`, all `full-*`, and `online`. Add `--project=nightly` (serialized, `--workers=1`) for the memory-leak soak. Because the local machine is a full macOS host, this fully covers the macOS surface — do not lean on a GitHub macOS run to find these failures.
 
 ## Branch Setup
 
@@ -226,9 +263,9 @@ Reproduce the smallest failing surface first.
 - Integration failure: run `npm run test:integration`.
 - Knip failure: run `npm run knip`.
 - Build/package/update-metadata failure: run `npm run build`, then the failing `electron-builder` or `scripts/ci/*` command. Packaging, signing, notarization, Store, and R2 checks may only be fully reproducible in Actions (release dry-runs / `nightly-publish.yml`).
-- E2E failure: run the exact Playwright project and spec locally, usually with `--workers=1`, and `--repeat-each=3` when triaging a suspected flake. Use the suite that owns the spec path.
+- E2E failure: rebuild first if app code changed (`npm run build:e2e`), then run the exact Playwright project and spec locally, usually with `--workers=1`, and `--repeat-each=3` when triaging a suspected flake. Use the suite that owns the spec path.
 
-After the narrow local repro is consistently green, broaden locally. The full local gate must be green before pushing or dispatching any GitHub run; the only failures exempt from local proof are those reproducible solely on another OS (Linux/Windows) or in CI-only packaging/signing steps.
+After the narrow local repro is consistently green, broaden only as far as the fix reaches (the owning suite when production code changed). Every local piece must have passed before pushing or dispatching any GitHub run; the only failures exempt from local proof are those reproducible solely on another OS (Linux/Windows) or in CI-only packaging/signing steps.
 
 Suite-to-path mapping:
 
@@ -272,12 +309,19 @@ Run a whole E2E suite in CI:
 gh workflow run e2e.yml --ref <branch> -f platform=<platform> -f suite=<suite>
 ```
 
-Dispatch the cross-platform stabilize surface one OS at a time — Linux first, then Windows only after Linux is green:
+Run one shard of a bucket in CI (shard numbers come from the failed job's name):
 
 ```bash
-gh workflow run stabilize.yml --ref <branch> -f platform=linux     # Phase B
-gh workflow run stabilize.yml --ref <branch> -f platform=windows   # Phase C, only after Linux is green
-# `all` / `non-windows` (adds macOS-on-CI) only for a macOS regression the local run somehow missed — rare.
+gh workflow run e2e.yml --ref <branch> -f platform=<platform> -f suite=<suite> -f shard=<n> -f shard_total=<N>
+```
+
+Dispatch the cross-platform stabilize surface one OS at a time — Linux first, then Windows only after Linux is green. One full discovery run per OS, then `only` for everything after:
+
+```bash
+gh workflow run stabilize.yml --ref <branch> -f platform=linux     # Phase B discovery
+gh workflow run stabilize.yml --ref <branch> -f platform=windows   # Phase C discovery, only after Linux is green
+gh workflow run stabilize.yml --ref <branch> -f platform=windows -f only='test full-terminal'   # scoped re-run of what failed
+# macOS-on-CI only for a macOS regression the local run somehow missed — rare: -f platform=macos -f only='<pieces>'
 ```
 
 Before starting a replacement full `stabilize.yml` (or release dry-run) run, cancel or wait for any older active run of the same workflow on the branch:
@@ -329,7 +373,7 @@ git diff --stat origin/develop...HEAD   # see exactly what (if anything) the bra
 
 ### Case 1 — nothing needed fixing (the tree was already green)
 
-If the full local gate and `stabilize.yml` (Linux + Windows) all passed without you editing a single file, there is **nothing to commit and nothing to merge**. `develop` is already in the exact state you validated. Do NOT fabricate a commit to record that stabilization ran — an empty `chore(ci): stabilize develop` commit (like `915a9aeda`) is the precise failure this skill forbids: it adds a meaningless SHA and history entry while changing nothing. The proof of a clean run is your final report and the run URLs.
+If the diff against the base is empty and the ledger is complete — every piece green locally, on Linux, and on Windows, whether in a discovery run or via a scoped flake confirmation — there is **nothing to commit and nothing to merge**. A discovery run that went red on a confirmed flake still counts; do not chase an all-green run to qualify. `develop` at the SHA you branched from is the state you validated (report that SHA). Do NOT fabricate a commit to record that stabilization ran — an empty `chore(ci): stabilize develop` commit (like `915a9aeda`) is the precise failure this skill forbids: it adds a meaningless SHA and history entry while changing nothing. The proof of a clean run is your final report and the run URLs.
 
 Clean up and report instead — return to `develop` and remove the stabilize branch:
 
@@ -345,9 +389,9 @@ Then report: develop was already green, no commit was made, citing the local gat
 
 All of the work above happens on the stabilize branch; stabilization is not finished until that work has been folded into `develop` as a **single commit**, pushed to origin, with the working tree left back on `develop`. A green branch that was never merged is an incomplete run.
 
-When the full local gate is green and `stabilize.yml` has passed for both Linux (Phase B) and Windows (Phase C) on the branch (plus release dry-runs when targeting a release):
+When the ledger shows every piece green locally, on Linux (Phase B) and on Windows (Phase C) (plus release dry-runs when targeting a release):
 
-1. Run the relevant local final checks for touched areas, at minimum `npm run check` plus targeted tests.
+1. Run `npm run check` and `npm run test` locally once. That is the whole final check — no E2E, no CI dispatch.
 2. Squash the branch to ONE commit (the entire stabilization lands as a single commit, not one commit per fix). Do this non-interactively from the stabilize branch — `git rebase -i` is not available here. Never pass `--allow-empty`; if `git commit` reports nothing to commit, you are actually in Case 1 — go back and close out there:
 
    ```bash
@@ -366,7 +410,7 @@ When the full local gate is green and `stabilize.yml` has passed for both Linux 
    git push --force-with-lease origin <branch>
    ```
 
-   A pure squash doesn't change the final tree, so it needs no re-validation. Re-run `stabilize.yml` only if a rebase onto a moved `origin/develop` (below) pulled in new changes.
+   A pure squash doesn't change the final tree, so it needs no re-validation of any kind.
 
 5. Merge that single commit back into `develop` only after the branch is green, then return to `develop` and push:
 
@@ -379,14 +423,18 @@ When the full local gate is green and `stabilize.yml` has passed for both Linux 
    git branch -d <branch>
    ```
 
-If `origin/develop` moved — so `git merge --ff-only` fails, or `git push origin develop` is rejected as non-fast-forward — do NOT force-push `develop`. Instead rebase the stabilize branch onto the new `origin/develop`, force-push the branch with lease, re-run the relevant checks/workflow, then ff-merge and push `develop` again:
+If `origin/develop` moved — so `git merge --ff-only` fails, or `git push origin develop` is rejected as non-fast-forward — do NOT force-push `develop`. Rebase the stabilize branch onto the new `origin/develop`, then ff-merge and push `develop` again:
 
 ```bash
 git switch <branch>
 git rebase origin/develop
-git push --force-with-lease origin <branch>
-# re-run validation, then repeat step 5
+npm run check && npm run test     # the only re-validation a rebase earns
+# then repeat step 5
 ```
+
+`develop` moves constantly, so on any stabilization longer than an hour this is the normal path, not an exception — and it must NOT restart validation. **Never re-dispatch `stabilize.yml` and never re-run E2E because of this rebase.** The commits you rebased over each passed `ci.yml` on their own PR; what you validated was your fixes, and they are unchanged. Chasing "everything green at the exact merged SHA" is unachievable on a moving branch and is how a finished stabilization turns into a second one. The single exception is a concrete interaction with your fixes: the rebase hit a conflict in a file they touched, or `git diff ORIG_HEAD..origin/develop --stat` shows upstream changed the same code or added a new caller of it. Then re-run the narrow specs covering that code (rung 1, plus rung 2 on the OS the fix was for), and nothing more. An unrelated upstream diff earns nothing.
+
+**Once `develop` is pushed you are finished.** Do not run the local gate, dispatch `stabilize.yml`, or watch any E2E against `develop` afterwards. The push triggers `ci.yml` on its own; a failure there is an ordinary CI failure, not a reason to start stabilizing again.
 
 **Done means (Case 2)** — all four must be true before you report completion:
 
@@ -395,4 +443,4 @@ git push --force-with-lease origin <branch>
 - `develop` has been pushed to origin.
 - The stabilize branch has been deleted locally and on origin.
 
-Final response must include the branch name (now deleted), the final commit SHA on `develop` (or, in Case 1, an explicit "no commit — develop was already green"), both `stabilize.yml` run URLs and conclusions (the Linux Phase-B run and the Windows Phase-C run, plus any release dry-run URLs), the local checks run, the flakes hardened, and confirmation that `develop` was pushed (Case 2) or untouched (Case 1).
+Final response must include the branch name (now deleted), the final commit SHA on `develop` (or, in Case 1, an explicit "no commit — develop was already green"), the green ledger (per OS, the run URL in which each piece passed — normally one discovery run plus the scoped re-runs — plus any release dry-run URLs), how many full `stabilize.yml` runs each OS took against the budget of one, the local checks run, the flakes hardened, and confirmation that `develop` was pushed (Case 2) or untouched (Case 1).

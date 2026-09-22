@@ -99,6 +99,16 @@ export type {
   PluginSystemApi,
 } from "./plugin.js";
 
+// ── Agent MCP endpoints (host.mcp) ──────────────────────────────────
+
+export type {
+  PluginAgentMcpContribution,
+  PluginMcpApi,
+  PluginMcpToolDefinition,
+  PluginMcpCaller,
+  PluginMcpJsonSchema,
+} from "./plugin.js";
+
 // ── Settings (host.settings) ────────────────────────────────────────
 
 export type {
@@ -162,6 +172,12 @@ export type {
   FileDecorationContribution,
 } from "./forge.js";
 
+// ── File editor contract (#12323) ───────────────────────────────────
+// Manifest shape only: the editor itself is a built-in renderer view, so no
+// runtime registration API crosses the SDK boundary.
+
+export type { FileEditorContribution } from "./plugin.js";
+
 // ── Forge types appearing in worktree projections ───────────────────
 
 export type { NormalizedPRState, ResourceRef, CIStatus } from "./forge.js";
@@ -192,6 +208,12 @@ export type {
   CheckRun,
   CheckRunStatus,
   CheckRunConclusion,
+  CredentialImportCapability,
+  CredentialImportCandidate,
+  CredentialImportExpected,
+  CredentialImportFailureReason,
+  CredentialImportPreview,
+  CredentialImportUnavailable,
 } from "./forge.js";
 
 // ── Plugin-managed process stream events ────────────────────────────

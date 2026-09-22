@@ -1,5 +1,7 @@
 import { Puzzle } from "lucide-react";
 import { toPersistedPanelKindRef } from "@shared/config/panelKindRegistry";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Button } from "@/components/ui/button";
 
 export interface PluginMissingPanelProps {
   /**
@@ -33,6 +35,9 @@ function displayNameFor(kind: string, pluginId: string | undefined): string {
  * `extensionState` is preserved on disk so re-enabling the plugin restores
  * the panel transparently; this component exists to give the user a clear
  * signal about what is missing and an affordance to discard the panel.
+ *
+ * The body scrolls rather than clips: a pane can be shorter than the
+ * explanation, and the action has to stay reachable.
  */
 export function PluginMissingPanel({ pluginId, kind, onRemove }: PluginMissingPanelProps) {
   const displayName = displayNameFor(kind, pluginId);
@@ -41,23 +46,26 @@ export function PluginMissingPanel({ pluginId, kind, onRemove }: PluginMissingPa
     <div
       role="region"
       aria-label="Plugin unavailable"
-      className="flex flex-1 flex-col items-center justify-center gap-3 bg-surface-panel p-6 text-text-muted"
+      className="flex flex-1 min-h-0 flex-col overflow-y-auto bg-surface-panel"
     >
-      <Puzzle className="h-8 w-8 text-text-muted" aria-hidden />
-      <div className="max-w-sm text-center">
-        <p className="text-sm font-medium text-text-primary">Plugin unavailable</p>
-        <p className="mt-1 text-xs text-text-muted">
-          This panel requires the <span className="font-mono text-text-primary">{displayName}</span>{" "}
-          plugin, which is not currently active. Re-enable the plugin to restore the panel.
-        </p>
-      </div>
-      <button
-        type="button"
-        onClick={onRemove}
-        className="mt-2 text-xs text-text-muted underline-offset-2 transition-colors hover:text-text-primary hover:underline"
-      >
-        Remove panel
-      </button>
+      <EmptyState
+        variant="zero-data"
+        scale="canvas"
+        icon={<Puzzle />}
+        title="Plugin unavailable"
+        description={
+          <>
+            This panel needs the <span className="font-mono text-text-primary">{displayName}</span>{" "}
+            plugin, which isn't active. Re-enable the plugin to restore the panel.
+          </>
+        }
+        action={
+          <Button variant="ghost" size="sm" onClick={onRemove}>
+            Remove panel
+          </Button>
+        }
+        className="my-auto"
+      />
     </div>
   );
 }

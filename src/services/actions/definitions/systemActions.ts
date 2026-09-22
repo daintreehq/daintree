@@ -178,7 +178,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("system.openExternal", () =>
     defineAction({
       id: "system.openExternal",
-      title: "Open External URL",
+      title: "Open external URL",
       description: "Open a URL in the system browser",
       category: "system",
       kind: "command",
@@ -194,7 +194,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("system.openPath", () =>
     defineAction({
       id: "system.openPath",
-      title: "Open Path",
+      title: "Open path",
       description: "Open a file or folder in the system file manager",
       category: "system",
       kind: "command",
@@ -210,7 +210,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("system.checkCommand", () =>
     defineAction({
       id: "system.checkCommand",
-      title: "Check Command Availability",
+      title: "Check command availability",
       description:
         "Check whether an executable is present on the user's PATH, to confirm a tool exists before depending on it. Absence is reported as a negative result rather than an error, so this never fails for a missing command. It only establishes presence — it neither runs the command nor reports its version.",
       category: "system",
@@ -241,7 +241,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("system.checkDirectory", () =>
     defineAction({
       id: "system.checkDirectory",
-      title: "Check Directory",
+      title: "Check directory",
       description:
         "Check whether a filesystem directory exists at an absolute path. Absence is reported as a negative result rather than an error, so this never fails for a missing path. It reports existence only, not readability, contents or whether the path is a file.",
       category: "system",
@@ -267,7 +267,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("system.getHomeDir", () => ({
     id: "system.getHomeDir",
-    title: "Get Home Directory",
+    title: "Get home directory",
     description: "Get the user's home directory path",
     category: "system",
     kind: "query",
@@ -283,7 +283,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("system.getResourceProfileSnapshot", () =>
     defineAction({
       id: "system.getResourceProfileSnapshot",
-      title: "Get Resource Profile Snapshot",
+      title: "Get resource profile snapshot",
       description:
         "Read how much pressure the host machine is under and which adaptive performance mode is in effect. Use this to judge whether there is headroom before launching more agents or heavy work. Some readings are platform-specific and report as unknown elsewhere. It never fails: while the service is starting it returns a neutral baseline, so treat an unremarkable early reading with caution.",
       category: "system",
@@ -306,7 +306,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("cliAvailability.get", () => ({
     id: "cliAvailability.get",
-    title: "Get CLI Availability",
+    title: "Get CLI availability",
     description:
       "Read which agent CLIs are installed on this machine, to confirm one exists before launching it. It answers from cache when one is warm and probes on demand when it is not, so a cached answer can miss a CLI installed since. Refresh explicitly when a stale answer would be misleading.",
     category: "system",
@@ -321,7 +321,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("cliAvailability.refresh", () => ({
     id: "cliAvailability.refresh",
-    title: "Refresh CLI Availability",
+    title: "Refresh CLI availability",
     description: "Re-check agent CLI availability (slower)",
     category: "system",
     kind: "command",
@@ -335,7 +335,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("files.search", () =>
     defineAction({
       id: "files.search",
-      title: "Search Files",
+      title: "Search files",
       description:
         "Find files whose name or path contains the query, within a worktree. Matching is plain substring, not glob, and never looks at file contents — use a source-reading capability to search inside files. Results are capped and truncated silently rather than paged, so a full-looking result may not be exhaustive when the query is broad.",
       category: "files",
@@ -365,7 +365,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("slashCommands.list", () =>
     defineAction({
       id: "slashCommands.list",
-      title: "List Slash Commands",
+      title: "List slash commands",
       description:
         "List the slash commands an agent CLI offers, including any the project defines locally. Use this to discover what a given agent can be driven with before sending it a command. An empty list means the agent exposes none, whereas naming a project that is not open fails.",
       category: "agent",
@@ -404,7 +404,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("artifact.saveToFile", () =>
     defineAction({
       id: "artifact.saveToFile",
-      title: "Save Artifact To File",
+      title: "Save artifact to file",
       description: "Save content to a file via save dialog",
       category: "artifacts",
       kind: "command",
@@ -424,7 +424,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("artifact.applyPatch", () =>
     defineAction({
       id: "artifact.applyPatch",
-      title: "Apply Patch",
+      title: "Apply patch",
       description:
         "Apply a unified diff patch to the filesystem. Args: `patchContent` (required); `worktreeId` or `worktreePath` (required) — the worktree to apply into (`cwd` is accepted as a legacy alias for `worktreePath`). Errors when either argument is missing. There is deliberately no active-worktree default: a destructive write must name its target rather than fall back to whatever happens to be active.",
       category: "artifacts",
@@ -448,7 +448,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("copyTree.isAvailable", () => ({
     id: "copyTree.isAvailable",
-    title: "CopyTree Availability",
+    title: "CopyTree availability",
     description: "Check whether CopyTree is available",
     category: "copyTree",
     kind: "query",
@@ -464,7 +464,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("copyTree.generate", () =>
     defineAction({
       id: "copyTree.generate",
-      title: "Generate CopyTree Context",
+      title: "Generate CopyTree context",
       description:
         "Bundle a worktree's file tree and selected file contents into a context dump on disk, and return its path. Use it to hand a large codebase context to something that can read a file; inject into a terminal when the target is an agent. The bundle routinely runs to tens of megabytes and is never returned inline. Check the budget flags before trusting it, and read it promptly: it is pruned by age.",
       category: "copyTree",
@@ -593,7 +593,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("copyTree.generateAndCopyFile", () =>
     defineAction({
       id: "copyTree.generateAndCopyFile",
-      title: "Generate And Copy Context",
+      title: "Generate and copy context",
       description:
         "Bundle a worktree's context to a file and onto the system clipboard, replacing what the user had copied. Selection mixes exact files with globs, so this assembles a curated bundle rather than the whole worktree. Agent and MCP callers must name the worktree, not rely on the active one. macOS and Linux copy the file, Windows its path. Never returned inline; check the budget flags for completeness.",
       category: "copyTree",
@@ -689,7 +689,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("copyTree.injectToTerminal", () =>
     defineAction({
       id: "copyTree.injectToTerminal",
-      title: "Inject Context To Terminal",
+      title: "Inject context to terminal",
       description:
         "Bundle a worktree's context and write it straight into a terminal, which is how an agent is given a large codebase context. The context goes to the terminal and never comes back in the result, so read the budget flags to tell whether the bundle was complete. This types a potentially enormous payload into a live pane, so target an idle terminal.",
       category: "copyTree",
@@ -772,7 +772,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("copyTree.getFileTree", () =>
     defineAction({
       id: "copyTree.getFileTree",
-      title: "Get File Tree",
+      title: "Get file tree",
       description: "List a directory as the generated context sees it",
       category: "copyTree",
       kind: "query",

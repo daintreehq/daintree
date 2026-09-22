@@ -4,6 +4,7 @@ import { render } from "@testing-library/react";
 import { PilotRunState } from "../PilotRunState";
 import { FLEET_BANDS, isDemandBand, type FleetBand } from "@/lib/fleetAttention";
 import type { AgentState } from "@shared/types/agent";
+import { glyphBox } from "@/components/icons/__tests__/glyphBox";
 
 /**
  * The colour utilities on a band's rendered glyph.
@@ -14,8 +15,7 @@ import type { AgentState } from "@shared/types/agent";
  */
 function toneOf(band: FleetBand, agentState?: AgentState): string {
   const { container, unmount } = render(<PilotRunState band={band} agentState={agentState} />);
-  const svg = container.querySelector("svg");
-  const tones = (svg?.getAttribute("class") ?? "")
+  const tones = (glyphBox(container)?.getAttribute("class") ?? "")
     .split(/\s+/)
     .filter((cls) => cls.startsWith("text-"))
     .sort()
@@ -27,16 +27,19 @@ function toneOf(band: FleetBand, agentState?: AgentState): string {
 /**
  * The glyph's own geometry, which is what makes a state readable without hue.
  *
- * The whole child markup, not a chosen attribute or two: the spinner and the
- * hollow circle are the same `<circle r="6">` and separate only on
- * `strokeDasharray` — a 270° arc against a closed ring. Sampling attributes by
- * hand reported them identical, which would have let a genuinely
- * indistinguishable pair through unnoticed. Tone stays out of this by
- * construction, since the class rides the `<svg>` root rather than its children.
+ * For the svg glyphs, the whole child markup and not a chosen attribute or two:
+ * sampling attributes by hand once reported a 270° arc and a closed ring as
+ * identical, which would have let an indistinguishable pair through unnoticed.
+ * The working spinner is drawn by CSS and has no markup, so it is identified by
+ * its kind; that its drawing really is a 270° arc is held by the geometry
+ * contract in icons-a11y.test.tsx. Tone stays out of this by construction,
+ * since the class rides the glyph box rather than its children.
  */
 function shapeOf(band: FleetBand, agentState?: AgentState): string {
   const { container, unmount } = render(<PilotRunState band={band} agentState={agentState} />);
-  const shape = container.querySelector("svg")?.innerHTML ?? "";
+  const glyph = glyphBox(container);
+  // The CSS-drawn spinner has no child markup; its kind is its geometry.
+  const shape = glyph?.getAttribute("data-glyph-box") ?? glyph?.innerHTML ?? "";
   unmount();
   return shape;
 }
@@ -146,7 +149,7 @@ describe("PilotRunState", () => {
   it("spins only the run that is actually working", () => {
     const spinning = (band: FleetBand, agentState?: AgentState) => {
       const { container, unmount } = render(<PilotRunState band={band} agentState={agentState} />);
-      const cls = container.querySelector("svg")?.getAttribute("class") ?? "";
+      const cls = glyphBox(container)?.getAttribute("class") ?? "";
       unmount();
       return cls.includes("animate-spin");
     };

@@ -1,5 +1,6 @@
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel } from "@shared/types/panel";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -1262,6 +1263,8 @@ class VoiceRecordingService {
 
     const foundPanel = terminalState.panelsById[panelId];
     if (!foundPanel || foundPanel.location === "trash") return null;
+    // A pane held for recovery (#12434) has no input surface to dictate into.
+    if (isPtyPanel(foundPanel) && foundPanel.restoreRecovery) return null;
     const panel = foundPanel;
 
     const currentProject = useProjectStore.getState().currentProject;

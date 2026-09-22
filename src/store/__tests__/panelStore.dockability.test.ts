@@ -126,11 +126,22 @@ describe("panelStore.addPanel dockability guard (#11054)", () => {
     expect(panel?.isVisible).toBe(true);
   });
 
-  it("redirects a dock request for dev-preview to the grid", async () => {
+  it("honors a dock request for dev-preview (#12397)", async () => {
     const id = await usePanelStore.getState().addPanel({ kind: "dev-preview", location: "dock" });
 
     expect(id).toBeTruthy();
-    expect(usePanelStore.getState().panelsById[id!]?.location).toBe("grid");
+    expect(usePanelStore.getState().panelsById[id!]?.location).toBe("dock");
+  });
+
+  it("activates the dock for a dev-preview created there", async () => {
+    const id = await usePanelStore
+      .getState()
+      .addPanel({ kind: "dev-preview", location: "dock", activateDockOnCreate: true });
+
+    expect(id).toBeTruthy();
+    const state = usePanelStore.getState();
+    expect(state.panelsById[id!]?.location).toBe("dock");
+    expect(state.activeDockTerminalId).toBe(id);
   });
 
   it("honors a dock request for a dockable non-PTY kind (file)", async () => {
@@ -152,20 +163,20 @@ describe("panelStore.addPanel dockability guard (#11054)", () => {
   });
 
   it("leaves an explicit grid request for a non-dockable kind untouched", async () => {
-    const id = await usePanelStore.getState().addPanel({ kind: "dev-preview", location: "grid" });
+    const id = await usePanelStore.getState().addPanel({ kind: "review", location: "grid" });
 
     expect(id).toBeTruthy();
     expect(usePanelStore.getState().panelsById[id!]?.location).toBe("grid");
   });
 
   it("does not activate the dock for a redirected (non-dockable) dock request", async () => {
-    // The create-focus wrapper keys on the COMMITTED location: a dev-preview
+    // The create-focus wrapper keys on the COMMITTED location: a review
     // requested into the dock is redirected to the grid, so it must NOT take
     // the dock-activation path — otherwise activeDockTerminalId would point at a
     // panel that isn't actually in the dock.
     const id = await usePanelStore
       .getState()
-      .addPanel({ kind: "dev-preview", location: "dock", activateDockOnCreate: true });
+      .addPanel({ kind: "review", location: "dock", activateDockOnCreate: true });
 
     expect(id).toBeTruthy();
     const state = usePanelStore.getState();
@@ -184,13 +195,13 @@ describe("panelStore.addPanel dockability guard (#11054)", () => {
     // preserving the id — so a previously stranded panel comes back instead of
     // carrying invisible dock state forever.
     const id = await usePanelStore.getState().addPanel({
-      kind: "dev-preview",
+      kind: "review",
       location: "dock",
-      requestedId: "stranded-devpreview-1",
+      requestedId: "stranded-review-1",
     });
 
-    expect(id).toBe("stranded-devpreview-1");
-    expect(usePanelStore.getState().panelsById["stranded-devpreview-1"]?.location).toBe("grid");
+    expect(id).toBe("stranded-review-1");
+    expect(usePanelStore.getState().panelsById["stranded-review-1"]?.location).toBe("grid");
   });
 });
 
@@ -265,7 +276,7 @@ describe("panelStore.addPanel worktree adoption on dock→grid rescue (#11375 po
     // Without adoption the rescued panel lands worktree-less in the global-only
     // grid bucket — invisible while a worktree is active (#11290), worse than
     // the dock stranding the rescue fixes.
-    const id = await usePanelStore.getState().addPanel({ kind: "dev-preview", location: "dock" });
+    const id = await usePanelStore.getState().addPanel({ kind: "review", location: "dock" });
 
     expect(id).toBeTruthy();
     const panel = usePanelStore.getState().panelsById[id!];
@@ -279,7 +290,7 @@ describe("panelStore.addPanel worktree adoption on dock→grid rescue (#11375 po
   it("does not override an explicit worktree when rescuing to the grid", async () => {
     const id = await usePanelStore
       .getState()
-      .addPanel({ kind: "dev-preview", location: "dock", worktreeId: "wt-explicit" });
+      .addPanel({ kind: "review", location: "dock", worktreeId: "wt-explicit" });
 
     expect(usePanelStore.getState().panelsById[id!]?.worktreeId).toBe("wt-explicit");
   });

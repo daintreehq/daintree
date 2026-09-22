@@ -591,8 +591,13 @@ describe("ThemeBrowser", () => {
 
       // The errored img should be removed from the document
       expect(document.body.contains(img)).toBe(false);
-      // The fallback div with border should be present
-      const fallbackDivs = document.querySelectorAll(".border-daintree-border\\/50");
+      // A colour swatch stands in for the missing thumbnail. Asserted by the
+      // inline background the fallback paints, not by its class name — the
+      // class is styling and may change; "something renders in its place" is
+      // the contract.
+      const fallbackDivs = [...document.querySelectorAll<HTMLElement>("div[style]")].filter(
+        (d) => d.style.backgroundColor !== ""
+      );
       expect(fallbackDivs.length).toBeGreaterThan(0);
     });
 
@@ -609,5 +614,139 @@ describe("ThemeBrowser", () => {
       const heroChips = container.querySelectorAll(".h-\\[200px\\] .w-3.h-3");
       expect(heroChips.length).toBe(8);
     });
+  });
+});
+
+// These pin the CONTRACT the surface owes, not the styling that currently
+// expresses it. A theme, a token or a glyph may change freely; what may not
+// change is that navigating never strands the filter, that pointer and keyboard
+// share one cursor, and that "saved" and "being tried" stay two separate facts.
+describe("ThemeBrowser navigation contract", () => {
+  beforeEach(() => {
+    _resetForTests();
+    useAppThemeStore.setState({
+      selectedSchemeId: DEFAULT_APP_SCHEME_ID,
+      customSchemes: [],
+      colorVisionMode: "default",
+      followSystem: false,
+      preferredDarkSchemeId: "daintree",
+      preferredLightSchemeId: "bondi",
+      recentSchemeIds: [],
+      accentColorOverride: null,
+      previewSchemeId: null,
+    });
+    useThemeBrowserStore.setState({ isOpen: true });
+    useUIStore.setState({ overlayStack: [] });
+    usePortalStore.setState({ isOpen: false });
+  });
+
+  afterEach(() => {
+    cleanup();
+    _resetForTests();
+    useAppThemeStore.setState({ previewSchemeId: null });
+    useThemeBrowserStore.setState({ isOpen: false });
+  });
+
+  it("keeps DOM focus on the filter field while arrowing the list", () => {
+    render(<Harness />);
+    const input = screen.getByLabelText("Filter themes");
+    act(() => input.focus());
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    // The rule: the list is navigated virtually. If focus ever lands on a row,
+    // the user's next keystroke stops reaching the filter.
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("points aria-activedescendant at the row being previewed", () => {
+    render(<Harness />);
+    const input = screen.getByLabelText("Filter themes");
+    act(() => input.focus());
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    const active = input.getAttribute("aria-activedescendant");
+    expect(active).toBeTruthy();
+    const row = document.getElementById(active!);
+    expect(row).not.toBeNull();
+    expect(row!.getAttribute("role")).toBe("option");
+  });
+
+  it("keeps 'what is saved' and 'what is being tried' separately addressable", () => {
+    render(<Harness />);
+    const other = otherDarkScheme();
+    fireEvent.click(findRowByName(other.name));
+
+    const rows = screen.getAllByRole("option");
+    const saved = rows.filter((o) => o.getAttribute("aria-current") === "true");
+    const cursor = rows.filter((o) => o.getAttribute("aria-selected") === "true");
+
+    // The rule: previewing must never move the marker for what is committed.
+    // Which ARIA attribute carries which is the app's convention (aria-current
+    // = saved, aria-selected = cursor); what may not change is that they are
+    // two distinct markers landing on two different rows while previewing.
+    expect(saved).toHaveLength(1);
+    expect(cursor).toHaveLength(1);
+    expect(saved[0]).not.toBe(cursor[0]);
+    expect(saved[0]!.textContent).toContain(
+      BUILT_IN_APP_SCHEMES.find((s) => s.id === DEFAULT_APP_SCHEME_ID)!.name
+    );
+    expect(cursor[0]!.textContent).toContain(other.name);
+    expect(useAppThemeStore.getState().previewSchemeId).toBe(other.id);
+  });
+
+  it("resumes arrow navigation from a row chosen with the pointer", () => {
+    render(<Harness />);
+    const input = screen.getByLabelText("Filter themes");
+    act(() => input.focus());
+
+    const third = darkSchemeAt(2)!;
+    const row = findRowByName(third.name);
+    // Rows are not focusable, so a click must not be allowed to take focus off
+    // the field. Drive the real sequence — pointerdown then click — rather than
+    // restoring focus by hand, which is what previously hid this regression.
+    fireEvent.pointerDown(row);
+    fireEvent.click(row);
+
+    // The rule: clicking never costs the user their keyboard.
+    expect(document.activeElement).toBe(input);
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    // The rule: one cursor, shared by both input devices. After clicking row N,
+    // ArrowDown must land on N+1 — not wherever the keyboard cursor was left.
+    expect(useAppThemeStore.getState().previewSchemeId).toBe(darkSchemeAt(3)!.id);
+  });
+
+  it("clears a non-empty query on Escape instead of closing the dialog", () => {
+    render(<Harness />);
+    const input = screen.getByLabelText("Filter themes");
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: "fio" } });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    // Escape after arrowing must still be understood as "undo my filter".
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(screen.getByLabelText<HTMLInputElement>("Filter themes").value).toBe("");
+    expect(useThemeBrowserStore.getState().isOpen).toBe(true);
+  });
+
+  it("hands focus back to whatever opened it", () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+
+    const view = render(<Harness />);
+    // Take focus into the dialog the way opening it does (the open-time focus
+    // lands in a rAF that jsdom will not run for us here).
+    act(() => screen.getByLabelText("Filter themes").focus());
+    expect(document.activeElement).not.toBe(opener);
+
+    view.unmount();
+
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
   });
 });

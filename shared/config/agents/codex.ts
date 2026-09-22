@@ -103,6 +103,9 @@ export const config: AgentConfig = {
     // escalation in `resume.shutdownSignal`: that one quits the CLI, this one
     // cancels the turn and leaves the session up.
     interrupt: "double-escape",
+    // No dedicated flag: `developer_instructions` is a config key that adds to
+    // the built-in instructions, set through the same global `-c` override.
+    appendSystemPrompt: { flag: "-c", configKey: "developer_instructions" },
   },
   detection: {
     primaryPatterns: [
@@ -140,7 +143,14 @@ export const config: AgentConfig = {
   },
   resume: {
     kind: "session-id",
-    args: (sessionId: string) => ["resume", sessionId],
+    // `-C .` pins the conversation to the directory the pane launches in. A
+    // resume from anywhere else stops on Codex's interactive "Choose working
+    // directory" prompt — or, under `tui.resume_cwd = "session"`, silently runs
+    // in the folder the conversation began in (#12434). Verified against
+    // `codex-cli 0.154.0`; a no-op when the two directories match. Trailing, so
+    // the echoed command still reads `codex resume <id>` for the scrape below.
+    args: (sessionId: string) => ["resume", sessionId, "-C", "."],
+    crossDirectoryResume: true,
     sessionIdPattern: "codex resume ([\\w-]+)",
     resumeLatestArgs: ["resume", "--last"],
     // Codex takes a gated Ctrl-C instead of `/quit` (#11851). Writing the slash

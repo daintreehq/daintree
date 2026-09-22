@@ -123,6 +123,9 @@ interface PluginHostApi {
   ): Promise<() => void>;
   invalidateFileDecorations(scope: string, paths?: string[]): Promise<void>;
 
+  // Tools served to terminal agents — gated on the `mcp:expose` capability
+  readonly mcp: PluginMcpApi;
+
   // Panel title-chrome badge
   setPanelBadge(panelId: string, badge: PluginPanelBadge | null): Promise<void>;
 
@@ -173,7 +176,7 @@ Two option bags recur. `PluginHostCallOptions` is the trailing argument on long-
 
 Nearly every host method now returns a Promise — the API became fully async in the move to the out-of-process worker model, so `registerAction`, `postToPanel`, `setPanelBadge`, and the rest resolve `Promise<void>`, and the subscription methods resolve `Promise<() => void>`. Always `await` a registration before assuming it took effect, and `await` the subscription methods to get the disposer. The synchronous `logger` accessor is the lone exception — its `info`/`warn`/`error` calls return `void`.
 
-The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, and `settings.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. `postToPanel`, `setPanelBadge`, `getActiveWorktree`, `getWorktrees`, `getWorktreesResult`, `getWorktreeStatus`, `getAgentState`, `invalidateFileDecorations`, `showToast`, `showQuickPick`, `showInputBox`, `showConfirm`, `dispatch`, `actions.*`, `sendToActiveAgent`, `process.spawn`, `fs.*`, `git.*`, `clipboard.*`, `system.*`, `settings.get`/`settings.set`, `storage.get`/`set`/`delete`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op (or, for `process.spawn`/`fs.*`/`git.*`, a rejection) after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
+The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `mcp.registerTools`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, and `settings.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. `postToPanel`, `setPanelBadge`, `getActiveWorktree`, `getWorktrees`, `getWorktreesResult`, `getWorktreeStatus`, `getAgentState`, `invalidateFileDecorations`, `showToast`, `showQuickPick`, `showInputBox`, `showConfirm`, `dispatch`, `actions.*`, `sendToActiveAgent`, `process.spawn`, `fs.*`, `git.*`, `clipboard.*`, `system.*`, `settings.get`/`settings.set`, `storage.get`/`set`/`delete`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op (or, for `process.spawn`/`fs.*`/`git.*`, a rejection) after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
 
 **Where validation errors surface.** The two groups report errors differently. A revoke-guarded activation-window method (`registerAction`, `registerHandler`, the subscriptions) throws synchronously at the call site on a bad descriptor or a revoked host — wrap the `activate()` body in `try`/`catch` if you want to handle it. The post-activation runtime-surface methods (`postToPanel`, `setPanelBadge`, `invalidateFileDecorations`, `broadcastToRenderer` on an invalid channel) instead reject the returned Promise rather than throwing synchronously, so handle their validation errors with `await` + `.catch()`:
 
@@ -252,12 +255,14 @@ const result = await invoke({});
 
 **Channel naming rules:**
 
-- No colons (reserved for Daintree's internal namespacing).
+- No colons (reserved for Daintree's internal namespacing). The host enforces this in two places: `registerHandler` throws `Plugin channel must not contain colons`, which fails `activate()` on its first registration, and `postToPanel` rejects the push. **`createMockHost` only enforces the second**, so a colon in a request channel passes every activation test and then breaks the first time the plugin runs in the app. Pin the rule with a test over your own channel constants.
 - Plugin-registered channels are addressed as `{pluginId}:{channel}` internally; the SDK handles the prefix.
 
 Handlers are unregistered on plugin unload.
 
 **Typed overload (preferred for new code):** pass a `PluginChannelSchema` with Zod `args`/`result` schemas and a `requires` capability list. The host rejects registration if any `requires` capability is missing from `manifest.capabilities` (fail-closed at the registration boundary). At dispatch, args are `safeParse`d before the handler runs and the result is `safeParse`d before returning to the renderer — schema failures throw with a `SCHEMA_ERROR:` prefix, missing capabilities throw with a `PERMISSION_REQUIRED:` prefix, and the renderer-side `useHostChannel` hook discriminates on those prefixes. The untyped overload above does no host-side validation and is retained only for plugins that haven't migrated to per-channel schemas.
+
+**The mock host does not validate typed channels.** `createMockHost().registerHandler` records the handler but neither keeps nor applies its schema, so a handler that returns a shape your own protocol rejects still passes. Wrap it in tests: keep the schema, parse args on the way in and the result on the way out, and invoke through that wrapper — then a schema mismatch fails in the test exactly as it would at the host boundary.
 
 ## `postToPanel`
 
@@ -560,6 +565,81 @@ await host.invalidateFileDecorations("worktree-diff:main", ["src/foo.ts"]);
 - Returns a disposer that unbinds the single impl. Re-registering with the same `descriptor.id` overwrites the prior binding; the older disposer becomes inert. All bindings are removed on plugin unload.
 - `invalidateFileDecorations(scope, paths?)` signals that decorations for `scope` (optionally narrowed to `paths`) changed so any renderer showing them re-pulls. It is NOT revoke-guarded — call it from your subscription callbacks and timers throughout the plugin's lifetime. It becomes a silent no-op after unload.
 
+## `mcp.registerTools`
+
+Binds the tool roster for an endpoint declared in `contributes.agentMcp`, which Daintree then serves to agents in its terminals over MCP. Requires the `mcp:expose` capability. This is the inbound direction — for a stdio server Daintree itself connects to, see [`mcpServers`](./contribution-points.md#mcp-servers--shipped). The end-to-end walkthrough, including when an agent actually receives the endpoint, is [Agent extensions → Agent MCP endpoints](./agent-extensions.md#agent-mcp-endpoints).
+
+```ts
+const dispose = await host.mcp.registerTools("ledger", {
+  list_entries: {
+    description: "List ledger entries, newest first.",
+    inputSchema: { type: "object", properties: { limit: { type: "integer" } } },
+    outputSchema: { type: "object", properties: { entries: { type: "array" } } },
+    async execute(args, caller, signal) {
+      const limit = typeof args.limit === "number" ? args.limit : 20;
+      return { entries: await readEntries(caller.projectId, limit, signal) };
+    },
+  },
+});
+```
+
+**Signature:**
+
+```ts
+interface PluginMcpApi {
+  registerTools(
+    endpointId: string,
+    tools: Record<string, PluginMcpToolDefinition>
+  ): Promise<() => void>;
+}
+
+interface PluginMcpToolDefinition {
+  description: string;
+  inputSchema: PluginMcpJsonSchema; // { type: "object", ... }
+  outputSchema?: PluginMcpJsonSchema;
+  execute(
+    args: Record<string, unknown>,
+    caller: PluginMcpCaller,
+    signal: AbortSignal
+  ): unknown | Promise<unknown>;
+}
+
+interface PluginMcpCaller {
+  readonly credentialId: string;
+  readonly projectId: string;
+  readonly terminalId: string;
+  readonly launchAgentIdHint?: string;
+}
+```
+
+All of these, plus `PluginAgentMcpContribution`, are exported from `@daintreehq/plugin-sdk`.
+
+**Rules:**
+
+- Revoke-guarded — call it during `activate()`. The tools' `execute` functions run for the plugin's whole lifetime; only binding the roster is restricted to the activation window.
+- `endpointId` must name an entry in `contributes.agentMcp`; an undeclared id is rejected, because enablement, credentials and the route are all driven by the manifest and a roster for an undeclared endpoint could never be reached.
+- The roster is validated whole and rejected whole, never trimmed: at least one and at most 8 tools; names matching `^[a-z][a-z0-9_]{0,31}$`; each description non-empty and at most 400 UTF-8 bytes; each schema a plain object with `type: "object"`, at most 8 KiB serialized. Only own keys of `tools` count. Schemas are snapshotted at registration, so mutating your schema object afterwards changes nothing an agent sees, and each tool's `execute` is captured then too.
+- Calling it again for the same `endpointId` replaces the roster; connected agents are sent `notifications/tools/list_changed`, and a call still running against the old roster is aborted. The replaced roster's disposer becomes inert.
+- Returns a disposer that unbinds this roster. Every roster is dropped when the plugin unloads.
+
+**Errors.** For a builtin, every one of these throws synchronously at the call site, like the other activation-window methods:
+
+- `PERMISSION_REQUIRED: plugin "…" mcp.registerTools requires "mcp:expose", which is not declared in manifest.capabilities` when the capability is missing. In practice the manifest gate already rejects `contributes.agentMcp` without `mcp:expose`, so this fires only for a plugin that declares no endpoint at all.
+- An undeclared-endpoint error, or a roster error naming the tool and the limit it broke.
+- A revoked-host error when called after `activate()` resolves or times out.
+
+In a worker plugin — every installed and project plugin — only the revoked-host and roster errors throw at your call site; the promise then resolves. The capability and declared-endpoint checks run afterwards in main, where the manifest lives, and a failure there fails activation with the error named. A `try`/`catch` around the `await` does not see it.
+
+**What `execute` receives.**
+
+- `args` — the arguments the agent sent. The host guarantees only that they are a JSON object; validating them against `inputSchema` is your job.
+- `caller` — frozen **provenance**, not identity. The credential was issued for one terminal launch in one project: `projectId` is that project, `terminalId` that terminal, `credentialId` a stable correlation id for the credential (never the credential itself, so it is safe to log), and `launchAgentIdHint` what the terminal was launched as. Any process that read the credential can present it, so treat `launchAgentIdHint` as a hint, not proof of what is calling. An installed plugin serves every project that enabled it from one instance, so scope its data by `caller.projectId`; a project plugin's `caller.projectId` is always its own project.
+- `signal` — aborted when the call times out (60 seconds, counted from the request, activation included), when the agent cancels, when the session closes or the credential is revoked, and when the endpoint's roster is replaced or dropped. Once it aborts the host stops waiting: the agent is answered with a tool error (or its session is closed), and your eventual result is discarded. Nothing stops an `execute` that ignores the signal — it runs on until it returns.
+
+**What the agent receives.** The return value is `JSON.stringify`-ed — `undefined` becomes `null`, and `toJSON` is honoured — and sent as the tool's text content. A worker plugin's result is serialized in the worker, before it crosses to main. A result over 256 KiB serialized, or one that cannot be serialized, becomes a tool error. With an `outputSchema`, the result must also serialize to a JSON object, which is sent as `structuredContent` as well; anything else is a tool error. A thrown error becomes a tool error carrying its message, truncated past 2,000 characters. A session may have at most 16 calls in flight; past that the agent gets a tool error asking it to retry.
+
+The mock host records rosters in `registeredMcpTools`, but it has no manifest model, so it skips the `mcp:expose` and declared-endpoint checks and leaves the roster limits to the real host.
+
 ## `setPanelBadge`
 
 Put a small live badge on the title chrome of one of your plugin's panels — a status dot or a short label — so per-worktree or per-agent state surfaces without the user opening the panel.
@@ -814,7 +894,21 @@ const dispose = await host.fs.watch(["/Users/me/.acme/data"], (changedPath) => {
 
 `readFile`, `readdir`, `stat`, and `watch` take a trailing options object carrying an optional `signal: AbortSignal`, so a read feeding a panel that has since unmounted can be cancelled — chain it off the view's `disposeSignal`. An already-aborted signal rejects before any I/O; aborting mid-flight rejects with the signal's reason. `writeFile` deliberately takes none: half-written files are not a state worth offering.
 
+`writeFile(path, contents, options?)` resolves `{ revision }` — the sha256 hex of the bytes written — for every call. Without `options` it is the plain write it has always been. Passing an options object (even `{}`) selects the **checked write**: the host serialises writes per resolved path, re-proves containment inside that critical section, refuses a symlink leaf (`TARGET_IS_SYMLINK`), and replaces the file atomically through a sibling temp file, flush and rename with the original mode preserved. `options.expectedRevision` compares the file's current bytes before anything is touched: a mismatch rejects with `REVISION_MISMATCH` and the error carries `currentRevision` so the caller can enter a conflict state without a second read; a missing target rejects with `TARGET_UNAVAILABLE`; `expectedRevision: null` means the file must not exist yet (`TARGET_EXISTS` otherwise). The `code` rides on the error object in-process and prefixes the message across the worker port. What the checked write does not promise is a lock against an uncooperative external process — a write that lands between the hash check and the rename is overwritten. The window is small, and callers that care keep their own copy of what they asked to write (the built-in Markdown editor keeps its draft until a save is verified).
+
 **Honest scope note:** `host.fs` gates the host-mediated path only. Your `main` is still un-sandboxed Node code (it runs in the plugin worker with full filesystem privileges) and can call raw `node:fs` directly, which the host cannot intercept without a real sandbox (see the [trust model](./trust-model.md)). `host.fs` gives a contained, audited path; it does not seal the un-mediated one.
+
+### What `host.fs` does not do
+
+These are not bugs, but each one has cost a plugin author a debugging cycle.
+
+- **Six methods, no more.** `readFile`, `readFileBytes`, `writeFile`, `readdir`, `stat`, `watch`. There is no `rm`, `rename`, `mkdir` or `copyFile`. Keep drafts, journals and caches in `host.storage` or under a user-data path rather than planning around deleting project files.
+- **Containment is to a declared root, not to the directory you meant.** A path is realpath-contained to one of your `scopes.fs.allowedPaths` roots. If your plugin works inside a narrower directory — an app inside a monorepo worktree — a symlinked directory inside that narrower directory can still reach elsewhere in the root, and the checked write's symlink refusal only looks at the leaf. Resolve the path on disk and check it against your own narrower root before reading or writing.
+- **A bare `readdir` reports a symlinked directory as neither a file nor a directory.** Code that walks a tree on `isFile`/`isDirectory` silently loses those subtrees. Either pass `{ detail: true }` or `stat` entries whose kind is unknown.
+- **`readFile` cannot tell missing from denied.** A read that fails is not proof the file is absent. Code that climbs a directory chain looking for a manifest must decide what a failure means, and should stop climbing on an unreadable file rather than silently reporting a hoisted copy further up.
+- **A rejected checked write does not prove the bytes did not land.** Never record a write as yours because the file now happens to match what you planned; treat a rejection as a failure and re-read if you need to know the truth.
+- **`watch` events can arrive before `writeFile` resolves.** If you watch files you also write, track the revisions of your in-flight writes, or your own edits come back as external changes. `watch` is non-recursive and undebounced: one subscription per directory.
+- **Decode text with care about the BOM.** `TextDecoder`'s default strips a byte-order mark, which shifts every offset by one against tools that count it. Decide which convention your offsets use and keep it on both sides — and note that some compilers (Svelte's among them) strip it too.
 
 ### `readdir` and the detailed listing
 
@@ -1031,7 +1125,7 @@ Deliberately not part of the host API:
 
 - Direct access to other plugins' state or registered handlers.
 - Access to the active user's AI-provider API keys. If a plugin needs AI calls, the user configures keys separately in settings or the plugin ships its own `secret` setting.
-- Full control of the active AI agent's runtime — driving, pausing, or resuming an agent session, and bridging a plugin's MCP tools into an agent Daintree is itself driving. Both cross the agent-config boundary (precedent #4100: never mutate user-owned agent config or session behaviour the user didn't opt into) and stay deferred. Passive observation is offered instead: [`getAgentState` / `onDidChangeAgentState`](#agent-observation) under `agent:read`. The one sanctioned write is text injection: [`host.sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) (gated on `agent:input`, JIT consent, stage-only by default) sends input to the active agent terminal. For everything else, `dispatch` into existing actions is the path.
+- Full control of the active AI agent's runtime — driving, pausing, or resuming an agent session. That crosses the agent-config boundary (precedent #4100: never mutate user-owned agent config or session behaviour the user didn't opt into) and stays deferred. Getting a plugin's tools into an agent is the one exception, and only in the sanctioned shape: [`mcp.registerTools`](#mcpregistertools) tools reach Claude Code launches through the Daintree-owned `--mcp-config` file, never through the user's own agent config, and only in projects where the user turned the endpoint on. Passive observation is offered instead of the rest: [`getAgentState` / `onDidChangeAgentState`](#agent-observation) under `agent:read`. The one sanctioned write is text injection: [`host.sendToActiveAgent`](#sendtoactiveagent--inject-text-into-the-active-agent) (gated on `agent:input`, JIT consent, stage-only by default) sends input to the active agent terminal. For everything else, `dispatch` into existing actions is the path.
 - An inbound webhook listener or a host-mediated `host.fetch`. Deferred: `scopes.network.allowedUrls` is still advisory rather than a request filter, and an inbound listener widens the attack surface in a way that wants the network-enforcement question settled first. Make outbound calls from your own `main` for now, and declare `network:fetch` with a tight `scopes.network.allowedUrls`.
 - Raw Electron main-process APIs are not _passed through_ the host — but the contained, audited equivalents are: `host.process` (managed child processes, gated on `shell:exec`), `host.fs` (scope-contained filesystem), and `host.git` (worktree-scoped git). You can still `import` Node modules directly in plugin code and the host cannot intercept that, so the host-mediated surfaces are the contained, audited path — not a seal on the un-mediated one.
 - Daintree's internal event bus. Only the specific subscriptions listed above are exposed. Broad event access would tie plugins to internal shape changes we want to be free to make.

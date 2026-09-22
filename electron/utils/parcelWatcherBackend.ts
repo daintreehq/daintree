@@ -1,4 +1,5 @@
 import { existsSync, watch as fsWatch, type FSWatcher } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { matchesGlob, normalize, relative, resolve } from "node:path";
 import parcelWatcher, {
   type AsyncSubscription,
@@ -100,6 +101,53 @@ const BACKEND_BY_PLATFORM: Partial<Record<NodeJS.Platform, BackendType>> = {
 export function parcelWatcherBackendOption(): { backend?: BackendType } {
   const backend = BACKEND_BY_PLATFORM[process.platform];
   return backend ? { backend } : {};
+}
+
+/**
+ * `FSEventStreamSetExclusionPaths` accepts at most eight paths. Past that the
+ * call fails and applies none of them, and @parcel/watcher discards its result,
+ * so overshooting silently loses every exclusion rather than the surplus.
+ */
+export const MAX_PARCEL_EXCLUSION_PATHS = 8;
+
+/**
+ * Pick which of `candidates` (child names of `root`, highest priority first)
+ * to pass as literal `ignore` entries so they become OS-level exclusions.
+ *
+ * @parcel/watcher compiles globs into a filter that runs after delivery; only
+ * non-glob strings reach `FSEventStreamSetExclusionPaths` on macOS. Callers
+ * keep their globs — they are still what filters nested matches and anything
+ * past the cap — and spread the returned names alongside them. The names stay
+ * relative so Parcel resolves them against the subscription root; an absolute
+ * path under an ancestor containing `[` or `(` would read as a glob.
+ *
+ * Only real directories qualify: a symlink's contents are not under the
+ * watched tree, and a linked worktree's `.git` is a file. Names must match the
+ * directory entry exactly — on case-insensitive APFS a lookup of `build` finds
+ * `Build/`, which case-sensitive globs leave visible and FSEvents would then
+ * silence. Existence is sampled once, so a directory created after subscribe
+ * (a fresh `npm install`) is only excluded from the next re-arm on — the
+ * caller's globs cover it meanwhile.
+ *
+ * macOS only. Linux's inotify walk already prunes glob matches before adding
+ * watches, and the Windows fallback matches literals case-insensitively, so
+ * elsewhere literals would add nothing or hide more than the globs do.
+ */
+export async function resolveParcelWatcherExclusions(
+  root: string,
+  candidates: readonly string[]
+): Promise<string[]> {
+  if (process.platform !== "darwin") return [];
+  let directories: Set<string>;
+  try {
+    const entries = await readdir(root, { withFileTypes: true });
+    directories = new Set(
+      entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+    );
+  } catch {
+    return [];
+  }
+  return candidates.filter((name) => directories.has(name)).slice(0, MAX_PARCEL_EXCLUSION_PATHS);
 }
 
 function slashPath(value: string): string {
@@ -243,6 +291,22 @@ export function subscribeParcelWatcher(
     liveSubscriptions.add(subscription);
     return subscription;
   });
+}
+
+/**
+ * Read-only snapshot for teardown diagnostics. `subscriptions` drops as soon as
+ * an unsubscribe is requested, before the native teardown finishes, so a zero
+ * there only means release was asked for; `lifecycleOps` is what is still
+ * running or queued behind the serialization lock.
+ */
+export function getParcelWatcherLifecycleStats(): {
+  subscriptions: number;
+  lifecycleOps: number;
+} {
+  return {
+    subscriptions: liveSubscriptions.size,
+    lifecycleOps: lifecycleQueue.length + (lifecycleBusy ? 1 : 0),
+  };
 }
 
 /** Wait until every lifecycle operation already queued by callers has settled. */

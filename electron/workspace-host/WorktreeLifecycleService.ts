@@ -9,11 +9,22 @@ import { buildProbeEnv } from "../utils/spawnEnv.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import type { WorktreeMonitor } from "./WorktreeMonitor.js";
 import type {
+  LifecycleCommandReview,
   WorktreeLifecyclePhase,
   WorktreeLifecyclePhaseCategory,
   WorktreeLifecycleState,
 } from "../../shared/types/worktree.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
+import {
+  FileLifecycleCommandApprovalStore,
+  fingerprintCommandGroups,
+  fingerprintReview,
+  lifecycleConfigCommandGroups,
+  resolveLifecycleCommandApprovalsDir,
+  resourceEnvironmentCommandGroups,
+  type LifecycleCommandApprovalStore,
+  type LifecycleCommandSource,
+} from "./lifecycleCommandTrust.js";
 
 const OUTPUT_TAIL_BYTES = 8192;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -54,6 +65,38 @@ const DaintreeLifecycleConfigSchema = z.object({
 });
 
 export type DaintreeLifecycleConfig = z.infer<typeof DaintreeLifecycleConfigSchema>;
+
+/** A loaded config and the file it won from. `user` is the only origin that runs unapproved. */
+export interface ResolvedLifecycleConfig {
+  config: DaintreeLifecycleConfig;
+  origin: "user" | "worktree" | "project";
+  path: string;
+}
+
+/** Resource environments read from a project settings file, and which file. */
+export interface ResolvedResourceEnvironments {
+  environments: Record<string, ResourceConfig>;
+  origin: "user" | "project";
+  path: string;
+}
+
+/**
+ * A resource block the file itself names. Keys arrive from the file and from a
+ * worktree's mode, so a plain index can return something inherited from
+ * `Object.prototype` — a block no command review ever listed.
+ */
+export function ownResource(
+  resources: Record<string, ResourceConfig> | undefined,
+  key: string | undefined
+): ResourceConfig | undefined {
+  return resources && key !== undefined && Object.hasOwn(resources, key)
+    ? resources[key]
+    : undefined;
+}
+
+/** Recorded on a skipped phase and returned by a refused resource action. */
+export const LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR =
+  "These commands come from the repository and haven't been approved. Review them on the worktree card.";
 
 /** Variables available for {{variable}} substitution in lifecycle commands. */
 export interface LifecycleVariables {
@@ -140,7 +183,12 @@ async function readJsonFile(p: string): Promise<unknown | null> {
 }
 
 export class WorktreeLifecycleService {
-  constructor(private readonly homeDir: string = os.homedir()) {}
+  constructor(
+    private readonly homeDir: string = os.homedir(),
+    private readonly approvals: LifecycleCommandApprovalStore = new FileLifecycleCommandApprovalStore(
+      resolveLifecycleCommandApprovalsDir(process.env.DAINTREE_USER_DATA)
+    )
+  ) {}
 
   /**
    * Load the merged lifecycle config for a worktree, using the priority chain:
@@ -154,14 +202,25 @@ export class WorktreeLifecycleService {
     worktreePath: string,
     projectRootPath: string
   ): Promise<DaintreeLifecycleConfig | null> {
+    return (await this.resolveConfig(worktreePath, projectRootPath))?.config ?? null;
+  }
+
+  /** {@link loadConfig}, keeping which file won — the input every command trust check needs. */
+  async resolveConfig(
+    worktreePath: string,
+    projectRootPath: string
+  ): Promise<ResolvedLifecycleConfig | null> {
     const sanitizedRoot = sanitizePathSegment(projectRootPath);
-    const candidates = [
-      pathJoin(this.homeDir, ".daintree", "projects", sanitizedRoot, "config.json"),
-      pathJoin(worktreePath, ".daintree", "config.json"),
-      pathJoin(projectRootPath, ".daintree", "config.json"),
+    const candidates: Array<{ origin: ResolvedLifecycleConfig["origin"]; path: string }> = [
+      {
+        origin: "user",
+        path: pathJoin(this.homeDir, ".daintree", "projects", sanitizedRoot, "config.json"),
+      },
+      { origin: "worktree", path: pathJoin(worktreePath, ".daintree", "config.json") },
+      { origin: "project", path: pathJoin(projectRootPath, ".daintree", "config.json") },
     ];
 
-    for (const configPath of candidates) {
+    for (const { origin, path: configPath } of candidates) {
       if (!(await fileExists(configPath))) {
         continue;
       }
@@ -178,10 +237,108 @@ export class WorktreeLifecycleService {
         continue;
       }
 
-      return result.data;
+      return { config: result.data, origin, path: configPath };
     }
 
     return null;
+  }
+
+  /**
+   * Whether commands from this config may run. A config the user owns always
+   * may; a repository config only when its exact commands were approved.
+   */
+  async isConfigApproved(
+    resolved: ResolvedLifecycleConfig,
+    projectRootPath: string
+  ): Promise<boolean> {
+    return this.isSourceApproved(describeConfigSource(resolved), projectRootPath);
+  }
+
+  /**
+   * Whether a resolved resource block may run. It comes from the settings
+   * environments when `environments` is set, otherwise from the config.
+   */
+  async isResourceApproved(
+    resolvedConfig: ResolvedLifecycleConfig | null,
+    environments: ResolvedResourceEnvironments | null,
+    projectRootPath: string
+  ): Promise<boolean> {
+    if (environments) {
+      return this.isSourceApproved(describeEnvironmentsSource(environments), projectRootPath);
+    }
+    return resolvedConfig ? this.isConfigApproved(resolvedConfig, projectRootPath) : false;
+  }
+
+  /**
+   * The unapproved repository commands this worktree would run, or `null` when
+   * everything it would run is the user's own or already approved.
+   */
+  async getCommandReview(
+    worktreePath: string,
+    projectRootPath: string
+  ): Promise<LifecycleCommandReview | null> {
+    const pending = await this.pendingSources(worktreePath, projectRootPath);
+    if (pending.length === 0) return null;
+    return {
+      fingerprint: fingerprintReview(pending),
+      sources: pending.map(({ path, groups }) => ({ path, groups })),
+    };
+  }
+
+  /**
+   * Approve the commands a review showed. Recomputed here rather than trusted
+   * from the caller, and refused when they no longer match what was reviewed.
+   */
+  async approveCommandReview(
+    worktreePath: string,
+    projectRootPath: string,
+    fingerprint: string
+  ): Promise<void> {
+    const pending = await this.pendingSources(worktreePath, projectRootPath);
+    if (pending.length === 0) return;
+    if (fingerprintReview(pending) !== fingerprint) {
+      throw new Error("These commands changed after you reviewed them. Review them again.");
+    }
+    await this.approvals.approve(
+      projectRootPath,
+      pending.map((source) => source.fingerprint)
+    );
+  }
+
+  private async pendingSources(
+    worktreePath: string,
+    projectRootPath: string
+  ): Promise<LifecycleCommandSource[]> {
+    const resolved = await this.resolveConfig(worktreePath, projectRootPath);
+    const sources: LifecycleCommandSource[] = [];
+    if (resolved) sources.push(describeConfigSource(resolved));
+    // Every settings-environment fallback is reached only when the config
+    // resolves no resource block of its own, so a settings file shadowed by one
+    // never runs and is not worth asking about. An empty `resources` resolves
+    // nothing, so it shadows nothing.
+    const configResolvesResource =
+      !!resolved?.config.resource || Object.keys(resolved?.config.resources ?? {}).length > 0;
+    if (!configResolvesResource) {
+      const environments = await this.resolveProjectResourceEnvironments(projectRootPath);
+      if (environments) sources.push(describeEnvironmentsSource(environments));
+    }
+    const pending: LifecycleCommandSource[] = [];
+    for (const source of sources) {
+      if (!(await this.isSourceApproved(source, projectRootPath))) pending.push(source);
+    }
+    return pending;
+  }
+
+  private async isSourceApproved(
+    source: LifecycleCommandSource,
+    projectRootPath: string
+  ): Promise<boolean> {
+    if (source.origin === "user" || source.groups.length === 0) return true;
+    try {
+      return await this.approvals.isApproved(projectRootPath, source.fingerprint);
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -197,8 +354,9 @@ export class WorktreeLifecycleService {
     if (!config) return null;
 
     if (config.resources) {
-      if (environmentId && config.resources[environmentId]) {
-        return config.resources[environmentId];
+      const named = ownResource(config.resources, environmentId);
+      if (named) {
+        return named;
       }
       if (config.resources["default"]) {
         return config.resources["default"];
@@ -561,12 +719,24 @@ export class WorktreeLifecycleService {
   async loadProjectResourceEnvironments(
     projectRootPath: string
   ): Promise<Record<string, ResourceConfig> | null> {
+    return (await this.resolveProjectResourceEnvironments(projectRootPath))?.environments ?? null;
+  }
+
+  /** {@link loadProjectResourceEnvironments}, keeping which settings file supplied them. */
+  async resolveProjectResourceEnvironments(
+    projectRootPath: string
+  ): Promise<ResolvedResourceEnvironments | null> {
     const sanitizedRoot = sanitizePathSegment(projectRootPath);
-    const candidates = [
-      pathJoin(this.homeDir, ".daintree", "projects", sanitizedRoot, "settings.json"),
-      pathJoin(projectRootPath, ".daintree", "settings.json"),
+    const candidates: Array<{ origin: ResolvedResourceEnvironments["origin"]; path: string }> = [
+      {
+        origin: "user",
+        path: pathJoin(this.homeDir, ".daintree", "projects", sanitizedRoot, "settings.json"),
+      },
+      // Main never writes resource environments into the repository's settings
+      // file, so anything found here was committed to the repository.
+      { origin: "project", path: pathJoin(projectRootPath, ".daintree", "settings.json") },
     ];
-    for (const settingsPath of candidates) {
+    for (const { origin, path: settingsPath } of candidates) {
       if (!(await fileExists(settingsPath))) continue;
       const raw = await readJsonFile(settingsPath);
       if (!raw || typeof raw !== "object") continue;
@@ -581,15 +751,20 @@ export class WorktreeLifecycleService {
         for (const [key, value] of Object.entries(
           settings.resourceEnvironments as Record<string, unknown>
         )) {
+          // Skipped as z.record skips it: assigning `__proto__` would replace the
+          // result's prototype rather than add an environment the review lists.
+          if (key === "__proto__") continue;
           const parsed = ResourceConfigSchema.safeParse(value);
           if (parsed.success) result[key] = parsed.data;
         }
-        if (Object.keys(result).length > 0) return result;
+        if (Object.keys(result).length > 0) {
+          return { environments: result, origin, path: settingsPath };
+        }
       }
       if (settings.resourceEnvironment && typeof settings.resourceEnvironment === "object") {
         const parsed = ResourceConfigSchema.safeParse(settings.resourceEnvironment);
         if (parsed.success) {
-          return { default: parsed.data };
+          return { environments: { default: parsed.data }, origin, path: settingsPath };
         }
       }
     }
@@ -665,6 +840,11 @@ export class WorktreeLifecycleService {
    * an auto-provision run — keeping that orchestration in WorkspaceService
    * avoids a circular call back into the host.
    *
+   * `needsApproval` is true when repository commands this run needed — the
+   * setup commands, or the provision that would follow them — have not been
+   * approved. Nothing runs in that case, not even setup commands that are
+   * approved, so approving and retrying runs the whole sequence once.
+   *
    * Re-fetches the monitor via `ctx.getMonitor` after every `await` because the
    * worktree may have been deleted mid-run.
    */
@@ -674,15 +854,18 @@ export class WorktreeLifecycleService {
     ctx: WorkspaceHostContext,
     provisionResource?: boolean,
     environmentId?: string
-  ): Promise<{ shouldProvision: boolean }> {
+  ): Promise<{ shouldProvision: boolean; needsApproval: boolean }> {
     const projectRootPath = ctx.projectRootPath;
-    const config = await this.loadConfig(worktreePath, projectRootPath);
+    const resolvedConfig = await this.resolveConfig(worktreePath, projectRootPath);
+    const config = resolvedConfig?.config ?? null;
+    let resourceEnvironments: ResolvedResourceEnvironments | null = null;
 
     // Resolve resource config: prefer resources (plural) over resource (singular)
     let resolvedResource = config?.resource;
     if (config?.resources) {
-      if (environmentId && config.resources[environmentId]) {
-        resolvedResource = config.resources[environmentId];
+      const named = ownResource(config.resources, environmentId);
+      if (named) {
+        resolvedResource = named;
       } else if (config.resources["default"]) {
         resolvedResource = config.resources["default"];
       } else {
@@ -698,10 +881,15 @@ export class WorktreeLifecycleService {
       const monitor = ctx.getMonitor(worktreeId);
       const envKey = monitor?.worktreeMode;
       if (envKey && envKey !== "local") {
-        const envs = await this.loadProjectResourceEnvironments(projectRootPath);
-        resolvedResource = envs?.[envKey] ?? undefined;
+        const envs = await this.resolveProjectResourceEnvironments(projectRootPath);
+        resolvedResource = ownResource(envs?.environments, envKey);
+        if (resolvedResource) resourceEnvironments = envs;
       }
     }
+
+    const resourceApproved = resolvedResource
+      ? await this.isResourceApproved(resolvedConfig, resourceEnvironments, projectRootPath)
+      : false;
 
     if (!config?.setup?.length && !(provisionResource && resolvedResource?.provision?.length)) {
       // Cache resource config even if no setup commands
@@ -710,23 +898,48 @@ export class WorktreeLifecycleService {
         if (m) {
           const v = this.buildVariables(worktreePath, projectRootPath, m.name, m.branch);
           const subCache = (cmd: string) => this.substituteVariables(cmd, v);
-          applyResourceConfigToMonitor(m, resolvedResource, subCache);
+          applyResourceConfigToMonitor(m, resolvedResource, subCache, resourceApproved);
+          if (!resourceApproved) m.setLifecycleCommandsNeedApproval(true);
           ctx.emitUpdate(m);
         }
       }
-      return { shouldProvision: false };
+      return { shouldProvision: false, needsApproval: false };
     }
 
-    if (!config) return { shouldProvision: false };
+    if (!config || !resolvedConfig) return { shouldProvision: false, needsApproval: false };
+
+    const setupApproved =
+      !config.setup?.length || (await this.isConfigApproved(resolvedConfig, projectRootPath));
+    const provisionApproved =
+      !(provisionResource && resolvedResource?.provision?.length) || resourceApproved;
 
     const monitor = ctx.getMonitor(worktreeId);
     if (!monitor) {
-      return { shouldProvision: false };
+      return { shouldProvision: false, needsApproval: false };
     }
 
     const worktreeName = monitor.name;
     const vars = this.buildVariables(worktreePath, projectRootPath, worktreeName, monitor.branch);
     const sub = (cmd: string) => this.substituteVariables(cmd, vars);
+
+    if (!setupApproved || !provisionApproved) {
+      const now = Date.now();
+      monitor.setLifecycleStatus({
+        phase: "setup",
+        state: "needs-approval",
+        totalCommands: config.setup?.length ?? 0,
+        error: LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR,
+        startedAt: now,
+        completedAt: now,
+      });
+      monitor.setLifecycleCommandsNeedApproval(true);
+      if (resolvedResource) {
+        applyResourceConfigToMonitor(monitor, resolvedResource, sub, resourceApproved);
+      }
+      ctx.emitUpdate(monitor);
+      return { shouldProvision: false, needsApproval: true };
+    }
+
     const commands = (config.setup ?? []).map(sub);
     const env = this.buildEnv(
       worktreePath,
@@ -734,7 +947,8 @@ export class WorktreeLifecycleService {
       worktreeName,
       monitor.branch,
       {
-        provider: resolvedResource?.provider,
+        // An approved setup must not carry a provider from an unapproved file.
+        provider: resourceApproved ? resolvedResource?.provider : undefined,
         endpoint: monitor.resourceStatus?.endpoint,
         lastOutput: monitor.resourceStatus?.lastOutput,
       },
@@ -791,7 +1005,7 @@ export class WorktreeLifecycleService {
     if (resolvedResource) {
       const m = ctx.getMonitor(worktreeId);
       if (m) {
-        applyResourceConfigToMonitor(m, resolvedResource, sub);
+        applyResourceConfigToMonitor(m, resolvedResource, sub, resourceApproved);
         ctx.emitUpdate(m);
       }
     }
@@ -801,7 +1015,7 @@ export class WorktreeLifecycleService {
       provisionResource &&
       resolvedResource?.provision?.length
     );
-    return { shouldProvision };
+    return { shouldProvision, needsApproval: false };
   }
 
   /**
@@ -809,6 +1023,10 @@ export class WorktreeLifecycleService {
    * (when configured), then regular teardown, reporting progress through the
    * monitor's lifecycle status. Teardown failures are logged but never thrown
    * — deletion must proceed regardless.
+   *
+   * A phase whose commands come from the repository and are not approved is
+   * skipped and recorded as `needs-approval` rather than waited on: the delete
+   * is often an agent's, with nobody there to answer, and it must not hang.
    */
   async runLifecycleTeardown(
     worktreeId: string,
@@ -817,7 +1035,9 @@ export class WorktreeLifecycleService {
     ctx: WorkspaceHostContext
   ): Promise<void> {
     const projectRootPath = ctx.projectRootPath;
-    const config = await this.loadConfig(monitor.path, projectRootPath);
+    const resolvedConfig = await this.resolveConfig(monitor.path, projectRootPath);
+    const config = resolvedConfig?.config ?? null;
+    let teardownEnvironments: ResolvedResourceEnvironments | null = null;
 
     // Resolve resource config for teardown
     let teardownResource = config?.resource;
@@ -836,8 +1056,9 @@ export class WorktreeLifecycleService {
     if (!teardownResource) {
       const envKey = monitor.worktreeMode;
       if (envKey && envKey !== "local") {
-        const envs = await this.loadProjectResourceEnvironments(projectRootPath);
-        teardownResource = envs?.[envKey] ?? undefined;
+        const envs = await this.resolveProjectResourceEnvironments(projectRootPath);
+        teardownResource = ownResource(envs?.environments, envKey);
+        if (teardownResource) teardownEnvironments = envs;
       }
     }
 
@@ -855,20 +1076,32 @@ export class WorktreeLifecycleService {
 
     const vars = this.buildVariables(monitor.path, projectRootPath, monitor.name, monitor.branch);
     const sub = (cmd: string) => this.substituteVariables(cmd, vars);
+    const teardownResourceApproved = teardownResource
+      ? await this.isResourceApproved(resolvedConfig, teardownEnvironments, projectRootPath)
+      : false;
     const env = this.buildEnv(
       monitor.path,
       projectRootPath,
       monitor.name,
       monitor.branch,
       {
-        provider: teardownResource?.provider,
+        // Local teardown can be approved while the resource block is not; the
+        // provider it would export belongs to the resource block's file.
+        provider: teardownResourceApproved ? teardownResource?.provider : undefined,
         endpoint: monitor.resourceStatus?.endpoint,
         lastOutput: monitor.resourceStatus?.lastOutput,
       },
       ctx.projectEnvVars
     );
 
-    if (hasResourceTeardown) {
+    if (hasResourceTeardown && !teardownResourceApproved) {
+      this.recordSkippedForApproval(
+        worktreeId,
+        "resource-teardown",
+        teardownResource!.teardown!.length,
+        ctx
+      );
+    } else if (hasResourceTeardown) {
       const resourceTeardownCommands = teardownResource!.teardown!.map(sub);
 
       monitor.setLifecycleStatus({
@@ -972,7 +1205,12 @@ export class WorktreeLifecycleService {
       }
     }
 
-    if (!config?.teardown?.length) {
+    if (!config?.teardown?.length || !resolvedConfig) {
+      return;
+    }
+
+    if (!(await this.isConfigApproved(resolvedConfig, projectRootPath))) {
+      this.recordSkippedForApproval(worktreeId, "teardown", config.teardown.length, ctx);
       return;
     }
 
@@ -1081,29 +1319,72 @@ export class WorktreeLifecycleService {
   }
 
   /**
+   * Settle a teardown phase that did not run because its commands need
+   * approval. The phase result is what outlives the status slot; a skipped
+   * resource teardown can leave a cloud resource billing, so it is recorded
+   * with the same category a failed one would be.
+   */
+  private recordSkippedForApproval(
+    worktreeId: string,
+    phase: "teardown" | "resource-teardown",
+    totalCommands: number,
+    ctx: WorkspaceHostContext
+  ): void {
+    const m = ctx.getMonitor(worktreeId);
+    if (!m) return;
+    const now = Date.now();
+    m.setLifecycleStatus({
+      phase,
+      state: "needs-approval",
+      totalCommands,
+      error: LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR,
+      startedAt: now,
+      completedAt: now,
+    });
+    m.recordLifecyclePhaseResult({
+      phase,
+      state: "needs-approval",
+      category: this.phaseCategory(phase),
+      exitCode: null,
+      signalName: null,
+      error: LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR,
+      startedAt: now,
+      completedAt: now,
+    });
+    m.setLifecycleCommandsNeedApproval(true);
+    ctx.emitUpdate(m);
+  }
+
+  /**
    * Replace {{variable}} and {variable} placeholders in a command string.
    * Unresolved variables are left as-is so the shell command fails loudly.
    * Values are shell-escaped to prevent injection via untrusted inputs
    * (e.g. branch names containing shell metacharacters).
    */
   substituteVariables(command: string, vars: LifecycleVariables): string {
-    // Double-brace: {{variable}} with snake_case keys
-    let result = command.replace(/\{\{(\w+)\}\}/g, (match, name: string) => {
-      const key = name.toLowerCase() as keyof LifecycleVariables;
-      const value = vars[key];
-      return value != null ? shellEscapeValue(value) : match;
-    });
-    // Single-brace: {variable} with hyphenated keys — skip shell vars like ${foo}
-    // {branch-slug} is safe unquoted — its charset is locked to [a-z0-9-]
-    result = result.replace(/(?<!\$)\{([\w-]+)\}/g, (match, name: string) => {
-      const key = name.toLowerCase() as keyof LifecycleVariables;
-      const value = vars[key];
-      if (value == null) return match;
-      if (key === "branch-slug")
-        return /^[a-z0-9-]*$/.test(value) ? value : shellEscapeValue(value);
-      return shellEscapeValue(value);
-    });
-    return result;
+    // One pass over the template, never over what it inserts. Substituting in
+    // two passes let the second rescan values the first had already quoted, so
+    // a branch named `x{branch}$(id)` expanded inside its own quotes and ran
+    // `id` from a command template the user had approved unchanged.
+    //
+    // Double-brace: {{variable}} with snake_case keys.
+    // Single-brace: {variable} with hyphenated keys.
+    // Neither form is touched straight after `$` — `${foo}` is the shell's, and
+    // `${{foo}}` substituted would put the single-quoted value in `$'…'`, where
+    // bash reads backslash escapes and the escaping no longer holds.
+    return command.replace(
+      /(?<!\$)\{\{(\w+)\}\}|(?<!\$\{?)\{([\w-]+)\}/g,
+      (match, doubleName: string | undefined, singleName: string | undefined) => {
+        const key = (doubleName ?? singleName ?? "").toLowerCase() as keyof LifecycleVariables;
+        const value = vars[key];
+        if (value == null) return match;
+        // {branch-slug} is safe unquoted — its charset is locked to [a-z0-9-]
+        if (key === "branch-slug" && /^[a-z0-9-]*$/.test(value)) {
+          return value;
+        }
+        return shellEscapeValue(value);
+      }
+    );
   }
 }
 
@@ -1138,6 +1419,28 @@ function tailOutput(chunks: string[], logPath?: string): string {
   const where = logPath ? `full log: ${logPath}` : "full log unavailable";
   const marker = `...(truncated — omitted ${dropped} bytes; ${where})\n`;
   return scrubSecrets(marker + tail);
+}
+
+function describeConfigSource(resolved: ResolvedLifecycleConfig): LifecycleCommandSource {
+  const groups = lifecycleConfigCommandGroups(resolved.config);
+  return {
+    origin: resolved.origin === "user" ? "user" : "repository",
+    path: resolved.path,
+    groups,
+    fingerprint: fingerprintCommandGroups("config", groups),
+  };
+}
+
+function describeEnvironmentsSource(
+  resolved: ResolvedResourceEnvironments
+): LifecycleCommandSource {
+  const groups = resourceEnvironmentCommandGroups(resolved.environments);
+  return {
+    origin: resolved.origin === "user" ? "user" : "repository",
+    path: resolved.path,
+    groups,
+    fingerprint: fingerprintCommandGroups("settings", groups),
+  };
 }
 
 /**

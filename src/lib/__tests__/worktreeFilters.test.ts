@@ -8,6 +8,7 @@ import {
   sortWorktrees,
   sortWorktreesByRelevance,
   groupByType,
+  orderWorktreesLikeSidebar,
   hasAnyFilters,
   computeChipCounts,
   emptyChipCounts,
@@ -18,6 +19,7 @@ import {
   copyableBranchName,
   type DerivedWorktreeMeta,
   type FilterState,
+  type SidebarOrderPrefs,
 } from "../worktreeFilters";
 import type { OrderBy } from "@/store/worktreeFilterStore";
 import type { Worktree } from "@shared/types/worktree";
@@ -198,6 +200,13 @@ describe("getWorktreeType", () => {
     const worktree = createMockWorktree({ branch: "FEATURE/uppercase" });
     expect(getWorktreeType(worktree)).toBe("feature");
   });
+
+  it.each(["constructor-injection", "Constructor/refactor", "__proto__/x"])(
+    "returns 'other' for a prefix that names an Object.prototype member (%s)",
+    (branch) => {
+      expect(getWorktreeType(createMockWorktree({ branch }))).toBe("other");
+    }
+  );
 });
 
 describe("compareWorktreeNames", () => {
@@ -1805,5 +1814,175 @@ describe("computeChipCounts — dev-server counts", () => {
     expect(counts.devServer.running).toBe(1);
     expect(counts.devServer.hasDevServer).toBe(1);
     expect(counts.devServer.error).toBe(0);
+  });
+});
+
+describe("orderWorktreesLikeSidebar", () => {
+  // A fixed epoch in the past, so every timestamp below satisfies
+  // `isValidPastTimestamp` against the real clock without faking it.
+  const T = 1_700_000_000_000;
+
+  const wt = (
+    id: string,
+    name: string,
+    branch: string,
+    createdAt: number,
+    lastActivityTimestamp: number,
+    extra: Partial<Worktree> = {}
+  ): Worktree =>
+    createMockWorktree({
+      id,
+      name,
+      branch,
+      createdAt: T + createdAt,
+      lastActivityTimestamp: T + lastActivityTimestamp,
+      ...extra,
+    });
+
+  const main = wt("m", "repo", "main", 10, 10, { isMainWorktree: true });
+  const pinnedFirst = wt("p1", "zeta", "bugfix/zeta", 20, 20);
+  const pinnedSecond = wt("p2", "yankee", "feature/yankee", 30, 30);
+  const featureTwo = wt("f2", "feature-2", "feature/two", 60, 80);
+  const featureTen = wt("f10", "feature-10", "feature/ten", 80, 50);
+  const bugfixOne = wt("b1", "bugfix-1", "bugfix/one", 50, 90);
+  const docsOne = wt("d1", "docs-1", "docs/one", 70, 40);
+  // The one worktree whose recent, created and alpha positions all differ, so
+  // grouped mode cannot pass by coincidentally agreeing with the name sort.
+  const featureTwenty = wt("f20", "feature-20", "feature/twenty", 40, 95);
+  const outside = wt("x", "aardvark", "feature/outside", 100, 100, { isExternal: true });
+
+  // Deliberately scrambled: the helper must not inherit input order.
+  const all = [
+    docsOne,
+    outside,
+    pinnedSecond,
+    main,
+    featureTen,
+    featureTwenty,
+    bugfixOne,
+    pinnedFirst,
+    featureTwo,
+  ];
+
+  // "ghost" is a stale pin for a worktree that no longer exists. "x" pins an
+  // external worktree, which must not lift it out of the trailing bucket.
+  const pinnedWorktrees = ["ghost", "p1", "x", "p2"];
+  // "d1" is deliberately absent, so manual mode sorts it to the end.
+  const manualOrder = ["ghost", "f10", "b1", "f2"];
+
+  const orderings: OrderBy[] = ["recent", "created", "alpha", "manual"];
+  const ids = (worktrees: Worktree[]) => worktrees.map((w) => w.id);
+  const prefs = (orderBy: OrderBy, groupByType: boolean): SidebarOrderPrefs => ({
+    orderBy,
+    groupByType,
+    pinnedWorktrees,
+    manualOrder,
+  });
+
+  // Derived by hand from the comparator in `sortWorktrees`, not from the
+  // function under test: main, then pins in pin order, then the orderBy
+  // comparator with the natural-number name tiebreak, then external.
+  const ungrouped: Record<OrderBy, string[]> = {
+    recent: ["m", "p1", "p2", "f20", "b1", "f2", "f10", "d1", "x"],
+    created: ["m", "p1", "p2", "f10", "d1", "f2", "b1", "f20", "x"],
+    alpha: ["m", "p1", "p2", "b1", "d1", "f2", "f10", "f20", "x"],
+    manual: ["m", "p1", "p2", "f10", "b1", "f2", "d1", "f20", "x"],
+  };
+
+  // Grouped re-sorts inside each section *without* `manualOrder`, so manual
+  // mode collapses to the name tiebreak there, and TYPE_ORDER (feature,
+  // bugfix, docs, then "Outside the project") outranks the pins.
+  const grouped: Record<OrderBy, string[]> = {
+    recent: ["m", "p2", "f20", "f2", "f10", "p1", "b1", "d1", "x"],
+    created: ["m", "p2", "f10", "f2", "f20", "p1", "b1", "d1", "x"],
+    alpha: ["m", "p2", "f2", "f10", "f20", "p1", "b1", "d1", "x"],
+    // Identical to alpha on purpose: `groupByType` re-sorts each section
+    // without `manualOrder`, so manual mode collapses to the name tiebreak.
+    manual: ["m", "p2", "f2", "f10", "f20", "p1", "b1", "d1", "x"],
+  };
+
+  it.each(orderings)("matches the sidebar's ungrouped order for %s", (orderBy) => {
+    expect(ids(orderWorktreesLikeSidebar(all, prefs(orderBy, false)))).toEqual(ungrouped[orderBy]);
+  });
+
+  it.each(orderings)("matches the sidebar's grouped order for %s", (orderBy) => {
+    expect(ids(orderWorktreesLikeSidebar(all, prefs(orderBy, true)))).toEqual(grouped[orderBy]);
+  });
+
+  // The regression guard for SidebarContent's swap: its no-query branch called
+  // `sortWorktrees` with the pins pre-filtered to ids that still exist.
+  it.each(orderings)("reproduces the sidebar's former sortWorktrees call for %s", (orderBy) => {
+    const validPinned = pinnedWorktrees.filter((id) => all.some((w) => w.id === id));
+    expect(ids(orderWorktreesLikeSidebar(all, prefs(orderBy, false)))).toEqual(
+      ids(sortWorktrees(all, orderBy, validPinned, manualOrder))
+    );
+  });
+
+  it("drops nothing and preserves object identity", () => {
+    const result = orderWorktreesLikeSidebar(all, prefs("recent", true));
+    expect(result).toHaveLength(all.length);
+    for (const worktree of all) {
+      expect(result).toContain(worktree);
+    }
+  });
+
+  it("does not mutate the worktrees or the preferences it is given", () => {
+    const input = [...all];
+    const pins = [...pinnedWorktrees];
+    const manual = [...manualOrder];
+    orderWorktreesLikeSidebar(input, {
+      orderBy: "alpha",
+      groupByType: true,
+      pinnedWorktrees: pins,
+      manualOrder: manual,
+    });
+    expect(ids(input)).toEqual(ids(all));
+    expect(pins).toEqual(pinnedWorktrees);
+    expect(manual).toEqual(manualOrder);
+  });
+
+  it("keeps a worktree whose branch prefix names an Object.prototype member when grouping", () => {
+    const inherited = wt("c1", "constructor-injection", "constructor-injection", 90, 90);
+    const result = orderWorktreesLikeSidebar([main, featureTwo, inherited], prefs("alpha", true));
+    expect(ids(result)).toEqual(["m", "f2", "c1"]);
+  });
+
+  it("keeps main first when main is also reported from outside the project", () => {
+    const externalMain = createMockWorktree({
+      id: "m2",
+      name: "repo",
+      branch: "main",
+      isMainWorktree: true,
+      isExternal: true,
+    });
+    expect(
+      ids(orderWorktreesLikeSidebar([featureTwo, externalMain], prefs("alpha", true)))
+    ).toEqual(["m2", "f2"]);
+  });
+
+  it("returns an empty array for empty input", () => {
+    expect(orderWorktreesLikeSidebar([], prefs("recent", true))).toEqual([]);
+  });
+
+  it("orders a set with no main worktree at all", () => {
+    expect(ids(orderWorktreesLikeSidebar([docsOne, bugfixOne], prefs("alpha", false)))).toEqual([
+      "b1",
+      "d1",
+    ]);
+  });
+
+  it("ignores a pin for a worktree that is not in the set", () => {
+    const subset = [featureTwo, bugfixOne];
+    expect(
+      ids(
+        orderWorktreesLikeSidebar(subset, {
+          orderBy: "alpha",
+          groupByType: false,
+          // "p1" is pinned ahead of "f2" but absent, so it must not reserve a slot.
+          pinnedWorktrees: ["p1", "f2"],
+          manualOrder: [],
+        })
+      )
+    ).toEqual(["f2", "b1"]);
   });
 });

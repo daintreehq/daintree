@@ -9,7 +9,11 @@ import type { ManagedTerminal } from "./types";
 import { isNonKeyboardInput } from "./inputUtils";
 import { installLinuxPrimarySelectionListeners } from "./primarySelection";
 import { writeTerminalInputOrFleet } from "./fleetInputRouter";
-import { getXtermCellDimensions } from "./TerminalResizeController";
+import {
+  getXtermCellDimensions,
+  invalidateXtermViewportScrollCache,
+} from "./TerminalResizeController";
+import { installViewportAnchorController } from "./TerminalViewportAnchorController";
 import { MouseWheelClassifier } from "./mouseWheelClassifier";
 import { getTerminalMetrics } from "@/config/xtermConfig";
 import { hashPerfLine, PERF_MARKS } from "@shared/perf/marks";
@@ -257,6 +261,13 @@ export interface TerminalListenerInstallDeps {
   scrollToBottomSafe: (managed: ManagedTerminal) => void;
   updateScrollState: (id: string, isScrolledBack: boolean) => void;
   clearUnseen: (id: string, fromUser: boolean) => void;
+  /**
+   * Unseen-output accounting across an ESC[3J redraw (#12398): hold stops
+   * publishing and returns the count the redraw must not raise; release
+   * lowers back to it and publishes once.
+   */
+  holdUnseen: (id: string) => number;
+  releaseUnseen: (id: string, count: number) => void;
   onWriteParsedReflow?: (managed: ManagedTerminal) => void;
 
   // Selection cache
@@ -275,17 +286,17 @@ export interface TerminalListenerInstallDeps {
   onUserInput: (id: string, data: string) => void;
   /**
    * Fired when a wheel scroll is actively forwarded to a mouse-reporting TUI.
-   * Lets the host boost the renderer tier and hold the resource profile off
-   * efficiency so an active scroll stays responsive (symptom B).
+   * Lets the host boost the renderer tier so an active scroll stays
+   * responsive (symptom B).
    */
   onActiveWheel: (id: string) => void;
   /**
    * Fired on ordinary scrollback wheel/key scrolling (not mouse-reporting
-   * forwarding). Holds the resource profile off efficiency for the scroll's
-   * duration so an in-progress profile downgrade doesn't drop the terminal's
-   * WebGL threshold mid-scroll (#10858). Unlike `onActiveWheel`, this does
-   * not boost the renderer tier — plain scrollback is client-side xterm
-   * rendering, not a PTY round-trip per redraw.
+   * forwarding). Holds the terminal's WebGL context for the scroll's duration
+   * so a threshold drop doesn't swap it onto the DOM renderer mid-scroll
+   * (#10858). Unlike `onActiveWheel`, this does not boost the renderer tier —
+   * plain scrollback is client-side xterm rendering, not a PTY round-trip per
+   * redraw.
    */
   onUserScrollIntent: (id: string) => void;
   onEnterPressed: (id: string) => void;
@@ -569,7 +580,7 @@ export function installTerminalBoundListeners(
     if (lines === 0) return;
 
     // A real scroll is being forwarded to the TUI — keep the pane fast: boost the
-    // renderer tier and hold the resource profile off efficiency for the gesture.
+    // renderer tier for the gesture.
     deps.onActiveWheel(id);
 
     pendingWheelLines += lines;
@@ -618,11 +629,74 @@ export function installTerminalBoundListeners(
   });
   managed.listeners.push(() => oscDisposable.dispose());
 
+  // A fresh terminal has no queued writes; a counter stranded by a rebuild
+  // (the old terminal's parse callback never fires) must not disarm the anchor.
+  managed.pendingOwnClearWrites = 0;
+  // Serialized restores need no guard here: they go through `terminal.reset()`,
+  // which bypasses the parser, and the serialize addon never emits ESC[3J.
+  const viewportAnchor = installViewportAnchorController(terminal, {
+    isOwnClear: () => (managed.pendingOwnClearWrites ?? 0) > 0,
+    afterRender: (callback) => {
+      let settled = false;
+      const renderOnce = terminal.onRender(() => {
+        if (settled) return;
+        settled = true;
+        renderOnce.dispose();
+        // Public onRender is xterm's onRenderedViewportChange, fired before the
+        // Viewport's own render listener performs the sync it deferred during
+        // synchronized output — hop out so scroll dimensions are current.
+        queueMicrotask(callback);
+      });
+      return () => {
+        settled = true;
+        renderOnce.dispose();
+      };
+    },
+    syncViewport: () => invalidateXtermViewportScrollCache(terminal),
+    holdUnseen: () => deps.holdUnseen(id),
+    releaseUnseen: (count) => deps.releaseUnseen(id, count),
+    setScrollTrackingSuppressed: (suppressed) => {
+      managed._suppressScrollTracking = suppressed;
+    },
+  });
+  managed.listeners.push(() => viewportAnchor.dispose());
+
+  // Reader navigation drops a pending restore. Capture phase, unlike the
+  // intent listeners below: xterm's scrollable element stops propagation of
+  // any wheel it consumed, and a drag straight to the top while the DOM still
+  // shows the pre-erase position produces no scroll event at all. Keys are
+  // only xterm's own scrollback chords — with `scrollOnUserInput` off, plain
+  // arrows and paging keys go to the program (Codex's input editor), and the
+  // controller's onScroll check already catches anything that moves the buffer.
+  const ANCHOR_CANCEL_KEYS = new Set(["PageUp", "PageDown", "Home", "End"]);
+  const cancelAnchorOnWheel = () => viewportAnchor.cancel();
+  const cancelAnchorOnKey = (e: KeyboardEvent) => {
+    if (e.shiftKey && ANCHOR_CANCEL_KEYS.has(e.key)) viewportAnchor.cancel();
+  };
+  const cancelAnchorOnScrollbar = (e: PointerEvent) => {
+    if (e.target instanceof Element && e.target.closest(".xterm-scrollbar")) {
+      viewportAnchor.cancel();
+    }
+  };
+  hostElement.addEventListener("wheel", cancelAnchorOnWheel, { capture: true, passive: true });
+  hostElement.addEventListener("keydown", cancelAnchorOnKey, { capture: true });
+  hostElement.addEventListener("pointerdown", cancelAnchorOnScrollbar, { capture: true });
+  hostElement.addEventListener("touchstart", cancelAnchorOnWheel, { capture: true, passive: true });
+  managed.listeners.push(() => {
+    hostElement.removeEventListener("wheel", cancelAnchorOnWheel, { capture: true });
+    hostElement.removeEventListener("keydown", cancelAnchorOnKey, { capture: true });
+    hostElement.removeEventListener("pointerdown", cancelAnchorOnScrollbar, { capture: true });
+    hostElement.removeEventListener("touchstart", cancelAnchorOnWheel, { capture: true });
+  });
+
   const writeParsedDisposable = terminal.onWriteParsed(() => {
     deps.notifyParsed(id);
     if (!managed.isUserScrolledBack && !managed.isAltBuffer) {
       if (!managed.terminal.hasSelection()) {
-        deps.scrollToBottomSafe(managed);
+        // xterm refreshes the whole viewport even for a zero-distance scroll.
+        // A prompt/spinner repaint already marks its changed rows dirty.
+        const buffer = terminal.buffer.active;
+        if (buffer.viewportY !== buffer.baseY) deps.scrollToBottomSafe(managed);
       } else {
         managed.isUserScrolledBack = true;
         deps.updateScrollState(id, true);
@@ -651,12 +725,20 @@ export function installTerminalBoundListeners(
   managed.listeners.push(() => scrollDisposable.dispose());
 
   const SCROLL_KEYS = new Set(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"]);
-  const onWheel = (ev: WheelEvent) => {
+  const onWheel = () => {
     managed._userScrollIntent = true;
     managed.lastWheelAt = Date.now();
+  };
+  // Capture phase, unlike onWheel: xterm's scrollable element stops
+  // propagation of every wheel it consumes, so a bubbling listener only sees
+  // the wheels that did NOT scroll — never an actual scrollback gesture.
+  // onWheel keeps its bubble-phase `lastWheelAt` semantics on purpose:
+  // useUnseenOutput's pill suppression has no expiry re-render, so feeding it
+  // every consumed wheel could leave the pill hidden after the gesture.
+  const onWheelScrollIntent = (ev: WheelEvent) => {
     // Skip the synthetic per-line events the alt-buffer mouse-reporting
-    // amplifier dispatches (already drives the profile hold via onActiveWheel)
-    // and modifier-held wheels (pinch-zoom/etc, not scrollback navigation) —
+    // amplifier dispatches (already signalled via onActiveWheel) and
+    // modifier-held wheels (pinch-zoom/etc, not scrollback navigation) —
     // mirrors the gating onWheelNormalize already applies for the same reasons.
     if (amplifiedWheelEvents.has(ev) || ev.ctrlKey || ev.altKey || ev.metaKey || ev.shiftKey) {
       return;
@@ -670,9 +752,11 @@ export function installTerminalBoundListeners(
     }
   };
   hostElement.addEventListener("wheel", onWheel, { passive: true });
+  hostElement.addEventListener("wheel", onWheelScrollIntent, { capture: true, passive: true });
   hostElement.addEventListener("keydown", onKeydownScroll);
   managed.listeners.push(() => {
     hostElement.removeEventListener("wheel", onWheel);
+    hostElement.removeEventListener("wheel", onWheelScrollIntent, { capture: true });
     hostElement.removeEventListener("keydown", onKeydownScroll);
   });
 

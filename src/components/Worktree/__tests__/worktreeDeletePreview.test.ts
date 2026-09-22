@@ -125,6 +125,23 @@ describe("buildWorktreeDeletePreview", () => {
     expect(preview?.changes).toHaveLength(2);
   });
 
+  it("carries the ahead count from the same status read as the file list", async () => {
+    // Callers that show an unpushed-commit count beside the file list must be
+    // reading one snapshot, not a number taken at a different time.
+    getFreshChangesMock.mockResolvedValue({ ...changes([file("a.ts", "modified")]), ahead: 3 });
+    const preview = await buildWorktreeDeletePreview("wt-1");
+    expect(preview?.ahead).toBe(3);
+  });
+
+  it("omits ahead entirely when git reports no upstream", async () => {
+    // Absent, NOT zero: every local commit on a branch with no upstream is
+    // unpushed, so a caller must be able to tell "none" from "unknown".
+    getFreshChangesMock.mockResolvedValue(changes([]));
+    const preview = await buildWorktreeDeletePreview("wt-1");
+    expect(preview).not.toBeNull();
+    expect("ahead" in preview!).toBe(false);
+  });
+
   it("carries a completed submodule inventory as verified", async () => {
     getFreshChangesMock.mockResolvedValue(changes([]));
     getSubmoduleDeleteRiskMock.mockResolvedValue(

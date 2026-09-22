@@ -1,6 +1,10 @@
 import type { MessagePort } from "node:worker_threads";
 import { SharedRingBuffer } from "../../../shared/utils/SharedRingBuffer.js";
-import { POOL_ENV_EMPTY_HASH, computePoolEnvHash } from "../../services/pty/ptyPoolEnvHash.js";
+import {
+  POOL_ENV_EMPTY_HASH,
+  carriesPoolStrippedEnv,
+  computePoolEnvHash,
+} from "../../services/pty/ptyPoolEnvHash.js";
 import { markPerformance } from "../../utils/performance.js";
 import { PortBatcher, type PortBatcherFailedBatch } from "../index.js";
 import type { HandlerMap, HostContext } from "./types.js";
@@ -15,6 +19,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
     rendererConnections,
     terminalWorkerConnections,
     windowProjectMap,
+    fallbackEligibleProjects,
     windowFocusedTerminalMap,
     disconnectWindow,
     disconnectTerminalWorkerPort,
@@ -38,6 +43,10 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       }
 
       const receivedPort = ports[0] as MessagePort;
+      // Opaque to the host — it only ever echoes this back so Main can address
+      // the exact view that read a chunk off this port (#12557).
+      const holderWebContentsId: number | undefined =
+        typeof msg.holderWebContentsId === "number" ? msg.holderWebContentsId : undefined;
       const existing = rendererConnections.get(windowId);
 
       // Duplicate port check
@@ -81,7 +90,18 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
           );
           for (const batch of failedBatches) {
             if (batch.bytes <= 0) continue;
-            sendEvent({ type: "data", id: batch.id, data: batchDataToString(batch.data) });
+            // Addressed to this view alone (#12557). Everyone else already
+            // has these bytes: sibling windows took them on their own ports,
+            // and port-less views took them from the supplementary IPC
+            // fallback that this window's acceptance kept open. Addressed by
+            // the holder's identity rather than its window, so a switch
+            // completing before Main routes this cannot redirect it.
+            sendEvent({
+              type: "data",
+              id: batch.id,
+              data: batchDataToString(batch.data),
+              portRecoveryWebContentsId: holderWebContentsId,
+            });
           }
           disconnectWindow(windowId, "postMessage-error");
         },
@@ -119,7 +139,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
             typeof portMsg.cols === "number" &&
             typeof portMsg.rows === "number"
           ) {
-            ptyManager.resize(portMsg.id, portMsg.cols, portMsg.rows);
+            ptyManager.resize(portMsg.id, portMsg.cols, portMsg.rows, "renderer-message-port");
           } else if (
             portMsg.type === "ack" &&
             typeof portMsg.id === "string" &&
@@ -189,6 +209,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
         closeHandler,
         portQueueManager: perWindowQueueManager,
         batcher: perWindowBatcher,
+        holderWebContentsId,
       });
       console.log(`[PtyHost] MessagePort listener installed for window ${windowId}`);
     },
@@ -241,7 +262,15 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
           );
           for (const batch of failedBatches) {
             if (batch.bytes <= 0) continue;
-            sendEvent({ type: "data", id: batch.id, data: batchDataToString(batch.data) });
+            // Same single-recipient recovery as the window port above: the
+            // engaged worker belongs to the window's port-holding view, so it
+            // is addressed by that same identity.
+            sendEvent({
+              type: "data",
+              id: batch.id,
+              data: batchDataToString(batch.data),
+              portRecoveryWebContentsId: rendererConnections.get(windowId)?.holderWebContentsId,
+            });
           }
           disconnectTerminalWorkerPort(windowId, terminalId, "postMessage-error");
         },
@@ -302,6 +331,32 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       // PortBatcher (flush-first). Keyed by windowId — never global — so each
       // WebContentsView/project view keeps its own focus.
       windowFocusedTerminalMap.set(msg.windowId, msg.id);
+    },
+
+    // Authoritative replace, never a merge: Main recomputes the whole set from
+    // its view registry whenever a view or a port holder changes, so a stale
+    // entry here would keep the IPC fallback open for a project whose every
+    // view now holds a port — a permanent double-path for its output.
+    "set-fallback-eligible-projects": (msg) => {
+      const projectIds: unknown = msg.projectIds;
+      // Validated in full BEFORE the set is touched. Clearing first and
+      // filtering as we go would let a malformed payload erase the current
+      // protection and reopen the starvation — the one direction this message
+      // must never fail in. An empty array is legitimate and still clears.
+      // Indexed rather than `.some()`, which skips holes: a sparse array like
+      // `["a", <hole>]` would pass and then insert `undefined` into the set.
+      const malformed =
+        !Array.isArray(projectIds) ||
+        projectIds.length !== Object.keys(projectIds).length ||
+        projectIds.some((projectId) => typeof projectId !== "string" || !projectId);
+      if (malformed) {
+        console.warn(
+          "[PtyHost] set-fallback-eligible-projects payload is not a list of project ids, ignoring"
+        );
+        return;
+      }
+      fallbackEligibleProjects.clear();
+      for (const projectId of projectIds as string[]) fallbackEligibleProjects.add(projectId);
     },
 
     "disconnect-port": (msg) => {
@@ -393,6 +448,10 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
             // entries are tagged with the current epoch and survive (#9774).
             // warmForKey is idempotent, per-key capacity-capped, and circuit-
             // broken, so stale/deleted worktree paths self-limit.
+            // A project env carrying a secret-named variable makes every
+            // launch that uses it pool-ineligible (`carriesPoolStrippedEnv`),
+            // so shells warmed for its key would never be taken.
+            if (carriesPoolStrippedEnv(msg.projectEnv ?? undefined)) return;
             for (const cwd of panelCwds) {
               pool.warmForKey(cwd, warmCallerEnv, projectEnvHash);
             }

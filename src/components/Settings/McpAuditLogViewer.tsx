@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Check, Clock, Copy, Download, Layers, RefreshCw, ShieldOff } from "lucide-react";
+import { Check, Copy, Download, Layers, RefreshCw, ShieldOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
@@ -13,6 +13,7 @@ import {
   isAuditRecord,
   isGrantRecord,
   type AssistantTurnRecord,
+  type McpAnomalySeverity,
   type McpAnomalySignal,
 } from "@shared/types";
 
@@ -63,6 +64,57 @@ const GRANT_TYPE_SEVERITY: Record<McpGrantRecordType, StatusSeverity> = {
   "tier.elevated": "warning",
   "tier.decayed": "info",
 };
+
+// Signals overlap (a record can back several), so the banner and each row
+// marker take the highest severity among the signals they summarise.
+const ANOMALY_SEVERITY_RANK: Record<McpAnomalySeverity, number> = {
+  info: 0,
+  warning: 1,
+  danger: 2,
+};
+
+const ANOMALY_SEVERITY_VISUAL: Record<
+  McpAnomalySeverity,
+  { label: string; banner: string; text: string; mark: string }
+> = {
+  // Info is drawn hollow: forced-colors paints every `.status-mark` fill the
+  // same CanvasText, but a border-only diamond stays distinct from a filled one.
+  info: {
+    label: "Anomaly (info)",
+    banner: "bg-overlay-soft border-border-default",
+    text: "text-text-secondary",
+    mark: "border border-text-secondary",
+  },
+  warning: {
+    label: "Anomaly (warning)",
+    banner: "bg-status-warning/10 border-status-warning/20",
+    text: "text-status-warning",
+    mark: "status-mark bg-status-warning",
+  },
+  danger: {
+    label: "Anomaly (error)",
+    banner: "bg-status-danger/10 border-status-danger/20",
+    text: "text-status-danger",
+    mark: "status-mark bg-status-danger",
+  },
+};
+
+function higherSeverity(a: McpAnomalySeverity, b: McpAnomalySeverity): McpAnomalySeverity {
+  return ANOMALY_SEVERITY_RANK[b] > ANOMALY_SEVERITY_RANK[a] ? b : a;
+}
+
+function AnomalyMark({ severity }: { severity: McpAnomalySeverity | undefined }) {
+  if (!severity) return null;
+  const { label, mark } = ANOMALY_SEVERITY_VISUAL[severity];
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      title={label}
+      className={cn("h-2 w-2 rounded-sm rotate-45 shrink-0", mark)}
+    />
+  );
+}
 
 type TimeRange = "5m" | "1h" | "24h" | "all";
 
@@ -311,7 +363,6 @@ export function McpAuditLogViewer({
   const [timeRange, setTimeRange] = useState<TimeRange>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [groupByTurn, setGroupByTurn] = useState(false);
-  const [ignoreLastHour, setIgnoreLastHour] = useState(false);
 
   const tick = useGlobalMinuteTicker();
   const now = useMemo(() => {
@@ -364,22 +415,30 @@ export function McpAuditLogViewer({
 
   const showCopyAll = filteredRecords.length === visibleRecords.length;
 
-  const oneHourAgo = now - 3_600_000;
+  // Stats are a snapshot fetched on mount/refresh; `expiresAt` lets a view left
+  // open drop signals the detector has since stopped emitting.
   const visibleSignals = useMemo(() => {
     if (anomalySuppressed) return [];
-    return ignoreLastHour
-      ? anomalySignals.filter((s) => s.timestamp <= oneHourAgo)
-      : anomalySignals;
-  }, [anomalySignals, anomalySuppressed, ignoreLastHour, oneHourAgo]);
+    return anomalySignals.filter((s) => s.expiresAt === undefined || s.expiresAt > now);
+  }, [anomalySignals, anomalySuppressed, now]);
 
-  const signalRecordIds = useMemo(() => {
-    const set = new Set<string>();
+  const signalSeverityByRecordId = useMemo(() => {
+    const map = new Map<string, McpAnomalySeverity>();
     for (const sig of visibleSignals) {
       for (const id of sig.recordIds) {
-        set.add(id);
+        const prev = map.get(id);
+        map.set(id, prev ? higherSeverity(prev, sig.severity) : sig.severity);
       }
     }
-    return set;
+    return map;
+  }, [visibleSignals]);
+
+  const bannerSeverity = useMemo(() => {
+    let highest: McpAnomalySeverity | null = null;
+    for (const sig of visibleSignals) {
+      highest = highest ? higherSeverity(highest, sig.severity) : sig.severity;
+    }
+    return highest;
   }, [visibleSignals]);
 
   const anomalyCountsByKind = useMemo(() => {
@@ -483,26 +542,17 @@ export function McpAuditLogViewer({
             Group by turn
           </button>
         )}
-        {!anomalySuppressed && anomalySignals.length > 0 && (
-          <button
-            type="button"
-            onClick={() => setIgnoreLastHour((v) => !v)}
-            className={cn(
-              "flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
-              ignoreLastHour
-                ? "border-status-warning/20 text-status-warning bg-status-warning/10"
-                : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
-            )}
-          >
-            <Clock className="w-3.5 h-3.5" />
-            Ignore last hour
-          </button>
-        )}
       </div>
 
-      {!anomalySuppressed && visibleSignals.length > 0 && (
-        <div className="flex items-start gap-2 p-2.5 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-          <span className="text-xs text-status-danger">
+      {bannerSeverity && (
+        <div
+          data-anomaly-severity={bannerSeverity}
+          className={cn(
+            "flex items-start gap-2 p-2.5 rounded-[var(--radius-md)] border",
+            ANOMALY_SEVERITY_VISUAL[bannerSeverity].banner
+          )}
+        >
+          <span className={cn("text-xs", ANOMALY_SEVERITY_VISUAL[bannerSeverity].text)}>
             {visibleSignals.length} anomaly signal{visibleSignals.length !== 1 ? "s" : ""}
             {Object.entries(anomalyCountsByKind).length > 0 &&
               ` (${Object.entries(anomalyCountsByKind)
@@ -683,14 +733,7 @@ export function McpAuditLogViewer({
                       label={RESULT_LABEL[record.result]}
                       className="h-3 w-3"
                     />
-                    {signalRecordIds.has(record.id) && (
-                      <span
-                        role="img"
-                        aria-label="Anomaly"
-                        className="status-mark h-2 w-2 rounded-sm rotate-45 shrink-0 bg-status-danger"
-                        title="Anomaly"
-                      />
-                    )}
+                    <AnomalyMark severity={signalSeverityByRecordId.get(record.id)} />
                   </div>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">

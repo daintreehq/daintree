@@ -402,7 +402,7 @@ export function setupLifecycleListeners(): DisposableStore {
         // guard, restore the suspended wake branch below, and re-widen
         // the formatter/component prop types — see the // FUTURE_SAB:
         // markers in `useAccessibilityAnnouncements.ts` and
-        // `TerminalHeaderContent.tsx`.
+        // `TerminalStatusSlot.tsx`.
         if (status === "suspended" || status === "paused-user") {
           return;
         }

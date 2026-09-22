@@ -232,10 +232,11 @@ function parseTemplate(value: string): TemplateKind {
 /**
  * Templates a project-local plugin cannot use.
  *
- * The project-origin manifest schema rejects `contributes.mcpServers` — an MCP
- * server is reachable through the app-global plugin-MCP surface, where an
- * external agent session carries no project binding, so it cannot be scoped to
- * one project. Scaffolding one under `--project` would write a manifest the
+ * The project-origin manifest schema rejects `contributes.mcpServers` — a
+ * contributed server runs under one app-wide supervisor whose tools Daintree
+ * and its in-app Assistant call with no project binding, so it cannot be
+ * scoped to one project (`contributes.agentMcp` is the project-scoped way to
+ * serve tools to agents). Scaffolding one under `--project` would write a manifest the
  * host refuses to load, and the author would only find out on the next open.
  */
 const PROJECT_INCOMPATIBLE_TEMPLATES: readonly TemplateKind[] = ["mcp", "full"];

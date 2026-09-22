@@ -1,6 +1,11 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { panelKindHasPty } from "../../../shared/config/panelKindRegistry.js";
+import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../shared/config/mcpLimits.js";
 import { tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
+import {
+  boundTerminalStatusOutput,
+  type CapturedTail,
+} from "../../../shared/utils/terminalOutputBudget.js";
 import type {
   TerminalStatusEntry,
   TerminalStatusResult,
@@ -35,13 +40,12 @@ import type { PtyClient } from "../PtyClient.js";
  * `lastCheckResult` is parsed out of agent stdout by `CheckResultDetector` —
  * both only ever reach the renderer's panel record, and main keeps no copy.
  *
- * `exitCode` is the one that looks reachable and is not. Main does cache exit
- * metadata, but `AgentAvailabilityStore` keys it by agent id, and an agent id
- * names the agent *type* ("claude"), not the spawn — so several terminals share
- * one, and `agentToTerminal` keeps only the most recent. Joining through it
- * would report whichever same-type terminal exited last, which for a fleet of
- * identical agents is a wrong answer far more often than a right one. The
- * renderer path has the code on the panel itself and reports it there.
+ * `exitCode` is the one that looks reachable. Main caches exit metadata per
+ * terminal in `AgentAvailabilityStore` (#12494), but everything else in this
+ * answer comes from the pty-host record, and the store is a second copy fed
+ * separately by events — the two can disagree mid-respawn, and splicing one
+ * field in from it is a contract change of its own. The renderer path has the
+ * code on the panel itself and reports it there.
  *
  * All three are reported as unavailable rather than defaulted or guessed:
  * `armed: false` and a borrowed exit code are both interpretations main has no
@@ -232,6 +236,13 @@ function buildEntry(record: TerminalRecord, submissionToken?: string): TerminalS
     spawnedAt: record.spawnedAt,
   };
 
+  // Counted on the pty-host record, so this surface reports whatever it holds.
+  // Older records predate the field and are unobserved rather than zero — the
+  // distinction the delivery path refuses on (#12535).
+  if (record.agentIncarnation !== undefined) {
+    entry.agentIncarnation = record.agentIncarnation;
+  }
+
   // `!wasKilled && !isExited` off the pty-host record (#12336). A pane that
   // exits cleanly is deliberately preserved, so the record outlives its
   // process and `false` is a real reading rather than a missing row. Assigned
@@ -241,8 +252,20 @@ function buildEntry(record: TerminalRecord, submissionToken?: string): TerminalS
     entry.hasPty = record.hasPty;
   }
 
+  // Absent means no content change has been observed yet, so there is nothing
+  // to report rather than a time to invent (#12428).
+  if (record.lastOutputChangeAt !== undefined) {
+    entry.lastOutputChangeAt = record.lastOutputChangeAt;
+  }
+
   if (agentState === "waiting" && record.waitingReason !== undefined) {
     entry.waitingReason = record.waitingReason;
+  }
+
+  // Parsed on the pty-host and kept on its record, so unlike `lastCheckResult`
+  // this surface can observe it (#12488); absent means none was seen.
+  if (record.lastHandback !== undefined) {
+    entry.lastHandback = record.lastHandback;
   }
 
   // The record was read, so an absent `submission` is evidence: this terminal
@@ -319,7 +342,7 @@ export async function buildViewlessTerminalStatus(
     if (record && isVisibleToBoundSession(record, workspaceId)) records.set(id, record);
   });
 
-  const outputs = new Map<string, string | null>();
+  const outputs = new Map<string, CapturedTail | null>();
   if (includeOutput) {
     const readable = lookupIds.filter((id) => records.has(id));
     const snapshots = await Promise.all(
@@ -332,7 +355,7 @@ export async function buildViewlessTerminalStatus(
         // Normalize before tailing (#10763), same as the renderer path: a
         // bottom-padding TUI's blank rows otherwise fill the last-N window and
         // an active agent reads as silent.
-        snapshot ? tailCapturedOutput(snapshot.data, lines, stripAnsi).content : null
+        snapshot ? tailCapturedOutput(snapshot.data, lines, stripAnsi) : null
       );
     });
   }
@@ -353,15 +376,24 @@ export async function buildViewlessTerminalStatus(
       };
     }
     const entry = buildEntry(record, submissionToken);
-    if (includeOutput) entry.recentOutput = outputs.get(id) ?? null;
+    if (includeOutput) {
+      const tail = outputs.get(id) ?? null;
+      entry.recentOutput = tail?.content ?? null;
+      if (tail?.truncated) entry.recentOutputTruncated = true;
+    }
     return entry;
   });
 
-  return {
-    terminals,
-    source: "pty",
-    unavailableFields: [...VIEWLESS_STATUS_UNAVAILABLE_FIELDS],
-  };
+  // Same fitting as the renderer answer (#12450), so a caller's tails do not
+  // change shape with whether its workspace happens to have a view open.
+  return boundTerminalStatusOutput<TerminalStatusResult>(
+    {
+      terminals,
+      source: "pty",
+      unavailableFields: [...VIEWLESS_STATUS_UNAVAILABLE_FIELDS],
+    },
+    MCP_RESPONSE_TEXT_MAX_BYTES
+  );
 }
 
 /**

@@ -123,3 +123,34 @@ describe("TerminalWebGLPolicy.shouldHaveActiveWebGL — DOM-mode pin safety net"
     expect(policy.shouldHaveActiveWebGL(baseManaged())).toBe(true);
   });
 });
+
+describe("cached project view (#12514)", () => {
+  it.each(ELIGIBLE_TIERS)("vetoes the want at eligible tier %s", (tier) => {
+    const policy = makePolicy({ isViewCached: () => true });
+
+    expect(policy.wantsWebGLAtTier(makeManaged(), tier)).toBe(false);
+  });
+
+  it("vetoes even when the caller vouches for DOM visibility", () => {
+    // A cached view's panes pass every DOM visibility check — it is laid out,
+    // just detached — so trustDomVisibility must not resurrect the want.
+    const policy = makePolicy({ isViewCached: () => true });
+
+    expect(
+      policy.wantsWebGLAtTier(makeManaged(), TerminalRefreshTier.FOCUSED, {
+        trustDomVisibility: true,
+      })
+    ).toBe(false);
+    expect(
+      policy.shouldRestoreWebGL(makeManaged({ lastAppliedTier: TerminalRefreshTier.FOCUSED }), {
+        trustDomVisibility: true,
+      })
+    ).toBe(false);
+  });
+
+  it("leaves eligibility untouched when the view is not cached", () => {
+    const policy = makePolicy({ isViewCached: () => false });
+
+    expect(policy.wantsWebGLAtTier(makeManaged(), TerminalRefreshTier.FOCUSED)).toBe(true);
+  });
+});

@@ -22,6 +22,13 @@ export interface RendererConnection {
   closeHandler?: () => void;
   portQueueManager: PortQueueManager;
   batcher: PortBatcher;
+  /**
+   * The view Main delivered this port's renderer end to (#12557), stored
+   * opaquely and echoed on every chunk the port accepts so Main can exclude
+   * the exact recipient. Undefined for synthetic connections that own no
+   * project view (SurfacePortBroker).
+   */
+  holderWebContentsId?: number;
 }
 
 /**
@@ -63,6 +70,12 @@ export interface HostContext {
   /** Dedicated worker-ingest ports, keyed windowId → terminalId. */
   terminalWorkerConnections: Map<number, Map<string, TerminalWorkerConnection>>;
   windowProjectMap: Map<number, string | null>;
+  /**
+   * Projects with a view that holds no MessagePort, pushed by Main (#12557).
+   * Orthogonal to `windowProjectMap`, which only tracks the one project each
+   * window is actively showing.
+   */
+  fallbackEligibleProjects: Set<string>;
   /**
    * Per-window UI-focused terminal id, pushed from the renderer's
    * `focusedId` (terminalFocusSlice). Read by each window's PortQueueManager

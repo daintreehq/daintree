@@ -430,6 +430,80 @@ describe("PtyClient Handshake Protocol", () => {
     });
   });
 
+  describe("power policy (#12515)", () => {
+    function restartHost() {
+      const newChild = Object.assign(new EventEmitter(), {
+        postMessage: vi.fn(),
+        kill: vi.fn(),
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+      });
+      forkMock.mockReturnValue(newChild);
+      mockChild.emit("exit", 1);
+      vi.advanceTimersByTime(2000);
+      newChild.emit("message", { type: "ready" });
+      return newChild;
+    }
+
+    function powerPolicyCalls(child: { postMessage: Mock }): unknown[][] {
+      return child.postMessage.mock.calls.filter(
+        (c: unknown[]) => (c[0] as { type?: string } | undefined)?.type === "set-power-policy"
+      );
+    }
+
+    it("sends a level change to the host", () => {
+      const client = createClient();
+      mockChild.postMessage.mockClear();
+
+      client.setPowerPolicy("deep", "deep");
+
+      expect(mockChild.postMessage).toHaveBeenCalledWith({
+        type: "set-power-policy",
+        level: "deep",
+        observationLevel: "deep",
+      });
+    });
+
+    it("sends a saving level on the default host's first ready", async () => {
+      // The default host's first ready gets no config replay, and on a battery
+      // launch the policy is already saving before the host is up.
+      const { updatePowerObservations } = await import("../../window/powerPolicy.js");
+      updatePowerObservations({ onBattery: true });
+
+      createClient();
+
+      expect(powerPolicyCalls(mockChild)).toEqual([
+        // Battery with a focused window: the raw level narrows, and so does
+        // observation, because battery still backs agent polling off.
+        [{ type: "set-power-policy", level: "saving", observationLevel: "saving" }],
+      ]);
+    });
+
+    it("replays main's current saving level to a restarted host", async () => {
+      const { updatePowerObservations } = await import("../../window/powerPolicy.js");
+      createClient();
+      updatePowerObservations({ screenLocked: true });
+
+      const newChild = restartHost();
+
+      const calls = powerPolicyCalls(newChild);
+      expect(calls).toHaveLength(1);
+      expect(calls[0][0]).toEqual({
+        type: "set-power-policy",
+        level: "deep",
+        observationLevel: "deep",
+      });
+    });
+
+    it("replays no level while main is active — a host boots there", () => {
+      createClient();
+
+      const newChild = restartHost();
+
+      expect(powerPolicyCalls(newChild)).toHaveLength(0);
+    });
+  });
+
   describe("edge cases", () => {
     it("should not resume if not paused", () => {
       const client = createClient();

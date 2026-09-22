@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useEffectEvent, useRef, useMemo, useState } from "react";
-import { FilterX, AlertTriangle, Trash2, GitBranch } from "lucide-react";
+import { FilterX, Trash2 } from "lucide-react";
 import { Layers, Plug } from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { KBD_CLASS, KbdChord } from "@/components/ui/Kbd";
@@ -9,7 +9,8 @@ import { useShallow } from "zustand/react/shallow";
 import { WorktreeCard } from "./WorktreeCard";
 import { WorktreeFilterPopover } from "./WorktreeFilterPopover";
 import { WorktreeSidebarSearchBar } from "./WorktreeSidebarSearchBar";
-import { useWorktreeBulkRemove, describeBulkRemoveRisks } from "./useWorktreeBulkRemove";
+import { useWorktreeBulkRemove } from "./useWorktreeBulkRemove";
+import { WorktreeBulkRemoveDialog } from "./WorktreeBulkRemoveDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   useWorktreeOverviewKeyboard,
@@ -1457,78 +1458,14 @@ export function WorktreeOverviewModal({
         onConfirm={handleCloseSessionsConfirm}
       />
 
-      {/* D3 — bulk remove. Typed-name gate ("N worktrees"), full target
-          list in the body so the user sees the actual blast radius, and
-          per-target warning rows for dirty trees and unpushed commits.
-          Main worktrees were filtered out at confirm-derive time (see
-          useWorktreeBulkRemove); the excluded count surfaces here so the
-          user isn't silently surprised. */}
-      <ConfirmDialog
-        isOpen={bulkRemove.isConfirmOpen}
-        onClose={bulkRemove.handleCancel}
-        title={
-          bulkRemove.targets.length === 1
-            ? `Remove '${bulkRemove.targets[0]?.branch ?? bulkRemove.targets[0]?.name ?? "worktree"}'?`
-            : `Remove ${bulkRemove.targets.length} worktrees?`
-        }
-        description={
-          // The consequence sentence is never traded away for the exclusion
-          // note. It used to be an either/or, so selecting a main worktree
-          // alongside real targets silently removed the only line telling the
-          // user that directories are deleted and uncommitted work discarded.
-          bulkRemove.excludedMainCount > 0
-            ? `Each worktree directory is deleted from disk and the branch worktree association is removed. Uncommitted and untracked changes are discarded. ${bulkRemove.excludedMainCount} main worktree${bulkRemove.excludedMainCount === 1 ? " is" : "s are"} excluded — only non-main worktrees can be removed here.`
-            : "Each worktree directory is deleted from disk and the branch worktree association is removed. Uncommitted and untracked changes are discarded."
-        }
-        confirmLabel={
-          bulkRemove.targets.length === 1
-            ? "Remove worktree"
-            : `Remove ${bulkRemove.targets.length} worktrees`
-        }
-        cancelLabel="Cancel"
-        variant="destructive"
-        // Scrollable per-worktree table of what is about to be deleted — a
-        // dialog, not an alertdialog.
-        hasPreview={bulkRemove.targets.length > 0}
-        zIndex="nested"
-        typedNameTarget={bulkRemove.typedNameTarget}
-        onConfirm={bulkRemove.handleConfirm}
-        isConfirmLoading={bulkRemove.isExecuting}
-      >
-        {bulkRemove.targets.length > 0 && (
-          <div className="border border-divider rounded-[var(--radius-md)] max-h-64 overflow-y-auto divide-y divide-divider">
-            {bulkRemove.targets.map((target) => {
-              const risks = describeBulkRemoveRisks(target);
-              return (
-                <div key={target.id} className="flex flex-col gap-1 px-3 py-2 bg-surface-canvas/40">
-                  <div className="flex items-center gap-2 text-sm text-text-primary">
-                    <GitBranch className="w-3.5 h-3.5 shrink-0 text-text-secondary" />
-                    {/* The branch is what truncates, so the branch is what the
-                        tooltip has to reveal — it used to show the path, which
-                        is not the string being clipped. */}
-                    <span
-                      className="font-mono truncate"
-                      title={`${target.branch ?? target.name}\n${target.path}`}
-                    >
-                      {target.branch ?? target.name}
-                    </span>
-                  </div>
-                  {risks.length > 0 && (
-                    <div className="flex items-start gap-1.5 text-xs text-status-warning">
-                      <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
-                      <span>{risks.join(" · ")}</span>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-        <div className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] text-status-error text-xs">
-          <Trash2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-          <span>This is irreversible. Type the count to confirm.</span>
-        </div>
-      </ConfirmDialog>
+      {/* D3 — bulk remove. Typed-name gate ("N worktrees"), and a fresh
+          per-target delete preview built at open time (#12416) so the
+          confirmation shows the files it is about to discard rather than a
+          count off the store's poll-interval-old snapshot. Main worktrees
+          were filtered out at confirm-derive time (see useWorktreeBulkRemove);
+          the excluded count surfaces in the dialog so the user isn't silently
+          surprised. */}
+      <WorktreeBulkRemoveDialog bulkRemove={bulkRemove} />
     </>
   );
 }

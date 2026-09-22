@@ -255,6 +255,56 @@ describe("terminalSessionPersistence", () => {
       expect(headless.options.reflowCursorLine).toBe(false);
     });
 
+    it("writes no capture header for a grid no pane could have been showing", async () => {
+      // A mirror that collapsed while hidden serializes at 2x1. Recording that
+      // as the capture grid makes every later restore park a real xterm on it
+      // (#12442), so the header is dropped and the file degrades to v1 — the
+      // format that already means "replay verbatim". The payload is kept either
+      // way: geometry and data are indivisible, so it cannot be relabelled with
+      // a healthier grid.
+      persistSessionSnapshotSync("term-geo-collapsed", { data: "payload", cols: 2, rows: 1 });
+
+      // Read the bytes rather than only the replay behaviour: a reader that
+      // salvages a poisoned header makes the round trip look correct even when
+      // the WRITER is still emitting one, and the file outlives this process.
+      const written = await fsp.readFile(
+        path.join(userDataDir, "terminal-sessions", "term-geo-collapsed.restore"),
+        "utf8"
+      );
+      expect(written).toBe("DAINTREE_SESSION_v1\npayload");
+      expect(written).not.toContain("2x1");
+
+      const headless = createMockHeadless("normal", 170, 40);
+      const result = restoreSessionFromFile(headless as never, "term-geo-collapsed");
+      await headless.drainWrites();
+
+      expect(result.restored).toBe(true);
+      expect(headless.write).toHaveBeenCalledWith("payload");
+      expect(headless.resize).not.toHaveBeenCalled();
+      expect(headless.cols).toBe(170);
+      expect(headless.rows).toBe(40);
+    });
+
+    it("still records a capture header for the smallest workable grid", async () => {
+      // The counterweight: the writer must drop the header only for a grid it
+      // could not honestly describe. Degrading a valid small capture to v1 would
+      // silently cost every such session its width alignment.
+      persistSessionSnapshotSync("term-geo-small", { data: "small payload", cols: 20, rows: 5 });
+
+      const written = await fsp.readFile(
+        path.join(userDataDir, "terminal-sessions", "term-geo-small.restore"),
+        "utf8"
+      );
+      expect(written).toBe("DAINTREE_SESSION_v2\n20x5\nsmall payload");
+
+      const headless = createMockHeadless("normal", 170, 40);
+      expect(restoreSessionFromFile(headless as never, "term-geo-small").restored).toBe(true);
+      expect(headless.resize).toHaveBeenNthCalledWith(1, 20, 5);
+      await headless.drainWrites();
+      expect(headless.cols).toBe(170);
+      expect(headless.rows).toBe(40);
+    });
+
     it("leaves the grid alone when the spawn size matches the capture", async () => {
       persistSessionSnapshotSync("term-geo-same", { data: "payload", cols: 100, rows: 30 });
 
@@ -285,6 +335,13 @@ describe("terminalSessionPersistence", () => {
         "term-v2-garbage": "DAINTREE_SESSION_v2\nnot-a-grid\npayload",
         "term-v2-zero": "DAINTREE_SESSION_v2\n0x24\npayload",
         "term-v2-huge": "DAINTREE_SESSION_v2\n9999x9999\npayload",
+        // The files #12442 left on disk: five of the reporter's seven snapshots
+        // recorded a 2x1 capture grid. Honouring that header parks the mirror on
+        // it at every restore, which is how the collapse outlived the panes.
+        // Both axes, since a one-row mirror corrupts a frame just as a
+        // two-column one does.
+        "term-v2-collapsed": "DAINTREE_SESSION_v2\n2x1\npayload",
+        "term-v2-one-row": "DAINTREE_SESSION_v2\n80x1\npayload",
       };
       for (const [id, contents] of Object.entries(cases)) {
         await writeSessionFile(id, contents);
@@ -308,7 +365,8 @@ describe("terminalSessionPersistence", () => {
     });
 
     it.each([
-      { label: "the smallest possible grid", cols: 1, rows: 1 },
+      { label: "a grid too small for any pane", cols: 1, rows: 1 },
+      { label: "the smallest grid a pane could be showing", cols: 20, rows: 5 },
       { label: "an ordinary grid", cols: 80, rows: 24 },
       { label: "the largest representable grid", cols: 2000, rows: 2000 },
       { label: "a grid past the representable bound", cols: 2001, rows: 24 },

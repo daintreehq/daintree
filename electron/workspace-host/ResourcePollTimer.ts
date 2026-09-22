@@ -10,6 +10,8 @@ import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 export interface ResourcePollTimerHost {
   readonly isRunning: boolean;
+  /** False while the project is backgrounded; nothing may arm or re-arm. */
+  readonly pollingEnabled: boolean;
   readonly hasResourceConfig: boolean;
   readonly hasStatusCommand: boolean;
   /** Interval in milliseconds. 0 disables auto-polling. */
@@ -42,6 +44,7 @@ export class ResourcePollTimer {
   schedule(): void {
     if (this.disposed) return;
     if (this.timer) return;
+    if (!this.host.pollingEnabled) return;
     if (this.host.resourcePollIntervalMs <= 0) return;
     if (!this.host.hasResourceConfig || !this.host.hasStatusCommand) return;
 
@@ -55,6 +58,7 @@ export class ResourcePollTimer {
       // flipped between schedule and fire.
       if (
         !this.host.isRunning ||
+        !this.host.pollingEnabled ||
         !this.host.hasResourceConfig ||
         !this.host.hasStatusCommand ||
         this.host.resourcePollIntervalMs <= 0
@@ -69,6 +73,8 @@ export class ResourcePollTimer {
           formatErrorMessage(err, "Resource status poll failed")
         );
       }
+      // schedule() also declines on a paused host, so a poll that was in
+      // flight when the project was backgrounded can't restart the cadence.
       if (this.disposed || !this.host.isRunning) return;
       this.schedule();
     }, delay);

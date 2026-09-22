@@ -299,6 +299,75 @@ describe("WaitingWatchdog", () => {
     });
   });
 
+  describe("stretched probe cadence", () => {
+    const validator: ProcessStateValidator = { hasActiveChildren: () => false };
+    const idleSince = 1000;
+    const start = idleSince + SILENCE_MS;
+
+    it.each([10000, 15000])(
+      "vetoes on output that landed anywhere inside a %ims probe gap",
+      (gap) => {
+        const { watchdog, onFire } = makeWatchdog({ validator });
+        for (let i = 0; i < FAIL_THRESHOLD + 2; i++) {
+          const now = start + i * gap;
+          watchdog.check(now, {
+            ...deadProbe(now, idleSince),
+            lastDataTimestamp: now - (gap - 1),
+            sinceLastProbeMs: gap,
+          });
+        }
+        expect(onFire).not.toHaveBeenCalled();
+      }
+    );
+
+    it("does not count output that predates the gap", () => {
+      const { watchdog, onFire } = makeWatchdog({ validator });
+      const gap = 15000;
+      for (let i = 0; i < FAIL_THRESHOLD; i++) {
+        const now = start + i * gap;
+        watchdog.check(now, {
+          ...deadProbe(now, idleSince),
+          lastDataTimestamp: now - gap,
+          sinceLastProbeMs: gap,
+        });
+      }
+      expect(onFire).toHaveBeenCalledTimes(1);
+    });
+
+    it("still decays: one burst of output stops vetoing and the watchdog fires", () => {
+      const { watchdog, onFire } = makeWatchdog({ validator });
+      const gap = 15000;
+      const dataAt = start - 1;
+      // Probe 0 sees the burst and vetoes; the next FAIL_THRESHOLD are dead votes.
+      for (let i = 0; i <= FAIL_THRESHOLD; i++) {
+        expect(onFire).not.toHaveBeenCalled();
+        const now = start + i * gap;
+        watchdog.check(now, {
+          ...deadProbe(now, idleSince),
+          lastDataTimestamp: dataAt,
+          sinceLastProbeMs: gap,
+        });
+      }
+      expect(onFire).toHaveBeenCalledTimes(1);
+    });
+
+    it("clears accumulated dead votes when a re-timed probe covers earlier output", () => {
+      // Two dead votes, then saving→active re-times the timer: output at t+1s,
+      // next probe 14s after the last one. The 5s TTL alone would miss it.
+      const { watchdog, onFire } = makeWatchdog({ validator });
+      watchdog.check(start, deadProbe(start, idleSince));
+      watchdog.check(start + 5000, deadProbe(start + 5000, idleSince));
+      const now = start + 19000;
+      watchdog.check(now, {
+        ...deadProbe(now, idleSince),
+        lastDataTimestamp: start + 6000,
+        sinceLastProbeMs: 14000,
+      });
+      watchdog.check(now + 5000, deadProbe(now + 5000, idleSince));
+      expect(onFire).not.toHaveBeenCalled();
+    });
+  });
+
   describe("TTL boundary for lastDataTimestamp veto", () => {
     it("data exactly at the TTL boundary does NOT veto (strict <)", () => {
       const validator: ProcessStateValidator = { hasActiveChildren: () => false };

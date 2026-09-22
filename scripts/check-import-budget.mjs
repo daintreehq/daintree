@@ -22,6 +22,7 @@ import {
   scanAllowlistMarkers,
   compareToBaseline,
   formatBaseline,
+  scanForbiddenModules,
 } from "./import-budget-lib.mjs";
 import { formatBudgetSummary, writeSummary } from "./budget-summary-lib.mjs";
 
@@ -96,6 +97,7 @@ function buildReport() {
   }
   const violations = scanSyncViolations(modules, ROOT);
   return {
+    forbidden: scanForbiddenModules(modules),
     moduleCount: modules.size,
     count: modules.size,
     modules: [...modules].sort(),
@@ -199,6 +201,19 @@ function main() {
   const force = process.argv.includes("--force");
 
   const report = buildReport();
+
+  // Checked before the baseline, and never against it: a forbidden module is
+  // not a count to ratchet up, and `--update` must not be able to bless one.
+  if (report.forbidden.length > 0) {
+    for (const { file, label } of report.forbidden) {
+      console.error(`::error::${label} is on main's eager import path: ${file}`);
+    }
+    console.error(
+      `\n[check-import-budget] FAILED — ${report.forbidden.length} module(s) that must stay behind a dynamic import are loaded at startup. ` +
+        `Reach them through \`await import()\` from a handler instead; there is no baseline to update for this.`
+    );
+    process.exit(1);
+  }
 
   if (isUpdate) {
     writeBaseline(report, { force });

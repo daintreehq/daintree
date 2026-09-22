@@ -53,7 +53,10 @@ function SendToAgentItemRow({
       onClick={() => !item.isInputLocked && onSelect(item)}
       aria-selected={isSelected}
       aria-disabled={item.isInputLocked}
-      aria-label={item.title}
+      // The subtitle carries the agent and, when the targets span more than one
+      // worktree, the worktree too — the only thing separating two identically
+      // titled rows, so the accessible name has to carry it as well.
+      aria-label={[item.title, item.subtitle].filter(Boolean).join(", ")}
       role="option"
     >
       <span className="shrink-0 text-daintree-text/70" aria-hidden="true">
@@ -122,8 +125,8 @@ export function SendToAgentPalette({
       label="Send selection to"
       shortcut={sendToAgentShortcut}
       ariaLabel="Send selection to agent"
-      searchPlaceholder="Search terminals and agents"
-      searchAriaLabel="Search terminals and agents"
+      searchPlaceholder="Search terminals, agents, and worktrees"
+      searchAriaLabel="Search terminals, agents, and worktrees"
       listId="send-to-agent-list"
       itemIdPrefix="send-to-agent-option"
       emptyMessage="No other terminals available"

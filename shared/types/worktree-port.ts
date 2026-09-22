@@ -17,6 +17,7 @@ import type {
   WorktreeEventVersion,
 } from "./workspace-host.js";
 import type { WorktreeChanges } from "./git.js";
+import type { LifecycleCommandReview } from "./worktree.js";
 import type { SubmoduleDeleteRisk } from "./submodule.js";
 
 export type WorktreePortResourceAction = "provision" | "teardown" | "resume" | "pause" | "status";
@@ -47,7 +48,10 @@ export interface WorktreePortProtocol {
     } & WorktreeEventVersion;
   };
   "set-active": {
-    payload: { worktreeId: string };
+    // `origin` is echoed back on the resulting `worktree-activated` event so
+    // the requesting view can skip the echo of a selection it already applied
+    // locally, while still applying host-originated activations (#12370).
+    payload: { worktreeId: string; origin?: string };
     result: { ok: true };
   };
   // Full-replacement set of worktree IDs that currently have an agent
@@ -123,6 +127,20 @@ export interface WorktreePortProtocol {
     payload: { worktreeId: string };
     result: { ok: true };
   };
+  // The repository commands this worktree would run that the user has not
+  // approved; `null` when there are none. Read fresh from disk by the host.
+  "get-lifecycle-command-approval": {
+    payload: { worktreeId: string };
+    result: { review: LifecycleCommandReview | null };
+  };
+  // Approve the commands a review showed. The host recomputes the review and
+  // refuses when its fingerprint no longer matches, so a change made while the
+  // dialog was open cannot be approved unseen. Renderer-only by construction:
+  // no action or MCP tool reaches this request (#12408).
+  "approve-lifecycle-commands": {
+    payload: { worktreeId: string; fingerprint: string };
+    result: { ok: true };
+  };
   "switch-worktree-environment": {
     payload: { worktreeId: string; envKey: string };
     result: { ok: true };
@@ -157,6 +175,21 @@ export interface WorktreePortProtocol {
   "get-submodule-delete-risk": {
     payload: { worktreeId: string };
     result: { risk: SubmoduleDeleteRisk | null };
+  };
+  // The switched-to view reporting when every worktree in its store carried a
+  // status (`appliedAt`), or that its deadline passed first (`appliedAt: null`).
+  // The host refuses an applied report taken from a store that does not match
+  // it — another epoch, another worktree count, or a load still enumerating —
+  // and the view reports again on its next store change (#12461).
+  "report-switch-status-timing": {
+    payload: {
+      switchId: string;
+      epoch: string;
+      appliedAt: number | null;
+      worktreeCount: number;
+      statusCount: number;
+    };
+    result: { accepted: boolean };
   };
 }
 

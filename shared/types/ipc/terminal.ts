@@ -1,4 +1,10 @@
-import type { PanelKind, PanelLocation, PanelTitleMode } from "../panel.js";
+import type {
+  PanelKind,
+  PanelLocation,
+  PanelRestoreRecovery,
+  PanelTitleMode,
+  TerminalSpawnSource,
+} from "../panel.js";
 import type { AgentId } from "../agent.js";
 import type { AgentState, WaitingReason } from "../agent.js";
 import type { BuiltInAgentId } from "../../config/agentIds.js";
@@ -63,6 +69,11 @@ export interface TerminalSpawnOptions {
   agentPresetColor?: string;
   /** Original user-selected preset ID; unchanged across fallback hops. */
   originalAgentPresetId?: string;
+  /**
+   * Handback code minted for this launch's initial prompt (#12488); the
+   * instruction is already in `command`. Never persisted.
+   */
+  handbackCode?: string;
   /**
    * Launch-time `ActionContext` snapshot, captured synchronously in the
    * renderer when the user launched the agent. Consumed only by the
@@ -133,6 +144,8 @@ export interface TerminalState {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /** Surface that spawned this terminal, captured at creation (#12419). */
+  spawnedBy?: TerminalSpawnSource;
   /** Preset ID selected at launch time */
   agentPresetId?: string;
   /** Preset brand color captured at launch time */
@@ -145,6 +158,10 @@ export interface TerminalState {
   isUsingFallback?: boolean;
   /** How many fallback hops have been consumed */
   fallbackChainIndex?: number;
+  /** Where the conversation began, when the pane runs elsewhere (#12434) */
+  conversationCwd?: string;
+  /** Held for recovery instead of launched (#12434). Untrusted until sanitized. */
+  restoreRecovery?: PanelRestoreRecovery;
   /**
    * Extension ID of the plugin that registered this panel's kind, if applicable.
    * Preserved across save/restore so the placeholder can name the missing plugin
@@ -239,6 +256,11 @@ export interface BackendTerminalInfo {
    */
   everDetectedAgent?: boolean;
   /**
+   * Observed respawn count for the live PTY (#12535). Absent when unobserved —
+   * never read absence as zero.
+   */
+  agentIncarnation?: number;
+  /**
    * Live detected identity — the agent currently running in this terminal.
    * The single source of truth for chrome. Not persisted; rehydrated here on
    * reconnect. See `docs/architecture/terminal-identity.md`.
@@ -285,6 +307,11 @@ export interface TerminalReconnectResult {
   originalAgentPresetId?: string;
   /** Sticky live-session flag. Rehydrated on reconnect. */
   everDetectedAgent?: boolean;
+  /**
+   * Observed respawn count for the live PTY (#12535). Absent when unobserved —
+   * never read absence as zero.
+   */
+  agentIncarnation?: number;
   /** Live detected identity; the single chrome source of truth. See `docs/architecture/terminal-identity.md`. */
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
@@ -356,6 +383,11 @@ export interface TerminalInfoPayload {
    * session, even if no agent is currently detected.
    */
   everDetectedAgent?: boolean;
+  /**
+   * Observed respawn count for the live PTY (#12535). Absent when unobserved —
+   * never read absence as zero.
+   */
+  agentIncarnation?: number;
 }
 
 import type { TerminalActivityPayload } from "../terminal.js";

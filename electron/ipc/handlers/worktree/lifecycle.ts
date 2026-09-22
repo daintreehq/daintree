@@ -32,6 +32,11 @@ import { shouldPlayUiFeedbackSound } from "../../../utils/uiFeedbackSound.js";
 
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
 
+// How long Retry waits for the renderer to confirm it attached the fresh port.
+// The renderer invoked Retry, so its preload listener is live and the receipt
+// normally lands within milliseconds; this only bounds a lost one.
+const RETRY_PORT_CONFIRM_TIMEOUT_MS = 10_000;
+
 const inFlightWorktreeCreateRequests = new Map<string, Promise<WorktreeCreateResult>>();
 
 function playSoundFireAndForget(id: SoundId): void {
@@ -250,19 +255,24 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       // port, so the renderer's worktree store never re-runs
       // `fetchInitialState()` and the sidebar stays stuck on the loading
       // skeleton even after a successful retry (#8796). Mirrors switch.ts.
+      //
+      // Forced, because the renderer needs its ready callbacks to run again
+      // whether or not main still holds a confirmed channel, and awaited to the
+      // renderer's receipt, because a posted port is not a delivered one. Any
+      // shortfall throws so the error banner stays and Retry remains available,
+      // rather than clearing the banner over a sidebar with no port (#12576).
       const sender = ctx.event.sender;
       if (!sender.isDestroyed()) {
         deps.worktreeService.attachDirectPort(windowId, sender);
         const host = deps.worktreeService.getHostForProject(project.path);
-        if (host && deps.worktreePortBroker) {
-          const brokered = deps.worktreePortBroker.brokerPort(host, sender);
-          if (!brokered) {
-            // The reload succeeded but the worktree MessagePort never
-            // connected, so the renderer's worktree store can't fetch its
-            // state. Throw so the error banner stays and Retry remains
-            // available, rather than leaving the sidebar silently stuck.
-            throw new Error("Reloaded the project but couldn't connect to the worktree service");
-          }
+        const broker = deps.worktreePortBroker;
+        const connected =
+          host !== undefined &&
+          broker !== undefined &&
+          broker.brokerPort(host, sender, { force: true }) &&
+          (await broker.waitForConfirmation(sender.id, RETRY_PORT_CONFIRM_TIMEOUT_MS));
+        if (!connected) {
+          throw new Error("Reloaded the project but couldn't connect to the worktree service");
         }
       }
     } catch (error) {

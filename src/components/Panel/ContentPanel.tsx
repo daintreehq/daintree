@@ -12,6 +12,8 @@ import { PanelHeader } from "./PanelHeader";
 import { useIsDragging } from "@/components/DragDrop";
 import { TitleEditingProvider, useTitleEditing } from "./TitleEditingContext";
 import { TerminalHeaderContent } from "@/components/Terminal/TerminalHeaderContent";
+import { TerminalStatusSlot } from "@/components/Terminal/TerminalStatusSlot";
+import { TerminalAgentIndicator } from "@/components/Terminal/TerminalAgentIndicator";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import type { PanelKind, AgentState, PersistableFlowStatus } from "@/types";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
@@ -29,6 +31,7 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
+import { tabDomId } from "./TabButton";
 import { isPtyPanel } from "@shared/types/panel";
 
 /**
@@ -63,7 +66,6 @@ export interface ContentPanelProps extends BasePanelProps {
 
   // Slots
   headerContent?: ReactNode;
-  headerContentPlacement?: "leading" | "trailing";
   headerActions?: ReactNode;
   toolbar?: ReactNode;
 
@@ -139,6 +141,13 @@ export interface ContentPanelProps extends BasePanelProps {
   // and time-bounded.
   isVoiceArming?: boolean;
 
+  /**
+   * The task-first composition of `title` for a header too narrow to show the
+   * full one. Set by the outer wrapper from the same store read as `title`;
+   * the accessible name and the rename prefill stay on the full title.
+   */
+  compactTitle?: string;
+
   // Tab support
   tabs?: TabInfo[];
   groupId?: string;
@@ -209,7 +218,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     showRestoreControl,
     children,
     headerContent,
-    headerContentPlacement,
     headerActions,
     toolbar,
     className,
@@ -244,6 +252,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     ambientAgentState,
     isSelected = false,
     isFleetFollower = false,
+    compactTitle,
     isHibernated = false,
     isVoiceArming = false,
     tabs,
@@ -349,6 +358,8 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   }, [titleEditing.isEditingTitle]);
 
   const showGridAttention = location === "grid" && !isMaximized && isMultiPanelGrid;
+  const tabPanelId = `panel-body-${id}`;
+  const activeTab = tabs && tabs.length > 1 ? tabs.find((t) => t.isActive) : undefined;
   const showGridAgentHighlights = usePreferencesStore((s) => s.showGridAgentHighlights);
   // When the Daintree Assistant region owns focus, suppress the grid panel's
   // `terminal-selected` accent so the visual "active surface" follows where
@@ -357,7 +368,10 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // navigation and action-target resolution are unaffected; only the chrome
   // releases. Ambient agent-state borders (`panel-state-*`) still render.
   const isAssistantActive = useMacroFocusStore((s) => s.focusedRegion === "assistant");
-  const showSelectedChrome = (isFocused || isSelected) && !isAssistantActive;
+  // The frame follows focus alone. An armed follower keeps the title-bar lift
+  // and its stripe (PanelHeader), but not the focus frame — otherwise every
+  // receiver in a fleet looks like the pane the keystrokes go to.
+  const showSelectedChrome = isFocused && !isAssistantActive;
   // #11837: a lone grid pane has no sibling to contrast against, so it skips
   // `showGridAttention` entirely and renders bare in every state — including
   // while the Assistant holds the keystrokes. That leaves the two states
@@ -429,23 +443,27 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   const blockedState = useDockBlockedState(effectiveAgentState);
   const isWorkingState = effectiveAgentState === "working";
 
-  // Auto-construct TerminalHeaderContent for PTY-backed terminals if headerContent not provided
+  // Auto-construct the terminal header for PTY-backed terminals when no custom
+  // headerContent is provided. One gate covers both the metadata and the status
+  // box, so a custom header never inherits either.
+  const isAutoTerminalHeader = headerContent === undefined && kind === "terminal";
   const resolvedHeaderContent = useMemo(() => {
     if (headerContent !== undefined) return headerContent;
-    if (kind === "terminal") {
+    if (isAutoTerminalHeader) {
       return (
         <TerminalHeaderContent
           id={id}
           kind={kind}
-          agentState={headerAgentState}
-          activity={activity}
+          // The lifecycle state, not the glyph's display state: the display
+          // state folds `completed` into `waiting` for the indicator, which
+          // would keep the row's settled trace (cost, "Finished, no changes")
+          // from ever rendering.
+          agentState={agentState}
           activityStatus={activityStatus}
           lastCommand={lastCommand}
           isExited={isExited}
           exitCode={exitCode}
           queueCount={queueCount}
-          flowStatus={flowStatus}
-          submitStatus={submitStatus}
           completedWithNoChanges={completedWithNoChanges}
           isHibernated={isHibernated}
         />
@@ -454,19 +472,73 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     return null;
   }, [
     headerContent,
+    isAutoTerminalHeader,
     kind,
     id,
-    headerAgentState,
-    activity,
+    agentState,
     activityStatus,
     lastCommand,
     isExited,
     exitCode,
     queueCount,
-    flowStatus,
-    submitStatus,
     completedWithNoChanges,
     isHibernated,
+  ]);
+
+  // A mixed tab group keeps both trailing boxes (empty, `null`) while a
+  // non-terminal tab is active, so switching tabs cannot move the controls.
+  const reservesTerminalSlots =
+    isAutoTerminalHeader || (tabs?.some((tab) => panelKindHasPty(tab.kind)) ?? false);
+
+  // Transient status gets its own reserved box ahead of the window controls
+  // rather than joining the metadata above (#12374).
+  const resolvedHeaderStatus = useMemo(() => {
+    if (isAutoTerminalHeader) {
+      return <TerminalStatusSlot id={id} flowStatus={flowStatus} submitStatus={submitStatus} />;
+    }
+    return reservesTerminalSlots ? null : undefined;
+  }, [isAutoTerminalHeader, reservesTerminalSlots, id, flowStatus, submitStatus]);
+
+  // Only agent terminals get the glyph box. A launched agent keeps it after
+  // exit so the controls don't shift; a plain shell gains it once an agent is
+  // detected in it, or once agent state arrives ahead of identity (#6650).
+  const isAgentTerminal =
+    agentId != null || terminalChrome.isAgent || headerAgentState !== undefined;
+  const reservesAgentSlot =
+    (isAutoTerminalHeader && isAgentTerminal) ||
+    (tabs?.some(
+      (tab) =>
+        panelKindHasPty(tab.kind) &&
+        (tab.launchAgentId != null ||
+          tab.chrome.isAgent ||
+          getTerminalAgentDisplayState(tab.chrome, tab.agentState) !== undefined)
+    ) ??
+      false);
+
+  // The agent state glyph goes to PanelHeader's far-right box, past the close
+  // button, and is never folded into the metadata row.
+  const resolvedAgentIndicator = useMemo(() => {
+    if (isAutoTerminalHeader && isAgentTerminal) {
+      return (
+        <TerminalAgentIndicator
+          id={id}
+          agentState={headerAgentState}
+          activity={activity}
+          isExited={isExited}
+          exitCode={exitCode}
+        />
+      );
+    }
+    return reservesAgentSlot ? null : undefined;
+  }, [
+    isAutoTerminalHeader,
+    isAgentTerminal,
+    reservesAgentSlot,
+    id,
+    headerAgentState,
+    activity,
+    isExited,
+    exitCode,
   ]);
 
   const handleTitleDoubleClick = useCallback(
@@ -583,7 +655,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         (location === "dock" || location === "dialog" || isMaximized) && "bg-surface-canvas",
         location === "grid" &&
           !isMaximized &&
-          "rounded border shadow-[var(--theme-shadow-ambient)] transition-colors duration-300",
+          "rounded-lg border shadow-[var(--theme-shadow-ambient)] transition-colors duration-150",
         location === "grid" &&
           !isMaximized &&
           resolveGridPanelChromeClass({
@@ -626,6 +698,8 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           isDragging={isDragging}
           id={id}
           title={title}
+          compactTitle={compactTitle}
+          tabPanelId={tabPanelId}
           kind={kind}
           agentId={agentId}
           chrome={terminalChrome}
@@ -658,7 +732,8 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           isFleetFollower={isFleetFollower}
           isFleetPreviewed={isFleetPreviewed}
           headerContent={resolvedHeaderContent}
-          headerContentPlacement={headerContentPlacement}
+          headerStatus={resolvedHeaderStatus}
+          agentIndicator={resolvedAgentIndicator}
           headerActions={headerActions}
           tabs={tabs}
           groupId={groupId}
@@ -672,7 +747,16 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
 
       {toolbar}
 
-      <div className="flex-1 min-h-0 relative flex flex-col">{children}</div>
+      {/* The tab strip's controlled region: every tab points here, and the
+          region is named by whichever tab is active. */}
+      <div
+        id={tabPanelId}
+        role={activeTab ? "tabpanel" : undefined}
+        aria-labelledby={activeTab ? tabDomId(activeTab.id) : undefined}
+        className="flex-1 min-h-0 relative flex flex-col"
+      >
+        {children}
+      </div>
 
       {showExitPulse ? <span className="fleet-exit-pulse-overlay" aria-hidden="true" /> : null}
     </div>
@@ -710,6 +794,15 @@ export const ContentPanel = forwardRef<HTMLDivElement, ContentPanelProps>(
         showTask: showAgentTaskTitles,
       });
     });
+    // The task alone, for a header with no room for the identity prefix. Only
+    // the grid composes tasks, and only when the compact form actually differs.
+    const compactTitle = usePanelStore((s) => {
+      const panel = s.panelsById[props.id];
+      if (!panel || !isPtyPanel(panel) || panel.title !== propsTitle) return undefined;
+      if (props.location === "dock") return undefined;
+      const compact = getTerminalDisplayTitle(panel, "compact", { showTask: showAgentTaskTitles });
+      return compact && compact !== composedTitle ? compact : undefined;
+    });
     const effectiveTitle = composedTitle ?? props.title;
     return (
       <TitleEditingProvider
@@ -717,7 +810,12 @@ export const ContentPanel = forwardRef<HTMLDivElement, ContentPanelProps>(
         title={effectiveTitle}
         onTitleChange={props.onTitleChange}
       >
-        <ContentPanelInner {...props} title={effectiveTitle} ref={ref} />
+        <ContentPanelInner
+          {...props}
+          title={effectiveTitle}
+          compactTitle={compactTitle}
+          ref={ref}
+        />
       </TitleEditingProvider>
     );
   }

@@ -9,11 +9,21 @@ name: Stabilize
 # the skill reads to distinguish real regressions from E2E flakes and to scope
 # intelligent re-runs (job re-run with `--test-list`, or `e2e-single.yml`).
 #
-# What it runs: check (typecheck/lint/format), unit, integration, knip, build +
-# smoke, and the full Playwright surface — core, all seven full-* buckets, online,
-# and the nightly memory-leak suite — across the platforms selected by `platform`.
+# What it runs: check (typecheck/lint/format), unit, integration, build + smoke,
+# and the full Playwright surface — core, all seven full-* buckets, online, and
+# the nightly memory-leak suite — across the platforms selected by `platform`.
 # Nightly BINARY publishing has moved to `nightly-publish.yml`; this workflow
-# never publishes.
+# never publishes. knip is NOT here: it is a static, OS-agnostic report the
+# skill runs once on the local Mac.
+#
+# Built for few, informative runs, because every dispatch costs the driving
+# agent the better part of an hour:
+#   - No job waits on another's verdict. check/test do NOT gate E2E, so a single
+#     run surfaces every failure at once instead of one layer per dispatch (a
+#     red Windows unit shard used to hide the entire Windows E2E result).
+#   - `only` re-runs just the pieces a fix touched instead of the whole surface.
+#   - The E2E app bundle is built once per OS (`e2e-build`) and handed to every
+#     shard, rather than rebuilt ~60 times.
 #
 # `stabilize-ok` is the single gate to watch (`gh run watch`) for the overall
 # verdict; drill into the per-suite jobs and artifacts for specifics.
@@ -32,6 +42,10 @@ on:
           - all
           - non-windows
           - macos
+      only:
+        description: "Scoped re-run: space- or comma-separated pieces to run; empty = everything. Pieces: check test build integration core full-terminal full-worktree full-presets full-platform full-panels full-resilience full-plugins online nightly. Aliases: full (all seven full-* buckets), e2e (every E2E suite). Example: `test full-terminal`."
+        type: string
+        default: ""
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -59,7 +73,82 @@ jobs:
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
       test-matrix: ${{ steps.unit.outputs.matrix }}
+      full-suites: ${{ steps.select.outputs.full-suites }}
+      expected: ${{ steps.select.outputs.expected }}
     steps:
+      # Resolve `only` into the set of jobs this run is expected to execute.
+      # `expected` is keyed by job id and drives both the per-job `if:` and the
+      # gate, which requires success from every expected job and tolerates
+      # `skipped` only from the ones deliberately left out.
+      - id: select
+        env:
+          ONLY: ${{ inputs.only }}
+          PLATFORM: ${{ inputs.platform || 'linux-windows' }}
+        run: |
+          set -euo pipefail
+          ALL_FULL="full-terminal full-worktree full-presets full-platform full-panels full-resilience full-plugins"
+          ALL="check test build integration core $ALL_FULL online nightly"
+          # No globbing: tokens are compared as literals, never expanded.
+          set -f
+          TOKENS=$(tr -s ',[:space:]' ' ' <<< "$ONLY")
+          EXPLICIT=true
+          if [ -z "${TOKENS// /}" ]; then
+            TOKENS="$ALL"
+            EXPLICIT=false
+          fi
+
+          SELECTED=""
+          for t in $TOKENS; do
+            case "$t" in
+              full) SELECTED="$SELECTED $ALL_FULL" ;;
+              e2e)  SELECTED="$SELECTED core $ALL_FULL online nightly" ;;
+              *)
+                case " $ALL " in
+                  *" $t "*) SELECTED="$SELECTED $t" ;;
+                  *)
+                    echo "::error::Unknown piece '$t' in 'only'. Valid: $ALL full e2e"
+                    exit 1
+                    ;;
+                esac
+                ;;
+            esac
+          done
+          has() { case " $SELECTED " in *" $1 "*) echo true ;; *) echo false ;; esac; }
+
+          # integration-test is a Linux-only job; on a run with no Linux leg it
+          # would only repeat what the Linux stage already proved.
+          case "$PLATFORM" in
+            windows|macos) INTEGRATION=false ;;
+            *)             INTEGRATION=$(has integration) ;;
+          esac
+
+          FULL_SUITES=$(for s in $ALL_FULL; do if [ "$(has "$s")" = true ]; then echo "$s"; fi; done | jq -R . | jq -sc .)
+          RUN_FULL=$(jq 'length > 0' <<< "$FULL_SUITES")
+          RUN_E2E=false
+          if [ "$RUN_FULL" = true ] || [ "$(has core)" = true ] || [ "$(has online)" = true ] || [ "$(has nightly)" = true ]; then
+            RUN_E2E=true
+          fi
+
+          EXPECTED=$(jq -nc \
+            --argjson check "$(has check)" --argjson test "$(has test)" --argjson build "$(has build)" \
+            --argjson integration "$INTEGRATION" --argjson e2ebuild "$RUN_E2E" --argjson core "$(has core)" \
+            --argjson full "$RUN_FULL" --argjson online "$(has online)" --argjson nightly "$(has nightly)" \
+            '{"matrix-setup": true, check: $check, test: $test, build: $build, "integration-test": $integration,
+              "e2e-build": $e2ebuild, "e2e-core": $core, "e2e-full": $full, "e2e-online": $online, "e2e-nightly": $nightly}')
+
+          # A selection that resolves to nothing (e.g. `only=integration` on a
+          # Windows-only run) would otherwise sail through the gate green
+          # having validated nothing.
+          if ! jq -e 'del(."matrix-setup") | any(.[]; . == true)' <<< "$EXPECTED" > /dev/null; then
+            echo "::error::'only=$ONLY' selects no job that runs on platform '$PLATFORM'"
+            exit 1
+          fi
+          echo "Explicit selection: $EXPLICIT"
+
+          echo "full-suites=$FULL_SUITES" >> "$GITHUB_OUTPUT"
+          echo "expected=$EXPECTED" >> "$GITHUB_OUTPUT"
+          echo "Expected jobs: $EXPECTED"
+
       - id: set
         run: |
           PLATFORM="${{ inputs.platform || 'linux-windows' }}"
@@ -87,6 +176,7 @@ jobs:
 
   check:
     needs: matrix-setup
+    if: fromJSON(needs.matrix-setup.outputs.expected).check
     runs-on: ${{ matrix.os }}
     name: Check (${{ matrix.name }})
     timeout-minutes: 30
@@ -127,6 +217,7 @@ jobs:
 
   test:
     needs: matrix-setup
+    if: fromJSON(needs.matrix-setup.outputs.expected).test
     runs-on: ${{ matrix.os }}
     name: Test (${{ matrix.name }} ${{ matrix.shard }}/${{ matrix.shards }})
     timeout-minutes: 35
@@ -175,7 +266,8 @@ jobs:
   # (`release-{macos,linux,windows}.yml -f dry_run=true`) and, for binaries, in
   # `nightly-publish.yml`. This job only proves the app compiles and launches.
   build:
-    needs: [matrix-setup, check, test]
+    needs: matrix-setup
+    if: fromJSON(needs.matrix-setup.outputs.expected).build
     runs-on: ${{ matrix.os }}
     name: Build (${{ matrix.name }})
     timeout-minutes: 30
@@ -279,7 +371,8 @@ jobs:
         timeout-minutes: 16
 
   integration-test:
-    needs: [check, test]
+    needs: matrix-setup
+    if: fromJSON(needs.matrix-setup.outputs.expected)['integration-test']
     runs-on: ubuntu-22.04
     timeout-minutes: 25
 
@@ -306,10 +399,19 @@ jobs:
       - name: Run integration tests
         run: npm run test:integration
 
-  # Static dead-code report. OS-agnostic, so Linux-only.
-  knip:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 15
+  # One build:e2e per OS, shared by every E2E shard below via e2e.yml's
+  # `prebuilt_artifact` input. The bundle is identical for every shard of a
+  # given OS and SHA, so building it per shard only burned runner-hours and,
+  # because the runner pool caps concurrency, wall-clock time.
+  e2e-build:
+    needs: matrix-setup
+    if: fromJSON(needs.matrix-setup.outputs.expected)['e2e-build']
+    runs-on: ${{ matrix.os }}
+    name: E2E build (${{ matrix.name }})
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix-setup.outputs.matrix) }}
 
     steps:
       - name: Check out repository
@@ -321,62 +423,84 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - name: Install Linux dependencies
-        run: |
-          # Ubuntu packages only: unrelated third-party indexes can be inconsistent.
-          test -s /etc/apt/sources.list
-          sudo apt-get -o Dir::Etc::sourceparts=- update
-          sudo apt-get -o Dir::Etc::sourceparts=- install -y libarchive-tools
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows-2022'
+        run: node scripts/ci/npm-ci-retry.mjs
+        env:
+          npm_config_msvs_version: "2022"
 
       - name: Install dependencies
+        if: matrix.os != 'windows-2022'
         run: node scripts/ci/npm-ci-retry.mjs
 
-      - name: Knip (static dead-code report)
-        run: npm run knip
+      - name: Build app
+        run: npm run build:e2e
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
+      # One tarball, not a directory upload: thousands of small files are slow
+      # to upload and slower to download on Windows.
+      - name: Pack build output
+        shell: bash
+        run: tar -czf e2e-build.tgz dist dist-electron
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-build-${{ matrix.name }}
+          path: e2e-build.tgz
+          # Long enough that "Re-run failed jobs" days later can still fetch it:
+          # a re-run does not rebuild a successful e2e-build.
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: error
+
+  # The E2E callers run even when `e2e-build` failed (`!cancelled()`): its result
+  # aggregates every OS, so a Windows-only install failure would otherwise skip
+  # Linux E2E too and the run would lose a healthy platform's results. Shards of
+  # the OS whose bundle is missing fail fast at the download step.
+  #
   # Every E2E job is a call into the unified e2e.yml runner, parameterised by
   # `suite` and the dispatched `platform`. json_report emits the machine-readable
   # results the stabilize skill reads to separate real regressions from flakes;
   # enable_blob_report feeds the merged HTML report below.
   e2e-core:
-    needs: [check, test]
+    needs: [matrix-setup, e2e-build]
+    if: ${{ !cancelled() && needs.matrix-setup.result == 'success' && fromJSON(needs.matrix-setup.outputs.expected)['e2e-core'] }}
     uses: ./.github/workflows/e2e.yml
     with:
       suite: core
       platform: ${{ inputs.platform || 'linux-windows' }}
       json_report: true
+      prebuilt_artifact: e2e-build
 
-  # Seven domain buckets fanned across the OS matrix inside e2e.yml, which
-  # auto-shards each full-* bucket (#8053) — so even a Windows full bucket lands
-  # in ~10min wall-time rather than ~39min serial, keeping the default
-  # `linux-windows` pass (and the rarer `all`) practical to run overnight.
+  # The selected full-* domain buckets (all seven unless `only` narrows them),
+  # fanned across the OS matrix inside e2e.yml, which auto-shards each bucket
+  # (#8053).
   e2e-full:
-    needs: [check, test]
+    needs: [matrix-setup, e2e-build]
+    if: ${{ !cancelled() && needs.matrix-setup.result == 'success' && fromJSON(needs.matrix-setup.outputs.expected)['e2e-full'] }}
     strategy:
       fail-fast: false
       matrix:
-        suite:
-          - full-terminal
-          - full-worktree
-          - full-presets
-          - full-platform
-          - full-panels
-          - full-resilience
-          - full-plugins
+        suite: ${{ fromJSON(needs.matrix-setup.outputs.full-suites) }}
     uses: ./.github/workflows/e2e.yml
     with:
       suite: ${{ matrix.suite }}
       platform: ${{ inputs.platform || 'linux-windows' }}
       json_report: true
       enable_blob_report: true
+      prebuilt_artifact: e2e-build
 
   e2e-online:
-    needs: [check, test]
+    needs: [matrix-setup, e2e-build]
+    if: ${{ !cancelled() && needs.matrix-setup.result == 'success' && fromJSON(needs.matrix-setup.outputs.expected)['e2e-online'] }}
     uses: ./.github/workflows/e2e.yml
     with:
       suite: online
       platform: ${{ inputs.platform || 'linux-windows' }}
       json_report: true
+      prebuilt_artifact: e2e-build
     secrets: inherit
 
   # Memory-leak detection — the `nightly` E2E suite (serialized, --workers=1,
@@ -384,19 +508,21 @@ jobs:
   # is covered by the local run, so this rides the default `linux-windows` pass;
   # add macOS (`all`) only when a macOS-on-CI soak is genuinely essential.
   e2e-nightly:
-    needs: [check, test]
+    needs: [matrix-setup, e2e-build]
+    if: ${{ !cancelled() && needs.matrix-setup.result == 'success' && fromJSON(needs.matrix-setup.outputs.expected)['e2e-nightly'] }}
     uses: ./.github/workflows/e2e.yml
     with:
       suite: nightly
       platform: ${{ inputs.platform || 'linux-windows' }}
       json_report: true
       enable_blob_report: true
+      prebuilt_artifact: e2e-build
 
   # Merge Playwright blob reports from every shard into one HTML report for human
   # review. Non-gating (if: always()) — a broken merge must not flip the verdict.
   merge-playwright-reports:
-    needs: [e2e-full, e2e-nightly]
-    if: always()
+    needs: [matrix-setup, e2e-full, e2e-nightly]
+    if: always() && (needs.e2e-full.result != 'skipped' || needs.e2e-nightly.result != 'skipped')
     runs-on: ubuntu-22.04
     timeout-minutes: 15
 
@@ -441,7 +567,9 @@ jobs:
   # `matrix-setup` MUST be in `needs`: it is the shared upstream of every gated
   # job, so if it fails/cancels the downstream jobs go `skipped` (not failure) —
   # without it here, a malformed matrix would skip everything and the gate would
-  # report green. We also count `skipped` as failure for defence-in-depth.
+  # report green. `skipped` is a pass ONLY for a job that `only` deliberately
+  # left out; an expected job that skipped (its upstream died) fails the gate,
+  # and an unreadable `expected` map fails it too.
   stabilize-ok:
     if: always()
     needs:
@@ -451,7 +579,7 @@ jobs:
         test,
         build,
         integration-test,
-        knip,
+        e2e-build,
         e2e-core,
         e2e-full,
         e2e-online,
@@ -462,5 +590,25 @@ jobs:
 
     steps:
       - name: Check results
-        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
-        run: exit 1
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          EXPECTED: ${{ needs.matrix-setup.outputs.expected }}
+        run: |
+          set -euo pipefail
+          if ! jq -e 'type == "object"' <<< "${EXPECTED:-null}" > /dev/null; then
+            echo "::error::matrix-setup produced no job selection"
+            exit 1
+          fi
+          BAD=$(jq -r --argjson expected "$EXPECTED" '
+            to_entries[]
+            | .key as $job | .value.result as $result
+            | select(
+                if $expected[$job] == true then $result != "success"
+                else ($result != "skipped" and $result != "success") end)
+            | "\($job): \($result)"' <<< "$NEEDS")
+          if [ -n "$BAD" ]; then
+            echo "::error::Jobs not green:"
+            echo "$BAD"
+            exit 1
+          fi
+          echo "All expected jobs succeeded."

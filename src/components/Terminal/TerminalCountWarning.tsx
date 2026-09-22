@@ -129,6 +129,9 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
       role="status"
       ariaLive="polite"
       className={className}
+      // It sits in the panel grid's column of strips, beside the grid
+      // notification bar, so its × trails the text the way the neighbours' do.
+      layout="strip"
       actions={[]}
       onClose={handleDismiss}
       closeAriaLabel="Dismiss warning"

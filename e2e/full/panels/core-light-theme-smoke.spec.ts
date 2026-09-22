@@ -5,7 +5,11 @@ import { T_LONG } from "../../helpers/timeouts";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
-import { getThemeChromeMetrics, setAppTheme } from "../../helpers/theme";
+import {
+  ensureQuickRunInputVisible,
+  getThemeChromeMetrics,
+  setAppTheme,
+} from "../../helpers/theme";
 
 const PROJECT_NAME = "light-theme-smoke";
 const LIGHT_SCHEME_IDS = BUILT_IN_APP_SCHEMES.filter((scheme) => scheme.type === "light").map(
@@ -27,9 +31,11 @@ test.describe.serial("Core: Light Theme Smoke", () => {
     ctx = await launchApp();
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture, PROJECT_NAME);
 
-    await expect(ctx.window.locator(SEL.toolbar.projectSwitcherTrigger)).toBeVisible();
-    await expect(ctx.window.getByLabel("Command input")).toBeVisible();
-    await expect(ctx.window.locator(SEL.worktree.mainCard)).toBeVisible();
+    await expect(ctx.window.locator(SEL.toolbar.projectSwitcherTrigger)).toBeVisible({
+      timeout: T_LONG,
+    });
+    await ensureQuickRunInputVisible(ctx.window);
+    await expect(ctx.window.locator(SEL.worktree.mainCard)).toBeVisible({ timeout: T_LONG });
   });
 
   test.afterAll(async () => {

@@ -2,7 +2,6 @@ import { useContentGridContext, type ContentGridProps } from "./useContentGridCo
 import { ContentGridFleetScope } from "./ContentGridFleetScope";
 import { ContentGridMaximizedGroup } from "./ContentGridMaximizedGroup";
 import { ContentGridMaximizedSingle } from "./ContentGridMaximizedSingle";
-import { ContentGridTwoPaneSplit } from "./ContentGridTwoPaneSplit";
 import { ContentGridDefault } from "./ContentGridDefault";
 
 export type { ContentGridProps } from "./useContentGridContext";
@@ -69,17 +68,8 @@ export function ContentGrid({
     }
   }
 
-  if (ctx.useTwoPaneSplitMode && ctx.twoPaneTerminals) {
-    return (
-      <ContentGridTwoPaneSplit
-        ctx={ctx}
-        bindCombinedGrid={bindCombinedGrid}
-        bindGridRegion={bindGridRegion}
-        className={className}
-      />
-    );
-  }
-
+  // Also renders the two-pane split, so crossing that boundary resizes the
+  // surviving panels instead of remounting them (#12476).
   return (
     <ContentGridDefault
       ctx={ctx}

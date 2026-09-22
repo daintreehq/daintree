@@ -152,14 +152,19 @@ vi.mock("node:v8", () => ({
   },
 }));
 
+const eventLoopHistogramMock = vi.hoisted(() => ({
+  enable: vi.fn(),
+  disable: vi.fn(),
+}));
+
 vi.mock("node:perf_hooks", () => ({
   performance: {
     now: () => Date.now(),
     timeOrigin: Date.now(),
   },
   monitorEventLoopDelay: () => ({
-    enable: vi.fn(),
-    disable: vi.fn(),
+    enable: eventLoopHistogramMock.enable,
+    disable: eventLoopHistogramMock.disable,
     percentile: () => 12_000_000,
     reset: vi.fn(),
   }),
@@ -538,6 +543,39 @@ describe("registerDiagnosticsHandlers", () => {
   });
 
   describe("handleGetDiagnosticsInfo", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("samples the event loop only while the reading is being polled (#12515)", () => {
+      // Drop whatever an earlier test left sampling, before faking timers.
+      registerDiagnosticsHandlers(deps)();
+      vi.useFakeTimers();
+      eventLoopHistogramMock.enable.mockClear();
+      eventLoopHistogramMock.disable.mockClear();
+
+      const cleanup = registerDiagnosticsHandlers(deps);
+      expect(eventLoopHistogramMock.enable).not.toHaveBeenCalled();
+
+      const handler = getHandlerFn("diagnostics:get-info");
+      handler();
+      expect(eventLoopHistogramMock.enable).toHaveBeenCalledTimes(1);
+
+      // Each poll keeps it alive; a minute without one releases it.
+      vi.advanceTimersByTime(30_000);
+      handler();
+      vi.advanceTimersByTime(59_000);
+      expect(eventLoopHistogramMock.disable).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1_000);
+      expect(eventLoopHistogramMock.disable).toHaveBeenCalledTimes(1);
+
+      // The next read starts sampling again; teardown releases it.
+      handler();
+      expect(eventLoopHistogramMock.enable).toHaveBeenCalledTimes(2);
+      cleanup();
+      expect(eventLoopHistogramMock.disable).toHaveBeenCalledTimes(2);
+    });
+
     it("returns uptime and event loop lag", () => {
       registerDiagnosticsHandlers(deps);
       const handler = getHandlerFn("diagnostics:get-info");

@@ -11,6 +11,15 @@ const nativeImageMock = vi.hoisted(() => ({
   createFromBuffer: vi.fn(),
 }));
 
+const dialogMock = vi.hoisted(() => ({
+  showOpenDialog: vi.fn(),
+}));
+
+const browserWindowMock = vi.hoisted(() => ({
+  fromWebContents: vi.fn<(sender: unknown) => unknown>(() => null),
+  getFocusedWindow: vi.fn<() => unknown>(() => null),
+}));
+
 vi.mock("electron", () => ({
   ipcMain: {
     handle: vi.fn(),
@@ -18,6 +27,8 @@ vi.mock("electron", () => ({
   },
   clipboard: clipboardMock,
   nativeImage: nativeImageMock,
+  dialog: dialogMock,
+  BrowserWindow: browserWindowMock,
 }));
 
 const fsPromisesMock = vi.hoisted(() => ({
@@ -648,5 +659,94 @@ describe("clipboard:thumbnail-from-path handler", () => {
       name: "AppError",
       code: "CLIPBOARD_INVALID",
     });
+  });
+});
+
+describe("clipboard:pick-attachments handler", () => {
+  let cleanup: () => void;
+  const senderEvent = { sender: { id: 7 } } as unknown as Electron.IpcMainInvokeEvent;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    browserWindowMock.fromWebContents.mockReturnValue(null);
+    browserWindowMock.getFocusedWindow.mockReturnValue(null);
+    cleanup = registerClipboardHandlers();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("parents the picker on the sender's window, not whichever window has focus", async () => {
+    const senderWindow = { id: "sender" };
+    browserWindowMock.fromWebContents.mockReturnValue(senderWindow);
+    browserWindowMock.getFocusedWindow.mockReturnValue({ id: "focused" });
+    dialogMock.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: ["/a/b.log"] });
+
+    const handler = getHandler("clipboard:pick-attachments");
+    await handler(senderEvent);
+
+    expect(dialogMock.showOpenDialog).toHaveBeenCalledTimes(1);
+    const [parent, options] = dialogMock.showOpenDialog.mock.calls[0]!;
+    expect(parent).toBe(senderWindow);
+    expect(options.properties).toEqual(expect.arrayContaining(["openFile", "multiSelections"]));
+    // Any file type: logs and extensionless snippets are as attachable as images.
+    expect(options.filters).toBeUndefined();
+  });
+
+  it("falls back to the focused window when the sender has none", async () => {
+    const focused = { id: "focused" };
+    browserWindowMock.getFocusedWindow.mockReturnValue(focused);
+    dialogMock.showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
+
+    const handler = getHandler("clipboard:pick-attachments");
+    await handler(senderEvent);
+
+    expect(dialogMock.showOpenDialog.mock.calls[0]![0]).toBe(focused);
+  });
+
+  it("opens unparented when no window can be resolved", async () => {
+    dialogMock.showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
+
+    const handler = getHandler("clipboard:pick-attachments");
+    await handler(senderEvent);
+
+    expect(dialogMock.showOpenDialog.mock.calls[0]).toHaveLength(1);
+  });
+
+  it("returns every selected path in the order the dialog gave them", async () => {
+    browserWindowMock.fromWebContents.mockReturnValue({});
+    dialogMock.showOpenDialog.mockResolvedValue({
+      canceled: false,
+      filePaths: ["/Users/me/Desktop/shot.png", "/var/log/app.log"],
+    });
+
+    const handler = getHandler("clipboard:pick-attachments");
+
+    await expect(handler(senderEvent)).resolves.toEqual([
+      "/Users/me/Desktop/shot.png",
+      "/var/log/app.log",
+    ]);
+  });
+
+  it("returns no paths when the picker is cancelled, whatever it reports alongside", async () => {
+    browserWindowMock.fromWebContents.mockReturnValue({});
+    dialogMock.showOpenDialog.mockResolvedValue({ canceled: true, filePaths: ["/stale"] });
+
+    const handler = getHandler("clipboard:pick-attachments");
+
+    await expect(handler(senderEvent)).resolves.toEqual([]);
+  });
+
+  it("never reads the files it returns", async () => {
+    browserWindowMock.fromWebContents.mockReturnValue({});
+    dialogMock.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: ["/a/b.png"] });
+
+    const handler = getHandler("clipboard:pick-attachments");
+    await handler(senderEvent);
+
+    expect(fsPromisesMock.open).not.toHaveBeenCalled();
+    expect(fsPromisesMock.stat).not.toHaveBeenCalled();
+    expect(nativeImageMock.createFromBuffer).not.toHaveBeenCalled();
   });
 });

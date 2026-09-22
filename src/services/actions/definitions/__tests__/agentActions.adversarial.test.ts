@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildHandbackInstruction } from "@shared/utils/handback";
+import { isRegisteredAgent } from "@/config/agents";
 import { z } from "zod";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
+import { UnactionableTargetError } from "../../unactionableTarget";
 
 const panelStoreMock = vi.hoisted(() => ({
   getState: vi.fn(),
@@ -82,7 +85,11 @@ vi.mock("@/store/projectPresetsStore", () => projectPresetsStoreMock);
 // module also means the preset-identity merge under test here is the real one.
 vi.mock("@/config/agents", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/config/agents")>();
-  return { ...actual, ...agentRegistryMock };
+  return {
+    ...actual,
+    ...agentRegistryMock,
+    isRegisteredAgent: vi.fn(actual.isRegisteredAgent),
+  };
 });
 vi.mock("@/clients/userAgentRegistryClient", () => ({
   userAgentRegistryClient: clientsMock.userAgentRegistryClient,
@@ -230,6 +237,225 @@ describe("agentActions adversarial", () => {
     });
     expect(result).toEqual(launchedResult());
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
+  });
+
+  // A requested id is a request for a new panel; one this view already holds
+  // would have the launcher overwrite a live panel's record (#12407).
+  it("agent.launch refuses a requested id an existing panel already uses", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+    panelStoreMock.getState.mockReturnValue({ panelsById: { "user-shell": { id: "user-shell" } } });
+
+    await expect(
+      callAction(actions, "agent.launch", { agentId: "claude", requestedId: "user-shell" })
+    ).rejects.toThrow(/already exists/);
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+
+    await callAction(actions, "agent.launch", { agentId: "claude", requestedId: "fresh-id" });
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ requestedId: "fresh-id" })
+    );
+  });
+
+  // #12431: one agent-neutral field, mapped per CLI by the registry.
+  it("agent.launch maps systemPrompt onto the agent's own append arguments", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", {
+      agentId: "claude",
+      prompt: "first turn",
+      systemPrompt: "Infer the best option\nfrom context.",
+      agentLaunchFlags: ["--verbose"],
+    });
+    expect(callbacks.onLaunchAgent).toHaveBeenLastCalledWith(
+      "claude",
+      expect.objectContaining({
+        prompt: "first turn",
+        systemPromptArgs: ["--append-system-prompt", "Infer the best option from context."],
+        agentLaunchFlags: ["--verbose"],
+      })
+    );
+
+    await callAction(actions, "agent.launch", { agentId: "codex", systemPrompt: "Be terse" });
+    expect(callbacks.onLaunchAgent).toHaveBeenLastCalledWith(
+      "codex",
+      expect.objectContaining({
+        systemPromptArgs: ["-c", 'developer_instructions="Be terse"'],
+      })
+    );
+  });
+
+  // #12488: the instruction rides the prompt and the code rides the spawn.
+  it("agent.launch appends the handback instruction to the prompt and hands the code to the launcher", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    const result = await callAction(actions, "agent.launch", {
+      agentId: "claude",
+      prompt: "Fix the flaky test",
+      handback: true,
+    });
+
+    const options: unknown = callbacks.onLaunchAgent.mock.calls[0]?.[1];
+    const code: unknown =
+      typeof options === "object" && options !== null
+        ? Reflect.get(options, "handbackCode")
+        : undefined;
+    expect(code).toEqual(expect.stringMatching(/^[a-z0-9]{6}$/));
+    expect(options).toMatchObject({
+      prompt: `Fix the flaky test\n\n${buildHandbackInstruction(String(code))}`,
+    });
+    // The public result is unchanged: the caller never sees the code.
+    expect(result).toEqual(launchedResult());
+  });
+
+  it("agent.launch refuses handback without a prompt, before launching", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await expect(
+      callAction(actions, "agent.launch", { agentId: "claude", handback: true })
+    ).rejects.toThrow(/needs a non-empty `prompt`/);
+    await expect(
+      callAction(actions, "agent.launch", { agentId: "claude", prompt: "  \n", handback: true })
+    ).rejects.toThrow(/needs a non-empty `prompt`/);
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it("agent.launch refuses handback for a launch that starts no agent", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    for (const agentId of ["terminal", "browser", "dev-preview", "not-an-agent"]) {
+      await expect(
+        callAction(actions, "agent.launch", { agentId, prompt: "do it", handback: true })
+      ).rejects.toBeInstanceOf(UnactionableTargetError);
+    }
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it("agent.launch refuses handback for a panel id even when a registry entry shares it", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+    const actual = await vi.importActual<typeof import("@/config/agents")>("@/config/agents");
+    vi.mocked(isRegisteredAgent).mockImplementation(() => true);
+
+    try {
+      await expect(
+        callAction(actions, "agent.launch", { agentId: "browser", prompt: "do it", handback: true })
+      ).rejects.toBeInstanceOf(UnactionableTargetError);
+      expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(isRegisteredAgent).mockImplementation(actual.isRegisteredAgent);
+    }
+  });
+
+  it("agent.launch leaves the prompt alone when handback is not asked for", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", { agentId: "claude", prompt: "hi", handback: false });
+
+    const options: unknown = callbacks.onLaunchAgent.mock.calls[0]?.[1];
+    expect(options).toMatchObject({ prompt: "hi" });
+    expect(options).not.toHaveProperty("handbackCode");
+  });
+
+  it("agent.launch treats a blank systemPrompt as absent, for any agent", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", { agentId: "gemini", systemPrompt: "  \n " });
+    const options = callbacks.onLaunchAgent.mock.calls[0]?.[1];
+    expect(options?.systemPromptArgs).toBeUndefined();
+  });
+
+  it("agent.launch refuses systemPrompt for an agent that cannot append one, before launching", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    const launch = callAction(actions, "agent.launch", {
+      agentId: "gemini",
+      systemPrompt: "Do not ask multiple-choice questions.",
+    });
+    await expect(launch).rejects.toBeInstanceOf(UnactionableTargetError);
+    await expect(launch).rejects.toThrow(/Gemini has no launch option that appends/);
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it("agent.launch refuses a systemPrompt that starts with a dash", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await expect(
+      callAction(actions, "agent.launch", { agentId: "claude", systemPrompt: "--yolo" })
+    ).rejects.toBeInstanceOf(UnactionableTargetError);
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it("agent.launch refuses systemPrompt alongside the same instruction in agentLaunchFlags", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await expect(
+      callAction(actions, "agent.launch", {
+        agentId: "codex",
+        systemPrompt: "Be terse",
+        agentLaunchFlags: ["-c", "developer_instructions=Be verbose"],
+      })
+    ).rejects.toThrow(/not both/);
+    // Other spellings the CLIs accept set the same instruction.
+    await expect(
+      callAction(actions, "agent.launch", {
+        agentId: "codex",
+        systemPrompt: "Be terse",
+        agentLaunchFlags: ["--config", "developer_instructions=Be verbose"],
+      })
+    ).rejects.toBeInstanceOf(UnactionableTargetError);
+    await expect(
+      callAction(actions, "agent.launch", {
+        agentId: "claude",
+        systemPrompt: "Be terse",
+        agentLaunchFlags: ["--append-system-prompt=Be verbose"],
+      })
+    ).rejects.toBeInstanceOf(UnactionableTargetError);
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+
+    // Unrelated overrides through the same flag are fine.
+    await callAction(actions, "agent.launch", {
+      agentId: "codex",
+      systemPrompt: "Be terse",
+      agentLaunchFlags: ["-c", "model_reasoning_effort=high"],
+    });
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("agent.launch advertises systemPrompt as an optional, length-bounded string", () => {
+    const actions = setupActions(makeCallbacks());
+    const schema = getDefinition(actions, "agent.launch").argsSchema;
+    if (!schema) throw new Error("agent.launch has no argsSchema");
+    const json = z
+      .object({
+        properties: z.record(
+          z.string(),
+          z.object({
+            type: z.string().optional(),
+            maxLength: z.number().optional(),
+            description: z.string().optional(),
+          })
+        ),
+        required: z.array(z.string()),
+      })
+      .parse(z.toJSONSchema(schema, { io: "input" }));
+    expect(json.properties.systemPrompt).toMatchObject({ type: "string", maxLength: 2000 });
+    expect(json.properties.systemPrompt?.description).toMatch(/Claude and Codex only/);
+    expect(json.required).toContain("agentId");
+    expect(json.required).not.toContain("systemPrompt");
+    expect(schema.safeParse({ agentId: "claude", systemPrompt: "x".repeat(2001) }).success).toBe(
+      false
+    );
   });
 
   it("agent.launch returns the identity the launcher resolved (#11547)", async () => {

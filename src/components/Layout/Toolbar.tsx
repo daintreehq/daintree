@@ -1,6 +1,5 @@
 import {
   Suspense,
-  lazy,
   useRef,
   useState,
   useEffect,
@@ -38,6 +37,18 @@ import {
 } from "./toolbarButtonMetadata";
 import { getToolbarDividerAfterIds, orderToolbarButtonsByGroup } from "./toolbarButtonGrouping";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
+import { ToolbarButtonsContextMenu } from "./ToolbarButtonsContextMenu";
+import {
+  buildToolbarVisibilityMenuRows,
+  canListToolbarButton,
+  resolveToolbarButtonMetadata,
+  type ToolbarSide,
+} from "./toolbarVisibilityMenu";
+import {
+  isToolbarButtonOnToolbar,
+  setToolbarButtonOnToolbar,
+  type ToolbarButtonPlacementState,
+} from "@/lib/toolbarVisibilityDispatch";
 import { cn } from "@/lib/utils";
 import { isMac, isLinux, isWindows } from "@/lib/platform";
 import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
@@ -131,14 +142,16 @@ import { ToolbarCommandPaletteButton } from "./ToolbarCommandPaletteButton";
 import { ResumeSessionsToolbarButton } from "./ResumeSessionsToolbarButton";
 import { ToolbarSettingsButton } from "./ToolbarSettingsButton";
 import { ToolbarProblemsButton } from "./ToolbarProblemsButton";
+import { HostMemoryPauseIndicator } from "./HostMemoryPauseIndicator";
+import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 import { ToolbarPortalButton } from "./ToolbarPortalButton";
 import { ToolbarAssistantButton } from "./ToolbarAssistantButton";
-import { useOverflowBadgeSeverity, type OverflowBadgeSeverity } from "./useOverflowBadgeSeverity";
-import { FixedDropdown } from "@/components/ui/fixed-dropdown";
 import {
-  isInsideCopyTreePanel,
-  restoreCopyTreeTriggerFocus,
-} from "@/components/CopyTree/copyTreeFocus";
+  useOverflowAgentObservations,
+  useOverflowBadgeSeverity,
+  type OverflowBadgeSeverity,
+} from "./useOverflowBadgeSeverity";
+import { CopyTreeMenuContent } from "@/components/CopyTree/CopyTreeRecentsPanel";
 import { useCopyTreeCompletionNotice } from "@/hooks/useCopyTreeCompletionNotice";
 import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 import type { CopyTreeHistoryRecord } from "@shared/types";
@@ -148,13 +161,6 @@ import {
   isBuiltInAgentId,
   type BuiltInAgentId,
 } from "@shared/config/agentIds";
-
-function preloadCopyTreeRecentsPanel() {
-  return import("@/components/CopyTree/CopyTreeRecentsPanel");
-}
-const LazyCopyTreeRecentsPanel = lazy(() =>
-  preloadCopyTreeRecentsPanel().then((m) => ({ default: m.CopyTreeRecentsPanel }))
-);
 
 type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
 
@@ -183,10 +189,12 @@ function ForgeStatsPlaceholder() {
   );
 }
 
+// The same box as the `size="icon"` button it stands in for, so the overflow
+// budget and the row height it reserves are the button's, not 4px more.
 function DevServerPlaceholder() {
   return (
     <div
-      className={cn(toolbarIconButtonClass, "h-9 w-9 opacity-0 pointer-events-none")}
+      className={cn(toolbarIconButtonClass, "h-8 w-8 opacity-0 pointer-events-none")}
       aria-hidden="true"
     />
   );
@@ -207,6 +215,9 @@ interface OverflowMenuProps {
   severity: OverflowBadgeSeverity;
   errorCount: number;
   notificationUnreadCount: number;
+  // Per-session agent states behind the badge, already worded — derived by
+  // the same rule as `severity`, so the name never says less than the dot.
+  agentObservations: readonly string[];
   agentDominantStates: Map<string, AgentState | null>;
   hasActiveWorktree: boolean;
   forgeStatsRef: React.RefObject<ForgeStatsHandle | null>;
@@ -248,6 +259,7 @@ function OverflowMenu({
   severity,
   errorCount,
   notificationUnreadCount,
+  agentObservations,
   agentDominantStates,
   hasActiveWorktree,
   forgeStatsRef,
@@ -297,20 +309,24 @@ function OverflowMenu({
   // flag mutating a ref passed in as a prop.
   const overflowMenuPointerCloseRef = useRef(false);
 
-  // Keep the accessible name stable and terse: a comma-enumerated list
-  // re-announces the full set on every focus pass and goes stale as
-  // resize-driven overflow changes. Surface only the purpose plus a
-  // count, escalating the noun to "problem(s)" when severity is
-  // actionable (critical/warning) so screen-reader users still learn
-  // there's something to act on without the list churn.
+  // Keep the accessible name stable and terse: a comma-enumerated list of
+  // the hidden buttons re-announces the full set on every focus pass and goes
+  // stale as resize-driven overflow changes. The count is always a count of
+  // hidden items — it was once re-nouned to "problems" whenever the badge lit,
+  // which read five hidden commands as five problems. What the badge is
+  // actually reporting rides behind the count instead, as the observations
+  // themselves: the error count, the unread count, the agent states seen.
   const n = overflowIds.length;
-  const hasProblem = severity === "critical" || severity === "warning";
-  const tooltipText = hasProblem
-    ? `More — ${n} ${n === 1 ? "problem" : "problems"}`
-    : `More — ${n} ${n === 1 ? "item" : "items"}`;
-  const ariaLabel = hasProblem
-    ? `More toolbar items — ${n} ${n === 1 ? "problem" : "problems"} hidden`
-    : `More toolbar items — ${n} hidden`;
+  const observations: string[] = [];
+  if (overflowIds.includes("problems") && errorCount > 0) {
+    observations.push(`${errorCount} ${errorCount === 1 ? "error" : "errors"}`);
+  }
+  if (overflowIds.includes("notification-center") && notificationUnreadCount > 0) {
+    observations.push(`${notificationUnreadCount} unread`);
+  }
+  observations.push(...agentObservations);
+  const tooltipText = `More — ${n} hidden${observations.length > 0 ? ` · ${observations.join(" · ")}` : ""}`;
+  const ariaLabel = `More toolbar items — ${n} hidden${observations.length > 0 ? `, ${observations.join(", ")}` : ""}`;
 
   const countSuffix = (id: AnyToolbarButtonId) => {
     if (id === "problems" && errorCount > 0) return ` (${errorCount})`;
@@ -333,7 +349,12 @@ function OverflowMenu({
               data-visible={isEmpty ? "false" : "true"}
               aria-hidden={isEmpty || undefined}
               tabIndex={isEmpty ? -1 : undefined}
-              className={toolbarIconButtonClass}
+              // The no-drag rectangle lives on the button itself, not on a
+              // wrapper: an empty trigger is display:none, and a wrapper
+              // around it would stay a zero-width flex item that still owns a
+              // gap — which is what gave the fixed divider 12px of clearance
+              // on one side while there was nothing to overflow.
+              className={cn(toolbarIconButtonClass, "app-no-drag")}
               aria-label={ariaLabel}
             >
               <Ellipsis />
@@ -620,6 +641,9 @@ export function Toolbar({
   const branchName = activeWorktree?.branch;
   const watcherDegraded = useWorktreeStore((state) => state.watcherDegraded);
   const topologyWatcherDark = useWorktreeStore((state) => state.topologyWatcherDark);
+  // Read here as well as in the indicator, so its arrival or departure re-renders
+  // the toolbar and the roving tab-stop sync below sees the item list change.
+  const hostMemoryPauseVisible = useHostMemoryPauseStore((state) => state.visible);
 
   // Per-item state for the overflow menu, so evicted buttons keep the signal
   // they carry on the visible toolbar (issue #9821). Reads mirror the
@@ -669,12 +693,25 @@ export function Toolbar({
   const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
   const positionAgentButton = useToolbarPreferencesStore((state) => state.positionAgentButton);
+  const toggleButtonVisibility = useToolbarPreferencesStore(
+    (state) => state.toggleButtonVisibility
+  );
+  const setPluginButtonPromoted = useToolbarPreferencesStore(
+    (state) => state.setPluginButtonPromoted
+  );
+  const setPanelButtonOnToolbar = useToolbarPreferencesStore(
+    (state) => state.setPanelButtonOnToolbar
+  );
+  const setLauncherItemOnToolbar = useToolbarPreferencesStore(
+    (state) => state.setLauncherItemOnToolbar
+  );
   // Live subscription so pin/unpin toggles from the launcher immediately
   // update per-agent toolbar button visibility. The `agentSettings` prop is
   // sourced from `useAgentLauncher()`'s local useState which does not react to
   // store mutations, so we prefer the store value when available.
   const liveAgentSettings = useAgentSettingsStore((s) => s.settings);
   const effectiveAgentSettings = liveAgentSettings ?? agentSettings;
+  const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   // Store-derived rather than local click state so every clipboard copy spins
@@ -702,8 +739,6 @@ export function Toolbar({
     announcement: copyTreeAnnouncement,
     clearNotice: clearCopyTreeNotice,
   } = useCopyTreeCompletionNotice(copyTreeButtonRef, { suppress: copyTreeOpen });
-  // Latch after first open so reopening never re-suspends.
-  const copyTreePanelMounted = useKeepMounted(copyTreeOpen);
 
   const hasActiveVoiceRecording = useVoiceRecordingStore(
     (state) =>
@@ -873,69 +908,81 @@ export function Toolbar({
     return handleCopyTree(activeWorktree, "toolbar");
   }, [isCopyingTree, activeWorktree, handleCopyTree]);
 
-  // Warm the panel chunk before the first click — React 19 `lazy` still shows
-  // the fallback for one frame on a cold chunk, and this dropdown's whole point
-  // is that the copy is one click deeper than it used to be.
-  useEffect(() => {
-    void preloadCopyTreeRecentsPanel();
-  }, []);
-
-  // Close and hand focus back to the trigger, but only when closing would
-  // otherwise strand it — an outside click has already moved focus somewhere the
-  // user chose, and yanking it back to the toolbar would fight that. The
-  // deferred-frame reasoning lives with the helper.
-  const closeCopyTreePanel = useCallback(() => {
-    setCopyTreeOpen(false);
-    restoreCopyTreeTriggerFocus(copyTreeButtonRef.current);
-  }, []);
-
-  // The visible button opens the panel; it no longer copies. Every immediate
+  // The visible button opens the menu; it no longer copies. Every immediate
   // route is deliberately left alone: `Cmd+Shift+C` dispatches
   // `worktree.copyTree` without passing through here at all, and the overflow
-  // item calls `handleCopyTreeClick` directly — a nested panel inside the
+  // item calls `handleCopyTreeClick` directly — a nested menu inside the
   // overflow menu isn't worth it (#11733).
   //
-  // The in-flight check matches what the button already announces: it renders
-  // `aria-disabled` while copying, and the shared Button doesn't suppress
-  // clicks on that alone, so without this the "disabled" trigger still opens a
-  // panel whose rows would all decline to run.
-  const handleCopyTreeToggle = useCallback(() => {
-    if (isCopyingTree || !activeWorktree) return;
-    // A lingering completion tooltip and the opening panel would anchor to the
-    // same button; the click is also an acknowledgement of the notice.
-    clearCopyTreeNotice();
-    setCopyTreeOpen((open) => !open);
-  }, [isCopyingTree, activeWorktree, clearCopyTreeNotice]);
+  // The guard sits on the open transition rather than on the trigger's
+  // `disabled`: the button is deliberately `aria-disabled` so its "Open a
+  // worktree first" tooltip still shows on hover, and a truly disabled trigger
+  // would fire no pointer events for it. Close is always honoured; the menu
+  // primitive owns close-time focus, so nothing here restores it.
+  const handleCopyTreeOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) {
+        if (isCopyingTree || !activeWorktree) return;
+        // A lingering completion tooltip and the opening menu would anchor to
+        // the same button; the click is also an acknowledgement of the notice.
+        clearCopyTreeNotice();
+      }
+      setCopyTreeOpen(open);
+    },
+    [isCopyingTree, activeWorktree, clearCopyTreeNotice]
+  );
 
-  // The panel's primary row: the old one-click behavior, now one click deeper.
+  // Where focus goes when the menu closes because its button was evicted to
+  // the overflow menu — set by the eviction effect, consumed once here.
+  const copyTreeEvictionFocusRef = useRef<HTMLElement | null>(null);
+  const handleCopyTreeCloseAutoFocus = useCallback((event: Event) => {
+    const target = copyTreeEvictionFocusRef.current;
+    if (!target) return;
+    copyTreeEvictionFocusRef.current = null;
+    // Radix would restore to the trigger, which is invisible by now. Deferred
+    // a frame so it lands after the shared handler has armed tooltip
+    // suppression — the wrapper runs this callback before that handler, and a
+    // focus placed earlier would drag the overflow trigger's tooltip open.
+    event.preventDefault();
+    requestAnimationFrame(() => target.focus({ preventScroll: true }));
+  }, []);
+
+  // The menu's pinned entry: the old one-click behavior, now one row deeper.
+  // Radix closes the menu on select; the handlers only dispatch.
   const handleCopyTreeFullContext = useCallback(() => {
-    closeCopyTreePanel();
     void handleCopyTreeClick();
-  }, [closeCopyTreePanel, handleCopyTreeClick]);
+  }, [handleCopyTreeClick]);
 
-  // A recents row. Replayed against the ACTIVE worktree, never the worktree
+  // Project settings, on the Context tab — where the excludes, always-include
+  // lists and size budgets that shape every copy actually live. Same
+  // CustomEvent the `project.settings.open` action uses.
+  const handleOpenContextSettings = useCallback(() => {
+    window.dispatchEvent(
+      new CustomEvent("daintree:open-settings-tab", { detail: { tab: "project:context" } })
+    );
+  }, []);
+
+  // A recent entry. Replayed against the ACTIVE worktree, never the worktree
   // stored on the record — the history dedupe key covers options alone, so a
   // record's worktree is whichever one ran it last rather than a stable target,
   // and it may name a worktree that has since been removed.
   const handleCopyTreeRunRecent = useCallback(
     (record: CopyTreeHistoryRecord) => {
-      closeCopyTreePanel();
       if (isCopyingTree || !activeWorktree) return;
       void handleCopyTreeWithOptions(activeWorktree, record.options, "toolbar");
     },
-    [closeCopyTreePanel, isCopyingTree, activeWorktree, handleCopyTreeWithOptions]
+    [isCopyingTree, activeWorktree, handleCopyTreeWithOptions]
   );
 
   // The anchor stops being interactive without a worktree or while a copy is
-  // in flight (it renders aria-disabled for both), and the panel's rows decline
-  // in both states — leaving it open would strand a dead menu over the toolbar.
-  // The in-flight half matters because copies start without the trigger: MCP
-  // and assistant dispatches, Cmd+Shift+C, and the palette can all begin one
-  // while the panel is open. `closeCopyTreePanel` rather than a bare state
-  // flip so focus stranded inside the closing panel returns to the trigger.
+  // in flight (it renders aria-disabled for both), and the menu's entries
+  // decline in both states — leaving it open would strand a dead menu over the
+  // toolbar. The in-flight half matters because copies start without the
+  // trigger: MCP and assistant dispatches, Cmd+Shift+C, and the palette can
+  // all begin one while the menu is open.
   useEffect(() => {
-    if ((!activeWorktree || isCopyingTree) && copyTreeOpen) closeCopyTreePanel();
-  }, [activeWorktree, isCopyingTree, copyTreeOpen, closeCopyTreePanel]);
+    if ((!activeWorktree || isCopyingTree) && copyTreeOpen) setCopyTreeOpen(false);
+  }, [activeWorktree, isCopyingTree, copyTreeOpen]);
 
   const getToolbarItems = useCallback(
     () =>
@@ -964,7 +1011,14 @@ export function Toolbar({
   useLayoutEffect(() => {
     const items = getToolbarItems();
     if (items.length === 0) return;
-    const clamped = Math.min(activeToolbarIndexRef.current, items.length - 1);
+    // An item that comes and goes ahead of the focused one — the host memory
+    // pause indicator (#12375) — shifts every index after it, so follow the
+    // element that holds focus rather than the index it used to have.
+    const focusedIndex = items.findIndex((el) => el === document.activeElement);
+    const clamped =
+      focusedIndex !== -1
+        ? focusedIndex
+        : Math.min(activeToolbarIndexRef.current, items.length - 1);
     activeToolbarIndexRef.current = clamped;
     syncToolbarTabStops(items, clamped);
 
@@ -975,7 +1029,13 @@ export function Toolbar({
       // redirect below is skipped — but the ref must still be cleared so
       // a later unrelated re-render doesn't trigger a phantom redirect.
       prevFocusedToolbarItemRef.current = null;
-      if (document.activeElement === document.body) {
+      // Two shapes of "focus is about to be nowhere". The evicted button has
+      // just gone `visibility: hidden`, but the browser only drops focus from
+      // it at its next rendering update — after this layout effect — so at
+      // this point it is still `activeElement` and the redirect has to fire
+      // now, or focus lands on <body> with nothing left to catch it. The
+      // body case covers an eviction whose fixup already ran (an unmount).
+      if (document.activeElement === document.body || document.activeElement === prevFocused) {
         // Redirect to the overflow trigger on the SAME side as the
         // evicted item; falling back to the other side's trigger would
         // pull focus across the toolbar to the wrong group.
@@ -1046,7 +1106,14 @@ export function Toolbar({
     [getToolbarItems, syncToolbarTabStops]
   );
 
-  const toolbarDividerClass = "toolbar-divider w-px h-5 mx-1";
+  // `shrink-0`: a 1px flex item is the first thing a squeezed row gives up,
+  // and a group boundary that silently goes to zero width is worse than one
+  // that costs the row a pixel.
+  const toolbarDividerClass = "toolbar-divider w-px h-5 mx-1 shrink-0";
+  // The two fixed dividers sit in the outer groups, whose `gap-1.5` already
+  // supplies the 6px the measured rows' own `gap-0.5` + `mx-1` add up to;
+  // an `mx-1` on top gave the launcher 10px on one side and 6px on the other.
+  const toolbarFixedDividerClass = "toolbar-divider w-px h-5 shrink-0";
 
   const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
 
@@ -1124,7 +1191,7 @@ export function Toolbar({
             <TooltipContent side="bottom">
               {hasWorkspace
                 ? createTooltipContent(
-                    isFocusMode ? "Show Sidebar" : "Hide Sidebar",
+                    isFocusMode ? "Show sidebar" : "Hide sidebar",
                     sidebarShortcut
                   )
                 : "Open a project or scratch to use the sidebar"}
@@ -1312,8 +1379,16 @@ export function Toolbar({
       "copy-tree": {
         render: () => (
           <div className="relative">
+            {/* ContextMenu outermost and DropdownMenu inside it, both triggers
+                composed straight onto the Button. The two wrappers publish the
+                same OverlayFocusRestoreContext and a trigger registers with
+                the NEAREST provider — so with ContextMenu nested inside
+                DropdownMenu (the PluginTrayButton shape) the dropdown's trigger
+                lands on the context menu's restore state, and a pointer pick
+                in the menu drops focus on <body>. This order gives the
+                dropdown — the button's whole job — the correct provider. */}
             <ContextMenu>
-              <ContextMenuTrigger asChild>
+              <DropdownMenu open={copyTreeOpen} onOpenChange={handleCopyTreeOpenChange}>
                 {/* Controlled union: hover opens through onOpenChange as
                     normal, while a completion notice forces the tooltip open
                     for its short display window — the whole feedback for a
@@ -1335,26 +1410,27 @@ export function Toolbar({
                   }}
                 >
                   <TooltipTrigger asChild>
-                    <Button
-                      ref={copyTreeButtonRef}
-                      variant="ghost"
-                      size="icon"
-                      data-toolbar-item=""
-                      onClick={handleCopyTreeToggle}
-                      aria-disabled={isCopyingTree || !activeWorktree || undefined}
-                      className={cn(
-                        "toolbar-icon-button relative",
-                        "text-text-primary",
-                        isCopyingTree && "cursor-wait opacity-70",
-                        "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                      )}
-                      aria-label={isCopyingTree ? "Copying…" : "Copy context"}
-                      aria-keyshortcuts={copyTreeAriaShortcut}
-                      aria-haspopup="dialog"
-                      aria-expanded={copyTreeOpen}
-                    >
-                      {showCopyingSpinner ? <Spinner /> : <Folders />}
-                    </Button>
+                    <DropdownMenuTrigger asChild>
+                      <ContextMenuTrigger asChild>
+                        <Button
+                          ref={copyTreeButtonRef}
+                          variant="ghost"
+                          size="icon"
+                          data-toolbar-item=""
+                          aria-disabled={isCopyingTree || !activeWorktree || undefined}
+                          className={cn(
+                            "toolbar-icon-button relative",
+                            "text-text-primary",
+                            isCopyingTree && "cursor-wait opacity-70",
+                            "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                          )}
+                          aria-label={isCopyingTree ? "Copying…" : "Copy context"}
+                          aria-keyshortcuts={copyTreeAriaShortcut}
+                        >
+                          {showCopyingSpinner ? <Spinner /> : <Folders />}
+                        </Button>
+                      </ContextMenuTrigger>
+                    </DropdownMenuTrigger>
                   </TooltipTrigger>
                   <TooltipContent side="bottom" className="font-medium">
                     {copyTreeNotice ? (
@@ -1373,28 +1449,18 @@ export function Toolbar({
                     )}
                   </TooltipContent>
                 </Tooltip>
-              </ContextMenuTrigger>
+                <CopyTreeMenuContent
+                  shortcut={copyTreeShortcut}
+                  onCopyFullContext={handleCopyTreeFullContext}
+                  onRunRecent={handleCopyTreeRunRecent}
+                  onOpenContextSettings={handleOpenContextSettings}
+                  onCloseAutoFocus={handleCopyTreeCloseAutoFocus}
+                />
+              </DropdownMenu>
               <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
                 <ToolbarContextMenuItems buttonId="copy-tree" side="right" />
               </ContextMenuContent>
             </ContextMenu>
-            <FixedDropdown
-              open={copyTreeOpen}
-              onOpenChange={(open) => {
-                if (!open) closeCopyTreePanel();
-              }}
-              anchorRef={copyTreeButtonRef}
-              className="p-0"
-            >
-              {copyTreePanelMounted && (
-                <Suspense fallback={null}>
-                  <LazyCopyTreeRecentsPanel
-                    onCopyFullContext={handleCopyTreeFullContext}
-                    onRunRecent={handleCopyTreeRunRecent}
-                  />
-                </Suspense>
-              )}
-            </FixedDropdown>
             {/* The toast this tooltip replaced was announced by assistive
                 tech; a forced-open tooltip isn't, so the notice is mirrored
                 into a live region. The hook toggles a zero-width space onto
@@ -1522,12 +1588,12 @@ export function Toolbar({
       copyTreeShortcut,
       copyTreeAriaShortcut,
       currentProject,
-      handleCopyTreeToggle,
+      handleCopyTreeOpenChange,
       handleCopyTreeFullContext,
       handleCopyTreeRunRecent,
-      closeCopyTreePanel,
+      handleOpenContextSettings,
+      handleCopyTreeCloseAutoFocus,
       copyTreeOpen,
-      copyTreePanelMounted,
       copyTreeNotice,
       copyTreeAnnouncement,
       copyTreeTooltipHovered,
@@ -1630,7 +1696,10 @@ export function Toolbar({
     [pluginConfigs]
   );
 
-  const effectiveLeftButtons = useMemo(() => {
+  // Every button holding a slot on each side, hidden or not. The toolbar draws
+  // the visible subset; its empty-space menu (#12355) lists the whole set, since
+  // hiding never takes a button's position away.
+  const positionedLeftButtons = useMemo(() => {
     // Dedupe defensively so a persisted list holding a repeated id never
     // renders duplicate pills (#10937) — the store also heals this, this is
     // belt-and-suspenders at the render boundary.
@@ -1656,31 +1725,35 @@ export function Toolbar({
     // boundary, so the groups have to actually be contiguous. Ordering here
     // rather than at the render loop means overflow, keyboard roving, and the
     // DOM all see the same canonical sequence.
-    return orderToolbarButtonsByGroup(
-      positioned.filter((id) =>
-        isToolbarButtonVisible(
-          id,
-          pinnedButtons,
-          effectiveAgentSettings,
-          agentAvailability,
-          pluginConfigs.has(id)
-        )
-      ),
-      resolveToolbarGroup
-    );
+    return orderToolbarButtonsByGroup(positioned, resolveToolbarGroup);
   }, [
     toolbarLayout.leftButtons,
     launcherOnRight,
     unpositionedAgentPins,
     unpositionedLauncherItemPins,
-    pinnedButtons,
-    effectiveAgentSettings,
-    agentAvailability,
-    pluginConfigs,
     resolveToolbarGroup,
   ]);
 
-  const effectiveRightButtons = useMemo(() => {
+  const isButtonShownOnToolbar = useCallback(
+    (id: AnyToolbarButtonId) =>
+      isToolbarButtonVisible(
+        id,
+        pinnedButtons,
+        effectiveAgentSettings,
+        agentAvailability,
+        pluginConfigs.has(id)
+      ),
+    [pinnedButtons, effectiveAgentSettings, agentAvailability, pluginConfigs]
+  );
+
+  // Filtering the grouped list yields the same sequence as grouping the filtered
+  // one — grouping is a stable partition.
+  const effectiveLeftButtons = useMemo(
+    () => positionedLeftButtons.filter(isButtonShownOnToolbar),
+    [positionedLeftButtons, isButtonShownOnToolbar]
+  );
+
+  const positionedRightButtons = useMemo(() => {
     // Dedupe the persisted base before appending plugin extras, so duplicate
     // ids (e.g. repeated `forge-stats`, #10937) can't render twice.
     const base = Array.from(new Set(toolbarLayout.rightButtons));
@@ -1703,15 +1776,11 @@ export function Toolbar({
     // replaced. Buttons the user already dragged into a side list keep that
     // position and are filtered on promotion below like any other id.
     const extra = pluginButtonIds.filter((id) => !positioned.has(id) && pinnedButtons[id] === true);
-    return [...base, ...extra].filter((id) =>
-      isToolbarButtonVisible(
-        id,
-        pinnedButtons,
-        effectiveAgentSettings,
-        agentAvailability,
-        pluginConfigs.has(id)
-      )
-    );
+    // Grouped like the left (#11681): the default right set is all utilities,
+    // so this changes nothing until a user moves a panel or agent across the
+    // centre — at which point the divider rules have to mean the same thing
+    // on both sides.
+    return orderToolbarButtonsByGroup([...base, ...extra], resolveToolbarGroup);
   }, [
     toolbarLayout.rightButtons,
     toolbarLayout.leftButtons,
@@ -1720,10 +1789,13 @@ export function Toolbar({
     unpositionedLauncherItemPins,
     pluginButtonIds,
     pinnedButtons,
-    effectiveAgentSettings,
-    agentAvailability,
-    pluginConfigs,
+    resolveToolbarGroup,
   ]);
+
+  const effectiveRightButtons = useMemo(
+    () => positionedRightButtons.filter(isButtonShownOnToolbar),
+    [positionedRightButtons, isButtonShownOnToolbar]
+  );
 
   const availableLeftIds = useMemo(
     () =>
@@ -1754,7 +1826,8 @@ export function Toolbar({
     rightGroupRef,
     availableLeftIds,
     availableRightIds,
-    pinnedIds
+    pinnedIds,
+    resolveToolbarGroup
   );
 
   // Voice recording reserves layout via an always-available slot but should
@@ -1778,6 +1851,8 @@ export function Toolbar({
 
   const leftOverflowSeverity = useOverflowBadgeSeverity(visibleLeftOverflow, errorCount);
   const rightOverflowSeverity = useOverflowBadgeSeverity(visibleRightOverflow, errorCount);
+  const leftAgentObservations = useOverflowAgentObservations(visibleLeftOverflow);
+  const rightAgentObservations = useOverflowAgentObservations(visibleRightOverflow);
 
   const leftVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(leftVisible), [leftVisible]);
   const rightVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(rightVisible), [rightVisible]);
@@ -1795,47 +1870,35 @@ export function Toolbar({
     // absolute` eviction styles never reach it — an open panel would strand on
     // screen and then re-anchor to the hidden button's rect on the next resize.
     if (overflowSet.has("copy-tree")) {
-      const focusWasInPanel = isInsideCopyTreePanel(document.activeElement);
-      setCopyTreeOpen(false);
+      // The menu portals out of the toolbar, so "is focus inside it?" is a
+      // closest() against the content's marker, not a DOM-ancestor check
+      // from the trigger.
+      const focusWasInPanel =
+        document.activeElement instanceof HTMLElement &&
+        document.activeElement.closest("[data-copy-tree-panel]") !== null;
       // The anchor is on its way to being hidden, so it can't take focus back.
       // The overflow trigger is where the command now lives, which makes it the
       // honest destination — otherwise a keyboard user is dropped onto <body>.
       // It has to be the trigger on the side that swallowed the button: the
       // other one renders display:none and untabbable when its own side has no
       // overflow, so focusing it would be the silent no-op this prevents.
+      //
+      // Recorded, not focused here: the menu is a modal Radix menu and its
+      // FocusScope is still trapping while it is open, so a synchronous
+      // `.focus()` at this point is bounced straight back inside. The move
+      // happens in the menu's own onCloseAutoFocus, once the trap has let go.
       if (focusWasInPanel) {
         const side = rightOverflow.includes("copy-tree") ? "right" : "left";
-        toolbarRef.current
-          ?.querySelector<HTMLElement>(
+        copyTreeEvictionFocusRef.current =
+          toolbarRef.current?.querySelector<HTMLElement>(
             `[data-toolbar-overflow-trigger][data-toolbar-overflow-side="${side}"][data-visible="true"]`
-          )
-          ?.focus();
+          ) ?? null;
       }
+      setCopyTreeOpen(false);
     }
   }, [leftOverflow, rightOverflow]);
 
-  const renderButtons = (buttonIds: AnyToolbarButtonId[], visibleSet: Set<AnyToolbarButtonId>) => {
-    return buttonIds
-      .filter((id) => buttonRegistry[id]?.isAvailable)
-      .map((id) => (
-        <div
-          key={id}
-          data-toolbar-button-id={id}
-          className={cn(
-            "app-no-drag",
-            !visibleSet.has(id) && "invisible absolute pointer-events-none"
-          )}
-          aria-hidden={visibleSet.has(id) ? undefined : true}
-          data-toolbar-placeholder={
-            !currentProject && PROJECT_SCOPED_TOOLBAR_IDS.has(id) ? "true" : undefined
-          }
-        >
-          {buttonRegistry[id]!.render()}
-        </div>
-      ));
-  };
-
-  const renderLeftButtons = (
+  const renderGroupedButtons = (
     buttonIds: AnyToolbarButtonId[],
     visibleSet: Set<AnyToolbarButtonId>
   ) => {
@@ -1894,6 +1957,77 @@ export function Toolbar({
       ...buildLauncherToolbarMeta(launcherCatalog),
     }),
     [pluginButtonIds, pluginConfigs, launcherCatalog]
+  );
+
+  // The same bundle Settings → Toolbar hands the placement resolvers, so the
+  // empty-space menu's checkmarks and toggles route exactly as that page does.
+  const toolbarPlacementState = useMemo<ToolbarButtonPlacementState>(
+    () => ({
+      pinnedButtons,
+      leftButtons: toolbarLayout.leftButtons,
+      rightButtons: toolbarLayout.rightButtons,
+      agentSettings: effectiveAgentSettings,
+      agentAvailability,
+      isPluginContribution: (id) => pluginConfigs.has(id),
+    }),
+    [
+      pinnedButtons,
+      toolbarLayout.leftButtons,
+      toolbarLayout.rightButtons,
+      effectiveAgentSettings,
+      agentAvailability,
+      pluginConfigs,
+    ]
+  );
+
+  // Rows for the empty-space menu (#12355), built from the side lists before
+  // the visibility filter so a hidden button still has one.
+  const toolbarMenuRows = useMemo(
+    () =>
+      buildToolbarVisibilityMenuRows(positionedLeftButtons, positionedRightButtons, {
+        resolveMetadata: (id) =>
+          resolveToolbarButtonMetadata(id, TOOLBAR_BUTTON_METADATA, dynamicOverflowMeta),
+        canList: (id) =>
+          canListToolbarButton(
+            id,
+            buttonRegistry,
+            PROJECT_SCOPED_TOOLBAR_IDS,
+            effectiveAgentSettings,
+            agentAvailability
+          ),
+        isOnToolbar: (id) => isToolbarButtonOnToolbar(id, toolbarPlacementState),
+      }),
+    [
+      positionedLeftButtons,
+      positionedRightButtons,
+      dynamicOverflowMeta,
+      buttonRegistry,
+      effectiveAgentSettings,
+      agentAvailability,
+      toolbarPlacementState,
+    ]
+  );
+
+  const handleToolbarMenuToggle = useCallback(
+    (buttonId: AnyToolbarButtonId, side: ToolbarSide, onToolbar: boolean) => {
+      setToolbarButtonOnToolbar(buttonId, side, onToolbar, toolbarPlacementState, {
+        setAgentPinned,
+        toggleButtonVisibility,
+        positionAgentButton,
+        setPluginButtonPromoted,
+        setPanelButtonOnToolbar,
+        setLauncherItemOnToolbar,
+      });
+    },
+    [
+      toolbarPlacementState,
+      setAgentPinned,
+      toggleButtonVisibility,
+      positionAgentButton,
+      setPluginButtonPromoted,
+      setPanelButtonOnToolbar,
+      setLauncherItemOnToolbar,
+    ]
   );
 
   const overflowActions = useMemo<Partial<Record<AnyToolbarButtonId, () => void>>>(
@@ -1988,7 +2122,8 @@ export function Toolbar({
   const renderOverflowMenu = (
     overflowIds: AnyToolbarButtonId[],
     side: "left" | "right",
-    severity: OverflowBadgeSeverity
+    severity: OverflowBadgeSeverity,
+    agentObservations: readonly string[]
   ) => (
     <OverflowMenu
       overflowIds={overflowIds}
@@ -1996,6 +2131,7 @@ export function Toolbar({
       severity={severity}
       errorCount={errorCount}
       notificationUnreadCount={notificationUnreadCount}
+      agentObservations={agentObservations}
       agentDominantStates={agentDominantStates}
       hasActiveWorktree={!!activeWorktree}
       forgeStatsRef={forgeStatsRef}
@@ -2116,7 +2252,7 @@ export function Toolbar({
       <TooltipTrigger asChild>
         <button
           data-toolbar-item=""
-          className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+          className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
           data-testid="project-switcher-trigger"
           aria-label={workspaceIdentity.ariaLabel}
           role={workspaceIdentity.kind !== "none" ? "combobox" : undefined}
@@ -2173,263 +2309,288 @@ export function Toolbar({
       {/* Brand marks in the toolbar are painted on the toolbar surface, not on
           whichever surface the theme happens to make hardest. */}
       <BrandSurface surface="surface-toolbar">
-        <div
-          ref={toolbarRef}
-          role="toolbar"
-          aria-label="Main toolbar"
-          onKeyDown={handleToolbarKeyDown}
-          onFocusCapture={handleToolbarFocusCapture}
-          className="@container/toolbar relative z-[60] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] h-12 items-center px-4 pt-1 shrink-0 app-drag-region surface-toolbar border-b border-divider"
-        >
-          {!isLinux() && <div className="window-resize-strip" />}
-
-          {/* LEFT GROUP */}
+        <ToolbarButtonsContextMenu rows={toolbarMenuRows} onToggle={handleToolbarMenuToggle}>
           <div
-            role="group"
-            aria-label="Navigation and agents"
-            className="flex items-center gap-1.5 z-20"
+            ref={toolbarRef}
+            role="toolbar"
+            aria-label="Main toolbar"
+            onKeyDown={handleToolbarKeyDown}
+            onFocusCapture={handleToolbarFocusCapture}
+            className="@container/toolbar relative z-[60] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-3 h-12 items-center px-4 shrink-0 app-drag-region surface-toolbar border-b border-divider"
           >
-            {isMac() && (
-              <div
-                data-fullscreen={isFullscreen ? "true" : undefined}
-                className={cn(
-                  "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
-                  isFullscreen ? "w-0" : "w-16"
-                )}
-              />
-            )}
-            {/* Fixed chrome, never part of buttonRegistry/overflow: this is the
+            {!isLinux() && <div className="window-resize-strip" />}
+
+            {/* LEFT GROUP */}
+            <div
+              role="group"
+              aria-label="Navigation and agents"
+              className="flex items-center gap-1.5 z-20"
+            >
+              {isMac() && (
+                <div
+                  data-fullscreen={isFullscreen ? "true" : undefined}
+                  className={cn(
+                    "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
+                    // A zero-width flex item still owns a gap on each side;
+                    // the negative margin folds the group's gap back in so
+                    // fullscreen's first button lands at the same inset a
+                    // spacer-less platform gives it.
+                    isFullscreen ? "w-0 -mr-1.5" : "w-16"
+                  )}
+                />
+              )}
+              {/* Fixed chrome, never part of buttonRegistry/overflow: this is the
               recovery surface for the application menu itself, so it must not
               be hideable or reorderable into an overflow popover (#11813).
               Gated here as well as inside the component so macOS doesn't keep
               an empty flex item, which would add a stray gap-1.5 column. */}
-            {!isMac() && (
-              <div className="app-no-drag">
-                <AppMenuButton />
+              {!isMac() && (
+                <div className="app-no-drag">
+                  <AppMenuButton />
+                </div>
+              )}
+              <div className="app-no-drag">{buttonRegistry["sidebar-toggle"]!.render()}</div>
+
+              <div className={toolbarFixedDividerClass} />
+
+              <div
+                ref={leftGroupRef}
+                className="toolbar-measured-row flex flex-1 min-w-0 items-center gap-0.5"
+              >
+                {renderGroupedButtons(effectiveLeftButtons, leftVisibleSet)}
               </div>
-            )}
-            <div className="app-no-drag">{buttonRegistry["sidebar-toggle"]!.render()}</div>
+              {renderOverflowMenu(
+                visibleLeftOverflow,
+                "left",
+                leftOverflowSeverity,
+                leftAgentObservations
+              )}
+            </div>
 
-            <div className={toolbarDividerClass} />
-
+            {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}
             <div
-              ref={leftGroupRef}
-              className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden"
+              role="group"
+              aria-label="Project"
+              className="app-no-drag relative flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
             >
-              {renderLeftButtons(effectiveLeftButtons, leftVisibleSet)}
-            </div>
-            <div className="app-no-drag">
-              {renderOverflowMenu(visibleLeftOverflow, "left", leftOverflowSeverity)}
-            </div>
-          </div>
-
-          {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}
-          <div
-            role="group"
-            aria-label="Project"
-            className="app-no-drag relative flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
-          >
-            {/* Anchor-only sibling of the pill — see ProjectIdentityEditor. */}
-            {currentProject && (
-              <ProjectIdentityEditor
-                project={currentProject}
-                open={isIdentityEditorOpen}
-                onOpenChange={handleIdentityEditorOpenChange}
-                onCloseAutoFocus={suppressPillTooltipForFocusRestore}
-              />
-            )}
-            <Tooltip
-              open={workspaceIdentity.kind !== "none" ? pillTooltipOpen : false}
-              onOpenChange={
-                workspaceIdentity.kind !== "none" ? handlePillTooltipOpenChange : undefined
-              }
-            >
-              <ContextMenu onOpenChange={handlePillContextMenuOpenChange}>
-                {shouldMountProjectSwitcherDropdown ? (
-                  <Suspense fallback={projectSwitcherTrigger}>
-                    <LazyProjectSwitcherPalette
-                      mode="dropdown"
-                      isOpen={isDropdownOpen}
-                      query={projectSwitcher.query}
-                      results={projectSwitcher.results}
-                      browseBands={projectSwitcher.browseBands}
-                      selectedIndex={projectSwitcher.selectedIndex}
-                      onQueryChange={projectSwitcher.setQuery}
-                      onSelectPrevious={projectSwitcher.selectPrevious}
-                      onSelectNext={projectSwitcher.selectNext}
-                      onSelect={projectSwitcher.selectRow}
-                      onHoverProject={projectSwitcher.onHoverProject}
-                      onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
-                      fleetLiveness={projectSwitcher.fleetLiveness}
-                      onClose={handlePillDropdownClose}
-                      onDropdownCloseAutoFocus={suppressPillTooltipForFocusRestore}
-                      consumeCloseAutoFocusSuppression={
-                        projectSwitcher.consumeCloseAutoFocusSuppression
-                      }
-                      onAddProject={projectSwitcher.addProject}
-                      onCloneRepo={projectSwitcher.cloneRepo}
-                      onStopProject={handleStopProject}
-                      onCloseProject={handleCloseProject}
-                      onSleepProject={handleSleepProject}
-                      onLocateProject={handleLocateProject}
-                      onMoveOrRenameProject={handleMoveOrRenameProject}
-                      onTogglePinProject={projectSwitcher.togglePinProject}
-                      onCopyPath={projectSwitcher.copyPath}
-                      onOpenProjectSettings={currentProject ? handleOpenProjectSettings : undefined}
-                      onSelectNewWindow={handleSelectNewWindow}
-                      dropdownAlign="center"
-                      removeConfirmProject={projectSwitcher.removeConfirmProject}
-                      onRemoveConfirmClose={handleRemoveConfirmClose}
-                      onConfirmRemove={projectSwitcher.confirmRemoveProject}
-                      isRemovingProject={projectSwitcher.isRemovingProject}
-                      sleepConfirmProject={projectSwitcher.sleepConfirmProject}
-                      onSleepConfirmClose={() => projectSwitcher.setSleepConfirmProject(null)}
-                      onConfirmSleep={projectSwitcher.confirmSleep}
-                      isSleepingProject={projectSwitcher.isSleepingProject}
-                      rankedSearch={projectSwitcher.isRankedSearch}
-                      scratchResults={projectSwitcher.scratchResults}
-                      onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
-                      onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
-                      onRequestDeleteScratch={projectSwitcher.requestDeleteScratch}
-                      deleteScratchConfirm={projectSwitcher.deleteScratchConfirm}
-                      onDismissDeleteScratchConfirm={projectSwitcher.dismissDeleteScratchConfirm}
-                      onConfirmDeleteScratch={() => void projectSwitcher.confirmDeleteScratch()}
-                      isDeletingScratch={projectSwitcher.isDeletingScratch}
-                      onRequestDeleteAllScratches={projectSwitcher.requestDeleteAllScratches}
-                      deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
-                      onDismissDeleteAllScratchesConfirm={
-                        projectSwitcher.dismissDeleteAllScratchesConfirm
-                      }
-                      onConfirmDeleteAllScratches={() =>
-                        void projectSwitcher.confirmDeleteAllScratches()
-                      }
-                      isDeletingAllScratches={projectSwitcher.isDeletingAllScratches}
-                      onRenameScratch={(scratchId, name) =>
-                        void projectSwitcher.renameScratch(scratchId, name)
-                      }
-                      onSaveAsProject={(scratchId) => void projectSwitcher.saveAsProject(scratchId)}
-                      saveAsProjectConfirm={projectSwitcher.saveAsProjectConfirm}
-                      onDismissSaveAsProjectConfirm={projectSwitcher.dismissSaveAsProjectConfirm}
-                      onConfirmDeleteOriginalScratch={() =>
-                        void projectSwitcher.confirmDeleteOriginalScratch()
-                      }
-                      isDeletingOriginalScratch={projectSwitcher.isDeletingOriginalScratch}
+              {/* Anchor-only sibling of the pill — see ProjectIdentityEditor. */}
+              {currentProject && (
+                <ProjectIdentityEditor
+                  project={currentProject}
+                  open={isIdentityEditorOpen}
+                  onOpenChange={handleIdentityEditorOpenChange}
+                  onCloseAutoFocus={suppressPillTooltipForFocusRestore}
+                />
+              )}
+              <Tooltip
+                open={workspaceIdentity.kind !== "none" ? pillTooltipOpen : false}
+                onOpenChange={
+                  workspaceIdentity.kind !== "none" ? handlePillTooltipOpenChange : undefined
+                }
+              >
+                <ContextMenu onOpenChange={handlePillContextMenuOpenChange}>
+                  {shouldMountProjectSwitcherDropdown ? (
+                    <Suspense fallback={projectSwitcherTrigger}>
+                      <LazyProjectSwitcherPalette
+                        mode="dropdown"
+                        isOpen={isDropdownOpen}
+                        query={projectSwitcher.query}
+                        results={projectSwitcher.results}
+                        browseBands={projectSwitcher.browseBands}
+                        selectedIndex={projectSwitcher.selectedIndex}
+                        onQueryChange={projectSwitcher.setQuery}
+                        onSelectPrevious={projectSwitcher.selectPrevious}
+                        onSelectNext={projectSwitcher.selectNext}
+                        onSelect={projectSwitcher.selectRow}
+                        onHoverProject={projectSwitcher.onHoverProject}
+                        onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
+                        fleetLiveness={projectSwitcher.fleetLiveness}
+                        onClose={handlePillDropdownClose}
+                        onDropdownCloseAutoFocus={suppressPillTooltipForFocusRestore}
+                        consumeCloseAutoFocusSuppression={
+                          projectSwitcher.consumeCloseAutoFocusSuppression
+                        }
+                        onAddProject={projectSwitcher.addProject}
+                        onCloneRepo={projectSwitcher.cloneRepo}
+                        onStopProject={handleStopProject}
+                        onCloseProject={handleCloseProject}
+                        onSleepProject={handleSleepProject}
+                        onLocateProject={handleLocateProject}
+                        onMoveOrRenameProject={handleMoveOrRenameProject}
+                        onTogglePinProject={projectSwitcher.togglePinProject}
+                        onCopyPath={projectSwitcher.copyPath}
+                        onOpenProjectSettings={
+                          currentProject ? handleOpenProjectSettings : undefined
+                        }
+                        onSelectNewWindow={handleSelectNewWindow}
+                        dropdownAlign="center"
+                        removeConfirmProject={projectSwitcher.removeConfirmProject}
+                        onRemoveConfirmClose={handleRemoveConfirmClose}
+                        onConfirmRemove={projectSwitcher.confirmRemoveProject}
+                        isRemovingProject={projectSwitcher.isRemovingProject}
+                        sleepConfirmProject={projectSwitcher.sleepConfirmProject}
+                        onSleepConfirmClose={() => projectSwitcher.setSleepConfirmProject(null)}
+                        onConfirmSleep={projectSwitcher.confirmSleep}
+                        isSleepingProject={projectSwitcher.isSleepingProject}
+                        rankedSearch={projectSwitcher.isRankedSearch}
+                        scratchResults={projectSwitcher.scratchResults}
+                        onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
+                        onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
+                        onRequestDeleteScratch={projectSwitcher.requestDeleteScratch}
+                        deleteScratchConfirm={projectSwitcher.deleteScratchConfirm}
+                        onDismissDeleteScratchConfirm={projectSwitcher.dismissDeleteScratchConfirm}
+                        onConfirmDeleteScratch={() => void projectSwitcher.confirmDeleteScratch()}
+                        isDeletingScratch={projectSwitcher.isDeletingScratch}
+                        onRequestDeleteAllScratches={projectSwitcher.requestDeleteAllScratches}
+                        deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
+                        onDismissDeleteAllScratchesConfirm={
+                          projectSwitcher.dismissDeleteAllScratchesConfirm
+                        }
+                        onConfirmDeleteAllScratches={() =>
+                          void projectSwitcher.confirmDeleteAllScratches()
+                        }
+                        isDeletingAllScratches={projectSwitcher.isDeletingAllScratches}
+                        onRenameScratch={(scratchId, name) =>
+                          void projectSwitcher.renameScratch(scratchId, name)
+                        }
+                        onSaveAsProject={(scratchId) =>
+                          void projectSwitcher.saveAsProject(scratchId)
+                        }
+                        saveAsProjectConfirm={projectSwitcher.saveAsProjectConfirm}
+                        onDismissSaveAsProjectConfirm={projectSwitcher.dismissSaveAsProjectConfirm}
+                        onConfirmDeleteOriginalScratch={() =>
+                          void projectSwitcher.confirmDeleteOriginalScratch()
+                        }
+                        isDeletingOriginalScratch={projectSwitcher.isDeletingOriginalScratch}
+                      >
+                        {projectSwitcherTrigger}
+                      </LazyProjectSwitcherPalette>
+                    </Suspense>
+                  ) : (
+                    projectSwitcherTrigger
+                  )}
+                  {currentProject && (
+                    <ContextMenuContent
+                      className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
+                      onCloseAutoFocus={handlePillContextMenuCloseAutoFocus}
                     >
-                      {projectSwitcherTrigger}
-                    </LazyProjectSwitcherPalette>
-                  </Suspense>
-                ) : (
-                  projectSwitcherTrigger
-                )}
-                {currentProject && (
-                  <ContextMenuContent
-                    className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
-                    onCloseAutoFocus={handlePillContextMenuCloseAutoFocus}
-                  >
-                    {/* The display name and emoji. Distinct from the switcher
+                      {/* The display name and emoji. Distinct from the switcher
                         row's "Move or rename project…", which relocates the
                         folder on disk. */}
-                    <ContextMenuItem onSelect={handleEditProjectIdentity}>
-                      <Pencil className="mr-2 h-3.5 w-3.5" />
-                      Edit name and icon…
-                    </ContextMenuItem>
-                    <ContextMenuItem onSelect={handlePillTogglePin}>
-                      {activeSearchableProject?.isPinned ? (
-                        <>
-                          <PinOff className="mr-2 h-3.5 w-3.5" />
-                          Unpin project
-                        </>
-                      ) : (
-                        <>
-                          <Pin className="mr-2 h-3.5 w-3.5" />
-                          Pin project
-                        </>
-                      )}
-                    </ContextMenuItem>
-                    <ContextMenuItem onSelect={handleCopyProjectPath}>
-                      <Clipboard className="mr-2 h-3.5 w-3.5" />
-                      Copy path
-                    </ContextMenuItem>
-                    <ContextMenuSeparator />
-                    <ContextMenuItem onSelect={handleOpenProjectSettings}>
-                      Project settings
-                    </ContextMenuItem>
-                    {activeSearchableProject && activeSearchableProject.processCount > 0 && (
-                      <ContextMenuItem onSelect={() => handleStopProject(currentProject.id)}>
-                        <Square className="mr-2 h-3.5 w-3.5" />
-                        Stop all agents
+                      <ContextMenuItem onSelect={handleEditProjectIdentity}>
+                        <Pencil className="mr-2 h-3.5 w-3.5" />
+                        Edit name and icon…
                       </ContextMenuItem>
-                    )}
-                    <ContextMenuItem
-                      onSelect={() => handleCloseProject(currentProject.id)}
-                      className="text-status-error focus:text-status-error"
-                    >
-                      <X className="mr-2 h-3.5 w-3.5" />
-                      Close project
-                    </ContextMenuItem>
-                  </ContextMenuContent>
+                      <ContextMenuItem onSelect={handlePillTogglePin}>
+                        {activeSearchableProject?.isPinned ? (
+                          <>
+                            <PinOff className="mr-2 h-3.5 w-3.5" />
+                            Unpin project
+                          </>
+                        ) : (
+                          <>
+                            <Pin className="mr-2 h-3.5 w-3.5" />
+                            Pin project
+                          </>
+                        )}
+                      </ContextMenuItem>
+                      <ContextMenuItem onSelect={handleCopyProjectPath}>
+                        <Clipboard className="mr-2 h-3.5 w-3.5" />
+                        Copy path
+                      </ContextMenuItem>
+                      <ContextMenuSeparator />
+                      <ContextMenuItem onSelect={handleOpenProjectSettings}>
+                        Project settings
+                      </ContextMenuItem>
+                      {activeSearchableProject && activeSearchableProject.processCount > 0 && (
+                        <ContextMenuItem onSelect={() => handleStopProject(currentProject.id)}>
+                          <Square className="mr-2 h-3.5 w-3.5" />
+                          Stop all agents
+                        </ContextMenuItem>
+                      )}
+                      <ContextMenuItem
+                        onSelect={() => handleCloseProject(currentProject.id)}
+                        className="text-status-error focus:text-status-error"
+                      >
+                        <X className="mr-2 h-3.5 w-3.5" />
+                        Close project
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  )}
+                </ContextMenu>
+                {currentProject && (
+                  <TooltipContent side="bottom" className="max-w-[28rem]">
+                    <div className="flex flex-col gap-0.5">
+                      <div className="text-xs font-medium">
+                        {currentProject.name}
+                        {branchName ? ` · ${branchName}` : ""}
+                      </div>
+                      <div className="text-text-muted font-mono text-2xs truncate">
+                        {currentProject.path}
+                      </div>
+                    </div>
+                  </TooltipContent>
                 )}
-              </ContextMenu>
-              {currentProject && (
-                <TooltipContent side="bottom" className="max-w-[28rem]">
-                  <div className="flex flex-col gap-0.5">
-                    <div className="text-xs font-medium">
-                      {currentProject.name}
-                      {branchName ? ` · ${branchName}` : ""}
+                {!currentProject && currentScratch && (
+                  <TooltipContent side="bottom" className="max-w-[28rem]">
+                    <div className="flex flex-col gap-0.5">
+                      <div className="text-xs font-medium">{currentScratch.name}</div>
+                      <div className="text-text-muted text-2xs">Scratch workspace</div>
                     </div>
-                    <div className="text-text-muted font-mono text-2xs truncate">
-                      {currentProject.path}
-                    </div>
-                  </div>
-                </TooltipContent>
-              )}
-              {!currentProject && currentScratch && (
-                <TooltipContent side="bottom" className="max-w-[28rem]">
-                  <div className="flex flex-col gap-0.5">
-                    <div className="text-xs font-medium">{currentScratch.name}</div>
-                    <div className="text-text-muted text-2xs">Scratch workspace</div>
-                  </div>
-                </TooltipContent>
-              )}
-            </Tooltip>
-          </div>
+                  </TooltipContent>
+                )}
+              </Tooltip>
+            </div>
 
-          {/* RIGHT GROUP */}
-          <div
-            role="group"
-            aria-label="Tools and settings"
-            className="flex items-center justify-end gap-1.5 z-20"
-          >
+            {/* RIGHT GROUP */}
             <div
-              ref={rightGroupRef}
-              className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden justify-end"
+              role="group"
+              aria-label="Tools and settings"
+              className="flex items-center justify-end gap-1.5 z-20"
             >
-              {renderButtons(effectiveRightButtons, rightVisibleSet)}
-            </div>
-            <div className="app-no-drag">
-              {renderOverflowMenu(visibleRightOverflow, "right", rightOverflowSeverity)}
-            </div>
-
-            <div className={toolbarDividerClass} />
-
-            <div className="app-no-drag flex items-center gap-0.5">
-              {buttonRegistry["assistant-toggle"]!.render()}
-              {buttonRegistry["portal-toggle"]!.render()}
-            </div>
-
-            {isWindows() && (
               <div
-                aria-hidden="true"
-                data-fullscreen={isFullscreen ? "true" : undefined}
-                className={cn(
-                  "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
-                  isFullscreen && "w-0"
-                )}
-                style={isFullscreen ? undefined : { width: `${WINDOWS_CAPTION_WIDTH_PX}px` }}
-              />
-            )}
+                ref={rightGroupRef}
+                className="toolbar-measured-row flex flex-1 min-w-0 items-center gap-0.5 justify-end"
+              >
+                {renderGroupedButtons(effectiveRightButtons, rightVisibleSet)}
+              </div>
+              {renderOverflowMenu(
+                visibleRightOverflow,
+                "right",
+                rightOverflowSeverity,
+                rightAgentObservations
+              )}
+
+              {/* Fixed chrome outside the measured button row: it exists only
+                  while a terminal host has output paused for memory (#12375),
+                  so there is nothing to pin, hide, or overflow. */}
+              {hostMemoryPauseVisible && (
+                <div className="app-no-drag shrink-0">
+                  <HostMemoryPauseIndicator />
+                </div>
+              )}
+
+              <div className={toolbarFixedDividerClass} />
+
+              <div className="app-no-drag flex items-center gap-0.5">
+                {buttonRegistry["assistant-toggle"]!.render()}
+                {buttonRegistry["portal-toggle"]!.render()}
+              </div>
+
+              {isWindows() && (
+                <div
+                  aria-hidden="true"
+                  data-fullscreen={isFullscreen ? "true" : undefined}
+                  className={cn(
+                    "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
+                    isFullscreen && "w-0 -ml-1.5"
+                  )}
+                  style={isFullscreen ? undefined : { width: `${WINDOWS_CAPTION_WIDTH_PX}px` }}
+                />
+              )}
+            </div>
           </div>
-        </div>
+        </ToolbarButtonsContextMenu>
       </BrandSurface>
     </header>
   );

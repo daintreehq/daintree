@@ -125,7 +125,7 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
     it("does not offer to open a folder — the user already has a workspace", () => {
       render(<ContentGridEmptyState {...SCRATCH_PROPS} />);
 
-      expect(screen.queryByRole("button", { name: /open folder/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: /open project/i })).toBeNull();
     });
 
     it("suppresses recipes, which are project-scoped", () => {
@@ -383,7 +383,7 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
         />
       );
 
-      fireEvent.click(screen.getByRole("button", { name: /open folder/i }));
+      fireEvent.click(screen.getByRole("button", { name: /open project/i }));
 
       expect(h.dispatch).toHaveBeenCalledWith("project.add", undefined, { source: "user" });
     });

@@ -555,10 +555,11 @@ describe("panelKindIsDockable", () => {
     expect(panelKindIsDockable("file")).toBe(true);
     expect(panelKindIsDockable("browser")).toBe(true);
     expect(panelKindIsDockable("file-browser")).toBe(true);
+    expect(panelKindIsDockable("dev-preview")).toBe(true);
   });
 
-  it("the three built-ins that opt out are not dockable", () => {
-    for (const kind of ["dev-preview", "review", "diff"]) {
+  it("the two built-ins that opt out are not dockable", () => {
+    for (const kind of ["review", "diff"]) {
       expect(panelKindIsDockable(kind), `${kind} opts out via dockable:false`).toBe(false);
     }
   });
@@ -599,6 +600,7 @@ describe("normalizeDockLocation", () => {
   it("passes a dock location through for a dockable kind", () => {
     expect(normalizeDockLocation("terminal", "dock")).toBe("dock");
     expect(normalizeDockLocation("browser", "dock")).toBe("dock");
+    expect(normalizeDockLocation("dev-preview", "dock")).toBe("dock");
   });
 
   it("redirects a dock location to grid for a non-dockable built-in", () => {

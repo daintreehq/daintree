@@ -55,6 +55,7 @@ export function ResumeSessionLine() {
         <History className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
         <span className="shrink-0">
           <PanelKindIcon iconId={primary.iconId} color={primary.color} size={15} />
+          <span className="sr-only">{primary.agentName} </span>
         </span>
         <span className="truncate text-sm text-daintree-text/75 group-hover:text-text-primary">
           {primary.name}

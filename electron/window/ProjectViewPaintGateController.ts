@@ -11,8 +11,9 @@ import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { PaintGate, PaintGateOutcome } from "./ProjectViewManagerTypes.js";
 
 /**
- * Resolve when the renderer with `webContentsId` posts `APP_VIEW_PAINTED`
- * via {@link signalViewPainted}, when the hard timeout elapses, or when a
+ * Resolve when the renderer with `webContentsId` signals it is ready (via
+ * {@link signalViewPainted} and its siblings) — after a confirmed frame when
+ * the gate requires one — when the hard timeout elapses, or when a
  * superseding switch cancels the gate. Only one paint gate is tracked at
  * a time — opening a new gate cancels any prior pending one.
  *
@@ -22,7 +23,18 @@ import type { PaintGate, PaintGateOutcome } from "./ProjectViewManagerTypes.js";
  *   - Hard (`paintGateHardTimeoutMs`): resolves the gate as
  *     `"hard-timeout"`. The caller owns the policy: cold starts abandon the
  *     switch and roll back (#11635), warm reactivations fall through and
- *     detach the bridge.
+ *     detach the bridge — once a frame has been confirmed (see below).
+ *
+ * Frame confirmation (#12394): with `confirmFrame`, a renderer signal no
+ * longer releases the gate by itself. Every one of them proves work ran, not
+ * that anything was drawn, and detaching the outgoing view over an undrawn
+ * incoming one shows a blank canvas. The signal latches readiness, and the
+ * gate releases once a probe started after readiness confirms a frame.
+ * `deferFrameConfirmation` holds probes until {@link enableFrameConfirmation}
+ * (a cold view's load has to settle first). With `unpaintedHardMs`, the hard
+ * bound only falls through when some frame has been confirmed; otherwise the
+ * gate keeps waiting for a first frame until that bound and resolves
+ * `"unpainted"` if none arrives.
  *
  * Both timer values are captured at gate creation. A later
  * `setPaintGateTimeoutMs` / `setPaintGateHardTimeoutMs` call updates the
@@ -41,6 +53,9 @@ export function waitForPaint(
     releaseChannel?: "painted" | "warm-painted" | "skeleton-painted";
     softMs?: number;
     hardMs?: number;
+    confirmFrame?: () => Promise<boolean>;
+    deferFrameConfirmation?: boolean;
+    unpaintedHardMs?: number;
   }
 ): Promise<PaintGateOutcome> {
   // Cancel any prior gate from a previous switch attempt. Should not
@@ -54,6 +69,11 @@ export function waitForPaint(
   // always fires before the hard fall-through, regardless of how the two
   // setters are ordered by the resource-profile push.
   const hardMs = Math.max(options?.hardMs ?? host.paintGateHardTimeoutMs, softMs);
+  const confirmFrame = options?.confirmFrame;
+  const unpaintedHardMs =
+    confirmFrame && options?.unpaintedHardMs !== undefined
+      ? Math.max(options.unpaintedHardMs, hardMs)
+      : undefined;
 
   return new Promise<PaintGateOutcome>((resolveOuter) => {
     let settled = false;
@@ -62,6 +82,16 @@ export function waitForPaint(
       releaseChannel,
       outgoingView,
       outgoingProjectId,
+      frame: confirmFrame
+        ? {
+            confirm: confirmFrame,
+            enabled: false,
+            ready: false,
+            painted: false,
+            readyProbeStarted: false,
+            awaitingFirstFrame: false,
+          }
+        : null,
       softTimeout: setTimeout(() => {
         // Soft tail: log only. Keep waiting for either the paint signal
         // or the hard timeout — DO NOT resolve.
@@ -73,6 +103,17 @@ export function waitForPaint(
         }
       }, softMs),
       hardTimeout: setTimeout(() => {
+        const frame = gate.frame;
+        if (frame && unpaintedHardMs !== undefined && !frame.painted) {
+          // No frame confirmed yet, so falling through would reveal a blank
+          // canvas. Keep the outgoing view up and give the view until the
+          // unpainted bound (measured from arm) to draw anything at all.
+          frame.awaitingFirstFrame = true;
+          gate.hardTimeout = setTimeout(() => {
+            gate.resolve("unpainted");
+          }, unpaintedHardMs - hardMs);
+          return;
+        }
         gate.resolve("hard-timeout");
       }, hardMs),
       resolve: (reason) => {
@@ -87,7 +128,91 @@ export function waitForPaint(
       },
     };
     host.pendingPaintGate = gate;
+    if (gate.frame && !options?.deferFrameConfirmation) {
+      startFrameConfirmation(host, gate);
+    }
   });
+}
+
+/**
+ * Probe for a drawn frame on `gate`'s view. `releaseOnConfirm` probes were
+ * started after readiness, so their frame is the one to reveal; the rest only
+ * record that the view is drawing, which lets an expired hard bound fall
+ * through without revealing a blank canvas. Settles are guarded on gate
+ * identity, so a probe that outlives its gate is inert.
+ */
+function probeFrame(host: ProjectViewManager, gate: PaintGate, releaseOnConfirm: boolean): void {
+  const frame = gate.frame;
+  if (!frame) return;
+  void frame.confirm().then((confirmed) => {
+    if (!confirmed || host.pendingPaintGate !== gate) return;
+    frame.painted = true;
+    if (releaseOnConfirm) {
+      gate.resolve("signal");
+    } else if (frame.awaitingFirstFrame) {
+      gate.resolve("hard-timeout");
+    }
+  });
+}
+
+function startFrameConfirmation(host: ProjectViewManager, gate: PaintGate): void {
+  const frame = gate.frame;
+  if (!frame || frame.enabled) return;
+  frame.enabled = true;
+  if (frame.ready) {
+    frame.readyProbeStarted = true;
+    probeFrame(host, gate, true);
+  } else {
+    probeFrame(host, gate, false);
+  }
+}
+
+/**
+ * Settle a matching gate's readiness. A gate without frame confirmation
+ * releases immediately (the original contract); one with it starts the single
+ * post-readiness probe once probes are enabled.
+ */
+function markReady(host: ProjectViewManager, gate: PaintGate): void {
+  const frame = gate.frame;
+  if (!frame) {
+    gate.resolve("signal");
+    return;
+  }
+  frame.ready = true;
+  if (!frame.enabled || frame.readyProbeStarted) return;
+  frame.readyProbeStarted = true;
+  probeFrame(host, gate, true);
+}
+
+/**
+ * Let a deferred frame-confirmation gate start probing. Called once by the
+ * switch controller after a cold view's load settles: before that the view is
+ * still navigating, and its skeleton CSS may not be applied yet, so a frame
+ * drawn then is not the frame the reveal needs. Guarded on gate identity like
+ * {@link signalSkeletonPainted}; returns whether probing was enabled.
+ */
+export function enableFrameConfirmation(host: ProjectViewManager, webContentsId: number): boolean {
+  const gate = host.pendingPaintGate;
+  if (!gate?.frame) return false;
+  if (gate.webContentsId !== webContentsId) return false;
+  if (gate.frame.enabled) return false;
+  startFrameConfirmation(host, gate);
+  return true;
+}
+
+/**
+ * Settle an open frame-confirmed gate as `"unpainted"` because its renderer
+ * went away mid-gate (#12394). The readiness and frames it gathered belonged
+ * to a document that no longer exists, and the replacement the crash handler
+ * reloads boots from scratch behind the bridge — a readiness signal from it
+ * mid-boot, or a hard bound trusting the old frame, would reveal its skeleton
+ * entrance. Settling now hands the caller the same rollback as a view that
+ * never drew, without waiting out the bound.
+ */
+export function failFrameConfirmation(host: ProjectViewManager, webContentsId: number): void {
+  const gate = host.pendingPaintGate;
+  if (!gate?.frame || gate.webContentsId !== webContentsId) return;
+  gate.resolve("unpainted");
 }
 
 /**
@@ -103,12 +228,11 @@ export function waitForPaint(
  * back to the paint bound here, so "never painted" is measured from the moment
  * the document was verified rather than from before it was even requested.
  *
- * Returns whether the retime happened. `false` is normal and expected: the
- * common fast path releases the gate on its signal during the load, a
- * superseding switch may have cancelled it, and suites that stub `waitForPaint`
- * out have no gate at all. Guarded on gate identity exactly like
- * {@link signalSkeletonPainted}, so a late call from a switch that has already
- * been superseded can never retime the gate that replaced it.
+ * Returns whether the retime happened. `false` is normal and expected: a
+ * superseding switch may have cancelled the gate, and suites that stub
+ * `waitForPaint` out have no gate at all. Guarded on gate identity exactly
+ * like {@link signalSkeletonPainted}, so a late call from a switch that has
+ * already been superseded can never retime the gate that replaced it.
  */
 export function retimeSkeletonPaintGateHardTimeout(
   host: ProjectViewManager,
@@ -136,11 +260,11 @@ export function clearPaintGate(host: ProjectViewManager): void {
 }
 
 /**
- * Renderer-driven gate release. Called from the `APP_VIEW_PAINTED` IPC
- * handler with the webContentsId of the renderer that just painted. Releases
- * a cold `"painted"` gate and ALSO a `"skeleton-painted"` early-reveal gate:
+ * Renderer-driven gate readiness. Called from the `APP_VIEW_PAINTED` IPC
+ * handler with the webContentsId of the renderer that just painted. Settles a
+ * cold `"painted"` gate and ALSO a `"skeleton-painted"` early-reveal gate:
  * React having committed its first frame is a strict superset of the skeleton
- * having parsed, so this is the fallback that still detaches the bridge if the
+ * having parsed, so this is the fallback that still releases the bridge if the
  * one-shot `APP_SKELETON_PARSED` was somehow missed (degrading to today's
  * behaviour, never worse). Warm gates own a distinct re-fireable channel and
  * are left for `signalWarmViewPainted`. A mismatch (e.g. a signal arriving
@@ -151,43 +275,43 @@ export function signalViewPainted(host: ProjectViewManager, webContentsId: numbe
   if (!gate) return;
   if (gate.releaseChannel === "warm-painted") return;
   if (gate.webContentsId !== webContentsId) return;
-  gate.resolve("signal");
+  markReady(host, gate);
 }
 
 /**
- * Early-reveal gate release. Called when an incoming cold-start view's
+ * Early-reveal gate readiness. Called when an incoming cold-start view's
  * `APP_SKELETON_PARSED` fires — i.e. its themed first-paint skeleton
- * (`#startup-skeleton`, injected in `createView`) is in the DOM, well before
- * React mounts. Releasing here lets the outgoing view detach and the branded
- * skeleton show in hundreds of ms instead of holding the old project on
- * screen for the full ~1.5–4s React cold boot. The skeleton is an opaque
- * themed cover over the view's themed canvas background, so the anti-flash
- * guarantee (no blank-canvas frame) is preserved. Only releases a gate
- * explicitly armed for the skeleton channel; a stray signal arriving with a
- * cold `"painted"` or warm gate pending (or no gate) is ignored, so the
- * scoped renderer fire is a safe no-op when main isn't bridging an early
- * reveal.
+ * (`#startup-skeleton`) is in the DOM, well before React mounts. Revealing on
+ * the skeleton lets the outgoing view detach without holding the old project
+ * on screen for the full ~1.5–4s React cold boot. Parsed is not painted,
+ * though: the release still waits for the load to settle and a confirmed
+ * frame (#12394). Only settles a gate explicitly armed for the skeleton
+ * channel; a stray signal arriving with a cold `"painted"` or warm gate
+ * pending (or no gate) is ignored, so the scoped renderer fire is a safe
+ * no-op when main isn't bridging an early reveal.
  */
 export function signalSkeletonPainted(host: ProjectViewManager, webContentsId: number): void {
   const gate = host.pendingPaintGate;
   if (!gate) return;
   if (gate.releaseChannel !== "skeleton-painted") return;
   if (gate.webContentsId !== webContentsId) return;
-  gate.resolve("signal");
+  markReady(host, gate);
 }
 
 /**
- * Warm-reactivation gate release. Called from the `APP_VIEW_WARM_PAINTED` IPC
- * handler after a cached view's wake fan-out completes and a clean
- * post-atlas-repair frame paints (#9679). Only releases a gate that is
- * actually waiting on the warm channel — a warm signal arriving with a
- * cold-start gate pending (or no gate at all) is silently ignored, so the
- * unconditional renderer-side fire is a safe no-op when main isn't bridging.
+ * Warm-reactivation gate readiness. Called from the `APP_VIEW_WARM_PAINTED`
+ * IPC handler after a cached view's wake fan-out completes (#9679). The
+ * renderer sends it without waiting on a frame, so the switch controller arms
+ * the warm gate with frame confirmation and the release follows a drawn frame
+ * (#12394). Only settles a gate that is actually waiting on the warm channel —
+ * a warm signal arriving with a cold-start gate pending (or no gate at all) is
+ * silently ignored, so the unconditional renderer-side fire is a safe no-op
+ * when main isn't bridging.
  */
 export function signalWarmViewPainted(host: ProjectViewManager, webContentsId: number): void {
   const gate = host.pendingPaintGate;
   if (!gate) return;
   if (gate.releaseChannel !== "warm-painted") return;
   if (gate.webContentsId !== webContentsId) return;
-  gate.resolve("signal");
+  markReady(host, gate);
 }

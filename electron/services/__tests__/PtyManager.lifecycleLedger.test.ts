@@ -210,6 +210,8 @@ vi.mock("../../utils/logger.js", () => ({
 }));
 
 const { PtyManager } = await import("../PtyManager.js");
+const { finishAgentSessionCaptures, resetAgentSessionCaptureDeliveryForTests } =
+  await import("../pty/agentSessionCaptureDelivery.js");
 
 function createPtyProcess(): MockPtyProcess {
   return {
@@ -367,6 +369,79 @@ describe("PtyManager lifecycle ledger", () => {
     ]);
   });
 
+  it("refuses a collapsed grid on a live PTY and holds the geometry it has (#12442)", () => {
+    const manager = new PtyManager();
+    const results: unknown[] = [];
+    manager.on("resize-result", (_id: string, result: unknown) => results.push(result));
+
+    // Before spawn: a collapsed grid must not be buffered either, or it becomes
+    // the boot geometry of the terminal that follows — the PTY then starts life
+    // collapsed with no resize to correct it.
+    manager.resize("t1", 2, 1);
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
+    expect(shared.created[0]?.options.cols).toBe(80);
+    expect(shared.created[0]?.options.rows).toBe(24);
+
+    const process = shared.created[0]!;
+    manager.resize("t1", 120, 40);
+    manager.resize("t1", 2, 90);
+    manager.resize("t1", 120, 1);
+    manager.resize("t1", Number.NaN, 40);
+
+    // Reporting a rejection is not the same as not resizing: assert the PTY
+    // itself only ever moved to the one healthy grid, so an implementation that
+    // resized or clamped and THEN reported "rejected" fails here.
+    expect(process.resize.mock.calls).toEqual([[120, 40]]);
+    expect(results).toEqual([
+      expect.objectContaining({ outcome: "applied", appliedCols: 120, appliedRows: 40 }),
+      expect.objectContaining({ outcome: "rejected", requestedCols: 2, appliedCols: null }),
+      expect.objectContaining({ outcome: "rejected", requestedRows: 1, appliedRows: null }),
+      expect.objectContaining({ outcome: "rejected", appliedCols: null }),
+    ]);
+
+    // Still live afterwards: a refusal must not latch the boundary shut.
+    manager.resize("t1", 100, 30);
+    expect(process.resize).toHaveBeenLastCalledWith(100, 30);
+  });
+
+  it("applies a grid too small to be plausible but not collapsed (#12442)", () => {
+    // The boundary cannot know a request's provenance: a small visible pane's
+    // real measurement is indistinguishable here from one extrapolated for a
+    // hidden pane. So it enforces only the floor no pane can reach, and the
+    // renderer applies the strict floor where it knows nothing measured the
+    // grid. Refusing this would split xterm from the PTY at every size a
+    // minimum-size pane at the largest font legitimately reaches.
+    const manager = new PtyManager();
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
+    const process = shared.created[0]!;
+
+    manager.resize("t1", 23, 4);
+
+    expect(process.resize).toHaveBeenCalledWith(23, 4);
+  });
+
+  it("boots at the default when spawn options themselves are collapsed (#12442)", () => {
+    // A separate door from the buffered resize above: the Main handler
+    // normalizes spawn dims with `Math.floor(cols) || 80`, which leaves a
+    // caller-supplied 2 intact, and from here they size the native PTY and both
+    // headless mirrors with no later resize to disagree with them.
+    const manager = new PtyManager();
+
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1, cols: 2, rows: 1 }));
+
+    expect(shared.created[0]?.options.cols).toBe(80);
+    expect(shared.created[0]?.options.rows).toBe(24);
+  });
+
+  it("boots at a requested small-but-uncollapsed grid untouched", () => {
+    const manager = new PtyManager();
+
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1, cols: 23, rows: 4 }));
+
+    expect(shared.created[0]?.options.cols).toBe(23);
+    expect(shared.created[0]?.options.rows).toBe(4);
+  });
+
   it("drops a buffered resize stamped by a previous incarnation", () => {
     const manager = new PtyManager();
 
@@ -376,8 +451,10 @@ describe("PtyManager lifecycle ledger", () => {
 
     // Stale resize from the killed incarnation lands after the kill removed
     // the pendingResizes entry but before the respawn — buffered, stamped
-    // with generation 1.
-    manager.resize("t1", 500, 2);
+    // with generation 1. Deliberately a grid a real pane could be showing: the
+    // plausibility gate (#12442) would refuse a tiny one outright, and the
+    // assertion below would then hold without the staleness check ever running.
+    manager.resize("t1", 500, 20);
 
     manager.spawn("t1", spawnOptions({ launchGeneration: 2 }));
 
@@ -417,6 +494,46 @@ describe("PtyManager lifecycle ledger", () => {
     expect(shared.eventsEmit).not.toHaveBeenCalledWith("agent-session:captured", expect.anything());
   });
 
+  it("holds the quit barrier while a trash expiry is still capturing (#12433)", async () => {
+    const manager = new PtyManager();
+    manager.spawn("t1", spawnOptions({ launchAgentId: "claude", launchGeneration: 3 }));
+    const terminal = shared.created[0]!;
+    let settleShutdown!: (sessionId: string | null) => void;
+    terminal.gracefulShutdown = () => {
+      terminal.gracefulShutdownCalled = true;
+      return new Promise((resolve) => {
+        settleShutdown = resolve;
+      });
+    };
+
+    try {
+      manager.trash("t1");
+      shared.trashCallbacks.get("t1")!("t1");
+      await vi.waitFor(() => expect(terminal.gracefulShutdownCalled).toBe(true));
+
+      // The id isn't known yet, so nothing can have been emitted — the barrier
+      // has to wait on the expiry itself.
+      let finished = false;
+      const finish = finishAgentSessionCaptures(5_000).then((result) => {
+        finished = true;
+        return result;
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(finished).toBe(false);
+
+      settleShutdown("sess-1");
+      await expect(finish).resolves.toEqual({ complete: true, pending: 0 });
+      expect(shared.eventsEmit).toHaveBeenCalledWith(
+        "agent-session:captured",
+        expect.objectContaining({ terminalId: "t1", boundary: "trash-expiry" })
+      );
+      // Past the barrier, the branch stamp is not worth waiting for.
+      expect(shared.getGitBranch).not.toHaveBeenCalled();
+    } finally {
+      resetAgentSessionCaptureDeliveryForTests();
+    }
+  });
+
   it("stamps terminalId and launchGeneration on trash-expiry session captures", async () => {
     const manager = new PtyManager();
 
@@ -440,6 +557,8 @@ describe("PtyManager lifecycle ledger", () => {
         expect.objectContaining({
           terminalId: "t1",
           launchGeneration: 3,
+          // Trash expiry journals only; it never claims the saved pane.
+          boundary: "trash-expiry",
           record: expect.objectContaining({
             sessionId: "sess-1",
             agentId: "claude",

@@ -24,7 +24,7 @@ export function registerAppConfigActions(
 ): void {
   actions.set("agentSettings.get", () => ({
     id: "agentSettings.get",
-    title: "Get Agent Settings",
+    title: "Get agent settings",
     description:
       "Read the stored per-agent configuration, such as each agent's model and launch flags, plus the global overrides. Use this to see how an agent is currently set up; a write merges into the stored entry, so unrelated values survive without reading first. Agents that have never been configured are simply absent from the result rather than appearing with defaults, so absence means unconfigured.",
     category: "settings",
@@ -54,7 +54,7 @@ export function registerAppConfigActions(
 
   actions.set("agentSettings.set", () => ({
     id: "agentSettings.set",
-    title: "Update Agent Settings",
+    title: "Update agent settings",
     description: "Update settings for an agent",
     category: "settings",
     kind: "command",
@@ -76,7 +76,7 @@ export function registerAppConfigActions(
 
   actions.set("agentSettings.reset", () => ({
     id: "agentSettings.reset",
-    title: "Reset Agent Settings",
+    title: "Reset agent settings",
     description: "Reset settings for one agent or all agents",
     category: "settings",
     kind: "command",
@@ -110,7 +110,7 @@ export function registerAppConfigActions(
 
   actions.set("sessionRestore.getConfig", () => ({
     id: "sessionRestore.getConfig",
-    title: "Get Session Restore Config",
+    title: "Get session restore config",
     description:
       "Read whether a relaunch brings back every project that was live, or only the one project each window was showing. No arguments. Returns { enabled }: `enabled` is whether live projects are restored on startup. Default on.",
     category: "settings",
@@ -127,7 +127,7 @@ export function registerAppConfigActions(
 
   actions.set("sessionRestore.updateConfig", () => ({
     id: "sessionRestore.updateConfig",
-    title: "Update Session Restore Config",
+    title: "Update session restore config",
     description: "Update whether live projects are restored after a relaunch",
     category: "settings",
     kind: "command",
@@ -149,7 +149,7 @@ export function registerAppConfigActions(
 
   actions.set("hibernation.getConfig", () => ({
     id: "hibernation.getConfig",
-    title: "Get Hibernation Config",
+    title: "Get hibernation config",
     description:
       "Read the auto-hibernation configuration that governs when idle worktrees are suspended to reclaim host memory. No arguments. Returns { enabled, inactiveThresholdHours }: `enabled` is whether auto-hibernation is on; `inactiveThresholdHours` is how long a worktree must be idle before it hibernates.",
     category: "settings",
@@ -167,7 +167,7 @@ export function registerAppConfigActions(
 
   actions.set("hibernation.updateConfig", () => ({
     id: "hibernation.updateConfig",
-    title: "Update Hibernation Config",
+    title: "Update hibernation config",
     description: "Update auto-hibernation configuration",
     category: "settings",
     kind: "command",
@@ -188,7 +188,7 @@ export function registerAppConfigActions(
 
   actions.set("idleTerminalNotify.getConfig", () => ({
     id: "idleTerminalNotify.getConfig",
-    title: "Get Idle Terminal Notification Config",
+    title: "Get idle terminal notification config",
     description: "Get idle terminal notification configuration",
     category: "settings",
     kind: "query",
@@ -205,7 +205,7 @@ export function registerAppConfigActions(
 
   actions.set("idleTerminalNotify.updateConfig", () => ({
     id: "idleTerminalNotify.updateConfig",
-    title: "Update Idle Terminal Notification Config",
+    title: "Update idle terminal notification config",
     description: "Update idle terminal notification configuration",
     category: "settings",
     kind: "command",
@@ -226,7 +226,7 @@ export function registerAppConfigActions(
 
   actions.set("idleTerminalNotify.closeProject", () => ({
     id: "idleTerminalNotify.closeProject",
-    title: "Close Idle Terminals",
+    title: "Close idle terminals",
     description:
       "Close (hibernate) the idle terminals in a background project. Args: { projectId }. Used as the recovery action on an idle-terminal inbox notification.",
     category: "terminal",
@@ -248,7 +248,7 @@ export function registerAppConfigActions(
 
   actions.set("idleTerminalNotify.muteProject", () => ({
     id: "idleTerminalNotify.muteProject",
-    title: "Mute Idle Terminal Notifications",
+    title: "Mute idle terminal notifications",
     description:
       "Mute idle-terminal notifications for a project for the cooldown window. Args: { projectId }. Used as the dismiss action on an idle-terminal inbox notification.",
     category: "terminal",
@@ -266,7 +266,7 @@ export function registerAppConfigActions(
 
   actions.set("idleBackgroundAutoClose.getConfig", () => ({
     id: "idleBackgroundAutoClose.getConfig",
-    title: "Get Idle Background Auto-Close Config",
+    title: "Get idle background auto-close config",
     description: "Get the idle background-project auto-close configuration",
     category: "settings",
     kind: "query",
@@ -283,7 +283,7 @@ export function registerAppConfigActions(
 
   actions.set("idleBackgroundAutoClose.updateConfig", () => ({
     id: "idleBackgroundAutoClose.updateConfig",
-    title: "Update Idle Background Auto-Close Config",
+    title: "Update idle background auto-close config",
     description: "Update the idle background-project auto-close configuration",
     category: "settings",
     kind: "command",
@@ -304,7 +304,7 @@ export function registerAppConfigActions(
 
   actions.set("worktreeConfig.get", () => ({
     id: "worktreeConfig.get",
-    title: "Get Worktree Config",
+    title: "Get worktree config",
     description: "Get worktree configuration",
     category: "settings",
     kind: "query",
@@ -318,7 +318,7 @@ export function registerAppConfigActions(
 
   actions.set("worktreeConfig.setPattern", () => ({
     id: "worktreeConfig.setPattern",
-    title: "Set Worktree Path Pattern",
+    title: "Set worktree path pattern",
     description: "Update the default worktree path pattern",
     category: "settings",
     kind: "command",
@@ -333,7 +333,7 @@ export function registerAppConfigActions(
 
   actions.set("modal.close", () => ({
     id: "modal.close",
-    title: "Close Modal",
+    title: "Close modal",
     description: "Close the active modal or dialog",
     category: "app",
     kind: "command",
@@ -348,7 +348,7 @@ export function registerAppConfigActions(
 
   actions.set("app.quit", () => ({
     id: "app.quit",
-    title: "Quit App",
+    title: "Quit app",
     description: "Quit Daintree",
     category: "app",
     kind: "command",
@@ -362,7 +362,7 @@ export function registerAppConfigActions(
 
   actions.set("app.forceQuit", () => ({
     id: "app.forceQuit",
-    title: "Force Quit App",
+    title: "Force quit app",
     description: "Force quit Daintree immediately (no graceful shutdown)",
     category: "app",
     kind: "command",

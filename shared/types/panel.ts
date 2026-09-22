@@ -1,5 +1,6 @@
 import type { AgentState, AgentStateChangeTrigger, AgentId, WaitingReason } from "./agent.js";
 import type { TerminalCheckResult } from "./checkResult.js";
+import type { TerminalHandback } from "./handback.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { BrowserHistory } from "./browser.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
@@ -190,7 +191,16 @@ export type TerminalRuntimeStatus = PersistableFlowStatus | "background" | "exit
  * arbitrary external client. Collapsing them left a terminal the user never
  * started looking identical to one they did.
  */
-export type TerminalSpawnSource = "quickrun" | "recipe" | "agent" | "palette" | "mcp" | "assistant";
+export const TERMINAL_SPAWN_SOURCES = [
+  "quickrun",
+  "recipe",
+  "agent",
+  "palette",
+  "mcp",
+  "assistant",
+] as const;
+
+export type TerminalSpawnSource = (typeof TERMINAL_SPAWN_SOURCES)[number];
 
 /** Focus policy for newly-created panels — orthogonal to provenance. */
 export type AddPanelFocusPolicy = "auto" | "preserve" | "take";
@@ -386,6 +396,34 @@ export type SessionLostReason =
   /** No session id was ever captured and no resume-latest fallback exists for this agent. */
   | "no-resume-path";
 
+/**
+ * Why restore held a pane instead of launching it (#12434). The first two are
+ * the resume election's losers ({@link SessionLostReason}); the rest only occur
+ * for an agent that can resume across directories.
+ */
+export type RestoreRecoveryReason =
+  | "sibling-owns-session-id"
+  | "sibling-owns-resume-latest-slot"
+  /** Filed under another worktree than it began in, with no conversation it could name. */
+  | "session-unresolved"
+  /** Filed under a worktree this project no longer has. */
+  | "destination-unavailable";
+
+export interface PanelRestoreRecovery {
+  reason: RestoreRecoveryReason;
+  /**
+   * The exact conversation restore had in hand but could not launch, because
+   * only the destination was in doubt. A candidate, not a claim: it is checked
+   * against sibling panes again before it is resumed.
+   */
+  sessionId?: string;
+  /**
+   * No directory has been chosen to run in yet. Cleared by moving the pane onto
+   * a worktree or by keeping the original folder — never by a guess.
+   */
+  awaitingDestination?: true;
+}
+
 export interface PtyPanelData extends BasePanelData {
   kind: "terminal";
   /**
@@ -543,6 +581,22 @@ export interface PtyPanelData extends BasePanelData {
    * See `docs/architecture/terminal-identity.md`.
    */
   detectedAgentId?: BuiltInAgentId;
+  /**
+   * How many times the pty-host has observed a new agent session take over this
+   * terminal's PTY after a prior one exited (#12535).
+   *
+   * `startedAt` is the PTY generation, so it cannot move when a user relaunches
+   * an agent in the shell their last one left behind — the PTY, its pid and its
+   * restart count all hold. This is the only field that moves for that, which
+   * is what lets a queued agent request tell the session it bound to from its
+   * successor. Owned by the host and only ever copied here; the renderer never
+   * increments it.
+   *
+   * Not persisted, and cleared when a restart re-stamps `startedAt`. An
+   * observation, not proof of process identity — a relaunch the detector never
+   * classified leaves it unchanged.
+   */
+  agentIncarnation?: number;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */
@@ -573,6 +627,12 @@ export interface PtyPanelData extends BasePanelData {
    * Live-only: set from `agent:state-changed`, never persisted.
    */
   lastCheckResult?: TerminalCheckResult;
+  /**
+   * The handback marker the agent most recently printed for a submission that
+   * asked for one (#12488). Surfaced over MCP via `terminal.getStatus`.
+   * Live-only: set from `agent:state-changed`, never persisted.
+   */
+  lastHandback?: TerminalHandback;
   /**
    * Live-only spawn lifecycle state. "spawning" from the moment the optimistic
    * placeholder lands in `panelsById` until the PTY IPC round-trip resolves;
@@ -610,6 +670,22 @@ export interface PtyPanelData extends BasePanelData {
    * `serializePtyPanel`.
    */
   sessionLostOnRestore?: SessionLostReason;
+  /**
+   * Directory this pane's conversation began in, recorded only once the pane
+   * runs somewhere else (#12434) — a pane moved onto another worktree resumes
+   * there, but its conversation is still filed under the folder it started in.
+   * Session lookup and the resume election key off this, never off `cwd`. Only
+   * set for agents that resume across directories; cleared when a new
+   * conversation starts. Persisted.
+   */
+  conversationCwd?: string;
+  /**
+   * Restore held this pane instead of launching it (#12434): the pane exists,
+   * with its title, placement and launch settings, but has no process until
+   * the user picks a conversation or starts a new one. Persisted, so a restart
+   * before that choice holds it again rather than launching fresh.
+   */
+  restoreRecovery?: PanelRestoreRecovery;
 }
 
 export interface BrowserPanelData extends BasePanelData {
@@ -704,11 +780,13 @@ export type FileRenderMode = "rendered" | "source";
 /**
  * View mode shared by the file viewer surfaces (panel + dialog). "rendered"
  * only applies to markdown and HTML files; "diff" only to files with local
- * worktree changes. Every other file is source-only. Availability is derived
- * per file at render time, so a persisted mode whose capability is gone falls
- * back to "source" rather than being rewritten.
+ * worktree changes; "edit" only to files a built-in editor plugin claims
+ * (#12323), and only in the panel — the dialog stays read-only. Every other
+ * file is source-only. Availability is derived per file at render time, so a
+ * persisted mode whose capability is gone falls back to "source" rather than
+ * being rewritten.
  */
-export type FileViewMode = FileRenderMode | "diff";
+export type FileViewMode = FileRenderMode | "diff" | "edit";
 
 /**
  * File panel — read-only viewer for a repo file in a grid cell. Markdown and
