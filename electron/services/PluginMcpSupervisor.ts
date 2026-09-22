@@ -13,6 +13,7 @@ import {
 } from "../../shared/types/ipc/pluginMcp.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { McpServerContributionSchema } from "../schemas/plugin.js";
+import { minimalWorkerEnv } from "../utils/minimalSpawnEnv.js";
 
 type McpServerContribution = z.infer<typeof McpServerContributionSchema>;
 
@@ -68,7 +69,10 @@ export interface ResolvedMcpServerConfig {
 /**
  * Spawn shim. Injected so unit tests can substitute a controllable duplex.
  * Production wiring uses `execa` with `cleanup: true`, `windowsHide: true`,
- * `detached: false` and `stdio: ["pipe", "pipe", "pipe"]`.
+ * `detached: false`, `stdio: ["pipe", "pipe", "pipe"]` and a minimal
+ * environment (`minimalWorkerEnv(config.env)`, `extendEnv: false`) — so
+ * `config.env` here is only the resolved manifest entries, not the child's
+ * full environment.
  */
 export type SubprocessSpawner = (
   config: ResolvedMcpServerConfig
@@ -1161,7 +1165,12 @@ const defaultSpawner: SubprocessSpawner = async (config) => {
   const { execa } = await import("execa");
   const subprocess = execa(config.command, config.args, {
     cwd: config.cwd,
-    env: { ...process.env, ...config.env },
+    // The server sees only the shared allowlist (with proxy/CA settings, since
+    // these servers make outbound HTTPS) plus what its manifest `env` forwards
+    // — never the host's tokens (#12616). `extendEnv: false` is load-bearing:
+    // execa otherwise merges `env` back onto the full `process.env`.
+    env: minimalWorkerEnv(config.env),
+    extendEnv: false,
     stdio: ["pipe", "pipe", "pipe"],
     cleanup: true,
     windowsHide: true,

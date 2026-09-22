@@ -1214,3 +1214,157 @@ describe("PluginMcpSupervisor.notifySettingChanged (issue #10619)", () => {
     expect(restart).not.toHaveBeenCalled();
   });
 });
+
+// The only tests that exercise the REAL default spawner: a live Node child
+// speaking MCP over stdio, reporting back the environment it actually received.
+// Asserting the options object handed to execa would miss what the bug was
+// about — execa merging `env` onto the parent environment behind our back.
+describe("PluginMcpSupervisor default spawner environment (issue #12616)", () => {
+  const SECRET = "DAINTREE_TEST_MCP_SECRET";
+  const WINDOWS_ESSENTIALS = ["SystemRoot", "COMSPEC", "PATHEXT", "WINDIR"] as const;
+  const PROBED_KEYS = [
+    "PATH",
+    "HOME",
+    "HTTPS_PROXY",
+    "NODE_OPTIONS",
+    SECRET,
+    ...WINDOWS_ESSENTIALS,
+  ];
+
+  // Answers `initialize`, and answers a `tools/call` with whichever of the
+  // requested keys are set in its own environment. Reading the env off an
+  // awaited tool response keeps the observation on the protocol stream —
+  // stderr is a separate pipe with no ordering against stdout. The child never
+  // exits on its own: exiting on top of pending pipe writes can truncate them.
+  const SERVER_SCRIPT = [
+    "const rl = require('node:readline').createInterface({ input: process.stdin });",
+    "const send = (m) => process.stdout.write(JSON.stringify(m) + '\\n');",
+    "rl.on('line', (line) => {",
+    "  if (!line.trim()) return;",
+    "  const msg = JSON.parse(line);",
+    "  if (typeof msg.id !== 'number') return;",
+    "  if (msg.method === 'initialize') {",
+    "    send({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: msg.params.protocolVersion,",
+    "      capabilities: { tools: {} }, serverInfo: { name: 'env-probe', version: '0' } } });",
+    "  } else if (msg.method === 'tools/call') {",
+    "    const env = {};",
+    "    for (const k of msg.params.arguments.keys) if (process.env[k] !== undefined) env[k] = process.env[k];",
+    "    send({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: JSON.stringify(env) }] } });",
+    "  } else {",
+    "    send({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'unexpected ' + msg.method } });",
+    "  }",
+    "});",
+  ].join("\n");
+
+  let restoreEnv: () => void = () => {};
+
+  beforeEach(() => {
+    vi.useRealTimers();
+    const seeded: Record<string, string> = {
+      [SECRET]: "host-only-secret",
+      HTTPS_PROXY: "http://host-proxy.test:3128",
+      // A real, harmless flag: an arbitrary sentinel would abort the child's
+      // Node startup under the buggy spawner instead of failing the assertion.
+      NODE_OPTIONS: "--no-warnings",
+    };
+    // Seed only what the host lacks, so a Windows run asserts its real values.
+    if (process.env.HOME === undefined) seeded.HOME = "/seeded/home";
+    for (const key of WINDOWS_ESSENTIALS) {
+      if (process.env[key] === undefined) seeded[key] = `seeded-${key}`;
+    }
+    const saved = new Map<string, string | undefined>();
+    for (const [key, value] of Object.entries(seeded)) {
+      saved.set(key, process.env[key]);
+      process.env[key] = value;
+    }
+    restoreEnv = () => {
+      for (const [key, value] of saved) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    };
+  });
+
+  afterEach(() => {
+    restoreEnv();
+  });
+
+  async function waitForExit(pid: number): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+
+  async function probeChildEnv(
+    manifestEnv: Record<string, string> | undefined,
+    resolveSettings: (settingId: string) => Promise<string> = async () => ""
+  ): Promise<Record<string, string>> {
+    // No `spawner` override — this is the production defaultSpawner.
+    const supervisor = new PluginMcpSupervisor({ killTree: () => {} });
+    let pid: number | null = null;
+    try {
+      await supervisor.start({
+        pluginId: "acme.env",
+        contributions: [
+          {
+            id: "probe",
+            name: "Env probe",
+            command: process.execPath,
+            args: ["-e", SERVER_SCRIPT],
+            ...(manifestEnv ? { env: manifestEnv } : {}),
+          },
+        ],
+        resolveSettings,
+      });
+      const [info] = supervisor.list();
+      pid = info?.pid ?? null;
+      // `start()` resolves on failure too, so readiness must be checked.
+      expect(info?.status, info?.lastError ?? undefined).toBe("ready");
+      const result = (await supervisor.callTool({
+        pluginId: "acme.env",
+        serverId: "probe",
+        tool: "env",
+        args: { keys: PROBED_KEYS },
+      })) as { content: Array<{ text: string }> };
+      return JSON.parse(result.content[0]!.text) as Record<string, string>;
+    } finally {
+      // Runs even when an assertion above throws, so no real child outlives
+      // the test and the env restore in afterEach sees a quiet process.
+      await supervisor.shutdownAll();
+      if (pid !== null) await waitForExit(pid);
+    }
+  }
+
+  it("gives a server the shared allowlist and network settings, never the host's other variables", async () => {
+    const env = await probeChildEnv(undefined);
+
+    expect(env[SECRET]).toBeUndefined();
+    expect(env.NODE_OPTIONS).toBeUndefined();
+    // PATH is read live, so version-manager shims and `npx` keep resolving.
+    expect(env.PATH).toBeTruthy();
+    expect(env.PATH).toBe(process.env.PATH);
+    expect(env.HOME).toBe(process.env.HOME);
+    // minimalWorkerEnv, not minimalSpawnEnv: proxy/CA settings reach the server.
+    expect(env.HTTPS_PROXY).toBe("http://host-proxy.test:3128");
+    for (const key of WINDOWS_ESSENTIALS) {
+      expect(env[key], key).toBe(process.env[key]);
+    }
+  }, 20_000);
+
+  it("forwards a host variable only when the manifest declares it, with the manifest value winning", async () => {
+    const env = await probeChildEnv(
+      { [SECRET]: "${settings:token}", HTTPS_PROXY: "http://manifest-proxy.test:8080" },
+      async (settingId) => (settingId === "token" ? "from-manifest" : "")
+    );
+
+    expect(env[SECRET]).toBe("from-manifest");
+    expect(env.HTTPS_PROXY).toBe("http://manifest-proxy.test:8080");
+    expect(env.NODE_OPTIONS).toBeUndefined();
+  }, 20_000);
+});

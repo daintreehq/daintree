@@ -1,10 +1,12 @@
 /**
  * The single environment allowlist every process the host spawns on a plugin's
- * behalf is built from (#11300). Three call sites share it — the plain-child
- * `child_process.spawn` (pipe and duplex modes) in {@link import("../services/plugin/PluginProcessManager.js").PluginProcessManager},
- * the interactive `node-pty` spawn in the pty-host, and the plugin worker's
- * `utilityProcess.fork` — so "what env does a plugin's code see" has exactly
- * one answer and the three can never drift into parallel allowlists.
+ * behalf is built from (#11300). The plain-child `child_process.spawn` (pipe
+ * and duplex modes) in {@link import("../services/plugin/PluginProcessManager.js").PluginProcessManager},
+ * the interactive `node-pty` spawn in the pty-host, the plugin worker's
+ * `utilityProcess.fork` and the plugin-shipped MCP servers in
+ * {@link import("../services/PluginMcpSupervisor.js").PluginMcpSupervisor}
+ * (#12616) all build from it — so "what env does a plugin's code see" has
+ * exactly one answer and they can never drift into parallel allowlists.
  */
 
 /**
@@ -86,15 +88,17 @@ const NETWORK_ENV_KEYS = [
 ] as const;
 
 /**
- * Environment for the plugin worker `utilityProcess.fork` — {@link SAFE_ENV_KEYS}
- * plus {@link NETWORK_ENV_KEYS}.
+ * Environment for the plugin worker `utilityProcess.fork` and for plugin-shipped
+ * MCP servers — {@link SAFE_ENV_KEYS} plus {@link NETWORK_ENV_KEYS}.
  *
  * Wider than the children a plugin spawns, deliberately and only by that set.
  * The worker hosts network-capable plugins in-process (the built-in GitHub forge
  * provider calls `https://api.github.com` from inside it), and `env` REPLACES
  * `process.env` in a utility process — so a user behind a TLS-inspecting proxy
  * would see every plugin's HTTPS call fail with no compile-time signal that
- * anything was dropped. A plugin's own children stay on the tighter list: they
+ * anything was dropped. MCP servers are the same case: they exist to call remote
+ * APIs, and their manifest `env` map is the only other thing forwarded. The
+ * children a plugin spawns through `host.process` stay on the tighter list: they
  * are arbitrary user-named binaries, and a plugin that needs proxy settings for
  * one passes them explicitly via `options.env`.
  */
