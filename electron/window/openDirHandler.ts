@@ -60,6 +60,15 @@ function enqueueOpen(task: () => Promise<unknown>): void {
 }
 
 function revealWindow(win: BrowserWindow): void {
+  // Never shown yet: the window is still behind createWindow's paint gate, and
+  // showing it now would map it blank. Take focus once the gate shows it. (A
+  // hidden app reads the same way; a Dock drop unhides it on its own.)
+  if (!win.isVisible() && !win.isMinimized()) {
+    win.once("show", () => {
+      if (!win.isDestroyed()) win.focus();
+    });
+    return;
+  }
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();

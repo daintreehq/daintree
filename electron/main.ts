@@ -63,6 +63,7 @@ import { buildMemoryAttribution } from "./utils/memoryAttribution.js";
 import { helpSessionService } from "./services/HelpSessionService.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
+import { isWindowBound, reserveWindowForOpen } from "./window/windowOpenState.js";
 import { distributePortsToView } from "./window/portDistribution.js";
 import { deliverOpenSystemMemoryPressure } from "./window/systemMemoryPressureDelivery.js";
 import { toDisposable } from "./utils/lifecycle.js";
@@ -385,6 +386,13 @@ if (!gotTheLock) {
     setMainWindow(win);
     const ctx = windowRegistry.register(win, { projectPath: initialProjectPath ?? undefined });
     opts?.onRegistered?.(ctx.windowId);
+    // A restored window only binds its workspace once setup reaches
+    // `registerInitialView`. Until then it is claimed for that workspace, so a
+    // folder opened from outside meanwhile finds this window instead of
+    // building a second view of the same project (#12593).
+    const releaseRestoreClaim = initialProjectId
+      ? reserveWindowForOpen(ctx.windowId, { projectId: initialProjectId, projectPath: null })
+      : undefined;
 
     // Keep the persisted window manifest in step with this window (#11492).
     // The save listens on `closed`, not `close`: WindowRegistry still holds the
@@ -661,18 +669,23 @@ if (!gotTheLock) {
       })
     );
 
-    const servicesResult = await setupWindowServices(win, {
-      loadRenderer,
-      smokeTestTimer,
-      smokeRendererUnresponsive,
-      windowRegistry,
-      initialProjectPath: initialProjectPath ?? undefined,
-      initialProjectId,
-      projectViewManager: pvm,
-      initialAppView: appView,
-      backgroundProjectIds: opts?.backgroundProjectIds,
-      createWindowForPath,
-    });
+    let servicesResult: CreateWindowResult;
+    try {
+      servicesResult = await setupWindowServices(win, {
+        loadRenderer,
+        smokeTestTimer,
+        smokeRendererUnresponsive,
+        windowRegistry,
+        initialProjectPath: initialProjectPath ?? undefined,
+        initialProjectId,
+        projectViewManager: pvm,
+        initialAppView: appView,
+        backgroundProjectIds: opts?.backgroundProjectIds,
+        createWindowForPath,
+      });
+    } finally {
+      releaseRestoreClaim?.(isWindowBound(windowRegistry, ctx.windowId));
+    }
 
     // The process is exiting, or the window never reached the registry and has
     // no services. Either way stop here, so a restore fan-out doesn't keep

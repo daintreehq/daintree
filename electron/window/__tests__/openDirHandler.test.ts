@@ -42,6 +42,9 @@ interface FakeWindow {
   active: string | null;
   views: string[];
   destroyed: boolean;
+  visible: boolean;
+  /** Fires the "show" listeners the router left, as createWindow's paint gate would. */
+  paint: () => void;
 }
 
 /**
@@ -54,17 +57,29 @@ function makeWorld() {
   const closed = new Set<string>();
   let nextId = 1;
 
-  function add(opts: { active?: string | null; ready?: boolean; minimized?: boolean } = {}) {
+  function add(
+    opts: { active?: string | null; ready?: boolean; minimized?: boolean; visible?: boolean } = {}
+  ) {
+    const showListeners: Array<() => void> = [];
     const fake = {
       id: nextId++,
       active: opts.active ?? null,
       views: opts.active ? [opts.active] : [],
       destroyed: false,
+      visible: opts.visible ?? true,
     } as FakeWindow;
+    fake.paint = () => {
+      fake.visible = true;
+      for (const listener of showListeners.splice(0)) listener();
+    };
     fake.win = {
       id: fake.id,
       isDestroyed: () => fake.destroyed,
       isMinimized: vi.fn(() => opts.minimized ?? false),
+      isVisible: () => fake.visible,
+      once: (event: string, listener: () => void) => {
+        if (event === "show") showListeners.push(listener);
+      },
       restore: vi.fn(),
       show: vi.fn(),
       focus: vi.fn(),
@@ -353,6 +368,34 @@ describe("routeExternalOpen — owners and the picker", () => {
     expect(created!.win.focus).toHaveBeenCalled();
     expect(deps.createWindowForPath).toHaveBeenCalledTimes(1);
     expect(deps.openDirectory).not.toHaveBeenCalled();
+  });
+
+  it("waits for a window still behind its paint gate to show before focusing it", async () => {
+    const world = makeWorld();
+    const booting = world.add({ active: idFor("/work/known"), visible: false });
+    const deps = makeDeps(world);
+
+    const outcome = await routeExternalOpen("/work/known", deps);
+
+    expect(outcome).toEqual({ kind: "focused", windowId: booting.id });
+    expect(booting.win.show).not.toHaveBeenCalled();
+    expect(booting.win.focus).not.toHaveBeenCalled();
+
+    booting.paint();
+    expect(booting.win.focus).toHaveBeenCalledOnce();
+    expect(booting.win.show).not.toHaveBeenCalled();
+  });
+
+  it("focuses a restoring window claimed for the project instead of making a second view", async () => {
+    const world = makeWorld();
+    const restoring = world.add({ ready: false, visible: false });
+    reserveWindowForOpen(restoring.id, { projectId: idFor("/work/known"), projectPath: null });
+    const deps = makeDeps(world);
+
+    const outcome = await routeExternalOpen("/work/known", deps);
+
+    expect(outcome).toEqual({ kind: "focused", windowId: restoring.id });
+    expect(deps.createWindowForPath).not.toHaveBeenCalled();
   });
 
   it("frees a git-init window the user has since used and closed, with no external open in between", async () => {
