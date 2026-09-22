@@ -92,9 +92,11 @@ export interface ViewScope {
   requestAnimationFrame(callback: FrameRequestCallback): () => void;
   /**
    * Adopt a `ResizeObserver`, `MutationObserver`, `IntersectionObserver` or
-   * anything else with `disconnect()`. Returned as given so it can be created
-   * and adopted in one expression. To release one early, register it with
-   * {@link ViewScope.add} instead and call the function that returns.
+   * anything else with `disconnect()`, returned as given. Start it before
+   * adopting it: a disposed scope disconnects what it adopts on arrival, and an
+   * observer started after that would escape the scope. To release one early,
+   * register it with {@link ViewScope.add} instead and call the function that
+   * returns.
    */
   observe<T extends { disconnect(): void }>(observer: T): T;
   /** Adopt a dedicated `Worker` (anything with `terminate()`). */
@@ -139,7 +141,9 @@ function loseContext(gl: WebGLRenderingContext | WebGL2RenderingContext): void {
  * useEffect(() => {
  *   const scope = createViewScope(disposeSignal);
  *   scope.listen(window, "resize", onResize);
- *   scope.observe(new ResizeObserver(onBoxChange)).observe(el);
+ *   const observer = new ResizeObserver(onBoxChange);
+ *   observer.observe(el);
+ *   scope.observe(observer);
  *   return scope.dispose;
  * }, [disposeSignal]);
  * ```
@@ -157,6 +161,8 @@ export function createViewScope(signal: AbortSignal, options?: ViewScopeOptions)
   let cleanupErrors = 0;
   let lateRegistrations = 0;
   let warnedLate = false;
+  let runningCleanups = 0;
+  let reportPending = false;
 
   const stats = (): ViewScopeStats => ({
     active: entries?.size ?? 0,
@@ -165,7 +171,22 @@ export function createViewScope(signal: AbortSignal, options?: ViewScopeOptions)
     lateRegistrations,
   });
 
+  const deliverReport = (): void => {
+    reportPending = false;
+    const report = onReport;
+    onReport = undefined;
+    if (!report) return;
+    try {
+      report(stats());
+    } catch (error) {
+      console.error(`${PREFIX} a view-scope onReport callback threw.`, error);
+    }
+  };
+
+  // A cleanup can dispose the scope and then throw; the report waits for the
+  // outermost cleanup to finish so its outcome is counted.
   const runCleanup = (cleanup: () => void): void => {
+    runningCleanups++;
     try {
       cleanup();
       released++;
@@ -175,6 +196,9 @@ export function createViewScope(signal: AbortSignal, options?: ViewScopeOptions)
         `${PREFIX} a view-scope cleanup threw; the scope's other resources were still released.`,
         error
       );
+    } finally {
+      runningCleanups--;
+      if (runningCleanups === 0 && reportPending) deliverReport();
     }
   };
 
@@ -215,14 +239,21 @@ export function createViewScope(signal: AbortSignal, options?: ViewScopeOptions)
     runCleanup(cleanup);
   };
 
+  // Built here rather than inline so a retained cancel function's closure holds
+  // only the entry: V8 shares one context between the closures created in a
+  // call, so an inline arrow would pin the target, listener or timer arguments.
+  const canceller =
+    (entry: Entry): (() => void) =>
+    () =>
+      release(entry);
+
   const adopt = (cleanup: () => void): (() => void) => {
     if (!entries) {
       noteLate();
       runCleanup(cleanup);
       return noop;
     }
-    const entry = track(cleanup);
-    return () => release(entry);
+    return canceller(track(cleanup));
   };
 
   const teardown = (reason?: unknown): void => {
@@ -242,14 +273,8 @@ export function createViewScope(signal: AbortSignal, options?: ViewScopeOptions)
       runCleanup(cleanup);
     }
 
-    const report = onReport;
-    onReport = undefined;
-    if (!report) return;
-    try {
-      report(stats());
-    } catch (error) {
-      console.error(`${PREFIX} a view-scope onReport callback threw.`, error);
-    }
+    reportPending = true;
+    if (runningCleanups === 0) deliverReport();
   };
 
   // Reads `upstream` rather than the `signal` parameter so no closure keeps the
@@ -278,7 +303,14 @@ export function createViewScope(signal: AbortSignal, options?: ViewScopeOptions)
     if (opts.passive !== undefined) nativeOptions.passive = opts.passive;
 
     let entry: Entry | null = null;
+    // The caller's signal is checked here as well as through its abort event:
+    // a native signal-backed listener is removed before any abort handler runs,
+    // so an earlier handler that dispatches this event must not reach it.
     const wrapper = function (this: EventTarget, event: Event): void {
+      if (callerSignal?.aborted) {
+        if (entry) finish(entry);
+        return;
+      }
       if (once && entry) finish(entry);
       if (typeof listener === "function") listener.call(this, event);
       else listener.handleEvent(event);
@@ -293,8 +325,7 @@ export function createViewScope(signal: AbortSignal, options?: ViewScopeOptions)
       target.removeEventListener(type, wrapper, capture);
       callerSignal?.removeEventListener("abort", onCallerAbort);
     });
-    const owned = entry;
-    return () => release(owned);
+    return canceller(entry);
   };
 
   const timer = <A extends unknown[]>(
@@ -315,8 +346,7 @@ export function createViewScope(signal: AbortSignal, options?: ViewScopeOptions)
           callback(...args);
         }, ms);
     entry = track(() => (repeat ? clearInterval(id) : clearTimeout(id)));
-    const owned = entry;
-    return () => release(owned);
+    return canceller(entry);
   };
 
   const scope: ViewScope = {
@@ -338,8 +368,7 @@ export function createViewScope(signal: AbortSignal, options?: ViewScopeOptions)
         callback(time);
       });
       entry = track(() => cancelAnimationFrame(id));
-      const owned = entry;
-      return () => release(owned);
+      return canceller(entry);
     },
     observe(observer) {
       adopt(() => observer.disconnect());

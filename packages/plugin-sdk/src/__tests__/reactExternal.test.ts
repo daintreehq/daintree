@@ -118,6 +118,17 @@ describe("@daintreehq/plugin-sdk/react — React stays external", () => {
       expect(code).not.toContain(marker);
     }
   });
+
+  // Read before any consumer build, which would replace `import.meta.env.*`
+  // and hide the read. A panel is a Vite library build that leaves
+  // `process.env.*` untouched and runs where `process` does not exist, and
+  // `daintree-plugin dev` builds in production mode, so a build-flag read the
+  // SDK ships either throws or never fires in a real plugin.
+  it("ships no build-environment reads in the emitted entry", async () => {
+    const code = await fs.readFile(path.join(sdkOutDir, "react.js"), "utf8");
+    expect(code).toContain("createViewScope");
+    expect(code).not.toMatch(/process\.env|import\.meta\.env/);
+  });
 });
 
 /**
@@ -215,11 +226,7 @@ describe("consumer panel build — React never reaches the bundle", () => {
     }
   });
 
-  // A panel is a Vite library build, which leaves `process.env.*` untouched and
-  // runs where `process` does not exist, so any build-flag read the SDK ships
-  // either throws or never fires in a real plugin.
-  it("carries no build-environment reads into the panel bundle", () => {
-    expect(chunk.code).toContain("createViewScope");
-    expect(chunk.code).not.toMatch(/process\.env|import\.meta\.env/);
+  it("carries createViewScope into the panel bundle", () => {
+    expect(chunk.code).toContain("function createViewScope");
   });
 });

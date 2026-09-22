@@ -146,7 +146,9 @@ useEffect(() => {
   const scope = createViewScope(disposeSignal);
   scope.listen(window, "resize", onResize);
   scope.setInterval(refresh, 5_000);
-  scope.observe(new ResizeObserver(onBoxChange)).observe(boxRef.current!);
+  const observer = new ResizeObserver(onBoxChange);
+  observer.observe(boxRef.current!);
+  scope.observe(observer);
   const gl = scope.webgl(canvasRef.current!.getContext("webgl2")!);
   void loadScene(gl, { signal: scope.signal });
   return scope.dispose;
@@ -163,7 +165,7 @@ useEffect(() => {
 | `webgl(gl)` | `WEBGL_lose_context.loseContext()`, when the context is still live and the extension exists |
 | `add(fn)` | calling `fn` |
 
-`listen`, the timers and `add` return a function that releases early. A timeout, a frame or a `{ once: true }` listener forgets itself as it fires, so a render loop that re-requests frames does not grow the scope. `scope.signal` aborts when the scope does; pass it to `fetch` and anything else signal-aware.
+`listen`, the timers and `add` return a function that releases early. Start an observer before adopting it, as above: a scope that is already disposed disconnects what it adopts on arrival, and an observer started after that would escape it. A timeout, a frame or a `{ once: true }` listener forgets itself as it fires, so a render loop that re-requests frames does not grow the scope. `scope.signal` aborts when the scope does; pass it to `fetch` and anything else signal-aware.
 
 Disposal is idempotent and never throws: a cleanup that throws is logged and the rest still run. Anything registered after disposal, typically from an `await` that settled after the view went away, is released on arrival and logged once, so check `scope.signal.aborted` before a continuation starts new work. Create a fresh scope in each effect setup; a disposed one stays disposed.
 

@@ -163,9 +163,11 @@ interface ViewScope {
     requestAnimationFrame(callback: FrameRequestCallback): () => void;
     /**
      * Adopt a `ResizeObserver`, `MutationObserver`, `IntersectionObserver` or
-     * anything else with `disconnect()`. Returned as given so it can be created
-     * and adopted in one expression. To release one early, register it with
-     * {@link ViewScope.add} instead and call the function that returns.
+     * anything else with `disconnect()`, returned as given. Start it before
+     * adopting it: a disposed scope disconnects what it adopts on arrival, and an
+     * observer started after that would escape the scope. To release one early,
+     * register it with {@link ViewScope.add} instead and call the function that
+     * returns.
      */
     observe<T extends {
         disconnect(): void;
@@ -202,7 +204,9 @@ interface ViewScope {
  * useEffect(() => {
  *   const scope = createViewScope(disposeSignal);
  *   scope.listen(window, "resize", onResize);
- *   scope.observe(new ResizeObserver(onBoxChange)).observe(el);
+ *   const observer = new ResizeObserver(onBoxChange);
+ *   observer.observe(el);
+ *   scope.observe(observer);
  *   return scope.dispose;
  * }, [disposeSignal]);
  * ```

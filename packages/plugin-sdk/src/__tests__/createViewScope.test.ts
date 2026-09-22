@@ -253,6 +253,64 @@ describe("createViewScope late registration", () => {
     expect(String(consoleWarn.mock.calls[0][0])).toMatch(/^@daintreehq\/plugin-sdk\/react:/);
   });
 
+  it("runs each cleanup once when one cancels another and re-enters dispose()", () => {
+    const onReport = vi.fn();
+    const scope = createViewScope(new AbortController().signal, { onReport });
+    const older = vi.fn();
+    const cancelOlder = scope.add(older);
+    scope.add(() => {
+      cancelOlder();
+      scope.dispose();
+    });
+
+    scope.dispose();
+
+    expect(older).toHaveBeenCalledTimes(1);
+    expect(onReport).toHaveBeenCalledTimes(1);
+    expect(onReport).toHaveBeenCalledWith(
+      expect.objectContaining({ released: 2, cleanupErrors: 0 })
+    );
+  });
+
+  it("releases and reports a registration made from the scope signal's abort handler", () => {
+    const onReport = vi.fn();
+    const scope = createViewScope(new AbortController().signal, { onReport });
+    const lateDisposer = vi.fn();
+    scope.signal.addEventListener("abort", () => scope.add(lateDisposer));
+
+    scope.dispose();
+
+    expect(lateDisposer).toHaveBeenCalledTimes(1);
+    expect(onReport).toHaveBeenCalledWith({
+      active: 0,
+      released: 1,
+      cleanupErrors: 0,
+      lateRegistrations: 1,
+    });
+  });
+
+  it("counts a cleanup that disposes the scope and then throws in the one report", () => {
+    const onReport = vi.fn();
+    const scope = createViewScope(new AbortController().signal, { onReport });
+    const other = vi.fn();
+    scope.add(other);
+    const cancel = scope.add(() => {
+      scope.dispose();
+      throw new Error("after dispose");
+    });
+
+    cancel();
+
+    expect(other).toHaveBeenCalledTimes(1);
+    expect(onReport).toHaveBeenCalledTimes(1);
+    expect(onReport).toHaveBeenCalledWith({
+      active: 0,
+      released: 1,
+      cleanupErrors: 1,
+      lateRegistrations: 0,
+    });
+  });
+
   it("releases a registration made by another cleanup during disposal", () => {
     const scope = createViewScope(new AbortController().signal);
     const lateDisposer = vi.fn();
@@ -319,10 +377,12 @@ describe("createViewScope diagnostics", () => {
 
     cancel();
     cancel();
-    scope.dispose();
-
     expect(disposer).toHaveBeenCalledTimes(1);
     expect(scope.stats()).toMatchObject({ active: 0, released: 1 });
+
+    scope.dispose();
+    expect(disposer).toHaveBeenCalledTimes(1);
+    expect(scope.stats().released).toBe(1);
   });
 });
 
@@ -358,20 +418,45 @@ describe("createViewScope timers and frames", () => {
     expect(scope.stats().active).toBe(0);
   });
 
-  it("clears a pending timeout on disposal and on cancel", () => {
+  it("clears a timeout cancelled while the scope is alive", () => {
     const scope = createViewScope(new AbortController().signal);
-    const disposed = vi.fn();
     const cancelled = vi.fn();
     const cancel = scope.setTimeout(cancelled, 10);
-    scope.setTimeout(disposed, 10);
 
     cancel();
-    scope.dispose();
+    cancel();
     vi.advanceTimersByTime(20);
 
     expect(cancelled).not.toHaveBeenCalled();
+    expect(scope.stats()).toMatchObject({ active: 0, released: 1 });
+    scope.dispose();
+    expect(scope.stats().released).toBe(1);
+  });
+
+  it("clears a pending timeout on disposal", () => {
+    const scope = createViewScope(new AbortController().signal);
+    const disposed = vi.fn();
+    scope.setTimeout(disposed, 10);
+
+    scope.dispose();
+    vi.advanceTimersByTime(20);
+
     expect(disposed).not.toHaveBeenCalled();
-    expect(scope.stats()).toMatchObject({ active: 0, released: 2 });
+    expect(scope.stats()).toMatchObject({ active: 0, released: 1 });
+  });
+
+  it("clears an interval cancelled while the scope is alive", () => {
+    const scope = createViewScope(new AbortController().signal);
+    const tick = vi.fn();
+    const cancel = scope.setInterval(tick, 10);
+
+    vi.advanceTimersByTime(10);
+    cancel();
+    cancel();
+    vi.advanceTimersByTime(30);
+
+    expect(tick).toHaveBeenCalledTimes(1);
+    expect(scope.stats()).toMatchObject({ active: 0, released: 1 });
   });
 
   it("keeps an interval registered until it is released", () => {
@@ -387,6 +472,26 @@ describe("createViewScope timers and frames", () => {
     scope.dispose();
     vi.advanceTimersByTime(30);
     expect(tick).toHaveBeenCalledTimes(3);
+  });
+
+  it("cancels a pending frame early", () => {
+    const cancelAnimationFrame = vi.fn();
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn(() => 7)
+    );
+    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
+    const scope = createViewScope(new AbortController().signal);
+    const cancel = scope.requestAnimationFrame(() => {});
+
+    cancel();
+    cancel();
+
+    expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(7);
+    expect(scope.stats()).toMatchObject({ active: 0, released: 1 });
+    scope.dispose();
+    expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
   });
 
   it("forgets a fired frame, so a render loop does not accumulate registrations", () => {
@@ -495,8 +600,9 @@ describe("createViewScope listeners", () => {
   it("forgets a once listener as it fires", () => {
     const target = new EventTarget();
     const scope = createViewScope(new AbortController().signal);
+    let activeDuringCallback = -1;
     const listener = vi.fn(() => {
-      expect(scope.stats().active).toBe(0);
+      activeDuringCallback = scope.stats().active;
     });
     scope.listen(target, "ping", listener, { once: true });
 
@@ -504,7 +610,79 @@ describe("createViewScope listeners", () => {
     target.dispatchEvent(new Event("ping"));
 
     expect(listener).toHaveBeenCalledTimes(1);
+    expect(activeDuringCallback).toBe(0);
     expect(scope.stats()).toMatchObject({ active: 0, released: 0 });
+  });
+
+  it("forgets a once listener whose callback throws", () => {
+    // A bare EventTarget: jsdom swallows listener exceptions there instead of
+    // reporting them as uncaught window errors.
+    const target = new EventTarget();
+    const scope = createViewScope(new AbortController().signal);
+    const listener = vi.fn(() => {
+      throw new Error("listener failed");
+    });
+    scope.listen(target, "ping", listener, { once: true });
+
+    target.dispatchEvent(new Event("ping"));
+    target.dispatchEvent(new Event("ping"));
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(scope.stats().active).toBe(0);
+  });
+
+  it("detaches from the caller's signal when a once listener fires", () => {
+    const target = new EventTarget();
+    const scope = createViewScope(new AbortController().signal);
+    const caller = new AbortController();
+    const addAbort = vi.spyOn(caller.signal, "addEventListener");
+    const removeAbort = vi.spyOn(caller.signal, "removeEventListener");
+    const listener = vi.fn();
+    scope.listen(target, "ping", listener, { once: true, signal: caller.signal });
+
+    target.dispatchEvent(new Event("ping"));
+
+    expect(removeAbort).toHaveBeenCalledWith("abort", addAbort.mock.calls[0][1]);
+    caller.abort();
+    scope.dispose();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(scope.stats()).toMatchObject({ active: 0, released: 0 });
+  });
+
+  it("detaches from the caller's signal when the listener is cancelled early", () => {
+    const target = new EventTarget();
+    const scope = createViewScope(new AbortController().signal);
+    const caller = new AbortController();
+    const addAbort = vi.spyOn(caller.signal, "addEventListener");
+    const removeAbort = vi.spyOn(caller.signal, "removeEventListener");
+    const listener = vi.fn();
+    const cancel = scope.listen(target, "ping", listener, { signal: caller.signal });
+
+    cancel();
+    target.dispatchEvent(new Event("ping"));
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(removeAbort).toHaveBeenCalledWith("abort", addAbort.mock.calls[0][1]);
+    expect(scope.stats()).toMatchObject({ active: 0, released: 1 });
+  });
+
+  it("never runs a listener once the caller's signal aborted, whatever the abort handler order", () => {
+    const target = new EventTarget();
+    const scope = createViewScope(new AbortController().signal);
+    const caller = new AbortController();
+    const listener = vi.fn();
+    // Registered first, so it runs before the scope's own abort handler.
+    caller.signal.addEventListener("abort", (event) => {
+      target.dispatchEvent(new Event("ping"));
+      event.stopImmediatePropagation();
+    });
+    scope.listen(target, "ping", listener, { signal: caller.signal });
+
+    caller.abort();
+    target.dispatchEvent(new Event("ping"));
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(scope.stats().active).toBe(0);
   });
 
   it("honours the caller's own signal and forgets the listener when it aborts", () => {
