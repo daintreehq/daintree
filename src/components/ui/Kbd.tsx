@@ -82,7 +82,7 @@ export function KbdChord({
       {steps.map((tokens, stepIndex) => (
         <Fragment key={stepIndex}>
           {stepIndex > 0 && (
-            <span className="text-daintree-text/40 text-3xs select-none" aria-hidden>
+            <span className="text-text-secondary text-3xs select-none" aria-hidden>
               ,
             </span>
           )}
@@ -98,7 +98,7 @@ export function KbdChord({
             {tokens.map((token, tokenIndex) => (
               <Fragment key={tokenIndex}>
                 {tokenIndex > 0 && !mac && (
-                  <span className="text-daintree-text/40 text-3xs select-none" aria-hidden>
+                  <span className="text-text-secondary text-3xs select-none" aria-hidden>
                     +
                   </span>
                 )}

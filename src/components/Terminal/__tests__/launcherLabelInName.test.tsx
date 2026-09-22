@@ -79,3 +79,50 @@ describe("Label in Name on the canvas-home context rows", () => {
     expect(more.getAttribute("aria-label") ?? "").toContain(visible);
   });
 });
+
+/**
+ * Truncating controls on this surface must disclose their full label through a
+ * mechanism that opens on KEYBOARD FOCUS, not only on hover.
+ *
+ * `title` is hover-only in every browser, and both of these controls are
+ * ordinary tab stops whose names are `truncate`d — so a keyboard user arrowing
+ * across "Migrate remaining J…" had no way to tell two long recipes apart
+ * before launching one. Asserted at source level, like the other launcher
+ * contracts: the rule is "not title-alone", so any focus-capable disclosure
+ * satisfies it and swapping Tooltip for something better will not churn this.
+ */
+describe("truncating launcher controls disclose on focus, not hover alone", () => {
+  const FILES = [
+    "src/components/Terminal/RecipeRunner/RecipeRunnerItem.tsx",
+    "src/components/Terminal/ResumeSessionLine.tsx",
+  ];
+
+  it("gives each one a focus-capable disclosure", async () => {
+    const { readFileSync } = await import("fs");
+    const { resolve } = await import("path");
+    for (const file of FILES) {
+      const source = readFileSync(resolve(process.cwd(), file), "utf-8");
+      // The control's own name is truncated somewhere in this file...
+      expect(source, `${file} should still truncate a label`).toContain("truncate");
+      // ...so it must import a disclosure that Radix opens on focus as well as
+      // hover. A bare `title=` attribute does not count.
+      expect(source, `${file} must disclose on focus, not only on hover`).toMatch(/TooltipTrigger/);
+    }
+  });
+
+  it("does not leave a hover-only title as the sole disclosure", async () => {
+    const { readFileSync } = await import("fs");
+    const { resolve } = await import("path");
+    for (const file of FILES) {
+      const source = readFileSync(resolve(process.cwd(), file), "utf-8");
+      const titleAttrs = [...source.matchAll(/(?<![A-Za-z])title=\{/g)].length;
+      const tooltips = [...source.matchAll(/<TooltipContent/g)].length;
+      // Either there is no native title at all, or there is at least as much
+      // tooltip disclosure as there is title — never title on its own.
+      expect(
+        titleAttrs === 0 || tooltips >= titleAttrs,
+        `${file}: ${titleAttrs} title= vs ${tooltips} TooltipContent`
+      ).toBe(true);
+    }
+  });
+});

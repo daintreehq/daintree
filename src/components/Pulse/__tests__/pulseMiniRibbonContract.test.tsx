@@ -72,10 +72,12 @@ describe("pulse mini ribbon — forced-colors cue contract", () => {
     }
   });
 
-  it("does not fall back to the panel surface for a quiet day", () => {
-    // The ribbon sits on the canvas, not on a panel. Painting a quiet day in
-    // `surface-panel` made it vanish on light themes; it must use a token that
-    // lifts off whatever it is over.
+  it("marks a quiet day with a boundary rather than a near-canvas fill", () => {
+    // The ribbon sits on the canvas, not on a panel, and every overlay fill on
+    // this theme family lands within ~1.1:1 of the canvas — under what an eye
+    // resolves. A quiet day therefore has to be carried by a BORDER, which is a
+    // third of a 6px cell's area, not by a fill. Asserts the mechanism, not a
+    // particular token: any fill-only quiet cell fails, whatever colour it is.
     render(<ProjectPulseStrip worktreeId="wt1" />);
     const ribbon = screen.getByTestId("pulse-mini-ribbon");
     const quiet = Array.from(ribbon.children).filter(
@@ -83,8 +85,18 @@ describe("pulse mini ribbon — forced-colors cue contract", () => {
     ) as HTMLElement[];
     expect(quiet.length).toBeGreaterThan(0);
     for (const el of quiet) {
+      expect(el.style.border).toBeTruthy();
       expect(el.style.background).not.toContain("surface-panel");
-      expect(el.style.background).toContain("overlay");
+    }
+    // An active day is the inverse: a solid fill and no border, so the two
+    // kinds of day can never converge on the same rendering.
+    const active = Array.from(ribbon.children).filter((el) =>
+      el.hasAttribute("data-heat-level")
+    ) as HTMLElement[];
+    expect(active.length).toBeGreaterThan(0);
+    for (const el of active) {
+      expect(el.style.background).toBeTruthy();
+      expect(el.style.border).toBeFalsy();
     }
   });
 });

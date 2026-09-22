@@ -1,6 +1,18 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import type { ReactNode } from "react";
+
+// The launcher's truncating controls disclose their full name through the
+// shared Tooltip, which needs a TooltipProvider ancestor it has no business
+// growing inside a unit test. Stubbed the same way the panel suites do it —
+// these tests are about keyboard behaviour, not the tooltip.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 // Hoisted so the vi.mock factories (which are hoisted above module code) can
 // safely reference this shared, mutable mock state.

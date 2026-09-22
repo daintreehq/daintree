@@ -6,6 +6,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { getRecipeTerminalSummary } from "../utils/recipeUtils";
 import { getRecipeScope } from "@/utils/recipeScope";
@@ -52,89 +53,110 @@ export function RecipeRunnerItem({
 
   if (mode === "grid") {
     return (
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <button
-            id={id}
-            ref={buttonRef}
-            role="option"
-            aria-selected={isFocused}
-            type="button"
-            onClick={() => onRun(recipe.id)}
-            onFocus={onFocus}
-            onKeyDown={onKeyDown}
-            disabled={disabled}
-            tabIndex={disabled ? -1 : (tabIndex ?? 0)}
-            // The name is `truncate`d, and a recipe LAUNCHES TERMINALS on click —
-            // "Migrate remaining J…" is not enough to tell two long recipes apart
-            // before committing to one. `title` and not `aria-label`: the clip is
-            // paint-time only, so the full name is already the accessible name.
-            title={
-              recipeSummary && recipeSummary !== recipe.name
-                ? `${recipe.name} — ${recipeSummary}`
-                : recipe.name
-            }
-            className={cn(
-              // The roving aria-selected ring only paints while keyboard focus
-              // is inside the recipe group (group-focus-within) — at rest the
-              // default-focused first card must NOT glow accent, or the hero
-              // recipe reads as a focused input on every empty grid.
-              //
-              // `transition-colors` stays narrow: transform is deliberately out
-              // of the property list, so the press scale snaps instead of easing
-              // over 150ms. A disabled card never enters :active, so the scale
-              // needs no disabled: reset. `launcher-press` is what lets reduced
-              // motion suppress the scale — see the rule in `index.css`.
-              "launcher-press group flex flex-col items-start gap-1.5 p-3 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60",
-              recipe.shadowedBy && "opacity-60"
-            )}
-          >
-            <div className="flex items-center gap-2 w-full">
-              <Play
+      // Hover AND keyboard focus, from one uncontrolled Tooltip. A native
+      // `title` only ever opens on hover, and these cards are a roving tab
+      // stop, so a keyboard user arrowing across "Migrate remaining J…" had no
+      // way to tell two long recipes apart before launching one. The tooltip
+      // replaces `title` rather than joining it — both would fire on hover.
+      <Tooltip>
+        <ContextMenu>
+          {/* Tooltip OUTSIDE ContextMenu, TooltipTrigger INSIDE ContextMenuTrigger:
+            both are `asChild`, so they compose down onto the one <button>. The
+            native `title` below covers the pointer; this is what covers the
+            KEYBOARD, since `title` never opens on focus and these cards are a
+            roving tab stop — a keyboard user arrowing across "Migrate remaining
+            J…" could not tell two long recipes apart before launching one.
+            Uncontrolled, per the overlay-focus rule: the shared suppression in
+            `tooltipFocusSuppression` already handles focus coming back after a
+            launch, and hand-rolling a controlled tooltip here is a violation. */}
+          <ContextMenuTrigger asChild>
+            <TooltipTrigger asChild>
+              <button
+                id={id}
+                ref={buttonRef}
+                role="option"
+                aria-selected={isFocused}
+                type="button"
+                onClick={() => onRun(recipe.id)}
+                onFocus={onFocus}
+                onKeyDown={onKeyDown}
+                disabled={disabled}
+                tabIndex={disabled ? -1 : (tabIndex ?? 0)}
                 className={cn(
-                  "h-3.5 w-3.5 text-status-success transition-colors shrink-0",
-                  !disabled && "group-hover:text-status-success"
+                  // The roving aria-selected ring only paints while keyboard focus
+                  // is inside the recipe group (group-focus-within) — at rest the
+                  // default-focused first card must NOT glow accent, or the hero
+                  // recipe reads as a focused input on every empty grid.
+                  //
+                  // `transition-colors` stays narrow: transform is deliberately out
+                  // of the property list, so the press scale snaps instead of easing
+                  // over 150ms. A disabled card never enters :active, so the scale
+                  // needs no disabled: reset. `launcher-press` is what lets reduced
+                  // motion suppress the scale — see the rule in `index.css`.
+                  "launcher-press group flex flex-col items-start gap-1.5 p-3 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60",
+                  recipe.shadowedBy && "opacity-60"
                 )}
-                aria-hidden
-              />
-              <span className="flex-1 text-sm font-medium text-text-primary truncate">
-                {recipe.name}
-              </span>
-              {recipe.shadowedBy && (
-                <span className="text-2xs text-text-secondary shrink-0">Overridden by Team</span>
-              )}
-              {isPinned && (
-                // Neutral, not accent: pinning is membership, and the accent is
-                // the one signal that means "this is where the keyboard is".
-                // Spending it on a static badge left two greens on screen at
-                // once in the dense state, and made the brightest glyph on the
-                // card the one that does nothing. The state was also
-                // `aria-hidden`, so it existed for sighted users only.
-                <>
-                  <Pin className="h-3 w-3 text-text-secondary shrink-0" aria-hidden />
-                  <span className="sr-only">Pinned</span>
-                </>
-              )}
-            </div>
-            <span className="flex items-center gap-2 w-full pl-5.5 text-xs text-text-secondary">
-              <span className="shrink-0">{scopeLabel}</span>
-              {recipeSummary && recipeSummary !== recipe.name && (
-                <span className="truncate">{recipeSummary}</span>
-              )}
-            </span>
-          </button>
-        </ContextMenuTrigger>
-        <RecipeContextMenu
-          recipe={recipe}
-          isPinned={isPinned}
-          onRun={onRun}
-          onEdit={onEdit}
-          onDuplicate={onDuplicate}
-          onPin={onPin}
-          onUnpin={onUnpin}
-          onDelete={onDelete}
-        />
-      </ContextMenu>
+              >
+                <div className="flex items-center gap-2 w-full">
+                  <Play
+                    className={cn(
+                      "h-3.5 w-3.5 text-status-success transition-colors shrink-0",
+                      !disabled && "group-hover:text-status-success"
+                    )}
+                    aria-hidden
+                  />
+                  <span className="flex-1 text-sm font-medium text-text-primary truncate">
+                    {recipe.name}
+                  </span>
+                  {recipe.shadowedBy && (
+                    <span className="text-2xs text-text-secondary shrink-0">
+                      Overridden by Team
+                    </span>
+                  )}
+                  {isPinned && (
+                    // Neutral, not accent: pinning is membership, and the accent is
+                    // the one signal that means "this is where the keyboard is".
+                    // Spending it on a static badge left two greens on screen at
+                    // once in the dense state, and made the brightest glyph on the
+                    // card the one that does nothing. The state was also
+                    // `aria-hidden`, so it existed for sighted users only.
+                    <>
+                      <Pin className="h-3 w-3 text-text-secondary shrink-0" aria-hidden />
+                      <span className="sr-only">Pinned</span>
+                    </>
+                  )}
+                </div>
+                <span className="flex items-center gap-2 w-full pl-5.5 text-xs text-text-secondary">
+                  <span className="shrink-0">{scopeLabel}</span>
+                  {recipeSummary && recipeSummary !== recipe.name && (
+                    <span className="truncate">{recipeSummary}</span>
+                  )}
+                </span>
+              </button>
+            </TooltipTrigger>
+          </ContextMenuTrigger>
+          <RecipeContextMenu
+            recipe={recipe}
+            isPinned={isPinned}
+            onRun={onRun}
+            onEdit={onEdit}
+            onDuplicate={onDuplicate}
+            onPin={onPin}
+            onUnpin={onUnpin}
+            onDelete={onDelete}
+          />
+        </ContextMenu>
+        {/* No `aria-describedby` wiring is wanted here: the button's own text
+          already names the recipe to assistive tech, and a tooltip that
+          repeats it would double the announcement. This is a visual
+          disclosure for the ellipsis, nothing more. */}
+        <TooltipContent side="top">
+          <span className="font-medium">{recipe.name}</span>
+          {recipeSummary && recipeSummary !== recipe.name && (
+            <span className="ml-1 text-text-secondary">{recipeSummary}</span>
+          )}
+        </TooltipContent>
+      </Tooltip>
     );
   }
 
@@ -158,12 +180,21 @@ export function RecipeRunnerItem({
               : recipe.name
           }
           className={cn(
-            "launcher-press group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60",
+            // The active option is marked by a SURFACE LIFT, not a second
+            // accent ring. In list mode DOM focus stays in the filter input —
+            // which paints its own accent ring — so an accent ring here put two
+            // accent anchors in one arrow-key domain and the surface claimed
+            // the keyboard was in two places. The house rule allows exactly one
+            // load-bearing accent per focus region, and in a combobox that one
+            // belongs to the control the user is actually typing into. A lift
+            // is also the conventional active-descendant cue, and it survives
+            // forced-colors better than a ring, which `box-shadow` drops.
+            "launcher-press group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:bg-overlay-strong group-focus-within/recipes:aria-selected:border-border-strong",
             recipe.shadowedBy && "opacity-60"
           )}
         >
           <Play
-            className="h-3.5 w-3.5 text-status-success/50 group-hover:text-status-success transition-colors shrink-0"
+            className="h-3.5 w-3.5 text-status-success transition-colors shrink-0"
             aria-hidden
           />
           <span className="flex-1 text-sm font-medium text-text-primary truncate">

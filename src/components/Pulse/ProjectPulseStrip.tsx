@@ -26,12 +26,16 @@ const MINI_GAP_PX = 2;
  * lost its cells entirely and rendered as an empty gap between its label and
  * its counts.
  *
- * An empty day is drawn from an overlay token rather than `surface-panel`
- * (what `getPulseHeatLevelBackground` returns for level 0). The ribbon sits on
- * the canvas, not on a panel, so on light themes `surface-panel` resolved to
- * very nearly the canvas colour and the zero cells vanished — the 18-day track
- * broke into two floating clusters of green with no baseline to read them
- * against. An overlay lifts off whatever it is over, in either polarity.
+ * A quiet day is an OUTLINE, an active day a solid fill — the same grammar the
+ * forced-colors rule below uses, so the ribbon reads the same way in every
+ * mode. It started as a quiet FILL, but every overlay step on this theme family
+ * lands within 1.04–1.10:1 of the canvas (measured off the captures), which is
+ * under what an eye resolves: the zero cells were invisible on light themes and
+ * barely there on dark, so the strip read as floating clusters of green with no
+ * baseline and you could see the active days without being able to count the
+ * gap between them. A 1px border on a 6px cell is a third of its area, so a
+ * border token carries at a size where a fill cannot, and the track becomes
+ * legible without the ribbon getting louder than the launcher above it.
  */
 function MiniRibbon({ cells }: { cells: HeatCell[] }) {
   return (
@@ -51,9 +55,8 @@ function MiniRibbon({ cells }: { cells: HeatCell[] }) {
             style={{
               width: MINI_CELL_PX,
               height: MINI_CELL_PX,
-              background: active
-                ? getPulseHeatLevelBackground(cell.level)
-                : "var(--theme-overlay-soft)",
+              background: active ? getPulseHeatLevelBackground(cell.level) : "transparent",
+              border: active ? undefined : "1px solid var(--theme-border-strong)",
             }}
           >
             {active && <span aria-hidden="true" className="pulse-heat-cell-shape" />}

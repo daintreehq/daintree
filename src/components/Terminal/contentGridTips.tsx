@@ -88,7 +88,18 @@ export const TIPS: TipEntry[] = [
         Press <Kbd>{shortcut}</Kbd> to launch a Claude agent in this worktree
       </>
     ),
-    actionId: "agent.terminal",
+    // `agent.claude`, NOT `agent.terminal`. The tip says "launch a Claude
+    // agent" and ⌘⌥N is `agent.terminal`, whose own description is "open a
+    // plain shell terminal with no agent attached" — so the tip taught a
+    // binding that does something else, and the button under it launched a
+    // bare shell. Both now point at the action the sentence names.
+    //
+    // `agent.claude` ships with no default combo, and `requiresShortcut`
+    // filters a tip whose binding is missing, so this tip simply does not
+    // appear until the user binds it. That is the right outcome: a teaching
+    // surface should stay quiet rather than teach a key that does something
+    // other than what it claims.
+    actionId: "agent.claude",
     actionLabel: "Launch agent",
     requiresShortcut: true,
     requiredAgents: ["claude"],
@@ -105,7 +116,8 @@ export const TIPS: TipEntry[] = [
         Press <Kbd>{shortcut}</Kbd> to launch a Gemini agent in this worktree
       </>
     ),
-    actionId: "agent.terminal",
+    // Same correction as the Claude tip above.
+    actionId: "agent.gemini",
     actionLabel: "Launch agent",
     requiresShortcut: true,
     requiredAgents: ["gemini"],

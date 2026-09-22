@@ -203,7 +203,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Terminal/HybridInputBar.tsx",
     "src/components/Terminal/RecipeRunner/RecipeRunnerGrid.tsx",
     "src/components/Terminal/RecipeRunner/RecipeRunnerItem.tsx",
-    "src/components/Terminal/RecipeRunner/RecipeRunnerList.tsx",
     "src/components/Terminal/TwoPaneSplitDivider.tsx",
     "src/components/Terminal/VoiceInputButton.tsx",
     "src/components/TerminalRecipe/RecipeEditor.tsx",
