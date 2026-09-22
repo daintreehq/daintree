@@ -220,7 +220,7 @@ function TaskOverflow({
         // popover is labelled and exposes the rows themselves once opened.
         aria-label={`Show ${tasks.length} more running ${tasks.length === 1 ? "task" : "tasks"}`}
         className={cn(
-          "flex w-full items-center gap-0.5 px-2 py-0.5 rounded-[var(--radius-sm)] text-3xs font-sans transition-colors",
+          "flex w-full min-h-6 items-center gap-0.5 px-2 rounded-[var(--radius-sm)] text-3xs font-sans transition-colors",
           "text-text-secondary hover:text-text-primary hover:bg-tint/[0.04]",
           "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         )}
@@ -285,7 +285,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
     <div
       data-task-row={terminal.id}
       className={cn(
-        "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-sm)] text-2xs font-mono group",
+        "flex items-center gap-1.5 px-2 rounded-[var(--radius-sm)] text-2xs font-mono group",
         "hover:bg-tint/[0.04] transition-colors",
         status === "success" && "opacity-60"
       )}
@@ -297,7 +297,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
       <button
         type="button"
         onClick={() => onFocus(terminal.id)}
-        className="flex-1 truncate text-left text-text-secondary hover:text-text-primary transition-colors cursor-pointer min-w-0"
+        className="flex-1 min-h-6 truncate text-left text-text-secondary hover:text-text-primary transition-colors cursor-pointer min-w-0"
         title={command}
       >
         {command}

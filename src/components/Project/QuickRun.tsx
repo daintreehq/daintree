@@ -500,7 +500,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
             <div
               className={cn(
                 // Fallback keeps themes without --dock-input-bg byte-identical.
-                "relative flex items-center rounded-[var(--radius-md)] border border-selection-outline bg-[var(--dock-input-bg,var(--color-overlay-soft))]",
+                "relative flex flex-wrap items-center rounded-[var(--radius-md)] border border-selection-outline bg-[var(--dock-input-bg,var(--color-overlay-soft))]",
                 // The focus anchor, and the single accent this region spends.
                 "transition-colors focus-within:border-accent-primary"
               )}
@@ -554,8 +554,16 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                 autoComplete="off"
               />
 
-              {/* Right Side Controls */}
-              <div className="flex items-center pr-1.5 gap-1">
+              {/* The two run options. Below 280px they drop to their own line
+                  inside the field's border, because beside the input they left
+                  a 200px column showing "$ Run a" — the command gave way to its
+                  own secondary settings. Run stays on the input's line. */}
+              <div
+                className={cn(
+                  "flex items-center gap-1 pr-1",
+                  "@max-[280px]/footer:order-last @max-[280px]/footer:basis-full @max-[280px]/footer:justify-end @max-[280px]/footer:border-t @max-[280px]/footer:border-border-subtle @max-[280px]/footer:py-0.5 @max-[280px]/footer:pr-1.5"
+                )}
+              >
                 {/* Auto-Restart Toggle */}
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -578,7 +586,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
-                    {autoRestart ? "Auto-restart: On" : "Auto-restart: Off"}
+                    {autoRestart ? "Auto-restart: on" : "Auto-restart: off"}
                   </TooltipContent>
                 </Tooltip>
 
@@ -609,12 +617,14 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
                     {runAsDocked
-                      ? "Output: Dock (Background Task)"
-                      : "Output: Grid (Interactive Terminal)"}
+                      ? "Output: dock (background task)"
+                      : "Output: grid (interactive terminal)"}
                   </TooltipContent>
                 </Tooltip>
+              </div>
 
-                {/* Enter Button */}
+              {/* Enter Button */}
+              <div className="flex items-center pr-1.5">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="inline-flex">

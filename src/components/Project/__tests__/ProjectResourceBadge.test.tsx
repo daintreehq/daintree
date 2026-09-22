@@ -586,7 +586,7 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
     expect(trigger?.textContent).not.toMatch(/[↑↓]/);
   });
 
-  it("suppresses the value (stays hidden) when metrics are unavailable", async () => {
+  it("keeps counting projects when the memory read fails, without inventing a figure", async () => {
     mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
     statsStoreState.stats = { p1: { processCount: 1 } };
     mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 0, unavailable: true });
@@ -595,9 +595,28 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
 
     await flush();
 
-    // No misleading "0MB"; the badge withholds the reading entirely.
-    expect(container.textContent ?? "").not.toContain("0MB");
-    expect(container.textContent ?? "").not.toContain("project active");
+    // The count comes from the stats store, not from main's process read, so
+    // a failed read must not freeze or hide it — but it must not produce a
+    // memory figure either, and a zero reading must not trip the warning.
+    expect(container.querySelector("[data-status-readout]")?.textContent).toBe("1 project active");
+    expect(container.textContent ?? "").not.toMatch(/\d\s*MB/);
+    expect(container.querySelector('[data-testid="sidebar-status-items"]')).toBeNull();
+  });
+
+  it("keeps whatever the footer pins beside the readout before the first read lands", async () => {
+    mockGetAll.mockReturnValue(new Promise(() => {}));
+    mockGetAppMetrics.mockReturnValue(new Promise(() => {}));
+    statsStoreState.stats = {};
+
+    const { container } = render(
+      <ProjectResourceBadge trailing={<button type="button">Run command</button>} />
+    );
+    await flush();
+
+    // Run command has nothing to do with whether the metrics read has
+    // landed; it used to vanish with the readout.
+    expect(container.querySelector("[data-status-readout]")).toBeNull();
+    expect(container.textContent).toContain("Run command");
   });
 
   it("keeps the readout in place with nothing running, rather than vanishing", async () => {

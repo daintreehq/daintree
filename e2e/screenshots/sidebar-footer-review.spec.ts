@@ -240,6 +240,11 @@ test("Sidebar footer — states, widths and themes", async ({ page }) => {
     await openResourcePopover(page);
     written.push(await snap(page.locator("body"), `popover-default-${theme}.png`));
 
+    // The row shows only a triangle for high memory; the words are here.
+    await open(page, "memory-critical", theme, DEFAULT_WIDTH, 900);
+    await openResourcePopover(page);
+    written.push(await snap(page.locator("body"), `popover-critical-${theme}.png`));
+
     // The status row on its own, at 3x the size, so the dot can be judged as a
     // glyph rather than as a smudge.
     await open(page, "many-projects", theme);

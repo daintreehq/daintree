@@ -33,6 +33,8 @@ const SAMPLES_PER_MIN = 60_000 / BADGE_POLL_MS;
 const FRESHNESS_TICK_MS = 1_000;
 /** Popover data older than this gets an age line; below it the reading is simply current. */
 const STALE_AFTER_SEC = 10;
+/** Three badge polls: past this, the fallback app-memory reading has stalled. */
+const APP_MEMORY_FRESH_MS = BADGE_POLL_MS * 3;
 
 function formatUptime(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -58,7 +60,10 @@ const IDLE_DOT_CLASS = "border border-text-secondary bg-transparent";
 
 interface AggregateStats {
   runningProjects: number;
-  totalMemoryMB: number;
+  /** Last measured app memory, or null before the first successful read. */
+  totalMemoryMB: number | null;
+  /** When `totalMemoryMB` was measured, so a stalled read can't pass as current. */
+  memorySampledAt: number | null;
   projects: Array<{ id: string; name: string }>;
 }
 
@@ -124,7 +129,7 @@ function MemorySummary({
   hasWorkloadReading,
   systemAvailableMB,
 }: {
-  appMemoryMB: number;
+  appMemoryMB: number | null;
   workloads: TerminalWorkloadSlice | null;
   workloadNote: string | null;
   /** Whether any workload reading has ever arrived — before one, the row waits. */
@@ -133,7 +138,10 @@ function MemorySummary({
 }) {
   return (
     <div className="space-y-1">
-      <MemoryRow label="Daintree app" value={formatMemory(appMemoryMB)} />
+      <MemoryRow
+        label="Daintree app"
+        value={appMemoryMB !== null ? formatMemory(appMemoryMB) : "Unavailable"}
+      />
       {hasWorkloadReading && (
         <MemoryRow
           label="Terminal programs"
@@ -296,14 +304,16 @@ function DiagnosticsSection({
 
   const trendDeltaMB =
     trendSamples.length >= 2 ? trendSamples[trendSamples.length - 1]! - trendSamples[0]! : 0;
-  // The window is however many samples have landed, not a fixed two minutes:
-  // a freshly opened popover has seconds of history, not minutes.
-  const windowMin = Math.max(1, Math.round(trendSamples.length / SAMPLES_PER_MIN));
+  // The window is the span the samples actually cover — one poll interval
+  // between each — not a fixed two minutes: a freshly opened popover has
+  // seconds of history, not minutes.
+  const windowSec = Math.max(0, trendSamples.length - 1) * (BADGE_POLL_MS / 1000);
+  const windowLabel = windowSec < 90 ? `${windowSec}s` : `${Math.round(windowSec / 60)} min`;
   const trendText =
     trend === "up"
-      ? `Grew ${Math.abs(Math.round(trendDeltaMB))} MB in ${windowMin} min`
+      ? `Grew ${Math.abs(Math.round(trendDeltaMB))} MB in ${windowLabel}`
       : trend === "down"
-        ? `Fell ${Math.abs(Math.round(trendDeltaMB))} MB in ${windowMin} min`
+        ? `Fell ${Math.abs(Math.round(trendDeltaMB))} MB in ${windowLabel}`
         : "Stable";
 
   return (
@@ -328,7 +338,7 @@ function DiagnosticsSection({
             <MemoryRow label="App memory trend" value={trendText} />
             <MemoryRow
               label="Main process JS heap"
-              value={`${Math.round(heapStats.usedMB)} of ${formatMemory(heapStats.limitMB)}`}
+              value={`${formatMemory(heapStats.usedMB)} of ${formatMemory(heapStats.limitMB)}`}
             />
             <MemoryRow label="Uptime" value={formatUptime(diagnosticsInfo.uptimeSeconds)} />
             {diagnosticsInfo.eventLoopP99Ms > 50 && (
@@ -369,7 +379,8 @@ export function ProjectResourceBadge({
 }: ProjectResourceBadgeProps = {}) {
   const [stats, setStats] = useState<AggregateStats>({
     runningProjects: 0,
-    totalMemoryMB: 0,
+    totalMemoryMB: null,
+    memorySampledAt: null,
     projects: [],
   });
   const [isLoading, setIsLoading] = useState(true);
@@ -384,6 +395,7 @@ export function ProjectResourceBadge({
   const [nowTs, setNowTs] = useState(() => Date.now());
   const [thresholds, setThresholds] = useState<MemoryThresholds>(FALLBACK_THRESHOLDS);
   const samplesRef = useRef<number[]>([]);
+  const popoverContentRef = useRef<HTMLDivElement>(null);
   // Mirror into state so JSX doesn't read the ref during render (React Compiler).
   const [samples, setSamples] = useState<number[]>([]);
 
@@ -405,7 +417,8 @@ export function ProjectResourceBadge({
     return total;
   });
 
-  const memoryState = getMemoryState(stats.totalMemoryMB, thresholds);
+  const memoryState =
+    stats.totalMemoryMB === null ? "normal" : getMemoryState(stats.totalMemoryMB, thresholds);
   const trend = getTrendDirection(samples, SAMPLES_PER_MIN);
   const projectNames = useMemo(
     () => new Map(stats.projects.map((p) => [p.id, p.name])),
@@ -426,9 +439,10 @@ export function ProjectResourceBadge({
         systemClient.getAppMetrics(),
       ]);
 
-      // Suppress the reading rather than reporting a misleading "0MB" when the
-      // main process couldn't read process metrics.
-      if (appMetrics.unavailable) return null;
+      // A failed metrics read withholds the memory figure — never a fake 0 —
+      // but not the project count, which comes from the stats store and has
+      // nothing to do with whether main could read its own processes.
+      const memoryMB = appMetrics.unavailable ? null : appMetrics.totalMemoryMB;
 
       const currentStats = useProjectStatsStore.getState().stats;
       let running = 0;
@@ -436,15 +450,15 @@ export function ProjectResourceBadge({
         if ((currentStats[p.id]?.processCount ?? 0) > 0) running++;
       }
 
-      const nextSamples = [
-        ...samplesRef.current.slice(-(MAX_SAMPLES - 1)),
-        appMetrics.totalMemoryMB,
-      ];
+      const nextSamples =
+        memoryMB === null
+          ? samplesRef.current
+          : [...samplesRef.current.slice(-(MAX_SAMPLES - 1)), memoryMB];
 
       return {
         nextSamples,
         runningProjects: running,
-        totalMemoryMB: appMetrics.totalMemoryMB,
+        totalMemoryMB: memoryMB,
         projects: projects.map((p: Project) => ({ id: p.id, name: p.name })),
       };
     } catch (error) {
@@ -506,11 +520,12 @@ export function ProjectResourceBadge({
         if (cancelled || gen !== generation || !result) return;
         samplesRef.current = result.nextSamples;
         setSamples(result.nextSamples);
-        setStats({
+        setStats((prev) => ({
           runningProjects: result.runningProjects,
-          totalMemoryMB: result.totalMemoryMB,
+          totalMemoryMB: result.totalMemoryMB ?? prev.totalMemoryMB,
+          memorySampledAt: result.totalMemoryMB !== null ? Date.now() : prev.memorySampledAt,
           projects: result.projects,
-        });
+        }));
         setIsLoading(false);
       } finally {
         if (inFlightGen === gen) inFlightGen = null;
@@ -657,7 +672,18 @@ export function ProjectResourceBadge({
   }, [showReadout]);
 
   if (!showReadout) {
-    return null;
+    // The readout waits for its first read, but whatever the footer pinned
+    // beside it must not: Run command has nothing to do with whether the
+    // metrics read has landed or failed.
+    if (trailing == null) return null;
+    return (
+      <div
+        data-sidebar-status-bar=""
+        className="flex items-center justify-end shrink-0 w-full min-h-7"
+      >
+        {trailing}
+      </div>
+    );
   }
 
   // The count is a separate fact from the activity state and stays in words;
@@ -680,6 +706,16 @@ export function ProjectResourceBadge({
   // from working to idle with its project count unchanged announces nothing.
   const announcement =
     stats.runningProjects > 0 ? `${isWorking ? "Working" : "Idle"}, ${readoutLabel}` : readoutLabel;
+
+  // The snapshot's own measurement when it has one. Otherwise the badge's
+  // 10s read of the same `getAppMetrics` source, but only while that read is
+  // itself recent: a metrics path that has stalled shows "Unavailable" rather
+  // than a number that silently stopped moving.
+  const appMemoryMB = memorySnapshot?.electron.available
+    ? memorySnapshot.electron.totalWorkingSetMb
+    : stats.memorySampledAt !== null && nowTs - stats.memorySampledAt <= APP_MEMORY_FRESH_MS
+      ? stats.totalMemoryMB
+      : null;
 
   const { shown: shownWorkloads, note: workloadNote } = pickWorkloads(
     memorySnapshot?.terminalWorkloads ?? null,
@@ -743,15 +779,15 @@ export function ProjectResourceBadge({
         {memoryState === "critical" && (
           <span
             data-testid="sidebar-status-items"
-            title="Daintree's own processes are using a large share of this machine's memory"
-            className="flex items-center gap-1 pl-1 pr-2 shrink-0 text-2xs font-medium text-text-primary"
+            title="Daintree's own memory use is high — open the readout for details"
+            className="flex items-center pl-1 pr-2 shrink-0"
           >
-            {/* The triangle carries the severity colour; the words stay neutral.
-                Status-coloured body text misses 4.5:1 on most of the fifteen
-                themes — there is no status *text* ramp. "App" because the
-                threshold reads Daintree's own processes, not the machine. */}
+            {/* The glyph alone on the row; the words live in the popover. With
+                the count on the left and Run command on the right, a worded
+                chip left 320px with "4 a…" — the warning cost the row its
+                first answer. The triangle carries the severity colour. */}
             <TriangleAlert className="h-3 w-3 shrink-0 text-status-warning" aria-hidden="true" />
-            <span className="@max-[280px]/footer:sr-only">High app memory</span>
+            <span className="sr-only">High app memory</span>
           </span>
         )}
         {trailing}
@@ -762,26 +798,37 @@ export function ProjectResourceBadge({
         sideOffset={8}
         collisionPadding={8}
         aria-labelledby="resource-usage-title"
-        // An informational popover: focus stays on the readout, as it does for
-        // the footer's other status popovers. Landing it on the keep-awake row
-        // painted a focus ring on a settings link nobody had reached for.
-        onOpenAutoFocus={(event) => event.preventDefault()}
+        // Focus the popover itself, not its first control. Radix's default
+        // landed on the keep-awake row and painted a ring on a settings link
+        // nobody had reached for; leaving focus on the readout instead strands
+        // keyboard users, because the content is portalled to the end of the
+        // document and Tab from the readout never reaches it.
+        ref={popoverContentRef}
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          popoverContentRef.current?.focus({ preventScroll: true, focusVisible: false });
+        }}
         className="w-72 p-3"
       >
         <div className="space-y-3">
           {popoverData ? (
             <>
               <div className="space-y-1.5">
+                {memoryState === "critical" && (
+                  <div className="flex items-start gap-1.5 text-2xs text-text-primary">
+                    <TriangleAlert
+                      className="mt-px h-3 w-3 shrink-0 text-status-warning"
+                      aria-hidden="true"
+                    />
+                    Daintree's own memory use is high for this machine
+                  </div>
+                )}
                 <div className="flex items-baseline justify-between gap-2">
                   <SectionLabel id="resource-usage-title">Memory</SectionLabel>
                   {ageLabel && <span className="text-2xs text-text-secondary">{ageLabel}</span>}
                 </div>
                 <MemorySummary
-                  appMemoryMB={
-                    memorySnapshot?.electron.available
-                      ? memorySnapshot.electron.totalWorkingSetMb
-                      : stats.totalMemoryMB
-                  }
+                  appMemoryMB={appMemoryMB}
                   workloads={shownWorkloads}
                   workloadNote={workloadNote}
                   hasWorkloadReading={memorySnapshot !== null || shownWorkloads !== null}
