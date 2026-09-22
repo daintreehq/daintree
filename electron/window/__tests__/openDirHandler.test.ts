@@ -513,6 +513,41 @@ describe("routeProjectOpen — an explicit new window (#12594)", () => {
     expect(owner.active).toBe("front");
   });
 
+  it("keeps a window still behind its paint gate on the router's own gated reveal", async () => {
+    const world = makeWorld();
+    const booting = world.add({ active: idFor("/work/known"), visible: false, ready: false });
+    const asking = world.add({ active: "other" });
+    const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => true) };
+
+    const outcome = await routeProjectOpen("/work/known", newWindowFrom(asking.id), deps);
+
+    expect(outcome).toEqual({ kind: "focused", windowId: booting.id });
+    expect(deps.redirectToOwner).not.toHaveBeenCalled();
+    expect(booting.win.show).not.toHaveBeenCalled();
+    booting.paint();
+    expect(booting.win.focus).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a picker window claimed while its owner renderer switches to the cached project", async () => {
+    const world = makeWorld();
+    // Closed back to the picker, still holding a live background view of P.
+    const picker = world.add({ active: "was-open" });
+    world.closed.add("was-open");
+    picker.views.push(idFor("/work/p"));
+    const asking = world.add({ active: "busy" });
+    const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => true) };
+
+    const outcome = await routeProjectOpen("/work/p", newWindowFrom(asking.id), deps);
+    expect(outcome).toEqual({ kind: "activated", windowId: picker.id });
+    expect(deps.openDirectory).not.toHaveBeenCalled();
+
+    // The renderer hasn't switched yet, so the window still reads as the
+    // picker: the next folder must not take it out from under that switch.
+    await routeExternalOpen("/work/r", deps);
+    expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/r");
+    expect(deps.openDirectory).not.toHaveBeenCalled();
+  });
+
   it("opens the project itself when the owner redirect declines, as for a closed project", async () => {
     const world = makeWorld();
     const picker = world.add({ active: idFor("/work/known") });

@@ -143,6 +143,10 @@ function createOpenDirDeps(
       const row = projectStore.getProjectById(project.id);
       const owner = findOtherProjectOwner(getWindowRegistry() ?? undefined, project.id, {});
       if (!row || !owner || owner.context.windowId !== windowId) return false;
+      // Mid cold switch away from this very project, the redirect would ask the
+      // outgoing renderer to switch to what it already shows — a no-op, and the
+      // switch in flight would win. The main-side open queues behind it instead.
+      if (owner.projectViewManager.getOutgoingBridgeProjectId() === project.id) return false;
       redirectToProjectOwner(owner, row);
       return true;
     },

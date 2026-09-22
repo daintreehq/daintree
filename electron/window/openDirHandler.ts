@@ -158,34 +158,35 @@ export async function routeProjectOpen(
     return { kind: "created", windowId: await deps.createWindowForPath(targetPath) };
   }
 
+  // In-app requests hand a live owner to the owner redirect (#12596). Only once
+  // the window has finished setting up: the redirect shows the window at once,
+  // and one still behind its paint gate has to wait for revealWindow's "show".
+  //
   // An owner that is the asking window itself only holds the project cached
   // (one showing it is a no-op focus), and there is nowhere else a single live
   // view can go: that window switches to it. The single-owner rule outranks
   // "new" here, as it does for every other gesture.
-  const isOwnerDecision =
-    decision.kind === "focus" || (decision.kind === "activate" && decision.reason === "owner");
-  if (
+  const { windowId } = decision;
+  const redirectToOwner = (): boolean =>
     routing.source === "in-app" &&
-    project &&
-    isOwnerDecision &&
-    deps.redirectToOwner?.(project, decision.windowId)
-  ) {
-    return {
-      kind: decision.kind === "focus" ? "focused" : "activated",
-      windowId: decision.windowId,
-    };
-  }
+    project !== null &&
+    isWindowReadyForOpens(win) &&
+    deps.redirectToOwner?.(project, windowId) === true;
 
   if (decision.kind === "focus") {
-    revealWindow(win);
-    return { kind: "focused", windowId: decision.windowId };
+    if (!redirectToOwner()) revealWindow(win);
+    return { kind: "focused", windowId };
   }
 
-  const { windowId } = decision;
+  const isOwner = decision.reason === "owner";
   await holdWindowForOpen(
     windowId,
     { projectId: project?.id ?? null, projectPath: targetPath },
     async () => {
+      // Held like any other open: an owner's renderer runs the switch after
+      // this returns, and until it binds the project the window must not read
+      // as empty to the next open in line.
+      if (isOwner && redirectToOwner()) return;
       revealWindow(win);
       await deps.openDirectory(targetPath, win);
     },

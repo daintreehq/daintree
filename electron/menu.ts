@@ -854,7 +854,9 @@ async function openInNewWindow(directoryPath: string, targetWindow: BrowserWindo
       defaultId: 1,
       cancelId: 1,
     });
-    if (response === 0) await openInNewWindow(directoryPath, targetWindow);
+    if (response === 0 && !targetWindow.isDestroyed()) {
+      await openInNewWindow(directoryPath, targetWindow);
+    }
   }
 }
 
