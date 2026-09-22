@@ -65,6 +65,15 @@ export function RecipeRunnerItem({
             onKeyDown={onKeyDown}
             disabled={disabled}
             tabIndex={disabled ? -1 : (tabIndex ?? 0)}
+            // The name is `truncate`d, and a recipe LAUNCHES TERMINALS on click —
+            // "Migrate remaining J…" is not enough to tell two long recipes apart
+            // before committing to one. `title` and not `aria-label`: the clip is
+            // paint-time only, so the full name is already the accessible name.
+            title={
+              recipeSummary && recipeSummary !== recipe.name
+                ? `${recipe.name} — ${recipeSummary}`
+                : recipe.name
+            }
             className={cn(
               // The roving aria-selected ring only paints while keyboard focus
               // is inside the recipe group (group-focus-within) — at rest the
@@ -92,7 +101,7 @@ export function RecipeRunnerItem({
                 {recipe.name}
               </span>
               {recipe.shadowedBy && (
-                <span className="text-2xs text-text-muted shrink-0">Overridden by Team</span>
+                <span className="text-2xs text-text-secondary shrink-0">Overridden by Team</span>
               )}
               {isPinned && (
                 // Neutral, not accent: pinning is membership, and the accent is
@@ -143,6 +152,11 @@ export function RecipeRunnerItem({
           onKeyDown={onKeyDown}
           disabled={disabled}
           tabIndex={disabled ? -1 : (tabIndex ?? 0)}
+          title={
+            recipeSummary && recipeSummary !== recipe.name
+              ? `${recipe.name} — ${recipeSummary}`
+              : recipe.name
+          }
           className={cn(
             "launcher-press group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60",
             recipe.shadowedBy && "opacity-60"
@@ -155,12 +169,14 @@ export function RecipeRunnerItem({
           <span className="flex-1 text-sm font-medium text-text-primary truncate">
             {recipe.name}
           </span>
-          <span className="text-2xs text-text-muted shrink-0">{scopeLabel}</span>
+          <span className="text-2xs text-text-secondary shrink-0">{scopeLabel}</span>
           {recipe.shadowedBy && (
-            <span className="text-2xs text-text-muted shrink-0">Overridden by Team</span>
+            <span className="text-2xs text-text-secondary shrink-0">Overridden by Team</span>
           )}
           {recipeSummary && recipeSummary !== recipe.name && (
-            <span className="text-xs text-text-muted truncate max-w-[30%]">{recipeSummary}</span>
+            <span className="text-xs text-text-secondary truncate max-w-[30%]">
+              {recipeSummary}
+            </span>
           )}
           {isPinned && (
             // Neutral, not accent: pinning is membership, and the accent is

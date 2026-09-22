@@ -50,6 +50,14 @@ export function ResumeSessionLine() {
       <button
         type="button"
         onClick={() => void resume(primary.session)}
+        // `title`, deliberately NOT `aria-label`. `truncate` clips at paint
+        // time only, so the full name is already in the DOM text node and
+        // assistive tech computes the complete accessible name from it — an
+        // aria-label here would replace a correct name with a second copy and
+        // risk breaking Label in Name. The only person losing information to
+        // the ellipsis is the sighted pointer user, and `title` is what they
+        // are missing.
+        title={primary.description ? `${primary.name} — ${primary.description}` : primary.name}
         className="group flex min-w-0 items-center gap-2.5 rounded-[var(--radius-md)] px-2.5 py-1.5 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
       >
         <History className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
@@ -57,7 +65,7 @@ export function ResumeSessionLine() {
           <PanelKindIcon iconId={primary.iconId} color={primary.color} size={15} />
           <span className="sr-only">{primary.agentName} </span>
         </span>
-        <span className="truncate text-sm text-daintree-text/75 group-hover:text-text-primary">
+        <span className="truncate text-sm text-text-secondary group-hover:text-text-primary">
           {primary.name}
         </span>
         {primary.description && (
@@ -79,7 +87,14 @@ export function ResumeSessionLine() {
           type="button"
           onClick={openLauncher}
           className="shrink-0 rounded-[var(--radius-md)] px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-overlay-subtle hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
-          aria-label={`Browse ${extraCount} more resumable session${extraCount !== 1 ? "s" : ""}`}
+          // Opens with the visible string verbatim, `+` included. WCAG 2.2
+          // SC 2.5.3 (Label in Name) wants what is on the control to appear in
+          // its accessible name, so a speech-input user can say what they read;
+          // "Browse 2 more resumable sessions" contained "2 more" but not
+          // "+2 more", and the control they can see is the one they cannot say.
+          aria-label={`+${extraCount} more — browse resumable session${
+            extraCount !== 1 ? "s" : ""
+          }`}
         >
           +{extraCount} more
         </button>

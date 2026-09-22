@@ -59,7 +59,7 @@ beforeEach(() => {
 describe("ProjectPulseStrip", () => {
   it("populates on mount by fetching when nothing is cached, staying collapsed", () => {
     render(<ProjectPulseStrip worktreeId="wt1" />);
-    expect(screen.getByRole("button", { name: /show project activity/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^project pulse/i })).toBeTruthy();
     // Populate-on-load: the cold strip kicks a fetch on mount so the peek fills
     // without needing a first expand — but stays collapsed until clicked.
     expect(state.fetchPulse).toHaveBeenCalledWith("wt1");
@@ -121,7 +121,9 @@ describe("ProjectPulseStrip", () => {
     state.getPulse = () => makePulse({ activeDays: 5, currentStreakDays: 2 });
     render(<ProjectPulseStrip worktreeId="wt1" />);
     expect(
-      screen.getByRole("button", { name: /show project activity — 5 active days, 2 day streak/i })
+      screen.getByRole("button", {
+        name: /^project pulse — 5 active days, 2 day streak, show activity$/i,
+      })
     ).toBeTruthy();
   });
 
@@ -130,7 +132,7 @@ describe("ProjectPulseStrip", () => {
     render(<ProjectPulseStrip worktreeId="wt1" />);
     // Anchored so "1 active days" (plural bug) or a spurious streak suffix fails.
     expect(
-      screen.getByRole("button", { name: /^show project activity — 1 active day$/i })
+      screen.getByRole("button", { name: /^project pulse — 1 active day, show activity$/i })
     ).toBeTruthy();
   });
 
@@ -145,7 +147,7 @@ describe("ProjectPulseStrip", () => {
     // The cold-cache mount fetch already fired; clear it so we assert only the
     // click-triggered fetch (a bare vi.fn() doesn't model the store's dedupe).
     state.fetchPulse.mockClear();
-    fireEvent.click(screen.getByRole("button", { name: /show project activity/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^project pulse/i }));
     expect(screen.getByTestId("pulse-card")).toBeTruthy();
     // Expanding kicks a (deduped) fetch so the peek is fresh + the card opens on
     // a skeleton rather than a blank frame.
@@ -154,7 +156,7 @@ describe("ProjectPulseStrip", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /collapse/i }));
     expect(screen.queryByTestId("pulse-card")).toBeNull();
-    expect(screen.getByRole("button", { name: /show project activity/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^project pulse/i })).toBeTruthy();
   });
 
   it("mini ribbon drops invalid-date and before-project cells and never triggers a fetch", () => {

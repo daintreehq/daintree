@@ -147,7 +147,7 @@ export function RecipeRunnerList({
             {flatRecipes.length > 0 ? (
               flatRecipes.map(renderItem)
             ) : (
-              <div className="px-3 py-2 text-sm text-text-muted">
+              <div className="px-3 py-2 text-sm text-text-secondary">
                 No recipes match &ldquo;{searchQuery}&rdquo;
               </div>
             )}

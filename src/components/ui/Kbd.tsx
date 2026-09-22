@@ -19,6 +19,19 @@ export const KBD_CLASS =
 export const KBD_COMPACT_CLASS =
   "px-1 py-px rounded-sm text-3xs font-mono tabular-nums leading-none bg-overlay-subtle text-text-secondary border border-border-subtle";
 
+/**
+ * No box at all — the chord as a bare monospace glyph run, the way a macOS
+ * menu prints it.
+ *
+ * For places that show a binding beside EVERY item in a group. One boxed chip
+ * tells a key apart from the words next to it; seven of them, each three keys
+ * wide, draw twenty-one bordered rectangles over a surface that already has a
+ * border per item, and the group stops reading as a row of actions. The
+ * monospace face and the glyphs carry the "this is a key" signal on their own
+ * once there is a run of them to compare against.
+ */
+export const KBD_BARE_CLASS = "font-mono tabular-nums leading-none text-xs text-text-secondary";
+
 export interface KbdProps {
   children: React.ReactNode;
   className?: string;
@@ -35,10 +48,12 @@ export interface KbdChordProps {
   className?: string;
   "aria-label"?: string;
   /**
-   * Tighten the chips for a dense list row. Same grammar, smaller box — see
-   * {@link KBD_COMPACT_CLASS}.
+   * Tighten the chips for a dense list row (`compact`, same grammar in a
+   * smaller box — see {@link KBD_COMPACT_CLASS}), or drop the box entirely
+   * for a group where every item carries a binding (`bare`, see
+   * {@link KBD_BARE_CLASS}).
    */
-  density?: "default" | "compact";
+  density?: "default" | "compact" | "bare";
 }
 
 /**
@@ -58,7 +73,8 @@ export function KbdChord({
   const steps = parseChord(shortcut, mac);
   if (steps.length === 0) return null;
   const compact = density === "compact";
-  const keyClass = compact ? KBD_COMPACT_CLASS : KBD_CLASS;
+  const bare = density === "bare";
+  const keyClass = bare ? KBD_BARE_CLASS : compact ? KBD_COMPACT_CLASS : KBD_CLASS;
 
   return (
     <span className={cn("inline-flex items-center", compact ? "gap-0.5" : "gap-1", className)}>
@@ -70,7 +86,15 @@ export function KbdChord({
               ,
             </span>
           )}
-          <span className={cn("inline-flex items-center", compact ? "gap-px" : "gap-0.5")}>
+          {/* No gap in `bare`: with no box to separate, the glyphs read as one
+              chord the way a menu prints them — spacing them re-creates the
+              fragmentation the boxes caused. */}
+          <span
+            className={cn(
+              "inline-flex items-center",
+              bare ? "gap-0" : compact ? "gap-px" : "gap-0.5"
+            )}
+          >
             {tokens.map((token, tokenIndex) => (
               <Fragment key={tokenIndex}>
                 {tokenIndex > 0 && !mac && (
