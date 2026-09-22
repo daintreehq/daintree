@@ -4,6 +4,7 @@ import type { WindowRegistry } from "./WindowRegistry.js";
 import type { OpenWorld, OpenWorldWindow, WindowOpenReservation } from "./windowOpenPolicy.js";
 import { getProjectHistory } from "../services/ProjectHistoryService.js";
 import { logError } from "../utils/logger.js";
+import { getPendingActivationProjectIds } from "./projectActivationClaims.js";
 
 /**
  * Process-wide world state behind `decideProjectOpenTarget` (#12593): which
@@ -153,7 +154,17 @@ export function snapshotOpenWorld(
     const win = ctx.browserWindow;
     if (win.isDestroyed()) continue;
     live.add(ctx.windowId);
-    const held = [...(reservations.get(ctx.windowId) ?? [])];
+    // An in-app switch or menu open that has committed to a project but whose
+    // view isn't registered yet (#12596) is an open in flight too, so an
+    // external open of that project focuses this window rather than building a
+    // second view, and the window never reads as empty mid-switch.
+    const held: WindowOpenReservation[] = [
+      ...(reservations.get(ctx.windowId) ?? []),
+      ...getPendingActivationProjectIds(ctx.windowId).map((projectId) => ({
+        projectId,
+        projectPath: null,
+      })),
+    ];
     const pvm = ctx.services.projectViewManager;
     try {
       const activeProjectId = shown(pvm?.getActiveProjectId());
