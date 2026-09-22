@@ -25,6 +25,7 @@ import {
 import type { ActionId } from "@shared/types/actions";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
+import { consultPanelCloseGuards, hasPanelCloseGuard } from "@/services/panelCloseGuard";
 import {
   isBrowserPanel,
   isDevPreviewPanel,
@@ -666,6 +667,15 @@ export function TerminalContextMenu({
             setDestructiveConfirm({ kind: "kill", ...KILL_RUNNING_AGENT_DIALOG_COPY });
             return;
           }
+          if (hasPanelCloseGuard(terminalId)) {
+            // Removing skips the trash, not the unsaved-work prompt (#12323).
+            const source = sourceRef.current;
+            void consultPanelCloseGuards([terminalId]).then((proceed) => {
+              if (!proceed) return;
+              void actionService.dispatch("terminal.kill", { terminalId }, { source });
+            });
+            return;
+          }
           void actionService.dispatch(
             "terminal.kill",
             { terminalId },
@@ -795,8 +805,8 @@ export function TerminalContextMenu({
         {label}
       </ContextMenuSubTrigger>
       {/* No search field in here: Radix's typeahead claims printable keys
-              inside a submenu, so finding a worktree past the cap is the
-              picker's job. */}
+          inside a submenu, so finding a worktree past the cap is the
+          picker's job. */}
       <ContextMenuSubContent>
         {submenuWorktrees.map((wt) => {
           const isCurrent = wt.id === terminal.worktreeId;

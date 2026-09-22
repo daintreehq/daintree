@@ -104,10 +104,10 @@ import {
   getPanelKindRegistrySnapshot,
   panelKindCanRestart,
   panelKindHasPty,
-  panelKindIsDockable,
   subscribeToPanelKindRegistry,
 } from "@shared/config/panelKindRegistry";
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
+import { consultPanelCloseGuards, hasPanelCloseGuard } from "@/services/panelCloseGuard";
 import { isPtyPanel } from "@shared/types/panel";
 import { actionService } from "@/services/ActionService";
 import { fireWatchNotification } from "@/lib/watchNotification";
@@ -382,17 +382,30 @@ function PanelHeaderComponent({
   const hasPty = panelKindHasPty(kind);
   const isHibernated = useIsHibernated(id);
 
+  // Read from the subscribed snapshot, not the registry helpers: a plugin
+  // registering, dropping or re-flagging its kind has to reach this header.
+  const panelKindRegistry = useSyncExternalStore(
+    subscribeToPanelKindRegistry,
+    getPanelKindRegistrySnapshot,
+    getPanelKindRegistrySnapshot
+  );
+  const kindCapabilities = readPanelKindMenuCapabilities(panelKindRegistry, kind);
+
   // Whether the overflow "..." menu has any items to show.
   // Dock membership is capability-gated by the registry: kinds are dockable by
   // default and a handful opt out with `dockable: false` (#10985, #11917).
   // Offering the affordance for an opted-out kind would silently strand it.
   const showMoveToDock =
-    !!onMinimize && !isMaximized && location !== "dock" && panelKindIsDockable(kind);
+    !!onMinimize && !isMaximized && location !== "dock" && kindCapabilities.isDockable;
   const hasOverflowItems = true;
 
   // The panel's own worktree, not the selected one: a panel can sit in a
   // worktree other than the one the sidebar has active.
   const currentWorktreeId = usePanelStore((state) => state.panelsById[id]?.worktreeId);
+  // The kind the panel was created as. A PTY-backed plugin panel renders
+  // through TerminalPane, which hands this header "terminal", but only the
+  // stored kind says whether Duplicate has a recipe to run.
+  const storedKind = usePanelStore((state) => state.panelsById[id]?.kind);
   // A count, not the worktree list, so a poll that changes nothing but a
   // worktree's status doesn't re-render every header. Counted against the live
   // map rather than as `size > 1`: a panel whose worktree has already gone
@@ -455,14 +468,6 @@ function PanelHeaderComponent({
     [id]
   );
 
-  // Read from the subscribed snapshot, not the registry helpers: a plugin
-  // registering or dropping its kind has to reach this menu.
-  const panelKindRegistry = useSyncExternalStore(
-    subscribeToPanelKindRegistry,
-    getPanelKindRegistrySnapshot,
-    getPanelKindRegistrySnapshot
-  );
-  const kindCapabilities = readPanelKindMenuCapabilities(panelKindRegistry, kind);
   // The same list the right-click menu renders for these kinds (#12606), so
   // the two menus offer one set of panel commands.
   const genericMenuGroups = hasGenericPanelMenu(kind, kindCapabilities.hasPty)
@@ -476,6 +481,15 @@ function PanelHeaderComponent({
   const handleGenericMenuCommand = (commandId: GenericPanelMenuCommandId) => {
     if (commandId === "move-to-worktree") {
       handleMoveToWorktreeSelect();
+      return;
+    }
+    if (commandId === "kill" && hasPanelCloseGuard(id)) {
+      // Removing skips the trash, not the unsaved-work prompt (#12323).
+      const panelId = id;
+      void consultPanelCloseGuards([panelId]).then((proceed) => {
+        if (!proceed) return;
+        void actionService.dispatch("terminal.kill", { terminalId: panelId }, { source: "menu" });
+      });
       return;
     }
     void actionService.dispatch(
@@ -1444,7 +1458,7 @@ function PanelHeaderComponent({
                     <Pencil className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                     Rename
                   </DropdownMenuItem>
-                  {canDuplicatePanelKind(kind) && (
+                  {canDuplicatePanelKind(storedKind ?? kind) && (
                     <DropdownMenuItem
                       onSelect={() =>
                         void actionService.dispatch(

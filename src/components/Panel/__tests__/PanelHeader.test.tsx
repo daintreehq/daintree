@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, fireEvent } from "@testing-library/react";
+import { act, cleanup, render, screen, fireEvent } from "@testing-library/react";
 import { PanelHeader } from "../PanelHeader";
 import type { PanelHeaderProps } from "../PanelHeader";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
@@ -10,6 +10,10 @@ import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getGenericPanelMenuGroups, type GenericPanelMenuInput } from "../genericPanelMenu";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
+import {
+  __resetPanelCloseGuardsForTests,
+  registerPanelCloseGuard,
+} from "@/services/panelCloseGuard";
 
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
@@ -45,11 +49,12 @@ vi.mock("framer-motion", () => {
 });
 
 let mockHiddenTabIds: ReadonlySet<string> = new Set();
+let mockKeybindingDisplays: Record<string, string> = {};
 
 vi.mock("@/hooks", () => ({
   useBackgroundPanelStats: () => ({ activeCount: 0, workingCount: 0 }),
   useTabOverflow: () => mockHiddenTabIds,
-  useKeybindingDisplay: () => "",
+  useKeybindingDisplay: (actionId: string) => mockKeybindingDisplays[actionId] ?? "",
   // Sentinel so tests can prove the close button's aria-keyshortcuts is present
   // on grid but omitted on dock. Only terminal.close resolves — keeps other
   // buttons (maximize, etc.) shortcut-less so unrelated tests are unaffected.
@@ -256,6 +261,7 @@ describe("PanelHeader", () => {
     mockCanRestart = false;
     mockIsDockable = true;
     mockHiddenTabIds = new Set();
+    mockKeybindingDisplays = {};
     mockStoreState = {
       watchedPanels: new Set<string>(),
       watchPanel: mockWatchPanel,
@@ -958,22 +964,49 @@ describe("PanelHeader", () => {
       });
     }
 
+    function storePanelKind(kind: string) {
+      mockStoreState = {
+        ...mockStoreState,
+        panelsById: { "test-panel": { id: "test-panel", kind, worktreeId: "w-a" } },
+      };
+    }
+
     afterEach(() => {
+      // Unmounted first: dropping a kind while a header still listens would
+      // notify it outside act().
+      cleanup();
       unregisterPanelKind(PLUGIN_KIND);
       unregisterPanelKind(PTY_PLUGIN_KIND);
+      __resetPanelCloseGuardsForTests();
     });
 
-    const menuLabels = () =>
+    type Row = "---" | { label: string; disabled: boolean; destructive: boolean };
+
+    /** A row's label: all of its text but the shortcut hint. */
+    const rowLabel = (node: Element) =>
+      Array.from(node.childNodes)
+        .filter((child) => !(child instanceof Element && child.tagName === "KBD"))
+        .map((child) => child.textContent ?? "")
+        .join("")
+        .trim();
+
+    const menuRows = (): Row[] =>
       Array.from(screen.getByTestId("overflow-menu").querySelectorAll("button, hr")).map((node) =>
-        node.tagName === "HR" ? "---" : (node.textContent?.trim() ?? "")
+        node.tagName === "HR"
+          ? "---"
+          : {
+              label: rowLabel(node),
+              disabled: node.hasAttribute("disabled"),
+              destructive: node.hasAttribute("data-destructive"),
+            }
       );
     const findMenuButton = (label: string) =>
       Array.from(screen.getByTestId("overflow-menu").querySelectorAll("button")).find(
-        (btn) => btn.textContent?.trim() === label
+        (btn) => rowLabel(btn) === label
       );
 
-    /** The shared list, with a rule where the menu draws a separator. */
-    const sharedLabels = (input: Partial<GenericPanelMenuInput> = {}) =>
+    /** The shared list, drawn the way the menu should draw it. */
+    const sharedRows = (input: Partial<GenericPanelMenuInput> = {}): Row[] =>
       getGenericPanelMenuGroups({
         location: "grid",
         isMaximized: false,
@@ -981,24 +1014,51 @@ describe("PanelHeader", () => {
         canMoveToWorktree: false,
         ...input,
       }).flatMap((group, index) => [
-        ...(index > 0 ? ["---"] : []),
-        ...group.map((command) => command.label),
+        ...(index > 0 ? ["---" as const] : []),
+        ...group.map((command) => ({
+          label: command.label,
+          disabled: command.disabled ?? false,
+          destructive: command.destructive ?? false,
+        })),
       ]);
 
-    it("renders the shared list verbatim for a plugin panel", () => {
+    /** The registry's own answer, not the mocked one the header's other items read. */
+    async function isDockableInRegistry(kind: string) {
+      const registry = await vi.importActual<typeof import("@shared/config/panelKindRegistry")>(
+        "@shared/config/panelKindRegistry"
+      );
+      return registry.panelKindIsDockable(kind);
+    }
+
+    it("renders the shared list for a plugin panel, row for row", () => {
       registerPluginKind(PLUGIN_KIND);
       render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
 
-      expect(menuLabels()).toEqual(sharedLabels());
+      expect(menuRows()).toEqual(sharedRows());
       // Positive presence, so two empty lists can't agree.
-      expect(menuLabels()).toContain("Remove panel");
+      expect(findMenuButton("Remove panel")).toBeDefined();
     });
 
-    it("renders it for a panel whose plugin has gone missing", () => {
+    it("renders it for a panel whose plugin has gone missing", async () => {
       render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
 
-      // Unregistered, so the dock can't render it either.
-      expect(menuLabels()).toEqual(sharedLabels({ isDockable: false }));
+      expect(menuRows()).toEqual(
+        sharedRows({ isDockable: await isDockableInRegistry(PLUGIN_KIND) })
+      );
+    });
+
+    it("disables Move to dock for a plugin kind the dock cannot render", async () => {
+      registerPluginKind(PLUGIN_KIND, { dockable: false });
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+
+      expect(menuRows()).toEqual(sharedRows({ isDockable: false }));
+      expect(await isDockableInRegistry(PLUGIN_KIND)).toBe(false);
+    });
+
+    it.each(["file", "file-browser", "diff"])("gives %s panels the same list", async (kind) => {
+      render(<PanelHeader {...makeProps({ kind })} />);
+
+      expect(menuRows()).toEqual(sharedRows({ isDockable: await isDockableInRegistry(kind) }));
     });
 
     it.each(["Duplicate", "Rename", "Trash"])("never offers the generic %s", (label) => {
@@ -1008,67 +1068,68 @@ describe("PanelHeader", () => {
       expect(findMenuButton(label)).toBeUndefined();
     });
 
-    it.each(["file", "file-browser", "diff"])("gives %s panels the same list", (kind) => {
-      render(<PanelHeader {...makeProps({ kind })} />);
-
-      expect(menuLabels()).toEqual(sharedLabels());
-    });
-
-    it("leads with Move to worktree… and opens the picker from it", () => {
+    it("leads with the worktree move and opens the picker from it", () => {
       registerPluginKind(PLUGIN_KIND);
-      mockStoreState = {
-        ...mockStoreState,
-        panelsById: { "test-panel": { id: "test-panel", worktreeId: "w-a" } },
-      };
+      storePanelKind(PLUGIN_KIND);
       mockWorktreeIds = ["w-a", "w-b"];
       render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
 
-      expect(menuLabels()).toEqual(sharedLabels({ canMoveToWorktree: true }));
-      fireEvent.click(findMenuButton("Move to worktree…")!);
+      expect(menuRows()).toEqual(sharedRows({ canMoveToWorktree: true }));
+      const moveLabel = getGenericPanelMenuGroups({
+        location: "grid",
+        isMaximized: false,
+        isDockable: true,
+        canMoveToWorktree: true,
+      })
+        .flat()
+        .find((command) => command.id === "move-to-worktree")!.label;
+      fireEvent.click(findMenuButton(moveLabel)!);
       const closeEvent = new Event("closeAutoFocus", { cancelable: true });
       act(() => mockMenuCloseAutoFocus?.(closeEvent));
       expect(document.querySelector('[role="dialog"][aria-label="Move to worktree"]')).toBeTruthy();
       expect(mockDispatch).not.toHaveBeenCalled();
     });
 
-    it("offers Restore on a maximized panel and Move to grid in the dock", () => {
+    it("follows maximize and dock placement", () => {
       registerPluginKind(PLUGIN_KIND);
       const { unmount } = render(
         <PanelHeader {...makeProps({ kind: PLUGIN_KIND, isMaximized: true })} />
       );
-      expect(menuLabels()).toEqual(sharedLabels({ isMaximized: true }));
+      expect(menuRows()).toEqual(sharedRows({ isMaximized: true }));
       unmount();
 
       render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND, location: "dock" })} />);
-      expect(menuLabels()).toEqual(sharedLabels({ location: "dock" }));
+      expect(menuRows()).toEqual(sharedRows({ location: "dock" }));
     });
 
-    it("disables Move to dock for a kind the dock cannot render", () => {
-      registerPluginKind(PLUGIN_KIND, { dockable: false });
-      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
-
-      expect(findMenuButton("Move to dock")?.hasAttribute("disabled")).toBe(true);
-    });
-
-    it("marks only Remove panel destructive", () => {
+    it("shows the maximize keybinding on the maximize row alone", () => {
       registerPluginKind(PLUGIN_KIND);
+      mockKeybindingDisplays = { "terminal.maximize": "⌃⇧F" };
       render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
 
-      const destructive = Array.from(
-        screen.getByTestId("overflow-menu").querySelectorAll("[data-destructive]")
-      ).map((node) => node.textContent?.trim());
-      expect(destructive).toEqual(["Remove panel"]);
+      const hints = Array.from(
+        screen.getByTestId("overflow-menu").querySelectorAll("button kbd")
+      ).map((kbd) => [rowLabel(kbd.closest("button")!), kbd.textContent]);
+      const maximize = getGenericPanelMenuGroups({
+        location: "grid",
+        isMaximized: false,
+        isDockable: true,
+        canMoveToWorktree: false,
+      })
+        .flat()
+        .find((command) => command.shortcutActionId === "terminal.maximize")!;
+      expect(hints).toEqual([[maximize.label, "⌃⇧F"]]);
     });
 
     it.each([
-      ["Move to dock", "terminal.moveToDock", "grid"],
-      ["Maximize", "terminal.toggleMaximize", "grid"],
-      ["Move to grid", "terminal.moveToGrid", "dock"],
-      ["Rename panel", "terminal.rename", "grid"],
-      ["Send to background", "terminal.background", "grid"],
-      ["Trash panel", "terminal.trash", "grid"],
-      ["Remove panel", "terminal.kill", "grid"],
-    ] as const)("routes %s to %s for this panel", (label, actionId, location) => {
+      ["move-to-dock", "terminal.moveToDock", "grid"],
+      ["toggle-maximize", "terminal.toggleMaximize", "grid"],
+      ["move-to-grid", "terminal.moveToGrid", "dock"],
+      ["rename", "terminal.rename", "grid"],
+      ["background", "terminal.background", "grid"],
+      ["trash", "terminal.trash", "grid"],
+      ["kill", "terminal.kill", "grid"],
+    ] as const)("routes %s to %s for this panel", (commandId, actionId, location) => {
       registerPluginKind(PLUGIN_KIND);
       // Another panel holds focus: the command still names this one.
       mockStoreState = { ...mockStoreState, focusedId: "other-panel" };
@@ -1080,8 +1141,16 @@ describe("PanelHeader", () => {
           {...makeProps({ kind: PLUGIN_KIND, location, onRestore, onMinimize, onToggleMaximize })}
         />
       );
+      const command = getGenericPanelMenuGroups({
+        location,
+        isMaximized: false,
+        isDockable: true,
+        canMoveToWorktree: false,
+      })
+        .flat()
+        .find((entry) => entry.id === commandId)!;
 
-      findMenuButton(label)!.click();
+      findMenuButton(command.label)!.click();
 
       expect(mockDispatch).toHaveBeenCalledTimes(1);
       expect(mockDispatch).toHaveBeenCalledWith(
@@ -1094,32 +1163,65 @@ describe("PanelHeader", () => {
       expect(onToggleMaximize).not.toHaveBeenCalled();
     });
 
-    it("keeps a PTY-backed plugin kind on the terminal menu, without a dead Duplicate", () => {
-      registerPluginKind(PTY_PLUGIN_KIND, { hasPty: true });
-      render(<PanelHeader {...makeProps({ kind: PTY_PLUGIN_KIND })} />);
+    it("asks a panel holding unsaved work before removing it", async () => {
+      registerPluginKind(PLUGIN_KIND);
+      let verdict: "proceed" | "cancel" = "cancel";
+      const guard = vi.fn(async () => verdict);
+      registerPanelCloseGuard("test-panel", guard);
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
 
-      expect(findMenuButton("Rename")).toBeDefined();
+      findMenuButton("Remove panel")!.click();
+      await act(async () => {});
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).not.toHaveBeenCalled();
+
+      verdict = "proceed";
+      findMenuButton("Remove panel")!.click();
+      await act(async () => {});
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "terminal.kill",
+        { terminalId: "test-panel" },
+        { source: "menu" }
+      );
+    });
+
+    it("keeps a PTY-backed plugin panel on the terminal menu, without a dead Duplicate", () => {
+      // TerminalPane hands the header "terminal"; the store keeps the real kind.
+      registerPluginKind(PTY_PLUGIN_KIND, { hasPty: true });
+      mockHasPty = true;
+      storePanelKind(PTY_PLUGIN_KIND);
+      render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+
+      expect(findMenuButton("Redraw")).toBeDefined();
+      expect(findMenuButton("Lock input")).toBeDefined();
       expect(findMenuButton("Rename panel")).toBeUndefined();
       expect(findMenuButton("Duplicate")).toBeUndefined();
     });
 
-    it("switches menus when the plugin registers its kind after the header mounted", () => {
+    it("switches to the terminal menu when the plugin registers its kind after mount", () => {
+      mockHasPty = true;
+      storePanelKind(PTY_PLUGIN_KIND);
       render(<PanelHeader {...makeProps({ kind: PTY_PLUGIN_KIND })} />);
       expect(findMenuButton("Rename panel")).toBeDefined();
+      expect(findMenuButton("Redraw")).toBeUndefined();
 
       act(() => registerPluginKind(PTY_PLUGIN_KIND, { hasPty: true }));
 
       expect(findMenuButton("Rename panel")).toBeUndefined();
-      expect(findMenuButton("Rename")).toBeDefined();
+      expect(findMenuButton("Redraw")).toBeDefined();
+      expect(findMenuButton("Duplicate")).toBeUndefined();
     });
 
-    it("leaves a browser panel's menu alone", () => {
-      render(<PanelHeader {...makeProps({ kind: "browser" })} />);
+    it.each(["terminal", "browser", "dev-preview", "review"])(
+      "keeps Duplicate on a %s panel, which has a recipe for it",
+      (kind) => {
+        storePanelKind(kind);
+        render(<PanelHeader {...makeProps({ kind })} />);
 
-      expect(findMenuButton("Rename")).toBeDefined();
-      expect(findMenuButton("Duplicate")).toBeDefined();
-      expect(findMenuButton("Rename panel")).toBeUndefined();
-    });
+        expect(findMenuButton("Duplicate")).toBeDefined();
+        expect(findMenuButton("Rename panel")).toBeUndefined();
+      }
+    );
   });
 
   describe("Maximize tooltip", () => {

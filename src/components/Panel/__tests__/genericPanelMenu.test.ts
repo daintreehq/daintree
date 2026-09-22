@@ -8,6 +8,7 @@ import {
 } from "@shared/config/panelKindRegistry";
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
 import {
+  GENERIC_PANEL_MENU_ACTION_IDS,
   getGenericPanelMenuGroups,
   hasGenericPanelMenu,
   readPanelKindMenuCapabilities,
@@ -41,9 +42,6 @@ function groups(input: Partial<GenericPanelMenuInput> = {}) {
     ...input,
   });
 }
-
-const labels = (input: Partial<GenericPanelMenuInput> = {}) =>
-  groups(input).map((group) => group.map((command) => command.label));
 
 afterEach(() => {
   unregisterPanelKind(PTY_PLUGIN_KIND);
@@ -119,28 +117,57 @@ describe("hasGenericPanelMenu", () => {
 });
 
 describe("getGenericPanelMenuGroups", () => {
-  it("lists a grid panel's commands in order, grouped", () => {
-    expect(labels()).toEqual([
-      ["Move to worktree…", "Move to dock", "Maximize"],
-      ["Rename panel"],
-      ["Send to background", "Trash panel", "Remove panel"],
-    ]);
+  const ids = (input: Partial<GenericPanelMenuInput> = {}) =>
+    groups(input).map((group) => group.map((command) => command.id));
+
+  const LAYOUT_INPUTS: Array<Partial<GenericPanelMenuInput>> = [
+    {},
+    { location: "dock" },
+    { isMaximized: true },
+    { isDockable: false },
+    { canMoveToWorktree: false },
+    { location: "dock", canMoveToWorktree: false },
+  ];
+
+  it("changes only the layout group with where the panel sits", () => {
+    const [, ...rest] = groups();
+    for (const input of LAYOUT_INPUTS) {
+      expect(groups(input).slice(1)).toEqual(rest);
+    }
   });
 
-  it("offers Restore in place of Maximize on a maximized panel", () => {
-    expect(labels({ isMaximized: true })[0]).toEqual([
-      "Move to worktree…",
-      "Move to dock",
-      "Restore",
-    ]);
+  it("offers Move to worktree only when there is somewhere to go, and leads with it", () => {
+    expect(ids({ canMoveToWorktree: true })[0]?.[0]).toBe("move-to-worktree");
+    expect(ids({ canMoveToWorktree: false }).flat()).not.toContain("move-to-worktree");
   });
 
-  it("offers Move to grid and no maximize in the dock", () => {
-    expect(labels({ location: "dock" })[0]).toEqual(["Move to worktree…", "Move to grid"]);
+  it("moves a grid panel to the dock or maximizes it, and a docked one only to the grid", () => {
+    const grid = ids({ canMoveToWorktree: false })[0];
+    const dock = ids({ location: "dock", canMoveToWorktree: false })[0];
+
+    expect(grid).toEqual(["move-to-dock", "toggle-maximize"]);
+    expect(dock).toEqual(["move-to-grid"]);
   });
 
-  it("drops Move to worktree when there is nowhere to move to", () => {
-    expect(labels({ canMoveToWorktree: false })[0]).toEqual(["Move to dock", "Maximize"]);
+  it("names the maximize command for what it will do", () => {
+    const toggle = (isMaximized: boolean) =>
+      groups({ isMaximized })
+        .flat()
+        .find((command) => command.id === "toggle-maximize")!;
+
+    expect(toggle(true).label).not.toBe(toggle(false).label);
+    expect(toggle(true).icon).not.toBe(toggle(false).icon);
+    expect(toggle(true).shortcutActionId).toBe(toggle(false).shortcutActionId);
+  });
+
+  it("gives a shortcut to the maximize command alone", () => {
+    for (const input of LAYOUT_INPUTS) {
+      const withShortcut = groups(input)
+        .flat()
+        .filter((command) => command.shortcutActionId !== undefined)
+        .map((command) => command.id);
+      expect(withShortcut).toEqual(input.location === "dock" ? [] : ["toggle-maximize"]);
+    }
   });
 
   it("disables only Move to dock, and only for a kind the dock cannot render", () => {
@@ -154,31 +181,28 @@ describe("getGenericPanelMenuGroups", () => {
     expect(disabled(true)).toEqual([]);
   });
 
-  it("marks only Remove panel destructive", () => {
-    const destructive = groups()
-      .flat()
-      .filter((command) => command.destructive)
-      .map((command) => command.label);
-    expect(destructive).toEqual(["Remove panel"]);
-  });
+  it("ends on its one destructive command", () => {
+    const all = groups().flat();
+    const destructive = all.filter((command) => command.destructive);
 
-  it("shows the maximize keybinding on Maximize and Restore alike", () => {
-    for (const isMaximized of [false, true]) {
-      const withShortcut = groups({ isMaximized })
-        .flat()
-        .filter((command) => command.shortcutActionId !== undefined)
-        .map((command) => [command.id, command.shortcutActionId]);
-      expect(withShortcut).toEqual([["toggle-maximize", "terminal.maximize"]]);
-    }
+    expect(destructive).toHaveLength(1);
+    expect(all.at(-1)).toBe(destructive[0]);
   });
 
   it("never repeats a command or leaves a group empty", () => {
-    for (const location of ["grid", "dock"] as const) {
-      for (const canMoveToWorktree of [false, true]) {
-        const result = groups({ location, canMoveToWorktree });
-        const ids = result.flat().map((command) => command.id);
-        expect(new Set(ids).size).toBe(ids.length);
-        expect(result.every((group) => group.length > 0)).toBe(true);
+    for (const input of LAYOUT_INPUTS) {
+      const result = groups(input);
+      const all = result.flat().map((command) => command.id);
+      expect(new Set(all).size).toBe(all.length);
+      expect(result.every((group) => group.length > 0)).toBe(true);
+    }
+  });
+
+  it("gives every command but the worktree move an action to dispatch", () => {
+    for (const input of LAYOUT_INPUTS) {
+      for (const command of groups(input).flat()) {
+        if (command.id === "move-to-worktree") continue;
+        expect(GENERIC_PANEL_MENU_ACTION_IDS[command.id]).toBeDefined();
       }
     }
   });

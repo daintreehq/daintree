@@ -107,6 +107,7 @@ vi.mock("../TerminalHandOver", () => ({
 }));
 
 import { TerminalContextMenu } from "../TerminalContextMenu";
+import { getGenericPanelMenuGroups } from "@/components/Panel/genericPanelMenu";
 
 // Radix schedules its focus return on a zero-delay timer after the content
 // unmounts, and arms outside-press listeners a tick after mounting.
@@ -130,10 +131,10 @@ function renderPane() {
 }
 
 /** Right-click `target`, then walk into the submenu and pick More from the keyboard. */
-async function openPickerFromMenu(target: HTMLElement) {
+async function openPickerFromMenu(target: HTMLElement, submenuName = "Move to worktree") {
   act(() => target.focus());
   fireEvent.contextMenu(target, { clientX: 24, clientY: 24 });
-  const submenu = await screen.findByRole("menuitem", { name: /^Move to worktree$/ });
+  const submenu = await screen.findByRole("menuitem", { name: submenuName });
   act(() => submenu.focus());
   fireEvent.keyDown(submenu, { key: "ArrowRight" });
   const more = await screen.findByRole("menuitem", { name: "More worktrees…" });
@@ -146,9 +147,12 @@ beforeAll(async () => {
   await primeRadix();
 });
 
+const shellPanel = panelsById.current["panel-1"];
+
 beforeEach(() => {
   dispatchMock.mockReset();
   _resetTooltipFocusSuppressionForTests();
+  panelsById.current = { "panel-1": shellPanel };
 });
 
 // A picker or dock preview left open unmounts here, and Radix runs its focus
@@ -199,6 +203,37 @@ describe("TerminalContextMenu More worktrees…, through the real overlays", () 
     await settle();
     expect(paneFocus).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(document.body);
+  });
+
+  it("hands a plugin panel's worktree move to the picker (#12606)", async () => {
+    panelsById.current = {
+      "panel-1": {
+        id: "panel-1",
+        title: "Dashboard",
+        kind: "acme.dashboard",
+        pluginId: "acme",
+        worktreeId: "w-main",
+      },
+    };
+    const moveCommand = getGenericPanelMenuGroups({
+      location: "grid",
+      isMaximized: false,
+      isDockable: false,
+      canMoveToWorktree: true,
+    })
+      .flat()
+      .find((command) => command.id === "move-to-worktree")!;
+    const pane = renderPane();
+
+    await openPickerFromMenu(pane, moveCommand.label);
+    await waitFor(() => expect(document.activeElement).toBe(searchField()));
+    fireEvent.keyDown(searchField()!, { key: "Enter" });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "terminal.moveToWorktree",
+      { terminalId: "panel-1", worktreeId: "w-0" },
+      { source: "menu" }
+    );
   });
 
   it("moves the panel from the picker", async () => {

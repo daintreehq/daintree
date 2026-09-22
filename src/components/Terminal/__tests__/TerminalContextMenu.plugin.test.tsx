@@ -38,13 +38,15 @@ vi.mock("@/components/ui/context-menu", () => {
   return {
     ContextMenu: Passthrough,
     ContextMenuTrigger: Passthrough,
-    ContextMenuContent: Passthrough,
+    ContextMenuContent: ({ children }: { children?: React.ReactNode }) => (
+      <div data-testid="context-menu-content">{children}</div>
+    ),
     ContextMenuItem: Item,
     ContextMenuActionItem: Item,
     ContextMenuCheckboxItem: Item,
     ContextMenuRadioGroup: Passthrough,
     ContextMenuRadioItem: Item,
-    ContextMenuSeparator: () => null,
+    ContextMenuSeparator: () => <hr />,
     ContextMenuLabel: Passthrough,
     ContextMenuShortcut: ({ children }: { children?: React.ReactNode }) => <kbd>{children}</kbd>,
     ContextMenuGroup: Passthrough,
@@ -103,32 +105,58 @@ vi.mock("@/store/fleetArmingStore", () => ({
 }));
 
 const panelsById = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
+const layoutState = vi.hoisted(() => ({
+  current: {
+    maximizeTarget: null as { type: "panel" | "group"; id: string } | null,
+    group: undefined as { id: string; panelIds: string[] } | undefined,
+  },
+}));
 
 vi.mock("@/store", () => ({
   usePanelStore: (
     selector: (s: {
       panelsById: Record<string, unknown>;
-      maximizeTarget: null;
-      getPanelGroup: () => undefined;
+      maximizeTarget: { type: "panel" | "group"; id: string } | null;
+      getPanelGroup: () => { id: string; panelIds: string[] } | undefined;
       watchedPanels: Set<string>;
     }) => unknown
   ) =>
     selector({
       panelsById: panelsById.current,
-      maximizeTarget: null,
-      getPanelGroup: () => undefined,
+      maximizeTarget: layoutState.current.maximizeTarget,
+      getPanelGroup: () => layoutState.current.group,
       watchedPanels: new Set<string>(),
     }),
 }));
 
-import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
+const keybindingDisplays = vi.hoisted(() => ({ current: {} as Record<string, string> }));
+
+vi.mock("@/hooks/useKeybinding", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useKeybinding")>()),
+  useKeybindingDisplay: (actionId: string) => keybindingDisplays.current[actionId] ?? "",
+}));
+
+import {
+  panelKindIsDockable,
+  registerPanelKind,
+  unregisterPanelKind,
+} from "@shared/config/panelKindRegistry";
+import type { PanelLocation } from "@/types";
 import { TerminalContextMenu } from "../TerminalContextMenu";
-import { getGenericPanelMenuGroups } from "@/components/Panel/genericPanelMenu";
+import {
+  getGenericPanelMenuGroups,
+  type GenericPanelMenuInput,
+} from "@/components/Panel/genericPanelMenu";
+import {
+  __resetPanelCloseGuardsForTests,
+  registerPanelCloseGuard,
+} from "@/services/panelCloseGuard";
 
 // A PTY-backed plugin kind. Registered so the real `panelKindHasPty` reports
 // `hasPty: true` for it, which is what keeps such a panel on the terminal menu
 // despite carrying a `pluginId`.
 const PTY_PLUGIN_KIND = "acme.shell";
+const VIEW_PLUGIN_KIND = "acme.dashboard";
 
 // Terminal-only labels that must never reach a plugin panel. "Rename terminal"
 // and "Trash terminal" are the sharp ones: the generic branch offers its own
@@ -144,43 +172,113 @@ const TERMINAL_ONLY_LABELS = [
 
 const GENERIC_PANEL_LABELS = ["Rename panel", "Send to background", "Trash panel", "Remove panel"];
 
-/** A row's own label: its text, without the icon or the shortcut hint. */
-function ownText(node: Element): string {
+type Row = "---" | { label: string; disabled: boolean; destructive: boolean };
+
+/** A row's label: all of its text but the shortcut hint. */
+function rowLabel(node: Element): string {
   return Array.from(node.childNodes)
-    .filter((child) => child.nodeType === Node.TEXT_NODE)
-    .map((child) => child.textContent)
+    .filter((child) => !(child instanceof Element && child.tagName === "KBD"))
+    .map((child) => child.textContent ?? "")
     .join("")
     .trim();
 }
 
-/** The menu's command rows in order, submenu triggers included. */
-function commandLabels(): string[] {
-  return Array.from(document.querySelectorAll("button, [data-subtrigger]")).map(ownText);
+/** The menu's rows in order, submenu triggers and separators included. */
+function menuRows(): Row[] {
+  return Array.from(
+    screen.getByTestId("context-menu-content").querySelectorAll("button, [data-subtrigger], hr")
+  ).map((node) =>
+    node.tagName === "HR"
+      ? "---"
+      : {
+          label: rowLabel(node),
+          disabled: node.hasAttribute("disabled"),
+          destructive: node.hasAttribute("data-destructive"),
+        }
+  );
 }
 
-function renderMenuFor(panel: Record<string, unknown>) {
+/** The shared list, drawn the way the menu should draw it. */
+function sharedRows(input: Partial<GenericPanelMenuInput> = {}): Row[] {
+  return getGenericPanelMenuGroups({
+    location: "grid",
+    isMaximized: false,
+    isDockable: true,
+    canMoveToWorktree: false,
+    ...input,
+  }).flatMap((group, index) => [
+    ...(index > 0 ? ["---" as const] : []),
+    ...group.map((command) => ({
+      label: command.label,
+      disabled: command.disabled ?? false,
+      destructive: command.destructive ?? false,
+    })),
+  ]);
+}
+
+function commandLabel(input: Partial<GenericPanelMenuInput>, id: string): string {
+  const command = getGenericPanelMenuGroups({
+    location: "grid",
+    isMaximized: false,
+    isDockable: true,
+    canMoveToWorktree: false,
+    ...input,
+  })
+    .flat()
+    .find((entry) => entry.id === id);
+  if (!command) throw new Error(`no ${id} command`);
+  return command.label;
+}
+
+function findRow(label: string): HTMLButtonElement | undefined {
+  return Array.from(screen.getByTestId("context-menu-content").querySelectorAll("button")).find(
+    (button) => rowLabel(button) === label
+  );
+}
+
+function renderMenuFor(panel: Record<string, unknown>, forceLocation?: PanelLocation) {
   panelsById.current = { "panel-1": panel };
   return render(
-    <TerminalContextMenu terminalId="panel-1">
+    <TerminalContextMenu terminalId="panel-1" forceLocation={forceLocation}>
       <div>Panel body</div>
     </TerminalContextMenu>
   );
 }
 
+function registerPluginKind(id: string, options: { hasPty?: boolean; dockable?: boolean } = {}) {
+  registerPanelKind({
+    id,
+    name: id,
+    iconId: "terminal",
+    color: "#abcdef",
+    hasPty: options.hasPty ?? false,
+    canRestart: options.hasPty ?? false,
+    canConvert: false,
+    extensionId: "acme",
+    ...(options.dockable !== undefined ? { dockable: options.dockable } : {}),
+  });
+}
+
 const pluginPanel = {
   id: "panel-1",
   title: "Dashboard",
-  kind: "acme.dashboard",
+  kind: VIEW_PLUGIN_KIND,
   pluginId: "acme",
   worktreeId: "wt-1",
 };
 
 describe("TerminalContextMenu — plugin panels (#11228)", () => {
   afterEach(() => {
+    // Unmounted first: dropping a kind while the menu still listens would
+    // notify it outside act().
     cleanup();
     dispatch.mockReset();
     worktreeList.current = [];
+    layoutState.current = { maximizeTarget: null, group: undefined };
+    keybindingDisplays.current = {};
     unregisterPanelKind(PTY_PLUGIN_KIND);
+    unregisterPanelKind(VIEW_PLUGIN_KIND);
+    __resetPanelCloseGuardsForTests();
   });
 
   it.each(GENERIC_PANEL_LABELS)("offers %s on a plugin panel", (label) => {
@@ -209,76 +307,121 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     expect(args).toMatchObject({ terminalId: "panel-1" });
   });
 
-  it("lists the shared panel commands verbatim, in the shared order (#12606)", () => {
+  it("draws the shared list row for row, the worktree move first (#12606)", () => {
     // The header's overflow menu is held to this same list; asserting both
     // against it is what keeps the two menus from drifting apart again.
+    registerPluginKind(VIEW_PLUGIN_KIND);
     worktreeList.current = [
       { id: "wt-1", path: "/repo", name: "main" },
       { id: "wt-2", path: "/repo-feature", name: "feature" },
     ];
     renderMenuFor(pluginPanel);
 
-    const expected = getGenericPanelMenuGroups({
-      location: "grid",
-      isMaximized: false,
-      // Unregistered here, so the dock can't render it.
-      isDockable: false,
-      canMoveToWorktree: true,
-    })
-      .flat()
-      .map((command) => command.label);
-    expect(commandLabels()).toEqual(expected);
-    expect(commandLabels()).toContain("Move to worktree…");
-    expect(commandLabels()).not.toContain("Duplicate panel");
-  });
-
-  it("disables Move to dock and marks only Remove panel destructive", () => {
-    renderMenuFor(pluginPanel);
-
-    const row = (label: string) =>
-      Array.from(document.querySelectorAll("button")).find((button) => ownText(button) === label);
-    expect(row("Move to dock")?.disabled).toBe(true);
-    expect(
-      Array.from(document.querySelectorAll("[data-destructive]")).map((node) => ownText(node))
-    ).toEqual(["Remove panel"]);
-  });
-
-  it("offers Move to worktree… to a panel whose worktree has gone", () => {
-    worktreeList.current = [{ id: "wt-2", path: "/repo-feature", name: "feature" }];
-    renderMenuFor({ ...pluginPanel, worktreeId: "wt-gone" });
-
-    expect(commandLabels()[0]).toBe("Move to worktree…");
-  });
-
-  it("offers no Move to worktree… when the panel's own worktree is the only one", () => {
-    worktreeList.current = [{ id: "wt-1", path: "/repo", name: "main" }];
-    renderMenuFor(pluginPanel);
-
-    expect(commandLabels()).not.toContain("Move to worktree…");
+    expect(menuRows()).toEqual(
+      sharedRows({ canMoveToWorktree: true, isDockable: panelKindIsDockable(VIEW_PLUGIN_KIND) })
+    );
+    expect(findRow("Remove panel")).toBeDefined();
   });
 
   it.each([
-    ["Maximize", "terminal.toggleMaximize"],
-    ["Send to background", "terminal.background"],
-    ["Remove panel", "terminal.kill"],
-  ])("routes %s to %s for this panel", (label, actionId) => {
-    renderMenuFor(pluginPanel);
+    ["an unregistered plugin", { kind: VIEW_PLUGIN_KIND, pluginId: "acme" }],
+    ["file", { kind: "file", filePath: "/repo/README.md" }],
+    ["file-browser", { kind: "file-browser" }],
+    ["diff", { kind: "diff" }],
+  ] as const)("draws the shared list for %s panels", (_label, fields) => {
+    renderMenuFor({ ...pluginPanel, pluginId: undefined, ...fields });
 
-    screen.getByText(label).click();
-
-    expect(dispatch).toHaveBeenCalledTimes(1);
-    const [calledId, args] = dispatch.mock.calls[0]!;
-    expect(calledId).toBe(actionId);
-    expect(args).toMatchObject({ terminalId: "panel-1" });
+    expect(menuRows()).toEqual(sharedRows({ isDockable: panelKindIsDockable(fields.kind) }));
   });
 
-  it("offers a docked plugin panel Move to grid", () => {
-    renderMenuFor({ ...pluginPanel, location: "dock" });
+  it("offers the worktree move to a panel whose worktree has gone", () => {
+    worktreeList.current = [{ id: "wt-2", path: "/repo-feature", name: "feature" }];
+    renderMenuFor({ ...pluginPanel, worktreeId: "wt-gone" });
 
-    screen.getByText("Move to grid").click();
+    const moveLabel = commandLabel({ canMoveToWorktree: true }, "move-to-worktree");
+    expect(menuRows()[0]).toEqual({ label: moveLabel, disabled: false, destructive: false });
+  });
 
-    expect(dispatch.mock.calls[0]?.[0]).toBe("terminal.moveToGrid");
-    expect(screen.queryByText("Maximize")).toBeNull();
+  it("offers no worktree move when the panel's own worktree is the only one", () => {
+    worktreeList.current = [{ id: "wt-1", path: "/repo", name: "main" }];
+    renderMenuFor(pluginPanel);
+
+    const moveLabel = commandLabel({ canMoveToWorktree: true }, "move-to-worktree");
+    expect(document.querySelector("[data-subtrigger]")).toBeNull();
+    expect(menuRows()).not.toContainEqual(expect.objectContaining({ label: moveLabel }));
+  });
+
+  it("follows a forced dock location over the stored one", () => {
+    renderMenuFor({ ...pluginPanel, location: "grid" }, "dock");
+
+    expect(menuRows()).toEqual(sharedRows({ location: "dock" }));
+    findRow(commandLabel({ location: "dock" }, "move-to-grid"))!.click();
+    expect(dispatch).toHaveBeenCalledWith(
+      "terminal.moveToGrid",
+      { terminalId: "panel-1" },
+      expect.anything()
+    );
+  });
+
+  it("offers Restore when the panel's tab group is the one maximized", () => {
+    layoutState.current = {
+      maximizeTarget: { type: "group", id: "group-1" },
+      group: { id: "group-1", panelIds: ["panel-2", "panel-1"] },
+    };
+    registerPluginKind(VIEW_PLUGIN_KIND);
+    renderMenuFor(pluginPanel);
+
+    expect(menuRows()).toEqual(sharedRows({ isMaximized: true }));
+  });
+
+  it("shows the maximize keybinding on the maximize row alone", () => {
+    keybindingDisplays.current = { "terminal.maximize": "⌃⇧F" };
+    registerPluginKind(VIEW_PLUGIN_KIND);
+    renderMenuFor(pluginPanel);
+
+    const hints = Array.from(
+      screen.getByTestId("context-menu-content").querySelectorAll("button kbd")
+    ).map((kbd) => [rowLabel(kbd.closest("button")!), kbd.textContent]);
+    expect(hints).toEqual([[commandLabel({}, "toggle-maximize"), "⌃⇧F"]]);
+  });
+
+  it.each([
+    ["move-to-dock", "terminal.moveToDock"],
+    ["toggle-maximize", "terminal.toggleMaximize"],
+    ["rename", "terminal.rename"],
+    ["background", "terminal.background"],
+    ["trash", "terminal.trash"],
+    ["kill", "terminal.kill"],
+  ])("routes %s to %s for this panel", (commandId, actionId) => {
+    registerPluginKind(VIEW_PLUGIN_KIND);
+    renderMenuFor(pluginPanel);
+
+    findRow(commandLabel({}, commandId))!.click();
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith(actionId, { terminalId: "panel-1" }, expect.anything());
+  });
+
+  it("asks a panel holding unsaved work before removing it", async () => {
+    let verdict: "proceed" | "cancel" = "cancel";
+    const guard = vi.fn(async () => verdict);
+    registerPanelCloseGuard("panel-1", guard);
+    renderMenuFor(pluginPanel);
+    const remove = findRow(commandLabel({}, "kill"))!;
+
+    remove.click();
+    await act(async () => {});
+    expect(guard).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalled();
+
+    verdict = "proceed";
+    remove.click();
+    await act(async () => {});
+    expect(dispatch).toHaveBeenCalledWith(
+      "terminal.kill",
+      { terminalId: "panel-1" },
+      expect.anything()
+    );
   });
 
   it("still gives a built-in terminal the terminal menu", () => {
@@ -306,18 +449,7 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     });
     expect(screen.getByText("Rename panel")).toBeTruthy();
 
-    act(() =>
-      registerPanelKind({
-        id: PTY_PLUGIN_KIND,
-        name: "Acme Shell",
-        iconId: "terminal",
-        color: "#abcdef",
-        hasPty: true,
-        canRestart: true,
-        canConvert: false,
-        extensionId: "acme",
-      })
-    );
+    act(() => registerPluginKind(PTY_PLUGIN_KIND, { hasPty: true }));
 
     expect(screen.queryByText("Rename panel")).toBeNull();
     expect(screen.getByText("Rename terminal")).toBeTruthy();
@@ -328,31 +460,18 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     // PTY-backed kind that renders through TerminalPane and is stamped with
     // pluginId. It's a genuine terminal, so keying off pluginId alone would
     // strip its copy/paste/redraw/restart — the regression this guards.
-    registerPanelKind({
-      id: PTY_PLUGIN_KIND,
-      name: "Acme Shell",
-      iconId: "terminal",
-      color: "#abcdef",
-      hasPty: true,
-      canRestart: true,
-      canConvert: false,
-      extensionId: "acme",
+    registerPluginKind(PTY_PLUGIN_KIND, { hasPty: true });
+    renderMenuFor({
+      id: "panel-1",
+      title: "Acme Shell",
+      kind: PTY_PLUGIN_KIND,
+      pluginId: "acme",
+      worktreeId: "wt-1",
     });
-    try {
-      renderMenuFor({
-        id: "panel-1",
-        title: "Acme Shell",
-        kind: PTY_PLUGIN_KIND,
-        pluginId: "acme",
-        worktreeId: "wt-1",
-      });
 
-      expect(screen.queryByText("Rename panel")).toBeNull();
-      expect(screen.getByText("Rename terminal")).toBeTruthy();
-      // Its kind has no duplicate recipe, so a Duplicate here would throw.
-      expect(screen.queryByText("Duplicate terminal")).toBeNull();
-    } finally {
-      unregisterPanelKind(PTY_PLUGIN_KIND);
-    }
+    expect(screen.queryByText("Rename panel")).toBeNull();
+    expect(screen.getByText("Rename terminal")).toBeTruthy();
+    // Its kind has no duplicate recipe, so a Duplicate here would throw.
+    expect(screen.queryByText("Duplicate terminal")).toBeNull();
   });
 });
