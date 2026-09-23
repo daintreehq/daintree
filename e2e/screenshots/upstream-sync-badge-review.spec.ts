@@ -234,7 +234,10 @@ async function snap(
   page: Page,
   slug: string,
   target: Locator,
-  expectText?: string | RegExp
+  expectText?: string | RegExp,
+  // "disabled" finishes a paused animation before the shot, which is right for
+  // every state but the one whose content IS a frozen animation frame.
+  animations: "disabled" | "allow" = "disabled"
 ): Promise<void> {
   await settle(page);
   await expect(target, `"${slug}": target never became visible — refusing to write`).toBeVisible({
@@ -253,7 +256,7 @@ async function snap(
   await target.screenshot({
     path: path.join(OUTPUT_DIR, `${slug}.png`),
     type: "png",
-    animations: "disabled",
+    animations,
     caret: "hide",
   });
   written.add(`${slug}.png`);
@@ -441,7 +444,7 @@ test("upstream sync badge review — states and themes", async () => {
           }
         )
         .toBe(true);
-      await snap(page, "60-flash-trough", cardOf(row(page, B.ahead)), "↑3");
+      await snap(page, "60-flash-trough", cardOf(row(page, B.ahead)), "↑3", "allow");
       await badge.evaluate((el) => el.getAnimations().forEach((a) => a.finish()));
       await page.addStyleTag({ content: POLISH_CSS }).catch(() => {});
     });
