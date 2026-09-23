@@ -14,6 +14,8 @@ export interface SpawnDiagnostics {
 
 export interface DiagnosticCopyButtonProps {
   diagnostics: SpawnDiagnostics;
+  /** The full error message, copied on its own line after the fields but never displayed. */
+  message?: string;
   className?: string;
 }
 
@@ -32,8 +34,14 @@ function formatDiagnostics(diagnostics: SpawnDiagnostics): string {
   return parts.join(" ");
 }
 
-export function DiagnosticCopyButton({ diagnostics, className }: DiagnosticCopyButtonProps) {
+export function DiagnosticCopyButton({
+  diagnostics,
+  message,
+  className,
+}: DiagnosticCopyButtonProps) {
   const payload = formatDiagnostics(diagnostics);
+  const fullMessage = message ? flattenWhitespace(message) : "";
+  const clipboardText = fullMessage ? `${payload}\n${fullMessage}` : payload;
   const [copied, setCopied] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const generationRef = useRef(0);
@@ -58,7 +66,7 @@ export function DiagnosticCopyButton({ diagnostics, className }: DiagnosticCopyB
     if (!payload) return;
     if (!navigator.clipboard?.writeText) return;
     const gen = generationRef.current;
-    void navigator.clipboard.writeText(payload).then(
+    void navigator.clipboard.writeText(clipboardText).then(
       () => {
         if (gen !== generationRef.current) return;
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
@@ -72,7 +80,7 @@ export function DiagnosticCopyButton({ diagnostics, className }: DiagnosticCopyB
         // Clipboard rejected — stay silent.
       }
     );
-  }, [payload]);
+  }, [payload, clipboardText]);
 
   if (!payload) return null;
 

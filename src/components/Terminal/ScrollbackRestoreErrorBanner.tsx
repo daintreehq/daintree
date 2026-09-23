@@ -1,6 +1,6 @@
 import { Clock, FileX2, History, RotateCcw, type LucideIcon } from "lucide-react";
 import { InlineStatusBanner } from "./InlineStatusBanner";
-import { boundedErrorText } from "@/utils/errorText";
+import { sanitizeErrorText } from "@/utils/errorText";
 import type { TerminalScrollbackRestoreError } from "@/types";
 
 export interface ScrollbackRestoreErrorBannerProps {
@@ -47,7 +47,12 @@ export function ScrollbackRestoreErrorBanner({
       icon={config.icon}
       title={config.title}
       description={SCROLLBACK_BANNER_DESCRIPTION}
-      contextLine={(config.showMessage && boundedErrorText(error.message)) || undefined}
+      // Unbounded: the line is one CSS-clipped row whose tooltip holds the
+      // whole message, so the cap that protects the description isn't needed.
+      contextLine={
+        (config.showMessage && sanitizeErrorText(error.message).replace(/\s+/g, " ").trim()) ||
+        undefined
+      }
       severity="warning"
       // Nothing is blocked — the terminal works — so this waits its turn
       // rather than interrupting whatever a screen reader is saying.

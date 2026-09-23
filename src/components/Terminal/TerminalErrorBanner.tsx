@@ -1,4 +1,4 @@
-import { XCircle, RotateCcw, FolderEdit, Trash2 } from "lucide-react";
+import { XCircle, RotateCcw, FolderEdit, Trash2, Copy } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "./InlineStatusBanner";
 import { BannerOverflowMenu } from "./BannerOverflowMenu";
 import { sanitizeErrorText, boundedErrorText } from "@/utils/errorText";
@@ -43,7 +43,6 @@ export function TerminalErrorBanner({
     variant: "primary",
     onClick: () => onUpdateCwd(terminalId),
     title: "Change working directory",
-    ariaLabel: "Update working directory",
     disabled: isRestarting,
   };
   const trashAction: BannerAction = {
@@ -53,8 +52,20 @@ export function TerminalErrorBanner({
     variant: "danger",
     onClick: () => onTrash(terminalId),
     title: "Move to trash",
-    ariaLabel: "Move to trash",
     disabled: isRestarting,
+  };
+
+  // The description is capped at 200 characters, so the menu is where the
+  // whole message can still be had.
+  const fullMessage = sanitizeErrorText(error.message);
+  const copyErrorAction: BannerAction = {
+    id: "copy-error",
+    label: "Copy error",
+    icon: Copy,
+    variant: "dismiss",
+    onClick: () => {
+      void navigator.clipboard?.writeText(fullMessage).catch(() => undefined);
+    },
   };
 
   // Single contextual action: change directory is the specific fix for a
@@ -63,6 +74,7 @@ export function TerminalErrorBanner({
   const primaryAction = canChangeDir ? changeDirAction : retryAction;
   const overflowActions: BannerAction[] = [
     ...(primaryAction.id === retryAction.id ? [] : [retryAction]),
+    ...(fullMessage ? [copyErrorAction] : []),
     trashAction,
   ];
 

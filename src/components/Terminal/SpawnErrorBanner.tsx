@@ -56,7 +56,6 @@ export function SpawnErrorBanner({
     variant: "primary",
     onClick: () => onUpdateCwd(terminalId),
     title: "Change working directory",
-    ariaLabel: "Update working directory",
     disabled: isRestarting,
   };
   const limitsAction: BannerAction = {
@@ -81,7 +80,6 @@ export function SpawnErrorBanner({
     variant: "danger",
     onClick: () => onTrash(terminalId),
     title: "Move to trash",
-    ariaLabel: "Move to trash",
     disabled: isRestarting,
   };
 
@@ -113,6 +111,9 @@ export function SpawnErrorBanner({
               syscall: error.syscall,
               path: error.path,
             }}
+            // The description is capped at 200 characters; the copy is where
+            // the whole message goes, so a clipped cause is never lost.
+            message={error.message}
           />
         ) : undefined
       }
