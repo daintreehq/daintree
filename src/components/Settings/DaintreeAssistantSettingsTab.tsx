@@ -24,6 +24,7 @@ import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsInput } from "./SettingsInput";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { McpAuditLogViewer } from "./McpAuditLogViewer";
 import { McpAuditLatencyTable } from "./McpAuditLatencyTable";
 import { TurnOutcomeDiagnostics } from "./TurnOutcomeDiagnostics";
@@ -57,6 +58,54 @@ import {
 
 const COPY_RESET_DELAY_MS = 2000;
 const CUSTOM_ARGS_DEBOUNCE_MS = 500;
+
+type SaveGroup = "launch" | "behavior" | "hibernation" | "security" | "privacy";
+
+const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
+  modelId: "launch",
+  customArgs: "launch",
+  debugLogging: "launch",
+  docSearch: "behavior",
+  daintreeControl: "behavior",
+  idleHibernateMinutes: "hibernation",
+  tier: "security",
+  bypassPermissions: "security",
+  auditRetention: "privacy",
+};
+
+const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
+  "modelId",
+  "customArgs",
+  "debugLogging",
+  "docSearch",
+  "daintreeControl",
+  "idleHibernateMinutes",
+  "tier",
+  "bypassPermissions",
+  "auditRetention",
+];
+
+function patchedKeys(patch: Partial<HelpAssistantSettings>): (keyof HelpAssistantSettings)[] {
+  return SETTING_KEYS.filter((key) => key in patch);
+}
+
+function saveGroupOf(patch: Partial<HelpAssistantSettings>): SaveGroup {
+  const [first] = patchedKeys(patch);
+  return first ? SAVE_GROUP_BY_KEY[first] : "launch";
+}
+
+function copySetting<K extends keyof HelpAssistantSettings>(
+  target: HelpAssistantSettings,
+  source: HelpAssistantSettings,
+  key: K
+): void {
+  target[key] = source[key];
+}
+
+interface SaveFailure {
+  group: SaveGroup;
+  patch: Partial<HelpAssistantSettings>;
+}
 
 const DEFAULT_SETTINGS: HelpAssistantSettings = {
   docSearch: true,
@@ -160,7 +209,8 @@ const HIBERNATE_OPTIONS = [
 interface BypassCopy {
   title: string;
   subtitle: string;
-  ariaLabel: string;
+  /** Only when the spoken name must add to the visible title; it has to contain it. */
+  ariaLabel?: string;
   warning: string;
 }
 
@@ -224,7 +274,6 @@ function getBypassCopy(agentId: string | null, tier: HelpAssistantTier): BypassC
     return {
       title: "Auto-approve assistant actions",
       subtitle: "Skip the assistant's own per-action confirmation sheet",
-      ariaLabel: "Auto-approve Daintree Assistant actions during help sessions",
       warning: `With this on, the assistant acts without asking — it skips its own confirmation sheet for everything it does. ${safeguard}`,
     };
   }
@@ -258,6 +307,7 @@ export function DaintreeAssistantSettingsTab() {
   const runtimeSnapshot = useMcpReadiness();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const [copied, setCopied] = useState(false);
   const [showRotateConfirm, setShowRotateConfirm] = useState(false);
   const [isRotating, setIsRotating] = useState(false);
@@ -298,7 +348,7 @@ export function DaintreeAssistantSettingsTab() {
     pendingCustomArgsRef.current = pendingCustomArgs;
   }, [pendingCustomArgs]);
 
-  useSettingsTabValidation("assistant", Boolean(error));
+  useSettingsTabValidation("assistant", Boolean(error || saveFailure));
 
   const preferredAgentId = useHelpPanelStore((s) => s.preferredAgentId);
   const setPreferredAgent = useHelpPanelStore((s) => s.setPreferredAgent);
@@ -641,21 +691,39 @@ export function DaintreeAssistantSettingsTab() {
     setShowClearAuditConfirm(false);
   };
 
+  // Optimistic apply; a rejected save puts the attempted keys back (unless a later
+  // change has already moved them) and parks the failure on the group it belongs to.
   const persist = useCallback(
     async (patch: Partial<HelpAssistantSettings>) => {
-      const next = { ...settings, ...patch } as HelpAssistantSettings;
-      setSettings(next);
+      const previous = settings;
+      const group = saveGroupOf(patch);
+      setSettings((current) => ({ ...current, ...patch }));
       try {
         await window.electron.helpAssistant.setSettings(patch);
+        setSaveFailure((current) => (current?.group === group ? null : current));
       } catch (err) {
-        setError(formatErrorMessage(err, "Couldn't save assistant settings"));
+        setSettings((current) => {
+          const reverted: HelpAssistantSettings = { ...current };
+          for (const key of patchedKeys(patch)) {
+            if (current[key] === patch[key]) copySetting(reverted, previous, key);
+          }
+          return reverted;
+        });
+        setSaveFailure({ group, patch });
         logError("Failed to save Daintree Assistant settings", err);
       }
-      // settings is intentionally read at call time via the closure; no stale risk
-      // because we set it synchronously above.
     },
     [settings]
   );
+
+  const saveError = (group: SaveGroup) =>
+    saveFailure?.group === group ? (
+      <SettingsLoadErrorBanner
+        title="Couldn't save that change"
+        message="The setting is back to its previous value."
+        onRetry={() => void persist(saveFailure.patch)}
+      />
+    ) : null;
 
   const toggleDocSearch = () => {
     void persist({ docSearch: !settings.docSearch });
@@ -717,9 +785,18 @@ export function DaintreeAssistantSettingsTab() {
   // Persist the pending value once the debounce settles. Skipped when pending
   // matches what's already persisted (e.g., user typed and undid, or the
   // value just landed via the optimistic update inside `persist`).
+  // Each settled value is attempted once: a rejected save rolls settings.customArgs
+  // back, which would otherwise re-fire this effect and retry in a loop. Retry
+  // lives on the group's error banner instead.
+  const lastAttemptedCustomArgsRef = useRef<string | null>(null);
   useEffect(() => {
-    if (debouncedPendingCustomArgs === null) return;
+    if (debouncedPendingCustomArgs === null) {
+      lastAttemptedCustomArgsRef.current = null;
+      return;
+    }
+    if (debouncedPendingCustomArgs === lastAttemptedCustomArgsRef.current) return;
     if (debouncedPendingCustomArgs !== settings.customArgs) {
+      lastAttemptedCustomArgsRef.current = debouncedPendingCustomArgs;
       void persist({ customArgs: debouncedPendingCustomArgs });
     }
   }, [debouncedPendingCustomArgs, settings.customArgs, persist]);
@@ -804,6 +881,7 @@ export function DaintreeAssistantSettingsTab() {
         title="Launch"
         description="The CLI behind the help assistant in the dock. Changes apply to new assistant sessions"
       >
+        {saveError("launch")}
         <SettingsGroup>
           <SettingsSelect
             label="Agent"
@@ -855,6 +933,8 @@ export function DaintreeAssistantSettingsTab() {
               onChange={toggleDebugLogging}
               ariaLabel="Enable Daintree Assistant debug logging"
               disabled={loading}
+              isModified={settings.debugLogging !== DEFAULT_SETTINGS.debugLogging}
+              onReset={() => void persist({ debugLogging: DEFAULT_SETTINGS.debugLogging })}
             />
           )}
         </SettingsGroup>
@@ -929,6 +1009,7 @@ export function DaintreeAssistantSettingsTab() {
         title="Behavior"
         description="Which tools the assistant can use during help sessions"
       >
+        {saveError("behavior")}
         <SettingsGroup>
           <SettingsSwitchCard
             id="assistant-doc-search"
@@ -936,7 +1017,6 @@ export function DaintreeAssistantSettingsTab() {
             subtitle="Let the assistant search Daintree docs and changelog while answering"
             isEnabled={settings.docSearch}
             onChange={toggleDocSearch}
-            ariaLabel="Allow the assistant to search Daintree documentation"
             disabled={loading}
             isModified={settings.docSearch !== DEFAULT_SETTINGS.docSearch}
             onReset={() => void persist({ docSearch: DEFAULT_SETTINGS.docSearch })}
@@ -987,6 +1067,7 @@ export function DaintreeAssistantSettingsTab() {
       </SettingsSection>
 
       <SettingsSection title="Hibernation">
+        {saveError("hibernation")}
         <SettingsGroup>
           <SettingsSelect
             label="Hibernate after"
@@ -1005,6 +1086,7 @@ export function DaintreeAssistantSettingsTab() {
         title="Security"
         description="How much of Daintree the assistant can reach, and whether to bypass the agent's own confirmation gate"
       >
+        {saveError("security")}
         <SettingsGroup>
           <SettingsSelect
             label="Capability tier"
@@ -1037,6 +1119,10 @@ export function DaintreeAssistantSettingsTab() {
               ariaLabel={bypassCopy.ariaLabel}
               colorScheme="amber"
               disabled={loading}
+              isModified={settings.bypassPermissions !== DEFAULT_SETTINGS.bypassPermissions}
+              onReset={() =>
+                void persist({ bypassPermissions: DEFAULT_SETTINGS.bypassPermissions })
+              }
             />
           )}
           {bypassCopy && settings.bypassPermissions && (
@@ -1059,6 +1145,7 @@ export function DaintreeAssistantSettingsTab() {
         title="Privacy"
         description="Help-session activity is logged locally so you can review what the assistant did"
       >
+        {saveError("privacy")}
         <SettingsGroup>
           <SettingsSwitchCard
             title="Capture audit log"
@@ -1334,7 +1421,7 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
           <p className="text-xs text-text-secondary select-text">{TIER_DETAILS[tier]}</p>
           {groups.map(([ns, tools]) => (
             <div key={ns} className="space-y-1">
-              <div className="text-3xs uppercase tracking-wide text-text-secondary font-mono">
+              <div className="text-xs text-text-secondary font-mono">
                 {ns}
                 <span className="ml-1 text-text-placeholder">({tools.length})</span>
               </div>
@@ -1439,7 +1526,7 @@ function NativeGrantsSection({
 
   return (
     <div className="space-y-2 pt-1">
-      <div className="text-3xs uppercase tracking-wide text-text-secondary font-mono">
+      <div className="text-xs text-text-secondary font-mono">
         Automation grants{grants.length > 0 ? ` (${grants.length})` : ""}
       </div>
       {grants.length > 0 ? (
@@ -1565,7 +1652,7 @@ function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
             </div>
             {perToolGrants.length > 0 ? (
               <div className="space-y-1">
-                <div className="text-3xs uppercase tracking-wide text-text-secondary font-mono">
+                <div className="text-xs text-text-secondary font-mono">
                   Active grants ({perToolGrants.length})
                 </div>
                 <div className="space-y-1">

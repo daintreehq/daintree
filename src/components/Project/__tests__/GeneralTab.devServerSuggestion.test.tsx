@@ -277,3 +277,73 @@ describe("GeneralTab — DOM anchors for settings deep-links", () => {
     expect(container.querySelector("#project-in-repo-settings")).not.toBeNull();
   });
 });
+
+describe("GeneralTab — SVG icon uploader", () => {
+  const project = {
+    id: "test-project",
+    path: "/Users/test/Projects/sample",
+    name: "Sample",
+    emoji: "🌲",
+    lastOpened: 0,
+  } as const;
+
+  function renderWithProject() {
+    return render(
+      <GeneralTab
+        currentProject={project}
+        name="Sample"
+        onNameChange={vi.fn()}
+        emoji="🌲"
+        onEmojiChange={vi.fn()}
+        color={undefined}
+        onColorChange={vi.fn()}
+        devServerCommand=""
+        onDevServerCommandChange={vi.fn()}
+        devServerLoadTimeout={undefined}
+        onDevServerLoadTimeoutChange={vi.fn()}
+        turbopackEnabled={true}
+        onTurbopackEnabledChange={vi.fn()}
+        daintreeMcpTier="off"
+        onDaintreeMcpTierChange={vi.fn()}
+        projectIconSvg={undefined}
+        onProjectIconSvgChange={vi.fn()}
+        enableInRepoSettings={vi.fn()}
+        disableInRepoSettings={vi.fn()}
+        projectId="test-project"
+        isOpen={true}
+      />
+    );
+  }
+
+  it("starts the first upload from a keyboard-reachable native button", () => {
+    renderWithProject();
+    const uploader = screen.getByTestId("project-icon-uploader");
+    expect(uploader.tagName).toBe("BUTTON");
+    expect(uploader.getAttribute("type")).toBe("button");
+    expect(uploader.hasAttribute("disabled")).toBe(false);
+    expect(uploader.getAttribute("tabindex")).not.toBe("-1");
+
+    uploader.focus();
+    expect(document.activeElement).toBe(uploader);
+
+    const input = screen.getByLabelText("Select SVG file") as HTMLInputElement;
+    const clickSpy = vi.spyOn(input, "click");
+    fireEvent.click(uploader);
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the uploader from the row label and its visible prompt, described by the row", () => {
+    renderWithProject();
+    const uploader = screen.getByTestId("project-icon-uploader");
+    const labelledBy = (uploader.getAttribute("aria-labelledby") ?? "").split(" ");
+    const name = labelledBy
+      .map((id) => document.getElementById(id)?.textContent?.trim())
+      .filter(Boolean)
+      .join(" ");
+    expect(name).toBe("Icon Drop an SVG here or click to browse");
+
+    const describedBy = (uploader.getAttribute("aria-describedby") ?? "").split(" ");
+    const description = describedBy.map((id) => document.getElementById(id)?.textContent).join(" ");
+    expect(description).toContain("An SVG shown in the empty grid");
+  });
+});

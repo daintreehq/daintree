@@ -11,6 +11,7 @@ import { TerminalSettingsTab } from "../TerminalSettingsTab";
 import { useLayoutConfigStore } from "@/store";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
+import { useCachedProjectViewsStore } from "@/store/cachedProjectViewsStore";
 
 const getHardwareInfo = vi.fn();
 const setResourceMonitoring = vi.fn();
@@ -138,6 +139,61 @@ describe("TerminalSettingsTab save failures", () => {
     });
     expect(useResourceMonitoringStore.getState().enabled).toBe(false);
     expect(screen.getByText("Couldn't save that change")).toBeTruthy();
+  });
+
+  it("replays the store update on Retry so a saved value is also the displayed one", async () => {
+    useResourceMonitoringStore.setState({ enabled: false });
+    setResourceMonitoring.mockRejectedValueOnce(new Error("IPC down"));
+    renderSubtab("performance");
+    const toggle = screen.getByRole("switch", { name: "Resource Monitoring Toggle" });
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    expect(useResourceMonitoringStore.getState().enabled).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(setResourceMonitoring).toHaveBeenLastCalledWith(true);
+    expect(useResourceMonitoringStore.getState().enabled).toBe(true);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByText("Couldn't save that change")).toBeNull();
+  });
+});
+
+describe("TerminalSettingsTab cached project views", () => {
+  const resetName = /Reset cached project views/i;
+
+  it("marks a count off the RAM tier and resets it to the tier through the action", async () => {
+    // 16 GiB sits on the 3-view tier.
+    getHardwareInfo.mockResolvedValue({ totalMemoryBytes: 16 * 1024 ** 3, logicalCpuCount: 8 });
+    useCachedProjectViewsStore.setState({ cachedProjectViews: 5 });
+    renderSubtab("performance");
+    await act(async () => {});
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: resetName }));
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      "terminalConfig.setCachedProjectViews",
+      { cachedProjectViews: 3 },
+      { source: "user" }
+    );
+  });
+
+  it("claims no difference while the count matches the tier or the hardware is unknown", async () => {
+    getHardwareInfo.mockResolvedValue({ totalMemoryBytes: 16 * 1024 ** 3, logicalCpuCount: 8 });
+    useCachedProjectViewsStore.setState({ cachedProjectViews: 3 });
+    const { unmount } = renderSubtab("performance");
+    await act(async () => {});
+    expect(screen.queryByRole("button", { name: resetName })).toBeNull();
+    unmount();
+
+    getHardwareInfo.mockRejectedValue(new Error("probe failed"));
+    useCachedProjectViewsStore.setState({ cachedProjectViews: 5 });
+    renderSubtab("performance");
+    await act(async () => {});
+    expect(screen.queryByRole("button", { name: resetName })).toBeNull();
   });
 });
 

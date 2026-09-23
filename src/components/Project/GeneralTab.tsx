@@ -536,7 +536,7 @@ export function GeneralTab({
               description="An SVG shown in the empty grid, up to 250KB"
               layout="stacked"
               error={iconError ?? undefined}
-              control={
+              control={({ labelId, descriptionId, disabled: rowDisabled }) => (
                 <>
                   <input
                     ref={fileInputRef}
@@ -567,9 +567,18 @@ export function GeneralTab({
                       </Button>
                     </div>
                   ) : (
-                    <div
+                    <button
+                      type="button"
+                      data-testid="project-icon-uploader"
+                      // The visible prompt joins the row label so the spoken name
+                      // contains what sighted users read on the button (WCAG 2.5.3).
+                      aria-labelledby={`${labelId} project-icon-uploader-prompt`}
+                      aria-describedby={descriptionId}
+                      disabled={rowDisabled}
                       className={cn(
-                        "flex items-center justify-center gap-2 px-4 py-4 rounded-[var(--radius-md)] border border-dashed border-border-strong transition-colors cursor-pointer",
+                        "flex w-full items-center justify-center gap-2 px-4 py-4 rounded-[var(--radius-md)] border border-dashed border-border-strong transition-colors cursor-pointer",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+                        "disabled:cursor-not-allowed disabled:opacity-50",
                         isDraggingIcon ? "bg-overlay-soft" : "hover:bg-overlay-subtle"
                       )}
                       onDrop={handleIconDrop}
@@ -578,13 +587,16 @@ export function GeneralTab({
                       onClick={() => fileInputRef.current?.click()}
                     >
                       <Upload className="h-4 w-4 text-text-secondary" aria-hidden="true" />
-                      <p className="text-xs text-text-secondary">
+                      <span
+                        id="project-icon-uploader-prompt"
+                        className="text-xs text-text-secondary"
+                      >
                         Drop an SVG here or click to browse
-                      </p>
-                    </div>
+                      </span>
+                    </button>
                   )}
                 </>
-              }
+              )}
             />
 
             <SettingsRow

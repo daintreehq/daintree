@@ -246,7 +246,6 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
                 subtitle="Append a record each time a forge provider method is invoked"
                 isEnabled={auditEnabled}
                 onChange={() => void handleAuditEnabledToggle()}
-                ariaLabel="Toggle forge audit log"
               />
             </SettingsGroup>
             <ForgeAuditLogViewer

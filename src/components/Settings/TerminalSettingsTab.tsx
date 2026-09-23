@@ -44,6 +44,7 @@ import {
   DEFAULT_AUTO_RESTART_THRESHOLD_MB,
 } from "@/store/memoryLeakConfigStore";
 import { SCROLLBACK_DEFAULT } from "@shared/config/scrollback";
+import { computeDefaultCachedViews } from "@shared/config/cachedProjectViews";
 import type { HardwareInfo } from "@shared/types/ipc/system";
 
 const STRATEGIES: Array<{
@@ -210,22 +211,24 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
   // Every save here rolls its value back on failure (the actions do it themselves;
   // the direct IPC calls pass a rollback), so the banner only has to say so and
-  // offer the same write again.
+  // offer the same write again. `apply` is the whole operation — any optimistic
+  // store update as well as the write — so Retry replays both, and a retry that
+  // succeeds after a rollback leaves the page showing what was saved.
   const persist = async (
     group: SaveGroup,
-    save: () => Promise<unknown>,
+    apply: () => Promise<unknown>,
     logMessage: string,
     rollback?: () => void
   ): Promise<void> => {
     try {
-      await save();
+      await apply();
       setSaveFailure((current) => (current?.group === group ? null : current));
     } catch (error) {
       rollback?.();
       logError(logMessage, error);
       setSaveFailure({
         group,
-        retry: () => void persist(group, save, logMessage, rollback),
+        retry: () => void persist(group, apply, logMessage, rollback),
       });
     }
   };
@@ -273,10 +276,12 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
   const setResourceMonitoring = (value: boolean) => {
     const previous = resourceMonitoringEnabled;
-    setResourceMonitoringEnabled(value);
     void persist(
       "resources",
-      () => window.electron.terminalConfig.setResourceMonitoring(value),
+      () => {
+        setResourceMonitoringEnabled(value);
+        return window.electron.terminalConfig.setResourceMonitoring(value);
+      },
       "Failed to persist resource monitoring setting",
       () => setResourceMonitoringEnabled(previous)
     );
@@ -284,10 +289,12 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
   const setMemoryLeakDetection = (value: boolean) => {
     const previous = memoryLeakDetectionEnabled;
-    setMemoryLeakDetectionEnabled(value);
     void persist(
       "resources",
-      () => window.electron.terminalConfig.setMemoryLeakDetection(value),
+      () => {
+        setMemoryLeakDetectionEnabled(value);
+        return window.electron.terminalConfig.setMemoryLeakDetection(value);
+      },
       "Failed to persist memory leak detection setting",
       () => setMemoryLeakDetectionEnabled(previous)
     );
@@ -296,7 +303,10 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const saveAutoRestartThreshold = (value: number, previous: number) => {
     void persist(
       "resources",
-      () => window.electron.terminalConfig.setMemoryLeakAutoRestartThresholdMb(value),
+      () => {
+        setAutoRestartThresholdMb(value);
+        return window.electron.terminalConfig.setMemoryLeakAutoRestartThresholdMb(value);
+      },
       "Failed to persist memory leak auto-restart threshold",
       () => setAutoRestartThresholdMb(previous)
     );
@@ -335,6 +345,14 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const hardwareLimits =
     hardwareInfo && hardwareInfo.totalMemoryBytes > 0
       ? computeHardwareDefaults(hardwareInfo.totalMemoryBytes)
+      : null;
+
+  // Main reports the effective count (the stored value, else this same RAM
+  // tier), so a count off the tier is one the user chose. Unknown until the
+  // hardware probe answers.
+  const defaultCachedViews =
+    hardwareInfo && hardwareInfo.totalMemoryBytes > 0
+      ? computeDefaultCachedViews(hardwareInfo.totalMemoryBytes)
       : null;
 
   const effectiveSubtab =
@@ -410,18 +428,20 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                     suffix="MB"
                     value={autoRestartThresholdMb}
                     isModified={autoRestartThresholdMb !== DEFAULT_AUTO_RESTART_THRESHOLD_MB}
-                    onReset={() => {
-                      const previous = autoRestartThresholdMb;
-                      setAutoRestartThresholdMb(DEFAULT_AUTO_RESTART_THRESHOLD_MB);
-                      saveAutoRestartThreshold(DEFAULT_AUTO_RESTART_THRESHOLD_MB, previous);
-                    }}
+                    onReset={() =>
+                      saveAutoRestartThreshold(
+                        DEFAULT_AUTO_RESTART_THRESHOLD_MB,
+                        autoRestartThresholdMb
+                      )
+                    }
                     onChange={(e) => {
                       const val = parseInt(e.target.value, 10);
                       if (!isNaN(val)) {
                         const previous = autoRestartThresholdMb;
-                        setAutoRestartThresholdMb(val);
                         if (val >= 1024 && val <= 32768) {
                           saveAutoRestartThreshold(val, previous);
+                        } else {
+                          setAutoRestartThresholdMb(val);
                         }
                       }
                     }}
@@ -536,6 +556,13 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 options={CACHED_VIEWS_OPTIONS}
                 value={cachedProjectViews}
                 onChange={(value) => void handleCachedProjectViewsChange(value)}
+                isModified={
+                  defaultCachedViews !== null && cachedProjectViews !== defaultCachedViews
+                }
+                onReset={() =>
+                  defaultCachedViews !== null &&
+                  void handleCachedProjectViewsChange(defaultCachedViews)
+                }
               />
             </SettingsGroup>
           </SettingsSection>

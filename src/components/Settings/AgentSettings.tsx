@@ -516,7 +516,7 @@ export function AgentSettings({
               <SettingsSwitchCard
                 id="agents-enable"
                 title="Pin to toolbar"
-                subtitle="Show this agent in the toolbar for quick access"
+                subtitle={`Show ${activeAgent.name} in the toolbar for quick access`}
                 isEnabled={isAgentToolbarVisible(activeEntry, cliAvailability?.[activeAgent.id])}
                 onChange={() => {
                   // Tri-state toggle (#7673): flip the *currently visible* state so
@@ -531,7 +531,6 @@ export function AgentSettings({
                     onSettingsChange?.();
                   })();
                 }}
-                ariaLabel={`Pin ${activeAgent.name} to toolbar`}
               />
 
               {/* Built-in agents only; user-defined agents don't participate in the keybinding registry. */}
