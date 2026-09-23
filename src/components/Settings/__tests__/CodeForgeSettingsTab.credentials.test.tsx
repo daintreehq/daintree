@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { CodeForgeSettingsTab } from "../CodeForgeSettingsTab";
 import type { ForgeProviderEntry } from "@shared/types";
 import type { AuthValidation } from "@shared/types/forge";
@@ -147,8 +147,9 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
       expect(setCredential).toHaveBeenCalledWith("acme.gitea", { token: "secret-token" });
     });
     await waitFor(() => {
-      expect(screen.getByText("Credentials saved")).toBeTruthy();
+      expect(screen.getByText("Checked and saved")).toBeTruthy();
     });
+    expect(screen.getByText("Credentials saved")).toBeTruthy();
   });
 
   it("surfaces the validation error and does not clear the field on invalid credentials", async () => {
@@ -173,7 +174,7 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
 
     await waitFor(() => {
       expect(setCredential).toHaveBeenCalled();
-      expect(screen.getByText("Bad token")).toBeTruthy();
+      expect(screen.getByRole("alert").textContent).toBe("Bad token");
     });
     expect((screen.getByLabelText("API token") as HTMLInputElement).value).toBe("nope");
   });
@@ -192,6 +193,11 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
 
     const clearButton = await screen.findByRole("button", { name: /clear credentials/i });
     fireEvent.click(clearButton);
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Clear Gitea credentials?")).toBeTruthy();
+    expect(clearCredential).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Clear credentials" }));
 
     await waitFor(() => {
       expect(clearCredential).toHaveBeenCalledWith("acme.gitea");

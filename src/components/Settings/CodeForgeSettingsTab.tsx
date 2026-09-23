@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo, Suspense } from "react";
-import { Check, AlertCircle } from "lucide-react";
+import { Check } from "lucide-react";
 import type { ForgeProviderContribution, ForgeProviderEntry } from "@shared/types";
 import type { ForgeAuditRecord, ForgeAuditStats } from "@shared/types/ipc/forge";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "@shared/types/ipc/forge";
@@ -20,7 +20,6 @@ import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { ForgeAuditLogViewer } from "./ForgeAuditLogViewer";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
-import { appClient } from "@/clients";
 import { logError } from "@/utils/logger";
 
 const GENERAL_ID = "general";
@@ -75,7 +74,6 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
   const [auditCopied, setAuditCopied] = useState(false);
   const [auditExported, setAuditExported] = useState(false);
   const [showAuditClearConfirm, setShowAuditClearConfirm] = useState(false);
-  const [developerMode, setDeveloperMode] = useState(false);
   const auditCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const auditExportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -100,9 +98,8 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
       window.electron.forgeAudit.getConfig(),
       window.electron.forgeAudit.getRecords(),
       window.electron.forgeAudit.getStats(),
-      appClient.getState(),
     ])
-      .then(([cfgResult, recordsResult, statsResult, stateResult]) => {
+      .then(([cfgResult, recordsResult, statsResult]) => {
         if (cancelled) return;
         if (cfgResult.status === "fulfilled") {
           setAuditEnabled(cfgResult.value.enabled);
@@ -119,9 +116,6 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
           setAuditStats(statsResult.value);
         } else {
           logError("Failed to load forge audit stats", statsResult.reason);
-        }
-        if (stateResult.status === "fulfilled" && stateResult.value?.developerMode) {
-          setDeveloperMode(stateResult.value.developerMode.enabled === true);
         }
         setAuditLoading(false);
       })
@@ -237,13 +231,13 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
           <ForgeIntegrationsTab />
           <SettingsSection
             title="Forge audit log"
-            description="Every forge provider call — list, get, assign, validateToken — with redacted argument summaries, for triaging slow providers, failure clusters and anomalies"
+            description={`Each call Daintree makes to a forge provider, with arguments redacted, for tracing slow or failing providers. Keeps the last ${auditMaxRecords.toLocaleString()} calls on this machine.`}
           >
             <SettingsGroup>
               <SettingsSwitchCard
                 id="forge-audit-enable"
                 title="Record forge provider calls"
-                subtitle="Append a record each time a forge provider method is invoked"
+                subtitle="Turning this off stops new records; the ones below stay until cleared"
                 isEnabled={auditEnabled}
                 onChange={() => void handleAuditEnabledToggle()}
               />
@@ -251,7 +245,6 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
             <ForgeAuditLogViewer
               records={auditRecords}
               loading={auditLoading}
-              maxRecords={auditMaxRecords}
               anomalySignals={auditStats?.anomalySignals}
               anomalySuppressed={auditStats?.anomalySuppressed ?? true}
               onRefresh={refreshAuditRecords}
@@ -260,7 +253,6 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
               onClear={() => setShowAuditClearConfirm(true)}
               copyFlashActive={auditCopied}
               exportFlashActive={auditExported}
-              developerMode={developerMode}
             />
           </SettingsSection>
         </>
@@ -281,6 +273,7 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
         title="Clear forge audit log?"
         description="This permanently deletes all recorded forge provider calls on this machine. New calls will still be recorded."
         confirmLabel="Clear log"
+        zIndex="nested"
       />
     </div>
   );
@@ -385,6 +378,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
   const [result, setResult] = useState<CredentialResult>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [hasCredential, setHasCredential] = useState(false);
+  const [confirmingClear, setConfirmingClear] = useState(false);
   // Synchronous in-flight guard: `isSaving` state updates are batched and the
   // re-render is deferred, so two rapid event dispatches could both pass an
   // `isSaving`-derived check before the first commit. The ref flips
@@ -423,12 +417,10 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
     };
   }, [providerId]);
 
+  // Only a success fades. An error carries the fix and stays until the input changes.
   useEffect(() => {
-    if (!result) return;
-    const timer = setTimeout(() => {
-      setResult(null);
-      setErrorMessage(null);
-    }, CREDENTIAL_RESULT_DISPLAY_MS);
+    if (result !== "success") return;
+    const timer = setTimeout(() => setResult(null), CREDENTIAL_RESULT_DISPLAY_MS);
     return () => clearTimeout(timer);
   }, [result]);
 
@@ -467,6 +459,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
   };
 
   const handleClear = async () => {
+    setConfirmingClear(false);
     try {
       await window.electron.forge.clearCredential(providerId);
       setValues({});
@@ -493,7 +486,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
               control={
                 <span className="flex items-center gap-1 text-xs text-text-secondary">
                   <Check className="w-3 h-3" aria-hidden="true" />
-                  {providerName} connected
+                  Credentials saved
                 </span>
               }
             />
@@ -504,15 +497,27 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
               label={field.label}
               description={field.helpText}
               layout="stacked"
+              error={
+                result === "error" && field.id === primaryId ? (
+                  <span role="alert">{errorMessage || "Couldn't save credentials"}</span>
+                ) : undefined
+              }
               control={({ descriptionId }) => (
                 <Input
                   id={`forge-cred-${field.id}`}
                   type={field.type === "password" ? "password" : "text"}
                   value={values[field.id] ?? ""}
-                  onChange={(e) => setValues((prev) => ({ ...prev, [field.id]: e.target.value }))}
+                  onChange={(e) => {
+                    setValues((prev) => ({ ...prev, [field.id]: e.target.value }));
+                    if (result === "error") {
+                      setResult(null);
+                      setErrorMessage(null);
+                    }
+                  }}
                   placeholder={field.placeholder}
                   aria-label={field.label}
                   aria-describedby={descriptionId}
+                  aria-invalid={result === "error" && field.id === primaryId ? true : undefined}
                   autoComplete={field.type === "password" ? "new-password" : "off"}
                   disabled={isSaving}
                 />
@@ -524,12 +529,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
               result === "success" ? (
                 <span className="flex items-center gap-1">
                   <Check className="w-3 h-3" aria-hidden="true" />
-                  Credentials saved
-                </span>
-              ) : result === "error" ? (
-                <span className="flex items-center gap-1 text-status-error">
-                  <AlertCircle className="w-3 h-3" aria-hidden="true" />
-                  {errorMessage || "Couldn't save credentials"}
+                  Checked and saved
                 </span>
               ) : null
             }
@@ -553,7 +553,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
               description={`Clearing removes Daintree's copy; ${providerName} features stop until you add them again`}
               control={
                 <Button
-                  onClick={handleClear}
+                  onClick={() => setConfirmingClear(true)}
                   variant="ghost-danger"
                   size="sm"
                   aria-label="Clear credentials"
@@ -565,6 +565,16 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
           </SettingsGroup>
         )}
       </SettingsSection>
+      <ConfirmDialog
+        isOpen={confirmingClear}
+        variant="destructive"
+        onConfirm={() => void handleClear()}
+        onClose={() => setConfirmingClear(false)}
+        title={`Clear ${providerName} credentials?`}
+        description={`Daintree's copy is deleted. ${providerName} issues, pull requests and pulse data stop until you add credentials again.`}
+        confirmLabel="Clear credentials"
+        zIndex="nested"
+      />
     </div>
   );
 }

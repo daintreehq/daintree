@@ -1,9 +1,12 @@
 import { useState, useEffect, useRef, type ComponentType } from "react";
 import { cn } from "@/lib/utils";
-import { GitBranch, ChevronDown, Search } from "lucide-react";
-import { GitHubIcon } from "@/components/icons/brands";
+import { ChevronDown, GitBranch, Search, Settings2 } from "lucide-react";
+import { GitHubIcon, GitLabIcon } from "@/components/icons/brands";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
+import {
+  BUILTIN_GITHUB_PROVIDER_ID,
+  BUILTIN_GITLAB_PROVIDER_ID,
+} from "@shared/utils/forgeProviderIds";
 
 export interface ForgeProviderOption {
   /** Canonical `{pluginId}.{contributionId}` forge provider id. */
@@ -14,8 +17,14 @@ export interface ForgeProviderOption {
 
 type ProviderIcon = ComponentType<{ size?: number; className?: string }>;
 
+const BRAND_ICONS: Record<string, ProviderIcon> = {
+  [BUILTIN_GITHUB_PROVIDER_ID]: GitHubIcon,
+  [BUILTIN_GITLAB_PROVIDER_ID]: GitLabIcon,
+};
+
+/** A forge's own mark where we have one; a generic branch for third-party providers. */
 function getProviderIcon(id: string): ProviderIcon {
-  return id === BUILTIN_GITHUB_PROVIDER_ID ? GitHubIcon : GitBranch;
+  return BRAND_ICONS[id] ?? GitBranch;
 }
 
 interface ForgeProviderSelectorDropdownProps {
@@ -52,7 +61,9 @@ export function ForgeProviderSelectorDropdown({
 
   useEffect(() => {
     const q = filterQuery.trim();
-    setActiveIndex(q && items.length > 1 ? 1 : 0);
+    // General stays listed as a destination but is never a search result, so a query
+    // with no match leaves nothing active and Enter picks nothing.
+    setActiveIndex(q ? (items.length > 1 ? 1 : -1) : 0);
   }, [filterQuery]); // eslint-disable-line react-hooks/exhaustive-deps -- items derived from filterQuery
 
   useEffect(() => {
@@ -120,7 +131,7 @@ export function ForgeProviderSelectorDropdown({
             })()
           ) : (
             <>
-              <GitBranch size={16} className="text-text-secondary" />
+              <Settings2 size={16} className="text-text-secondary" />
               <span className="flex-1 text-left truncate">General</span>
             </>
           )}
@@ -156,7 +167,7 @@ export function ForgeProviderSelectorDropdown({
             aria-autocomplete="list"
             aria-controls="forge-provider-selector-list"
             aria-activedescendant={
-              items[activeIndex]
+              activeIndex >= 0 && items[activeIndex]
                 ? `forge-provider-selector-item-${items[activeIndex].id}`
                 : undefined
             }
@@ -193,7 +204,7 @@ export function ForgeProviderSelectorDropdown({
               >
                 {item.kind === "general" ? (
                   <>
-                    <GitBranch size={16} className="shrink-0 text-text-secondary" />
+                    <Settings2 size={16} className="shrink-0 text-text-secondary" />
                     <div className="flex-1 min-w-0">
                       <div className="truncate">General</div>
                       <div className="text-xs text-text-secondary truncate">
@@ -216,8 +227,8 @@ export function ForgeProviderSelectorDropdown({
             );
           })}
           {items.length === 1 && filterQuery && (
-            <div className="px-2 py-3 text-xs text-text-secondary text-center">
-              No providers match "{filterQuery}"
+            <div role="status" className="px-2 py-3 text-xs text-text-secondary">
+              No providers match &ldquo;{filterQuery.trim()}&rdquo;
             </div>
           )}
         </div>

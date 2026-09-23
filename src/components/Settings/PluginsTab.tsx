@@ -18,6 +18,7 @@ import { logError } from "@/utils/logger";
  */
 export function PluginsTab() {
   const [count, setCount] = useState<number | null>(null);
+  const [countFailed, setCountFailed] = useState(false);
   const showInlineLoading = useDeferredLoading(count === null, UI_DOHERTY_THRESHOLD);
   // Opt-in background update check (#10893). `null` until the main-process
   // electron-store value loads; renders OFF while loading so it never implies
@@ -34,13 +35,15 @@ export function PluginsTab() {
       window.electron.plugin
         .list()
         .then((list) => {
-          if (!cancelled) setCount(list.length);
+          if (cancelled) return;
+          setCount(list.length);
+          setCountFailed(false);
         })
         .catch((err) => {
           if (cancelled) return;
-          // The manager surfaces load failures itself; the summary just stays
-          // quiet rather than showing a count it can't trust.
-          setCount(0);
+          // A count of zero would read as "nothing installed"; say it couldn't be read
+          // and let the manager, which surfaces the failure itself, take it from there.
+          setCountFailed(true);
           logError("Failed to load plugin count", err);
         });
     };
@@ -116,8 +119,9 @@ export function PluginsTab() {
     void actionService.dispatch("app.pluginManager", undefined, { source: "user" });
   };
 
-  const summary =
-    count === null
+  const summary = countFailed
+    ? "Couldn't read the installed plugins — the plugin manager shows why"
+    : count === null
       ? null
       : count === 0
         ? "No plugins installed yet"
@@ -139,7 +143,7 @@ export function PluginsTab() {
               </span>
             }
             control={
-              <Button variant="subtle" size="sm" onClick={openManager}>
+              <Button variant="outline" size="sm" onClick={openManager}>
                 Open plugin manager
               </Button>
             }

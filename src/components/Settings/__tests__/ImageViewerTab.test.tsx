@@ -99,7 +99,11 @@ describe("ImageViewerTab", () => {
 
     // Section chrome appears immediately, before the load resolves.
     expect(screen.getByText("Image viewer")).toBeTruthy();
-    expect(screen.getByText(/Choose the application that opens when you click/i)).toBeTruthy();
+    expect(
+      screen.getByText(
+        'The app "Open in image viewer" launches from the file viewer. Saved for Repo only.'
+      )
+    ).toBeTruthy();
 
     const osRadio = screen.getByRole("radio", { name: /Use OS default/i }) as HTMLInputElement;
     const customRadio = screen.getByRole("radio", {
@@ -197,7 +201,8 @@ describe("ImageViewerTab", () => {
         await vi.advanceTimersByTimeAsync(10_000);
       });
 
-      expect(screen.getByText(/took too long to load/i)).toBeTruthy();
+      expect(screen.getByText("The saved image viewer took too long to load")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
 
       const saveButton = screen.getByRole("button", { name: /save/i }) as HTMLButtonElement;
       expect(saveButton.disabled).toBe(true);

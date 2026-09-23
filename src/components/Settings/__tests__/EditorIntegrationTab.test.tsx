@@ -161,6 +161,21 @@ describe("EditorIntegrationTab", () => {
     expect(getConfigMock).not.toHaveBeenCalled();
   });
 
+  it("refuses to save a custom editor with no command, and says so on the field", async () => {
+    const saveButton = await renderLoadedTab();
+    selectEditor("custom");
+    fireEvent.click(saveButton);
+
+    const command = screen.getByRole("textbox", { name: "Command" }) as HTMLInputElement;
+    expect(await screen.findByText("Enter the command that opens your editor")).toBeTruthy();
+    expect(command.getAttribute("aria-invalid")).toBe("true");
+    expect(setConfigMock).not.toHaveBeenCalled();
+
+    // The error belongs to the empty value; typing clears it.
+    fireEvent.change(command, { target: { value: "nvim" } });
+    expect(screen.queryByText("Enter the command that opens your editor")).toBeNull();
+  });
+
   it("saves the selected editor through the editor IPC", async () => {
     const saveButton = await renderLoadedTab();
     selectEditor("zed");
@@ -236,7 +251,7 @@ describe("EditorIntegrationTab", () => {
       expect(screen.queryByText("/usr/bin/zed")).toBeNull();
       expect(screen.getByText("Not found: Cursor, Sublime Text")).toBeTruthy();
 
-      const toggle = screen.getByRole("button", { name: "Show detected editors (2)" });
+      const toggle = screen.getByRole("button", { name: "Show 2 other found editors" });
       expect(toggle.getAttribute("aria-expanded")).toBe("false");
       const region = document.getElementById(toggle.getAttribute("aria-controls")!);
       expect(region).toBeTruthy();
@@ -244,7 +259,7 @@ describe("EditorIntegrationTab", () => {
 
       fireEvent.click(toggle);
       expect(toggle.getAttribute("aria-expanded")).toBe("true");
-      expect(toggle.textContent).toBe("Hide detected editors");
+      expect(toggle.textContent).toBe("Hide other found editors");
       expect(entryIds(region!)).toEqual(["zed", "neovim"]);
       expect(screen.getByText("/usr/bin/zed")).toBeTruthy();
 
@@ -258,7 +273,7 @@ describe("EditorIntegrationTab", () => {
 
       expect(entryIds(document)).toEqual(["cursor"]);
       expect(screen.getByText("Not found: Sublime Text")).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Show detected editors (3)" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Show 3 other found editors" })).toBeTruthy();
     });
 
     it("omits the disclosure when the selection is the only editor found", async () => {
@@ -272,7 +287,7 @@ describe("EditorIntegrationTab", () => {
       await renderLoadedTab();
 
       expect(screen.getByText("/usr/bin/code")).toBeTruthy();
-      expect(screen.queryByRole("button", { name: /detected editors/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: /other found editor/ })).toBeNull();
     });
   });
 

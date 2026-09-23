@@ -1,15 +1,49 @@
 import { useMemo, useState } from "react";
-import { Check, Clock, Copy, Download, Eye, RefreshCw } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Check, Copy, Download, RefreshCw } from "lucide-react";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
+import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
-import type { ForgeAnomalyKind, ForgeAuditRecord, ForgeAuditResult } from "@shared/types/ipc/forge";
+import { SettingsGroup, SettingsRow } from "./SettingsGroup";
+import type {
+  ForgeAnomalyKind,
+  ForgeAnomalySignal,
+  ForgeAuditRecord,
+  ForgeAuditResult,
+} from "@shared/types/ipc/forge";
 
-type ResultFilter = "all" | ForgeAuditResult;
+/**
+ * `problems` is the landing view: successful calls are the bulk of the log, and the
+ * rare error or not-found would drown in them. It is named for what it shows, so
+ * "All results" can mean all of them.
+ */
+type ResultFilter = "problems" | "all" | ForgeAuditResult;
 
 type TimeRange = "5m" | "1h" | "24h" | "all";
+
+const RESULT_OPTIONS: ReadonlyArray<{ value: ResultFilter; label: string }> = [
+  { value: "problems", label: "Problems" },
+  { value: "all", label: "All results" },
+  { value: "error", label: "Errors" },
+  { value: "not-found", label: "Not found" },
+  { value: "success", label: "Successful" },
+];
+
+const TIME_OPTIONS: ReadonlyArray<{ value: TimeRange; label: string }> = [
+  { value: "all", label: "Any time" },
+  { value: "5m", label: "Last 5 minutes" },
+  { value: "1h", label: "Last hour" },
+  { value: "24h", label: "Last 24 hours" },
+];
 
 const TIME_RANGE_MS: Record<Exclude<TimeRange, "all">, number> = {
   "5m": 300_000,
@@ -36,6 +70,12 @@ const ANOMALY_KIND_LABEL: Record<ForgeAnomalyKind, string> = {
   "p95-z-score": "p95 outlier",
 };
 
+export function matchesResultFilter(filter: ResultFilter, result: ForgeAuditResult): boolean {
+  if (filter === "all") return true;
+  if (filter === "problems") return result !== "success";
+  return result === filter;
+}
+
 function formatRelativeTimestamp(ts: number, now: number): string {
   const diffMs = now - ts;
   if (diffMs < 0) return "just now";
@@ -51,8 +91,7 @@ function formatRelativeTimestamp(ts: number, now: number): string {
 interface ForgeAuditLogViewerProps {
   records: ForgeAuditRecord[];
   loading: boolean;
-  maxRecords: number;
-  anomalySignals?: import("@shared/types/ipc/forge").ForgeAnomalySignal[];
+  anomalySignals?: ForgeAnomalySignal[];
   anomalySuppressed?: boolean;
   onRefresh: () => Promise<void> | void;
   onCopy: (records: ForgeAuditRecord[]) => Promise<void> | void;
@@ -60,19 +99,15 @@ interface ForgeAuditLogViewerProps {
   onClear: () => void;
   copyFlashActive?: boolean;
   exportFlashActive?: boolean;
-  /**
-   * When true, successful calls are included in the default view. Off by
-   * default so rare error and not-found rows aren't drowned out by the
-   * high-volume `success` flow. Opt-in via the developer-mode toggle on the
-   * parent tab.
-   */
-  developerMode?: boolean;
 }
 
+/**
+ * The recorded calls as two groups: the log itself (filters, records, the actions that
+ * read it) and, last and apart, the one action that destroys it.
+ */
 export function ForgeAuditLogViewer({
   records,
   loading,
-  maxRecords,
   anomalySignals = [],
   anomalySuppressed = true,
   onRefresh,
@@ -81,13 +116,11 @@ export function ForgeAuditLogViewer({
   onClear,
   copyFlashActive,
   exportFlashActive,
-  developerMode = false,
 }: ForgeAuditLogViewerProps) {
   const [methodFilter, setMethodFilter] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [resultFilter, setResultFilter] = useState<ResultFilter>("all");
+  const [resultFilter, setResultFilter] = useState<ResultFilter>("problems");
   const [timeRange, setTimeRange] = useState<TimeRange>("all");
-  const [showSuccessful, setShowSuccessful] = useState(false);
   const [ignoreLastHour, setIgnoreLastHour] = useState(false);
 
   const tick = useGlobalMinuteTicker();
@@ -96,18 +129,13 @@ export function ForgeAuditLogViewer({
     return Date.now();
   }, [tick]);
 
-  // The toggle is the user's expressed intent, but `resultFilter === "success"`
-  // means the user explicitly asked for that bucket — don't filter them back out.
-  const suppressSuccess = !showSuccessful && resultFilter !== "success";
-
   const filteredRecords = useMemo(() => {
     const needle = methodFilter.trim().toLowerCase();
     const search = searchQuery.trim().toLowerCase();
     const cutoffMs = timeRange !== "all" ? now - TIME_RANGE_MS[timeRange] : undefined;
     return records.filter((record) => {
       if (cutoffMs !== undefined && record.timestamp < cutoffMs) return false;
-      if (suppressSuccess && record.result === "success") return false;
-      if (resultFilter !== "all" && record.result !== resultFilter) return false;
+      if (!matchesResultFilter(resultFilter, record.result)) return false;
       if (
         needle.length > 0 &&
         !record.methodName.toLowerCase().includes(needle) &&
@@ -124,7 +152,7 @@ export function ForgeAuditLogViewer({
       }
       return true;
     });
-  }, [records, methodFilter, searchQuery, resultFilter, suppressSuccess, timeRange, now]);
+  }, [records, methodFilter, searchQuery, resultFilter, timeRange, now]);
 
   const oneHourAgo = now - 3_600_000;
   const visibleSignals = useMemo(() => {
@@ -142,271 +170,228 @@ export function ForgeAuditLogViewer({
     return set;
   }, [visibleSignals]);
 
-  const anomalyCountsByKind = useMemo(() => {
+  const anomalySummary = useMemo(() => {
+    if (visibleSignals.length === 0) return "No anomaly signals outside the last hour";
     const counts = new Map<ForgeAnomalyKind, number>();
     for (const sig of visibleSignals) {
       counts.set(sig.kind, (counts.get(sig.kind) ?? 0) + 1);
     }
-    return counts;
+    const kinds = Array.from(counts.entries())
+      .map(([kind, count]) => `${count} ${ANOMALY_KIND_LABEL[kind]}`)
+      .join(", ");
+    const plural = visibleSignals.length !== 1 ? "s" : "";
+    return `${visibleSignals.length} anomaly signal${plural} (${kinds})`;
   }, [visibleSignals]);
 
-  const isFiltering =
-    methodFilter.trim().length > 0 ||
-    searchQuery.trim().length > 0 ||
-    resultFilter !== "all" ||
-    timeRange !== "all" ||
-    suppressSuccess;
+  const onlyDefaultFilter =
+    methodFilter.trim().length === 0 &&
+    searchQuery.trim().length === 0 &&
+    resultFilter === "problems" &&
+    timeRange === "all";
   const showCopyAll = filteredRecords.length === records.length;
+  const nothingShown = filteredRecords.length === 0;
 
   return (
-    <div className="contents">
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          type="text"
-          value={methodFilter}
-          onChange={(e) => setMethodFilter(e.target.value)}
-          placeholder="Filter by method or provider"
-          aria-label="Filter audit by method or provider"
-          className="flex-1 min-w-[180px] bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-        />
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search arguments"
-          aria-label="Search audit arguments"
-          className="w-40 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-        />
-        <select
-          value={resultFilter}
-          onChange={(e) => {
-            const value = e.target.value;
-            if (
-              value === "all" ||
-              value === "success" ||
-              value === "not-found" ||
-              value === "error"
-            ) {
-              setResultFilter(value);
-            }
-          }}
-          aria-label="Filter audit by result"
-          className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-        >
-          <option value="all">All results</option>
-          <option value="success">Success</option>
-          <option value="not-found">Not found</option>
-          <option value="error">Error</option>
-        </select>
-        <select
-          value={timeRange}
-          onChange={(e) => {
-            const value = e.target.value;
-            if (value === "5m" || value === "1h" || value === "24h" || value === "all") {
-              setTimeRange(value);
-            }
-          }}
-          aria-label="Filter audit by time range"
-          className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-        >
-          <option value="all">All</option>
-          <option value="5m">Last 5 minutes</option>
-          <option value="1h">Last hour</option>
-          <option value="24h">Last 24 hours</option>
-        </select>
-        {developerMode && (
-          <button
-            type="button"
-            onClick={() => setShowSuccessful((v) => !v)}
-            className={cn(
-              "flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
-              showSuccessful
-                ? "bg-overlay-subtle border-border-default text-text-primary"
-                : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
-            )}
-            aria-pressed={showSuccessful}
+    <>
+      <SettingsGroup>
+        <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+          <Input
+            density="compact"
+            type="text"
+            value={methodFilter}
+            onChange={(e) => setMethodFilter(e.target.value)}
+            placeholder="Filter by method or provider"
+            aria-label="Filter audit by method or provider"
+            className="w-auto min-w-44 flex-1"
+          />
+          <Input
+            density="compact"
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search arguments and errors"
+            aria-label="Search audit arguments and errors"
+            className="w-auto min-w-44 flex-1"
+          />
+          <Select
+            value={resultFilter}
+            onValueChange={(v) => {
+              const match = RESULT_OPTIONS.find((o) => o.value === v);
+              if (match) setResultFilter(match.value);
+            }}
           >
-            <Eye className="w-3.5 h-3.5" />
-            Show successful calls
-          </button>
-        )}
-        {!anomalySuppressed && anomalySignals.length > 0 && (
-          <button
-            type="button"
-            onClick={() => setIgnoreLastHour((v) => !v)}
-            className={cn(
-              "flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
-              ignoreLastHour
-                ? "border-status-warning/20 text-status-warning bg-status-warning/10"
-                : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
-            )}
-            aria-pressed={ignoreLastHour}
+            <SelectTrigger aria-label="Filter audit by result" className="h-7 w-36 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {RESULT_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={timeRange}
+            onValueChange={(v) => {
+              const match = TIME_OPTIONS.find((o) => o.value === v);
+              if (match) setTimeRange(match.value);
+            }}
           >
-            <Clock className="w-3.5 h-3.5" />
-            Ignore last hour
-          </button>
-        )}
-      </div>
-
-      {!anomalySuppressed && visibleSignals.length > 0 && (
-        <div className="flex items-start gap-2 p-2.5 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-          <span className="text-xs text-status-danger">
-            {visibleSignals.length} anomaly signal{visibleSignals.length !== 1 ? "s" : ""}
-            {anomalyCountsByKind.size > 0 &&
-              ` (${Array.from(anomalyCountsByKind.entries())
-                .map(([kind, count]) => `${count} ${ANOMALY_KIND_LABEL[kind]}`)
-                .join(", ")})`}
-          </span>
+            <SelectTrigger aria-label="Filter audit by time" className="h-7 w-36 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TIME_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
-      )}
 
-      <div className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-border-default bg-surface-canvas">
-        {loading ? (
-          <Skeleton label="Loading audit records" className="space-y-2 p-3">
-            <SkeletonBone className="h-5 w-5/6" />
-            <SkeletonBone className="h-5 w-4/6" />
-            <SkeletonBone className="h-5 w-3/4" />
-          </Skeleton>
-        ) : filteredRecords.length === 0 ? (
-          records.length === 0 ? (
-            <EmptyState variant="zero-data" scale="sidebar" title="No forge calls recorded yet" />
-          ) : suppressSuccess &&
-            methodFilter.trim().length === 0 &&
-            searchQuery.trim().length === 0 &&
-            resultFilter === "all" &&
-            timeRange === "all" ? (
-            <EmptyState
-              variant="user-cleared"
-              scale="sidebar"
-              title="No errors or not-found results"
-            />
+        {!anomalySuppressed && anomalySignals.length > 0 && (
+          <div className="flex flex-wrap items-center gap-3 px-4 py-2.5">
+            <p className="min-w-0 flex-1 text-xs text-status-error" role="status">
+              {anomalySummary}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              aria-pressed={ignoreLastHour}
+              onClick={() => setIgnoreLastHour((v) => !v)}
+            >
+              Ignore last hour
+            </Button>
+          </div>
+        )}
+
+        <div className="max-h-72 overflow-y-auto">
+          {loading ? (
+            <Skeleton label="Loading audit records" className="space-y-2 p-4">
+              <SkeletonBone className="h-5 w-5/6" />
+              <SkeletonBone className="h-5 w-4/6" />
+              <SkeletonBone className="h-5 w-3/4" />
+            </Skeleton>
+          ) : nothingShown ? (
+            records.length === 0 ? (
+              <EmptyState variant="zero-data" scale="sidebar" title="No forge calls recorded yet" />
+            ) : onlyDefaultFilter ? (
+              <EmptyState
+                variant="user-cleared"
+                scale="sidebar"
+                title="No problems recorded — choose All results to see every call"
+              />
+            ) : (
+              <EmptyState
+                variant="filtered-empty"
+                scale="sidebar"
+                title="No records match the current filters"
+              />
+            )
           ) : (
-            <EmptyState
-              variant="filtered-empty"
-              scale="sidebar"
-              title="No records match the current filters"
-            />
-          )
-        ) : (
-          <ul className="divide-y divide-border-default">
-            {filteredRecords.map((record) => (
-              <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 p-2 text-xs">
-                <div className="flex self-start items-center gap-1 mt-0.5">
-                  <SeverityMark
-                    severity={RESULT_SEVERITY[record.result]}
-                    label={RESULT_LABEL[record.result]}
-                    className="h-3 w-3"
-                  />
-                  {signalRecordIds.has(record.id) && (
-                    <span
-                      role="img"
-                      aria-label="Anomaly"
-                      className="status-mark h-2 w-2 rounded-sm rotate-45 shrink-0 bg-status-danger"
-                      title="Anomaly"
+            <ul className="divide-y divide-border-subtle" aria-label="Forge audit records">
+              {filteredRecords.map((record) => (
+                <li
+                  key={record.id}
+                  className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-3 px-4 py-2.5 text-xs"
+                >
+                  <div className="flex self-start items-center gap-1 mt-0.5">
+                    <SeverityMark
+                      severity={RESULT_SEVERITY[record.result]}
+                      label={RESULT_LABEL[record.result]}
+                      className="h-3 w-3"
                     />
-                  )}
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-text-primary truncate">
-                      {record.methodName}
-                    </span>
-                    {(record.repoOwner || record.repoName) && (
-                      <span className="font-mono text-3xs text-text-secondary truncate">
-                        {record.repoOwner ? `${record.repoOwner}/` : ""}
-                        {record.repoName ?? ""}
-                      </span>
+                    {signalRecordIds.has(record.id) && (
+                      <span
+                        role="img"
+                        aria-label="Anomaly"
+                        className="status-mark h-2 w-2 rounded-sm rotate-45 shrink-0 bg-status-danger"
+                        title="Anomaly"
+                      />
                     )}
                   </div>
-                  <div className="mt-0.5 font-mono text-text-secondary truncate">
-                    {record.providerId}
-                  </div>
-                  {record.argsSummary && record.argsSummary !== "{}" && (
+                  <div className="min-w-0">
+                    <div className="flex items-baseline gap-2 min-w-0">
+                      <span className="font-mono text-text-primary truncate">
+                        {record.methodName}
+                      </span>
+                      {(record.repoOwner || record.repoName) && (
+                        <span className="font-mono text-text-secondary truncate">
+                          {record.repoOwner ? `${record.repoOwner}/` : ""}
+                          {record.repoName ?? ""}
+                        </span>
+                      )}
+                    </div>
                     <div className="mt-0.5 font-mono text-text-secondary truncate">
-                      {record.argsSummary}
+                      {record.providerId}
+                      {record.argsSummary && record.argsSummary !== "{}" && (
+                        <span title={record.argsSummary}> · {record.argsSummary}</span>
+                      )}
                     </div>
-                  )}
-                  {record.errorMessage && (
-                    <div className="mt-0.5 text-3xs text-status-danger/80 truncate">
-                      {record.errorMessage}
-                    </div>
-                  )}
-                </div>
-                <div className="text-right text-text-secondary whitespace-nowrap">
-                  <div>{formatRelativeTimestamp(record.timestamp, now)}</div>
-                  <div>{record.durationMs}ms</div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+                    {record.errorMessage && (
+                      // Wrapped, never truncated: the end of an error is usually the fix.
+                      <div className="mt-1 text-status-error break-words select-text">
+                        {record.errorMessage}
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-right text-text-secondary whitespace-nowrap tabular-nums">
+                    <div>{formatRelativeTimestamp(record.timestamp, now)}</div>
+                    <div>{record.durationMs}ms</div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={() => void onRefresh()}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
-          aria-label="Refresh audit log"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-          Refresh
-        </button>
-        <button
-          type="button"
-          onClick={() => void onCopy(filteredRecords)}
-          disabled={filteredRecords.length === 0}
-          className={cn(
-            "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
-            filteredRecords.length === 0
-              ? "border-border-default text-text-placeholder cursor-not-allowed"
-              : copyFlashActive
-                ? "text-status-success border-status-success/30"
-                : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
-          )}
-        >
-          {copyFlashActive ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-          {copyFlashActive ? "Copied!" : `Copy ${showCopyAll ? "all" : "filtered"} as JSON`}
-        </button>
-        <button
-          type="button"
-          onClick={() => void onExport(filteredRecords)}
-          disabled={filteredRecords.length === 0}
-          className={cn(
-            "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
-            filteredRecords.length === 0
-              ? "border-border-default text-text-placeholder cursor-not-allowed"
-              : exportFlashActive
-                ? "text-status-success border-status-success/30"
-                : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
-          )}
-        >
-          {exportFlashActive ? (
-            <Check className="w-3.5 h-3.5" />
-          ) : (
-            <Download className="w-3.5 h-3.5" />
-          )}
-          {exportFlashActive ? "Exported!" : "Export as NDJSON"}
-        </button>
-        <button
-          type="button"
-          onClick={onClear}
-          disabled={records.length === 0}
-          className={cn(
-            "px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
-            records.length === 0
-              ? "border-border-default text-text-placeholder cursor-not-allowed"
-              : "border-border-default text-status-danger hover:text-status-danger hover:bg-status-danger/10 hover:border-status-danger/20"
-          )}
-        >
-          Clear log
-        </button>
-        <span className="ml-auto text-xs text-text-secondary">
-          {isFiltering
-            ? `${filteredRecords.length} of ${records.length}`
-            : `${records.length} of ${maxRecords}`}
-        </span>
-      </div>
-    </div>
+        <div className="flex flex-wrap items-center gap-2 px-4 py-2.5">
+          <span className="mr-auto text-xs text-text-secondary tabular-nums" aria-live="polite">
+            {filteredRecords.length} of {records.length} calls
+          </span>
+          <Button variant="outline" size="sm" onClick={() => void onRefresh()}>
+            <RefreshCw aria-hidden="true" />
+            Refresh
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={nothingShown}
+            onClick={() => void onCopy(filteredRecords)}
+          >
+            {copyFlashActive ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+            {copyFlashActive ? "Copied" : `Copy ${showCopyAll ? "all" : "shown"} as JSON`}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={nothingShown}
+            onClick={() => void onExport(filteredRecords)}
+          >
+            {exportFlashActive ? <Check aria-hidden="true" /> : <Download aria-hidden="true" />}
+            {exportFlashActive ? "Exported" : "Export as NDJSON"}
+          </Button>
+        </div>
+      </SettingsGroup>
+
+      <SettingsGroup>
+        <SettingsRow
+          label="Clear log"
+          description="Deletes every recorded call on this machine. Recording carries on."
+          control={
+            <Button
+              variant="ghost-danger"
+              size="sm"
+              onClick={onClear}
+              disabled={records.length === 0}
+            >
+              Clear log
+            </Button>
+          }
+        />
+      </SettingsGroup>
+    </>
   );
 }

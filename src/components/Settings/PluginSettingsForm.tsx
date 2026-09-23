@@ -6,10 +6,12 @@ import {
   SettingsGroup,
   SettingsRow,
 } from "@/components/Settings/SettingsGroup";
+import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import {
   Select,
   SelectContent,
@@ -80,11 +82,31 @@ function toDraft(value: unknown, type: SettingFieldType): string {
   return String(value);
 }
 
-/** One scope's loaded values. `values === null` means "not loaded yet". */
+/**
+ * An enum this small, with labels this short, is a segmented control on the rail
+ * rather than a select — the same control-choice rule every other settings page follows.
+ */
+const SEGMENTED_MAX_OPTIONS = 5;
+const SEGMENTED_MAX_LABEL = 12;
+
+function fitsSegmented(options: readonly string[]): boolean {
+  return (
+    options.length >= 2 &&
+    options.length <= SEGMENTED_MAX_OPTIONS &&
+    options.every((opt) => opt.length <= SEGMENTED_MAX_LABEL)
+  );
+}
+
+/**
+ * One scope's loaded values. `values === null` means "not loaded": still loading, or
+ * `failed` when the read errored — never an empty object, which would present stored
+ * values (and stored secrets) as unset and let a write overwrite what was never read.
+ */
 interface ScopeValues {
   values: Record<string, unknown> | null;
   secrets: Set<string>;
   secretInfo: SecretTierInfo;
+  failed?: boolean;
 }
 
 const UNLOADED_SCOPE: ScopeValues = {
@@ -92,6 +114,7 @@ const UNLOADED_SCOPE: ScopeValues = {
   secrets: new Set(),
   secretInfo: EMPTY_SECRET_INFO,
 };
+const FAILED_SCOPE: ScopeValues = { ...UNLOADED_SCOPE, failed: true };
 const EMPTY_SCOPE: ScopeValues = { values: {}, secrets: new Set(), secretInfo: EMPTY_SECRET_INFO };
 
 /**
@@ -126,7 +149,7 @@ function loadScopeValues(
     })
     .catch((err) => {
       if (cancelled) return;
-      setState(EMPTY_SCOPE);
+      setState(FAILED_SCOPE);
       logError(`Failed to load ${scope} plugin settings for ${pluginId}`, err);
     });
   return () => {
@@ -148,6 +171,8 @@ interface SettingFieldProps {
   secretIsPlaintext: boolean;
   /** Whether this field's scope values have finished loading. */
   loaded: boolean;
+  /** Whether this field's scope failed to load, so it has nothing safe to edit. */
+  failed: boolean;
 }
 
 /**
@@ -164,6 +189,7 @@ function SettingField({
   secretTier,
   secretIsPlaintext,
   loaded,
+  failed,
 }: SettingFieldProps) {
   const type = effectiveType(def);
   const scope = settingScope(def);
@@ -311,9 +337,22 @@ function SettingField({
   }, [enumOpen, enumListOpen]);
   const fieldId = `plugin-setting-${pluginId}-${def.id}`;
 
+  // Optimistic, but a failed write puts the switch back: a control that still shows
+  // the value it couldn't save reads as applied.
   const toggleBool = (next: boolean) => {
     setBoolValue(next);
-    void writeValue(next);
+    void writeValue(next).then((ok) => {
+      if (!ok) setBoolValue(!next);
+    });
+  };
+
+  const chooseEnum = (next: string) => {
+    const previous = committed;
+    setDraft(next);
+    void writeValue(next).then((ok) => {
+      if (ok) setCommitted(next);
+      else setDraft(previous);
+    });
   };
 
   const commitText = async () => {
@@ -434,7 +473,11 @@ function SettingField({
     onReset: saving ? undefined : () => void handleReset(),
     resetAriaLabel: `Reset ${label} to default`,
     disabled: rowDisabled,
-    disabledReason: scopeReady ? undefined : "Open a project to edit this setting",
+    disabledReason: !scopeReady
+      ? "Open a project to edit this setting"
+      : failed
+        ? "Saved value couldn't be read"
+        : undefined,
     error: shownError ?? undefined,
   };
 
@@ -459,6 +502,23 @@ function SettingField({
   if (type === "enum") {
     const options = def.options ?? [];
     const wide = options.some((opt) => opt.length > 24);
+    if (fitsSegmented(options)) {
+      return (
+        <SettingsRow
+          {...rowProps}
+          control={({ descriptionId, disabled }) => (
+            <SegmentedRadioGroup
+              aria-label={label}
+              aria-describedby={descriptionId}
+              options={options.map((opt) => ({ value: opt, label: opt }))}
+              value={draft}
+              onChange={chooseEnum}
+              disabled={disabled || saving}
+            />
+          )}
+        />
+      );
+    }
     return (
       <SettingsRow
         {...rowProps}
@@ -468,11 +528,7 @@ function SettingField({
             onOpenChange={setEnumOpen}
             value={draft}
             disabled={disabled || saving}
-            onValueChange={(next) => {
-              setDraft(next);
-              setCommitted(next);
-              void writeValue(next);
-            }}
+            onValueChange={chooseEnum}
           >
             <SelectTrigger
               aria-labelledby={labelId}
@@ -680,6 +736,7 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
   const settings = plugin.manifest.contributes.settings ?? [];
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
 
+  const [reloadKey, setReloadKey] = useState(0);
   const [userScope, setUserScope] = useState<ScopeValues>(UNLOADED_SCOPE);
   const [projectScope, setProjectScope] = useState<ScopeValues>(UNLOADED_SCOPE);
   const [localScope, setLocalScope] = useState<ScopeValues>(UNLOADED_SCOPE);
@@ -698,48 +755,61 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
   useEffect(() => {
     if (!hasUserScope) return;
     return loadScopeValues(pluginId, "user", null, setUserScope);
-  }, [pluginId, hasUserScope]);
+  }, [pluginId, hasUserScope, reloadKey]);
 
   // Project-scoped values: reload on project switch (#9301 re-render requirement).
   useEffect(() => {
     if (!hasProjectScope) return;
     return loadScopeValues(pluginId, "project", projectId, setProjectScope);
-  }, [pluginId, hasProjectScope, projectId]);
+  }, [pluginId, hasProjectScope, projectId, reloadKey]);
 
   // Local scope resolves from the same project id as `project`, so it reloads on
   // exactly the same switches — the file it reaches just isn't in the repo.
   useEffect(() => {
     if (!hasLocalScope) return;
     return loadScopeValues(pluginId, "local", projectId, setLocalScope);
-  }, [pluginId, hasLocalScope, projectId]);
+  }, [pluginId, hasLocalScope, projectId, reloadKey]);
 
   if (settings.length === 0) return null;
 
+  const anyFailed = userScope.failed || projectScope.failed || localScope.failed;
+
   // One group; the caller owns the heading (a section, or the tab that already names it).
   return (
-    <SettingsGroup>
-      {settings.map((def) => {
-        const scope = settingScope(def);
-        const state = byScope[scope];
-        const loaded = state.values !== null;
-        const values = state.values;
-        const secrets = state.secrets;
-        const secretInfo = state.secretInfo;
-        return (
-          <SettingField
-            // Remount project-bound fields on project switch so drafts reset.
-            key={PROJECT_BOUND_SCOPES.includes(scope) ? `${def.id}:${projectId ?? "none"}` : def.id}
-            def={def}
-            pluginId={pluginId}
-            projectId={projectId}
-            storedValue={values?.[def.id]}
-            secretIsSet={secrets.has(def.id)}
-            secretTier={secretInfo.tier}
-            secretIsPlaintext={secretInfo.plaintext.has(def.id)}
-            loaded={loaded}
-          />
-        );
-      })}
-    </SettingsGroup>
+    <div className="grid gap-3">
+      {anyFailed && (
+        <SettingsLoadErrorBanner
+          message="Couldn't read this plugin's saved settings, so they can't be edited yet"
+          onRetry={() => setReloadKey((k) => k + 1)}
+        />
+      )}
+      <SettingsGroup>
+        {settings.map((def) => {
+          const scope = settingScope(def);
+          const state = byScope[scope];
+          const loaded = state.values !== null;
+          const values = state.values;
+          const secrets = state.secrets;
+          const secretInfo = state.secretInfo;
+          return (
+            <SettingField
+              // Remount project-bound fields on project switch so drafts reset.
+              key={
+                PROJECT_BOUND_SCOPES.includes(scope) ? `${def.id}:${projectId ?? "none"}` : def.id
+              }
+              def={def}
+              pluginId={pluginId}
+              projectId={projectId}
+              storedValue={values?.[def.id]}
+              secretIsSet={secrets.has(def.id)}
+              secretTier={secretInfo.tier}
+              secretIsPlaintext={secretInfo.plaintext.has(def.id)}
+              loaded={loaded}
+              failed={state.failed === true}
+            />
+          );
+        })}
+      </SettingsGroup>
+    </div>
   );
 }

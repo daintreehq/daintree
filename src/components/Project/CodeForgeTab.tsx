@@ -137,7 +137,7 @@ export function CodeForgeTab({
   const remoteDescription =
     "Auto-detect prefers origin, then any other remote a forge provider recognizes";
   const providerDescription =
-    "Pins this project to one provider. Auto-detects from the remote URL when unset.";
+    "Overrides the default provider for this project. Auto-detect uses the default provider from global Code forge settings, then the remote's hostname";
 
   return (
     <SettingsSection

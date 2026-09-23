@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Check, AlertCircle, FlaskConical, ExternalLink, Import } from "lucide-react";
+import { Check, FlaskConical, ExternalLink, Import } from "lucide-react";
 import { useGitHubConfigStore } from "../stores/githubConfigStore";
 import { actionService } from "@/services/ActionService";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
@@ -34,8 +34,8 @@ interface CliImportPreview {
 type CliImportPhase = "idle" | "previewing" | "confirming" | "committing";
 
 const SCOPE_DESCRIPTIONS: Record<(typeof GITHUB_REQUIRED_SCOPES)[number], string> = {
-  repo: "Access repository data",
-  "read:org": "Read organization membership (for private repos)",
+  repo: "read repository data",
+  "read:org": "see private repos in your organizations",
 };
 
 export function GitHubSettingsTab() {
@@ -53,6 +53,7 @@ export function GitHubSettingsTab() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const isGhAvailable = useGitHubCliAvailable();
   const [isClearing, setIsClearing] = useState(false);
+  const [confirmingClear, setConfirmingClear] = useState(false);
   const [cliImportPhase, setCliImportPhase] = useState<CliImportPhase>("idle");
   // Kept after the dialog closes so its exit animation still shows what was
   // confirmed; replaced by the next preview.
@@ -74,14 +75,21 @@ export function GitHubSettingsTab() {
   });
   const loadError = timeoutError ?? storeError;
 
+  // Only a success fades. An error carries the fix, so it stays until the token changes.
   useEffect(() => {
-    if (!validationResult) return;
-    const timer = setTimeout(() => {
-      setValidationResult(null);
-      setErrorMessage(null);
-    }, 5000);
+    if (validationResult !== "success" && validationResult !== "test-success") return;
+    const timer = setTimeout(() => setValidationResult(null), 5000);
     return () => clearTimeout(timer);
   }, [validationResult]);
+
+  const handleTokenChange = (next: string) => {
+    setGithubToken(next);
+    // A result belongs to the token it was produced for.
+    if (validationResult !== null) {
+      setValidationResult(null);
+      setErrorMessage(null);
+    }
+  };
 
   const handleSaveToken = async () => {
     if (!githubToken.trim()) return;
@@ -120,6 +128,7 @@ export function GitHubSettingsTab() {
   };
 
   const handleClearToken = async () => {
+    setConfirmingClear(false);
     setIsClearing(true);
     try {
       await window.electron.forge.clearCredential(BUILTIN_GITHUB_PROVIDER_ID);
@@ -241,22 +250,25 @@ export function GitHubSettingsTab() {
 
   useSettingsTabValidation("code-forge", Boolean(loadError));
 
+  const tokenError =
+    validationResult === "error" || validationResult === "test-error"
+      ? errorMessage || "Invalid token"
+      : undefined;
+
   const tokenStatus =
     validationResult === "success" ? (
       <span className="flex items-center gap-1">
         <Check className="w-3 h-3 shrink-0" aria-hidden="true" />
-        Token saved
+        Checked and saved
       </span>
     ) : validationResult === "test-success" ? (
       <span className="flex items-center gap-1">
         <Check className="w-3 h-3 shrink-0" aria-hidden="true" />
-        Token valid — click Save to store it
+        Token works — not saved yet
       </span>
-    ) : validationResult === "error" || validationResult === "test-error" ? (
-      <span className="flex items-center gap-1 text-status-error">
-        <AlertCircle className="w-3 h-3 shrink-0" aria-hidden="true" />
-        {errorMessage || "Invalid token"}
-      </span>
+    ) : tokenError ? (
+      // Shown on the field; repeated here only so the live region announces it.
+      <span className="sr-only">{tokenError}</span>
     ) : null;
 
   return (
@@ -276,8 +288,8 @@ export function GitHubSettingsTab() {
                 <span className="flex items-center gap-1 text-xs text-text-secondary">
                   <Check className="w-3 h-3" aria-hidden="true" />
                   {githubConfig.username
-                    ? `GitHub connected as @${githubConfig.username}`
-                    : "GitHub connected"}
+                    ? `Token saved for @${githubConfig.username}`
+                    : "Token saved"}
                 </span>
               }
             />
@@ -286,7 +298,9 @@ export function GitHubSettingsTab() {
             label="Personal access token"
             type="password"
             value={githubToken}
-            onChange={(e) => setGithubToken(e.target.value)}
+            onChange={(e) => handleTokenChange(e.target.value)}
+            error={tokenError}
+            description="Test checks a token without saving it; Save checks it, then stores it"
             placeholder={
               githubConfig?.hasToken ? "Enter new token to replace" : "ghp_... or github_pat_..."
             }
@@ -321,20 +335,21 @@ export function GitHubSettingsTab() {
 
         <SettingsGroup>
           <SettingsRow
-            label={isGhAvailable ? "Get a token" : "Create a new token"}
+            label="Get a token"
             description={
               <>
                 {isGhAvailable
-                  ? "Import the token the GitHub CLI already holds, or create one on GitHub. "
+                  ? "Import the token the GitHub CLI already holds, or create one on GitHub with the scopes preselected. "
                   : "Opens GitHub in your browser with the required scopes preselected. "}
-                Required scopes:{" "}
+                Needs{" "}
                 {GITHUB_REQUIRED_SCOPES.map((scope, index) => (
                   <span key={scope}>
-                    {index > 0 && ", "}
-                    <code className="font-mono text-text-primary">{scope}</code> (
-                    {SCOPE_DESCRIPTIONS[scope]})
+                    {index > 0 && " and "}
+                    <code className="font-mono text-text-primary">{scope}</code> to{" "}
+                    {SCOPE_DESCRIPTIONS[scope]}
                   </span>
                 ))}
+                .
               </>
             }
             error={
@@ -377,7 +392,7 @@ export function GitHubSettingsTab() {
               description="Clearing removes Daintree's copy; forge features stop until you add another token"
               control={
                 <Button
-                  onClick={handleClearToken}
+                  onClick={() => setConfirmingClear(true)}
                   disabled={isValidating || isTesting || isImporting}
                   loading={isClearing}
                   variant="ghost-danger"
@@ -391,6 +406,17 @@ export function GitHubSettingsTab() {
           </SettingsGroup>
         )}
       </SettingsSection>
+
+      <ConfirmDialog
+        isOpen={confirmingClear}
+        variant="destructive"
+        onConfirm={() => void handleClearToken()}
+        onClose={() => setConfirmingClear(false)}
+        title="Clear the GitHub token?"
+        description="Daintree's copy is deleted. Issues, pull requests and repository stats stop until you add a token again."
+        confirmLabel="Clear token"
+        zIndex="nested"
+      />
 
       <ConfirmDialog
         isOpen={cliImportPhase === "confirming" || cliImportPhase === "committing"}

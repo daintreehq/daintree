@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { AlertCircle, FolderOpen, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,6 +33,8 @@ import {
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { useProjectStore } from "@/store/projectStore";
 import { systemClient } from "@/clients";
+import { actionService } from "@/services/ActionService";
+import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
@@ -68,8 +70,13 @@ const STATE_LABEL: Record<ProjectPluginState, string> = {
 const PROJECT_OPTION_PREFIX = "project:";
 const INSTALLED_OPTION_PREFIX = "installed:";
 
-function projectPluginStatus(plugin: ProjectPluginInfo): string {
-  if (plugin.muted && plugin.state !== "invalid") return "Off";
+/**
+ * One status for the picker, the badge and the pane. A plugin in a folder that is
+ * turned off is off whatever its own state says, so the folder decides first.
+ */
+export function projectPluginStatus(plugin: ProjectPluginInfo, folderTrusted: boolean): string {
+  if (plugin.state === "invalid") return STATE_LABEL.invalid;
+  if (plugin.muted || !folderTrusted) return "Off";
   return STATE_LABEL[plugin.state];
 }
 
@@ -190,8 +197,8 @@ function ProjectOverviewPane({ projectPluginCount }: { projectPluginCount: numbe
         title="This project's plugins"
         description={
           projectPluginCount === 0
-            ? "No plugins found in .daintree/plugins."
-            : `${projectPluginCount} plugin${projectPluginCount === 1 ? "" : "s"} in .daintree/plugins.`
+            ? "None found in .daintree/plugins"
+            : `${projectPluginCount} plugin${projectPluginCount === 1 ? "" : "s"} in .daintree/plugins`
         }
       >
         <SettingsGroup>
@@ -261,6 +268,9 @@ function ProjectOverviewPane({ projectPluginCount }: { projectPluginCount: numbe
   );
 }
 
+/** Longer than this and a manifest description is clamped behind "Show more". */
+const LONG_DESCRIPTION = 160;
+
 /** Whether a loaded plugin contributes settings, so its section is worth a heading. */
 function hasPluginSettings(plugin: LoadedPluginInfo | undefined): plugin is LoadedPluginInfo {
   return (plugin?.manifest.contributes.settings?.length ?? 0) > 0;
@@ -272,10 +282,28 @@ function hasPluginSettings(plugin: LoadedPluginInfo | undefined): plugin is Load
  * `collidesWithGlobal` case is exactly two plugins sharing an id.
  */
 function PluginIdentityDescription({ description, id }: { description?: string; id: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const textId = useId();
+  const long = (description?.length ?? 0) > LONG_DESCRIPTION;
   return (
     <>
-      {description && <span className="block break-words">{description}</span>}
-      <span className="block font-mono break-all">{id}</span>
+      {description && (
+        <span id={textId} className={cn("block break-words", long && !expanded && "line-clamp-2")}>
+          {description}
+        </span>
+      )}
+      {long && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={textId}
+          onClick={() => setExpanded((v) => !v)}
+          className="text-text-primary underline-offset-2 hover:underline rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+      <span className="mt-1 block font-mono break-all">{id}</span>
     </>
   );
 }
@@ -285,10 +313,12 @@ function ProjectPluginPane({
   plugin,
   loaded,
   projectPath,
+  onShowOverview,
 }: {
   plugin: ProjectPluginInfo;
   loaded: LoadedPluginInfo | undefined;
   projectPath: string | undefined;
+  onShowOverview: () => void;
 }) {
   const trust = useProjectPluginStore((s) => s.trust);
   const muting = useProjectPluginStore((s) => s.muting);
@@ -319,16 +349,19 @@ function ProjectPluginPane({
       .catch((err: unknown) => logError("Failed to reveal project plugin folder", err));
   };
 
+  const folderOff = !folderTrusted && plugin.state !== "invalid";
   const runStatus = plugin.muted
-    ? "Switched off on its own. The project's other plugins are unaffected, and the folder still has whatever trust you gave it — turning this back on runs it again without asking."
-    : !folderTrusted && plugin.state !== "invalid"
-      ? "Not running because this project's plugins are turned off as a folder. Enable them under “This project”."
-      : undefined;
+    ? "Switched off on its own. The project's other plugins are unaffected, and turning this back on runs it again without asking."
+    : plugin.state === "staged"
+      ? "Allowed here, but staged: it was read and has not run yet. Activate it below to start it."
+      : plugin.state === "active"
+        ? "Running in this project. Switching it off stops only this plugin."
+        : undefined;
 
   const badges = (
     <>
       <Badge size="xs">Project</Badge>
-      <Badge size="xs">{projectPluginStatus(plugin)}</Badge>
+      <Badge size="xs">{projectPluginStatus(plugin, folderTrusted)}</Badge>
       {plugin.version && <Badge size="xs">v{plugin.version}</Badge>}
     </>
   );
@@ -340,11 +373,23 @@ function ProjectPluginPane({
         description={<PluginIdentityDescription description={plugin.description} id={plugin.id} />}
       >
         <SettingsGroup>
+          {folderOff && (
+            <SettingsRow
+              label="This project's plugins are turned off"
+              description="Nothing in .daintree/plugins runs until the folder is allowed, this plugin included"
+              control={
+                <Button variant="outline" size="sm" onClick={onShowOverview}>
+                  Review folder
+                </Button>
+              }
+            />
+          )}
           {canMute ? (
             <SettingsRow
               label="Run here"
               accessory={badges}
               description={runStatus}
+              disabled={folderOff}
               control={({ descriptionId, disabled }) => (
                 <SettingsSwitch
                   checked={!plugin.muted}
@@ -402,7 +447,7 @@ function ProjectPluginPane({
             />
           )}
 
-          {plugin.state === "staged" && !plugin.muted && (
+          {plugin.state === "staged" && !plugin.muted && folderTrusted && (
             <SettingsRow
               label="Staged"
               description="New to this project, so it was read but never run. Activating starts it now and on every future open."
@@ -488,16 +533,15 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
       >
         <SettingsGroup>
           <SettingsRow
-            label="Show here"
+            label="Show in this project"
             accessory={
               <>
                 <Badge size="xs">{plugin.isBuiltin ? "Built-in" : "Installed"}</Badge>
                 {plugin.manifest.version && <Badge size="xs">v{plugin.manifest.version}</Badge>}
               </>
             }
-            description="Hiding keeps this plugin out of this project's panels, commands, toolbar buttons, keyboard shortcuts and context menus. It stays installed and keeps running, so anything it contributes elsewhere — agents, recipes, forge providers, file decorations — carries on here regardless. This is which projects see it, not whether it is loaded."
+            description="Hiding removes its panels, commands, buttons and shortcuts from this project. It stays installed and running, so background features such as agents, forge providers and file decorations carry on."
             disabled={plugin.disabled}
-            disabledReason="Turned off everywhere in Settings → Plugins, so there is nothing for this project to show or hide"
             control={({ descriptionId, disabled }) => (
               <SettingsSwitch
                 checked={visible}
@@ -509,13 +553,31 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
               />
             )}
           />
+          {plugin.disabled && (
+            <SettingsRow
+              label="Turned off everywhere"
+              description="It isn't running in any project, so there's nothing to show or hide here"
+              control={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    void actionService.dispatch("app.pluginManager", undefined, { source: "user" })
+                  }
+                >
+                  Open plugin manager
+                </Button>
+              }
+            />
+          )}
           {!plugin.disabled && (
             <SettingsRow
               label="Where it shows up"
+              accessory={<Badge size="xs">All projects</Badge>}
               description={
                 hiddenByDefault
-                  ? "Hidden in projects you haven't decided about, including ones you open later. The switch above is this project's answer."
-                  : "Shown everywhere unless a project says otherwise. The switch above is this project's answer."
+                  ? "Hidden in every project that hasn't said otherwise, including new ones. The switch above is this project's answer."
+                  : "Shown in every project that hasn't said otherwise, including new ones. The switch above is this project's answer."
               }
               control={({ descriptionId, disabled }) => (
                 <Select
@@ -570,6 +632,7 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
 export function ProjectPluginsTab() {
   const projectPlugins = useProjectPluginStore((s) => s.plugins);
   const error = useProjectPluginStore((s) => s.error);
+  const folderTrusted = useProjectPluginStore((s) => s.trust?.enabled === true);
   const projectPath = useProjectStore((s) => s.currentProject?.path);
 
   const [installed, setInstalled] = useState<LoadedPluginInfo[] | null>(null);
@@ -620,8 +683,8 @@ export function ProjectPluginsTab() {
         pluginId: p.id,
         name: p.displayName,
         origin: "project" as const,
-        status: projectPluginStatus(p),
-        active: p.state === "active",
+        status: projectPluginStatus(p, folderTrusted),
+        active: folderTrusted && !p.muted && p.state === "active",
       })),
       ...installedOnly.map((p) => ({
         id: `${INSTALLED_OPTION_PREFIX}${p.instanceId}`,
@@ -632,7 +695,7 @@ export function ProjectPluginsTab() {
         active: !p.disabled,
       })),
     ],
-    [projectPlugins, installedOnly]
+    [projectPlugins, installedOnly, folderTrusted]
   );
 
   // A selection that has gone away — the folder changed, a plugin was
@@ -648,25 +711,20 @@ export function ProjectPluginsTab() {
 
   return (
     <div className="space-y-8">
-      <SettingsSection
-        title="Plugin"
-        description="Plugins this project ships, and which of your installed plugins show up in it"
-        action={
-          <div className="w-72">
-            <ProjectPluginSelectorDropdown
-              options={options}
-              activeId={showOverview ? PROJECT_PLUGINS_OVERVIEW_ID : selectedId}
-              onChange={setSelectedId}
-            />
-          </div>
-        }
-      >
+      {/* The picker leads the page bare, the way the agent and forge pages open: it
+          chooses what the rest of the page is about, so it is not a setting in a section. */}
+      <div className="space-y-2">
+        <ProjectPluginSelectorDropdown
+          options={options}
+          activeId={showOverview ? PROJECT_PLUGINS_OVERVIEW_ID : selectedId}
+          onChange={setSelectedId}
+        />
         {error && (
-          <p className="text-xs text-status-danger" role="alert">
+          <p className="text-xs text-status-error" role="alert">
             {error}
           </p>
         )}
-      </SettingsSection>
+      </div>
 
       {showOverview && <ProjectOverviewPane projectPluginCount={projectPlugins.length} />}
 
@@ -680,6 +738,7 @@ export function ProjectPluginsTab() {
               : undefined
           }
           projectPath={projectPath}
+          onShowOverview={() => setSelectedId(PROJECT_PLUGINS_OVERVIEW_ID)}
         />
       )}
 

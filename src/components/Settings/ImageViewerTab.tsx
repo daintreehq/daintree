@@ -33,6 +33,8 @@ export function ImageViewerTab() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [commandError, setCommandError] = useState<string | null>(null);
   // What is on disk, so Save means "write this change". Null while the project has
   // no preference yet: the OS default shown then is a suggestion, and saving it is
   // still a real first write.
@@ -65,7 +67,7 @@ export function ImageViewerTab() {
     const timer = setTimeout(() => {
       timedOut = true;
       if (!cancelled && isMountedRef.current) {
-        setLoadError("Settings took too long to load. Reopen the tab to retry.");
+        setLoadError("The saved image viewer took too long to load");
         setIsLoading(false);
       }
     }, 10_000);
@@ -93,7 +95,7 @@ export function ImageViewerTab() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [activeProjectId]);
+  }, [activeProjectId, loadAttempt]);
 
   const handleModeChange = (newMode: ImageViewerMode) => {
     setMode(newMode);
@@ -103,12 +105,13 @@ export function ImageViewerTab() {
   const handleCommandChange = (value: string) => {
     setCustomCommand(value);
     setSaved(false);
+    setCommandError(null);
   };
 
   const handleSave = async () => {
     if (!activeProjectId || isSaving || isLoading || loadError) return;
     if (mode === "custom" && !customCommand.trim()) {
-      setSaveError("Custom command cannot be empty");
+      setCommandError("Enter the command that opens images");
       return;
     }
     setIsSaving(true);
@@ -156,7 +159,7 @@ export function ImageViewerTab() {
     <SettingsSection
       id="image-viewer"
       title="Image viewer"
-      description="Choose the application that opens when you click 'Open in image viewer' in the file viewer"
+      description={`The app "Open in image viewer" launches from the file viewer. Saved for ${activeProject?.name ?? "this project"} only.`}
     >
       <SettingsGroup className="overflow-hidden">
         <RadioChoiceGroup
@@ -210,10 +213,20 @@ export function ImageViewerTab() {
                   value={customCommand}
                   onChange={(e) => handleCommandChange(e.target.value)}
                   disabled={controlsDisabled}
-                  placeholder="e.g. open -a Photoshop, gimp"
+                  placeholder="open -a Photoshop, gimp"
+                  aria-describedby={`${commandFieldId}-help${commandError ? ` ${commandFieldId}-error` : ""}`}
+                  aria-invalid={commandError ? true : undefined}
                   className="font-mono"
                 />
-                <p className="text-xs text-text-secondary select-text">
+                {commandError && (
+                  <p id={`${commandFieldId}-error`} className="text-xs text-status-error">
+                    {commandError}
+                  </p>
+                )}
+                <p
+                  id={`${commandFieldId}-help`}
+                  className="text-xs text-text-secondary select-text"
+                >
                   The file path is appended as the last argument
                 </p>
               </div>
@@ -231,9 +244,16 @@ export function ImageViewerTab() {
               "Saved"
             ) : !persisted && !isLoading ? (
               "Not saved yet — images open with the OS default"
+            ) : persisted && isDirty ? (
+              "Unsaved changes"
             ) : null
           }
         >
+          {loadError && (
+            <Button variant="outline" size="sm" onClick={() => setLoadAttempt((n) => n + 1)}>
+              Retry
+            </Button>
+          )}
           <Button
             variant="contrast"
             size="sm"
