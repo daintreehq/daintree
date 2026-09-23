@@ -311,12 +311,34 @@ async function populate(app: ElectronApplication, page: Page, repoDir: string): 
   await activateE2EPlugin(app, "daintree.rich").catch(() => {});
   // Trust the folder, then add a second plugin and rescan: it is new to a trusted
   // folder, so it stages instead of running — one plugin in each state.
-  await page.evaluate(() => window.electron.plugin.setProjectPluginTrust("enabled"));
+  // Trust can land before the view is bound to its project (the call then has no
+  // project to record against), so keep asking until main reports the plugin running.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async () => {
+          await window.electron.plugin.setProjectPluginTrust("enabled").catch(() => {});
+          const plugins = await window.electron.plugin.getProjectPlugins();
+          return plugins.find((p) => p.id === "acme.project-hello")?.state ?? "missing";
+        }),
+      { timeout: 30_000, intervals: [500, 1000, 2000] }
+    )
+    .toBe("active");
   const staged = path.join(repoDir, ".daintree", "plugins", STAGED_PROJECT_PLUGIN.name);
   mkdirSync(path.join(staged, "dist"), { recursive: true });
   writeFileSync(path.join(staged, "dist", "index.js"), "export async function activate() {}\n");
   writeFileSync(path.join(staged, "plugin.json"), JSON.stringify(STAGED_PROJECT_PLUGIN, null, 2));
-  await page.evaluate(() => window.electron.plugin.reloadProjectPlugins());
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async (id) => {
+          await window.electron.plugin.reloadProjectPlugins();
+          const plugins = await window.electron.plugin.getProjectPlugins();
+          return plugins.find((p) => p.id === id)?.state ?? "missing";
+        }, STAGED_PROJECT_PLUGIN.name),
+      { timeout: 30_000, intervals: [1000, 2000] }
+    )
+    .toBe("staged");
   // Real forge calls against the fixture's GitHub remote, so the audit log holds
   // records the provider actually wrote. Read-only methods on an owner that does not
   // exist; with no token stored they fail or miss, which is the interesting case.
