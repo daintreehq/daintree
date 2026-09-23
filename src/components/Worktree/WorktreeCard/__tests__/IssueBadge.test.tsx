@@ -128,10 +128,14 @@ describe("IssueBadge trigger", () => {
     expect(trigger().getAttribute("aria-label")).toBe("Open issue #42: Something is broken");
   });
 
-  it("names the settings route, not the issue, when no token is configured", () => {
+  it("names the item and the settings route when no token is configured", () => {
     mockMissingCredential = true;
     render(badge({ issueTitle: "Something is broken", isHeadline: true }));
-    expect(trigger().getAttribute("aria-label")).toMatch(/access token/);
+    const name = trigger().getAttribute("aria-label") ?? "";
+    expect(name).toMatch(/access token/);
+    // Which item the badge is for survives the switch to the settings action.
+    expect(name).toContain("#42");
+    expect(name).toContain("Something is broken");
     // Still a working control, so nothing on it drops to the muted tier, which
     // has no dark-theme contrast floor.
     for (const el of trigger().querySelectorAll("*")) {

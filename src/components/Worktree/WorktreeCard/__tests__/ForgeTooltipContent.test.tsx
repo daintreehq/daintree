@@ -114,7 +114,7 @@ describe("ForgeTooltipContent avatars", () => {
     expect(container.querySelectorAll("img")).toHaveLength(2);
   });
 
-  it("caps the assignee avatars at three and names the first assignee beside a count of the rest", () => {
+  it("names every assignee in visible text, with at most three avatars beside them", () => {
     const data = {
       ...baseIssue,
       assignees: [user("alice"), user("bob"), user("carol"), user("dave")],
@@ -122,10 +122,11 @@ describe("ForgeTooltipContent avatars", () => {
     const { container } = render(<IssueTooltipContent data={data} />);
     // Author (1) + three assignee avatars (3) = 4 images.
     expect(container.querySelectorAll("img")).toHaveLength(4);
-    // A sighted reader gets a name, not only faces: the first login is visible
-    // and the count covers everyone else.
-    expect(screen.getByText("alice")).toBeDefined();
-    expect(screen.getByText(`+${data.assignees.length - 1}`)).toBeDefined();
+    // Every login is readable without hovering anything: a keyboard user who
+    // opened the card from focus can't reach a native title.
+    const text = container.textContent ?? "";
+    for (const a of data.assignees) expect(text).toContain(a.login);
+    expect(text).not.toMatch(/\+\d/);
   });
 
   it("names every assignee for screen readers even when avatars overflow", () => {
@@ -134,7 +135,8 @@ describe("ForgeTooltipContent avatars", () => {
       assignees: [user("alice"), user("bob"), user("carol"), user("dave")],
     };
     render(<IssueTooltipContent data={data} />);
-    expect(screen.getByText("Assigned to alice, bob, carol, dave")).toBeDefined();
+    expect(screen.getByText("Assigned to")).toBeDefined();
+    expect(screen.getByText(/alice, bob, carol, dave/)).toBeDefined();
   });
 
   it("handles a missing avatar URL without crashing", () => {
@@ -161,7 +163,7 @@ describe("ForgeTooltipContent avatars", () => {
     expect(screen.getByText("octocat")).toBeDefined();
     // Author + two stacked assignees.
     expect(container.querySelectorAll("img")).toHaveLength(3);
-    expect(screen.getByText("Assigned to alice, bob")).toBeDefined();
+    expect(screen.getByText(/alice, bob/)).toBeDefined();
   });
 });
 
@@ -481,5 +483,32 @@ describe("hover card descriptions", () => {
     };
     expect(describePRTooltip(prData, undefined, ci)).toContain("CI passing");
     expect(describePRTooltip({ ...prData, isDraft: true })).toMatch(/^Draft pull request #7/);
+  });
+});
+
+describe("describe*Tooltip title option", () => {
+  it("speaks the title only when the trigger's own name lacks it", () => {
+    expect(describePRTooltip(prData)).not.toContain(prData.title);
+    expect(describePRTooltip(prData, undefined, undefined, { includeTitle: true })).toContain(
+      prData.title
+    );
+    expect(describeIssueTooltip(issueData, undefined, { includeTitle: true })).toContain(
+      issueData.title
+    );
+  });
+});
+
+describe("TooltipFallback CI", () => {
+  it("keeps an open PR's CI mark while its details load", () => {
+    const ci = {
+      state: "pending" as const,
+      total: 4,
+      passed: 2,
+      failed: 0,
+      pending: 2,
+      rawData: null,
+    };
+    render(<TooltipFallback type="pr" number={7} prState="open" ciStatus={ci} status="loading" />);
+    expect(screen.getByText(/CI pending/)).toBeTruthy();
   });
 });

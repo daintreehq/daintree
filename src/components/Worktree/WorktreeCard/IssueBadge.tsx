@@ -86,7 +86,9 @@ export function IssueBadge({
           aria-disabled={!isActive || undefined}
           aria-label={
             missingCredential
-              ? "Add a forge access token to see issue details"
+              ? // Which item, then the action: the badge still names what it's for
+                // even though clicking it now opens Settings.
+                `Issue #${issueNumber}${issueTitle ? `: ${issueTitle}` : ""}. Add a forge access token to see issue details`
               : issueTitle
                 ? `Open issue #${issueNumber}: ${issueTitle}`
                 : `Open issue #${issueNumber}`
@@ -134,7 +136,11 @@ export function IssueBadge({
         side="right"
         align="start"
         className="p-3"
-        aria-label={data && !missingCredential ? describeIssueTooltip(data, freshness) : undefined}
+        aria-label={
+          data && !missingCredential
+            ? describeIssueTooltip(data, freshness, { includeTitle: !issueTitle })
+            : undefined
+        }
       >
         {missingCredential ? (
           <TokenMissingTooltip type="issue" />

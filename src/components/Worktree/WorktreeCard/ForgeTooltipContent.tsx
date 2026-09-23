@@ -70,9 +70,10 @@ function ForgeAvatar({
 
 // Assignee metadata cell. A `UserCheck` glyph marks the role (vs the author
 // row's `PenLine`) so creator and assignee read apart at a glance. One assignee
-// → glyph + avatar + login. Two or more → up to three avatars side by side, the
-// first login, and a count of the rest, so a sighted reader gets a name rather
-// than a row of faces. The avatars sit apart instead of overlapping: an overlap
+// → glyph + avatar + login. Two or more → the cell takes a line of its own and
+// names everyone in wrapping text, with up to three avatars as support: a
+// count of faces told a keyboard user nothing, and a hover title can't be
+// reached from focus. The avatars sit apart instead of overlapping: an overlap
 // needs a cut-out ring in the card's own colour, which forced-colors strips and
 // which has no one token to match across the overlay's light and dark planes.
 function AssigneeMeta({ assignees }: { assignees: ForgeUser[] }) {
@@ -87,17 +88,11 @@ function AssigneeMeta({ assignees }: { assignees: ForgeUser[] }) {
     );
   }
 
-  const shown = assignees.slice(0, 3);
-  const others = assignees.length - 1;
-
-  const everyone = assignees.map((u) => u.login).join(", ");
-
   return (
-    // The full list on hover too, now the card itself can be hovered.
-    <span className="flex items-center gap-1 min-w-0" title={everyone}>
-      <UserCheck className="w-3 h-3 shrink-0" aria-hidden="true" />
-      <span className="flex items-center gap-0.5 shrink-0" aria-hidden="true">
-        {shown.map((user) => (
+    <span className="flex items-start gap-1 min-w-0 basis-full">
+      <UserCheck className="w-3 h-3 mt-px shrink-0" aria-hidden="true" />
+      <span className="flex items-center gap-0.5 mt-px shrink-0" aria-hidden="true">
+        {assignees.slice(0, 3).map((user) => (
           <Avatar
             key={user.login}
             src={withAvatarSize(user.avatarUrl, 24)}
@@ -106,13 +101,10 @@ function AssigneeMeta({ assignees }: { assignees: ForgeUser[] }) {
           />
         ))}
       </span>
-      <span className="truncate" aria-hidden="true">
-        {assignees[0]!.login}
+      <span className="min-w-0 [overflow-wrap:anywhere]">
+        <span className="sr-only">Assigned to </span>
+        {assignees.map((u) => u.login).join(", ")}
       </span>
-      <span className="shrink-0 tabular-nums" aria-hidden="true">
-        +{others}
-      </span>
-      <span className="sr-only">Assigned to {everyone}</span>
     </span>
   );
 }
@@ -445,6 +437,8 @@ interface TooltipFallbackProps {
   /** What the badge already knows — never say less than the badge did. */
   title?: string;
   prState?: string;
+  /** The badge's CI rollup, so the fallback keeps the mark the badge shows. */
+  ciStatus?: CIStatus | null;
   status: "loading" | "failed" | "idle";
   freshness?: TooltipFreshness;
 }
@@ -464,6 +458,7 @@ export function TooltipFallback({
   number,
   title,
   prState,
+  ciStatus,
   status,
   freshness,
 }: TooltipFallbackProps) {
@@ -488,16 +483,21 @@ export function TooltipFallback({
         stateLabel={header.label}
         number={number}
         title={title}
+        trailing={
+          type === "pr" && ciStatus && (prState === undefined || prState === "open") ? (
+            <CIStatusItem status={ciStatus} />
+          ) : undefined
+        }
       />
       {status === "loading" && (
         <div className="space-y-2" aria-hidden="true">
           <div className="space-y-1.5">
-            <div className="animate-pulse-delayed h-2.5 w-full rounded-full bg-overlay-strong" />
-            <div className="animate-pulse-delayed h-2.5 w-2/3 rounded-full bg-overlay-strong" />
+            <div className="animate-pulse-delayed h-2.5 w-full rounded-full bg-tint/[0.1]" />
+            <div className="animate-pulse-delayed h-2.5 w-2/3 rounded-full bg-tint/[0.1]" />
           </div>
           <div className="flex items-center gap-3">
-            <div className="animate-pulse-delayed h-2.5 w-16 rounded-full bg-overlay-strong" />
-            <div className="animate-pulse-delayed h-2.5 w-20 rounded-full bg-overlay-strong" />
+            <div className="animate-pulse-delayed h-2.5 w-16 rounded-full bg-tint/[0.1]" />
+            <div className="animate-pulse-delayed h-2.5 w-20 rounded-full bg-tint/[0.1]" />
           </div>
         </div>
       )}
@@ -515,11 +515,18 @@ function joinList(parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(". ") + ".";
 }
 
+interface DescribeOptions {
+  /** Speak the title too — for a trigger whose own name doesn't carry it. */
+  includeTitle?: boolean;
+}
+
 function describeMeta(
   data: IssueTooltipData | PRTooltipData,
-  freshness?: TooltipFreshness
+  freshness: TooltipFreshness | undefined,
+  { includeTitle = false }: DescribeOptions
 ): (string | null)[] {
   return [
+    includeTitle ? data.title : null,
     data.bodyExcerpt || null,
     data.author ? `Created by ${data.author.login}` : null,
     data.assignees.length > 0
@@ -535,24 +542,30 @@ function describeMeta(
  * What a screen reader hears for the issue card. The visual layout's rows and
  * chips carry the boundaries a sighted reader uses; flattened into the
  * tooltip's description they'd run together, so this spells them out as
- * sentences. The title is left out — it's already the trigger's name.
+ * sentences. The title is left out by default because it's the trigger's name;
+ * a trigger that shows only the number asks for it with `includeTitle`.
  */
-export function describeIssueTooltip(data: IssueTooltipData, freshness?: TooltipFreshness): string {
+export function describeIssueTooltip(
+  data: IssueTooltipData,
+  freshness?: TooltipFreshness,
+  options: DescribeOptions = {}
+): string {
   return joinList([
     `${issueStateVisual(data.state).label} issue #${data.number}`,
-    ...describeMeta(data, freshness),
+    ...describeMeta(data, freshness, options),
   ]);
 }
 
 export function describePRTooltip(
   data: PRTooltipData,
   freshness?: TooltipFreshness,
-  ciStatus?: CIStatus | null
+  ciStatus?: CIStatus | null,
+  options: DescribeOptions = {}
 ): string {
   const ci = getCIStatusVisual(ciStatus);
   return joinList([
     `${prStateLabel(data.state, data.isDraft)} pull request #${data.number}`,
     ci && (data.state === "open" || data.state === undefined) ? ci.ariaLabel : null,
-    ...describeMeta(data, freshness),
+    ...describeMeta(data, freshness, options),
   ]);
 }

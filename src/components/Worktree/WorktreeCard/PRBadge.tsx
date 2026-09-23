@@ -92,7 +92,7 @@ export function PRBadge({
     !missingCredential;
 
   const ariaLabel = missingCredential
-    ? "Add a forge access token to see PR details"
+    ? `Pull request #${prNumber}${isHeadline && prTitle ? `: ${prTitle}` : ""}. Add a forge access token to see PR details`
     : `Open ${prStateLabel} pull request #${prNumber}` +
       (isHeadline && prTitle ? `: ${prTitle}` : "") +
       (ciVisual ? ` — ${ciVisual.ariaLabel}` : "") +
@@ -200,7 +200,13 @@ export function PRBadge({
         align="start"
         className="p-3"
         aria-label={
-          data && !missingCredential ? describePRTooltip(data, freshness, prCiStatus) : undefined
+          data && !missingCredential
+            ? describePRTooltip(data, freshness, prCiStatus, {
+                // The subordinate badge shows only the number, so the card's
+                // description is the only place its title is spoken.
+                includeTitle: !(isHeadline && prTitle),
+              })
+            : undefined
         }
       >
         {missingCredential ? (
@@ -213,6 +219,7 @@ export function PRBadge({
             number={prNumber}
             title={prTitle}
             prState={prState}
+            ciStatus={prCiStatus}
             status={loading ? "loading" : error ? "failed" : "idle"}
             freshness={freshness}
           />

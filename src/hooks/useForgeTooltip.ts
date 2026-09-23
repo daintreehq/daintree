@@ -68,10 +68,27 @@ function useForgeTooltipGate() {
     };
   }, [providerId]);
 
+  // A "no token" answer is what sends the user to Settings, so it can't be
+  // trusted until the TTL lapses: once they've saved a token and come back, the
+  // next open must see it. Called only while the cached answer is negative, so
+  // a connected forge pays nothing.
+  const recheckCredential = useCallback(async (): Promise<boolean> => {
+    if (!providerId) return false;
+    try {
+      const status = await window.electron.forge.getCredentialStatus(providerId);
+      credentialStatusCache.set(providerId, status.hasCredential);
+      setHasCredential(status.hasCredential);
+      return status.hasCredential;
+    } catch {
+      return false;
+    }
+  }, [providerId]);
+
   return {
     providerResolved: entry !== null,
     providerId,
     missingCredential: entry !== null && hasCredential === false,
+    recheckCredential,
   };
 }
 
@@ -84,7 +101,8 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
     error: false,
   });
   const mountedRef = useRef(true);
-  const { providerResolved, providerId, missingCredential } = useForgeTooltipGate();
+  const { providerResolved, providerId, missingCredential, recheckCredential } =
+    useForgeTooltipGate();
 
   useEffect(() => {
     mountedRef.current = true;
@@ -94,7 +112,8 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
   }, []);
 
   const fetchTooltip = useCallback(async () => {
-    if (!cwd || !issueNumber || !providerResolved || missingCredential) return;
+    if (!cwd || !issueNumber || !providerResolved) return;
+    if (missingCredential && !(await recheckCredential())) return;
 
     const cacheKey = `${cwd}:${issueNumber}`;
     const cached = issueCache.get(cacheKey);
@@ -160,7 +179,7 @@ export function useIssueTooltip(cwd: string | undefined, issueNumber: number | u
       if (!mountedRef.current || generation !== cacheGeneration) return;
       setState({ data: null, loading: false, error: true });
     }
-  }, [cwd, issueNumber, providerResolved, missingCredential]);
+  }, [cwd, issueNumber, providerResolved, missingCredential, recheckCredential]);
 
   const reset = useCallback(() => {
     setState({ data: null, loading: false, error: false });
@@ -178,7 +197,8 @@ export function usePRTooltip(cwd: string | undefined, prNumber: number | undefin
     error: false,
   });
   const mountedRef = useRef(true);
-  const { providerResolved, providerId, missingCredential } = useForgeTooltipGate();
+  const { providerResolved, providerId, missingCredential, recheckCredential } =
+    useForgeTooltipGate();
 
   useEffect(() => {
     mountedRef.current = true;
@@ -188,7 +208,8 @@ export function usePRTooltip(cwd: string | undefined, prNumber: number | undefin
   }, []);
 
   const fetchTooltip = useCallback(async () => {
-    if (!cwd || !prNumber || !providerResolved || missingCredential) return;
+    if (!cwd || !prNumber || !providerResolved) return;
+    if (missingCredential && !(await recheckCredential())) return;
 
     const cacheKey = `${cwd}:${prNumber}`;
     const cached = prCache.get(cacheKey);
@@ -249,7 +270,7 @@ export function usePRTooltip(cwd: string | undefined, prNumber: number | undefin
       if (!mountedRef.current || generation !== cacheGeneration) return;
       setState({ data: null, loading: false, error: true });
     }
-  }, [cwd, prNumber, providerResolved, missingCredential]);
+  }, [cwd, prNumber, providerResolved, missingCredential, recheckCredential]);
 
   const reset = useCallback(() => {
     setState({ data: null, loading: false, error: false });
