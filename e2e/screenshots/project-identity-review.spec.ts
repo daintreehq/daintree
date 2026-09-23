@@ -68,6 +68,8 @@ interface State {
   fixture: "rest" | "suggestion" | "long-name" | "emoji-button";
   /** Hold the emoji data request so the picker stays in its loading state. */
   holdData?: boolean;
+  /** Emulated OS contrast mode, where fills and shadows can be stripped. */
+  media?: { forcedColors?: "active"; contrast?: "more" };
   drive?: (page: Page) => Promise<void>;
 }
 
@@ -161,6 +163,26 @@ const STATES: State[] = [
   },
   { slug: "loading", fixture: "rest", holdData: true },
   {
+    // The active cell and the current-value badge, with fills and box-shadows
+    // stripped as Windows High Contrast does.
+    slug: "forced-colors",
+    fixture: "rest",
+    media: { forcedColors: "active" },
+    drive: async (page) => {
+      await tabToSearch(page);
+      await page.keyboard.type("palm");
+    },
+  },
+  {
+    slug: "contrast-more",
+    fixture: "rest",
+    media: { contrast: "more" },
+    drive: async (page) => {
+      await tabToSearch(page);
+      await page.keyboard.type("palm");
+    },
+  },
+  {
     slug: "emoji-button",
     fixture: "emoji-button",
     drive: async (page) => {
@@ -192,6 +214,10 @@ async function load(page: Page, theme: string, state: State): Promise<void> {
     // Never fulfilled: the picker sits in its loading state for the capture.
     await page.route("**/emojibase/**", () => {});
   }
+  await page.emulateMedia({
+    forcedColors: state.media?.forcedColors ?? "none",
+    contrast: state.media?.contrast ?? "no-preference",
+  });
   await page.setViewportSize({ width: 1180, height: 820 });
   await page.goto(
     `${server!.baseURL}/project-identity-preview.html?theme=${theme}&fixture=${state.fixture}`
@@ -246,6 +272,8 @@ async function verify(page: Page, state: State): Promise<void> {
       await expect(cell(page, 0)).toBeVisible();
       break;
     case "search-current":
+    case "forced-colors":
+    case "contrast-more":
       expect(q).toBe("palm");
       await expect(page.locator('[frimousse-emoji][aria-current="true"]')).toHaveCount(1);
       break;
