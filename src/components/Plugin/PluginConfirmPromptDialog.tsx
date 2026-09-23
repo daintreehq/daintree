@@ -2,6 +2,9 @@ import { useCallback, useRef } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePluginPromptStore } from "@/store/pluginPromptStore";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
+import { PluginProvenance } from "./PluginProvenance";
 
 /**
  * Singleton dialog for `host.showConfirm` (#10522). Mounted once near the top of
@@ -26,6 +29,12 @@ export function PluginConfirmPromptDialog() {
       ? { promptId: current.promptId, pluginId: current.pluginId, options: current.params.options }
       : null;
   const resetKey = confirm ? confirm.promptId : "null";
+  const pluginId = confirm ? confirm.pluginId : "";
+  // Named like the quick pick and input box: the id is the host's instance key,
+  // which for a project plugin carries a machine-local project id (#12211).
+  const pluginName = usePluginRuntimeStore(
+    (s) => s.pluginMetaById.get(pluginId)?.displayName ?? pluginManifestIdFromInstanceKey(pluginId)
+  );
 
   // resolveCurrent advances the queue synchronously, so a rapid double-click
   // could land a second resolution on the freshly-promoted item. Gate each
@@ -76,9 +85,8 @@ export function PluginConfirmPromptDialog() {
         cancelLabel={options.cancelLabel || "Cancel"}
         onConfirm={() => resolveOnce(confirm.promptId, true)}
         variant={variant}
-      >
-        <p className="text-xs text-text-secondary">Requested by the '{confirm.pluginId}' plugin</p>
-      </ConfirmDialog>
+        hint={<PluginProvenance pluginName={pluginName} />}
+      />
     </ErrorBoundary>
   );
 }

@@ -23,7 +23,11 @@
 import { test, expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { existsSync, mkdirSync, readdirSync, rmSync } from "fs";
 import path from "path";
-import { startPreviewServer, stubViteHmrClient, type PreviewServer } from "../helpers/previewHarness";
+import {
+  startPreviewServer,
+  stubViteHmrClient,
+  type PreviewServer,
+} from "../helpers/previewHarness";
 
 const ENABLED = !!process.env.DAINTREE_SHOT_PLUGIN_PROMPT;
 const OUT_DIR = path.resolve(
@@ -101,7 +105,9 @@ async function withPage<T>(
 
 async function open(page: Page, theme: string, fixture: string): Promise<Locator> {
   await page.setViewportSize({ width: 1000, height: 760 });
-  await page.goto(`${server!.baseURL}/plugin-prompt-preview.html?theme=${theme}&fixture=${fixture}`);
+  await page.goto(
+    `${server!.baseURL}/plugin-prompt-preview.html?theme=${theme}&fixture=${fixture}`
+  );
   const surface = page.locator(SURFACE).first();
   await expect(surface).toBeAttached({ timeout: ATTACH_TIMEOUT_MS });
   await page.evaluate(() => document.fonts.ready);
@@ -115,7 +121,9 @@ async function snap(page: Page, surface: Locator, file: string): Promise<string>
   await page.waitForTimeout(250);
   const box = await surface.boundingBox();
   if (!box || box.width < 80 || box.height < 40) {
-    throw new Error(`${file}: surface has no real box (${JSON.stringify(box)}) — refusing to write`);
+    throw new Error(
+      `${file}: surface has no real box (${JSON.stringify(box)}) — refusing to write`
+    );
   }
   const viewport = page.viewportSize()!;
   const x = Math.max(0, box.x - CLIP_PAD);
@@ -269,7 +277,16 @@ test("plugin prompt dialogs — every state, every theme", async ({ context }) =
     }
   }
 
-  // Behaviour the pictures cannot show: what the plugin actually receives.
+  // Behaviour the pictures cannot show. Focus first: the dialog's own
+  // initial-focus pass only lands on its close button in a real browser, so
+  // this is the check that a plugin prompt opens ready to type into.
+  await withPage(context, "input focus", async (page) => {
+    await open(page, THEMES[0]!, "ib-full");
+    const focused = await page.evaluate(() => document.activeElement?.tagName ?? null);
+    expect(focused).toBe("INPUT");
+  });
+
+  // And what the plugin actually receives.
   await withPage(context, "multi submit", async (page) => {
     await open(page, THEMES[0]!, "qp-multi");
     await page.keyboard.press("Enter");

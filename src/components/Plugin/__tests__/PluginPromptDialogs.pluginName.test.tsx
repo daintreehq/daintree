@@ -6,7 +6,7 @@
  * a machine-local project id that must never reach user-facing copy (#12211).
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render } from "@testing-library/react";
 
 class ResizeObserverStub {
   observe() {}
@@ -83,6 +83,11 @@ function seedQuickPickPrompt(pluginId: string): void {
   });
 }
 
+/** The attribution line splits the name into its own span, so read it whole. */
+function provenanceText(): string | null {
+  return document.querySelector('[data-testid="plugin-provenance"]')?.textContent ?? null;
+}
+
 afterEach(() => {
   cleanup();
   usePluginPromptStore.getState().reset();
@@ -96,7 +101,7 @@ describe("PluginInputBoxDialog — plugin attribution", () => {
 
     render(<PluginInputBoxDialog />);
 
-    expect(screen.queryByText("Requested by the 'Video Manager' plugin")).not.toBeNull();
+    expect(provenanceText()).toBe("Requested by the 'Video Manager' plugin");
     expect(document.body.textContent).not.toContain("project__b6700c7a__");
   });
 
@@ -105,7 +110,7 @@ describe("PluginInputBoxDialog — plugin attribution", () => {
 
     render(<PluginInputBoxDialog />);
 
-    expect(screen.queryByText("Requested by the 'gregpriday.video-manager' plugin")).not.toBeNull();
+    expect(provenanceText()).toBe("Requested by the 'gregpriday.video-manager' plugin");
     expect(document.body.textContent).not.toContain("project__b6700c7a__");
   });
 });
