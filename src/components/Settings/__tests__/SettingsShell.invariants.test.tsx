@@ -171,7 +171,11 @@ describe("landing on a search result", () => {
 
   it("reports a gated setting that is not on the page as not landed", () => {
     const gated = SETTINGS_SEARCH_INDEX.find((e) => e.requiresEnabled)!;
-    section(`settings-panel-${gated.tab}`, "<div>page without the gated row</div>");
+    // Its section heading is on the page; the row it names is not.
+    section(
+      `settings-panel-${gated.tab}`,
+      `<div class="settings-section"><h4 data-settings-section-title>${gated.section}</h4></div>`
+    );
     expect(landOnSettingByText(gated.id, gated.tab as SettingsTab)).toBe(false);
   });
 });

@@ -1347,7 +1347,12 @@ export function landOnSettingByText(sectionId: string, tab: SettingsTab): boolea
   const entry = SEARCH_ENTRY_BY_ID.get(sectionId);
   const panel = document.getElementById(`settings-panel-${tab}`);
   if (!entry || entry.kind !== "section" || !panel) return false;
-  const target = findRowByLabel(panel, entry.title) ?? findSectionByTitle(panel, entry.section);
+  // A gated setting's section renders while the setting itself is hidden, so landing
+  // on the heading would report "found" for a row that is not there. Only its own
+  // row counts.
+  const target =
+    findRowByLabel(panel, entry.title) ??
+    (entry.requiresEnabled ? null : findSectionByTitle(panel, entry.section));
   if (!target) return false;
   landOn(target);
   return true;
