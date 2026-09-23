@@ -107,7 +107,8 @@ describe("LiveRateLimitCountdown", () => {
         )
         .join("")
         .trim();
-      expect(visible).toMatch(/^Resumes (in \S.*|shortly)$/);
+      // "in" only ever introduces a time; the elapsed case takes its own phrase.
+      expect(visible).toMatch(/^Resumes (in (\d|less than)|(?!in )\w)/);
       cleanup();
     }
   });
@@ -178,5 +179,14 @@ describe("bucketLabel", () => {
     for (const name of ["rest", "core", "graphql"]) {
       expect(bucketLabel(name)).toMatch(/REST|GraphQL/);
     }
+  });
+});
+
+describe("RateLimitDetailsPanel details states", () => {
+  it("treats an answered read with no buckets like one that answered null", () => {
+    const empty = panel({ details: { buckets: [], fetchedAt: NOW } }).container.textContent;
+    cleanup();
+    const none = panel({ details: null }).container.textContent;
+    expect(empty).toEqual(none);
   });
 });

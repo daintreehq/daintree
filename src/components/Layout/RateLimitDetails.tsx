@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { UI_DOHERTY_THRESHOLD, UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 import type { RateLimitBucket, RateLimitDetails } from "@shared/types/forge";
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -48,9 +48,10 @@ function formatClockTime(epochMs: number): string {
 
 /**
  * The time phrase that completes "Resumes …" in passive banners: `in 14m`,
- * `in less than a minute`, or `shortly` once the reported time has passed.
- * It owns the preposition so the sentence stays grammatical when the deadline
- * crosses between parent renders.
+ * `in less than a minute`, or `on the next check` once the reported time has
+ * passed — polling picks back up then, and nothing more than that is known.
+ * It owns the preposition and the elapsed case, so callers render it whenever
+ * a reset time exists and the sentence never depends on which one re-rendered.
  *
  * Re-evaluates on the shared minute ticker, so it counts in minutes; the
  * per-second readout lives in {@link RateLimitDetailsPanel}. The ticking text
@@ -61,7 +62,7 @@ function formatClockTime(epochMs: number): string {
 export function LiveRateLimitCountdown({ resetAt }: { resetAt: number }) {
   useGlobalMinuteTicker();
   const remaining = resetAt - Date.now();
-  if (remaining <= 0) return <>shortly</>;
+  if (remaining <= 0) return <>on the next check</>;
   return (
     <>
       <span aria-hidden="true">in {formatRateLimitCountdownCoarse(remaining)}</span>
@@ -118,6 +119,7 @@ export function RateLimitDetailsPanel({
   const copy = CAUSE_COPY[kind ?? "unknown"];
   const provider = providerName ? providerName[0]!.toUpperCase() + providerName.slice(1) : "";
   const showPending = useDeferredLoading(details === undefined, UI_DOHERTY_THRESHOLD);
+  const showStillWorking = useDeferredLoading(details === undefined, UI_STILL_WORKING_MS);
   const buckets = details?.buckets ?? [];
 
   return (
@@ -135,13 +137,27 @@ export function RateLimitDetailsPanel({
             <RateLimitBucketRow key={bucket.name} bucket={bucket} now={now} />
           ))}
         </div>
-      ) : details === null ? (
-        <div className="text-text-secondary text-2xs">
-          {provider} didn’t report per-quota details
-        </div>
+      ) : details !== undefined ? (
+        <div className="text-text-secondary text-2xs">Quota details unavailable</div>
       ) : showPending ? (
-        <div className="text-text-secondary text-2xs">Checking quotas…</div>
+        <BucketRowSkeleton stillWorking={showStillWorking} />
       ) : null}
+    </div>
+  );
+}
+
+/** Holds the shape of one bucket row while the details read is in flight. */
+function BucketRowSkeleton({ stillWorking }: { stillWorking: boolean }) {
+  return (
+    <div className="flex flex-col gap-1.5" aria-busy="true">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="bg-overlay-emphasis animate-pulse-delayed h-3 w-16 rounded-[var(--radius-xs)]" />
+        <span className="bg-overlay-emphasis animate-pulse-delayed h-2.5 w-20 rounded-[var(--radius-xs)]" />
+      </div>
+      <div className="bg-overlay-emphasis animate-pulse-delayed h-1.5 rounded-full" />
+      <span className="text-text-secondary text-2xs">
+        {stillWorking ? "Still checking quotas…" : "Checking quotas…"}
+      </span>
     </div>
   );
 }
@@ -188,7 +204,7 @@ function RateLimitBucketRow({ bucket, now }: { bucket: RateLimitBucket; now: num
         aria-valuemax={bucket.limit}
         aria-valuenow={used}
         aria-valuetext={`${remaining.toLocaleString()} of ${bucket.limit.toLocaleString()} left`}
-        className="bg-overlay-strong h-1.5 overflow-hidden rounded-full"
+        className="bg-overlay-emphasis h-1.5 overflow-hidden rounded-full"
       >
         <div
           className={cn(

@@ -360,7 +360,9 @@ export const ForgeStatsToolbarButton = memo(
       };
     }, [rateLimitResetAt]);
 
-    const rateLimitActive = rateLimitCountdown !== null;
+    // A kind with no reset time is still an active throttle (useRepositoryStats
+    // treats either as parked), so the clock stays until both clear.
+    const rateLimitActive = rateLimitCountdown !== null || rateLimitKind !== null;
 
     // The pill row holds three equal flex-1 stat pills budgeted to a constant
     // 13rem. Each active trailing indicator (rate-limit clock, PR-detection-
@@ -1288,8 +1290,8 @@ export const ForgeStatsToolbarButton = memo(
                     data-toolbar-item=""
                     aria-label={
                       rateLimitKind === "secondary"
-                        ? `${providerName} secondary rate limit — resuming in ${rateLimitCountdown}`
-                        : `${providerName} rate limit — resets in ${rateLimitCountdown}`
+                        ? `${providerName} secondary rate limit`
+                        : `${providerName} rate limit`
                     }
                     className="flex h-full w-7 shrink-0 cursor-default items-center justify-center focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
                   >
