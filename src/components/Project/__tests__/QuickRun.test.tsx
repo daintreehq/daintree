@@ -46,7 +46,9 @@ vi.mock("@/store/worktreeStore", () => ({
 
 vi.mock("@/hooks/useWorktrees", () => ({
   useWorktrees: () => ({
-    worktreeMap: new Map([["wt-1", { name: "main", path: "/tmp/test-worktree" }]]),
+    worktreeMap: new Map([
+      ["wt-1", { name: "main", branch: "develop", path: "/tmp/test-worktree" }],
+    ]),
   }),
 }));
 
@@ -69,7 +71,18 @@ vi.mock("@/components/Project/RunningTaskList", () => ({
   RunningTaskList: () => null,
 }));
 
-import { QuickRun } from "../QuickRun";
+import { QuickRun, QuickRunToggle, useQuickRunExpanded } from "../QuickRun";
+
+/** The panel as the sidebar footer mounts it: only while its toggle is open. */
+function Footer({ projectId }: { projectId: string }) {
+  const [open, toggle] = useQuickRunExpanded(projectId);
+  return (
+    <>
+      {open && <QuickRun projectId={projectId} focusOnMount />}
+      <QuickRunToggle expanded={open} onToggle={toggle} />
+    </>
+  );
+}
 
 function setupPendingTerminal() {
   const promise = new Promise<void>((resolve, reject) => {
@@ -118,7 +131,7 @@ describe("QuickRun", () => {
 
   it("prevents duplicate terminal spawn on rapid double Enter", async () => {
     setupPendingTerminal();
-    render(<QuickRun projectId="test-project" />);
+    render(<Footer projectId="test-project" />);
 
     const input = openPanel();
     fireEvent.change(input, { target: { value: "npm test" } });
@@ -135,7 +148,7 @@ describe("QuickRun", () => {
 
   it("prevents duplicate spawn from Enter + run button click", async () => {
     setupPendingTerminal();
-    render(<QuickRun projectId="test-project" />);
+    render(<Footer projectId="test-project" />);
 
     const input = openPanel();
     fireEvent.change(input, { target: { value: "npm test" } });
@@ -144,7 +157,7 @@ describe("QuickRun", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     // Then click the run button before addPanel resolves
-    const runButton = screen.getByLabelText("Run command");
+    const runButton = screen.getByLabelText("Run");
     fireEvent.click(runButton);
 
     expect(mockAddTerminal).toHaveBeenCalledTimes(1);
@@ -154,7 +167,7 @@ describe("QuickRun", () => {
 
   it("allows a second run after the first completes", async () => {
     setupPendingTerminal();
-    render(<QuickRun projectId="test-project" />);
+    render(<Footer projectId="test-project" />);
 
     typeAndEnter("npm test");
     expect(mockAddTerminal).toHaveBeenCalledTimes(1);
@@ -174,7 +187,7 @@ describe("QuickRun", () => {
 
   it("releases the guard when addPanel throws", async () => {
     setupPendingTerminal();
-    render(<QuickRun projectId="test-project" />);
+    render(<Footer projectId="test-project" />);
 
     typeAndEnter("npm test");
     expect(mockAddTerminal).toHaveBeenCalledTimes(1);
@@ -193,7 +206,7 @@ describe("QuickRun", () => {
   });
 
   it("does not call addPanel for blank input", () => {
-    render(<QuickRun projectId="test-project" />);
+    render(<Footer projectId="test-project" />);
 
     const input = openPanel();
     fireEvent.change(input, { target: { value: "   " } });
@@ -203,7 +216,7 @@ describe("QuickRun", () => {
   });
 
   it("stays closed until asked, and remembers the answer per project", () => {
-    const { unmount } = render(<QuickRun projectId="test-project" />);
+    const { unmount } = render(<Footer projectId="test-project" />);
 
     // Closed is the resting state: this launcher is opt-in, and it used to
     // spend the footer's vertical budget on every session that never ran a
@@ -215,35 +228,95 @@ describe("QuickRun", () => {
     unmount();
 
     // Reopening the same project honours the choice...
-    const again = render(<QuickRun projectId="test-project" />);
+    const again = render(<Footer projectId="test-project" />);
     expect(screen.queryByPlaceholderText("Run a command")).not.toBeNull();
     again.unmount();
 
     // ...while a different project starts from the default again.
-    render(<QuickRun projectId="other-project" />);
+    render(<Footer projectId="other-project" />);
     expect(screen.queryByPlaceholderText("Run a command")).toBeNull();
   });
 
-  it("holds its chevron in the footer's shared glyph column, open or shut", () => {
-    render(<QuickRun projectId="test-project" />);
-    const header = screen.getByRole("button", { name: /run command/i });
+  it("keeps one name on its toggle and reports open or shut through aria-expanded", () => {
+    render(<Footer projectId="test-project" />);
+    const toggle = screen.getByRole("button", { name: /run command/i });
 
-    // The rows below carry 8px marks where this one carries a 12px chevron, so
-    // a glyph sized by itself pushes this label off their shared edge (#12587).
-    const expectChevronInColumn = () => {
-      const slots = header.querySelectorAll('[data-sidebar-footer-slot="glyph"]');
-      expect(slots).toHaveLength(1);
-      expect(slots[0]!.querySelector("svg")).not.toBeNull();
-      expect(slots[0]!.nextElementSibling?.textContent).toBe("Run command");
-    };
-
-    expectChevronInColumn();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
     openPanel();
-    expectChevronInColumn();
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.getAttribute("aria-label")).toBe("Run command");
+    expect(document.getElementById(toggle.getAttribute("aria-controls")!)).not.toBeNull();
+  });
+
+  it("lands in the field when opened, without throwing the suggestion list over the panel", () => {
+    localStorage.setItem(
+      "daintree_cmd_history_test-project",
+      JSON.stringify([{ command: "npm test", timestamp: 1 }])
+    );
+    render(<Footer projectId="test-project" />);
+    const input = openPanel();
+
+    expect(document.activeElement).toBe(input);
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+
+    // Asking for the list still opens it.
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("dismisses suggestions on Escape without leaving the field", () => {
+    localStorage.setItem(
+      "daintree_cmd_history_test-project",
+      JSON.stringify([{ command: "npm test", timestamp: 1 }])
+    );
+    render(<Footer projectId="test-project" />);
+    const input = openPanel();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("captions the destination with the branch, not the worktree's folder name", () => {
+    render(<Footer projectId="test-project" />);
+    openPanel();
+
+    const panel = document.getElementById("quick-run-panel")!;
+    expect(panel.textContent).toContain("develop");
+    expect(panel.textContent).not.toContain("main");
+  });
+
+  it("keeps the arrow-key selection scrolled into view", () => {
+    localStorage.setItem(
+      "daintree_cmd_history_test-project",
+      JSON.stringify([
+        { command: "npm test", timestamp: 2 },
+        { command: "npm run lint", timestamp: 1 },
+      ])
+    );
+    const scrolled: string[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.id);
+    };
+    try {
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+
+      // Whatever row the combobox names as active is the row brought into view.
+      expect(scrolled.at(-1)).toBe(input.getAttribute("aria-activedescendant"));
+      expect(scrolled.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
   });
 
   it("renders all main buttons with type='button'", () => {
-    render(<QuickRun projectId="test-project" />);
+    render(<Footer projectId="test-project" />);
     openPanel();
 
     const allButtons = screen.getAllByRole("button");

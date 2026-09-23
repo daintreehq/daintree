@@ -13,9 +13,7 @@ import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useKeepAwakeStore } from "@/store/keepAwakeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
-import { QuickRun } from "@/components/Project/QuickRun";
-import { ProjectPluginIndicator } from "@/components/Plugin/ProjectPluginIndicator";
-import { SidebarStatusBar } from "../SidebarStatusBar";
+import { SidebarFooter } from "../SidebarFooter";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { Project, RunCommand } from "@shared/types";
@@ -135,11 +133,13 @@ interface Fixture {
  * reading. Process presence and agent activity are separate axes on purpose —
  * the strip reports the first in words and the second with its mark.
  */
-function seedStats(runningProjects: number, totalMemoryMB: number, workingAgents = 1): void {
-  const projects = Array.from({ length: 4 }, (_, i) => ({
-    id: `proj-${i}`,
-    name: ["Daintree", "Assistant", "Backend", "Site builder"][i]!,
-  }));
+function seedStats(
+  runningProjects: number,
+  totalMemoryMB: number,
+  workingAgents = 1,
+  names: readonly string[] = ["Daintree", "Assistant", "Backend", "Site builder"]
+): void {
+  const projects = names.map((name, i) => ({ id: `proj-${i}`, name }));
   const stats: ProjectStatusMap = {};
   projects.forEach((p, i) => {
     const running = i < runningProjects;
@@ -160,6 +160,94 @@ function seedStats(runningProjects: number, totalMemoryMB: number, workingAgents
 
 let PROJECT_LIST: Array<{ id: string; name: string }> = [];
 let APP_MEMORY_MB = 1240;
+
+/**
+ * The shape of a real heavy session, taken from the owner's own popover: twenty
+ * registered projects, seven with terminals, and most of the rest idle. Sparse
+ * fixtures hid exactly what made the popover a wall of text — thirteen rows of
+ * "0 terms ~0MB" and a nineteen-row process table.
+ */
+const BUSY_PROJECT_NAMES = [
+  "Daintree",
+  "PageSugar",
+  "LifePlan",
+  "BusinessBenchmark",
+  "Daintree Website",
+  "Assistant Backend",
+  "Claude Commands",
+  "Everkinetic",
+  "Assistant Lab",
+  "Video Scripting",
+  "Daintree Assistant",
+  "Video Editor",
+  "SearchSocket",
+  "YouTube Thumbnails",
+  "RuinWeave",
+  "CandidCue",
+  "Personal Bio",
+  "Writing",
+  "SpokenAir",
+  "ask-google",
+] as const;
+
+/** terminals and measured MB per running project, in list order. */
+const BUSY_TERMINALS: ReadonlyArray<[number, number]> = [
+  [4, 2048],
+  [1, 1741],
+  [1, 704],
+  [1, 500],
+  [2, 1741],
+  [2, 3379],
+  [1, 445],
+];
+
+const BUSY_PROCESSES = [
+  ["Tab", "Daintree view", 512, 0.2],
+  ["Tab", "LifePlan view", 450, 0],
+  ["Tab", "PageSugar view", 419, 0],
+  ["Tab", "Daintree Website view", 366, 0.6],
+  ["Browser", "Browser", 364, 0.2],
+  ["Utility", "daintree-pty-host", 329, 0.2],
+  ["Tab", "Claude Commands view", 244, 0],
+  ["GPU", "GPU", 196, 0.2],
+  ["Tab", "Tab", 170, 0],
+  ["Utility", "daintree-workspace-host", 118, 0],
+  ["Utility", "daintree-workspace-host", 94, 0],
+  ["Utility", "daintree-workspace-host", 92, 0],
+  ["Utility", "daintree-workspace-host", 86, 0],
+  ["Utility", "daintree-workspace-host", 84, 0],
+  ["Utility", "daintree-plugin-prod", 79, 0],
+  ["Utility", "daintree-workspace-host", 78, 0],
+  ["Utility", "daintree-pty-host", 72, 0],
+  ["Utility", "daintree-watchdog", 58, 0],
+  ["Utility", "Network Service", 57, 0],
+] as const;
+
+let WORKLOAD_BY_PROJECT: Array<{
+  projectId: string | null;
+  terminalCount: number;
+  processCount: number;
+  memoryMb: number;
+  topProcesses: never[];
+}> = [];
+let TERMINAL_WORKLOAD_MB = 0;
+
+/** Seed the popover's reads for the busy session. */
+function seedBusySession(): void {
+  seedStats(7, 3868, 3, BUSY_PROJECT_NAMES);
+  WORKLOAD_BY_PROJECT = [
+    ...BUSY_TERMINALS.map(([terminals, mb], i) => ({
+      projectId: `proj-${i}`,
+      terminalCount: terminals,
+      processCount: terminals * 3,
+      memoryMb: mb,
+      topProcesses: [],
+    })),
+    // A terminal opened outside any project — the remainder row.
+    { projectId: null, terminalCount: 1, processCount: 2, memoryMb: 182, topProcesses: [] },
+  ];
+  TERMINAL_WORKLOAD_MB = WORKLOAD_BY_PROJECT.reduce((sum, p) => sum + p.memoryMb, 0);
+}
 
 /** Reset everything a fixture might have set, so one sweep can't leak into the next. */
 function baseline(): void {
@@ -190,6 +278,8 @@ function baseline(): void {
     state: { config: { enabled: true, onBattery: false }, isBlocking: true, revision: 1 },
     loadError: null,
   });
+  WORKLOAD_BY_PROJECT = [];
+  TERMINAL_WORKLOAD_MB = 0;
   seedStats(1, 1240);
 }
 
@@ -272,6 +362,18 @@ export const FIXTURES: Record<string, Fixture> = {
     seed: () => {
       baseline();
       seedStats(4, 24_000);
+    },
+  },
+
+  /**
+   * The owner's real session: seven of twenty projects running. Captured with
+   * the readout's popover open, since that breakdown is the thing under review.
+   */
+  "busy-session": {
+    what: "seven of twenty projects running, the resource breakdown's real load",
+    seed: () => {
+      baseline();
+      seedBusySession();
     },
   },
 
@@ -417,7 +519,35 @@ installPreviewShims({
     getDiagnosticsInfo: async () => ({
       uptimeSeconds: 7_400,
       eventLoopP99Ms: 12,
-      systemAvailableMB: 18_400,
+      systemAvailableMB: 15_770,
+    }),
+    getProcessMetrics: async () =>
+      BUSY_PROCESSES.map(([type, name, memoryMB, cpuPercent], i) => ({
+        pid: 64_500 + i * 17,
+        type,
+        name,
+        memoryMB,
+        cpuPercent,
+      })),
+    getHeapStats: async () => ({ usedMB: 56, limitMB: 4096, percent: 1.4, externalMB: 12 }),
+    getMemorySnapshot: async () => ({
+      timestamp: Date.now(),
+      electron: {
+        available: true,
+        totalWorkingSetMb: APP_MEMORY_MB,
+        processCount: BUSY_PROCESSES.length,
+        sampledAt: Date.now(),
+      },
+      terminalWorkloads: {
+        available: true,
+        stale: false,
+        ageMs: 1_000,
+        sampledAt: Date.now(),
+        totalMemoryMb: TERMINAL_WORKLOAD_MB,
+        processCount: 24,
+        terminalCount: 12,
+        byProject: WORKLOAD_BY_PROJECT,
+      },
     }),
   }),
 });
@@ -464,9 +594,7 @@ function Preview() {
           case — it is here so the two strips are reviewed as the pair they
           form, since they share chrome, row height, dot and type. */}
       <div data-footer-region className="flex flex-col">
-        <QuickRun projectId={PROJECT_ID} />
-        <ProjectPluginIndicator />
-        <SidebarStatusBar />
+        <SidebarFooter projectId={PROJECT_ID} />
       </div>
     </div>
   );
