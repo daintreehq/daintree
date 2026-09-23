@@ -207,7 +207,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
           <div id={resultsId} className="flex flex-col items-center gap-3 py-10 text-center">
             <div className="space-y-1">
               <p className="text-sm text-text-primary">
-                No shortcuts match &ldquo;{trimmedQuery}&rdquo;
+                No shortcuts match &quot;{trimmedQuery}&quot;
               </p>
               <p className="text-xs text-text-secondary">
                 Try another action name, or keys like{" "}

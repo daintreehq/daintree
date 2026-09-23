@@ -2,6 +2,7 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { Kbd, KbdChord } from "../Kbd";
+import { describeChord } from "@/lib/kbdShortcut";
 
 vi.mock("@/lib/platform", () => ({
   isMac: vi.fn(() => false),
@@ -42,10 +43,16 @@ describe("KbdChord", () => {
     expect(label?.textContent).toBe("Save file");
   });
 
-  it("falls back to shortcut string for accessible text when aria-label is not provided", () => {
-    const { container } = render(<KbdChord shortcut="Cmd+S" />);
-    const label = container.querySelector(".sr-only");
-    expect(label?.textContent).toBe("Cmd+S");
+  it("falls back to the spoken form, not glyphs or the raw string, without an aria-label", () => {
+    for (const isMac of [true, false]) {
+      const { container, unmount } = render(
+        <KbdChord shortcut="Cmd+Shift+K Cmd+S" isMac={isMac} />
+      );
+      const spoken = container.querySelector(".sr-only")?.textContent ?? "";
+      expect(spoken).toBe(describeChord("Cmd+Shift+K Cmd+S", isMac));
+      expect(spoken).not.toMatch(/[⌘⌥⇧⌃+]/);
+      unmount();
+    }
   });
 
   it("renders chord with multiple steps", () => {
