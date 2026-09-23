@@ -1146,9 +1146,10 @@ export function FilePane({
     // background reload) must not pull focus across the window.
     const focusLost = document.activeElement === null || document.activeElement === document.body;
     if (wasEditModeRef.current && viewMode !== "edit" && focusLost) {
-      const active = modeToggleRef.current?.querySelector<HTMLButtonElement>(
-        'button[aria-pressed="true"], button'
-      );
+      const toggle = modeToggleRef.current;
+      const active =
+        toggle?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]') ??
+        toggle?.querySelector<HTMLButtonElement>("button");
       active?.focus({ preventScroll: true });
     }
     wasEditModeRef.current = viewMode === "edit";

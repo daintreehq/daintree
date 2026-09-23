@@ -1614,6 +1614,18 @@ describe("plugin-contributed editing in the file browser", () => {
     expect(screen.queryByTestId("file-editor-hint")).toBeNull();
   });
 
+  it("hands focus to the Rendered segment, not the first one, when leaving Edit for Rendered", async () => {
+    enabled = true;
+    renderViewer("/repo/notes.md", { editorContext: context });
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.click(screen.getByRole("button", { name: "Rendered" }));
+    const rendered = screen.getByRole("button", { name: "Rendered" });
+    expect(rendered.getAttribute("aria-pressed")).toBe("true");
+    expect(document.activeElement).toBe(rendered);
+  });
+
   it("offers Edit without a hint when the plugin is already enabled", async () => {
     enabled = true;
     renderViewer("/repo/notes.md", { editorContext: context });

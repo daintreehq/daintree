@@ -345,9 +345,11 @@ export function FileBrowserViewer({
       renderMode !== "edit" &&
       document.activeElement === document.body
     ) {
-      modeToggleRef.current
-        ?.querySelector<HTMLButtonElement>('button[aria-pressed="true"], button')
-        ?.focus({ preventScroll: true });
+      const toggle = modeToggleRef.current;
+      (
+        toggle?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]') ??
+        toggle?.querySelector<HTMLButtonElement>("button")
+      )?.focus({ preventScroll: true });
     }
     previousMode.current = renderMode;
   }, [renderMode]);

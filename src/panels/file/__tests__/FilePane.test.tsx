@@ -3783,6 +3783,25 @@ describe("FilePane edit mode (#12323)", () => {
     expect(screen.queryByTestId("markdown-viewer-mock")).toBeNull();
   });
 
+  it("hands focus to the Rendered segment, not the first one, when leaving Edit for Rendered", async () => {
+    seedWorktree();
+    const view = await renderPane({ fileViewMode: "edit" });
+    expect(await screen.findByTestId("file-editor-mock")).toBeTruthy();
+    expect(document.activeElement).toBe(document.body);
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: "/repo/docs/spec.md",
+      worktreeId: WORKTREE_ID,
+      fileViewMode: "rendered",
+    };
+    view.rerender(paneElement());
+    await act(async () => {});
+    const rendered = screen.getByRole("button", { name: "Rendered" });
+    expect(rendered.getAttribute("aria-pressed")).toBe("true");
+    expect(document.activeElement).toBe(rendered);
+  });
+
   it("offers the wrap toggle in edit mode, shared with Source", async () => {
     seedWorktree();
     await renderPane({ fileViewMode: "edit" });
