@@ -229,13 +229,13 @@ function TrafficLights() {
       {colors.map((color, i) => (
         <span
           key={color}
+          className="rounded-full"
           style={{
             position: "absolute",
             left: 12 + i * 23,
             top: 18,
             width: 14,
             height: 14,
-            borderRadius: 9999,
             background: color,
             boxShadow: "inset 0 0 0 0.5px rgba(0,0,0,0.25)",
           }}
