@@ -57,7 +57,16 @@ const ALL_THEMES = [
 ];
 
 /** Mirrors the fixture lists in the preview entry, which runs under Vite aliases this loader lacks. */
-const TERMINAL_STATES = ["rest", "shell", "fleet", "bright", "narrow", "hover", "focus"] as const;
+const TERMINAL_STATES = [
+  "rest",
+  "shell",
+  "fleet",
+  "bright",
+  "narrow",
+  "fleet-narrow",
+  "hover",
+  "focus",
+] as const;
 const SIDEBAR_STATES = ["sidebar-below", "sidebar-above"] as const;
 
 /** Margin of pane kept around the pill in the zoom crop. */

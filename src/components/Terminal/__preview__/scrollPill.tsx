@@ -17,6 +17,7 @@ import type { PtyPanelData } from "@shared/types/panel";
 import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
 import { ScrollIndicator } from "@/components/Worktree/ScrollIndicator";
 import { TerminalScrollIndicator } from "../TerminalScrollIndicator";
+import { TerminalChipRow } from "../TerminalChipRow";
 import "@/index.css";
 
 /**
@@ -143,6 +144,8 @@ const TERMINAL_FIXTURES: Fixture[] = [
   { slug: "fleet", width: 760, height: 360, inputBar: true, fleet: true },
   { slug: "bright", width: 760, height: 360, inputBar: true, bright: true },
   { slug: "narrow", width: 360, height: 300, inputBar: true },
+  // Below the ~330px where the two chips' natural widths meet.
+  { slug: "fleet-narrow", width: 300, height: 300, inputBar: true, fleet: true },
   { slug: "hover", width: 760, height: 360, inputBar: true },
   { slug: "focus", width: 760, height: 360, inputBar: true },
 ];
@@ -221,14 +224,10 @@ function TerminalRow({
                 scheme={scheme}
               />
             </div>
-            <TerminalScrollIndicator terminalId={`preview-${fixture.slug}`} />
-            {fixture.fleet && (
-              <div className="absolute inset-0 z-30 pointer-events-none overflow-hidden flex items-end justify-start pb-1.5 pl-[14px]">
-                <div className="pointer-events-auto">
-                  <FleetDraftingPill />
-                </div>
-              </div>
-            )}
+            <TerminalChipRow
+              leading={fixture.fleet ? <FleetDraftingPill /> : null}
+              trailing={<TerminalScrollIndicator terminalId={`preview-${fixture.slug}`} />}
+            />
           </div>
           {fixture.inputBar && (
             <div

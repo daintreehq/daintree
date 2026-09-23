@@ -27,6 +27,7 @@ import { ArtifactOverlay } from "./ArtifactOverlay";
 
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalScrollIndicator } from "./TerminalScrollIndicator";
+import { TerminalChipRow } from "./TerminalChipRow";
 import { useGridScrollRoot } from "./GridScrollRootContext";
 import { useUnmountVisibilityCleanup } from "./useUnmountVisibilityCleanup";
 import { useTerminalVisibilityObserver } from "./useTerminalVisibilityObserver";
@@ -1605,17 +1606,10 @@ function TerminalPaneComponent({
                 )}
               </div>
 
-              <TerminalScrollIndicator terminalId={id} />
-
-              {isFleetPrimary && (
-                // Clipped like the scroll pill's overlay, so the chip's floating
-                // shadow stays off the composer. The popover portals out.
-                <div className="absolute inset-0 z-30 pointer-events-none overflow-hidden flex items-end justify-start pb-1.5 pl-[14px]">
-                  <div className="pointer-events-auto">
-                    <FleetDraftingPill />
-                  </div>
-                </div>
-              )}
+              <TerminalChipRow
+                leading={isFleetPrimary ? <FleetDraftingPill /> : null}
+                trailing={<TerminalScrollIndicator terminalId={id} />}
+              />
 
               {(isBackendDisconnected || isBackendRecovering) && (
                 <div
