@@ -1,6 +1,7 @@
 import { worktreeClient } from "@/clients";
 import type { FileChangeDetail, WorktreeChanges } from "@shared/types/git";
 import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
+import type { WorktreeTeardownPreview } from "@shared/types/worktree";
 import { MCP_PREVIEW_CAUTION_PREFIX } from "@/lib/mcpPreviewLines";
 
 /**
@@ -447,6 +448,124 @@ export function isSubmoduleChange(
 }
 
 /**
+ * A parent change list split the way every delete-confirm surface displays it.
+ *
+ * Display only — the tier keeps reading the unsplit list, where a submodule's
+ * row is a tracked change and escalates like one.
+ */
+export interface WorktreeDisplayChanges {
+  /** Ordinary files, sorted by path so a tree reads the same on every open. */
+  files: FileChangeDetail[];
+  /**
+   * Submodule rows whose nested content is NOT listed by the inventory: the
+   * checkout points at another commit and that pointer is the whole change.
+   * A submodule with listed nested files or commits is dropped from the parent
+   * list instead of being counted as a file standing for them.
+   */
+  pointerOnly: FileChangeDetail[];
+}
+
+export function splitDisplayChanges(
+  changes: FileChangeDetail[],
+  rootPath: string | undefined,
+  submodules: WorktreeSubmoduleRiskState | null
+): WorktreeDisplayChanges {
+  const risk = submodules?.risk ?? null;
+  const submodulePaths = new Set((risk?.entries ?? []).map((entry) => entry.path));
+  const nested = [...(risk?.dirtyFiles ?? []), ...(risk?.untrackedFiles ?? [])];
+  const hasEvidence = (path: string) =>
+    nested.some((file) => file.startsWith(`${path}/`)) ||
+    (risk?.atRiskCommits ?? []).some((commit) => commit.submodulePath === path);
+  const files: FileChangeDetail[] = [];
+  const pointerOnly: FileChangeDetail[] = [];
+  for (const change of changes) {
+    if (!isSubmoduleChange(change, rootPath, submodulePaths)) {
+      files.push(change);
+      continue;
+    }
+    if (change.status === "ignored") continue;
+    const path = toDisplayPath(change.path, rootPath).replace(/\\/g, "/");
+    if (!hasEvidence(path)) pointerOnly.push(change);
+  }
+  files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return { files, pointerOnly };
+}
+
+/** The at-risk commits of one submodule, capped for display. */
+export interface SubmoduleCommitGroup {
+  /** The submodule path, or `null` for a module store with no checkout. */
+  path: string | null;
+  rows: SubmoduleCommitRow[];
+}
+
+/** Rows per module once more than one module holds unpushed commits. */
+export const MULTI_MODULE_COMMIT_LIMIT = 3;
+
+/**
+ * The retained at-risk commits grouped by the submodule they were found in,
+ * BEFORE any capping, so every affected module keeps its place — a global cap
+ * applied first could fill all five rows from one module and drop another
+ * from view entirely, and a push in the module shown would then leave the
+ * delete refused for a reason nobody was shown. Each group caps on its own,
+ * and an incomplete walk keeps "at least" on its tail.
+ */
+export function groupAtRiskCommits(risk: SubmoduleDeleteRisk | null): SubmoduleCommitGroup[] {
+  if (!risk) return [];
+  const byPath = new Map<string | null, SubmoduleDeleteRisk["atRiskCommits"]>();
+  for (const commit of risk.atRiskCommits) {
+    const path = commit.submodulePath ?? null;
+    const bucket = byPath.get(path);
+    if (bucket) bucket.push(commit);
+    else byPath.set(path, [commit]);
+  }
+  const limit = byPath.size > 1 ? MULTI_MODULE_COMMIT_LIMIT : SUBMODULE_COMMIT_LIMIT;
+  return [...byPath].map(([path, commits]) => ({
+    path,
+    rows: buildSubmoduleCommitRows({ ...risk, atRiskCommits: commits }, limit),
+  }));
+}
+
+/**
+ * The teardown a delete would run, or `"unreadable"` when it couldn't be
+ * read. Never rejects: a confirm surface has to say an unreadable teardown
+ * may still run rather than drop it. `null` when the worktree is gone.
+ */
+export async function fetchWorktreeTeardownPreview(
+  worktreeId: string
+): Promise<WorktreeTeardownPreview | null | "unreadable"> {
+  try {
+    return await worktreeClient.getDeleteTeardownPreview(worktreeId);
+  } catch {
+    return "unreadable";
+  }
+}
+
+/**
+ * The teardown half of the MCP preview — the same disclosure the local dialog
+ * makes, because a delete an agent requested runs the same teardown.
+ */
+export function formatTeardownPreviewLines(
+  teardown: WorktreeTeardownPreview | null | "unreadable"
+): string[] {
+  if (teardown === "unreadable") {
+    return [
+      `${MCP_PREVIEW_CAUTION_PREFIX}Project teardown may also run — its commands couldn't be read.`,
+    ];
+  }
+  const lines: string[] = [];
+  for (const phase of teardown?.phases ?? []) {
+    const noun = phase.phase === "resource-teardown" ? "Resource teardown" : "Project teardown";
+    if (!phase.approved) {
+      lines.push(`${noun} will be skipped — its commands haven't been approved for this project.`);
+      continue;
+    }
+    lines.push(`${noun} will run first (the delete continues if it fails):`);
+    for (const command of phase.commands) lines.push(`  ${command}`);
+  }
+  return lines;
+}
+
+/**
  * Render a change set as capped, glyph-prefixed file rows (`  M src/app.ts`),
  * shared by the local delete dialog and the MCP preview so both show the same
  * actual content (the D2 "a count is insufficient" rule). Ignored files are
@@ -642,8 +761,19 @@ export function formatSubmodulePreviewLines(state: WorktreeSubmoduleRiskState): 
     lines.push(
       `${MCP_PREVIEW_CAUTION_PREFIX}${measured} inside submodules ${count === 1 && !capped ? "is" : "are"} on no remote this clone knows about — the worktree cannot be deleted until ${count === 1 && !capped ? "it is" : "they are"} pushed:`
     );
-    for (const row of commitRows) {
-      lines.push(row.isOverflow ? `  ${row.subject}` : `  ${row.shortOid} ${row.subject}`);
+    // Grouped per submodule so every module that needs a push is named, and
+    // no cap can push one out of view.
+    const groups = groupAtRiskCommits(risk);
+    for (const group of groups) {
+      if (groups.length > 1 || group.path) {
+        lines.push(`  in ${group.path ?? "a module store with no checkout"}:`);
+      }
+      const indent = groups.length > 1 || group.path ? "    " : "  ";
+      for (const row of group.rows) {
+        lines.push(
+          row.isOverflow ? `${indent}${row.subject}` : `${indent}${row.shortOid} ${row.subject}`
+        );
+      }
     }
   }
   if (state.status === "unverified") {
@@ -668,9 +798,13 @@ export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview 
       `${MCP_PREVIEW_CAUTION_PREFIX}Could not verify current changes — proceed with caution.`,
     ];
   }
-  const { trackedChangeCount, untrackedFileCount, changes, rootPath, submodules } = preview;
+  const { changes, rootPath, submodules } = preview;
   const submoduleLines = formatSubmodulePreviewLines(submodules);
-  if (changes.length === 0) {
+  // A submodule's own parent row stands for nested content listed below, so
+  // it is neither counted nor listed as a file of its own.
+  const { files, pointerOnly } = splitDisplayChanges(changes, rootPath, submodules);
+  const { trackedChangeCount, untrackedFileCount } = summarizeWorktreeChanges(files);
+  if (files.length === 0 && pointerOnly.length === 0) {
     // Only claim a clean tree when nothing nested contradicts it. Saying "No
     // uncommitted changes." above a list of submodule commits about to be
     // destroyed is the misleading-precision failure this whole surface exists
@@ -687,9 +821,17 @@ export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview 
   if (untrackedFileCount > 0) {
     parts.push(`${untrackedFileCount} untracked file${untrackedFileCount === 1 ? "" : "s"}`);
   }
+  if (pointerOnly.length > 0) {
+    parts.push(
+      `${pointerOnly.length} submodule${pointerOnly.length === 1 ? "" : "s"} checked out at a different commit`
+    );
+  }
   return [
     `${parts.join(" and ")}:`,
-    ...formatWorktreeChangeRows(changes, PREVIEW_FILE_LIMIT, rootPath),
+    ...formatWorktreeChangeRows(pointerOnly, PREVIEW_FILE_LIMIT, rootPath).map(
+      (row) => `${row} (submodule)`
+    ),
+    ...formatWorktreeChangeRows(files, PREVIEW_FILE_LIMIT, rootPath),
     ...submoduleLines,
   ];
 }

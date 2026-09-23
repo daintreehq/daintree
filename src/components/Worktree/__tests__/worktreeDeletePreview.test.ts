@@ -2,15 +2,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { FileChangeDetail, GitStatus, WorktreeChanges } from "@shared/types/git";
 import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
 
-const { getFreshChangesMock, getSubmoduleDeleteRiskMock } = vi.hoisted(() => ({
+const { getFreshChangesMock, getSubmoduleDeleteRiskMock, getTeardownMock } = vi.hoisted(() => ({
   getFreshChangesMock: vi.fn(),
   getSubmoduleDeleteRiskMock: vi.fn(),
+  getTeardownMock: vi.fn(),
 }));
 
 vi.mock("@/clients", () => ({
   worktreeClient: {
     getFreshChanges: getFreshChangesMock,
     getSubmoduleDeleteRisk: getSubmoduleDeleteRiskMock,
+    getDeleteTeardownPreview: getTeardownMock,
   },
 }));
 
@@ -22,6 +24,8 @@ import {
   submoduleDeleteBlock,
   formatWorktreeDeletePreviewLines,
   formatWorktreeChangeRows,
+  formatTeardownPreviewLines,
+  fetchWorktreeTeardownPreview,
   buildWorktreeChangeRows,
   submoduleForceRequired,
   submoduleCommitsAreCapped,
@@ -780,5 +784,89 @@ describe("worktreeDeleteBlockedBy (#12115)", () => {
 
   it("has nothing to block on for an already-removed worktree", () => {
     expect(worktreeDeleteBlockedBy({ state: "gone" })).toBeNull();
+  });
+});
+
+describe("delete-preview parity for the MCP confirm", () => {
+  const entry = (path: string) => ({
+    path,
+    state: "moved" as const,
+    recordedOid: "0".repeat(40),
+    hasModifiedContent: true,
+    hasUntrackedContent: false,
+  });
+
+  function withSubmodule(parent: FileChangeDetail[], risk: SubmoduleDeleteRisk) {
+    return {
+      ...summarizeWorktreeChanges(parent),
+      changes: parent,
+      rootPath: ROOT,
+      submodules: { status: "verified", risk } as const,
+    };
+  }
+
+  it("does not count a submodule's own row as a file when its contents are listed", () => {
+    // The approver sees the nested files below; a header reading "1
+    // uncommitted tracked file" for the gitlink stated a loss twice.
+    const lines = formatWorktreeDeletePreviewLines(
+      withSubmodule(
+        [file("vendor/lib", "modified")],
+        emptyRisk({ entries: [entry("vendor/lib")], dirtyFiles: ["vendor/lib/a.c"] })
+      )
+    );
+    expect(lines.join("\n")).not.toContain("uncommitted tracked file");
+    expect(lines[0]).toBe("No uncommitted changes in the worktree itself.");
+    expect(lines.join("\n")).toContain("vendor/lib/a.c");
+  });
+
+  it("names a submodule whose checkout only moved, rather than calling it a file", () => {
+    const lines = formatWorktreeDeletePreviewLines(
+      withSubmodule([file("vendor/lib", "modified")], emptyRisk({ entries: [entry("vendor/lib")] }))
+    );
+    expect(lines[0]).toBe("1 submodule checked out at a different commit:");
+    expect(lines[1]).toBe("  M vendor/lib (submodule)");
+  });
+
+  it("groups unpushed commits under every submodule that holds them", () => {
+    const lines = formatWorktreeDeletePreviewLines(
+      withSubmodule(
+        [],
+        emptyRisk({
+          atRiskCommits: [
+            ...Array.from({ length: 6 }, (_, i) => ({
+              oid: `a${i}bcdef0123456789`,
+              subject: `Codec ${i}`,
+              submodulePath: "vendor/codec",
+            })),
+            { oid: "b0bcdef0123456789", subject: "Zlib fix", submodulePath: "vendor/zlib" },
+          ],
+        })
+      )
+    ).join("\n");
+    expect(lines).toContain("  in vendor/codec:");
+    expect(lines).toContain("  in vendor/zlib:");
+    expect(lines).toContain("Zlib fix");
+  });
+
+  it("states the teardown a delete runs, skips, or couldn't read", () => {
+    expect(
+      formatTeardownPreviewLines({
+        phases: [
+          { phase: "resource-teardown", commands: ["devbox destroy"], approved: false },
+          { phase: "teardown", commands: ["docker compose down"], approved: true },
+        ],
+      })
+    ).toEqual([
+      "Resource teardown will be skipped — its commands haven't been approved for this project.",
+      "Project teardown will run first (the delete continues if it fails):",
+      "  docker compose down",
+    ]);
+    expect(formatTeardownPreviewLines("unreadable")[0]).toContain("Project teardown may also run");
+    expect(formatTeardownPreviewLines({ phases: [] })).toEqual([]);
+  });
+
+  it("reads a failed teardown fetch as unreadable, never as none", async () => {
+    getTeardownMock.mockRejectedValueOnce(new Error("port timeout"));
+    await expect(fetchWorktreeTeardownPreview("wt-1")).resolves.toBe("unreadable");
   });
 });

@@ -177,17 +177,34 @@ vi.mock("@/components/ui/button", () => ({
 import { WorktreeDeleteDialog } from "../WorktreeDeleteDialog";
 
 /**
- * A refused delete offers no delete at all — not a disabled one. The footer's
- * primary is the recheck, it is not marked destructive, and the dialog drops
- * its destructive variant so nothing on screen reads as a delete awaiting
- * permission.
+ * A refused delete keeps its action in place and unavailable — the app's
+ * convention for a refusal — and offers the one way forward, a Retry that
+ * re-reads, in the banner that explains it.
  */
 function expectNoDeleteOffered(): void {
-  const primary = screen.getByTestId("delete-worktree-confirm");
-  expect(primary.textContent).toBe("Retry");
-  expect(primary.getAttribute("data-intent")).not.toBe("destructive");
-  expect(screen.getByTestId("delete-worktree-dialog").getAttribute("data-variant")).toBe("default");
-  expect(screen.queryByText(/^(Force )?delete worktree$/i)).toBeNull();
+  const primary = screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement;
+  expect(primary.textContent).toBe("Delete worktree");
+  expect(primary.disabled).toBe(true);
+  expect(retryButton()).toBeDefined();
+}
+
+/**
+ * Click the refusal's Retry once it is available. The banner can render a
+ * tick before the open-time check settles, and Retry is (correctly) inert
+ * until it does.
+ */
+async function clickRetry(): Promise<void> {
+  await waitFor(() => {
+    expect(retryButton().getAttribute("aria-disabled")).toBeNull();
+  });
+  fireEvent.click(retryButton());
+}
+
+/** The refusal banner's Retry. */
+function retryButton(): HTMLElement {
+  return within(screen.getByTestId("delete-worktree-blocked")).getByRole("button", {
+    name: "Retry",
+  });
 }
 
 function makeWorktree(
@@ -1577,15 +1594,13 @@ describe("WorktreeDeleteDialog — submodules", () => {
     const banner = await screen.findByTestId("delete-worktree-blocked");
     expect(banner.textContent).toContain("Push the submodule commits first");
     expect(banner.textContent).toContain("from inside the submodule");
-    // The recovery is the footer's primary now; the banner carries no button.
     // Scoped to what the inventory can prove: it measures reachability from
     // this module repo's own remote-tracking refs, never global existence.
     expect(banner.textContent).toContain("on no remote this clone knows about");
     expect(banner.textContent).not.toContain("nowhere else");
     // The commits are listed below; a banner repeating them says it twice.
     expect(banner.textContent).not.toContain("Fix the vendored parser");
-    expect(within(banner).queryByRole("button")).toBeNull();
-    expect(screen.getByTestId("delete-worktree-confirm").textContent).toBe("Retry");
+    expect(within(banner).getByRole("button").textContent).toBe("Retry");
     expect(screen.getByTestId("delete-worktree-hint").textContent).toContain("Delete unavailable");
   });
 
@@ -1660,7 +1675,7 @@ describe("WorktreeDeleteDialog — submodules", () => {
     // Retry re-runs the same fetch, and a completed inventory clears the block.
     // It never dispatches: it only re-reads.
     buildPreviewMock.mockResolvedValue(makePreview([]));
-    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    await clickRetry();
     expect(startDeleteMock).not.toHaveBeenCalled();
 
     await waitFor(() => {
@@ -1812,6 +1827,9 @@ describe("WorktreeDeleteDialog — submodules", () => {
 describe("WorktreeDeleteDialog — submodule entries, rechecks, teardown", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // `clearAllMocks` keeps queued `...Once` values, and a recheck here makes
+    // an extra call — a value an earlier suite left queued would answer it.
+    buildPreviewMock.mockReset();
     terminalCountsMock.total = 0;
     terminalsMock.length = 0;
     devPreviewGetByWorktreeMock.mockResolvedValue(null);
@@ -1945,7 +1963,7 @@ describe("WorktreeDeleteDialog — submodule entries, rechecks, teardown", () =>
     );
     await screen.findByTestId("delete-worktree-blocked");
     buildPreviewMock.mockResolvedValue(makePreview([{ path: "a.ts", status: "modified" }]));
-    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    await clickRetry();
     await waitFor(() => {
       expect(screen.getByRole("status").textContent).toContain("select Force delete");
     });
@@ -2149,16 +2167,15 @@ describe("WorktreeDeleteDialog — submodule entries, rechecks, teardown", () =>
         resolveRecheck = resolve;
       })
     );
-    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    await clickRetry();
     // Still refused, still showing its evidence, and the recheck can't be
     // stacked while it runs.
     expect(screen.getByTestId("delete-worktree-blocked")).toBeDefined();
     expect(screen.getByTestId("delete-worktree-submodule-commit-list").textContent).toContain(
       "Fix the parser"
     );
-    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
-      true
-    );
+    expect(retryButton().getAttribute("aria-disabled")).toBe("true");
+    expectNoDeleteOffered();
 
     await act(async () => {
       resolveRecheck(blocked);
@@ -2167,7 +2184,7 @@ describe("WorktreeDeleteDialog — submodule entries, rechecks, teardown", () =>
     expect(startDeleteMock).not.toHaveBeenCalled();
   });
 
-  it("moves focus to Cancel when a recheck turns Retry back into the delete", async () => {
+  it("moves focus to Cancel when a cleared refusal takes its Retry away", async () => {
     buildPreviewMock.mockResolvedValue(makePreview([], { status: "unverified", risk: null }));
     render(
       <WorktreeDeleteDialog
@@ -2177,20 +2194,22 @@ describe("WorktreeDeleteDialog — submodule entries, rechecks, teardown", () =>
       />
     );
     await screen.findByTestId("delete-worktree-blocked");
-    const primary = screen.getByTestId("delete-worktree-confirm");
-    primary.focus();
+    await waitFor(() => {
+      expect(retryButton().getAttribute("aria-disabled")).toBeNull();
+    });
+    const retry = retryButton();
+    retry.focus();
 
     buildPreviewMock.mockResolvedValue(makePreview([]));
-    fireEvent.click(primary);
+    fireEvent.click(retry);
     await waitFor(() => {
       expect(screen.queryByTestId("delete-worktree-blocked")).toBeNull();
     });
-    // The same button now reads "Delete worktree" and is live. Focus must not
-    // be left sitting on it from a click that meant "check again".
+    // The banner, and the Retry that had focus, are gone; focus must land
+    // inside the dialog on Cancel, not on the page behind it.
     await waitFor(() => {
       expect(screen.getByRole("status").textContent).toContain("can be deleted");
     });
-    expect(screen.getByTestId("delete-worktree-confirm").textContent).toBe("Delete worktree");
     expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
   });
 

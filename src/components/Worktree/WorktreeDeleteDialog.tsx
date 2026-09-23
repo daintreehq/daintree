@@ -13,7 +13,8 @@ import {
   buildWorktreeChangeRows,
   buildSubmoduleCommitRows,
   buildSubmoduleFileRows,
-  isSubmoduleChange,
+  groupAtRiskCommits,
+  splitDisplayChanges,
   submoduleCommitsAreCapped,
   submoduleDeleteBlock,
   submoduleFileCount,
@@ -24,8 +25,6 @@ import {
   worktreeDeleteBlockedBy,
   worktreeDeleteContentRisk,
   PREVIEW_FILE_LIMIT,
-  SUBMODULE_COMMIT_LIMIT,
-  type SubmoduleCommitRow,
   type WorktreeDeletePreview,
   type WorktreeSubmoduleRiskState,
 } from "@/components/Worktree/worktreeDeletePreview";
@@ -34,7 +33,6 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import type { WorktreeState } from "@/types";
 import type { WorktreeTeardownPreview } from "@shared/types/worktree";
-import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
 import { cn } from "@/lib/utils";
 import { isProtectedBranch as isProtectedBranchName } from "@shared/utils/gitConstants";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
@@ -156,36 +154,14 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // and wrong by an unbounded factor — and shows the commits as nothing at all.
   const submodulePathSet = new Set((submodules?.risk?.entries ?? []).map((entry) => entry.path));
   // A submodule's own row in the parent status (` M vendor/codec`) is not a
-  // file, and its content is listed under "Inside submodules". Listed first so
-  // the cap can't hide it, and kept out of every file count — the counts below
-  // are display only, and the tier above still reads the unsplit list.
-  const submoduleEntryChanges = previewChanges.filter((c) =>
-    isSubmoduleChange(c, previewRootPath, submodulePathSet)
-  );
-  // Sorted for display so the same tree reads the same way on every open;
-  // git's own order shifts between the seed snapshot and the fresh read.
-  const fileChanges = previewChanges
-    .filter((c) => !isSubmoduleChange(c, previewRootPath, submodulePathSet))
-    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  // A submodule whose contents are listed under "Inside submodules" needs no
-  // row of its own up here — that row would only point down at the evidence.
-  // One with nothing listed (its checkout moved to another commit, nothing
-  // dirty inside) keeps its row: the pointer change is the whole of it.
-  const risk = submodules?.risk ?? null;
-  const submodulePathsWithEvidence = new Set(
-    [...submodulePathSet].filter(
-      (path) =>
-        [...(risk?.dirtyFiles ?? []), ...(risk?.untrackedFiles ?? [])].some((file) =>
-          file.startsWith(`${path}/`)
-        ) || (risk?.atRiskCommits ?? []).some((commit) => commit.submodulePath === path)
-    )
-  );
-  const pointerOnlyChanges = submoduleEntryChanges.filter(
-    (c) =>
-      c.status !== "ignored" &&
-      !submodulePathsWithEvidence.has(
-        buildWorktreeChangeRows([c], 1, previewRootPath)[0]?.label ?? ""
-      )
+  // file. When its contents are listed under "Inside submodules" it gets no
+  // row here; when nothing is listed (the checkout just points at another
+  // commit) the row is the whole change and stays, listed first so the cap
+  // can't hide it. Display only — the tier above reads the unsplit list.
+  const { files: fileChanges, pointerOnly: pointerOnlyChanges } = splitDisplayChanges(
+    previewChanges,
+    previewRootPath,
+    submodules
   );
   const previewChangeRows = buildWorktreeChangeRows(
     [...pointerOnlyChanges, ...fileChanges],
@@ -420,9 +396,8 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // Once any check settles — the open-time read, a Retry, or the submit-time
   // re-read that held a force delete back — say what it found, and if the
   // control that had focus went away with the state it answered (a gate input
-  // replaced by a refusal, a banner's Retry unmounting, the refusal's Retry
-  // turning back into the delete), put focus on Cancel. Never leave it on a
-  // delete the user didn't reach for.
+  // replaced by a refusal, a banner's Retry unmounting once the refusal
+  // clears), put focus on Cancel rather than on the page behind the dialog.
   useEffect(() => {
     const kind = pendingCheckRef.current;
     if (previewPending || isDeleting || kind === null) return;
@@ -452,8 +427,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     const active = document.activeElement;
     const lostFocus =
       !active || active === document.body || !active.isConnected || !root?.contains(active);
-    const onPrimary = active instanceof HTMLElement && active.dataset.confirmRole === "confirm";
-    if (lostFocus || (kind === "recheck" && onPrimary && !isBlocked)) {
+    if (lostFocus) {
       root?.querySelector<HTMLElement>('[data-confirm-role="cancel"]')?.focus();
     }
   }, [
@@ -888,9 +862,8 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     );
 
   /**
-   * The delete is refused, not merely dangerous — so the banner leads the body,
-   * states the one thing the user can do about it, and the footer offers that
-   * (Retry) in place of a delete that cannot happen.
+   * The delete is refused, not merely dangerous — so the banner leads the body
+   * and states the one thing the user can do about it, with its Retry.
    *
    * Separate from `verifyFailedBanner`: that one fires when the PARENT status
    * could not be read at all, and it stays a warning because the host re-reads
@@ -938,6 +911,17 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           )}
         </p>
       </div>
+      {/* Re-reads; it never pushes or deletes. Stays mounted through the
+          recheck, which keeps the refusal on screen until the answer lands. */}
+      <Button
+        variant="subtle"
+        size="xs"
+        className="shrink-0"
+        aria-disabled={previewPending || undefined}
+        onClick={recheck}
+      >
+        Retry
+      </Button>
     </div>
   ) : null;
 
@@ -988,12 +972,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       isOpen={isOpen}
       onClose={onClose}
       size="md"
-      // A refused delete has nothing destructive left to confirm, so its
-      // primary is a neutral Retry rather than a red button labelled with an
-      // action that cannot run. Initial focus is pinned to Cancel so the swap
-      // never moves it.
-      variant={isBlocked ? "default" : "destructive"}
-      initialFocus="cancel"
+      variant="destructive"
       // The body lists what will happen and, when the worktree is dirty, the
       // files that will be lost — structured evidence, so a dialog rather than
       // an alertdialog, which APG reserves for a brief message read out whole.
@@ -1404,22 +1383,15 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               : (blockedHint ?? undefined)
         }
         secondaryAction={{ label: "Cancel", onClick: onClose }}
-        primaryAction={
-          isBlocked
-            ? {
-                // The only way forward from a refusal, after a push or fetch
-                // elsewhere. It re-reads; it never pushes or deletes.
-                label: "Retry",
-                onClick: recheck,
-                disabled: previewPending,
-              }
-            : {
-                label: deleteButtonLabel,
-                onClick: handleDelete,
-                disabled: !canSubmit,
-                intent: "destructive",
-              }
-        }
+        // A refused delete keeps the app's convention for a refusal: the
+        // action stays in place, unavailable, with its reason in the hint;
+        // the way forward is the banner's Retry.
+        primaryAction={{
+          label: deleteButtonLabel,
+          onClick: handleDelete,
+          disabled: !canSubmit,
+          intent: "destructive",
+        }}
       />
     </AppDialog>
   );
@@ -1466,38 +1438,6 @@ function TeardownCommandList({ commands }: { commands: string[] }) {
       )}
     </ul>
   );
-}
-
-interface SubmoduleCommitGroup {
-  path: string | null;
-  rows: SubmoduleCommitRow[];
-}
-
-/** Rows per module once more than one module holds unpushed commits. */
-const MULTI_MODULE_COMMIT_LIMIT = 3;
-
-/**
- * The retained at-risk commits grouped by the submodule they were found in,
- * BEFORE any capping, so every affected module keeps a heading and a count —
- * a global cap applied first could fill all five rows from one module and
- * drop another from view entirely, and a push in the module shown would then
- * leave the delete refused for a reason nobody was shown. Each group caps on
- * its own, and an incomplete walk keeps "at least" on its tail.
- */
-function groupAtRiskCommits(risk: SubmoduleDeleteRisk | null): SubmoduleCommitGroup[] {
-  if (!risk) return [];
-  const byPath = new Map<string | null, SubmoduleDeleteRisk["atRiskCommits"]>();
-  for (const commit of risk.atRiskCommits) {
-    const path = commit.submodulePath ?? null;
-    const bucket = byPath.get(path);
-    if (bucket) bucket.push(commit);
-    else byPath.set(path, [commit]);
-  }
-  const limit = byPath.size > 1 ? MULTI_MODULE_COMMIT_LIMIT : SUBMODULE_COMMIT_LIMIT;
-  return [...byPath].map(([path, commits]) => ({
-    path,
-    rows: buildSubmoduleCommitRows({ ...risk, atRiskCommits: commits }, limit),
-  }));
 }
 
 function capitalize(text: string): string {
