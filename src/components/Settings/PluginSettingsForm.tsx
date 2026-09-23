@@ -198,7 +198,6 @@ function SettingField({
   // at window capture and pops the stack before Radix sees the key, so without
   // an entry of its own the list's Escape closed the whole manager.
   const [enumOpen, setEnumOpen] = useState(false);
-  useEscapeStack(enumOpen, () => setEnumOpen(false));
 
   // Initialize from stored value (falling back to the declared default) once the
   // scope's values resolve. Runs once per (re)mount when `loaded` flips true.
@@ -300,6 +299,16 @@ function SettingField({
   // The row greys out only while there is nothing to edit yet; a write in flight
   // disables just the control, so the label doesn't flicker on every save.
   const rowDisabled = !loaded || !scopeReady;
+  // The list is only open while there is an enabled enum control to hold it.
+  // A save or reset disabling the field mid-open, or a reload turning the
+  // setting into another type, would otherwise leave the Select forced open on
+  // a disabled control, or leave an invisible escape entry swallowing the next
+  // Escape.
+  const enumListOpen = enumOpen && type === "enum" && !rowDisabled && !saving;
+  useEscapeStack(enumListOpen, () => setEnumOpen(false));
+  useEffect(() => {
+    if (enumOpen && !enumListOpen) setEnumOpen(false);
+  }, [enumOpen, enumListOpen]);
   const fieldId = `plugin-setting-${pluginId}-${def.id}`;
 
   const toggleBool = (next: boolean) => {
@@ -455,7 +464,7 @@ function SettingField({
         {...rowProps}
         control={({ labelId, descriptionId, disabled }) => (
           <Select
-            open={enumOpen}
+            open={enumListOpen}
             onOpenChange={setEnumOpen}
             value={draft}
             disabled={disabled || saving}

@@ -254,6 +254,37 @@ describe("PluginSettingsForm", () => {
     }
   });
 
+  it("drops an open enum list and its Escape claim when the field is disabled", async () => {
+    let resolveWrite: () => void = () => {};
+    vi.mocked(pluginApi.setSettingValue).mockImplementation(
+      () => new Promise<void>((resolve) => (resolveWrite = resolve))
+    );
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([{ id: "mode", type: "enum", label: "Mode", options: ["a", "b"] }])}
+      />
+    );
+    const select = (await screen.findByRole("combobox", { name: "Mode" })) as HTMLButtonElement;
+    await waitFor(() => expect(select.disabled).toBe(false));
+    fireEvent.click(select);
+    await waitFor(() => expect(select.getAttribute("aria-expanded")).toBe("true"));
+    // Picking an option starts a save, which disables the field.
+    fireEvent.click(within(screen.getByRole("listbox")).getByRole("option", { name: "b" }));
+    await waitFor(() => expect(select.disabled).toBe(true));
+    expect(select.getAttribute("aria-expanded")).toBe("false");
+    const outer = vi.fn();
+    const outerEntry = registerEscape(outer);
+    try {
+      act(() => {
+        dispatchEscape();
+      });
+      expect(outer).toHaveBeenCalledTimes(1);
+    } finally {
+      outerEntry.unregister();
+      await act(async () => resolveWrite());
+    }
+  });
+
   it("surfaces an inline error for invalid JSON and does not write", async () => {
     render(
       <PluginSettingsForm plugin={makePlugin([{ id: "cfg", type: "json", label: "Config" }])} />
