@@ -44,12 +44,12 @@ const OUTCOME_LABEL: Record<ConflictResolution, string> = {
 };
 
 /** The caption-strip recipe shared by the app's other destructive previews. */
-const PREVIEW_FRAME = "rounded border border-tint/[0.08] bg-tint/[0.04] text-xs";
+const PREVIEW_FRAME = "rounded-[var(--radius-md)] border border-tint/[0.08] bg-tint/[0.04] text-xs";
 const PREVIEW_STRIP =
   "px-3 py-2 border-b border-tint/[0.08] flex items-center justify-between gap-2";
 const PREVIEW_CAPTION = "text-2xs font-semibold uppercase tracking-wider text-text-secondary";
 const PREVIEW_COUNT =
-  "ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal";
+  "ml-1.5 tabular-nums bg-tint/10 rounded-[var(--radius-sm)] px-1 py-0.5 text-3xs font-medium normal-case tracking-normal";
 
 function collapsePairs(result: ParseEnvResult): Record<string, string> {
   const out: Record<string, string> = {};

@@ -93,9 +93,7 @@ describe("EnvironmentVariablesEditor", () => {
       expect(screen.getByText("API_KEY")).toBeTruthy();
 
       const globalSection = screen.getByRole("group", { name: "Inherited from global" });
-      const deleteButtons = globalSection.querySelectorAll(
-        '[aria-label="Delete environment variable"]'
-      );
+      const deleteButtons = globalSection.querySelectorAll('[aria-label^="Delete"]');
       expect(deleteButtons.length).toBe(0);
 
       const inputs = globalSection.querySelectorAll("input");
@@ -121,7 +119,7 @@ describe("EnvironmentVariablesEditor", () => {
       expect(valueInputs.length).toBe(1);
       expect((valueInputs[0] as HTMLInputElement).value).toBe("my-value");
 
-      const deleteButtons = screen.getAllByLabelText("Delete environment variable");
+      const deleteButtons = screen.getAllByRole("button", { name: /^Delete / });
       expect(deleteButtons.length).toBe(1);
     });
 
@@ -150,7 +148,7 @@ describe("EnvironmentVariablesEditor", () => {
         />
       );
 
-      expect(screen.getByText("********")).toBeTruthy();
+      expect(screen.getByText("••••••••")).toBeTruthy();
       expect(screen.getByText("visible")).toBeTruthy();
     });
 
@@ -310,7 +308,7 @@ describe("EnvironmentVariablesEditor", () => {
       fireEvent.click(screen.getByRole("button", { name: "Move 1 value out of shared settings" }));
 
       expect(onFlush).not.toHaveBeenCalled();
-      expect(screen.getByText(/fix the errors above before saving/i)).toBeTruthy();
+      expect(screen.getByText(/fix the name above to save/i)).toBeTruthy();
     });
   });
 });
@@ -323,7 +321,7 @@ describe("EnvironmentVariablesEditor — DOM anchors for settings deep-links", (
 });
 
 describe("EnvironmentVariablesEditor save controls", () => {
-  it("keeps Save changes and Discard disabled until the draft differs from what was loaded", () => {
+  it("keeps Save and Discard disabled until the draft differs from what was loaded", () => {
     render(
       <EnvironmentVariablesEditor
         {...defaultProps}
@@ -332,7 +330,7 @@ describe("EnvironmentVariablesEditor save controls", () => {
       />
     );
 
-    const save = screen.getByRole("button", { name: "Save changes" }) as HTMLButtonElement;
+    const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
     const discard = screen.getByRole("button", { name: "Discard" }) as HTMLButtonElement;
     expect(save.disabled).toBe(true);
     expect(discard.disabled).toBe(true);

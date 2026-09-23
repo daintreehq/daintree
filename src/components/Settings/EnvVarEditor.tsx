@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Eye, EyeOff, Plus, RotateCcw, Upload, X } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronDown,
+  Eye,
+  EyeOff,
+  Plus,
+  RotateCcw,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { looksLikeSecret } from "@/utils/secretDetection";
@@ -29,12 +38,16 @@ import { SettingsEmptyRow } from "./SettingsGroup";
  *    don't silently ship empty-string overrides.
  *
  * Validation surfaces:
- *  - Empty key after trim → red left-stripe on the row + "Key required" inline
- *    message. Blur on an empty key does NOT persist.
- *  - Duplicate key → amber left-stripe on both matching rows + "Duplicate key"
- *    inline message. The second occurrence is not persisted until resolved.
- *  - Literal secret value → amber left-stripe + inline advisory message.
+ *  - Empty key after trim → error stripe on the row + "Enter a name" under the
+ *    key. Blur on an empty key does NOT persist.
+ *  - Duplicate key → error stripe on both matching rows + a message under the
+ *    key. The second occurrence is not persisted until resolved.
+ *  - Literal secret value → warning stripe + an advisory under the value.
  *    Values still commit (warning is advisory only).
+ *
+ *  Messages sit in the row's flow, under the field they describe, and are
+ *  referenced by it: squeezed into the cell at a 4xs size they were the smallest
+ *  text on the page at exactly the moment the row needed reading.
  *
  * Reveal toggle: when the key name matches `isSensitiveEnvKey` or the value
  * matches `looksLikeSecret`, an eye toggle appears in the value cell and the
@@ -170,6 +183,8 @@ const EMPTY_SUGGESTIONS: EnvVarSuggestion[] = [];
 
 interface EnvVarKeyCellProps {
   rowId: string;
+  /** 1-based position, for a field name that means something when read aloud. */
+  position: number;
   value: string;
   suggestions: EnvVarSuggestion[];
   usedKeys: Set<string>;
@@ -201,6 +216,7 @@ interface EnvVarKeyCellProps {
  */
 function EnvVarKeyCell({
   rowId,
+  position,
   value,
   suggestions,
   usedKeys,
@@ -216,6 +232,8 @@ function EnvVarKeyCell({
   const [activeIndex, setActiveIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listboxId = `env-key-suggestions-${rowId}`;
+  const messageId = `env-key-message-${rowId}`;
+  const hasError = isEmptyKey || isDuplicate;
 
   const trimmedValue = value.trim();
   const availableSuggestions = useMemo(() => {
@@ -240,150 +258,154 @@ function EnvVarKeyCell({
   const showChevron = availableSuggestions.length > 0 && !disabled;
 
   return (
-    <div className="relative">
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverAnchor asChild>
-          <input
-            ref={(el) => {
-              inputRef.current = el;
-              registerRef(rowId, el);
-            }}
-            type="text"
-            className={cn(
-              "w-full h-full bg-transparent border-0 outline-hidden py-2 font-mono text-xs leading-[inherit]",
-              "focus:ring-2 focus:ring-inset focus:ring-daintree-accent/40",
-              "disabled:cursor-default",
-              showChevron ? "pl-2.5 pr-8" : "px-2.5",
-              disabled
-                ? "text-text-secondary"
-                : isEmptyKey
-                  ? "text-status-error"
-                  : isDuplicate
-                    ? "text-status-warning"
-                    : "text-text-primary"
-            )}
-            value={value}
-            placeholder="KEY"
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-            disabled={disabled}
-            aria-label={`Env var key for row ${rowId}`}
-            aria-invalid={isEmptyKey || isDuplicate ? "true" : undefined}
-            role="combobox"
-            aria-expanded={open}
-            aria-controls={listboxId}
-            aria-autocomplete="list"
-            aria-activedescendant={
-              open && activeIndex >= 0 ? `env-key-option-${rowId}-${activeIndex}` : undefined
-            }
-            onChange={(e) => onChange(rowId, e.target.value)}
-            onBlur={() => onBlur(rowId)}
-            onFocus={(e) => e.target.select()}
-            onKeyDown={(e) => {
-              if (e.key === "ArrowDown") {
-                if (availableSuggestions.length === 0) return;
-                e.preventDefault();
-                if (!open) {
-                  setOpen(true);
-                  setActiveIndex(0);
-                } else {
-                  setActiveIndex((i) =>
-                    i + 1 >= availableSuggestions.length ? availableSuggestions.length - 1 : i + 1
-                  );
-                }
-              } else if (e.key === "ArrowUp") {
-                if (!open) return;
-                e.preventDefault();
-                setActiveIndex((i) => (i <= 0 ? 0 : i - 1));
-              } else if (e.key === "Enter" && open && activeIndex >= 0) {
-                e.preventDefault();
-                const sel = availableSuggestions[activeIndex];
-                if (sel) handleSelect(sel.key);
-              } else if (e.key === "Escape") {
-                if (open) {
-                  // Close the popover first; don't bubble to the surrounding
-                  // dialog's Escape handler.
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setOpen(false);
-                } else {
-                  e.currentTarget.blur();
-                }
-              }
-            }}
-            data-testid="env-editor-key"
-          />
-        </PopoverAnchor>
-        {showChevron && (
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              aria-label="Show key suggestions"
-              tabIndex={-1}
-              onMouseDown={(e) => {
-                // Keep focus on the input — without this, clicking the chevron
-                // moves focus to the button and subsequent keyboard nav (Arrow,
-                // Enter) wouldn't fire on the input's onKeyDown handler.
-                e.preventDefault();
-                inputRef.current?.focus();
+    <div className="flex flex-col">
+      <div className="relative">
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverAnchor asChild>
+            <input
+              ref={(el) => {
+                inputRef.current = el;
+                registerRef(rowId, el);
               }}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary hover:bg-daintree-bg/60 transition-colors"
-              data-testid="env-editor-key-suggestions-trigger"
-            >
-              <ChevronDown size={12} aria-hidden="true" />
-            </button>
-          </PopoverTrigger>
-        )}
-        <PopoverContent
-          align="start"
-          sideOffset={4}
-          className="p-1 min-w-52 w-auto"
-          onOpenAutoFocus={(e) => e.preventDefault()}
-          onCloseAutoFocus={(e) => {
-            e.preventDefault();
-            inputRef.current?.focus();
-          }}
-          data-testid="env-editor-key-suggestions-listbox"
-        >
-          <div role="listbox" id={listboxId} aria-label="Env var key suggestions">
-            {availableSuggestions.map((s, idx) => (
-              <div
-                key={s.key}
-                id={`env-key-option-${rowId}-${idx}`}
-                role="option"
-                aria-selected={idx === activeIndex}
-                onClick={() => handleSelect(s.key)}
-                onMouseEnter={() => setActiveIndex(idx)}
-                className={cn(
-                  "flex items-start gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer",
-                  idx === activeIndex && "bg-overlay-soft"
-                )}
-                data-testid="env-editor-key-suggestion"
+              type="text"
+              className={cn(
+                ENV_CELL_INPUT,
+                showChevron ? "pl-2.5 pr-8" : "px-2.5",
+                disabled ? "text-text-secondary" : "text-text-primary"
+              )}
+              value={value}
+              placeholder="KEY"
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+              disabled={disabled}
+              aria-label={`Name of variable ${position}`}
+              aria-invalid={hasError ? "true" : undefined}
+              aria-describedby={hasError ? messageId : undefined}
+              role="combobox"
+              aria-expanded={open}
+              aria-controls={listboxId}
+              aria-autocomplete="list"
+              aria-activedescendant={
+                open && activeIndex >= 0 ? `env-key-option-${rowId}-${activeIndex}` : undefined
+              }
+              onChange={(e) => onChange(rowId, e.target.value)}
+              onBlur={() => onBlur(rowId)}
+              onFocus={(e) => e.target.select()}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowDown") {
+                  if (availableSuggestions.length === 0) return;
+                  e.preventDefault();
+                  if (!open) {
+                    setOpen(true);
+                    setActiveIndex(0);
+                  } else {
+                    setActiveIndex((i) =>
+                      i + 1 >= availableSuggestions.length ? availableSuggestions.length - 1 : i + 1
+                    );
+                  }
+                } else if (e.key === "ArrowUp") {
+                  if (!open) return;
+                  e.preventDefault();
+                  setActiveIndex((i) => (i <= 0 ? 0 : i - 1));
+                } else if (e.key === "Enter" && open && activeIndex >= 0) {
+                  e.preventDefault();
+                  const sel = availableSuggestions[activeIndex];
+                  if (sel) handleSelect(sel.key);
+                } else if (e.key === "Escape") {
+                  if (open) {
+                    // Close the popover first; don't bubble to the surrounding
+                    // dialog's Escape handler.
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setOpen(false);
+                  } else {
+                    e.currentTarget.blur();
+                  }
+                }
+              }}
+              data-testid="env-editor-key"
+            />
+          </PopoverAnchor>
+          {showChevron && (
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                aria-label="Show key suggestions"
+                tabIndex={-1}
+                onMouseDown={(e) => {
+                  // Keep focus on the input — without this, clicking the chevron
+                  // moves focus to the button and subsequent keyboard nav (Arrow,
+                  // Enter) wouldn't fire on the input's onKeyDown handler.
+                  e.preventDefault();
+                  inputRef.current?.focus();
+                }}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
+                data-testid="env-editor-key-suggestions-trigger"
               >
-                <span className="font-mono text-xs text-text-primary shrink-0">{s.key}</span>
-                {s.hint && (
-                  <span className="text-2xs text-text-secondary leading-snug">{s.hint}</span>
-                )}
-              </div>
-            ))}
-          </div>
-        </PopoverContent>
-      </Popover>
-      {(isEmptyKey || isDuplicate) && (
-        <p
-          className={cn(
-            "absolute left-2.5 bottom-0.5 text-4xs leading-none pointer-events-none",
-            isEmptyKey ? "text-status-error" : "text-status-warning"
+                <ChevronDown size={12} aria-hidden="true" />
+              </button>
+            </PopoverTrigger>
           )}
+          <PopoverContent
+            align="start"
+            sideOffset={4}
+            className="p-1 min-w-52 w-auto"
+            onOpenAutoFocus={(e) => e.preventDefault()}
+            onCloseAutoFocus={(e) => {
+              e.preventDefault();
+              inputRef.current?.focus();
+            }}
+            data-testid="env-editor-key-suggestions-listbox"
+          >
+            <div role="listbox" id={listboxId} aria-label="Env var key suggestions">
+              {availableSuggestions.map((s, idx) => (
+                <div
+                  key={s.key}
+                  id={`env-key-option-${rowId}-${idx}`}
+                  role="option"
+                  aria-selected={idx === activeIndex}
+                  onClick={() => handleSelect(s.key)}
+                  onMouseEnter={() => setActiveIndex(idx)}
+                  className={cn(
+                    "flex items-start gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer",
+                    idx === activeIndex && "bg-overlay-soft"
+                  )}
+                  data-testid="env-editor-key-suggestion"
+                >
+                  <span className="font-mono text-xs text-text-primary shrink-0">{s.key}</span>
+                  {s.hint && (
+                    <span className="text-2xs text-text-secondary leading-snug">{s.hint}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </PopoverContent>
+        </Popover>
+      </div>
+      {hasError && (
+        <p
+          id={messageId}
+          className="px-2.5 pb-2 text-xs text-status-error"
           data-testid={isEmptyKey ? "env-editor-error-empty" : "env-editor-error-duplicate"}
         >
-          {isEmptyKey ? "Key required" : "Duplicate key"}
+          {isEmptyKey ? "Enter a name" : "Another variable already uses this name"}
         </p>
       )}
     </div>
   );
 }
+
+/** A borderless field filling its table cell; the ring is inset so it stays inside the cell. */
+const ENV_CELL_INPUT = cn(
+  "w-full bg-transparent border-0 outline-hidden py-2 font-mono text-xs leading-[inherit]",
+  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
+  "disabled:cursor-default"
+);
+
+/** Icon actions inside the table, at the 24px target minimum. */
+const ENV_CELL_ACTION =
+  "flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors";
 
 // Auto-clear duration for the "Pasted text normalized" inline indicator.
 // Long enough to read at a glance; short enough to feel ephemeral.
@@ -692,15 +714,20 @@ export function EnvVarEditor({
 
   return (
     <div
-      className="rounded-[var(--radius-md)] border border-border-default overflow-hidden bg-daintree-bg/30"
+      className="rounded-[var(--radius-md)] border border-border-default overflow-hidden bg-surface-input"
       data-testid={dataTestId}
     >
-      {/* Header */}
-      <div className="grid grid-cols-[2fr_3fr_auto] text-xs font-medium text-text-secondary bg-daintree-bg/40 border-b border-border-default">
-        <div className="px-2.5 py-1.5">Key</div>
-        <div className="px-2.5 py-1.5 border-l border-daintree-border/60">Value</div>
-        <div className="px-2.5 py-1.5 w-9" aria-hidden="true" />
-      </div>
+      {/* Header — only over rows it can label */}
+      {!isEmpty && (
+        <div
+          className="grid grid-cols-[2fr_3fr_auto] text-xs font-medium text-text-secondary bg-overlay-subtle border-b border-border-default"
+          aria-hidden="true"
+        >
+          <div className="px-2.5 py-1.5">Name</div>
+          <div className="px-2.5 py-1.5 border-l border-border-subtle">Value</div>
+          <div className="w-9" />
+        </div>
+      )}
       {/* Body */}
       {isEmpty ? (
         <SettingsEmptyRow
@@ -725,8 +752,8 @@ export function EnvVarEditor({
           Add your first variable, or import a .env file
         </SettingsEmptyRow>
       ) : (
-        <div className="divide-y divide-border-default">
-          {rows.map((row) => {
+        <div className="divide-y divide-border-subtle">
+          {rows.map((row, rowIndex) => {
             const trimmedKey = row.key.trim();
             const touched = !!touchedKeys[row.rowId];
             const isEmptyKey = !row.isInherited && touched && trimmedKey === "";
@@ -738,13 +765,14 @@ export function EnvVarEditor({
             const valueInputType = isSecret && !isRevealed ? "password" : "text";
             const isOverride =
               !row.isInherited && !!inheritedEnv && trimmedKey !== "" && trimmedKey in inheritedEnv;
-            const stripeClass = isEmptyKey
-              ? "before:bg-status-error"
-              : isDuplicate || hasSecretWarning
-                ? "before:bg-status-warning/70"
-                : isOverride
-                  ? "before:bg-state-modified"
-                  : "before:bg-transparent";
+            const stripeClass =
+              isEmptyKey || isDuplicate
+                ? "before:bg-status-error"
+                : hasSecretWarning
+                  ? "before:bg-status-warning"
+                  : isOverride
+                    ? "before:bg-state-modified"
+                    : "before:bg-transparent";
             // Keys taken by *other* editable rows — used to filter the
             // suggestion popover so a single key can't be picked twice.
             // Inherited rows don't count: a suggested key that matches an
@@ -763,12 +791,13 @@ export function EnvVarEditor({
                   "relative grid grid-cols-[2fr_3fr_auto] items-stretch group",
                   "before:content-[''] before:absolute before:left-0 before:top-0 before:bottom-0 before:w-[2px]",
                   stripeClass,
-                  row.isInherited && "bg-daintree-bg/20"
+                  row.isInherited && "bg-overlay-subtle"
                 )}
                 data-testid={row.isInherited ? "env-editor-row-inherited" : "env-editor-row"}
               >
                 <EnvVarKeyCell
                   rowId={row.rowId}
+                  position={rowIndex + 1}
                   value={row.key}
                   suggestions={suggestions ?? EMPTY_SUGGESTIONS}
                   usedKeys={usedKeys}
@@ -781,78 +810,84 @@ export function EnvVarEditor({
                   registerRef={registerKeyInput}
                 />
                 {/* Value cell */}
-                <div className="relative border-l border-daintree-border/60">
-                  <input
-                    type={valueInputType}
-                    className={cn(
-                      "w-full h-full bg-transparent border-0 outline-hidden py-2 font-mono text-xs leading-[inherit]",
-                      "focus:ring-2 focus:ring-inset focus:ring-daintree-accent/40",
-                      "disabled:cursor-default",
-                      isSecret ? "pl-2.5 pr-8" : "px-2.5",
-                      row.isInherited
-                        ? "text-text-secondary"
-                        : hasSecretWarning
-                          ? "text-status-warning"
-                          : "text-text-primary"
-                    )}
-                    value={row.value}
-                    placeholder={valuePlaceholder}
-                    spellCheck={false}
-                    autoComplete={isSecret ? "new-password" : "off"}
-                    data-1p-ignore
-                    data-lpignore="true"
-                    data-bwignore
-                    data-form-type="other"
-                    disabled={row.isInherited}
-                    aria-label={`Env var value for row ${row.rowId}`}
-                    onChange={(e) => handleValueChange(row.rowId, e.target.value)}
-                    onBlur={() => handleValueBlur(row.rowId)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        // Blur first so the current row commits its value to
-                        // the parent; only then add the new row. Without this,
-                        // the browser's focus-change blur fires after handleAdd
-                        // has already appended the placeholder row, and
-                        // handleValueBlur's commit sweeps in an unintended
-                        // NEW_VAR: "" entry.
-                        e.currentTarget.blur();
-                        handleAdd();
-                      } else if (e.key === "Escape") {
-                        e.currentTarget.blur();
-                      }
-                    }}
-                    onPaste={(e) => handleValuePaste(row.rowId, e)}
-                    data-testid="env-editor-value"
-                  />
-                  {isSecret && (
-                    <button
-                      type="button"
-                      onClick={() => toggleReveal(row.rowId)}
-                      aria-pressed={isRevealed}
-                      aria-label={isRevealed ? "Hide value" : "Show value"}
-                      className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary hover:bg-daintree-bg/60 transition-colors"
-                      data-testid="env-editor-reveal"
-                    >
-                      {isRevealed ? (
-                        <EyeOff size={12} aria-hidden="true" />
-                      ) : (
-                        <Eye size={12} aria-hidden="true" />
+                <div className="flex flex-col border-l border-border-subtle">
+                  <div className="relative">
+                    <input
+                      type={valueInputType}
+                      className={cn(
+                        ENV_CELL_INPUT,
+                        isSecret ? "pl-2.5 pr-9" : "px-2.5",
+                        row.isInherited ? "text-text-secondary" : "text-text-primary"
                       )}
-                    </button>
-                  )}
+                      value={row.value}
+                      placeholder={valuePlaceholder}
+                      spellCheck={false}
+                      autoComplete={isSecret ? "new-password" : "off"}
+                      data-1p-ignore
+                      data-lpignore="true"
+                      data-bwignore
+                      data-form-type="other"
+                      disabled={row.isInherited}
+                      aria-label={`Value of ${trimmedKey || `variable ${rowIndex + 1}`}`}
+                      aria-describedby={
+                        hasSecretWarning ? `env-value-message-${row.rowId}` : undefined
+                      }
+                      onChange={(e) => handleValueChange(row.rowId, e.target.value)}
+                      onBlur={() => handleValueBlur(row.rowId)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          // Blur first so the current row commits its value to
+                          // the parent; only then add the new row. Without this,
+                          // the browser's focus-change blur fires after handleAdd
+                          // has already appended the placeholder row, and
+                          // handleValueBlur's commit sweeps in an unintended
+                          // NEW_VAR: "" entry.
+                          e.currentTarget.blur();
+                          handleAdd();
+                        } else if (e.key === "Escape") {
+                          e.currentTarget.blur();
+                        }
+                      }}
+                      onPaste={(e) => handleValuePaste(row.rowId, e)}
+                      data-testid="env-editor-value"
+                    />
+                    {isSecret && (
+                      <button
+                        type="button"
+                        onClick={() => toggleReveal(row.rowId)}
+                        aria-pressed={isRevealed}
+                        aria-label={`${isRevealed ? "Hide" : "Show"} value${trimmedKey ? ` of ${trimmedKey}` : ""}`}
+                        className={cn(
+                          ENV_CELL_ACTION,
+                          "absolute right-1.5 top-1/2 -translate-y-1/2"
+                        )}
+                        data-testid="env-editor-reveal"
+                      >
+                        {isRevealed ? (
+                          <EyeOff size={12} aria-hidden="true" />
+                        ) : (
+                          <Eye size={12} aria-hidden="true" />
+                        )}
+                      </button>
+                    )}
+                  </div>
                   {hasSecretWarning && (
                     <p
-                      className="absolute left-2.5 bottom-0.5 text-4xs leading-none text-status-warning pointer-events-none"
+                      id={`env-value-message-${row.rowId}`}
+                      className="flex items-start gap-1.5 px-2.5 pb-2 text-xs text-text-secondary"
                       data-testid="env-editor-warning-secret"
-                      title="Looks like a secret. Prefer a ${ENV_VAR} reference to your shell environment."
                     >
-                      {"Looks like a secret — prefer ${ENV_VAR}"}
+                      <AlertTriangle
+                        className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
+                        aria-hidden="true"
+                      />
+                      {"Looks like a secret — reference it as ${ENV_VAR} from your shell instead"}
                     </p>
                   )}
                   {!hasSecretWarning && normalizedRows.has(row.rowId) && (
                     <p
-                      className="absolute left-2.5 bottom-0.5 text-4xs leading-none text-status-info pointer-events-none"
+                      className="px-2.5 pb-2 text-xs text-text-secondary"
                       data-testid="env-editor-normalized"
                     >
                       Pasted text normalized
@@ -860,38 +895,41 @@ export function EnvVarEditor({
                   )}
                 </div>
                 {/* Actions cell — remove / revert / override by row kind. */}
-                <div className="flex items-center justify-center w-9 border-l border-daintree-border/60">
+                <div className="flex items-center justify-center w-9 border-l border-border-subtle">
                   {row.isInherited ? (
                     <button
                       type="button"
-                      className="p-1 rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary hover:bg-daintree-bg/60 transition-colors"
+                      className={ENV_CELL_ACTION}
                       aria-label={`Override ${trimmedKey} in this preset`}
                       onClick={() => handleOverride(row.rowId)}
                       data-testid="env-editor-override"
                       title="Override this inherited value"
                     >
-                      <Plus size={12} aria-hidden="true" />
+                      <Plus className="h-3.5 w-3.5" aria-hidden="true" />
                     </button>
                   ) : isOverride ? (
                     <button
                       type="button"
-                      className="p-1 rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary hover:bg-daintree-bg/60 transition-colors"
+                      className={ENV_CELL_ACTION}
                       aria-label={`Revert ${trimmedKey} to inherited value`}
                       onClick={() => handleRevert(row.rowId)}
                       data-testid="env-editor-revert"
                       title="Revert to inherited value"
                     >
-                      <RotateCcw size={12} aria-hidden="true" />
+                      <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
                     </button>
                   ) : (
                     <button
                       type="button"
-                      className="p-1 rounded-[var(--radius-sm)] text-text-secondary hover:text-status-error hover:bg-daintree-bg/60 transition-colors"
-                      aria-label={`Remove ${trimmedKey || "empty"} env var`}
+                      className={cn(
+                        ENV_CELL_ACTION,
+                        "text-status-error hover:text-status-error hover:bg-status-error/10"
+                      )}
+                      aria-label={`Delete ${trimmedKey || `variable ${rowIndex + 1}`}`}
                       onClick={() => handleRemove(row.rowId)}
                       data-testid="env-editor-remove"
                     >
-                      <X size={12} aria-hidden="true" />
+                      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                     </button>
                   )}
                 </div>
@@ -902,25 +940,20 @@ export function EnvVarEditor({
       )}
       {/* Add row (only when non-empty — empty state has its own affordance) */}
       {!isEmpty && (
-        <div className="grid grid-cols-2 divide-x divide-border-default border-t border-border-default">
-          <button
-            type="button"
-            onClick={handleAdd}
-            className="flex items-center justify-center gap-1.5 py-2 text-2xs text-text-secondary hover:text-text-primary hover:bg-daintree-bg/50 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-            data-testid="env-editor-add"
-          >
-            <Plus size={12} aria-hidden="true" />
-            <span>Add variable</span>
-          </button>
-          <button
-            type="button"
+        <div className="flex justify-end gap-2 px-2.5 py-2 border-t border-border-default bg-overlay-subtle">
+          <Button variant="outline" size="sm" onClick={handleAdd} data-testid="env-editor-add">
+            <Plus aria-hidden="true" />
+            Add variable
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => setIsImportOpen(true)}
-            className="flex items-center justify-center gap-1.5 py-2 text-2xs text-text-secondary hover:text-text-primary hover:bg-daintree-bg/50 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
             data-testid="env-editor-import"
           >
-            <Upload size={12} aria-hidden="true" />
-            <span>Import .env</span>
-          </button>
+            <Upload aria-hidden="true" />
+            Import .env
+          </Button>
         </div>
       )}
       <ImportEnvDialog

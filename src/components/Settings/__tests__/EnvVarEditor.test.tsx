@@ -18,6 +18,7 @@ import { EnvVarEditor } from "../EnvVarEditor";
 
 vi.mock("lucide-react", () => ({
   X: () => <span data-testid="x-icon" />,
+  Trash2: () => <span data-testid="trash-icon" />,
   Eye: () => <span data-testid="eye-icon" />,
   EyeOff: () => <span data-testid="eye-off-icon" />,
   Plus: () => <span data-testid="plus-icon" />,
@@ -163,7 +164,7 @@ describe("EnvVarEditor", () => {
 
     // Duplicate key error surfaces (the first row also gets flagged because it
     // matches the duplicate set).
-    expect(getAllByText(/Duplicate key/).length).toBeGreaterThanOrEqual(1);
+    expect(getAllByText(/already uses this name/).length).toBeGreaterThanOrEqual(1);
 
     // Commit must not include the duplicate (the resolver drops the second
     // occurrence and keeps {FOO: "a"}).

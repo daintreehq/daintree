@@ -1,19 +1,17 @@
-import {
-  Plus,
-  Trash2,
-  ChevronUp,
-  ChevronDown,
-  PanelBottom,
-  LayoutGrid,
-  RefreshCw,
-} from "lucide-react";
-import { useId } from "react";
+import { Plus, Trash2, ChevronUp, ChevronDown } from "lucide-react";
+import { useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { RadioChoiceRow } from "@/components/ui/RadioChoice";
-import { cn } from "@/lib/utils";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
+import { actionService } from "@/services/ActionService";
 import { SCROLLBACK_MIN, SCROLLBACK_MAX } from "@shared/config/scrollback";
-import { validatePathPattern, previewPathPattern } from "@shared/utils/pathPattern";
+import {
+  DEFAULT_WORKTREE_PATH_PATTERN,
+  validatePathPattern,
+  previewPathPattern,
+} from "@shared/utils/pathPattern";
 import type { RunCommand } from "@/types";
 import type { Project, ResourceEnvironment } from "@shared/types/project";
 import { ResourceEnvironmentsSection } from "@/components/Settings/ResourceEnvironmentsSection";
@@ -26,6 +24,44 @@ import {
   SettingsRow,
 } from "@/components/Settings/SettingsGroup";
 import { SettingsInput } from "@/components/Settings/SettingsInput";
+import { useRowFocus } from "@/components/Settings/useRowFocus";
+
+const LOCATION_OPTIONS = [
+  { value: "grid", label: "Grid" },
+  { value: "dock", label: "Dock" },
+] as const;
+
+/**
+ * The global pattern this project inherits while its own override is empty, so the
+ * page can say where worktrees will actually go instead of only "the global default".
+ */
+function useGlobalWorktreePattern(isOpen: boolean): string {
+  const [pattern, setPattern] = useState(DEFAULT_WORKTREE_PATH_PATTERN);
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    void actionService
+      .dispatch("worktreeConfig.get", undefined, { source: "user" })
+      .then((result) => {
+        if (cancelled || !result.ok) return;
+        const config: unknown = result.result;
+        if (
+          config &&
+          typeof config === "object" &&
+          "pathPattern" in config &&
+          typeof config.pathPattern === "string" &&
+          config.pathPattern
+        ) {
+          setPattern(config.pathPattern);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
+  return pattern;
+}
 
 const BRANCH_PREFIX_OPTIONS = [
   { value: "none", label: "None", description: "No prefix added" },
@@ -121,16 +157,19 @@ export function AutomationTab({
   isOpen,
 }: AutomationTabProps) {
   const trimmedWorktreePathPattern = worktreePathPattern.trim();
+  const globalPathPattern = useGlobalWorktreePattern(isOpen ?? false);
   const pathPatternValidation =
     trimmedWorktreePathPattern.length > 0 ? validatePathPattern(trimmedWorktreePathPattern) : null;
   const hasPathPatternError = pathPatternValidation !== null && !pathPatternValidation.valid;
   useSettingsTabValidation("project:automation", hasPathPatternError);
   const pathPatternErrorId = useId();
+  const focus = useRowFocus();
 
+  const effectivePathPattern = trimmedWorktreePathPattern || globalPathPattern;
   const pathPatternPreview =
-    pathPatternValidation?.valid === true
+    !hasPathPatternError && validatePathPattern(effectivePathPattern).valid
       ? previewPathPattern(
-          trimmedWorktreePathPattern,
+          effectivePathPattern,
           currentProject?.path ?? "/Users/name/Projects/my-project"
         )
       : null;
@@ -151,15 +190,25 @@ export function AutomationTab({
       scrollbackNum > SCROLLBACK_MAX);
 
   const addRunCommand = () => {
-    onRunCommandsChange([
-      ...runCommands,
-      {
-        id: `cmd-${crypto.randomUUID()}`,
-        name: "",
-        command: "",
-      },
-    ]);
+    const id = `cmd-${crypto.randomUUID()}`;
+    onRunCommandsChange([...runCommands, { id, name: "", command: "" }]);
+    focus.focusRow(id);
   };
+
+  const deleteRunCommand = (index: number) => {
+    focus.focusAfterDelete(
+      runCommands.map((c) => c.id),
+      index
+    );
+    onRunCommandsChange(runCommands.filter((_, i) => i !== index));
+  };
+
+  const addRunCommandButton = (
+    <Button variant="outline" size="sm" onClick={addRunCommand} ref={focus.registerFallback}>
+      <Plus />
+      Add command
+    </Button>
+  );
 
   const updateRunCommand = (index: number, patch: Partial<RunCommand>) => {
     const updated = [...runCommands];
@@ -181,33 +230,24 @@ export function AutomationTab({
         id="project-run-commands"
         title="Run commands"
         description="Quick access to common project tasks like build, test, and deploy"
-        action={
-          runCommands.length > 0 ? (
-            <Button variant="outline" size="sm" onClick={addRunCommand}>
-              <Plus />
-              Add command
-            </Button>
-          ) : undefined
-        }
+        action={runCommands.length > 0 ? addRunCommandButton : undefined}
       >
         <SettingsGroup>
           {runCommands.length === 0 ? (
-            <SettingsEmptyRow
-              action={
-                <Button variant="outline" size="sm" onClick={addRunCommand}>
-                  <Plus />
-                  Add command
-                </Button>
-              }
-            >
+            <SettingsEmptyRow action={addRunCommandButton}>
               No run commands yet — add one to launch it from the toolbar
             </SettingsEmptyRow>
           ) : (
-            runCommands.map((cmd, index) => (
-              <div key={cmd.id} className="flex items-start gap-3 px-4 py-3">
-                <div className="flex-1 min-w-0 space-y-2">
-                  <div className="flex items-center gap-2">
+            runCommands.map((cmd, index) => {
+              const name = cmd.name.trim() || `command ${index + 1}`;
+              return (
+                <div
+                  key={cmd.id}
+                  className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-2 gap-y-2 px-4 py-3"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
                     <Input
+                      ref={focus.register(cmd.id)}
                       type="text"
                       value={cmd.name}
                       onChange={(e) => updateRunCommand(index, { name: e.target.value })}
@@ -215,7 +255,39 @@ export function AutomationTab({
                       aria-label="Run command name"
                       className="flex-1 min-w-0"
                     />
-                    {cmd.icon && <span className="text-lg">{cmd.icon}</span>}
+                    {cmd.icon && (
+                      <span className="text-lg" aria-hidden="true">
+                        {cmd.icon}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => moveRunCommand(index, -1)}
+                      disabled={index === 0}
+                      aria-label={`Move ${name} up`}
+                    >
+                      <ChevronUp />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => moveRunCommand(index, 1)}
+                      disabled={index === runCommands.length - 1}
+                      aria-label={`Move ${name} down`}
+                    >
+                      <ChevronDown />
+                    </Button>
+                    <Button
+                      variant="ghost-danger"
+                      size="icon-sm"
+                      onClick={() => deleteRunCommand(index)}
+                      aria-label={`Delete ${name}`}
+                    >
+                      <Trash2 />
+                    </Button>
                   </div>
                   <Input
                     type="text"
@@ -224,72 +296,37 @@ export function AutomationTab({
                     placeholder="npm run build"
                     aria-label="Run command"
                     spellCheck={false}
-                    className="font-mono"
+                    className="col-start-1 font-mono"
                   />
                   {cmd.description && (
-                    <p className="text-xs text-text-secondary">{cmd.description}</p>
+                    <p className="col-start-1 text-xs text-text-secondary">{cmd.description}</p>
                   )}
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      onClick={() =>
-                        updateRunCommand(index, {
-                          preferredLocation: cmd.preferredLocation === "dock" ? "grid" : "dock",
-                        })
-                      }
-                    >
-                      {cmd.preferredLocation === "dock" ? <PanelBottom /> : <LayoutGrid />}
-                      {cmd.preferredLocation === "dock" ? "Dock" : "Grid"}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      aria-pressed={!!cmd.preferredAutoRestart}
-                      onClick={() =>
-                        updateRunCommand(index, {
-                          preferredAutoRestart: !cmd.preferredAutoRestart,
-                        })
-                      }
-                      className={cn(
-                        cmd.preferredAutoRestart && "bg-overlay-selected text-text-primary"
-                      )}
-                    >
-                      <RefreshCw />
-                      Auto-restart
-                    </Button>
+                  <div className="col-start-1 flex flex-wrap items-center gap-x-5 gap-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-text-secondary" aria-hidden="true">
+                        Opens in
+                      </span>
+                      <SegmentedRadioGroup
+                        options={[...LOCATION_OPTIONS]}
+                        value={cmd.preferredLocation === "dock" ? "dock" : "grid"}
+                        onChange={(value) => updateRunCommand(index, { preferredLocation: value })}
+                        aria-label={`Where ${name} opens`}
+                      />
+                    </div>
+                    <label className="flex items-center gap-2 text-xs text-text-secondary cursor-pointer">
+                      <Switch
+                        size="sm"
+                        checked={!!cmd.preferredAutoRestart}
+                        onCheckedChange={(checked) =>
+                          updateRunCommand(index, { preferredAutoRestart: checked })
+                        }
+                      />
+                      Restart when it exits
+                    </label>
                   </div>
                 </div>
-                <div className="flex flex-col gap-1">
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    onClick={() => moveRunCommand(index, -1)}
-                    disabled={index === 0}
-                    aria-label="Move run command up"
-                  >
-                    <ChevronUp />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    onClick={() => moveRunCommand(index, 1)}
-                    disabled={index === runCommands.length - 1}
-                    aria-label="Move run command down"
-                  >
-                    <ChevronDown />
-                  </Button>
-                  <Button
-                    variant="ghost-danger"
-                    size="icon-xs"
-                    onClick={() => onRunCommandsChange(runCommands.filter((_, i) => i !== index))}
-                    aria-label="Delete run command"
-                  >
-                    <Trash2 />
-                  </Button>
-                </div>
-              </div>
-            ))
+              );
+            })
           )}
         </SettingsGroup>
       </SettingsSection>
@@ -319,6 +356,8 @@ export function AutomationTab({
               <SettingsDependents>
                 <SettingsInput
                   label="Prefix"
+                  layout="inline"
+                  controlWidth="select"
                   value={branchPrefixCustom}
                   onChange={(e) => onBranchPrefixCustomChange(e.target.value)}
                   placeholder="e.g. feature/ or myteam/"
@@ -347,13 +386,20 @@ export function AutomationTab({
 
       <SettingsSection
         title="Worktree path pattern"
-        description="Overrides the global worktree path pattern for this project. Leave empty to use the global default."
+        description="Where new worktrees for this project are created"
       >
         <SettingsGroup>
           <SettingsRow
             label="Path pattern"
             description={
               <>
+                {trimmedWorktreePathPattern === "" && (
+                  <>
+                    Using global default ·{" "}
+                    <code className="font-mono text-text-primary">{globalPathPattern}</code>
+                    <br />
+                  </>
+                )}
                 <code className="font-mono">{"{branch-slug}"}</code> is required. Also available:{" "}
                 <code className="font-mono">{"{parent-dir}"}</code>,{" "}
                 <code className="font-mono">{"{base-folder}"}</code>,{" "}
@@ -370,7 +416,7 @@ export function AutomationTab({
                   type="text"
                   value={worktreePathPattern}
                   onChange={(e) => onWorktreePathPatternChange(e.target.value)}
-                  placeholder="e.g. {parent-dir}/{base-folder}-worktrees/{branch-slug}"
+                  placeholder={globalPathPattern}
                   spellCheck={false}
                   autoComplete="off"
                   aria-labelledby={labelId}

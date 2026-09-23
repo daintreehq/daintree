@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useId, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Plus, Trash2, Edit3, Download, FileDown, Check, Pin, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsEmptyRow, SettingsGroup } from "@/components/Settings/SettingsGroup";
@@ -60,6 +61,8 @@ export function RecipesTab({
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportFeedback, setExportFeedback] = useState<string | null>(null);
+  const importLabelId = useId();
+  const importErrorId = useId();
   const exportTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const hasLoadedRecipes = useRef(false);
 
@@ -215,8 +218,8 @@ export function RecipesTab({
                 <div>
                   <p className="text-sm text-status-warning">Default recipe unavailable</p>
                   <p className="text-xs text-text-secondary mt-1">
-                    The previously pinned recipe was deleted or is no longer eligible. Pin another
-                    recipe or clear the default below.
+                    The pinned recipe was deleted or is no longer eligible. Pin another recipe with
+                    its pin button, or clear the default.
                   </p>
                   <Button
                     variant="outline"
@@ -263,13 +266,7 @@ export function RecipesTab({
                 // toast for an action that was never possible (#11860).
                 const fromPlugin = isPluginRecipe(recipe);
                 return (
-                  <div
-                    key={recipe.id}
-                    className={cn(
-                      "px-4 py-3 hover:bg-overlay-subtle transition-colors group cursor-default",
-                      isShadowed && "opacity-60"
-                    )}
-                  >
+                  <div key={recipe.id} className={cn("px-4 py-3", isShadowed && "opacity-60")}>
                     <div className="flex items-start gap-3">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
@@ -291,7 +288,7 @@ export function RecipesTab({
                           </Badge>
                           {isShadowed && <Badge size="xs">Overridden</Badge>}
                           {isDefault && <Badge size="xs">Default</Badge>}
-                          {recipe.showInEmptyState && <Badge size="xs">Empty state</Badge>}
+                          {recipe.showInEmptyState && <Badge size="xs">On empty grid</Badge>}
                         </div>
                         <div className="text-xs text-text-secondary mt-1">
                           {recipe.lastUsedAt ? (
@@ -309,7 +306,7 @@ export function RecipesTab({
                             <TooltipTrigger asChild>
                               <Button
                                 variant="ghost"
-                                size="sm"
+                                size="icon-sm"
                                 onClick={() =>
                                   onDefaultWorktreeRecipeIdChange(isDefault ? undefined : recipe.id)
                                 }
@@ -319,11 +316,7 @@ export function RecipesTab({
                                     ? `Unset ${recipe.name} as default worktree recipe`
                                     : `Set ${recipe.name} as default worktree recipe`
                                 }
-                                className={`h-7 px-2 transition-opacity ${
-                                  isDefault
-                                    ? "opacity-100"
-                                    : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-                                }`}
+                                className={cn(isDefault && "bg-overlay-selected text-text-primary")}
                               >
                                 <Pin className={isDefault ? "fill-current" : undefined} />
                               </Button>
@@ -333,15 +326,14 @@ export function RecipesTab({
                             </TooltipContent>
                           </Tooltip>
                         )}
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+                        <div className="flex items-center gap-1">
                           {!fromPlugin && (
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Button
                                   variant="ghost"
-                                  size="sm"
+                                  size="icon-sm"
                                   onClick={() => handleEditRecipe(recipe)}
-                                  className="h-7 px-2"
                                   aria-label={`Edit recipe ${recipe.name}`}
                                 >
                                   <Edit3 />
@@ -354,9 +346,8 @@ export function RecipesTab({
                             <TooltipTrigger asChild>
                               <Button
                                 variant="ghost"
-                                size="sm"
+                                size="icon-sm"
                                 onClick={() => handleExportRecipe(recipe.id)}
-                                className="h-7 px-2"
                                 aria-label={
                                   exported
                                     ? `Recipe ${recipe.name} exported to clipboard`
@@ -378,13 +369,12 @@ export function RecipesTab({
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Button
-                                  variant="ghost"
-                                  size="sm"
+                                  variant="ghost-danger"
+                                  size="icon-sm"
                                   onClick={() => setRecipeToDelete(recipe.id)}
-                                  className="h-7 px-2"
                                   aria-label={`Delete recipe ${recipe.name}`}
                                 >
-                                  <Trash2 className="text-status-error" />
+                                  <Trash2 />
                                 </Button>
                               </TooltipTrigger>
                               <TooltipContent side="bottom">Delete recipe</TooltipContent>
@@ -449,20 +439,28 @@ export function RecipesTab({
         </AppDialog.Header>
 
         <AppDialog.Body>
-          <p className="text-sm text-text-secondary mb-4">
+          <p id={importLabelId} className="text-sm text-text-secondary mb-4">
             Paste the JSON configuration for the recipe you want to import.
           </p>
-          <textarea
+          <Textarea
             value={importJson}
-            onChange={(e) => setImportJson(e.target.value)}
+            onChange={(e) => {
+              setImportJson(e.target.value);
+              setImportError(null);
+            }}
             placeholder='{"name": "My Recipe", "terminals": [...]}'
-            className="w-full h-64 px-3 py-2 bg-surface-canvas border border-border-default rounded-[var(--radius-md)] text-sm text-text-primary font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30 resize-none"
+            variant="code"
+            resize="none"
+            className="h-64"
             spellCheck={false}
+            aria-labelledby={importLabelId}
+            invalid={!!importError}
+            aria-describedby={importError ? importErrorId : undefined}
           />
           {importError && (
-            <div className="mt-3 text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] p-3">
+            <p id={importErrorId} role="alert" className="mt-2 text-xs text-status-error">
               {importError}
-            </div>
+            </p>
           )}
         </AppDialog.Body>
 

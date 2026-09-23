@@ -48,14 +48,14 @@ describe("ContextTab copy", () => {
 
     // Sentence-case headings/labels present (getByText throws if absent)
     expect(screen.getByText("Excluded paths")).toBeTruthy();
-    expect(screen.getByText("Context generation settings")).toBeTruthy();
+    expect(screen.getByText("Context generation")).toBeTruthy();
     expect(screen.getByText("Test configuration")).toBeTruthy();
-    expect(screen.getByText("Max context size (bytes)")).toBeTruthy();
-    expect(screen.getByText("Max file size (bytes)")).toBeTruthy();
+    expect(screen.getByText("Max context size")).toBeTruthy();
+    expect(screen.getByText("Max file size")).toBeTruthy();
     expect(screen.getByText("Character budget")).toBeTruthy();
     expect(screen.getByText("File priority strategy")).toBeTruthy();
-    expect(screen.getByText("Always include (glob patterns)")).toBeTruthy();
-    expect(screen.getByText("Always exclude (glob patterns)")).toBeTruthy();
+    expect(screen.getByText("Always include")).toBeTruthy();
+    expect(screen.getByText("Always exclude")).toBeTruthy();
 
     // Former Title Case variants are gone
     expect(screen.queryByText("Excluded Paths")).toBeNull();
@@ -71,30 +71,17 @@ describe("ContextTab copy", () => {
     expect(screen.getByRole("button", { name: "Test config" })).toBeTruthy();
   });
 
-  it("drops trailing periods on single-sentence subtitles but keeps them on multi-sentence", () => {
-    renderTab();
-
-    const excludedSubtitle = screen
-      .getByText(/Glob patterns to exclude from monitoring and context injection/)
-      .textContent?.trim();
-    expect(excludedSubtitle?.endsWith(")")).toBe(true);
-    expect(excludedSubtitle?.endsWith(").")).toBe(false);
-
-    const includeSubtitle = screen
-      .getByText(/Files matching these patterns are included/)
-      .textContent?.trim();
-    expect(includeSubtitle?.endsWith("them")).toBe(true);
-
-    const excludeSubtitle = screen
-      .getByText(/Additional exclusion patterns beyond the default excluded paths above/)
-      .textContent?.trim();
-    expect(excludeSubtitle?.endsWith("above")).toBe(true);
-
-    // Two-sentence subtitle keeps both periods
-    const multiSentence = screen
-      .getByText(/Configure how CopyTree generates context for AI agents/)
-      .textContent?.trim();
-    expect(multiSentence?.endsWith("copying to clipboard.")).toBe(true);
+  it("drops trailing periods on single-sentence subtitles", () => {
+    const { container } = renderTab();
+    const subtitles = Array.from(container.querySelectorAll("p, div"))
+      .filter((el) => el.classList.contains("text-xs") && el.children.length === 0)
+      .map((el) => el.textContent?.trim() ?? "")
+      .filter((text) => text.length > 0);
+    expect(subtitles.length).toBeGreaterThan(3);
+    for (const text of subtitles) {
+      const sentences = text.split(/[.!?](\s|$)/).filter((part) => part.trim().length > 1);
+      if (sentences.length <= 1) expect(text.endsWith(".")).toBe(false);
+    }
   });
 });
 

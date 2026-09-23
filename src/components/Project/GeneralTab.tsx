@@ -465,7 +465,12 @@ export function GeneralTab({
               label="Color"
               description="Tints the project's gradient in the sidebar and dashboard"
               layout="stacked"
-              control={
+              error={
+                hexInput && !isValidHexColor(hexInput)
+                  ? "Enter a hex color like #3b82f6 — the current color stays until it's valid"
+                  : undefined
+              }
+              control={({ descriptionId }) => (
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2">
                     {resolvedSwatches.map((hex, i) => (
@@ -513,6 +518,7 @@ export function GeneralTab({
                       autoCapitalize="off"
                       autoComplete="off"
                       aria-label="Hex color value"
+                      aria-describedby={descriptionId}
                       invalid={!!hexInput && !isValidHexColor(hexInput)}
                       className="w-28 font-mono"
                     />
@@ -528,7 +534,7 @@ export function GeneralTab({
                     )}
                   </div>
                 </div>
-              }
+              )}
             />
 
             <SettingsRow

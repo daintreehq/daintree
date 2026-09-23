@@ -321,6 +321,12 @@ async function captureAll(page: Page, state: "empty" | "populated"): Promise<voi
           timeout: 10_000,
         });
       }
+      if (populated && tab === "project:general") {
+        // The tier is a project setting the saveSettings seam does not carry, so
+        // choose it the way a user does to get the System warning on screen.
+        await panel(page, tab).getByRole("radio", { name: "System" }).check({ force: true });
+        await settle(page, 300);
+      }
       await capturePage(page, state, tab, required[tab]);
     });
   }
@@ -450,7 +456,7 @@ async function captureValidation(page: Page): Promise<void> {
     await p.getByLabel("Environment variable name").last().fill("2FAST_MODE");
     await add.click();
     await p.getByLabel("Environment variable name").last().fill("DATABASE_URL");
-    await p.getByRole("button", { name: "Save changes" }).click();
+    await p.getByRole("button", { name: "Save", exact: true }).click();
     await capturePage(page, "validation", "project:variables", [
       "Use letters, digits, and underscores only",
       "Duplicate variable name",
@@ -485,9 +491,7 @@ async function captureValidation(page: Page): Promise<void> {
   await attempt("validation/project:automation", async () => {
     await openSettingsAt(page, "project:automation");
     const p = panel(page, "project:automation");
-    await p
-      .getByPlaceholder("e.g. {parent-dir}/{base-folder}-worktrees/{branch-slug}")
-      .fill("{parent-dir}/worktrees/{branch}");
+    await p.getByRole("textbox", { name: "Path pattern" }).fill("{parent-dir}/worktrees/{branch}");
     await p.getByRole("spinbutton", { name: "Scrollback" }).fill("12");
     await p.getByRole("button", { name: "Add environment" }).click();
     const nameInput = p.locator("#new-environment-name");
