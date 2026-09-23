@@ -23,6 +23,24 @@ import { Avatar } from "@/components/ui/Avatar";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 
+/**
+ * Spread onto the badges' `TooltipContent`. The card is hoverable, so the
+ * pointer can now press, drag and click inside it — and React bubbles those
+ * through the portal to the badge and the sortable worktree card around it,
+ * where a click would open the item, a drag would pick the card up, and a
+ * right-click would open the card's context menu. `data-no-dnd` is read from
+ * the DOM (`closest()`), which a portal never reaches, so it goes on the
+ * content itself; the handlers stop the synthetic bubbling.
+ */
+const stop = (event: { stopPropagation: () => void }) => event.stopPropagation();
+export const HOVER_CARD_EVENT_FENCE = {
+  "data-no-dnd": "",
+  onClick: stop,
+  onDoubleClick: stop,
+  onContextMenu: stop,
+  onPointerDown: stop,
+} as const;
+
 // Every body renders at the same width, so the card doesn't resize between the
 // skeleton, a short title and a long one as the pointer moves along a column of
 // badges. 280px + the content's p-3 sits inside the primitive's max-w-xs.

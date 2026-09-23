@@ -11,6 +11,7 @@ import {
   TokenMissingTooltip,
   describeIssueTooltip,
   TooltipFallback,
+  HOVER_CARD_EVENT_FENCE,
   type TooltipFreshness,
 } from "./ForgeTooltipContent";
 
@@ -136,6 +137,7 @@ export function IssueBadge({
         side="right"
         align="start"
         className="p-3"
+        {...HOVER_CARD_EVENT_FENCE}
         aria-label={
           data && !missingCredential
             ? describeIssueTooltip(data, freshness, { includeTitle: !issueTitle })

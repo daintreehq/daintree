@@ -13,6 +13,7 @@ import {
   TokenMissingTooltip,
   describePRTooltip,
   TooltipFallback,
+  HOVER_CARD_EVENT_FENCE,
   type TooltipFreshness,
 } from "./ForgeTooltipContent";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
@@ -199,6 +200,7 @@ export function PRBadge({
         side="right"
         align="start"
         className="p-3"
+        {...HOVER_CARD_EVENT_FENCE}
         aria-label={
           data && !missingCredential
             ? describePRTooltip(data, freshness, prCiStatus, {

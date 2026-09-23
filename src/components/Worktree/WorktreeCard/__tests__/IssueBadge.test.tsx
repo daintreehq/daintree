@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
@@ -19,6 +19,7 @@ let mockError = false;
 let mockData: IssueTooltipData | null = null;
 let mockFreshnessCause: "rate-limit" | "circuit-breaker" | undefined = undefined;
 let mockIsOpen = true;
+const mockHandleClick = vi.fn();
 
 vi.mock("@/hooks/useForgeTooltip", () => ({
   useIssueTooltip: () => ({
@@ -36,7 +37,7 @@ vi.mock("../hooks/useForgeBadgeTooltip", () => ({
   useForgeBadgeTooltip: () => ({
     isOpen: mockIsOpen,
     handleOpenChange: vi.fn(),
-    handleClick: vi.fn(),
+    handleClick: mockHandleClick,
   }),
 }));
 
@@ -82,6 +83,7 @@ beforeEach(() => {
   mockData = null;
   mockFreshnessCause = undefined;
   mockIsOpen = true;
+  mockHandleClick.mockClear();
 });
 
 describe("IssueBadge cold-number gap (#8079)", () => {
@@ -188,5 +190,24 @@ describe("IssueBadge hover card", () => {
     render(badge({ issueTitle: "Something is broken" }));
     expect(screen.getAllByText("Steps to reproduce").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Open").length).toBeGreaterThan(0);
+  });
+});
+
+describe("IssueBadge hover card isolation", () => {
+  it("keeps a click inside the card from reaching the badge, and opts the card out of drag", () => {
+    mockData = DATA;
+    render(badge({ issueTitle: "Something is broken" }));
+    const excerpt = screen.getAllByText("Steps to reproduce")[0]!;
+
+    // The card is hoverable, and React bubbles portal events to the badge: a
+    // click here would otherwise open the issue.
+    fireEvent.click(excerpt);
+    expect(mockHandleClick).not.toHaveBeenCalled();
+    // Drag activation reads the DOM, which a portal never shares with the card.
+    expect(excerpt.closest("[data-no-dnd]")).not.toBeNull();
+    expect(excerpt.closest("button")).toBeNull();
+
+    fireEvent.click(trigger());
+    expect(mockHandleClick).toHaveBeenCalledTimes(1);
   });
 });
