@@ -512,10 +512,17 @@ describe("PluginSettingsForm", () => {
   it("renders a scope badge per field", async () => {
     render(
       <PluginSettingsForm
-        plugin={makePlugin([{ id: "p", type: "string", label: "P", scope: "project" }])}
+        plugin={makePlugin([
+          { id: "u", type: "string", label: "U" },
+          { id: "p", type: "string", label: "P", scope: "project" },
+          { id: "l", type: "string", label: "L", scope: "local" },
+        ])}
       />
     );
-    expect(await screen.findByText("Project")).toBeTruthy();
+    // Named for what a change reaches: one project, or every project.
+    expect(await screen.findByText("All projects")).toBeTruthy();
+    expect(screen.getByText("This project")).toBeTruthy();
+    expect(screen.getByText("This project, this machine")).toBeTruthy();
   });
 
   it("disables project-scoped fields when no project is active", async () => {

@@ -120,7 +120,7 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
     const input = screen.getByLabelText("API token") as HTMLInputElement;
     expect(input.type).toBe("password");
     expect(screen.getByText("Personal access token")).toBeTruthy();
-    expect(screen.queryByText("No configuration needed")).toBeNull();
+    expect(screen.queryByText(/needs no credentials/)).toBeNull();
   });
 
   it("validates and persists via forge.setCredential keyed by the canonical provider id", async () => {
@@ -204,7 +204,7 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
     });
   });
 
-  it("shows 'No configuration needed' for a provider with no credentialFields", async () => {
+  it("says a provider with no credentialFields needs none", async () => {
     installForgeMocks({
       providers: [makeProvider("acme", "plain", "Plain Forge")],
     });
@@ -212,12 +212,12 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
     render(<CodeForgeSettingsTab activeSubtab="acme.plain" onSubtabChange={vi.fn()} />);
 
     await waitFor(() => {
-      expect(screen.getByText("No configuration needed")).toBeTruthy();
+      expect(screen.getByText("Plain Forge needs no credentials")).toBeTruthy();
     });
     expect(screen.queryByTestId("forge-credential-form")).toBeNull();
   });
 
-  it("labels a local authless provider instead of 'No configuration needed' (#10563)", async () => {
+  it("labels a local authless provider differently from a remote one (#10563)", async () => {
     const localProvider: ForgeProviderEntry = {
       pluginId: "acme",
       contribution: { id: "mock", name: "Mock Forge", matches: ["mock.local"], kind: "local" },
@@ -227,9 +227,11 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
     render(<CodeForgeSettingsTab activeSubtab="acme.mock" onSubtabChange={vi.fn()} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Local provider — no authentication needed")).toBeTruthy();
+      expect(
+        screen.getByText("Mock Forge works locally, so there's nothing to sign in to")
+      ).toBeTruthy();
     });
-    expect(screen.queryByText("No configuration needed")).toBeNull();
+    expect(screen.queryByText("Mock Forge needs no credentials")).toBeNull();
     expect(screen.queryByTestId("forge-credential-form")).toBeNull();
   });
 

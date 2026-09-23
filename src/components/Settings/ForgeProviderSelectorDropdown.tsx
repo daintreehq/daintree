@@ -171,7 +171,7 @@ export function ForgeProviderSelectorDropdown({
                 ? `forge-provider-selector-item-${items[activeIndex].id}`
                 : undefined
             }
-            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden"
+            className="flex-1 min-w-0 px-1 py-0.5 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder rounded-[var(--radius-sm)] focus:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary"
           />
         </div>
         <div

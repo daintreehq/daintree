@@ -3,7 +3,6 @@ import { Check, Copy, Download, RefreshCw } from "lucide-react";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { Button } from "@/components/ui/button";
-import { EmptyState } from "@/components/ui/EmptyState";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -13,7 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
-import { SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import type {
   ForgeAnomalyKind,
   ForgeAnomalySignal,
@@ -91,6 +90,10 @@ function formatRelativeTimestamp(ts: number, now: number): string {
 interface ForgeAuditLogViewerProps {
   records: ForgeAuditRecord[];
   loading: boolean;
+  /** The last read failed; `records` is whatever the previous read returned. */
+  loadFailed?: boolean;
+  /** The last copy, export, clear or recording change failed. */
+  opError?: string | null;
   anomalySignals?: ForgeAnomalySignal[];
   anomalySuppressed?: boolean;
   onRefresh: () => Promise<void> | void;
@@ -108,6 +111,8 @@ interface ForgeAuditLogViewerProps {
 export function ForgeAuditLogViewer({
   records,
   loading,
+  loadFailed = false,
+  opError = null,
   anomalySignals = [],
   anomalySuppressed = true,
   onRefresh,
@@ -189,6 +194,12 @@ export function ForgeAuditLogViewer({
     resultFilter === "problems" &&
     timeRange === "all";
   const showCopyAll = filteredRecords.length === records.length;
+  const clearFilters = () => {
+    setMethodFilter("");
+    setSearchQuery("");
+    setResultFilter("all");
+    setTimeRange("all");
+  };
   const nothingShown = filteredRecords.length === 0;
 
   return (
@@ -202,7 +213,7 @@ export function ForgeAuditLogViewer({
             onChange={(e) => setMethodFilter(e.target.value)}
             placeholder="Filter by method or provider"
             aria-label="Filter audit by method or provider"
-            className="w-auto min-w-44 flex-1"
+            className="w-auto min-w-36 flex-1 basis-0"
           />
           <Input
             density="compact"
@@ -211,7 +222,7 @@ export function ForgeAuditLogViewer({
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search arguments and errors"
             aria-label="Search audit arguments and errors"
-            className="w-auto min-w-44 flex-1"
+            className="w-auto min-w-36 flex-1 basis-0"
           />
           <Select
             value={resultFilter}
@@ -220,7 +231,10 @@ export function ForgeAuditLogViewer({
               if (match) setResultFilter(match.value);
             }}
           >
-            <SelectTrigger aria-label="Filter audit by result" className="h-7 w-36 text-xs">
+            <SelectTrigger
+              aria-label="Filter audit by result"
+              className="h-7 w-32 shrink-0 text-xs"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -238,7 +252,7 @@ export function ForgeAuditLogViewer({
               if (match) setTimeRange(match.value);
             }}
           >
-            <SelectTrigger aria-label="Filter audit by time" className="h-7 w-36 text-xs">
+            <SelectTrigger aria-label="Filter audit by time" className="h-7 w-32 shrink-0 text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -274,21 +288,39 @@ export function ForgeAuditLogViewer({
               <SkeletonBone className="h-5 w-4/6" />
               <SkeletonBone className="h-5 w-3/4" />
             </Skeleton>
+          ) : loadFailed && records.length === 0 ? (
+            <SettingsEmptyRow
+              action={
+                <Button variant="outline" size="sm" onClick={() => void onRefresh()}>
+                  Retry
+                </Button>
+              }
+            >
+              <span className="text-status-error">Couldn&apos;t read the audit log</span>
+            </SettingsEmptyRow>
           ) : nothingShown ? (
             records.length === 0 ? (
-              <EmptyState variant="zero-data" scale="sidebar" title="No forge calls recorded yet" />
+              <SettingsEmptyRow>No forge calls recorded yet</SettingsEmptyRow>
             ) : onlyDefaultFilter ? (
-              <EmptyState
-                variant="user-cleared"
-                scale="sidebar"
-                title="No problems recorded — choose All results to see every call"
-              />
+              <SettingsEmptyRow
+                action={
+                  <Button variant="outline" size="sm" onClick={() => setResultFilter("all")}>
+                    Show all results
+                  </Button>
+                }
+              >
+                No problems recorded
+              </SettingsEmptyRow>
             ) : (
-              <EmptyState
-                variant="filtered-empty"
-                scale="sidebar"
-                title="No records match the current filters"
-              />
+              <SettingsEmptyRow
+                action={
+                  <Button variant="outline" size="sm" onClick={clearFilters}>
+                    Clear filters
+                  </Button>
+                }
+              >
+                No records match these filters
+              </SettingsEmptyRow>
             )
           ) : (
             <ul className="divide-y divide-border-subtle" aria-label="Forge audit records">
@@ -349,7 +381,19 @@ export function ForgeAuditLogViewer({
 
         <div className="flex flex-wrap items-center gap-2 px-4 py-2.5">
           <span className="mr-auto text-xs text-text-secondary tabular-nums" aria-live="polite">
-            {filteredRecords.length} of {records.length} calls
+            {opError ? (
+              <span className="text-status-error">{opError}</span>
+            ) : loadFailed ? (
+              <span className="text-status-error">
+                Couldn&apos;t refresh — showing the last read
+              </span>
+            ) : copyFlashActive ? (
+              "Copied to the clipboard"
+            ) : exportFlashActive ? (
+              "Exported"
+            ) : (
+              `${filteredRecords.length} of ${records.length} calls`
+            )}
           </span>
           <Button variant="outline" size="sm" onClick={() => void onRefresh()}>
             <RefreshCw aria-hidden="true" />

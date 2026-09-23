@@ -101,7 +101,7 @@ describe("ImageViewerTab", () => {
     expect(screen.getByText("Image viewer")).toBeTruthy();
     expect(
       screen.getByText(
-        'The app "Open in image viewer" launches from the file viewer. Saved for Repo only.'
+        'For Repo only. The app "Open in image viewer" launches from the file viewer.'
       )
     ).toBeTruthy();
 
@@ -236,7 +236,8 @@ describe("ImageViewerTab", () => {
 
     fireEvent.click(saveButton);
 
-    await screen.findByText("Saved");
+    await screen.findByText("OS default");
+    expect(screen.queryByText(/Unsaved changes/)).toBeNull();
     expect(saveButton.disabled).toBe(true);
   });
 

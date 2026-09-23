@@ -40,6 +40,10 @@ export function GitLabSettingsTab() {
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [token, setToken] = useState("");
   const [hasToken, setHasToken] = useState(false);
+  // False until the stored-token status has been read: an unknown status is not "no
+  // token", and every write that could remove one waits for it.
+  const [credentialKnown, setCredentialKnown] = useState(false);
+  const [urlError, setUrlError] = useState<string | null>(null);
   const [isValidating, setIsValidating] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
@@ -97,6 +101,7 @@ export function GitLabSettingsTab() {
       .then((status) => {
         if (cancelled) return;
         setHasToken(status.hasCredential);
+        setCredentialKnown(true);
         setCredentialLoadError(null);
       })
       .catch((err) => {
@@ -136,9 +141,14 @@ export function GitLabSettingsTab() {
    *
    * An instance SWITCH also clears any stored token: the credential is scoped
    * to the instance it was validated against, and re-pointing the URL must
-   * not silently re-scope the old token to the new host.
+   * not silently re-scope the old token to the new host. That removal only
+   * happens with `allowTokenRemoval` — the user confirmed it. Otherwise a token
+   * found at write time (loaded late, or saved from another window) stops the
+   * switch before anything is written, and the caller asks first.
    */
-  const persistInstanceUrlIfDirty = async (): Promise<void> => {
+  const persistInstanceUrlIfDirty = async (
+    allowTokenRemoval: boolean
+  ): Promise<"done" | "needs-confirm"> => {
     const normalized = normalizeInstanceUrl(instanceUrl);
     // Compared against a fresh read, not this tab's load-time snapshot. The
     // setting is shared across windows, and main validates against whatever is
@@ -153,7 +163,13 @@ export function GitLabSettingsTab() {
         : DEFAULT_INSTANCE_URL;
     if (normalized === stored) {
       if (stored !== savedInstanceUrl) setSavedInstanceUrl(stored);
-      return;
+      return "done";
+    }
+    const status = await window.electron.forge.getCredentialStatus(BUILTIN_GITLAB_PROVIDER_ID);
+    if (status.hasCredential && !allowTokenRemoval) {
+      setHasToken(true);
+      setCredentialKnown(true);
+      return "needs-confirm";
     }
     await window.electron.plugin.setSettingValue(
       GITLAB_PLUGIN_ID,
@@ -167,12 +183,12 @@ export function GitLabSettingsTab() {
     instanceUrlDirtyRef.current = false;
     // Same reason for the credential: a token the other window saved for its
     // instance is exactly the one that must not be re-scoped to this one.
-    const status = await window.electron.forge.getCredentialStatus(BUILTIN_GITLAB_PROVIDER_ID);
     if (status.hasCredential || hasToken) {
       await window.electron.forge.clearCredential(BUILTIN_GITLAB_PROVIDER_ID);
       setHasToken(false);
       setNotice("Instance changed — enter a token for the new instance");
     }
+    return "done";
   };
 
   const handleSaveToken = async (confirmed = false) => {
@@ -185,7 +201,10 @@ export function GitLabSettingsTab() {
     setValidationResult(null);
     setErrorMessage(null);
     try {
-      await persistInstanceUrlIfDirty();
+      if ((await persistInstanceUrlIfDirty(confirmed)) === "needs-confirm") {
+        setPendingSwitch("save");
+        return;
+      }
       // The host's forge credential surface validates against GitLab before
       // persisting and delivers the token to the live provider impl.
       const validation = await window.electron.forge.setCredential(BUILTIN_GITLAB_PROVIDER_ID, {
@@ -220,7 +239,10 @@ export function GitLabSettingsTab() {
     setValidationResult(null);
     setErrorMessage(null);
     try {
-      await persistInstanceUrlIfDirty();
+      if ((await persistInstanceUrlIfDirty(confirmed)) === "needs-confirm") {
+        setPendingSwitch("test");
+        return;
+      }
       const result = await actionService.dispatch<GitLabTokenValidation>(
         "forge.validateToken",
         // The GitLab tab is GitLab-pinned by design, so the test always
@@ -271,11 +293,12 @@ export function GitLabSettingsTab() {
     // committed by the Save or Test that brings a token for it.
     if (switchesInstanceWithToken()) return;
     setIsPersistingUrl(true);
-    void persistInstanceUrlIfDirty()
+    setUrlError(null);
+    // Never allowed to remove a token: if one turns up, the switch waits for Save.
+    void persistInstanceUrlIfDirty(false)
       .catch((err) => {
         logError("Failed to save GitLab instance URL", err);
-        setValidationResult("error");
-        setErrorMessage("Couldn't save instance URL");
+        setUrlError("Couldn't save the instance URL");
       })
       .finally(() => setIsPersistingUrl(false));
   };
@@ -335,9 +358,11 @@ export function GitLabSettingsTab() {
             onChange={(e) => {
               instanceUrlDirtyRef.current = true;
               setInstanceUrl(e.target.value);
+              setUrlError(null);
               clearStaleResult();
             }}
             onBlur={handleInstanceUrlBlur}
+            error={urlError ?? undefined}
             // The blur persists the URL and can clear the credential, so it
             // takes the same lock every other credential write does.
             readOnly={credentialOpInFlight()}
@@ -346,13 +371,13 @@ export function GitLabSettingsTab() {
             autoComplete="off"
             disabled={isValidating || isTesting}
           />
-          {hasToken && (
+          {credentialKnown && (
             <SettingsRow
               label="Status"
               control={
                 <span className="flex items-center gap-1 text-xs text-text-secondary">
-                  <Check className="w-3 h-3" aria-hidden="true" />
-                  Token saved for {hostOf(savedInstanceUrl)}
+                  {hasToken && <Check className="w-3 h-3" aria-hidden="true" />}
+                  {hasToken ? `Token saved for ${hostOf(savedInstanceUrl)}` : "No token saved"}
                 </span>
               }
             />
@@ -380,7 +405,9 @@ export function GitLabSettingsTab() {
           <SettingsActions status={tokenStatus}>
             <Button
               onClick={() => void handleTestToken()}
-              disabled={credentialOpInFlight() || !settingsLoaded || !token.trim()}
+              disabled={
+                credentialOpInFlight() || !settingsLoaded || !credentialKnown || !token.trim()
+              }
               loading={isTesting}
               variant="outline"
               size="sm"
@@ -391,7 +418,9 @@ export function GitLabSettingsTab() {
             </Button>
             <Button
               onClick={() => void handleSaveToken()}
-              disabled={credentialOpInFlight() || !settingsLoaded || !token.trim()}
+              disabled={
+                credentialOpInFlight() || !settingsLoaded || !credentialKnown || !token.trim()
+              }
               loading={isValidating}
               variant="contrast"
               size="sm"

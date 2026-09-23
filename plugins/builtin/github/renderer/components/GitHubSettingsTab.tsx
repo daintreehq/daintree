@@ -281,15 +281,17 @@ export function GitHubSettingsTab() {
         description="Used for repository statistics, issue and PR detection, and linking worktrees to GitHub. Daintree keeps its own copy, so forge features don't depend on the gh CLI."
       >
         <SettingsGroup>
-          {githubConfig?.hasToken && (
+          {githubConfig && (
             <SettingsRow
               label="Status"
               control={
                 <span className="flex items-center gap-1 text-xs text-text-secondary">
-                  <Check className="w-3 h-3" aria-hidden="true" />
-                  {githubConfig.username
-                    ? `Token saved for @${githubConfig.username}`
-                    : "Token saved"}
+                  {githubConfig.hasToken && <Check className="w-3 h-3" aria-hidden="true" />}
+                  {!githubConfig.hasToken
+                    ? "No token saved"
+                    : githubConfig.username
+                      ? `Token saved for @${githubConfig.username}`
+                      : "Token saved"}
                 </span>
               }
             />

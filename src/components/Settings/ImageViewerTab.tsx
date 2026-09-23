@@ -24,6 +24,10 @@ const ROW_CLASSES =
 const ROW_SELECTED = "bg-overlay-selected";
 const ROW_UNSELECTED = "hover:bg-overlay-soft";
 
+function describeViewer(viewer: PersistedImageViewer): string {
+  return viewer.mode === "os" ? "OS default" : `Custom (${viewer.customCommand})`;
+}
+
 export function ImageViewerTab() {
   const commandFieldId = useId();
   const [mode, setMode] = useState<ImageViewerMode>("os");
@@ -32,7 +36,6 @@ export function ImageViewerTab() {
   const [isSaving, setIsSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [commandError, setCommandError] = useState<string | null>(null);
   // What is on disk, so Save means "write this change". Null while the project has
@@ -57,7 +60,6 @@ export function ImageViewerTab() {
     if (!activeProjectId) return;
     setMode("os");
     setCustomCommand("");
-    setSaved(false);
     setPersisted(null);
     setSaveError(null);
     setLoadError(null);
@@ -99,12 +101,10 @@ export function ImageViewerTab() {
 
   const handleModeChange = (newMode: ImageViewerMode) => {
     setMode(newMode);
-    setSaved(false);
   };
 
   const handleCommandChange = (value: string) => {
     setCustomCommand(value);
-    setSaved(false);
     setCommandError(null);
   };
 
@@ -116,7 +116,6 @@ export function ImageViewerTab() {
     }
     setIsSaving(true);
     setSaveError(null);
-    setSaved(false);
     try {
       // Routed through projectClient so the per-projectId getSettings cache
       // is invalidated on save. Bypassing it left other readers reading
@@ -133,7 +132,6 @@ export function ImageViewerTab() {
       patchCachedProjectSettings(activeProjectId, { preferredImageViewer });
       if (!isMountedRef.current) return;
       setPersisted({ mode, customCommand: preferredImageViewer.customCommand ?? "" });
-      setSaved(true);
     } catch (err) {
       if (!isMountedRef.current) return;
       setSaveError(formatErrorMessage(err, "Failed to save image viewer preference"));
@@ -159,7 +157,7 @@ export function ImageViewerTab() {
     <SettingsSection
       id="image-viewer"
       title="Image viewer"
-      description={`The app "Open in image viewer" launches from the file viewer. Saved for ${activeProject?.name ?? "this project"} only.`}
+      description={`For ${activeProject?.name ?? "this project"} only. The app "Open in image viewer" launches from the file viewer.`}
     >
       <SettingsGroup className="overflow-hidden">
         <RadioChoiceGroup
@@ -240,13 +238,16 @@ export function ImageViewerTab() {
               <span className="text-status-error">{loadError}</span>
             ) : saveError ? (
               <span className="text-status-error">{saveError}</span>
-            ) : saved && !isDirty ? (
-              "Saved"
-            ) : !persisted && !isLoading ? (
-              "Not saved yet — images open with the OS default"
-            ) : persisted && isDirty ? (
-              "Unsaved changes"
-            ) : null
+            ) : !persisted ? (
+              isLoading ? null : (
+                "Not saved yet — images open with the OS default"
+              )
+            ) : (
+              <span>
+                Saved: <span className="font-medium">{describeViewer(persisted)}</span>
+                {isDirty && " · Unsaved changes"}
+              </span>
+            )
           }
         >
           {loadError && (

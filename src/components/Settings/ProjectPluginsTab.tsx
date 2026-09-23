@@ -5,9 +5,11 @@ import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import {
   SETTINGS_CONTROL_WIDTH,
+  SettingsEmptyRow,
   SettingsGroup,
   SettingsRow,
 } from "@/components/Settings/SettingsGroup";
+import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import {
   Select,
   SelectContent,
@@ -350,13 +352,15 @@ function ProjectPluginPane({
   };
 
   const folderOff = !folderTrusted && plugin.state !== "invalid";
-  const runStatus = plugin.muted
-    ? "Switched off on its own. The project's other plugins are unaffected, and turning this back on runs it again without asking."
-    : plugin.state === "staged"
-      ? "Allowed here, but staged: it was read and has not run yet. Activate it below to start it."
-      : plugin.state === "active"
-        ? "Running in this project. Switching it off stops only this plugin."
-        : undefined;
+  const runStatus = folderOff
+    ? undefined
+    : plugin.muted
+      ? "Switched off on its own. The project's other plugins are unaffected, and turning this back on runs it again without asking."
+      : plugin.state === "staged"
+        ? "Allowed to run here. It's new to this project, so it waits for you to activate it."
+        : plugin.state === "active"
+          ? "Running in this project. Switching it off stops only this plugin."
+          : undefined;
 
   const badges = (
     <>
@@ -390,6 +394,7 @@ function ProjectPluginPane({
               accessory={badges}
               description={runStatus}
               disabled={folderOff}
+              disabledReason="Not running because this project's plugins are turned off"
               control={({ descriptionId, disabled }) => (
                 <SettingsSwitch
                   checked={!plugin.muted}
@@ -412,6 +417,23 @@ function ProjectPluginPane({
                     {plugin.error}
                   </span>
                 ) : undefined
+              }
+            />
+          )}
+
+          {plugin.state === "staged" && !plugin.muted && folderTrusted && (
+            <SettingsRow
+              label="Staged"
+              description="New to this project, so it was read but never run. Activating starts it now and on every future open."
+              control={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void activateStaged(plugin.id)}
+                  loading={activating.has(plugin.id)}
+                >
+                  Activate plugin
+                </Button>
               }
             />
           )}
@@ -443,23 +465,6 @@ function ProjectPluginPane({
                     <CapabilityRow key={capability} capability={capability} />
                   ))}
                 </ul>
-              }
-            />
-          )}
-
-          {plugin.state === "staged" && !plugin.muted && folderTrusted && (
-            <SettingsRow
-              label="Staged"
-              description="New to this project, so it was read but never run. Activating starts it now and on every future open."
-              control={
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void activateStaged(plugin.id)}
-                  loading={activating.has(plugin.id)}
-                >
-                  Activate plugin
-                </Button>
               }
             />
           )}
@@ -572,12 +577,12 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
           )}
           {!plugin.disabled && (
             <SettingsRow
-              label="Where it shows up"
-              accessory={<Badge size="xs">All projects</Badge>}
+              label="Default for all projects"
+
               description={
                 hiddenByDefault
-                  ? "Hidden in every project that hasn't said otherwise, including new ones. The switch above is this project's answer."
-                  : "Shown in every project that hasn't said otherwise, including new ones. The switch above is this project's answer."
+                  ? "Hidden in every project that hasn't chosen, including new ones. Changing this affects other projects; the switch above is only this one."
+                  : "Shown in every project that hasn't chosen, including new ones. Changing this affects other projects; the switch above is only this one."
               }
               control={({ descriptionId, disabled }) => (
                 <Select
@@ -636,6 +641,8 @@ export function ProjectPluginsTab() {
   const projectPath = useProjectStore((s) => s.currentProject?.path);
 
   const [installed, setInstalled] = useState<LoadedPluginInfo[] | null>(null);
+  const [installedFailed, setInstalledFailed] = useState(false);
+  const [installedAttempt, setInstalledAttempt] = useState(0);
   const [selectedId, setSelectedId] = useState<string>(PROJECT_PLUGINS_OVERVIEW_ID);
 
   // Same pull-and-resubscribe shape as the global Plugins tab: `list()` is the
@@ -647,11 +654,14 @@ export function ProjectPluginsTab() {
       window.electron.plugin
         .list()
         .then((list) => {
-          if (!cancelled) setInstalled(list);
+          if (cancelled) return;
+          setInstalled(list);
+          setInstalledFailed(false);
         })
         .catch((err) => {
           if (cancelled) return;
-          setInstalled([]);
+          // Keep whatever list we had: an empty one would claim nothing is installed.
+          setInstalledFailed(true);
           logError("Failed to load installed plugins for the project plugins tab", err);
         });
     };
@@ -661,7 +671,7 @@ export function ProjectPluginsTab() {
       cancelled = true;
       unsubscribe();
     };
-  }, []);
+  }, [installedAttempt]);
 
   // A project plugin loads under an instance key, so it appears in `list()`
   // alongside the installed ones. Split on `instanceId`, NOT on `manifest.name`
@@ -724,6 +734,12 @@ export function ProjectPluginsTab() {
             {error}
           </p>
         )}
+        {installedFailed && (
+          <SettingsLoadErrorBanner
+            message="Couldn't read your installed plugins, so they're missing from this list"
+            onRetry={() => setInstalledAttempt((n) => n + 1)}
+          />
+        )}
       </div>
 
       {showOverview && <ProjectOverviewPane projectPluginCount={projectPlugins.length} />}
@@ -746,9 +762,29 @@ export function ProjectPluginsTab() {
         <InstalledPluginPane key={selectedInstalled.instanceId} plugin={selectedInstalled} />
       )}
 
-      {showOverview && projectPlugins.length === 0 && installedOnly.length === 0 && (
-        <p className="text-xs text-text-secondary">No plugins to configure yet.</p>
-      )}
+      {showOverview &&
+        !installedFailed &&
+        installed !== null &&
+        projectPlugins.length === 0 &&
+        installedOnly.length === 0 && (
+          <SettingsGroup>
+            <SettingsEmptyRow
+              action={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    void actionService.dispatch("app.pluginManager", undefined, { source: "user" })
+                  }
+                >
+                  Open plugin manager
+                </Button>
+              }
+            >
+              Install a plugin, or add one to .daintree/plugins, to configure it here
+            </SettingsEmptyRow>
+          </SettingsGroup>
+        )}
     </div>
   );
 }

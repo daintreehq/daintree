@@ -9,6 +9,7 @@ import {
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
@@ -43,10 +44,14 @@ interface SecretTierInfo {
 
 const EMPTY_SECRET_INFO: SecretTierInfo = { tier: "unavailable", plaintext: new Set() };
 
+/**
+ * Named for what a change reaches, not for the file it lands in: "User" read as
+ * "just me" on a project page, when it means every project on this machine.
+ */
 const SCOPE_BADGE_LABEL: Record<PluginSettingsScope, string> = {
-  user: "User",
-  project: "Project",
-  local: "Local",
+  user: "All projects",
+  project: "This project",
+  local: "This project, this machine",
 };
 
 /**
@@ -224,6 +229,8 @@ function SettingField({
   // at window capture and pops the stack before Radix sees the key, so without
   // an entry of its own the list's Escape closed the whole manager.
   const [enumOpen, setEnumOpen] = useState(false);
+  // Resetting a stored secret deletes a credential, so it asks first (D1).
+  const [confirmingSecretClear, setConfirmingSecretClear] = useState(false);
 
   // Initialize from stored value (falling back to the declared default) once the
   // scope's values resolve. Runs once per (re)mount when `loaded` flips true.
@@ -470,15 +477,20 @@ function SettingField({
     accessory: scopeBadge,
     isModified,
     // Hidden mid-write so a reset can't race the save it would undo.
-    onReset: saving ? undefined : () => void handleReset(),
-    resetAriaLabel: `Reset ${label} to default`,
+    onReset: saving
+      ? undefined
+      : isSecret
+        ? () => setConfirmingSecretClear(true)
+        : () => void handleReset(),
+    resetAriaLabel: isSecret ? `Clear ${label}` : `Reset ${label} to default`,
     disabled: rowDisabled,
     disabledReason: !scopeReady
       ? "Open a project to edit this setting"
       : failed
         ? "Saved value couldn't be read"
         : undefined,
-    error: shownError ?? undefined,
+    // A failed write is announced where it happened; a missing path is a standing state.
+    error: error ? <span role="alert">{error}</span> : (shownError ?? undefined),
   };
 
   if (type === "boolean") {
@@ -635,6 +647,21 @@ function SettingField({
   }
 
   if (isSecret) {
+    const clearConfirm = (
+      <ConfirmDialog
+        isOpen={confirmingSecretClear}
+        variant="destructive"
+        onConfirm={() => {
+          setConfirmingSecretClear(false);
+          void handleReset();
+        }}
+        onClose={() => setConfirmingSecretClear(false)}
+        title={`Clear ${label}?`}
+        description="The saved value is deleted. The plugin can't use it until you enter it again."
+        confirmLabel={`Clear ${label}`}
+        zIndex="nested"
+      />
+    );
     const tierText =
       secretTier === "unavailable"
         ? "Secure storage unavailable — secrets can't be saved on this device"
@@ -642,57 +669,61 @@ function SettingField({
           ? "Stored as plaintext — re-save to move it into the OS keychain"
           : "Stored in OS keychain";
     return (
-      <SettingsRow
-        {...rowProps}
-        layout="stacked"
-        control={({ labelId, descriptionId, disabled }) => (
-          <div className="grid gap-1.5">
-            <div className="flex items-center gap-2">
-              <Input
-                type={revealed ? "text" : "password"}
-                value={draft}
-                disabled={disabled || saving}
-                aria-labelledby={labelId}
-                aria-describedby={
-                  [descriptionId, scopeReady ? tierId : null].filter(Boolean).join(" ") || undefined
-                }
-                aria-invalid={shownError ? true : undefined}
-                placeholder={hasStored ? "••••••••" : "Not set"}
-                autoComplete="off"
-                className="min-w-0 flex-1"
-                onChange={(e) => setDraft(e.target.value)}
-                onBlur={() => void commitSecret()}
-              />
-              {hasStored && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
+      <>
+        <SettingsRow
+          {...rowProps}
+          layout="stacked"
+          control={({ labelId, descriptionId, disabled }) => (
+            <div className="grid gap-1.5">
+              <div className="flex items-center gap-2">
+                <Input
+                  type={revealed ? "text" : "password"}
+                  value={draft}
                   disabled={disabled || saving}
-                  aria-label={revealed ? `Hide ${label}` : `Reveal ${label}`}
-                  // Toggle reveal without firing the input's blur-commit.
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    if (revealed) {
-                      setRevealed(false);
-                      setDraft("");
-                    } else {
-                      void handleReveal();
-                    }
-                  }}
-                >
-                  {revealed ? <EyeOff /> : <Eye />}
-                </Button>
+                  aria-labelledby={labelId}
+                  aria-describedby={
+                    [descriptionId, scopeReady ? tierId : null].filter(Boolean).join(" ") ||
+                    undefined
+                  }
+                  aria-invalid={shownError ? true : undefined}
+                  placeholder={hasStored ? "••••••••" : "Not set"}
+                  autoComplete="off"
+                  className="min-w-0 flex-1"
+                  onChange={(e) => setDraft(e.target.value)}
+                  onBlur={() => void commitSecret()}
+                />
+                {hasStored && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    disabled={disabled || saving}
+                    aria-label={revealed ? `Hide ${label}` : `Reveal ${label}`}
+                    // Toggle reveal without firing the input's blur-commit.
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      if (revealed) {
+                        setRevealed(false);
+                        setDraft("");
+                      } else {
+                        void handleReveal();
+                      }
+                    }}
+                  >
+                    {revealed ? <EyeOff /> : <Eye />}
+                  </Button>
+                )}
+              </div>
+              {scopeReady && (
+                <p id={tierId} className="text-xs text-text-secondary">
+                  {tierText}
+                </p>
               )}
             </div>
-            {scopeReady && (
-              <p id={tierId} className="text-xs text-text-secondary">
-                {tierText}
-              </p>
-            )}
-          </div>
-        )}
-      />
+          )}
+        />
+        {clearConfirm}
+      </>
     );
   }
 

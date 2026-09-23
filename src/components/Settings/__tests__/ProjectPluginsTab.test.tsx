@@ -62,6 +62,15 @@ vi.mock("@/components/ui/select", () => {
 });
 
 const showItemInFolder = vi.fn().mockResolvedValue(undefined);
+const dispatch = vi.fn();
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: (...args: unknown[]) => dispatch(...args) },
+}));
+
+// The generated form's secret-clear confirm pulls the app dialog stack (and the panel
+// store behind it) into this suite; nothing here opens it.
+vi.mock("@/components/ui/ConfirmDialog", () => ({ ConfirmDialog: () => null }));
+
 vi.mock("@/clients", () => ({
   systemClient: { showItemInFolder: (p: string) => showItemInFolder(p) },
 }));

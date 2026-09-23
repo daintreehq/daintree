@@ -232,7 +232,7 @@ export function EditorIntegrationTab() {
     <SettingsSection
       id="editor-external"
       title="External editor"
-      description={`The editor that "Open in editor" launches from the diff viewer and worktree cards. Saved for ${activeProjectName ?? "this project"} only.`}
+      description={`For ${activeProjectName ?? "this project"} only. The editor that "Open in editor" launches from the diff viewer and worktree cards.`}
     >
       <SettingsGroup>
         <SettingsRow
@@ -416,7 +416,12 @@ export function EditorIntegrationTab() {
               </span>
             ) : preferredEditor ? (
               <span>
-                Saved: <span className="font-medium">{EDITOR_LABELS[preferredEditor.id]}</span>
+                Saved:{" "}
+                <span className="font-medium">
+                  {preferredEditor.id === "custom"
+                    ? `Custom (${preferredEditor.customCommand ?? "no command"})`
+                    : EDITOR_LABELS[preferredEditor.id]}
+                </span>
                 {isDirty && " · Unsaved changes"}
               </span>
             ) : (

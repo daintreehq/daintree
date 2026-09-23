@@ -310,6 +310,9 @@ export function ForgeIntegrationsTab() {
             }}
             options={options}
             disabled={loading}
+            isModified={settings.defaultProviderId !== null}
+            onReset={() => void handleChange(AUTO_DETECT_VALUE)}
+            resetAriaLabel="Reset default provider to auto-detect"
             placeholder={loading ? "Loading…" : AUTO_DETECT_LABEL}
             error={error ?? undefined}
           />

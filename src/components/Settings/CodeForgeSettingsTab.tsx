@@ -15,7 +15,7 @@ import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import { ForgeIntegrationsTab } from "./ForgeIntegrationsTab";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { SettingsSection } from "./SettingsSection";
-import { SettingsActions, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { SettingsActions, SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { ForgeAuditLogViewer } from "./ForgeAuditLogViewer";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
@@ -74,6 +74,10 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
   const [auditCopied, setAuditCopied] = useState(false);
   const [auditExported, setAuditExported] = useState(false);
   const [showAuditClearConfirm, setShowAuditClearConfirm] = useState(false);
+  // A failed read is not an empty log, and a failed copy/export/clear is not silence.
+  const [auditLoadFailed, setAuditLoadFailed] = useState(false);
+  const [auditConfigFailed, setAuditConfigFailed] = useState(false);
+  const [auditOpError, setAuditOpError] = useState<string | null>(null);
   const auditCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const auditExportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -83,8 +87,13 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
         window.electron.forgeAudit.getRecords(),
         window.electron.forgeAudit.getStats(),
       ]);
-      if (recordsResult.status === "fulfilled") setAuditRecords(recordsResult.value);
-      else logError("Failed to load forge audit log", recordsResult.reason);
+      if (recordsResult.status === "fulfilled") {
+        setAuditRecords(recordsResult.value);
+        setAuditLoadFailed(false);
+      } else {
+        setAuditLoadFailed(true);
+        logError("Failed to load forge audit log", recordsResult.reason);
+      }
       if (statsResult.status === "fulfilled") setAuditStats(statsResult.value);
       else logError("Failed to load forge audit stats", statsResult.reason);
     } catch (err) {
@@ -105,11 +114,13 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
           setAuditEnabled(cfgResult.value.enabled);
           setAuditMaxRecords(cfgResult.value.maxRecords);
         } else {
+          setAuditConfigFailed(true);
           logError("Failed to load forge audit config", cfgResult.reason);
         }
         if (recordsResult.status === "fulfilled") {
           setAuditRecords(recordsResult.value);
         } else {
+          setAuditLoadFailed(true);
           logError("Failed to load forge audit log", recordsResult.reason);
         }
         if (statsResult.status === "fulfilled") {
@@ -141,25 +152,30 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
       const cfg = await window.electron.forgeAudit.setEnabled(next);
       setAuditEnabled(cfg.enabled);
       setAuditMaxRecords(cfg.maxRecords);
+      setAuditOpError(null);
     } catch (err) {
       logError("Failed to toggle forge audit log", err);
+      setAuditOpError("Couldn't change recording");
     }
   }, [auditEnabled]);
 
   const handleAuditCopy = useCallback(async (toCopy: ForgeAuditRecord[]) => {
     try {
       await navigator.clipboard.writeText(JSON.stringify(toCopy, null, 2));
+      setAuditOpError(null);
       setAuditCopied(true);
       if (auditCopyTimeoutRef.current) clearTimeout(auditCopyTimeoutRef.current);
       auditCopyTimeoutRef.current = setTimeout(() => setAuditCopied(false), COPY_FEEDBACK_MS);
     } catch (err) {
       logError("Failed to copy forge audit log", err);
+      setAuditOpError("Couldn't copy the records");
     }
   }, []);
 
   const handleAuditExport = useCallback(async (toExport: ForgeAuditRecord[]) => {
     try {
       const saved = await window.electron.forgeAudit.exportLog(toExport);
+      setAuditOpError(null);
       if (saved) {
         setAuditExported(true);
         if (auditExportTimeoutRef.current) clearTimeout(auditExportTimeoutRef.current);
@@ -167,18 +183,21 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
       }
     } catch (err) {
       logError("Failed to export forge audit log", err);
+      setAuditOpError("Couldn't export the records");
     }
   }, []);
 
   const handleAuditClear = useCallback(async () => {
     try {
       await window.electron.forgeAudit.clearLog();
+      setAuditOpError(null);
       setAuditRecords([]);
       setAuditStats((prev) =>
         prev ? { ...prev, anomalySignals: [], anomalySuppressed: true } : prev
       );
     } catch (err) {
       logError("Failed to clear forge audit log", err);
+      setAuditOpError("Couldn't clear the log");
     } finally {
       setShowAuditClearConfirm(false);
     }
@@ -240,11 +259,15 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
                 subtitle="Turning this off stops new records; the ones below stay until cleared"
                 isEnabled={auditEnabled}
                 onChange={() => void handleAuditEnabledToggle()}
+                disabled={auditConfigFailed}
+                disabledReason="Couldn't read whether recording is on"
               />
             </SettingsGroup>
             <ForgeAuditLogViewer
               records={auditRecords}
               loading={auditLoading}
+              loadFailed={auditLoadFailed}
+              opError={auditOpError}
               anomalySignals={auditStats?.anomalySignals}
               anomalySuppressed={auditStats?.anomalySuppressed ?? true}
               onRefresh={refreshAuditRecords}
@@ -331,28 +354,28 @@ function ProviderSettingsBody({ providerId, pluginId, contribution }: ProviderSe
           fields={credentialFields}
         />
       ) : (
-        <p className="text-xs text-text-secondary">
-          {contribution.kind === "local"
-            ? "Local provider — no authentication needed"
-            : "No configuration needed"}
-        </p>
+        <SettingsSection title="Authentication">
+          <SettingsGroup>
+            <SettingsEmptyRow>
+              {contribution.kind === "local"
+                ? `${contribution.name} works locally, so there's nothing to sign in to`
+                : `${contribution.name} needs no credentials`}
+            </SettingsEmptyRow>
+          </SettingsGroup>
+        </SettingsSection>
       )}
 
-      <div className="space-y-2">
-        <p className="text-xs text-text-secondary font-mono">{pluginId}</p>
-        {capabilities && capabilities.length > 0 && (
-          <div>
-            <p className="text-xs font-medium text-text-secondary mb-1">Capabilities</p>
-            <ul className="text-xs text-text-secondary space-y-0.5">
-              {capabilities.map((cap) => (
-                <li key={cap} className="list-disc list-inside">
-                  {cap}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </div>
+      <SettingsSection title="Provider">
+        <SettingsGroup>
+          <SettingsRow
+            label="Plugin"
+            description={<span className="font-mono break-all">{pluginId}</span>}
+          />
+          {capabilities && capabilities.length > 0 && (
+            <SettingsRow label="Supports" description={capabilities.join(", ")} />
+          )}
+        </SettingsGroup>
+      </SettingsSection>
     </div>
   );
 }
@@ -378,6 +401,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
   const [result, setResult] = useState<CredentialResult>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [hasCredential, setHasCredential] = useState(false);
+  const [credentialKnown, setCredentialKnown] = useState(false);
   const [confirmingClear, setConfirmingClear] = useState(false);
   // Synchronous in-flight guard: `isSaving` state updates are batched and the
   // re-render is deferred, so two rapid event dispatches could both pass an
@@ -400,12 +424,15 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
       setResult(null);
       setErrorMessage(null);
       setHasCredential(false);
+      setCredentialKnown(false);
     }
 
     window.electron.forge
       .getCredentialStatus(providerId)
       .then((status) => {
-        if (!cancelled) setHasCredential(status.hasCredential);
+        if (cancelled) return;
+        setHasCredential(status.hasCredential);
+        setCredentialKnown(true);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -480,13 +507,13 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
         description={`Credentials are validated against ${providerName} before they're saved`}
       >
         <SettingsGroup>
-          {hasCredential && (
+          {credentialKnown && (
             <SettingsRow
               label="Status"
               control={
                 <span className="flex items-center gap-1 text-xs text-text-secondary">
-                  <Check className="w-3 h-3" aria-hidden="true" />
-                  Credentials saved
+                  {hasCredential && <Check className="w-3 h-3" aria-hidden="true" />}
+                  {hasCredential ? "Credentials saved" : "No credentials saved"}
                 </span>
               }
             />
