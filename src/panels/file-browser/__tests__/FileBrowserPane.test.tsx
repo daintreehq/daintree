@@ -2938,7 +2938,7 @@ describe("FileBrowserPane git status derivation", () => {
     });
     renderPane();
 
-    await screen.findByText("Nothing selected");
+    await screen.findByText("Pick a file to read");
     // Git said there were changes and none survived: that is an unusable
     // snapshot, not an empty one. Calling it clean would state the opposite of
     // what git reported.
@@ -3010,7 +3010,7 @@ describe("FileBrowserPane git status derivation", () => {
     worktreeMock.changes = null;
     renderPane();
 
-    expect(await screen.findByText("Nothing selected")).toBeTruthy();
+    expect(await screen.findByText("Pick a file to read")).toBeTruthy();
     expect(screen.queryByText("Worktree is clean")).toBeNull();
     expect(treeProps.gitStatusIndex).toBeNull();
   });
@@ -3020,7 +3020,7 @@ describe("FileBrowserPane git status derivation", () => {
     setChanges([{ path: "/repo/src/app.ts", status: "modified" }]);
     renderPane({});
 
-    expect(await screen.findByText("Nothing selected")).toBeTruthy();
+    expect(await screen.findByText("Pick a file to read")).toBeTruthy();
     expect(treeProps.gitStatusIndex).toBeNull();
   });
 
@@ -3061,7 +3061,7 @@ describe("a selection the dotfile filter hides (#11620)", () => {
   it("previews a dotfile while dotfiles are visible", () => {
     renderPane();
     expect(treeArgs.selectedPath).toBe(".env");
-    expect(screen.queryByText("Nothing selected")).toBeNull();
+    expect(screen.queryByText("Pick a file to read")).toBeNull();
   });
 
   it("stops previewing it once the dotfile toggle hides it", () => {
@@ -3071,7 +3071,7 @@ describe("a selection the dotfile filter hides (#11620)", () => {
     // screen while the tree stopped showing the file at all.
     mockPanel.browserHideDotfiles = true;
     renderPane();
-    expect(screen.getByText("Nothing selected")).toBeTruthy();
+    expect(screen.getByText("Pick a file to read")).toBeTruthy();
   });
 });
 

@@ -386,7 +386,9 @@ export function FileBrowserViewer({
     if (!body) return;
     // A folder waits for its rows: the skeleton has nothing to focus, and
     // focusing the body first would strand the reader above the list.
-    if (folderPath !== null && folderRows == null) return;
+    // A read that failed settles with no rows too; that one hands focus to the
+    // path pill below rather than waiting for rows that will never come.
+    if (folderPath !== null && folderRows == null && folderStatus !== "error") return;
     focusAfterNavigationRef.current = false;
     // The next listing's first row, or — for a file, or a state with no rows —
     // the toolbar's path pill, which names what just opened.
@@ -394,7 +396,7 @@ export function FileBrowserViewer({
       body.querySelector<HTMLElement>("[data-listing-row]") ??
       body.parentElement?.querySelector<HTMLElement>("[data-toolbar-path]");
     target?.focus({ preventScroll: true });
-  }, [filePath, folderPath, folderRows, state.status]);
+  }, [filePath, folderPath, folderRows, folderStatus, state.status]);
   const [changeTick, setChangeTick] = useState(0);
   useEffect(() => setChangeTick((value) => value + 1), [revision]);
   // The panel id rides a sentinel because this component is not remounted per
@@ -857,8 +859,8 @@ export function FileBrowserViewer({
             variant="zero-data"
             scale="canvas"
             icon={<FileText className="h-6 w-6" />}
-            title="Nothing selected"
-            description="Pick a file in the tree to read it here."
+            title="Pick a file to read"
+            description="Choose one in the tree and it opens here."
             className="w-full"
           />
         ) : (
@@ -910,7 +912,7 @@ export function FileBrowserViewer({
 
   /**
    * The folder-selected state (#11620) — what a selected folder shows instead
-   * of the same "Nothing selected" a bare panel shows.
+   * of the same "Pick a file to read" a bare panel shows.
    *
    * Branches on `folderStatus`, the raw fetch state, never on a Doherty-gated
    * flag: a gated boolean is false both before the gate opens and after the
@@ -972,11 +974,11 @@ export function FileBrowserViewer({
                 ? "Dotfiles are hidden here"
                 : folderHiddenCounts.alwaysHidden > 0
                   ? "Everything here is on the always-hidden list"
-                  : "Nothing in this folder yet"
+                  : "Add a file to this folder"
             }
             {...(canRevealDotfiles || folderHiddenCounts.alwaysHidden > 0
               ? {}
-              : { description: "Add a file to it and it'll show up here." })}
+              : { description: "It'll show up here." })}
             action={
               canRevealDotfiles ? (
                 <button

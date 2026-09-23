@@ -57,3 +57,21 @@ describe("ZoomableImage keyboard", () => {
     expect(image.style.transform).toContain("scale(1)");
   });
 });
+
+describe("ZoomableImage footer", () => {
+  it("is one named toolbar with a single tab stop", () => {
+    render(
+      <TooltipProvider>
+        <ZoomableImage filePath="/repo/a.png" rootPath="/repo" alt="a.png" />
+      </TooltipProvider>
+    );
+    const toolbar = screen.getByRole("toolbar", { name: "Zoom controls" });
+    fireEvent.focus(toolbar);
+    fireEvent.keyDown(toolbar, { key: "ArrowRight" });
+    // Disabled buttons take no focus at all, so they are no tab stop either way.
+    const stops = Array.from(toolbar.querySelectorAll("button")).filter(
+      (button) => !button.disabled && button.tabIndex === 0
+    );
+    expect(stops).toHaveLength(1);
+  });
+});

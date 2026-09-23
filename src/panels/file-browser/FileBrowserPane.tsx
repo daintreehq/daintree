@@ -1519,8 +1519,8 @@ export function FileBrowserPane({
                 : hiddenCounts.alwaysHidden > 0
                   ? "Everything here is on the always-hidden list"
                   : rootPath
-                    ? "This folder is empty"
-                    : "This worktree is empty"
+                    ? "Add a file to this folder"
+                    : "Add a file to this worktree"
             }
             action={
               canRevealDotfiles ? (

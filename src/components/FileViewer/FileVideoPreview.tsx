@@ -121,7 +121,7 @@ export function FileVideoPreview({
           disablePictureInPicture
           preload="metadata"
           aria-label={label}
-          className={`max-w-full ${maxHeightClassName} rounded`}
+          className={`max-w-full ${maxHeightClassName} rounded-lg`}
           // `paused` alone would call a buffering stall a stop; `ended` alone
           // would call a finished video still playing (the spec leaves `paused`
           // false at the end). Both, on all three events, or neither is right.

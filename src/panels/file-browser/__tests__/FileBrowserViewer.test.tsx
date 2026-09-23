@@ -605,7 +605,7 @@ describe("FileBrowserViewer tree-sidebar toggle (#11328)", () => {
     // The empty state has no toolbar of its own; the persistent Root is what
     // keeps a re-open control on screen once the tree is collapsed.
     expect(screen.getByTestId("file-browser-sidebar-toggle")).toBeTruthy();
-    expect(screen.getByText("Nothing selected")).toBeTruthy();
+    expect(screen.getByText("Pick a file to read")).toBeTruthy();
   });
 
   it("is the first control in the toolbar in both the empty and file-selected states", async () => {
@@ -1130,7 +1130,7 @@ describe("FileBrowserViewer Refresh control (#11586, #11938)", () => {
 
     // Nothing selected still needs it: Refresh re-reads the tree too, and a
     // workspace root has only the polled reconcile to fall back on (#11590).
-    expect(screen.getByText("Nothing selected")).toBeTruthy();
+    expect(screen.getByText("Pick a file to read")).toBeTruthy();
     const button = screen.getByTestId("file-browser-refresh");
     await act(async () => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -1206,7 +1206,7 @@ describe("FileBrowserViewer idle body", () => {
 
     expect(screen.getByRole("button", { name: /Read src\/app\.ts/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Read docs\/notes\.md/ })).toBeTruthy();
-    expect(screen.queryByText("Nothing selected")).toBeNull();
+    expect(screen.queryByText("Pick a file to read")).toBeNull();
   });
 
   it("opens a summarised file through the pane's selection callback", () => {
@@ -1222,7 +1222,7 @@ describe("FileBrowserViewer idle body", () => {
     renderViewer(null, { changedFiles: [] });
 
     expect(screen.getByText("Worktree is clean")).toBeTruthy();
-    expect(screen.queryByText("Nothing selected")).toBeNull();
+    expect(screen.queryByText("Pick a file to read")).toBeNull();
   });
 
   it("keeps the generic placeholder when no git status is available", () => {
@@ -1230,7 +1230,7 @@ describe("FileBrowserViewer idle body", () => {
     // snapshot hasn't arrived is equally unknown. Neither may claim "clean".
     renderViewer(null, { changedFiles: null });
 
-    expect(screen.getByText("Nothing selected")).toBeTruthy();
+    expect(screen.getByText("Pick a file to read")).toBeTruthy();
     expect(screen.queryByText("Worktree is clean")).toBeNull();
   });
 
@@ -1252,14 +1252,14 @@ describe("folder-selected state (#11620)", () => {
 
   it("lists a selected folder's contents instead of the nothing-selected state", () => {
     renderViewer(null, { folderPath: "src", folderRows: FOLDER_ROWS });
-    expect(screen.queryByText("Nothing selected")).toBeNull();
+    expect(screen.queryByText("Pick a file to read")).toBeNull();
     expect(screen.getByLabelText("pkg")).toBeTruthy();
     expect(screen.getByLabelText("a.ts")).toBeTruthy();
   });
 
   it("still shows the nothing-selected state when neither a file nor a folder is selected", () => {
     renderViewer(null);
-    expect(screen.getByText("Nothing selected")).toBeTruthy();
+    expect(screen.getByText("Pick a file to read")).toBeTruthy();
   });
 
   it("prefers the file preview when a file is selected", () => {
@@ -1273,13 +1273,13 @@ describe("folder-selected state (#11620)", () => {
     // The #10083 trap: branching on a Doherty-gated flag would paint "This
     // folder is empty" for the first 400ms of every folder load.
     renderViewer(null, { folderPath: "src", folderRows: null, folderStatus: "pending" });
-    expect(screen.queryByText("Nothing in this folder yet")).toBeNull();
-    expect(screen.queryByText("Nothing selected")).toBeNull();
+    expect(screen.queryByText("Add a file to this folder")).toBeNull();
+    expect(screen.queryByText("Pick a file to read")).toBeNull();
   });
 
   it("shows the empty state for a folder that really holds nothing", () => {
     renderViewer(null, { folderPath: "src", folderRows: [], folderStatus: "ready" });
-    expect(screen.getByText("Nothing in this folder yet")).toBeTruthy();
+    expect(screen.getByText("Add a file to this folder")).toBeTruthy();
   });
 
   it("offers Show dotfiles only when unhiding them would reveal something", () => {
@@ -1819,6 +1819,36 @@ describe("viewer at tight widths and keyboard continuity", () => {
       })
     );
     expect(document.activeElement).toBe(screen.getByLabelText("util"));
+  });
+
+  it("hands focus to the path pill when the folder it drilled into fails to read", () => {
+    const onSelectEntry = vi.fn();
+    const { rerender } = renderViewer(null, {
+      folderPath: "src",
+      folderRows: [{ path: "src/lib", name: "lib", isDirectory: true }],
+      onSelectEntry,
+    });
+    const lib = screen.getByLabelText("lib");
+    lib.focus();
+    fireEvent.keyDown(lib, { key: "Enter" });
+
+    rerender(
+      viewerJsx(null, {
+        folderPath: "src/lib",
+        folderRows: null,
+        folderStatus: "pending",
+        onSelectEntry,
+      })
+    );
+    rerender(
+      viewerJsx(null, {
+        folderPath: "src/lib",
+        folderRows: null,
+        folderStatus: "error",
+        onSelectEntry,
+      })
+    );
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /^Copy folder path/ }));
   });
 
   it("announces a folder that couldn't be read, with Retry", () => {

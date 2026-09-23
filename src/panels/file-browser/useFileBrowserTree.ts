@@ -1239,7 +1239,7 @@ export function useFileBrowserTree({
   //
   // "Nothing to show" means no rows, not merely no listing: a folder cached as
   // empty whose re-read then fails has nothing to protect, and reporting it as
-  // ready would put "Nothing in this folder yet" on screen for a folder we in
+  // ready would put "Add a file to this folder" on screen for a folder we in
   // fact failed to read — a confident claim built on a failure.
   const listingStatus: FolderListingStatus =
     listingPath === null || (listingRows !== null && listingRows.length > 0)

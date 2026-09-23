@@ -4,6 +4,7 @@ import { TRANSPARENCY_CHECKERBOARD_STYLE } from "./transparencyCheckerboard";
 import { cn } from "@/lib/utils";
 import { Minus, Plus } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 
 export interface ZoomableImageProps {
   /** Absolute path of the image. */
@@ -73,6 +74,8 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
+  const controlsRef = useRef<HTMLDivElement>(null);
+  const handleControlsKeyDown = useToolbarRoving(controlsRef);
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number } | null>(null);
   const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
   const [stage, setStage] = useState<{ width: number; height: number } | null>(null);
@@ -223,40 +226,54 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
       {/* The image's facts on the left — its own size, and how much of it is
           on screen — and the view controls on the right, reachable without a
           wheel or a drag. */}
-      <div className="flex shrink-0 items-center gap-2 border-t border-border-default px-3 py-1 text-2xs text-text-secondary">
-        <span className="min-w-0 flex-1 truncate tabular-nums" data-testid="zoomable-image-status">
+      {/* Wraps rather than truncates: at a narrow width the facts drop to
+          their own line instead of losing the scale off the end. */}
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 border-t border-border-default px-3 py-1 text-2xs text-text-secondary">
+        <span className="tabular-nums" data-testid="zoomable-image-status">
           {natural && (
-            <>
+            <span className="whitespace-nowrap">
               {natural.width} × {natural.height}
               <span aria-hidden="true" className="px-1.5">
                 ·
               </span>
-            </>
+            </span>
           )}
-          {isZoomed ? `${shownPercent}%` : `Fit, ${shownPercent}%`}
+          <span className="whitespace-nowrap">
+            {isZoomed ? `${shownPercent}%` : `Fit, ${shownPercent}%`}
+          </span>
         </span>
-        <ZoomButton
-          label="Zoom out"
-          disabled={zoom <= MIN_ZOOM}
-          onClick={() => setZoom((current) => clampZoom(current / BUTTON_ZOOM_STEP))}
+        {/* One tab stop with Left/Right between the three, the same toolbar
+            contract as the viewer's header. */}
+        <div
+          ref={controlsRef}
+          role="toolbar"
+          aria-label="Zoom controls"
+          onKeyDown={handleControlsKeyDown}
+          className="ml-auto flex shrink-0 items-center gap-2"
         >
-          <Minus className="h-3.5 w-3.5" aria-hidden="true" />
-        </ZoomButton>
-        <ZoomButton
-          label="Zoom in"
-          disabled={zoom >= MAX_ZOOM}
-          onClick={() => setZoom((current) => clampZoom(current * BUTTON_ZOOM_STEP))}
-        >
-          <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-        </ZoomButton>
-        <button
-          type="button"
-          onClick={resetView}
-          disabled={!isZoomed}
-          className="shrink-0 rounded-lg px-2 py-1 text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary disabled:opacity-50"
-        >
-          Fit to screen
-        </button>
+          <ZoomButton
+            label="Zoom out"
+            disabled={zoom <= MIN_ZOOM}
+            onClick={() => setZoom((current) => clampZoom(current / BUTTON_ZOOM_STEP))}
+          >
+            <Minus className="h-3.5 w-3.5" aria-hidden="true" />
+          </ZoomButton>
+          <ZoomButton
+            label="Zoom in"
+            disabled={zoom >= MAX_ZOOM}
+            onClick={() => setZoom((current) => clampZoom(current * BUTTON_ZOOM_STEP))}
+          >
+            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+          </ZoomButton>
+          <button
+            type="button"
+            onClick={resetView}
+            disabled={!isZoomed}
+            className="shrink-0 rounded-lg px-2 py-1 text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary disabled:opacity-50"
+          >
+            Fit to screen
+          </button>
+        </div>
       </div>
     </div>
   );
