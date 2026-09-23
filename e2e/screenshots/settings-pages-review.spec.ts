@@ -27,6 +27,9 @@
  *   DAINTREE_SHOT_ONLY            comma-separated tab-id filter (e.g. `general,project:general`)
  *   DAINTREE_SHOT_SWEEP           first slice of each page only (theme sweep)
  *   DAINTREE_SHOT_MAX_SLICES      slice cap per page (default 6)
+ *   DAINTREE_SHOT_NOTIFICATIONS   optional JSON patch applied to the global notification
+ *                                 settings before capture, to see states the defaults hide
+ *                                 (quiet hours on, sounds on) — e.g. '{"quietHoursEnabled":true}'
  *
  * A manifest.json beside the PNGs lists every file written with its tab, subtab and
  * slice, and the run fails unless the files on disk match it.
@@ -49,6 +52,9 @@ const SWEEP_ONLY = !!process.env.DAINTREE_SHOT_SWEEP;
 const MAX_SLICES = Number(process.env.DAINTREE_SHOT_MAX_SLICES ?? "6");
 const OUTPUT_DIR = process.env.DAINTREE_SHOT_DIR ? path.resolve(process.env.DAINTREE_SHOT_DIR) : "";
 const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "").split(",").filter(Boolean);
+const NOTIFICATION_SEED: Record<string, unknown> | null = process.env.DAINTREE_SHOT_NOTIFICATIONS
+  ? (JSON.parse(process.env.DAINTREE_SHOT_NOTIFICATIONS) as Record<string, unknown>)
+  : null;
 
 const DIALOG = '[role="dialog"]:has(.settings-sidebar)';
 // AppDialog puts role="dialog" on the full-viewport scrim; the card is its child.
@@ -247,6 +253,11 @@ test("settings pages review — every tab and subtab, sliced top to bottom", asy
 
     const page = await openAndOnboardProject(ctx.app, ctx.window, repo.dir, PROJECT_NAME);
     if (THEME) await setAppTheme(page, THEME);
+    if (NOTIFICATION_SEED) {
+      await page.evaluate(async (patch) => {
+        await window.electron.notification.setSettings(patch);
+      }, NOTIFICATION_SEED);
+    }
     await page.addStyleTag({ content: POLISH_CSS });
     await dismissBlockingPalette(page);
     await settle(page, 600);
