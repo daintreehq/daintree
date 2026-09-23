@@ -504,11 +504,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // detected in it, or once agent state arrives ahead of identity (#6650).
   const isAgentTerminal =
     agentId != null || terminalChrome.isAgent || headerAgentState !== undefined;
-  // Every grid pane holds the box, agent or not: a shell someone starts
-  // `claude` in would otherwise jump its controls left the moment the agent is
-  // detected, and a column of mixed panes lines its close buttons up.
   const reservesAgentSlot =
-    (location === "grid" && !isMaximized) ||
     (isAutoTerminalHeader && isAgentTerminal) ||
     (tabs?.some(
       (tab) =>
