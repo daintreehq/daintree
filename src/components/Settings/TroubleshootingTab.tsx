@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle } from "lucide-react";
 import { SeverityMark } from "@/lib/statusSeverity";
-import { AuditLoadErrorRow, InlineErrorRow } from "./auditLogParts";
+import { ErrorRetryRow, InlineErrorRow } from "./auditLogParts";
 import { Spinner } from "@/components/ui/Spinner";
 import { appClient, systemClient, logsClient } from "@/clients";
 import type { AppState, SystemHealthCheckResult } from "@shared/types";
@@ -357,6 +357,7 @@ export function TroubleshootingTab() {
   const [verboseLoaded, setVerboseLoaded] = useState(false);
   const [verboseError, setVerboseError] = useState<string | null>(null);
   const [logOverridesFailed, setLogOverridesFailed] = useState(false);
+  const [clearOverridesError, setClearOverridesError] = useState<string | null>(null);
   const [developerModeError, setDeveloperModeError] = useState<string | null>(null);
   const [autoOpenDiagnostics, setAutoOpenDiagnostics] = useState(false);
   const [focusEventsTab, setFocusEventsTab] = useState(false);
@@ -395,10 +396,12 @@ export function TroubleshootingTab() {
   };
 
   const handleClearLogOverrides = async () => {
+    setClearOverridesError(null);
     try {
       await logsClient.clearLevelOverrides();
       setLogOverrides({});
     } catch (error) {
+      setClearOverridesError("Overrides couldn't be cleared. Try again.");
       logError("Failed to clear log level overrides", error);
     }
   };
@@ -425,6 +428,10 @@ export function TroubleshootingTab() {
         if (result.ok) {
           setVerboseLogging((result.result as { verbose: boolean }).verbose);
           setVerboseLoaded(true);
+        } else {
+          setVerboseError(
+            "Couldn't read whether verbose logging is on. Reopen settings to try again."
+          );
         }
       })
       .catch((error) => {
@@ -615,7 +622,7 @@ export function TroubleshootingTab() {
             }
           />
           {logOverridesFailed && (
-            <AuditLoadErrorRow
+            <ErrorRetryRow
               message="Active overrides couldn't be read"
               onRetry={() => setLogOverridesRefreshKey((k) => k + 1)}
             />
@@ -646,6 +653,7 @@ export function TroubleshootingTab() {
               }
             />
           )}
+          {clearOverridesError && <InlineErrorRow>{clearOverridesError}</InlineErrorRow>}
         </SettingsGroup>
       </SettingsSection>
 

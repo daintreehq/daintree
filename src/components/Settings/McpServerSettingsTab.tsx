@@ -14,7 +14,7 @@ import {
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { McpAuditLogViewer } from "@/components/Settings/McpAuditLogViewer";
-import { AuditLoadErrorRow } from "@/components/Settings/auditLogParts";
+import { ErrorRetryRow, InlineErrorRow } from "@/components/Settings/auditLogParts";
 import { TurnOutcomeDiagnostics } from "@/components/Settings/TurnOutcomeDiagnostics";
 import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
@@ -116,6 +116,10 @@ export function McpServerSettingsTab() {
   const [rotateError, setRotateError] = useState<string | null>(null);
   const [clearError, setClearError] = useState<string | null>(null);
   const [bearersFailed, setBearersFailed] = useState(false);
+  const [auditToggleError, setAuditToggleError] = useState<string | null>(null);
+  const [paneWakeError, setPaneWakeError] = useState<string | null>(null);
+  const [configCopyError, setConfigCopyError] = useState<string | null>(null);
+  const [keyCopyError, setKeyCopyError] = useState<string | null>(null);
   // Set by a deliberate clear, so the empty log says so instead of reading as
   // "nothing has ever been recorded" beside turn outcomes that were kept.
   const [auditCleared, setAuditCleared] = useState(false);
@@ -396,7 +400,7 @@ export function McpServerSettingsTab() {
   const copyClientConfig = async (workspaceId: string | null) => {
     const generation = ++copyGenerationRef.current;
     try {
-      setError(null);
+      setConfigCopyError(null);
       // Rotating the key elsewhere (the assistant tab has its own control)
       // doesn't broadcast, so the cached status can be stale by the time the
       // user copies. Re-read it rather than hand out a dead key.
@@ -416,7 +420,7 @@ export function McpServerSettingsTab() {
     } catch (err) {
       if (generation !== copyGenerationRef.current) return;
       clearConfigCopyFeedback();
-      setError(formatErrorMessage(err, "Failed to copy config"));
+      setConfigCopyError(formatErrorMessage(err, "Failed to copy config"));
       logError("Failed to copy MCP config", err);
     }
   };
@@ -479,6 +483,7 @@ export function McpServerSettingsTab() {
   };
 
   const handleCopyApiKey = async () => {
+    setKeyCopyError(null);
     try {
       await navigator.clipboard.writeText(status.apiKey);
       setCopiedKey(true);
@@ -490,7 +495,7 @@ export function McpServerSettingsTab() {
         clearTimeout(apiKeyCopyTimeoutRef.current);
         apiKeyCopyTimeoutRef.current = null;
       }
-      setError(formatErrorMessage(err, "Failed to copy API key"));
+      setKeyCopyError(formatErrorMessage(err, "Failed to copy API key"));
       logError("Failed to copy MCP API key", err);
     }
   };
@@ -517,24 +522,24 @@ export function McpServerSettingsTab() {
 
   const handlePaneWakeToggle = async () => {
     try {
-      setError(null);
+      setPaneWakeError(null);
       setPaneWakeEnabled(await window.electron.mcpServer.setPaneWakeEnabled(!paneWakeEnabled));
     } catch (err) {
-      setError(formatErrorMessage(err, "Failed to update pane wakes"));
+      setPaneWakeError(formatErrorMessage(err, "Failed to update pane wakes"));
       logError("Failed to toggle MCP pane wakes", err);
     }
   };
 
   const handleAuditEnabledToggle = async () => {
     try {
-      setError(null);
+      setAuditToggleError(null);
       const next = !auditEnabled;
       const cfg = await window.electron.mcpServer.setAuditEnabled(next);
       setAuditEnabled(cfg.enabled);
       setAuditMaxRecords(cfg.maxRecords);
       setMaxRecordsInput(cfg.maxRecords.toString());
     } catch (err) {
-      setError(formatErrorMessage(err, "Failed to update audit logging"));
+      setAuditToggleError(formatErrorMessage(err, "Failed to update audit logging"));
       logError("Failed to toggle MCP audit log", err);
     }
   };
@@ -714,7 +719,7 @@ export function McpServerSettingsTab() {
         {statusRow}
 
         {status.enabled && runtimeSnapshot.state === "ready" && bearersFailed && (
-          <AuditLoadErrorRow
+          <ErrorRetryRow
             message="Connected clients couldn't be read"
             onRetry={() => void refreshActiveBearers()}
           />
@@ -828,6 +833,7 @@ export function McpServerSettingsTab() {
             disabled={!paneWakeLoaded}
           />
         )}
+        {status.enabled && paneWakeError && <InlineErrorRow>{paneWakeError}</InlineErrorRow>}
       </SettingsGroup>
 
       <p className="sr-only" role="status">
@@ -887,6 +893,7 @@ export function McpServerSettingsTab() {
 
                   <SettingsRow
                     label="Client config"
+                    error={configCopyError}
                     description={
                       <>
                         {viewWorkspaceId
@@ -981,6 +988,7 @@ export function McpServerSettingsTab() {
               <SettingsRow
                 id="mcp-server-auth"
                 label="API key"
+                error={keyCopyError}
                 layout={status.apiKey ? "stacked" : "inline"}
                 description={
                   status.apiKey
@@ -1065,6 +1073,7 @@ export function McpServerSettingsTab() {
                   : undefined
               }
             />
+            {auditToggleError && <InlineErrorRow>{auditToggleError}</InlineErrorRow>}
             <SettingsRow
               label="Records kept"
               description={`The oldest are dropped past this limit. ${MCP_AUDIT_MIN_RECORDS}–${MCP_AUDIT_MAX_RECORDS}, default ${MCP_AUDIT_DEFAULT_MAX_RECORDS}.`}
@@ -1131,7 +1140,7 @@ export function McpServerSettingsTab() {
             actionError={auditActionError}
             loadError={
               auditLoadFailed ? (
-                <AuditLoadErrorRow
+                <ErrorRetryRow
                   message="The audit log couldn't be read"
                   onRetry={() => void refreshAuditRecords()}
                 />

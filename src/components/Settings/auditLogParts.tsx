@@ -146,10 +146,11 @@ export function AuditRecordTime({ ts, now }: { ts: number; now: number }) {
 }
 
 /**
- * A log that couldn't be read, in the place its rows would be — so a failed read
- * never passes for an empty log.
+ * A read or write that failed, in the place its content or control lives, with
+ * a Retry that repeats it — so a failed read never passes for an empty log and a
+ * failed save never passes for the old value.
  */
-export function AuditLoadErrorRow({ message, onRetry }: { message: string; onRetry: () => void }) {
+export function ErrorRetryRow({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <SettingsEmptyRow
       action={

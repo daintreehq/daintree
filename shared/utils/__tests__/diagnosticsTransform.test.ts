@@ -200,6 +200,17 @@ describe("file path redaction", () => {
     expect(() => JSON.parse(out)).not.toThrow();
   });
 
+  it("leaves no fragment of a spaced folder anywhere in the path", () => {
+    const posix = redactJson({ p: "/Users/Alice Smith/Private Client/notes.txt" });
+    const windows = redactJson({ p: "C:\\Users\\Alice Smith\\Private Client\\notes.txt" });
+    for (const out of [posix, windows]) {
+      for (const fragment of ["Alice", "Smith", "Private", "Client", "notes"]) {
+        expect(out).not.toContain(fragment);
+      }
+      expect(() => JSON.parse(out)).not.toThrow();
+    }
+  });
+
   it("redacts a raw Windows path in plain log text", () => {
     const out = applyReplacements("open C:\\Users\\Alice\\file.txt failed", rules);
     expect(out).not.toContain("Alice");

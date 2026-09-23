@@ -240,13 +240,17 @@ export function ForgeAuditLogViewer({
         </div>
       )}
 
+      {/* A failed refresh keeps the rows already read, under the error, so the
+          actions below never act on evidence the user can't see. */}
+      {!loading && loadError && records.length > 0 && loadError}
+
       {loading ? (
         <Skeleton label="Loading audit records" className="space-y-2 px-4 py-3">
           <SkeletonBone className="h-5 w-5/6" />
           <SkeletonBone className="h-5 w-4/6" />
           <SkeletonBone className="h-5 w-3/4" />
         </Skeleton>
-      ) : loadError ? (
+      ) : loadError && records.length === 0 ? (
         loadError
       ) : filteredRecords.length === 0 ? (
         records.length === 0 ? (

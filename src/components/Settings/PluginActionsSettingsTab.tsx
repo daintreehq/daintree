@@ -5,7 +5,7 @@ import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { PluginActionAuditLogViewer } from "@/components/Settings/PluginActionAuditLogViewer";
-import { InlineErrorRow, AuditLoadErrorRow } from "@/components/Settings/auditLogParts";
+import { InlineErrorRow, ErrorRetryRow } from "@/components/Settings/auditLogParts";
 import { logError } from "@/utils/logger";
 import { type PluginActionAuditRecord, PLUGIN_AUDIT_DEFAULT_MAX_RECORDS } from "@shared/types";
 
@@ -163,7 +163,7 @@ export function PluginActionsSettingsTab() {
           actionError={actionError}
           loadError={
             recordsFailed ? (
-              <AuditLoadErrorRow
+              <ErrorRetryRow
                 message="Plugin actions couldn't be read"
                 onRetry={() => void refreshRecords()}
               />

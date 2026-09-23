@@ -9,6 +9,7 @@ import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { ErrorRetryRow } from "./auditLogParts";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import type { SettingsPresetOption } from "./SettingsPresetGroup";
 import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
@@ -21,6 +22,9 @@ import { logError } from "@/utils/logger";
 type TelemetryLevel = "off" | "errors" | "full";
 type LogRetention = 7 | 30 | 90 | 0;
 type LoadState = "loading" | "ready" | "error";
+
+/** A write that failed, and the call that repeats it. */
+type FailedWrite = { message: string; retry: () => void } | null;
 
 const PRIVACY_SUBTABS: SettingsSubtabItem[] = [
   { id: "telemetry", label: "Telemetry" },
@@ -125,6 +129,14 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [pendingSessionRetention, setPendingSessionRetention] = useState<LogRetention | null>(null);
   const [showAllEvents, setShowAllEvents] = useState(false);
+  const [telemetryFailure, setTelemetryFailure] = useState<FailedWrite>(null);
+  const [logRetentionFailure, setLogRetentionFailure] = useState<FailedWrite>(null);
+  const [sessionRetentionFailure, setSessionRetentionFailure] = useState<FailedWrite>(null);
+  const [cacheFailure, setCacheFailure] = useState<FailedWrite>(null);
+  const [shortenPending, setShortenPending] = useState(false);
+  const [shortenError, setShortenError] = useState<string | null>(null);
+  const [clearHistoryPending, setClearHistoryPending] = useState(false);
+  const [clearHistoryError, setClearHistoryError] = useState<string | null>(null);
   const [sessionRetentionDays, setSessionRetentionDays] =
     useState<LogRetention>(DEFAULT_RETENTION_DAYS);
   const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
@@ -158,33 +170,19 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
     };
   }, [privacyLoadNonce]);
 
+  // A failed write reverts the control and says so right beside it, with a
+  // Retry that repeats the same change — not a toast the user has to go and find.
   const handleTelemetryChange = async (level: TelemetryLevel) => {
     const prev = telemetryLevel;
+    setTelemetryFailure(null);
     setTelemetryLevel(level);
     try {
       await window.electron.privacy.setTelemetryLevel(level);
     } catch (err) {
       setTelemetryLevel(prev);
-      const retry = async () => {
-        try {
-          await window.electron.privacy.setTelemetryLevel(level);
-          setTelemetryLevel(level);
-        } catch (retryErr) {
-          setTelemetryLevel(prev);
-          notify({
-            type: "error",
-            title: "Couldn't save setting",
-            message: "Telemetry level couldn't be saved.",
-            actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-          });
-          logError("Failed to set telemetry level", retryErr);
-        }
-      };
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Telemetry level couldn't be saved.",
-        actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+      setTelemetryFailure({
+        message: "Telemetry level couldn't be saved",
+        retry: () => void handleTelemetryChange(level),
       });
       logError("Failed to set telemetry level", err);
     }
@@ -192,31 +190,15 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
 
   const handleRetentionChange = async (days: LogRetention) => {
     const prev = logRetentionDays;
+    setLogRetentionFailure(null);
     setLogRetentionDays(days);
     try {
       await window.electron.privacy.setLogRetention(days);
     } catch (err) {
       setLogRetentionDays(prev);
-      const retry = async () => {
-        try {
-          await window.electron.privacy.setLogRetention(days);
-          setLogRetentionDays(days);
-        } catch (retryErr) {
-          setLogRetentionDays(prev);
-          notify({
-            type: "error",
-            title: "Couldn't save setting",
-            message: "Log retention couldn't be saved.",
-            actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-          });
-          logError("Failed to set log retention", retryErr);
-        }
-      };
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Log retention couldn't be saved.",
-        actions: [{ label: "Try again", variant: "primary", onClick: retry }],
+      setLogRetentionFailure({
+        message: "Log retention couldn't be saved",
+        retry: () => void handleRetentionChange(days),
       });
       logError("Failed to set log retention", err);
     }
@@ -241,38 +223,42 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
     };
   }, [sessionRetentionNonce]);
 
-  const handleSessionRetentionChange = async (days: LogRetention) => {
+  /** Resolves false when the write failed; the caller decides where to say so. */
+  const handleSessionRetentionChange = async (
+    days: LogRetention,
+    { reportInline = true }: { reportInline?: boolean } = {}
+  ): Promise<boolean> => {
     const prev = sessionRetentionDays;
+    setSessionRetentionFailure(null);
     setSessionRetentionDays(days);
     try {
       await window.electron.agentSessionHistory.setRetentionDays(days);
+      return true;
     } catch (err) {
       setSessionRetentionDays(prev);
-      const retry = async () => {
-        try {
-          await window.electron.agentSessionHistory.setRetentionDays(days);
-          setSessionRetentionDays(days);
-        } catch (retryErr) {
-          setSessionRetentionDays(prev);
-          notify({
-            type: "error",
-            title: "Couldn't save setting",
-            message: "Session history retention couldn't be saved.",
-            actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-            context: { eventKind: "uiFeedback" },
-          });
-          logError("Failed to set session history retention", retryErr);
-        }
-      };
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Session history retention couldn't be saved.",
-        actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-        context: { eventKind: "uiFeedback" },
-      });
+      if (reportInline) {
+        setSessionRetentionFailure({
+          message: "Session history retention couldn't be saved",
+          retry: () => void handleSessionRetentionChange(days),
+        });
+      }
       logError("Failed to set session history retention", err);
+      return false;
     }
+  };
+
+  // The confirm stays up, busy, until the shorter window has actually been
+  // saved, and says so inside itself if it wasn't.
+  const confirmShortenRetention = async () => {
+    if (pendingSessionRetention === null || shortenPending) return;
+    setShortenPending(true);
+    setShortenError(null);
+    const ok = await handleSessionRetentionChange(pendingSessionRetention, {
+      reportInline: false,
+    });
+    setShortenPending(false);
+    if (ok) setPendingSessionRetention(null);
+    else setShortenError("Session history retention couldn't be saved. Try again.");
   };
 
   // A shorter window prunes records the moment it's saved, so it asks first;
@@ -286,28 +272,19 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
   };
 
   const handleClearSessionHistory = async () => {
-    // Close the confirm dialog up front — ConfirmDialog doesn't self-close on
-    // confirm, and the clear is fast + surfaces its own error toast on failure.
-    setShowClearHistoryConfirm(false);
+    if (clearHistoryPending) return;
+    setClearHistoryPending(true);
+    setClearHistoryError(null);
     try {
       await window.electron.agentSessionHistory.clear();
+      setShowClearHistoryConfirm(false);
       setHistoryCleared(true);
       setTimeout(() => setHistoryCleared(false), CLEARED_FLASH_MS);
     } catch (err) {
-      notify({
-        type: "error",
-        title: "Couldn't clear history",
-        message: "Session history couldn't be cleared.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleClearSessionHistory(),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      setClearHistoryError("Session history couldn't be cleared. Try again.");
       logError("Failed to clear agent session history", err);
+    } finally {
+      setClearHistoryPending(false);
     }
   };
 
@@ -315,39 +292,26 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
     window.electron.privacy.openDataFolder();
   };
 
-  const notifyClearCacheFailed = (title: string, message: string, onRetry: () => void) => {
-    notify({
-      type: "error",
-      // uiFeedback defaults to inbox-only, which would drop the Try again callback.
-      priority: "high",
-      title,
-      message,
-      actions: [{ label: "Try again", variant: "primary", onClick: onRetry }],
-      context: { eventKind: "uiFeedback" },
-    });
-  };
-
   const handleClearCache = async () => {
     setCacheClearing(true);
     setCacheCleared(false);
+    setCacheFailure(null);
     try {
       const { failed } = await window.electron.privacy.clearCache();
       if (failed === 0) {
         setCacheCleared(true);
-        setTimeout(() => setCacheCleared(false), 3000);
+        setTimeout(() => setCacheCleared(false), CLEARED_FLASH_MS);
       } else {
-        notifyClearCacheFailed(
-          "Couldn't clear all caches",
-          "Some cached data may remain. Try again to finish clearing it.",
-          () => void handleClearCache()
-        );
+        setCacheFailure({
+          message: "Some caches couldn't be cleared, so cached data may remain",
+          retry: () => void handleClearCache(),
+        });
       }
     } catch (err) {
-      notifyClearCacheFailed(
-        "Couldn't clear cache",
-        "Cached data may remain. Try again to finish clearing it.",
-        () => void handleClearCache()
-      );
+      setCacheFailure({
+        message: "The cache couldn't be cleared, so cached data may remain",
+        retry: () => void handleClearCache(),
+      });
       logError("Failed to clear cache", err);
     } finally {
       setCacheClearing(false);
@@ -430,6 +394,12 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                     />
                   ))}
                 </RadioChoiceGroup>
+                {telemetryFailure && (
+                  <ErrorRetryRow
+                    message={telemetryFailure.message}
+                    onRetry={telemetryFailure.retry}
+                  />
+                )}
                 <SettingsRow
                   label="Preview outbound telemetry"
                   description="Inspect every sanitized payload Daintree would send — live, for this session only, with no transmission to any server."
@@ -536,6 +506,12 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                   onReset={() => void handleRetentionChange(DEFAULT_RETENTION_DAYS)}
                   disabled={privacyUnknown}
                 />
+                {logRetentionFailure && (
+                  <ErrorRetryRow
+                    message={logRetentionFailure.message}
+                    onRetry={logRetentionFailure.retry}
+                  />
+                )}
                 <SettingsRow
                   id="privacy-clear-cache"
                   label="Clear cache"
@@ -551,6 +527,9 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                     </Button>
                   }
                 />
+                {cacheFailure && (
+                  <ErrorRetryRow message={cacheFailure.message} onRetry={cacheFailure.retry} />
+                )}
                 <SettingsRow
                   label="Hidden commands"
                   description={
@@ -597,6 +576,12 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                   onReset={() => requestSessionRetentionChange(DEFAULT_RETENTION_DAYS)}
                   disabled={sessionRetentionUnknown}
                 />
+                {sessionRetentionFailure && (
+                  <ErrorRetryRow
+                    message={sessionRetentionFailure.message}
+                    onRetry={sessionRetentionFailure.retry}
+                  />
+                )}
               </SettingsGroup>
               <SettingsGroup>
                 <SettingsRow
@@ -657,13 +642,17 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
       <ConfirmDialog
         isOpen={pendingSessionRetention !== null}
         variant="destructive"
-        onConfirm={() => {
-          if (pendingSessionRetention !== null) {
-            void handleSessionRetentionChange(pendingSessionRetention);
-          }
-          setPendingSessionRetention(null);
-        }}
-        onClose={() => setPendingSessionRetention(null)}
+        onConfirm={() => void confirmShortenRetention()}
+        onClose={
+          shortenPending
+            ? undefined
+            : () => {
+                setPendingSessionRetention(null);
+                setShortenError(null);
+              }
+        }
+        isConfirmLoading={shortenPending}
+        hint={shortenError ?? undefined}
         title="Shorten session history?"
         description={
           pendingSessionRetention === null
@@ -677,7 +666,16 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
         isOpen={showClearHistoryConfirm}
         variant="destructive"
         onConfirm={() => void handleClearSessionHistory()}
-        onClose={() => setShowClearHistoryConfirm(false)}
+        onClose={
+          clearHistoryPending
+            ? undefined
+            : () => {
+                setShowClearHistoryConfirm(false);
+                setClearHistoryError(null);
+              }
+        }
+        isConfirmLoading={clearHistoryPending}
+        hint={clearHistoryError ?? undefined}
         title="Clear all session history?"
         description="This permanently deletes recorded resumable-session history across every project on this machine, and those records can't be recovered. Open sessions aren't affected, and bookmarked sessions are kept — deleting a bookmark is the only way to remove one."
         confirmLabel="Clear history"

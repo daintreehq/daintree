@@ -20,7 +20,7 @@ import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { ForgeAuditLogViewer } from "./ForgeAuditLogViewer";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
-import { AuditLoadErrorRow } from "@/components/Settings/auditLogParts";
+import { ErrorRetryRow } from "@/components/Settings/auditLogParts";
 import { logError } from "@/utils/logger";
 
 const GENERAL_ID = "general";
@@ -288,7 +288,7 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
               exportFlashActive={auditExported}
               loadError={
                 auditRecordsFailed ? (
-                  <AuditLoadErrorRow
+                  <ErrorRetryRow
                     message="The forge audit log couldn't be read"
                     onRetry={() => void refreshAuditRecords()}
                   />

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
-import { AuditLoadErrorRow } from "./auditLogParts";
+import { ErrorRetryRow } from "./auditLogParts";
 import { logError } from "@/utils/logger";
 import {
   type AssistantTurnRecord,
@@ -393,7 +393,7 @@ export function TurnOutcomeDiagnostics({
             <SkeletonBone className="h-5 w-1/2" />
           </Skeleton>
         ) : failed ? (
-          <AuditLoadErrorRow message="Turn outcomes couldn't be read" onRetry={handleRefresh} />
+          <ErrorRetryRow message="Turn outcomes couldn't be read" onRetry={handleRefresh} />
         ) : totalRecords === 0 ? (
           <SettingsEmptyRow>
             Outcomes show up here once an assistant session finishes a turn

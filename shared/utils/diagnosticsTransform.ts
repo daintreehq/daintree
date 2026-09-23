@@ -137,16 +137,16 @@ export const PREBUILT_REDACTIONS: PrebuiltRedaction[] = [
     id: "filepath",
     label: "Strip absolute file paths",
     rules: [
-      // Home directory first, taking the whole user segment even when it has a
-      // space in it ("/Users/Alice Smith"), which the general rule below would
-      // split and half-leak.
-      regexRule(/\/(?:Users|home)\/[^/"\\\n]+(?:\/[^\s/"\\]+)*/),
-      // POSIX absolute path with 2+ segments (avoids mangling every lone `/`).
-      regexRule(/\/(?:[^\s/"\\]+\/)+[^\s/"\\]+/),
+      // POSIX absolute path with 2+ segments (a lone `/` is left alone). Folder
+      // segments — anything followed by another `/` — may contain spaces
+      // ("/Users/Alice Smith/Private Client/"), so no fragment of a spaced name
+      // survives; the final segment stops at whitespace so trailing prose does.
+      regexRule(/\/(?:[^/"\\\n]+\/)+[^\s/"\\]*/),
       // Windows drive-letter path, raw (`C:\Users\x`) or JSON-escaped
-      // (`C:\\Users\\x`): each separator is one backslash optionally doubled,
-      // consumed whole so the replacement never leaves a dangling escape.
-      regexRule(/[A-Za-z]:(?:\\\\?|\/)(?:[^\\/\s"]+(?:\\\\?|\/))*[^\\/\s"]*/),
+      // (`C:\\Users\\x`). Each separator is one backslash optionally doubled,
+      // consumed whole so the replacement never leaves a dangling escape; folder
+      // segments may contain spaces like POSIX ones.
+      regexRule(/[A-Za-z]:(?:\\\\?|\/)(?:[^\\/"\n]+(?:\\\\?|\/))*[^\\/\s"]*/),
     ],
   },
 ];

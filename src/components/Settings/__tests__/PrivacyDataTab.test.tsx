@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { PrivacyDataTab } from "../PrivacyDataTab";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -93,7 +93,7 @@ describe("PrivacyDataTab", () => {
     });
   });
 
-  it("reverts telemetry level and shows error toast on IPC failure", async () => {
+  it("reverts telemetry level and says so beside it on IPC failure", async () => {
     window.electron = {
       privacy: createPrivacyApi({
         getSettings: vi.fn().mockResolvedValue({
@@ -123,9 +123,14 @@ describe("PrivacyDataTab", () => {
     });
 
     expect(window.electron.privacy.setTelemetryLevel).toHaveBeenCalledWith("errors");
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Couldn't save setting" })
-    );
+    expect(screen.getByText("Telemetry level couldn't be saved")).toBeTruthy();
+    // Retry repeats the same change rather than asking the user to find it again.
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(window.electron.privacy.setTelemetryLevel).toHaveBeenCalledTimes(2);
+    });
+    expect(window.electron.privacy.setTelemetryLevel).toHaveBeenLastCalledWith("errors");
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
   it("reverts to latest successful value (stale closure proof)", async () => {
@@ -224,7 +229,7 @@ describe("PrivacyDataTab", () => {
     expect(screen.queryByText(/What's collected at each level/i)).toBeNull();
   });
 
-  it("reverts log retention and shows error toast on IPC failure", async () => {
+  it("reverts log retention and says so beside it on IPC failure", async () => {
     window.electron = {
       privacy: createPrivacyApi({
         getSettings: vi.fn().mockResolvedValue({
@@ -259,9 +264,8 @@ describe("PrivacyDataTab", () => {
     });
 
     expect(window.electron.privacy.setLogRetention).toHaveBeenCalledWith(90);
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Couldn't save setting" })
-    );
+    expect(screen.getByText("Log retention couldn't be saved")).toBeTruthy();
+    expect(mockNotify).not.toHaveBeenCalled();
   });
 
   it("disables session retention with an inline error and Retry when it fails to load", async () => {
@@ -361,29 +365,12 @@ describe("PrivacyDataTab", () => {
 
       fireEvent.click(clearCacheButton());
 
-      await waitFor(() => {
-        expect(mockNotify).toHaveBeenCalledWith(
-          expect.objectContaining({
-            type: "error",
-            priority: "high",
-            title: "Couldn't clear all caches",
-            context: { eventKind: "uiFeedback" },
-          })
-        );
-      });
+      await screen.findByText(/Some caches couldn't be cleared/);
       expect(screen.queryByText("Cache cleared")).toBeNull();
       expect(clearCacheButton().disabled).toBe(false);
     });
 
-    it("reports a rejected clear and retries from the toast action", async () => {
-      const retryLabels: string[] = [];
-      let retry: (() => void) | undefined;
-      mockNotify.mockImplementationOnce(
-        (payload: { actions?: Array<{ label: string; onClick: () => void }> }) => {
-          retryLabels.push(...(payload.actions ?? []).map((action) => action.label));
-          retry = payload.actions?.[0]?.onClick;
-        }
-      );
+    it("reports a rejected clear beside the button and retries from there", async () => {
       const clearCache = vi
         .fn<ClearCache>()
         .mockRejectedValueOnce(new Error("IPC fail"))
@@ -392,26 +379,17 @@ describe("PrivacyDataTab", () => {
 
       fireEvent.click(clearCacheButton());
 
-      await waitFor(() => {
-        expect(mockNotify).toHaveBeenCalledWith(
-          expect.objectContaining({
-            type: "error",
-            priority: "high",
-            title: "Couldn't clear cache",
-          })
-        );
-      });
+      await screen.findByText(/The cache couldn't be cleared/);
       expect(screen.queryByText("Cache cleared")).toBeNull();
 
-      expect(retryLabels).toEqual(["Try again"]);
-      act(() => {
-        retry?.();
-      });
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
       await waitFor(() => {
         expect(screen.queryByText("Cache cleared")).not.toBeNull();
       });
       expect(clearCache).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText(/The cache couldn't be cleared/)).toBeNull();
+      expect(mockNotify).not.toHaveBeenCalled();
     });
   });
 
@@ -453,6 +431,23 @@ describe("PrivacyDataTab", () => {
 
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       expect(window.electron.agentSessionHistory.setRetentionDays).not.toHaveBeenCalled();
+      expect(sessionOption("30 days").getAttribute("aria-checked")).toBe("true");
+    });
+
+    it("keeps the confirm open and says so inside it when shortening fails", async () => {
+      Reflect.set(window, "electron", {
+        privacy: createPrivacyApi(),
+        agentSessionHistory: createAgentSessionHistoryApi({
+          setRetentionDays: vi.fn().mockRejectedValue(new Error("disk full")),
+        }),
+      });
+      await renderStorage();
+      fireEvent.click(sessionOption("7 days"));
+      const dialog = await screen.findByRole("alertdialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Shorten and delete" }));
+
+      await within(dialog).findByText(/couldn't be saved/);
+      expect(screen.getByRole("alertdialog")).toBeTruthy();
       expect(sessionOption("30 days").getAttribute("aria-checked")).toBe("true");
     });
 
