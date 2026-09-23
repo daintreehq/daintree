@@ -8,6 +8,23 @@ interface PopoverSearchFieldProps extends React.InputHTMLAttributes<HTMLInputEle
 }
 
 /**
+ * The strip and input halves of the field, for a search box whose `<input>` is
+ * owned by someone else — the emoji picker's comes from frimousse, which wires
+ * its keyboard navigation to its own element.
+ */
+export const POPOVER_SEARCH_STRIP_CLASS = cn(
+  "flex items-center gap-2 border-b border-border-default px-3",
+  "transition-colors duration-150 ease-out",
+  "focus-within:bg-overlay-soft focus-within:border-selection-outline"
+);
+
+export const POPOVER_SEARCH_INPUT_CLASS = cn(
+  "h-10 min-w-0 flex-1 bg-transparent text-sm text-text-primary",
+  "placeholder:text-text-placeholder outline-hidden",
+  "disabled:cursor-not-allowed disabled:opacity-50"
+);
+
+/**
  * The search box that sits at the top of a filtering popover.
  *
  * The whole strip is the field: the magnifier lives inside its padding and the
@@ -30,26 +47,14 @@ export const PopoverSearchField = forwardRef<HTMLInputElement, PopoverSearchFiel
       // A label rather than a div: clicking anywhere on the strip — the icon,
       // the padding — puts the caret in the field, which is what "the whole
       // top area is the text box" has to mean to a pointer.
-      <label
-        className={cn(
-          "flex items-center gap-2 border-b border-border-default px-3",
-          "transition-colors duration-150 ease-out",
-          "focus-within:bg-overlay-soft focus-within:border-selection-outline",
-          fieldClassName
-        )}
-      >
+      <label className={cn(POPOVER_SEARCH_STRIP_CLASS, fieldClassName)}>
         {/* text-secondary, not text-muted: muted has no contrast floor in the
             dark themes (2.2:1 in Namib) and this glyph names the field. */}
         <Search className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
         <input
           ref={ref}
           type="text"
-          className={cn(
-            "h-10 min-w-0 flex-1 bg-transparent text-sm text-text-primary",
-            "placeholder:text-text-placeholder outline-hidden",
-            "disabled:cursor-not-allowed disabled:opacity-50",
-            className
-          )}
+          className={cn(POPOVER_SEARCH_INPUT_CLASS, className)}
           {...inputProps}
         />
       </label>

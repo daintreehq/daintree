@@ -465,7 +465,7 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   },
   {
     file: "src/components/ui/emoji-picker.tsx",
-    fragment: "relative flex-1 outline-hidden",
+    fragment: "min-h-0 flex-1 outline-hidden",
     reason:
       "Radix emoji-picker Viewport is a presentational container — focus lives on the inner search input",
   },
