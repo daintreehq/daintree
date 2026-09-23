@@ -1551,8 +1551,11 @@ body,
    blue — a second, louder focus language that terminals, whose focus lives in
    xterm, never show. The ring it gets instead is the selected edge itself,
    drawn over the border in the same ink, so the pane looks the same however
-   its focus arrived. */
+   its focus arrived. The border steps aside while the ring shows: the ink is
+   translucent on most themes, and two layers of it composite into a visibly
+   stronger edge than the terminal next door. */
 .terminal-selected:focus-visible {
+  border-color: transparent;
   outline: 1px solid
     var(
       --panel-focus-border,
@@ -2558,7 +2561,8 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     opacity: 1 !important;
   }
 
-  .terminal-selected {
+  .terminal-selected,
+  .terminal-selected:focus-visible {
     outline: 2px solid Highlight;
     outline-offset: -2px;
     border-color: Highlight;
@@ -3099,6 +3103,13 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
   .terminal-selected-quiet,
   .terminal-focused {
     border-width: 2px;
+  }
+
+  /* The focused root's ring stands in for the border, so it takes the
+     border's widened stroke. */
+  .terminal-selected:focus-visible {
+    outline-width: 2px;
+    outline-offset: -2px;
   }
 
   /* Inbox filter segments. This mode outlines the unselected chips but leaves
