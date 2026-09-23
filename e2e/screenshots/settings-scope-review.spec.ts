@@ -603,6 +603,20 @@ const STATES: ScopeState[] = [
     },
   },
   {
+    // Tab out of the sidebar list lands on the page it selects, not the close button.
+    slug: "30-tab-into-panel",
+    target: { tab: "notifications" },
+    arrange: async (page) => {
+      await page.locator(SEARCH).click();
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Tab");
+      const landed = await page.evaluate(() => document.activeElement?.id ?? null);
+      if (landed !== "settings-panel-notifications") {
+        throw new Error(`Tab from the nav landed on ${landed}`);
+      }
+    },
+  },
+  {
     // Keyboard on the page-level subtab bar, nested inside the sidebar's tabpanel.
     slug: "27-subtab-focus",
     target: { tab: "general" },

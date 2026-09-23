@@ -94,6 +94,18 @@
     border: none;
   }
 
+  /* `outline-hidden` is a transparent outline so that this mode can paint it — which
+     here drew a square box inside the rounded field once search took focus on open.
+     The field's focus belongs on its wrapper, the same edge the pointer sees. */
+  .settings-search-input:focus {
+    outline: none;
+  }
+
+  .settings-search:focus-within {
+    outline: 2px solid Highlight;
+    outline-offset: -1px;
+  }
+
   /* Outline, not fill. A `Highlight` background makes Chromium paint a Canvas backplate
      behind the label, which comes out as a solid white block where the text should be —
      verified in the capture harness. An inset outline says "selected" without putting
@@ -122,9 +134,12 @@
      point is stronger state contrast they read exactly as faintly as they do by
      default, while every row around them gains a border. Give both an explicit
      boundary. Kept separate from the forced-colors block above by house rule. */
-  .settings-scope-control [data-slot="segmented-thumb"] {
-    border-width: 2px;
-    border-color: var(--theme-text-primary);
+  /* On the checked radio, not the thumb: this mode also boxes every button, and the
+     radios paint above the thumb, so its strengthened border survived only as two
+     bright slivers down the sides. An inset outline sits above the radio's own box. */
+  .settings-scope-control [role="radio"][aria-checked="true"] {
+    outline: 2px solid var(--theme-text-primary);
+    outline-offset: -2px;
   }
 
   .settings-nav-item[data-active="true"] {

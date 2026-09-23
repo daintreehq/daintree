@@ -641,6 +641,18 @@ function SettingsDialogInner({
     const focusedIndex = tabs.indexOf(document.activeElement as HTMLElement);
     if (focusedIndex === -1) return;
 
+    // Forward Tab leaves the list for the page it selects, as the tabs pattern expects:
+    // in DOM order the header's close button sat between them, one extra stop on every
+    // trip into the content. Close stays reachable — Shift+Tab from the page.
+    if (e.key === "Tab" && !e.shiftKey && !isSearching) {
+      const panel = document.getElementById(`settings-panel-${activeTab}`);
+      if (panel) {
+        e.preventDefault();
+        panel.focus();
+      }
+      return;
+    }
+
     let nextIndex: number | null = null;
 
     switch (e.key) {
@@ -1794,18 +1806,21 @@ export function SearchResults({
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-3">
+      <div className={cn("flex items-center justify-between", filteringModified ? "mb-1" : "mb-3")}>
         <p className="text-xs text-text-secondary">
           <span className="tabular-nums">{results.length}</span> result
           {results.length === 1 ? "" : "s"}
-          {filteringModified && <span> · {modifiedCoverageNote()}</span>}
         </p>
         {/* Real instructions, not a placeholder — they take the secondary ramp. */}
-        <p className="text-3xs text-text-secondary">
+        <p className="shrink-0 whitespace-nowrap text-3xs text-text-secondary">
           <kbd className="settings-kbd px-1 py-0.5 rounded-sm border font-mono">↑↓</kbd> navigate{" "}
           <kbd className="settings-kbd px-1 py-0.5 rounded-sm border font-mono">↵</kbd> open
         </p>
       </div>
+      {filteringModified && (
+        // Its own line: beside the count it wrapped and crushed the key hints.
+        <p className="mb-3 text-xs text-text-secondary">{modifiedCoverageNote()}</p>
+      )}
       <div
         id={SEARCH_RESULTS_LISTBOX_ID}
         role="listbox"
