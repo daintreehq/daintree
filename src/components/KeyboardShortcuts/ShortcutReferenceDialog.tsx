@@ -71,7 +71,7 @@ function ShortcutRow({ entry, mac, groupScope, categoryLabel }: ShortcutRowProps
       <span className="sr-only">{spokenBinding(entry, mac, groupScope)}</span>
       <span
         aria-hidden="true"
-        className="ml-auto flex shrink-0 flex-wrap items-baseline justify-end gap-x-2 gap-y-0.5 text-xs leading-5 text-text-secondary"
+        className="ml-auto flex min-w-0 max-w-full flex-wrap items-baseline justify-end gap-x-2 gap-y-0.5 text-xs leading-5 text-text-secondary"
       >
         {entry.isCustom && <span>Custom</span>}
         {entry.alternatives.length === 0 ? (
@@ -80,9 +80,8 @@ function ShortcutRow({ entry, mac, groupScope, categoryLabel }: ShortcutRowProps
           entry.alternatives.map((alt, index) => {
             const scope = alt.scope === groupScope ? null : scopeLabel(alt.scope);
             return (
-              <span key={alt.combo} className="inline-flex items-baseline gap-2">
+              <span key={alt.combo} className="inline-flex flex-wrap items-baseline gap-x-2">
                 {index > 0 && <span>or</span>}
-                {scope && <span>{scope}</span>}
                 <KbdChord
                   shortcut={alt.combo}
                   isMac={mac}
@@ -90,6 +89,7 @@ function ShortcutRow({ entry, mac, groupScope, categoryLabel }: ShortcutRowProps
                   className="text-text-primary"
                   aria-label=""
                 />
+                {scope && <span>{scope.toLowerCase()}</span>}
               </span>
             );
           })
@@ -134,9 +134,9 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
   const groups = useMemo(() => groupByCategory(entries), [entries]);
 
   const results = useMemo(() => {
-    const ranked = searchShortcuts(entries, searchQuery);
+    const ranked = searchShortcuts(entries, searchQuery, mac);
     return ranked ? collapseNumberedSeries(ranked) : null;
-  }, [entries, searchQuery]);
+  }, [entries, searchQuery, mac]);
 
   const rowCount = results
     ? results.length
@@ -192,7 +192,9 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
         />
       </AppDialog.Header>
 
-      <AppDialog.Body>
+      {/* A new query is a new list: keep the best match in view rather than
+          holding the offset the user had scrolled to in the old one. */}
+      <AppDialog.Body resetScrollKey={trimmedQuery}>
         <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
           {trimmedQuery
             ? rowCount === 0
@@ -238,7 +240,12 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
                 <section key={category} aria-labelledby={headingId}>
                   <h3
                     id={headingId}
-                    className="sticky top-0 z-10 flex items-baseline gap-2 border-b border-border-subtle bg-surface-dialog pb-1.5 text-sm font-semibold text-text-primary"
+                    // Sticky offsets are measured inside the body's padding, so
+                    // at `top-0` rows scroll through the band above a stuck
+                    // heading. Pinning it into that band and filling it
+                    // (-top-6 + pt-6, with -mt-6 to keep the resting layout)
+                    // closes the gap.
+                    className="sticky -top-6 z-10 -mt-6 flex items-baseline gap-2 border-b border-border-subtle bg-surface-dialog pt-6 pb-1.5 text-sm font-semibold text-text-primary"
                   >
                     {category}
                     {groupScopeLabel && (
@@ -261,10 +268,12 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
 
       <AppDialog.Footer
         hint={
-          <>
-            <KbdChord shortcut={CHORD_EXAMPLE} isMac={mac} density="bare" />
-            <span>means press one, then the other</span>
-          </>
+          // One inline run so it wraps like a sentence at narrow widths
+          // instead of the hint slot truncating it.
+          <span className="min-w-0">
+            <KbdChord shortcut={CHORD_EXAMPLE} isMac={mac} density="bare" /> means press one, then
+            the other
+          </span>
         }
         secondaryAction={{ label: "Edit shortcuts", onClick: openKeyboardSettings }}
       />

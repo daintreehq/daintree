@@ -1,6 +1,5 @@
 import Fuse from "fuse.js";
 import { KEYBINDING_CATEGORY_ORDER } from "@shared/config/defaultKeybindings";
-import { MODIFIER_SEARCH_MAP, isChordPrefix, normalizeQuery } from "@/lib/kbdShortcut";
 
 /** The slice of a registered binding the reference needs. */
 export interface ReferenceBinding {
@@ -221,12 +220,196 @@ export function sharedScope(entries: readonly ShortcutEntry[]): string | null {
   return scope && scope !== "global" ? scope : null;
 }
 
-function normalizedCombo(combo: string): string {
-  let normalized = combo.toLowerCase().replace(/[\s+]+/g, "");
-  for (const [symbol, text] of Object.entries(MODIFIER_SEARCH_MAP)) {
-    normalized = normalized.replace(new RegExp(symbol, "g"), text);
+const MODIFIER_NAMES: ReadonlyMap<string, string> = new Map([
+  ["⌘", "cmd"],
+  ["cmd", "cmd"],
+  ["command", "cmd"],
+  ["meta", "cmd"],
+  ["⌃", "ctrl"],
+  ["ctrl", "ctrl"],
+  ["control", "ctrl"],
+  ["⌥", "alt"],
+  ["alt", "alt"],
+  ["option", "alt"],
+  ["opt", "alt"],
+  ["⇧", "shift"],
+  ["shift", "shift"],
+]);
+
+const KEY_NAMES: ReadonlyMap<string, string> = new Map([
+  ["⏎", "enter"],
+  ["↩", "enter"],
+  ["return", "enter"],
+  ["enter", "enter"],
+  ["⎋", "escape"],
+  ["esc", "escape"],
+  ["escape", "escape"],
+  ["⌫", "backspace"],
+  ["backspace", "backspace"],
+  ["⌦", "delete"],
+  ["del", "delete"],
+  ["delete", "delete"],
+  ["⇥", "tab"],
+  ["tab", "tab"],
+  ["↑", "up"],
+  ["arrowup", "up"],
+  ["up", "up"],
+  ["↓", "down"],
+  ["arrowdown", "down"],
+  ["down", "down"],
+  ["←", "left"],
+  ["arrowleft", "left"],
+  ["left", "left"],
+  ["→", "right"],
+  ["arrowright", "right"],
+  ["right", "right"],
+  ["space", "space"],
+]);
+
+const GLYPH = /[⌘⌃⌥⇧⏎↩⎋⌫⌦⇥↑↓←→]/;
+const FUNCTION_KEY = /^f\d{1,2}$/;
+
+type KeyStep = { modifiers: Set<string>; key: string | null };
+
+function canonicalKey(token: string, mac: boolean): { modifier?: string; key?: string } {
+  const lower = token.toLowerCase();
+  const modifier = MODIFIER_NAMES.get(lower);
+  // Off macOS the stored "Cmd" is the physical Ctrl key, so the two are one key.
+  if (modifier) return { modifier: !mac && modifier === "cmd" ? "ctrl" : modifier };
+  return { key: KEY_NAMES.get(lower) ?? lower };
+}
+
+/** A stored combo ("Cmd+K Cmd+S") as comparable steps. */
+function comboSteps(combo: string, mac: boolean): KeyStep[] {
+  return combo
+    .trim()
+    .replace(/\s*\+\s*/g, "+")
+    .split(/\s+/)
+    .map((step) => {
+      const modifiers = new Set<string>();
+      let key: string | null = null;
+      const literalPlus = step.endsWith("++");
+      const parts = (literalPlus ? step.slice(0, -1) : step).split("+").filter(Boolean);
+      if (literalPlus) parts.push("+");
+      for (const part of parts) {
+        const canonical = canonicalKey(part, mac);
+        if (canonical.modifier) modifiers.add(canonical.modifier);
+        else key = canonical.key ?? null;
+      }
+      return { modifiers, key };
+    });
+}
+
+/**
+ * Read a query as keys, or return null when it reads as words. Keys are what
+ * the reference prints (⌘⇧P, ⌘K, ⌘S, ⇧F6) or what people type (cmd+k, Ctrl+Tab,
+ * "cmd k", F6). A modifier after a key starts the next chord step, and so does
+ * a comma — except straight after a modifier, where the comma is the key (⌘,).
+ */
+function parseKeyQuery(query: string, mac: boolean): KeyStep[] | null {
+  const raw = query.trim();
+  if (!raw) return null;
+
+  const tokens: string[] = [];
+  let word = "";
+  const flush = () => {
+    if (word) tokens.push(word);
+    word = "";
+  };
+  for (const char of raw) {
+    if (GLYPH.test(char)) {
+      flush();
+      tokens.push(char);
+    } else if (char === "+" || /\s/.test(char)) {
+      flush();
+      if (char === "+") tokens.push("+");
+    } else if (char === ",") {
+      flush();
+      tokens.push(",");
+    } else {
+      word += char;
+    }
   }
-  return normalized;
+  flush();
+
+  const words = tokens.filter((t) => t !== "+" && t !== ",");
+  const hasGlyph = tokens.some((t) => GLYPH.test(t));
+  const hasPlus = tokens.includes("+");
+  const firstIsModifier = words.length > 0 && MODIFIER_NAMES.has(words[0]!.toLowerCase());
+  const singleFunctionKey = words.length === 1 && FUNCTION_KEY.test(words[0]!.toLowerCase());
+  const looksLikeKeys =
+    hasGlyph ||
+    hasPlus ||
+    singleFunctionKey ||
+    // "cmd k", "cmd shift p", or a lone "shift": every word a modifier or one key.
+    (firstIsModifier &&
+      words.every(
+        (w) =>
+          MODIFIER_NAMES.has(w.toLowerCase()) ||
+          w.length === 1 ||
+          FUNCTION_KEY.test(w.toLowerCase())
+      ));
+  if (!looksLikeKeys) return null;
+  // A multi-letter word that is neither a modifier nor a named key means words.
+  if (
+    words.some(
+      (w) =>
+        w.length > 1 &&
+        !MODIFIER_NAMES.has(w.toLowerCase()) &&
+        !KEY_NAMES.has(w.toLowerCase()) &&
+        !FUNCTION_KEY.test(w.toLowerCase()) &&
+        !/^[^a-z0-9]+$/i.test(w)
+    )
+  ) {
+    return null;
+  }
+
+  const steps: KeyStep[] = [{ modifiers: new Set(), key: null }];
+  for (const token of tokens) {
+    const step = steps[steps.length - 1]!;
+    if (token === "+") continue;
+    if (token === ",") {
+      if (step.key === null && step.modifiers.size > 0) step.key = ",";
+      else if (step.key !== null || step.modifiers.size > 0)
+        steps.push({ modifiers: new Set(), key: null });
+      continue;
+    }
+    const canonical = canonicalKey(token, mac);
+    if (canonical.modifier) {
+      if (step.key !== null) steps.push({ modifiers: new Set([canonical.modifier]), key: null });
+      else step.modifiers.add(canonical.modifier);
+    } else if (step.key === null) {
+      step.key = canonical.key ?? null;
+    } else {
+      steps.push({ modifiers: new Set(), key: canonical.key ?? null });
+    }
+  }
+  const filled = steps.filter((step) => step.key !== null || step.modifiers.size > 0);
+  return filled.length > 0 ? filled : null;
+}
+
+function sameModifiers(a: Set<string>, b: Set<string>): boolean {
+  return a.size === b.size && [...a].every((m) => b.has(m));
+}
+
+/**
+ * Whether a combo starts with the queried keys. Every finished step must match
+ * exactly; the last step may be partial — modifiers only ("⌘⇧") match any key
+ * held with at least those modifiers, while a step with its key must match
+ * exactly, so "⌘K" finds the ⌘K family and not ⌘⇧K.
+ */
+function comboMatches(combo: string, query: KeyStep[], mac: boolean): boolean {
+  const steps = comboSteps(combo, mac);
+  if (query.length > steps.length) return false;
+  return query.every((q, i) => {
+    const step = steps[i]!;
+    const last = i === query.length - 1;
+    if (q.key === null) {
+      if (!last) return false;
+      return [...q.modifiers].every((m) => step.modifiers.has(m));
+    }
+    return q.key === step.key && sameModifiers(q.modifiers, step.modifiers);
+  });
 }
 
 function searchKeywords(entry: ShortcutEntry): string {
@@ -243,7 +426,8 @@ function wordStarts(haystack: string, needle: string): boolean {
 /**
  * Ranked matches for a query, best first — or `null` when there is no query.
  *
- * A query that reads as keys ("⌘K", "cmd+shift") filters by key prefix. A query
+ * A query that reads as keys ("⌘K", "⌘⇧P", "Ctrl+Tab", F6) filters to the keys
+ * that start with it, in the platform's own terms. A query
  * that reads as words ranks, strongest first: the phrase at the start of a word
  * in the name, the phrase anywhere in the name, then every word found at a word
  * start across the name, category and tags. Fuzzy matching is only the
@@ -252,36 +436,16 @@ function wordStarts(haystack: string, needle: string): boolean {
  */
 export function searchShortcuts(
   entries: readonly ShortcutEntry[],
-  query: string
+  query: string,
+  mac: boolean
 ): ShortcutEntry[] | null {
   const trimmed = query.trim();
   if (!trimmed) return null;
 
-  if (isChordPrefix(trimmed)) {
-    const prefix = normalizeQuery(trimmed).replace(/\+/g, "");
+  const keys = parseKeyQuery(trimmed, mac);
+  if (keys) {
     return entries.filter((entry) =>
-      entry.alternatives.some((alt) => normalizedCombo(alt.combo).startsWith(prefix))
-    );
-  }
-
-  // A lone modifier ("cmd", "⌘", "shift+") lists every key that uses it.
-  const modifierKey = normalizeQuery(trimmed).replace(/\+$/, "");
-  // Own keys only: the map is a plain object, and "constructor" is a word
-  // someone could type.
-  const modifier = Object.hasOwn(MODIFIER_SEARCH_MAP, modifierKey)
-    ? MODIFIER_SEARCH_MAP[modifierKey]
-    : undefined;
-  if (modifier) {
-    return entries.filter((entry) =>
-      entry.alternatives.some((alt) =>
-        alt.combo
-          .toLowerCase()
-          .split(/[\s+]+/)
-          .some(
-            (key) =>
-              Object.hasOwn(MODIFIER_SEARCH_MAP, key) && MODIFIER_SEARCH_MAP[key] === modifier
-          )
-      )
+      entry.alternatives.some((alt) => comboMatches(alt.combo, keys, mac))
     );
   }
 
@@ -297,7 +461,15 @@ export function searchShortcuts(
     else if (words.every((word) => wordStarts(haystack, word))) tiers[2]!.push(entry);
   }
 
-  const ranked = tiers.flat();
+  // One character is as likely a key as the start of a word: a row bound to
+  // exactly that key, unmodified (the worktree grid's X), leads.
+  const bareKey = [...trimmed].length === 1 ? parseKeyQuery(`+${trimmed}`, mac) : null;
+  const keyed = bareKey
+    ? entries.filter((entry) =>
+        entry.alternatives.some((alt) => comboMatches(alt.combo, bareKey, mac))
+      )
+    : [];
+  const ranked = [...new Set([...keyed, ...tiers.flat()])];
   if (ranked.length > 0) return ranked;
 
   const fuse = new Fuse([...entries], {

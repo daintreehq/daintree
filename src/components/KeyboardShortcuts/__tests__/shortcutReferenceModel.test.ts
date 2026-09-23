@@ -12,6 +12,7 @@ import {
   searchShortcuts,
   type ReferenceBinding,
 } from "../shortcutReferenceModel";
+import { parseChord } from "@/lib/kbdShortcut";
 
 function registry(isWindows: boolean): ReferenceBinding[] {
   return buildDefaultKeybindings(isWindows).map((binding) => ({
@@ -187,11 +188,11 @@ describe("searchShortcuts", () => {
   const entries = buildShortcutEntries(registry(false), noOverrides);
 
   it("returns null for an empty query, so the grouped view shows", () => {
-    expect(searchShortcuts(entries, "   ")).toBeNull();
+    expect(searchShortcuts(entries, "   ", true)).toBeNull();
   });
 
   it("ranks names that contain the query as a word ahead of anything else", () => {
-    const results = searchShortcuts(entries, "agent")!;
+    const results = searchShortcuts(entries, "agent", true)!;
     const firstMiss = results.findIndex((e) => !/\bagent/i.test(e.description));
     const lastHit = results.map((e) => /\bagent/i.test(e.description)).lastIndexOf(true);
     expect(lastHit).toBeGreaterThan(0);
@@ -199,13 +200,13 @@ describe("searchShortcuts", () => {
   });
 
   it("finds a multi-word query as words, not as a key combination", () => {
-    const results = searchShortcuts(entries, "focused terminal")!;
+    const results = searchShortcuts(entries, "focused terminal", true)!;
     expect(results.length).toBeGreaterThan(0);
     for (const entry of results.slice(0, 3)) expect(entry.description).toMatch(/focused terminal/i);
   });
 
   it("filters by key prefix when the query reads as keys", () => {
-    const results = searchShortcuts(entries, "⌘K")!;
+    const results = searchShortcuts(entries, "⌘K", true)!;
     expect(results.length).toBeGreaterThan(0);
     for (const entry of results) {
       expect(entry.alternatives.some((alt) => /^Cmd\+K /i.test(alt.combo))).toBe(true);
@@ -213,7 +214,7 @@ describe("searchShortcuts", () => {
   });
 
   it("lists every key using a lone modifier", () => {
-    const results = searchShortcuts(entries, "ctrl")!;
+    const results = searchShortcuts(entries, "ctrl", true)!;
     expect(results.length).toBeGreaterThan(0);
     for (const entry of results) {
       expect(entry.alternatives.some((alt) => /(^|[+ ])Ctrl\+/.test(alt.combo))).toBe(true);
@@ -221,17 +222,59 @@ describe("searchShortcuts", () => {
   });
 
   it("does not treat an inherited object key as a modifier", () => {
-    expect(() => searchShortcuts(entries, "constructor")).not.toThrow();
-    expect(searchShortcuts(entries, "constructor")).toEqual([]);
+    expect(() => searchShortcuts(entries, "constructor", true)).not.toThrow();
+    expect(searchShortcuts(entries, "constructor", true)).toEqual([]);
   });
 
   it("finds unset shortcuts by asking for them", () => {
-    const results = searchShortcuts(entries, "not set")!;
+    const results = searchShortcuts(entries, "not set", true)!;
     expect(results.length).toBeGreaterThan(0);
     expect(results.every((e) => e.alternatives.length === 0)).toBe(true);
   });
 
   it("falls back to fuzzy matching only when nothing matches as words", () => {
-    expect(searchShortcuts(entries, "stsh")!.some((e) => /stash/i.test(e.description))).toBe(true);
+    expect(searchShortcuts(entries, "stsh", true)!.some((e) => /stash/i.test(e.description))).toBe(
+      true
+    );
+  });
+
+  for (const mac of [true, false]) {
+    const platform = mac ? "macOS" : "Windows/Linux";
+    const platformEntries = buildShortcutEntries(registry(!mac), noOverrides);
+
+    it(`finds every key typed exactly as the reference prints it (${platform})`, () => {
+      for (const entry of platformEntries) {
+        for (const alt of entry.alternatives) {
+          const printed = parseChord(alt.combo, mac)
+            .map((keys) => keys.join(mac ? "" : "+"))
+            .join(", ");
+          const results = searchShortcuts(platformEntries, printed, mac) ?? [];
+          expect(results, `${printed} (${entry.description})`).toContain(entry);
+        }
+      }
+    });
+
+    it(`never returns a row whose keys don't start with a typed chord (${platform})`, () => {
+      const results = searchShortcuts(platformEntries, mac ? "⌘K" : "Ctrl+K", mac)!;
+      expect(results.length).toBeGreaterThan(0);
+      for (const entry of results) {
+        const starts = entry.alternatives.some((alt) => /^(Cmd|Ctrl)\+K( |$)/.test(alt.combo));
+        expect(starts, entry.description).toBe(true);
+      }
+    });
+  }
+
+  it("reads a comma straight after a modifier as the comma key", () => {
+    const results = searchShortcuts(entries, "⌘,", true)!;
+    expect(results.map((e) => e.description)).toContain("Open settings");
+  });
+
+  it("keeps typed words out of key matching", () => {
+    for (const query of ["tab", "shift focus", "command palette"]) {
+      const results = searchShortcuts(entries, query, true)!;
+      for (const entry of results.slice(0, 1)) {
+        expect(entry.description.toLowerCase(), query).toContain(query.split(" ").pop()!);
+      }
+    }
   });
 });
