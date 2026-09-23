@@ -14,6 +14,8 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { runWithMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import {
   buildWorktreeDeletePreview,
+  fetchWorktreeTeardownPreview,
+  formatTeardownPreviewLines,
   formatWorktreeDeletePreviewLines,
   settleWorktreeDeleteOutcome,
   worktreeDeleteBlockedBy,
@@ -192,7 +194,7 @@ export type McpConfirmPreviewTarget =
 
 /** Section heading rendered above each kind's preview lines. */
 const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
-  worktreeDelete: "Working tree changes",
+  worktreeDelete: "What this delete affects",
   gitPush: "Branch and local commits",
   gitPullRebase: "Branch and local commits",
   recipe: "Recipe contents",
@@ -750,9 +752,13 @@ export async function buildMcpConfirmPreview(
     };
   }
   if (target.kind === "worktreeDelete") {
-    const outcome = await settleWorktreeDeleteOutcome(
-      buildWorktreeDeletePreview(target.worktreeId)
-    );
+    // The teardown read rides alongside: the delete runs the project's
+    // teardown before removing the tree, and an agent-initiated delete owes
+    // the approver the same disclosure the local dialog makes.
+    const [outcome, teardown] = await Promise.all([
+      settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(target.worktreeId)),
+      fetchWorktreeTeardownPreview(target.worktreeId),
+    ]);
     // Deliberately the SAME formatter the local dialog's data comes from,
     // submodule half included: this surface is the one an agent-driven force
     // delete gates on, and a preview that listed only what the parent's status
@@ -760,9 +766,12 @@ export async function buildMcpConfirmPreview(
     // unrecoverable submodule commits they were never shown.
     const lines =
       outcome.state === "verified"
-        ? formatWorktreeDeletePreviewLines(outcome.preview)
+        ? [
+            ...formatWorktreeDeletePreviewLines(outcome.preview),
+            ...formatTeardownPreviewLines(teardown),
+          ]
         : outcome.state === "failed"
-          ? formatWorktreeDeletePreviewLines(null)
+          ? [...formatWorktreeDeletePreviewLines(null), ...formatTeardownPreviewLines(teardown)]
           : // Monitor gone / already removed → nothing meaningful to preview.
             [];
     const gate = resolveWorktreeDeleteGate(target, outcome);

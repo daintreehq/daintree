@@ -235,4 +235,33 @@ describe("bulkRemoveExclusion", () => {
     expect(bulkRemoveExclusion(incomplete)).toEqual({ kind: "blocked", block: "unverified" });
     expect(isBulkRemoveEligible(incomplete)).toBe(false);
   });
+
+  it("does not count a submodule's own row as a file when its contents are counted", () => {
+    // The parent reports a submodule with work in it as one ` M vendor/lib`
+    // row; counting it beside the nested files it stands for stated one loss
+    // twice.
+    const risks = describeBulkRemoveRisks(
+      target({
+        status: verified({
+          changes: [change("/tmp/worktrees/retry-jitter/vendor/lib", "modified")],
+          submodules: {
+            status: "verified",
+            risk: risk({
+              entries: [
+                {
+                  path: "vendor/lib",
+                  state: "moved",
+                  recordedOid: "0".repeat(40),
+                  hasModifiedContent: true,
+                  hasUntrackedContent: false,
+                },
+              ],
+              dirtyFiles: ["vendor/lib/a.c", "vendor/lib/b.c"],
+            }),
+          },
+        }),
+      })
+    );
+    expect(risks).toEqual(["2 files inside submodules"]);
+  });
 });
