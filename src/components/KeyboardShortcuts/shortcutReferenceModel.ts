@@ -288,7 +288,7 @@ function comboSteps(combo: string, mac: boolean): KeyStep[] {
     .map((step) => {
       const modifiers = new Set<string>();
       let key: string | null = null;
-      const literalPlus = step.endsWith("++");
+      const literalPlus = step === "+" || step.endsWith("++");
       const parts = (literalPlus ? step.slice(0, -1) : step).split("+").filter(Boolean);
       if (literalPlus) parts.push("+");
       for (const part of parts) {

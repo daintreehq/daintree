@@ -306,6 +306,13 @@ describe("searchShortcuts", () => {
           category: "View",
           effectiveCombo: "Cmd++",
         },
+        {
+          actionId: "custom.plus",
+          scope: "global",
+          description: "Bare plus",
+          category: "View",
+          effectiveCombo: "+",
+        },
       ],
       noOverrides
     );
@@ -319,6 +326,9 @@ describe("searchShortcuts", () => {
         results.map((e) => e.description),
         query
       ).toEqual(["Zoom with plus"]);
+    }
+    for (const mac of [true, false]) {
+      expect(searchShortcuts(withPlus, "+", mac)!.map((e) => e.description)).toEqual(["Bare plus"]);
     }
   });
 });
