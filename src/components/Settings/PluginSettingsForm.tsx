@@ -1,7 +1,22 @@
-import { useCallback, useEffect, useState } from "react";
-import { Eye, EyeOff, FolderOpen, RotateCcw } from "lucide-react";
+import { useCallback, useEffect, useId, useState } from "react";
+import { Eye, EyeOff, FolderOpen } from "lucide-react";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
+import {
+  SETTINGS_CONTROL_WIDTH,
+  SettingsGroup,
+  SettingsRow,
+} from "@/components/Settings/SettingsGroup";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useProjectStore } from "@/store/projectStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
@@ -37,9 +52,6 @@ const SCOPE_BADGE_LABEL: Record<PluginSettingsScope, string> = {
  * only scope that is not one of these.
  */
 const PROJECT_BOUND_SCOPES: readonly PluginSettingsScope[] = ["project", "local"];
-
-const INPUT_CLASS =
-  "w-full px-2.5 py-1.5 text-sm rounded-[var(--radius-md)] bg-surface-canvas border border-border-default text-text-primary placeholder:text-text-placeholder focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary disabled:opacity-50 disabled:cursor-not-allowed";
 
 function settingScope(def: SettingDefinition): PluginSettingsScope {
   return def.scope ?? "user";
@@ -163,6 +175,11 @@ function SettingField({
   // Last value committed to storage, to skip no-op writes on blur.
   const [committed, setCommitted] = useState("");
   const [boolValue, setBoolValue] = useState(false);
+  // Whether this scope holds a stored override, so the row can show it is modified.
+  // Tracked here rather than read from `storedValue`, which is the load-time value and
+  // would go stale after the first write or reset.
+  const [overridden, setOverridden] = useState(false);
+  const tierId = useId();
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // Secret-specific state.
@@ -179,6 +196,7 @@ function SettingField({
   // scope's values resolve. Runs once per (re)mount when `loaded` flips true.
   useEffect(() => {
     if (!loaded) return;
+    setOverridden(storedValue !== undefined);
     if (isSecret) {
       setHasStored(secretIsSet);
       setRevealed(false);
@@ -233,6 +251,7 @@ function SettingField({
       try {
         await window.electron.plugin.setSettingValue(pluginId, def.id, value, scope, projectId);
         setError(null);
+        setOverridden(true);
         return true;
       } catch (err) {
         setError(formatErrorMessage(err, "Couldn't save setting"));
@@ -250,6 +269,7 @@ function SettingField({
     try {
       await window.electron.plugin.deleteSettingValue(pluginId, def.id, scope, projectId);
       setError(null);
+      setOverridden(false);
       if (isSecret) {
         setHasStored(false);
         setRevealed(false);
@@ -269,9 +289,15 @@ function SettingField({
     }
   }, [pluginId, def.id, def.default, scope, projectId, isSecret, type]);
 
-  const controlsDisabled = !loaded || !scopeReady || saving;
+  // The row greys out only while there is nothing to edit yet; a write in flight
+  // disables just the control, so the label doesn't flicker on every save.
+  const rowDisabled = !loaded || !scopeReady;
   const fieldId = `plugin-setting-${pluginId}-${def.id}`;
-  const describedBy = error ? `${fieldId}-error` : def.description ? `${fieldId}-desc` : undefined;
+
+  const toggleBool = (next: boolean) => {
+    setBoolValue(next);
+    void writeValue(next);
+  };
 
   const commitText = async () => {
     if (draft === committed) return;
@@ -373,218 +399,246 @@ function SettingField({
     }
   };
 
-  const renderControl = () => {
-    if (isPath) {
-      return (
-        <div className="flex items-center gap-1.5">
-          <input
-            id={fieldId}
-            type="text"
-            value={draft}
-            readOnly
-            disabled={controlsDisabled}
-            aria-describedby={describedBy}
-            placeholder={type === "file" ? "No file selected" : "No folder selected"}
-            className={INPUT_CLASS}
+  const label = fieldLabel(def);
+  const scopeBadge = <Badge size="xs">{SCOPE_BADGE_LABEL[scope]}</Badge>;
+  const isModified = (isSecret ? hasStored : overridden) && loaded && scopeReady;
+  const shownError =
+    error ??
+    (pathMissing
+      ? `This ${type === "file" ? "file" : "folder"} no longer exists — pick a new one`
+      : null);
+  const rowProps = {
+    id: fieldId,
+    label,
+    description: def.description,
+    accessory: scopeBadge,
+    isModified,
+    // Hidden mid-write so a reset can't race the save it would undo.
+    onReset: saving ? undefined : () => void handleReset(),
+    resetAriaLabel: `Reset ${label} to default`,
+    disabled: rowDisabled,
+    disabledReason: scopeReady ? undefined : "Open a project to edit this setting",
+    error: shownError ?? undefined,
+  };
+
+  if (type === "boolean") {
+    return (
+      <SettingsRow
+        {...rowProps}
+        onRowClick={saving ? undefined : () => toggleBool(!boolValue)}
+        control={({ labelId, descriptionId, disabled }) => (
+          <SettingsSwitch
+            checked={boolValue}
+            disabled={disabled || saving}
+            aria-labelledby={labelId}
+            aria-describedby={descriptionId}
+            onCheckedChange={toggleBool}
           />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={controlsDisabled}
-            className="shrink-0 gap-1.5"
-            onClick={() => void handleBrowse()}
+        )}
+      />
+    );
+  }
+
+  if (type === "enum") {
+    const options = def.options ?? [];
+    const wide = options.some((opt) => opt.length > 24);
+    return (
+      <SettingsRow
+        {...rowProps}
+        control={({ labelId, descriptionId, disabled }) => (
+          <Select
+            value={draft}
+            disabled={disabled || saving}
+            onValueChange={(next) => {
+              setDraft(next);
+              setCommitted(next);
+              void writeValue(next);
+            }}
           >
-            <FolderOpen />
-            Browse
-          </Button>
-        </div>
-      );
-    }
-    if (type === "boolean") {
-      return (
-        <SettingsSwitch
-          id={fieldId}
-          checked={boolValue}
-          disabled={controlsDisabled}
-          aria-describedby={describedBy}
-          aria-label={fieldLabel(def)}
-          onCheckedChange={(next) => {
-            setBoolValue(next);
-            void writeValue(next);
-          }}
-        />
-      );
-    }
-    if (type === "enum") {
-      const options = def.options ?? [];
-      return (
-        <select
-          id={fieldId}
+            <SelectTrigger
+              aria-labelledby={labelId}
+              aria-describedby={descriptionId}
+              aria-invalid={shownError ? true : undefined}
+              className={SETTINGS_CONTROL_WIDTH[wide ? "wide" : "select"]}
+            >
+              {/* An unset enum shows the placeholder rather than silently adopting the first option. */}
+              <SelectValue placeholder="Select…" />
+            </SelectTrigger>
+            <SelectContent>
+              {options.map((opt) => (
+                <SelectItem key={opt} value={opt}>
+                  {opt}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+      />
+    );
+  }
+
+  if (type === "number") {
+    return (
+      <SettingsRow
+        {...rowProps}
+        control={({ labelId, descriptionId, disabled }) => (
+          // Text, not type=number: the draft is validated on commit, and a number input
+          // reports anything it can't parse as "" — which would read as "clear to default".
+          <Input
+            type="text"
+            inputMode="decimal"
+            value={draft}
+            disabled={disabled || saving}
+            aria-labelledby={labelId}
+            aria-describedby={descriptionId}
+            aria-invalid={shownError ? true : undefined}
+            className={SETTINGS_CONTROL_WIDTH.number}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => void commitText()}
+          />
+        )}
+      />
+    );
+  }
+
+  if (type === "json") {
+    return (
+      <SettingsRow
+        {...rowProps}
+        layout="stacked"
+        control={({ labelId, descriptionId, disabled }) => (
+          <Textarea
+            variant="code"
+            value={draft}
+            disabled={disabled || saving}
+            aria-labelledby={labelId}
+            aria-describedby={descriptionId}
+            aria-invalid={shownError ? true : undefined}
+            rows={4}
+            spellCheck={false}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => void commitText()}
+          />
+        )}
+      />
+    );
+  }
+
+  if (isPath) {
+    return (
+      <SettingsRow
+        {...rowProps}
+        layout="stacked"
+        control={({ labelId, descriptionId, disabled }) => (
+          <div className="flex items-center gap-2">
+            <Input
+              type="text"
+              value={draft}
+              readOnly
+              disabled={disabled || saving}
+              aria-labelledby={labelId}
+              aria-describedby={descriptionId}
+              aria-invalid={shownError ? true : undefined}
+              placeholder={type === "file" ? "No file selected" : "No folder selected"}
+              className="min-w-0 flex-1 font-mono text-xs"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={disabled || saving}
+              className="shrink-0"
+              onClick={() => void handleBrowse()}
+            >
+              <FolderOpen />
+              Browse
+            </Button>
+          </div>
+        )}
+      />
+    );
+  }
+
+  if (isSecret) {
+    const tierText =
+      secretTier === "unavailable"
+        ? "Secure storage unavailable — secrets can't be saved on this device"
+        : hasStored && secretIsPlaintext && !migratedToKeychain
+          ? "Stored as plaintext — re-save to move it into the OS keychain"
+          : "Stored in OS keychain";
+    return (
+      <SettingsRow
+        {...rowProps}
+        layout="stacked"
+        control={({ labelId, descriptionId, disabled }) => (
+          <div className="grid gap-1.5">
+            <div className="flex items-center gap-2">
+              <Input
+                type={revealed ? "text" : "password"}
+                value={draft}
+                disabled={disabled || saving}
+                aria-labelledby={labelId}
+                aria-describedby={
+                  [descriptionId, scopeReady ? tierId : null].filter(Boolean).join(" ") || undefined
+                }
+                aria-invalid={shownError ? true : undefined}
+                placeholder={hasStored ? "••••••••" : "Not set"}
+                autoComplete="off"
+                className="min-w-0 flex-1"
+                onChange={(e) => setDraft(e.target.value)}
+                onBlur={() => void commitSecret()}
+              />
+              {hasStored && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  disabled={disabled || saving}
+                  aria-label={revealed ? `Hide ${label}` : `Reveal ${label}`}
+                  // Toggle reveal without firing the input's blur-commit.
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    if (revealed) {
+                      setRevealed(false);
+                      setDraft("");
+                    } else {
+                      void handleReveal();
+                    }
+                  }}
+                >
+                  {revealed ? <EyeOff /> : <Eye />}
+                </Button>
+              )}
+            </div>
+            {scopeReady && (
+              <p id={tierId} className="text-xs text-text-secondary">
+                {tierText}
+              </p>
+            )}
+          </div>
+        )}
+      />
+    );
+  }
+
+  // string
+  return (
+    <SettingsRow
+      {...rowProps}
+      layout="stacked"
+      control={({ labelId, descriptionId, disabled }) => (
+        <Input
+          type="text"
           value={draft}
-          disabled={controlsDisabled}
-          aria-describedby={describedBy}
-          className={INPUT_CLASS}
-          onChange={(e) => {
-            const next = e.target.value;
-            setDraft(next);
-            setCommitted(next);
-            void writeValue(next);
-          }}
-        >
-          {/* Empty placeholder so an unset enum doesn't silently adopt the first option. */}
-          {draft === "" && <option value="">Select…</option>}
-          {options.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
-          ))}
-        </select>
-      );
-    }
-    if (type === "json") {
-      return (
-        <textarea
-          id={fieldId}
-          value={draft}
-          disabled={controlsDisabled}
-          aria-describedby={describedBy}
-          rows={4}
-          spellCheck={false}
-          className={`${INPUT_CLASS} font-mono text-xs resize-y`}
+          disabled={disabled || saving}
+          aria-labelledby={labelId}
+          aria-describedby={descriptionId}
+          aria-invalid={shownError ? true : undefined}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={() => void commitText()}
         />
-      );
-    }
-    if (type === "secret") {
-      return (
-        <div className="flex items-center gap-1.5">
-          <input
-            id={fieldId}
-            type={revealed ? "text" : "password"}
-            value={draft}
-            disabled={controlsDisabled}
-            aria-describedby={describedBy}
-            placeholder={hasStored ? "••••••••" : "Not set"}
-            autoComplete="off"
-            className={INPUT_CLASS}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => void commitSecret()}
-          />
-          {hasStored && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              disabled={controlsDisabled}
-              aria-label={revealed ? `Hide ${fieldLabel(def)}` : `Reveal ${fieldLabel(def)}`}
-              // Toggle reveal without firing the input's blur-commit.
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                if (revealed) {
-                  setRevealed(false);
-                  setDraft("");
-                } else {
-                  void handleReveal();
-                }
-              }}
-            >
-              {revealed ? <EyeOff /> : <Eye />}
-            </Button>
-          )}
-        </div>
-      );
-    }
-    // string
-    return (
-      <input
-        id={fieldId}
-        type="text"
-        value={draft}
-        disabled={controlsDisabled}
-        aria-describedby={describedBy}
-        className={INPUT_CLASS}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={() => void commitText()}
-      />
-    );
-  };
-
-  const canReset =
-    (isSecret ? hasStored : storedValue !== undefined) && loaded && scopeReady && !saving;
-
-  return (
-    <div className="grid grid-cols-[minmax(0,1fr)] gap-1.5">
-      <div className="flex items-center justify-between gap-2">
-        <label htmlFor={fieldId} className="text-xs font-medium text-text-primary">
-          {fieldLabel(def)}
-        </label>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <span className="text-3xs uppercase tracking-wide text-text-secondary">
-            {SCOPE_BADGE_LABEL[scope]}
-          </span>
-          {canReset && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`Reset ${fieldLabel(def)} to default`}
-              className="text-daintree-text/40 hover:text-daintree-text/70"
-              onClick={() => void handleReset()}
-            >
-              <RotateCcw />
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {/* boolean lays the switch beside the description; others stack. */}
-      {type === "boolean" ? (
-        <div className="flex items-center justify-between gap-3">
-          {def.description ? (
-            <p id={`${fieldId}-desc`} className="text-2xs text-text-secondary">
-              {def.description}
-            </p>
-          ) : (
-            <span />
-          )}
-          {renderControl()}
-        </div>
-      ) : (
-        <>
-          {renderControl()}
-          {isSecret && scopeReady && (
-            <p className="text-2xs text-text-secondary">
-              {secretTier === "unavailable"
-                ? "Secure storage unavailable — secrets can't be saved on this device"
-                : hasStored && secretIsPlaintext && !migratedToKeychain
-                  ? "Stored as plaintext — re-save to move it into the OS keychain"
-                  : "Stored in OS keychain"}
-            </p>
-          )}
-          {def.description && (
-            <p id={`${fieldId}-desc`} className="text-2xs text-text-secondary">
-              {def.description}
-            </p>
-          )}
-        </>
       )}
-
-      {!scopeReady && (
-        <p className="text-2xs text-text-secondary">Open a project to edit this setting.</p>
-      )}
-      {pathMissing && !error && (
-        <p className="text-2xs text-status-warning">
-          This {type === "file" ? "file" : "folder"} no longer exists — pick a new one.
-        </p>
-      )}
-      {error && (
-        <p id={`${fieldId}-error`} className="text-2xs text-status-danger">
-          {error}
-        </p>
-      )}
-    </div>
+    />
   );
 }
 
@@ -642,9 +696,9 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
 
   if (settings.length === 0) return null;
 
+  // One group; the caller owns the heading (a section, or the tab that already names it).
   return (
-    <div className="mt-4 pt-4 border-t border-border-default space-y-4">
-      <h4 className="text-xs font-medium text-text-secondary">Settings</h4>
+    <SettingsGroup>
       {settings.map((def) => {
         const scope = settingScope(def);
         const state = byScope[scope];
@@ -667,6 +721,6 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
           />
         );
       })}
-    </div>
+    </SettingsGroup>
   );
 }

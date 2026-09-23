@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -18,7 +18,7 @@ import { isAgentInstalled, isAgentLaunchable } from "../../../shared/utils/agent
 import { Sparkles, ChevronLeft, ArrowRight, Check, Sun, Moon, FolderOpen } from "lucide-react";
 import { AnimatePresence, m, useReducedMotion, type Variants } from "framer-motion";
 import { Plug } from "@/components/icons";
-import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
+import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import {
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
@@ -1268,40 +1268,29 @@ function PrivacyStep({
   telemetryEnabled?: boolean;
   onTelemetryChange: (enabled: boolean) => void;
 }) {
-  const crashReportingLabelId = useId();
-
   return (
-    <section>
-      <div className="space-y-3 rounded-[var(--radius-lg)] border border-border-default p-4">
-        <div className="flex items-center justify-between gap-3">
-          <p id={crashReportingLabelId} className="text-sm font-medium text-text-primary">
-            Enable crash reporting
-          </p>
-          <SettingsSwitch
-            checked={telemetryEnabled ?? false}
-            onCheckedChange={onTelemetryChange}
-            aria-labelledby={crashReportingLabelId}
-          />
-        </div>
-        <p className="text-xs text-text-secondary">
-          No file contents or credentials are ever sent.
-        </p>
-        {/* Underlined at rest: previously this read as a third line of body
-            copy and only became identifiable as a control on hover. */}
-        <button
-          type="button"
-          className="text-xs text-text-link underline underline-offset-2 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary rounded-xs"
-          onClick={() =>
-            void actionService.dispatch(
-              "telemetry.togglePreview",
-              { active: true },
-              { source: "user" }
-            )
-          }
-        >
-          Preview what would be sent
-        </button>
-      </div>
+    <section className="space-y-2">
+      <SettingsSwitchCard
+        title="Enable crash reporting"
+        subtitle="No file contents or credentials are ever sent"
+        isEnabled={telemetryEnabled ?? false}
+        onChange={() => onTelemetryChange(!(telemetryEnabled ?? false))}
+      />
+      {/* Underlined at rest: previously this read as a third line of body
+          copy and only became identifiable as a control on hover. */}
+      <button
+        type="button"
+        className="text-xs text-text-link underline underline-offset-2 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary rounded-xs"
+        onClick={() =>
+          void actionService.dispatch(
+            "telemetry.togglePreview",
+            { active: true },
+            { source: "user" }
+          )
+        }
+      >
+        Preview what would be sent
+      </button>
     </section>
   );
 }
@@ -1315,28 +1304,14 @@ function PermissionsStep({
   permissionsEnabled?: boolean;
   onPermissionsChange: (enabled: boolean) => void;
 }) {
-  const labelId = useId();
-  const descriptionId = useId();
-
   return (
     <section>
-      <div className="space-y-3 rounded-[var(--radius-lg)] border border-border-default p-4">
-        <div className="flex items-center justify-between gap-3">
-          <p id={labelId} className="text-sm font-medium text-text-primary">
-            Skip permission prompts for agents
-          </p>
-          <SettingsSwitch
-            checked={permissionsEnabled ?? false}
-            onCheckedChange={onPermissionsChange}
-            aria-labelledby={labelId}
-            aria-describedby={descriptionId}
-          />
-        </div>
-        <p id={descriptionId} className="text-xs text-text-secondary">
-          Agents act without confirmation — faster, but they run commands and edit files on their
-          own. You can change this anytime in Settings → Agents.
-        </p>
-      </div>
+      <SettingsSwitchCard
+        title="Skip permission prompts for agents"
+        subtitle="Agents act without confirmation — faster, but they run commands and edit files on their own. You can change this anytime in Settings → Agents."
+        isEnabled={permissionsEnabled ?? false}
+        onChange={() => onPermissionsChange(!(permissionsEnabled ?? false))}
+      />
     </section>
   );
 }

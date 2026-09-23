@@ -1166,7 +1166,7 @@ export function GeneralTab({
                 <div id="keyboard-shortcuts-content" className="space-y-4">
                   {shortcuts.map((category) => (
                     <div key={category.category} className="space-y-2">
-                      <h5 className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
+                      <h5 className="text-xs font-medium text-text-secondary">
                         {category.category}
                       </h5>
                       <dl className="space-y-1">

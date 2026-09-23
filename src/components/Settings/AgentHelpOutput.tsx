@@ -1,5 +1,7 @@
-import { Card } from "@/components/ui/card";
 import { useState, useRef, useEffect } from "react";
+import type { ReactNode } from "react";
+import { SettingsSection } from "./SettingsSection";
+import { SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import { Button } from "@/components/ui/button";
 import { Copy, RefreshCw } from "lucide-react";
 import { agentHelpClient } from "@/clients";
@@ -103,6 +105,9 @@ export function AgentHelpOutput({
     }
   };
 
+  const installed = isAgentInstalled(availability);
+  const showMissing = isAgentMissing(availability) && !isCliLoading;
+
   const renderOutput = () => {
     if (!helpResult) return null;
 
@@ -111,19 +116,16 @@ export function AgentHelpOutput({
     const hasError = helpResult.exitCode !== 0 || helpResult.timedOut;
 
     return (
-      <div className="space-y-2">
+      <div>
         {hasError && (
-          <div className="px-3 py-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
-            <p className="text-xs text-status-warning">
-              {helpResult.timedOut
-                ? "Command timed out"
-                : `Command exited with code ${helpResult.exitCode}`}
-            </p>
-          </div>
+          <p className="px-4 pt-3 text-xs text-status-warning">
+            {helpResult.timedOut
+              ? "Command timed out"
+              : `Command exited with code ${helpResult.exitCode}`}
+          </p>
         )}
-
-        <div className="relative max-h-80 overflow-auto rounded-[var(--radius-md)] border border-border-default bg-surface-canvas">
-          <pre className="p-3 text-xs font-mono text-text-primary whitespace-pre-wrap break-words select-text">
+        <div className="relative max-h-80 overflow-auto">
+          <pre className="px-4 py-3 text-xs font-mono text-text-primary whitespace-pre-wrap break-words select-text">
             {cleanStdout}
             {cleanStderr && (
               <>
@@ -133,7 +135,7 @@ export function AgentHelpOutput({
             )}
           </pre>
           {helpResult.truncated && (
-            <div className="sticky bottom-0 px-3 py-2 bg-daintree-bg/95 border-t border-border-default text-xs text-text-secondary">
+            <div className="settings-card sticky bottom-0 px-4 py-2 border-t border-border-subtle text-xs text-text-secondary">
               Output truncated (exceeded size limit)
             </div>
           )}
@@ -142,85 +144,85 @@ export function AgentHelpOutput({
     );
   };
 
-  return (
-    <Card className="space-y-4">
-      <div className="pb-3 border-b border-border-default">
-        <div className="flex items-center justify-between">
-          <div>
-            <h5 className="text-sm font-medium text-text-primary">Help output</h5>
-            <p className="text-xs text-text-secondary select-text">
-              Available CLI flags for {agentName}
-            </p>
-          </div>
+  const loadButton = (label: string) => (
+    <Button
+      size="sm"
+      variant="outline"
+      onClick={() => void loadHelp(!!helpResult)}
+      disabled={isLoading}
+    >
+      <RefreshCw aria-hidden="true" />
+      {label}
+    </Button>
+  );
 
-          {isAgentInstalled(availability) && (
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => void loadHelp(!!helpResult)}
-                disabled={isLoading}
-                className="text-text-secondary hover:text-text-primary"
-              >
-                <RefreshCw size={14} />
-                {helpResult ? "Refresh" : "Load"}
-              </Button>
-
-              {helpResult && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => void handleCopy()}
-                  disabled={isLoading}
-                  className="text-text-secondary hover:text-text-primary"
-                >
-                  <Copy size={14} />
-                  {isCopied ? "Copied!" : "Copy"}
-                </Button>
-              )}
-            </div>
-          )}
-        </div>
+  let body: ReactNode = null;
+  if (isLoading) {
+    body = (
+      <div className="px-4 py-3 space-y-2 animate-pulse-delayed" aria-hidden="true">
+        <div className="h-3 bg-overlay-medium rounded-sm w-3/4" />
+        <div className="h-3 bg-overlay-medium rounded-sm w-1/2" />
+        <div className="h-3 bg-overlay-medium rounded-sm w-5/6" />
+        <div className="h-3 bg-overlay-medium rounded-sm w-2/3" />
+        <div className="h-3 bg-overlay-medium rounded-sm w-1/3" />
       </div>
-
-      {isLoading && (
-        <div className="rounded-[var(--radius-md)] border border-border-default bg-surface-canvas p-3 animate-pulse-delayed">
-          <div className="space-y-2">
-            <div className="h-3 bg-daintree-border/50 rounded w-3/4" />
-            <div className="h-3 bg-daintree-border/50 rounded w-1/2" />
-            <div className="h-3 bg-daintree-border/50 rounded w-5/6" />
-            <div className="h-3 bg-daintree-border/50 rounded w-2/3" />
-            <div className="h-3 bg-daintree-border/50 rounded w-1/3" />
-          </div>
-        </div>
-      )}
-
-      {!isLoading && isAgentMissing(availability) && !isCliLoading && (
-        <div className="px-4 py-6 rounded-[var(--radius-md)] border border-border-default bg-surface text-center space-y-2">
-          <p className="text-sm text-text-secondary">CLI not found</p>
-          <p className="text-xs text-text-secondary select-text">
-            {agentName} is not installed or not in your PATH
-          </p>
-          {usageUrl && (
+    );
+  } else if (showMissing) {
+    body = (
+      <SettingsEmptyRow
+        action={
+          usageUrl ? (
             <Button
               size="sm"
-              variant="ghost"
+              variant="outline"
               onClick={() => window.electron.system.openExternal(usageUrl)}
-              className="mt-2"
             >
               Install instructions
             </Button>
-          )}
-        </div>
-      )}
+          ) : undefined
+        }
+      >
+        CLI not found — {agentName} is not installed or not in your PATH
+      </SettingsEmptyRow>
+    );
+  } else if (error) {
+    body = (
+      <SettingsEmptyRow action={installed ? loadButton("Retry") : undefined}>
+        <span className="text-status-error">{error}</span>
+      </SettingsEmptyRow>
+    );
+  } else if (helpResult) {
+    body = renderOutput();
+  } else if (installed) {
+    body = (
+      <SettingsEmptyRow action={loadButton("Load")}>
+        Load the output of {agentName}&apos;s help command to see its flags
+      </SettingsEmptyRow>
+    );
+  }
 
-      {!isLoading && error && (
-        <div className="px-4 py-6 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5 text-center">
-          <p className="text-sm text-status-error">{error}</p>
-        </div>
-      )}
-
-      {!isLoading && !error && renderOutput()}
-    </Card>
+  return (
+    <SettingsSection
+      title="Help output"
+      description={`Available CLI flags for ${agentName}`}
+      action={
+        installed && helpResult ? (
+          <>
+            {loadButton("Refresh")}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void handleCopy()}
+              disabled={isLoading}
+            >
+              <Copy aria-hidden="true" />
+              {isCopied ? "Copied!" : "Copy"}
+            </Button>
+          </>
+        ) : undefined
+      }
+    >
+      {body && <SettingsGroup>{body}</SettingsGroup>}
+    </SettingsSection>
   );
 }

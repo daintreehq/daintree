@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { createContext, use } from "react";
+import type { ReactNode } from "react";
 import { ProjectPluginsTab } from "../ProjectPluginsTab";
 import {
   __resetProjectPluginStoreForTesting,
@@ -24,6 +26,40 @@ vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (s: unknown) => unknown) =>
     selector({ currentProject: { id: PROJECT_ID, path: "/tmp/proj" } }),
 }));
+
+// The real Select lazy-loads Radix. This stand-in keeps the trigger's own props (its
+// test id and label) and lets a test pick an option with a click.
+vi.mock("@/components/ui/select", () => {
+  interface Ctx {
+    value: string;
+    onValueChange: (v: string) => void;
+    disabled?: boolean;
+  }
+  const SelectCtx = createContext<Ctx | null>(null);
+  return {
+    Select: ({ children, ...ctx }: Ctx & { children: ReactNode }) => (
+      <SelectCtx value={ctx}>{children}</SelectCtx>
+    ),
+    SelectTrigger: ({ children, ...props }: { children: ReactNode }) => {
+      const ctx = use(SelectCtx)!;
+      return (
+        <button type="button" role="combobox" disabled={ctx.disabled} {...props}>
+          {children}
+        </button>
+      );
+    },
+    SelectValue: () => <span>{use(SelectCtx)!.value}</span>,
+    SelectContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+    SelectItem: ({ value, children }: { value: string; children: ReactNode }) => {
+      const ctx = use(SelectCtx)!;
+      return (
+        <button type="button" data-select-item={value} onClick={() => ctx.onValueChange(value)}>
+          {children}
+        </button>
+      );
+    },
+  };
+});
 
 const showItemInFolder = vi.fn().mockResolvedValue(undefined);
 vi.mock("@/clients", () => ({
@@ -434,9 +470,9 @@ describe("ProjectPluginsTab", () => {
     await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
 
     await select("Acme Tools");
-    fireEvent.change(await screen.findByTestId("installed-plugin-visibility-default"), {
-      target: { value: "selected" },
-    });
+    const trigger = await screen.findByTestId("installed-plugin-visibility-default");
+    expect(trigger.getAttribute("aria-label")).toBe("Which projects show this plugin by default");
+    fireEvent.click(screen.getByRole("button", { name: "Only projects I turn it on in" }));
 
     await waitFor(() =>
       expect(pluginApi.setPluginVisibilityDefault).toHaveBeenCalledWith("acme.tools", true)

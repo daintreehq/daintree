@@ -5,6 +5,8 @@ import { cn } from "@/lib/utils";
 import { looksLikeSecret } from "@/utils/secretDetection";
 import { isSensitiveEnvKey } from "../../../shared/utils/envVars";
 import { ImportEnvDialog } from "./ImportEnvDialog";
+import { Button } from "@/components/ui/button";
+import { SettingsEmptyRow } from "./SettingsGroup";
 
 /**
  * Inline env var CRUD editor with validation and optional inheritance.
@@ -694,33 +696,34 @@ export function EnvVarEditor({
       data-testid={dataTestId}
     >
       {/* Header */}
-      <div className="grid grid-cols-[2fr_3fr_auto] text-3xs uppercase tracking-wide text-text-secondary bg-daintree-bg/40 border-b border-border-default">
+      <div className="grid grid-cols-[2fr_3fr_auto] text-xs font-medium text-text-secondary bg-daintree-bg/40 border-b border-border-default">
         <div className="px-2.5 py-1.5">Key</div>
         <div className="px-2.5 py-1.5 border-l border-daintree-border/60">Value</div>
         <div className="px-2.5 py-1.5 w-9" aria-hidden="true" />
       </div>
       {/* Body */}
       {isEmpty ? (
-        <div className="m-2 flex flex-col gap-1.5">
-          <button
-            type="button"
-            onClick={handleAdd}
-            className="w-full flex items-center justify-center gap-1.5 py-4 text-xs leading-[inherit] text-text-secondary hover:text-text-primary hover:bg-daintree-bg/50 transition-colors border border-dashed border-daintree-border/60 rounded-[var(--radius-sm)]"
-            data-testid="env-editor-add"
-          >
-            <Plus size={12} aria-hidden="true" />
-            <span>Add your first variable</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setIsImportOpen(true)}
-            className="w-full flex items-center justify-center gap-1.5 py-2 text-2xs text-text-secondary hover:text-text-primary hover:bg-daintree-bg/50 transition-colors rounded-[var(--radius-sm)]"
-            data-testid="env-editor-import"
-          >
-            <Upload size={12} aria-hidden="true" />
-            <span>Import .env</span>
-          </button>
-        </div>
+        <SettingsEmptyRow
+          action={
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={handleAdd} data-testid="env-editor-add">
+                <Plus aria-hidden="true" />
+                Add variable
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsImportOpen(true)}
+                data-testid="env-editor-import"
+              >
+                <Upload aria-hidden="true" />
+                Import .env
+              </Button>
+            </div>
+          }
+        >
+          Add your first variable, or import a .env file
+        </SettingsEmptyRow>
       ) : (
         <div className="divide-y divide-border-default">
           {rows.map((row) => {

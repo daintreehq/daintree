@@ -3,7 +3,18 @@ import { AlertCircle, FolderOpen, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import {
+  SETTINGS_CONTROL_WIDTH,
+  SettingsGroup,
+  SettingsRow,
+} from "@/components/Settings/SettingsGroup";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
@@ -249,6 +260,25 @@ function ProjectOverviewPane({ projectPluginCount }: { projectPluginCount: numbe
   );
 }
 
+/** Whether a loaded plugin contributes settings, so its section is worth a heading. */
+function hasPluginSettings(plugin: LoadedPluginInfo | undefined): plugin is LoadedPluginInfo {
+  return (plugin?.manifest.contributes.settings?.length ?? 0) > 0;
+}
+
+/**
+ * The plugin's name as the section title, its manifest description and id beneath.
+ * The id stays visible because two plugins can share a display name, and the
+ * `collidesWithGlobal` case is exactly two plugins sharing an id.
+ */
+function PluginIdentityDescription({ description, id }: { description?: string; id: string }) {
+  return (
+    <>
+      {description && <span className="block break-words">{description}</span>}
+      <span className="block font-mono break-all">{id}</span>
+    </>
+  );
+}
+
 /** Detail for one plugin the project itself ships. */
 function ProjectPluginPane({
   plugin,
@@ -288,139 +318,142 @@ function ProjectPluginPane({
       .catch((err: unknown) => logError("Failed to reveal project plugin folder", err));
   };
 
+  const runStatus = plugin.muted
+    ? "Switched off on its own. The project's other plugins are unaffected, and the folder still has whatever trust you gave it — turning this back on runs it again without asking."
+    : !folderTrusted && plugin.state !== "invalid"
+      ? "Not running because this project's plugins are turned off as a folder. Enable them under “This project”."
+      : undefined;
+
+  const badges = (
+    <>
+      <Badge size="xs">Project</Badge>
+      <Badge size="xs">{projectPluginStatus(plugin)}</Badge>
+      {plugin.version && <Badge size="xs">v{plugin.version}</Badge>}
+    </>
+  );
+
   return (
-    <div data-testid="project-plugin-detail">
-      <SettingsGroup>
-        <div className="px-4 py-3 space-y-2">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <h4 className="text-sm font-medium text-text-primary break-words">
-                {plugin.displayName}
-              </h4>
-              <p className="mt-0.5 font-mono text-2xs text-text-secondary break-all">{plugin.id}</p>
-            </div>
-            {canMute && (
-              <div className="shrink-0 flex items-center gap-2">
-                <span className="text-xs text-text-secondary">Run here</span>
+    <div className="space-y-8" data-testid="project-plugin-detail">
+      <SettingsSection
+        title={plugin.displayName}
+        description={<PluginIdentityDescription description={plugin.description} id={plugin.id} />}
+      >
+        <SettingsGroup>
+          {canMute ? (
+            <SettingsRow
+              label="Run here"
+              accessory={badges}
+              description={runStatus}
+              control={({ descriptionId, disabled }) => (
                 <SettingsSwitch
                   checked={!plugin.muted}
-                  disabled={muting.has(plugin.id)}
+                  disabled={disabled || muting.has(plugin.id)}
                   onCheckedChange={(next) => void setMuted(plugin.id, !next)}
                   aria-label={`Run ${plugin.displayName} in this project`}
+                  aria-describedby={descriptionId}
                   data-testid="project-plugin-mute-switch"
                 />
-              </div>
-            )}
-          </div>
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <Badge size="xs">Project</Badge>
-            <Badge size="xs">{projectPluginStatus(plugin)}</Badge>
-            {plugin.version && <Badge size="xs">v{plugin.version}</Badge>}
-          </div>
-          {plugin.description && (
-            <p className="text-xs text-text-secondary break-words">{plugin.description}</p>
+              )}
+            />
+          ) : (
+            <SettingsRow
+              label="Manifest"
+              accessory={badges}
+              error={
+                plugin.error ? (
+                  <span className="flex items-start gap-1.5 break-words">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-px" aria-hidden="true" />
+                    {plugin.error}
+                  </span>
+                ) : undefined
+              }
+            />
           )}
-        </div>
 
-        {plugin.muted && (
-          <p className="px-4 py-3 text-xs text-text-secondary leading-relaxed">
-            Switched off on its own. The project&apos;s other plugins are unaffected, and the folder
-            still has whatever trust you gave it — turning this back on runs it again without
-            asking.
-          </p>
-        )}
-        {!plugin.muted && !folderTrusted && plugin.state !== "invalid" && (
-          <p className="px-4 py-3 text-xs text-text-secondary leading-relaxed">
-            Not running because this project&apos;s plugins are turned off as a folder. Enable them
-            under &ldquo;This project&rdquo;.
-          </p>
-        )}
+          <SettingsRow
+            label="Source"
+            description={
+              <span className="font-mono break-all">.daintree/plugins/{plugin.dirName}</span>
+            }
+          />
 
-        <SettingsRow
-          label="Source"
-          description={
-            <span className="font-mono break-all">.daintree/plugins/{plugin.dirName}</span>
-          }
-        />
+          {plugin.collidesWithGlobal && (
+            <SettingsRow
+              label="Shares an id with an installed plugin"
+              description="Both load — the instance key keeps them apart — so check which one a command or panel came from."
+            />
+          )}
 
-        {plugin.state === "invalid" && plugin.error && (
-          <div className="flex items-start gap-2 px-4 py-3">
-            <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-            <p className="text-xs text-status-danger break-words">{plugin.error}</p>
-          </div>
-        )}
+          {granted.length > 0 && (
+            <SettingsRow
+              label="Declared capabilities"
+              layout="stacked"
+              description="What the plugin says it uses. Daintree doesn't sandbox project plugins, so this is a description of intent, not a limit on it."
+              control={
+                <ul className="space-y-1.5">
+                  {granted.map((capability) => (
+                    <CapabilityRow key={capability} capability={capability} />
+                  ))}
+                </ul>
+              }
+            />
+          )}
 
-        {plugin.collidesWithGlobal && (
-          <div className="flex items-start gap-2 px-4 py-3">
-            <AlertCircle className="w-3.5 h-3.5 text-status-warning shrink-0 mt-0.5" />
-            <p className="text-xs text-text-primary break-words">
-              An installed plugin already uses this id. Both load — the instance key keeps them
-              apart — so check which one a command or panel came from.
-            </p>
-          </div>
-        )}
-
-        {granted.length > 0 && (
-          <div className="px-4 py-3 space-y-2">
-            <h5 className="text-sm font-medium text-text-primary">Declared capabilities</h5>
-            <p className="text-xs text-text-secondary leading-relaxed">
-              What the plugin says it uses. Daintree doesn&apos;t sandbox project plugins, so this
-              is a description of intent, not a limit on it.
-            </p>
-            <ul className="space-y-1.5">
-              {granted.map((capability) => (
-                <CapabilityRow key={capability} capability={capability} />
-              ))}
-            </ul>
-          </div>
-        )}
-
-        <div className="px-4 py-3 space-y-2">
-          <div className="flex items-center gap-2 flex-wrap">
-            {plugin.state === "staged" && !plugin.muted && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void activateStaged(plugin.id)}
-                loading={activating.has(plugin.id)}
-              >
-                Activate plugin
-              </Button>
-            )}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void handleReload()}
-              loading={reloading}
-            >
-              <RefreshCw />
-              Reload from disk
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleReveal} disabled={!projectPath}>
-              <FolderOpen />
-              Reveal folder
-            </Button>
-          </div>
           {plugin.state === "staged" && !plugin.muted && (
-            <p className="text-xs text-text-secondary leading-relaxed">
-              New to this project, so it was read but never run. Activating starts it now and on
-              every future open.
-            </p>
+            <SettingsRow
+              label="Staged"
+              description="New to this project, so it was read but never run. Activating starts it now and on every future open."
+              control={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void activateStaged(plugin.id)}
+                  loading={activating.has(plugin.id)}
+                >
+                  Activate plugin
+                </Button>
+              }
+            />
           )}
-          <p className="text-xs text-text-secondary leading-relaxed">
-            Reloading re-reads every manifest in the folder, not just this one.
-          </p>
-        </div>
 
-        {loaded && (
-          <div className="px-4 py-3">
-            <PluginSettingsForm plugin={loaded} />
-          </div>
-        )}
-      </SettingsGroup>
+          <SettingsRow
+            label="Plugin folder"
+            layout="stacked"
+            description="Reloading re-reads every manifest in the folder, not just this one."
+            control={
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleReload()}
+                  loading={reloading}
+                >
+                  <RefreshCw />
+                  Reload from disk
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleReveal} disabled={!projectPath}>
+                  <FolderOpen />
+                  Reveal folder
+                </Button>
+              </div>
+            }
+          />
+        </SettingsGroup>
+      </SettingsSection>
+
+      {hasPluginSettings(loaded) && (
+        <SettingsSection title="Settings">
+          <PluginSettingsForm plugin={loaded} />
+        </SettingsSection>
+      )}
     </div>
   );
 }
+
+const VISIBILITY_DEFAULT_OPTIONS = [
+  { value: "all", label: "Every project" },
+  { value: "selected", label: "Only projects I turn it on in" },
+] as const;
 
 /** Detail for one INSTALLED plugin, seen from inside a project. */
 function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
@@ -432,6 +465,7 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
   const hiddenByDefault = visibility.defaultHiddenPluginIds.includes(pluginId);
   const override = visibility.overrides[pluginId];
   const visible = override ?? !hiddenByDefault;
+  const name = plugin.manifest.displayName ?? pluginId;
 
   // The switch always writes an explicit answer for this project EXCEPT when
   // the answer it would write is the default anyway — then it clears the
@@ -442,43 +476,37 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
   };
 
   return (
-    <div data-testid="installed-plugin-detail">
-      <SettingsGroup>
-        <div className="px-4 py-3 space-y-2">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <h4 className="text-sm font-medium text-text-primary break-words">
-                {plugin.manifest.displayName ?? pluginId}
-              </h4>
-              <p className="mt-0.5 font-mono text-2xs text-text-secondary break-all">{pluginId}</p>
-            </div>
-            <div className="shrink-0 flex items-center gap-2">
-              <span className="text-xs text-text-secondary">Show here</span>
+    <div className="space-y-8" data-testid="installed-plugin-detail">
+      <SettingsSection
+        title={name}
+        description={
+          <PluginIdentityDescription description={plugin.manifest.description} id={pluginId} />
+        }
+      >
+        <SettingsGroup>
+          <SettingsRow
+            label="Show here"
+            accessory={
+              <>
+                <Badge size="xs">{plugin.isBuiltin ? "Built-in" : "Installed"}</Badge>
+                {plugin.manifest.version && <Badge size="xs">v{plugin.manifest.version}</Badge>}
+              </>
+            }
+            description="Hiding keeps this plugin out of this project's panels, commands, toolbar buttons, keyboard shortcuts and context menus. It stays installed and keeps running, so anything it contributes elsewhere — agents, recipes, forge providers, file decorations — carries on here regardless. This is which projects see it, not whether it is loaded."
+            disabled={plugin.disabled}
+            disabledReason="Turned off everywhere in Settings → Plugins, so there is nothing for this project to show or hide"
+            control={({ descriptionId, disabled }) => (
               <SettingsSwitch
                 checked={visible}
-                disabled={plugin.disabled}
+                disabled={disabled}
                 onCheckedChange={handleToggle}
-                aria-label={`Show ${plugin.manifest.displayName ?? pluginId} in this project`}
+                aria-label={`Show ${name} in this project`}
+                aria-describedby={descriptionId}
                 data-testid="installed-plugin-visibility-switch"
               />
-            </div>
-          </div>
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <Badge size="xs">{plugin.isBuiltin ? "Built-in" : "Installed"}</Badge>
-            {plugin.manifest.version && <Badge size="xs">v{plugin.manifest.version}</Badge>}
-          </div>
-          {plugin.manifest.description && (
-            <p className="text-xs text-text-secondary break-words">{plugin.manifest.description}</p>
-          )}
-        </div>
-
-        {plugin.disabled ? (
-          <p className="px-4 py-3 text-xs text-text-secondary leading-relaxed">
-            Turned off everywhere in Settings → Plugins, so there is nothing for this project to
-            show or hide.
-          </p>
-        ) : (
-          <>
+            )}
+          />
+          {!plugin.disabled && (
             <SettingsRow
               label="Where it shows up"
               description={
@@ -486,35 +514,39 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
                   ? "Hidden in projects you haven't decided about, including ones you open later. The switch above is this project's answer."
                   : "Shown everywhere unless a project says otherwise. The switch above is this project's answer."
               }
-              control={({ descriptionId }) => (
-                <select
+              control={({ descriptionId, disabled }) => (
+                <Select
                   value={hiddenByDefault ? "selected" : "all"}
-                  onChange={(e) =>
-                    void setVisibilityDefault(pluginId, e.target.value === "selected")
-                  }
-                  aria-label="Which projects show this plugin by default"
-                  aria-describedby={descriptionId}
-                  data-testid="installed-plugin-visibility-default"
-                  className="w-72 px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus:border-accent-primary/40 focus:outline-hidden transition-colors"
+                  disabled={disabled}
+                  onValueChange={(next) => void setVisibilityDefault(pluginId, next === "selected")}
                 >
-                  <option value="all">Every project</option>
-                  <option value="selected">Only projects I turn it on in</option>
-                </select>
+                  <SelectTrigger
+                    aria-label="Which projects show this plugin by default"
+                    aria-describedby={descriptionId}
+                    data-testid="installed-plugin-visibility-default"
+                    className={SETTINGS_CONTROL_WIDTH.wide}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {VISIBILITY_DEFAULT_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               )}
             />
-            <p className="px-4 py-3 text-xs text-text-secondary leading-relaxed">
-              Hiding keeps this plugin out of this project&apos;s panels, commands, toolbar buttons,
-              keyboard shortcuts and context menus. It stays installed and keeps running, so
-              anything it contributes elsewhere — agents, recipes, forge providers, file decorations
-              — carries on here regardless. This is which projects see it, not whether it is loaded.
-            </p>
-          </>
-        )}
+          )}
+        </SettingsGroup>
+      </SettingsSection>
 
-        <div className="px-4 py-3">
+      {hasPluginSettings(plugin) && (
+        <SettingsSection title="Settings">
           <PluginSettingsForm plugin={plugin} />
-        </div>
-      </SettingsGroup>
+        </SettingsSection>
+      )}
     </div>
   );
 }
