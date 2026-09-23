@@ -2,276 +2,99 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { OverrideField } from "../OverrideField";
+import { SettingsDependents, SettingsGroup } from "../SettingsGroup";
 
-describe("OverrideField", () => {
-  it("renders label associated to input", () => {
-    render(
-      <OverrideField
-        label="Shell program"
-        value={undefined}
-        onChange={vi.fn()}
-        onReset={vi.fn()}
-        inheritDescription="Inherits app default"
-      />
-    );
-    const input = screen.getByLabelText("Shell program");
-    expect(input).toBeTruthy();
-    expect(input.tagName).toBe("INPUT");
-  });
-
-  it("renders empty input value when inheriting (value is undefined)", () => {
-    render(
-      <OverrideField
-        label="Shell"
-        value={undefined}
-        onChange={vi.fn()}
-        onReset={vi.fn()}
-        inheritDescription="Inherits app default"
-      />
-    );
-    const input = screen.getByLabelText("Shell") as HTMLInputElement;
-    expect(input.value).toBe("");
-  });
-
-  it("renders inheritDescription when value is undefined", () => {
-    render(
-      <OverrideField
-        label="Shell"
-        value={undefined}
-        onChange={vi.fn()}
-        onReset={vi.fn()}
-        inheritDescription="Inherits app default (1000 lines)"
-      />
-    );
-    expect(screen.getByText("Inherits app default (1000 lines)")).toBeTruthy();
-  });
-
-  it("renders overrideDescription when value is set", () => {
-    render(
-      <OverrideField
-        label="Shell"
-        value="/bin/bash"
-        onChange={vi.fn()}
-        onReset={vi.fn()}
-        inheritDescription="Inherits app default"
-        overrideDescription="Overriding app default"
-      />
-    );
-    expect(screen.getByText("Overriding app default")).toBeTruthy();
-    expect(screen.queryByText("Inherits app default")).toBeNull();
-  });
-
-  it("wires description to aria-describedby", () => {
-    render(
-      <OverrideField
-        label="Shell"
-        value={undefined}
-        onChange={vi.fn()}
-        onReset={vi.fn()}
-        inheritDescription="Inherits app default"
-      />
-    );
-    const input = screen.getByLabelText("Shell");
-    const describedBy = input.getAttribute("aria-describedby");
-    expect(describedBy).toBeTruthy();
-    expect(document.getElementById(describedBy!)?.textContent).toBe("Inherits app default");
-  });
-
-  it("does not render reset button when inheriting", () => {
-    render(
-      <OverrideField
-        label="Shell"
-        value={undefined}
-        onChange={vi.fn()}
-        onReset={vi.fn()}
-        inheritDescription="Inherits app default"
-      />
-    );
-    expect(screen.queryByLabelText("Reset to global")).toBeNull();
-  });
-
-  it("renders reset button when overriding", () => {
-    render(
-      <OverrideField
-        label="Shell"
-        value="/bin/bash"
-        onChange={vi.fn()}
-        onReset={vi.fn()}
-        inheritDescription="Inherits app default"
-      />
-    );
-    expect(screen.getByLabelText("Reset to global")).toBeTruthy();
-  });
-
-  it("hides reset button when disabled", () => {
-    render(
-      <OverrideField
-        label="Shell"
-        value="/bin/bash"
-        onChange={vi.fn()}
-        onReset={vi.fn()}
-        disabled
-        inheritDescription="Inherits app default"
-      />
-    );
-    expect(screen.queryByLabelText("Reset to global")).toBeNull();
-  });
-
-  it("calls onChange with new value when typing", () => {
-    const onChange = vi.fn();
-    render(
+function renderField(props: Partial<Parameters<typeof OverrideField>[0]> = {}) {
+  const onChange = vi.fn();
+  const onReset = vi.fn();
+  render(
+    <SettingsGroup>
       <OverrideField
         label="Shell"
         value={undefined}
         onChange={onChange}
-        onReset={vi.fn()}
-        inheritDescription="Inherits app default"
+        onReset={onReset}
+        inheritDescription="Default: /bin/zsh"
+        {...props}
       />
-    );
-    const input = screen.getByLabelText("Shell");
+    </SettingsGroup>
+  );
+  return { onChange, onReset, input: screen.getByRole("textbox") as HTMLInputElement };
+}
+
+const modifiedMark = () => document.querySelector("[data-settings-row] .status-mark");
+
+describe("OverrideField", () => {
+  it("names the field by its visible label and describes it by what it inherits", () => {
+    const { input } = renderField();
+
+    expect(screen.getByLabelText("Shell")).toBe(input);
+    const describedBy = input.getAttribute("aria-describedby")!;
+    expect(document.getElementById(describedBy)?.textContent).toBe("Default: /bin/zsh");
+  });
+
+  it("keeps the inherited value in view while overriding, so Reset says where it goes back to", () => {
+    renderField({ value: "/bin/bash" });
+
+    expect(screen.getByText("Default: /bin/zsh")).toBeTruthy();
+  });
+
+  it("marks the row modified and offers a named reset only while overriding", () => {
+    const { onReset } = renderField({ value: "/bin/bash" });
+
+    expect(modifiedMark()).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Reset Shell to default" }));
+    expect(onReset).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows neither the mark nor the reset while inheriting", () => {
+    renderField();
+
+    expect(modifiedMark()).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Reset/ })).toBeNull();
+  });
+
+  it("passes typed values through as an override", () => {
+    const { input, onChange } = renderField();
+
     fireEvent.change(input, { target: { value: "/bin/bash" } });
+
     expect(onChange).toHaveBeenCalledWith("/bin/bash");
   });
 
-  it("calls onReset when reset button is clicked", () => {
-    const onReset = vi.fn();
-    render(
-      <OverrideField
-        label="Shell"
-        value="/bin/bash"
-        onChange={vi.fn()}
-        onReset={onReset}
-        inheritDescription="Inherits app default"
-      />
-    );
-    fireEvent.click(screen.getByLabelText("Reset to global"));
-    expect(onReset).toHaveBeenCalled();
-  });
+  it("treats emptying an override as going back to the inherited value, never an empty override", () => {
+    const { input, onChange, onReset } = renderField({ value: "/bin/bash" });
 
-  it("renders override indicator dot when overriding", () => {
-    render(
-      <OverrideField
-        label="Shell"
-        value="/bin/bash"
-        onChange={vi.fn()}
-        onReset={vi.fn()}
-        inheritDescription="Inherits app default"
-      />
-    );
-    expect(screen.getByTestId("override-indicator")).toBeTruthy();
-  });
-
-  it("does not render override indicator when inheriting", () => {
-    render(
-      <OverrideField
-        label="Shell"
-        value={undefined}
-        onChange={vi.fn()}
-        onReset={vi.fn()}
-        inheritDescription="Inherits app default"
-      />
-    );
-    expect(screen.queryByTestId("override-indicator")).toBeNull();
-  });
-
-  it("shows error message and sets aria-invalid when error provided", () => {
-    render(
-      <OverrideField
-        label="Scrollback"
-        value="999999"
-        onChange={vi.fn()}
-        onReset={vi.fn()}
-        inheritDescription="Inherits app default"
-        error="Must be between 100 and 100000"
-      />
-    );
-    const input = screen.getByLabelText("Scrollback");
-    expect(input.getAttribute("aria-invalid")).toBe("true");
-    expect(screen.getByText("Must be between 100 and 100000")).toBeTruthy();
-  });
-
-  it("forwards input props like placeholder, type, min, max", () => {
-    render(
-      <OverrideField
-        label="Scrollback"
-        value={undefined}
-        onChange={vi.fn()}
-        onReset={vi.fn()}
-        inheritDescription="Inherits app default"
-        type="number"
-        min={100}
-        max={100000}
-        placeholder="1000"
-      />
-    );
-    const input = screen.getByLabelText("Scrollback");
-    expect(input.getAttribute("type")).toBe("number");
-    expect(input.getAttribute("min")).toBe("100");
-    expect(input.getAttribute("max")).toBe("100000");
-    expect(input.getAttribute("placeholder")).toBe("1000");
-  });
-
-  it("renders hint label suffix when provided", () => {
-    render(
-      <OverrideField
-        label="Shell"
-        hint="(machine-local, not shared)"
-        value={undefined}
-        onChange={vi.fn()}
-        onReset={vi.fn()}
-        inheritDescription="Inherits app default"
-      />
-    );
-    expect(screen.getByText("(machine-local, not shared)")).toBeTruthy();
-  });
-
-  it("treats clearing the input while overriding as a reset, not an empty override", () => {
-    const onChange = vi.fn();
-    const onReset = vi.fn();
-    render(
-      <OverrideField
-        label="Shell"
-        value="/bin/bash"
-        onChange={onChange}
-        onReset={onReset}
-        inheritDescription="Inherits app default"
-      />
-    );
-    const input = screen.getByLabelText("Shell");
     fireEvent.change(input, { target: { value: "" } });
+
     expect(onReset).toHaveBeenCalledTimes(1);
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("forwards empty string normally when already inheriting", () => {
-    const onChange = vi.fn();
-    const onReset = vi.fn();
+  it("takes the disabled state of a switched-off parent and drops the reset with it", () => {
     render(
-      <OverrideField
-        label="Shell"
-        value={undefined}
-        onChange={onChange}
-        onReset={onReset}
-        inheritDescription="Inherits app default"
-      />
+      <SettingsGroup>
+        <SettingsDependents disabled reason="Turn the parent on first">
+          <OverrideField
+            label="Shell"
+            value="/bin/bash"
+            onChange={vi.fn()}
+            onReset={vi.fn()}
+            inheritDescription="Default: /bin/zsh"
+          />
+        </SettingsDependents>
+      </SettingsGroup>
     );
-    const input = screen.getByLabelText("Shell");
-    fireEvent.change(input, { target: { value: "" } });
-    expect(onReset).not.toHaveBeenCalled();
+
+    expect((screen.getByRole("textbox") as HTMLInputElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: /^Reset/ })).toBeNull();
   });
 
-  it("uses status-info (not accent) as the override signal", () => {
-    render(
-      <OverrideField
-        label="Shell"
-        value="/bin/bash"
-        onChange={vi.fn()}
-        onReset={vi.fn()}
-        inheritDescription="Inherits app default"
-      />
-    );
-    const dot = screen.getByTestId("override-indicator");
-    expect(dot.className).not.toContain("bg-accent");
-    expect(dot.className).not.toContain("bg-accent-primary");
+  it("flags an error on the field and reads it before the description", () => {
+    const { input } = renderField({ value: "nope", error: "Not a shell" });
+
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    const [first] = input.getAttribute("aria-describedby")!.split(" ");
+    expect(document.getElementById(first!)?.textContent).toBe("Not a shell");
   });
 });

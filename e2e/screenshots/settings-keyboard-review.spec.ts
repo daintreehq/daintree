@@ -336,6 +336,17 @@ async function captureKeyboard(page: Page, theme: string): Promise<void> {
     await settle(page, 300);
   });
 
+  await step("keyboard-filter-modified", async () => {
+    await ensureAt(page, "keyboard");
+    const modified = panel.getByRole("radio", { name: "Modified" }).first();
+    if (!(await modified.isVisible().catch(() => false))) return;
+    await scrollPanel(page, KEYBOARD_PANEL, { top: 0 });
+    await modified.click();
+    await settle(page, 300);
+    await shoot(page, "kb-12-filter-modified", theme);
+    await panel.getByRole("radio", { name: "All" }).first().click();
+  });
+
   await closeSettings(page);
 }
 
@@ -365,10 +376,11 @@ async function captureCommands(page: Page, theme: string): Promise<void> {
 
   await step("commands-prompt", async () => {
     await ensureAt(page, "project:commands");
-    await panel
-      .getByRole("radio", { name: /Custom prompt/ })
-      .first()
-      .click();
+
+    // Older builds hid the prompt behind an "Override with" choice; click it when present.
+    const promptMode = panel.getByRole("radio", { name: /Custom prompt/ }).first();
+    if (await promptMode.isVisible().catch(() => false)) await promptMode.click();
+    await panel.locator("textarea").first().scrollIntoViewIfNeeded();
     await settle(page, 300);
     await shoot(page, "cmd-04-prompt-empty", theme);
     await panel.locator("textarea").first().fill("Create an issue about {title} with {nope}");
@@ -384,11 +396,13 @@ async function captureCommands(page: Page, theme: string): Promise<void> {
 
   await step("commands-disabled", async () => {
     await ensureAt(page, "project:commands");
-    await panel
+    // Collapse whatever the earlier steps expanded: the older "Collapse" icon button,
+    // or the disclosure that names its command and reports aria-expanded.
+    const collapse = panel
       .getByRole("button", { name: /Collapse/ })
-      .first()
-      .click()
-      .catch(() => {});
+      .or(panel.locator('button[aria-expanded="true"]'))
+      .first();
+    if (await collapse.isVisible().catch(() => false)) await collapse.click();
     const toggles = panel.locator(
       'button[aria-label="Command enabled"], [role="switch"][aria-label*="work-issue"], [role="switch"]'
     );
@@ -399,7 +413,10 @@ async function captureCommands(page: Page, theme: string): Promise<void> {
 
   await step("commands-filters", async () => {
     await ensureAt(page, "project:commands");
-    await panel.getByRole("radio", { name: "Overridden" }).first().click();
+    await panel
+      .getByRole("radio", { name: /Overridden|Modified/ })
+      .first()
+      .click();
     await settle(page, 300);
     await shoot(page, "cmd-08-filter-overridden", theme);
     await panel.getByRole("radio", { name: "All" }).first().click();

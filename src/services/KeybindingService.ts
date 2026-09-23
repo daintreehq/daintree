@@ -52,6 +52,7 @@ class KeybindingService {
   private listeners = new Set<() => void>();
   private whenContext: WhenClauseContext = {};
   private whenContextProvider: ((event: KeyboardEvent) => WhenClauseContext) | null = null;
+  private shortcutCaptures = 0;
 
   constructor() {
     DEFAULT_KEYBINDINGS.forEach((binding) => {
@@ -397,6 +398,28 @@ class KeybindingService {
 
   popPendingChord(): void {
     this.clearPendingChord();
+  }
+
+  /**
+   * Hand the keyboard to a shortcut recorder. While any recorder holds it, the
+   * app-wide shortcut listeners stand down: they sit on the same window capture
+   * phase and were registered first, so the recorder's own `stopPropagation`
+   * cannot keep a keystroke it is recording from also firing the action it is
+   * currently bound to. Returns the release; calling it twice is harmless.
+   */
+  beginShortcutCapture(): () => void {
+    this.shortcutCaptures++;
+    this.clearPendingChord();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.shortcutCaptures--;
+    };
+  }
+
+  isCapturingShortcut(): boolean {
+    return this.shortcutCaptures > 0;
   }
 
   getLastInvalidKey(): string | null {

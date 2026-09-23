@@ -782,6 +782,32 @@ describe("KeybindingService", () => {
     });
   });
 
+  describe("shortcut capture ownership", () => {
+    it("holds ownership until every recorder has released it", () => {
+      const service = new KeybindingService();
+      const releaseA = service.beginShortcutCapture();
+      const releaseB = service.beginShortcutCapture();
+
+      releaseA();
+      releaseA();
+      expect(service.isCapturingShortcut()).toBe(true);
+
+      releaseB();
+      expect(service.isCapturingShortcut()).toBe(false);
+    });
+
+    it("drops a half-typed app chord so the recorder starts from a clean slate", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      service.resolveKeybinding(createKeyboardEvent({ key: "k", code: "KeyK", metaKey: true }));
+      expect(service.getPendingChord()).not.toBeNull();
+
+      service.beginShortcutCapture();
+
+      expect(service.getPendingChord()).toBeNull();
+    });
+  });
+
   describe("lastInvalidKey echo — issue #8105", () => {
     function startCmdKChord(service: KeybindingService): void {
       setPlatform("MacIntel");

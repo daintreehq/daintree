@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, act, within } from "@testing-library/react";
+import { render, screen, act, within, fireEvent } from "@testing-library/react";
 
 // jsdom ships no matchMedia; InlineStatusBanner reads it to honour reduced motion.
 Object.defineProperty(window, "matchMedia", {
@@ -139,7 +139,10 @@ async function renderTab() {
   });
 }
 
-const openEditor = () => clickText("Edit");
+const openEditor = () =>
+  act(async () => {
+    screen.getByRole("button", { name: /^Edit shortcut for Save file/ }).click();
+  });
 
 beforeEach(() => {
   dispatch.mockReset();
@@ -243,7 +246,9 @@ describe("KeyboardShortcutsTab — failed shortcut reset", () => {
     dispatch.mockResolvedValue(FAILURE);
 
     await renderTab();
-    await act(async () => screen.getByLabelText("Reset to default").click());
+    await act(async () =>
+      screen.getByRole("button", { name: "Reset Save file to default" }).click()
+    );
 
     expect(within(row()).getByRole("alert")).toBeTruthy();
     // Retry re-issues the reset for that row.
@@ -258,6 +263,11 @@ describe("KeyboardShortcutsTab — failed shortcut reset", () => {
 });
 
 describe("KeyboardShortcutsTab — failed reset all", () => {
+  // Reset all only acts when something is customized, so every case starts with one.
+  beforeEach(() => {
+    overrides.add("app.save");
+  });
+
   it("holds the dialog open with an inline error and never reloads the overrides", async () => {
     dispatch.mockResolvedValue(FAILURE);
 
@@ -288,5 +298,54 @@ describe("KeyboardShortcutsTab — failed reset all", () => {
 
     expect(screen.queryByRole("alert")).toBeNull();
     expect(loadOverrides).toHaveBeenCalledTimes(2); // mount + successful reset
+  });
+});
+
+describe("KeyboardShortcutsTab — finding a shortcut", () => {
+  const search = (text: string) =>
+    act(async () => {
+      const input = screen.getByRole("textbox", { name: "Search shortcuts" });
+      fireEvent.change(input, { target: { value: text } });
+    });
+
+  it("searches the fixed shortcuts too, so a match there is never reported as nothing found", async () => {
+    await renderTab();
+    await search("reorder panel");
+
+    expect(screen.queryAllByTestId("shortcut-row")).toHaveLength(0);
+    expect(screen.getByText("Reorder panel")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Clear search" })).toBeNull();
+  });
+
+  it("offers one way back when nothing at all matches", async () => {
+    await renderTab();
+    await search("zzqx");
+
+    expect(screen.queryByText("Reorder panel")).toBeNull();
+    await act(async () => screen.getByRole("button", { name: "Clear search" }).click());
+
+    expect(screen.getAllByTestId("shortcut-row")).toHaveLength(1);
+    expect(
+      (screen.getByRole("textbox", { name: "Search shortcuts" }) as HTMLInputElement).value
+    ).toBe("");
+  });
+
+  it("narrows to customized bindings under Modified, leaving out keys that can't be customized", async () => {
+    overrides.add("app.save");
+    await renderTab();
+
+    await act(async () => screen.getByRole("radio", { name: "Modified" }).click());
+
+    expect(screen.getAllByTestId("shortcut-row")).toHaveLength(1);
+    expect(screen.queryByText("Reorder panel")).toBeNull();
+  });
+
+  it("says nothing is customized yet rather than showing an empty list under Modified", async () => {
+    await renderTab();
+
+    await act(async () => screen.getByRole("radio", { name: "Modified" }).click());
+
+    expect(screen.queryAllByTestId("shortcut-row")).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Show all" })).toBeTruthy();
   });
 });

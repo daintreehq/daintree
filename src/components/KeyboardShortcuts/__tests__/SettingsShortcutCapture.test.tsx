@@ -14,6 +14,7 @@ vi.mock("@/services/KeybindingService", async () => {
     CHORD_TIMEOUT_MS: 1000,
     keybindingService: {
       findConflicts: vi.fn(() => []),
+      beginShortcutCapture: vi.fn(() => () => {}),
       formatComboForDisplay: vi.fn((combo: string) => combo),
       getOverride: vi.fn(() => undefined),
       getDefaultCombo: vi.fn(() => undefined),
@@ -72,7 +73,7 @@ describe("SettingsShortcutCapture", () => {
 
     expect(screen.getByText("Click to record shortcut")).toBeTruthy();
     expect(screen.getByText("Cancel")).toBeTruthy();
-    expect(screen.getByText("Clear")).toBeTruthy();
+    expect(screen.getByText("Remove shortcut")).toBeTruthy();
     expect(screen.queryByText("Save")).toBeNull();
   });
 
@@ -87,7 +88,7 @@ describe("SettingsShortcutCapture", () => {
 
     fireEvent.click(screen.getByText("Click to record shortcut"));
 
-    expect(screen.getByText("Press key combination...")).toBeTruthy();
+    expect(screen.getByText("Press a key combination")).toBeTruthy();
   });
 
   it("status region announces recording state changes via aria-live", () => {
@@ -107,7 +108,7 @@ describe("SettingsShortcutCapture", () => {
     fireEvent.click(screen.getByText("Click to record shortcut"));
 
     const updatedStatus = screen.getByRole("status");
-    expect(updatedStatus.textContent).toContain("Press key combination...");
+    expect(updatedStatus.textContent).toContain("Press a key combination");
   });
 
   it("captures single key combination and displays it", async () => {
@@ -163,17 +164,11 @@ describe("SettingsShortcutCapture", () => {
       window.dispatchEvent(firstEvent);
     });
 
-    // Should show waiting state, ranked against the captured combo by weight
-    // rather than a dash. Accent stays on the combo alone — the recording box
-    // already carries it as the one live signal, and a second accent tone
-    // would compete with it.
+    // The waiting state shows the first stroke as keys beside the instruction,
+    // so the user can see what the second key will be appended to.
     const instruction = screen.getByText(/Press second key or wait to finish/);
-    const combo = instruction.previousSibling;
-    expect(combo).not.toBeNull();
-    expect(instruction.textContent).toMatch(/^\s/);
-    expect(instruction.parentElement?.textContent).toBe(
-      `${combo?.textContent}${instruction.textContent}`
-    );
+    const firstStroke = instruction.previousElementSibling;
+    expect(firstStroke?.querySelectorAll("kbd").length).toBeGreaterThan(0);
 
     // Second key of chord
     const secondEvent = new KeyboardEvent("keydown", {
@@ -225,7 +220,7 @@ describe("SettingsShortcutCapture", () => {
     expect(screen.queryByText(/Press second key or wait to finish/)).toBeNull();
   });
 
-  it("calls onCapture with empty string when Clear is clicked", async () => {
+  it("calls onCapture with empty string when Remove shortcut is clicked", async () => {
     render(
       <SettingsShortcutCapture
         onCapture={mockOnCapture}
@@ -234,7 +229,7 @@ describe("SettingsShortcutCapture", () => {
       />
     );
 
-    fireEvent.click(screen.getByText("Clear"));
+    fireEvent.click(screen.getByText("Remove shortcut"));
 
     expect(mockOnCapture).toHaveBeenCalledWith("");
   });
@@ -276,7 +271,7 @@ describe("SettingsShortcutCapture", () => {
     });
 
     // Should still be in first step, not captured
-    expect(screen.getByText("Press key combination...")).toBeTruthy();
+    expect(screen.getByText("Press a key combination")).toBeTruthy();
   });
 
   it("ignores repeated events (e.repeat)", async () => {
@@ -308,7 +303,7 @@ describe("SettingsShortcutCapture", () => {
     });
 
     // Should still be in first step, repeated key was ignored
-    expect(screen.getByText("Press key combination...")).toBeTruthy();
+    expect(screen.getByText("Press a key combination")).toBeTruthy();
   });
 
   it("displays conflict warnings when conflicts exist", async () => {
@@ -346,7 +341,7 @@ describe("SettingsShortcutCapture", () => {
       vi.advanceTimersByTime(1100);
     });
 
-    expect(screen.getByText("Conflicts with:")).toBeTruthy();
+    expect(screen.getByText("Conflicts with")).toBeTruthy();
     expect(screen.getByText("Conflicting Action")).toBeTruthy();
   });
 
@@ -366,8 +361,9 @@ describe("SettingsShortcutCapture", () => {
     fireEvent.click(screen.getByText("Click to record shortcut"));
 
     const keyEvent = new KeyboardEvent("keydown", {
-      key: "Escape",
-      code: "Escape",
+      key: "k",
+      code: "KeyK",
+      ctrlKey: true,
       bubbles: true,
     });
 
@@ -599,7 +595,7 @@ describe("SettingsShortcutCapture", () => {
         window.dispatchEvent(keyEvent);
       });
 
-      expect(screen.getByText("Press key combination...")).toBeTruthy();
+      expect(screen.getByText("Press a key combination")).toBeTruthy();
       expect(keyEvent.defaultPrevented).toBe(false);
       // Guard must run before stopPropagation — otherwise the IME candidate window
       // can break in the surrounding application.
@@ -629,7 +625,7 @@ describe("SettingsShortcutCapture", () => {
         window.dispatchEvent(keyEvent);
       });
 
-      expect(screen.getByText("Press key combination...")).toBeTruthy();
+      expect(screen.getByText("Press a key combination")).toBeTruthy();
       expect(keyEvent.defaultPrevented).toBe(false);
       expect(stopPropagationSpy).not.toHaveBeenCalled();
     });
@@ -660,7 +656,7 @@ describe("SettingsShortcutCapture", () => {
 
       // No combo captured — Save button should not appear and the prompt is unchanged.
       expect(screen.queryByText("Save")).toBeNull();
-      expect(screen.getByText("Press key combination...")).toBeTruthy();
+      expect(screen.getByText("Press a key combination")).toBeTruthy();
     });
 
     it("does not record an IME-composing Enter as the second token of a pending chord", () => {
@@ -737,7 +733,7 @@ describe("SettingsShortcutCapture", () => {
       expect(screen.getByTestId("shortcut-capture-validation-error")).toBeTruthy();
       expect(screen.getByText("Agent shortcuts use Ctrl+Alt+letter")).toBeTruthy();
 
-      const saveButton = screen.getByText("Save") as HTMLButtonElement;
+      const saveButton = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
       expect(saveButton.disabled).toBe(true);
 
       fireEvent.click(saveButton);
@@ -773,7 +769,7 @@ describe("SettingsShortcutCapture", () => {
 
       expect(screen.queryByTestId("shortcut-capture-validation-error")).toBeNull();
 
-      const saveButton = screen.getByText("Save") as HTMLButtonElement;
+      const saveButton = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
       expect(saveButton.disabled).toBe(false);
 
       fireEvent.click(saveButton);
@@ -877,7 +873,7 @@ describe("SettingsShortcutCapture", () => {
       // Validation error is shown.
       expect(screen.getByTestId("shortcut-capture-validation-error")).toBeTruthy();
       // Conflict section suppressed — no Unbind button to accidentally fire.
-      expect(screen.queryByText("Conflicts with:")).toBeNull();
+      expect(screen.queryByText("Conflicts with")).toBeNull();
       expect(screen.queryByText("Unbind")).toBeNull();
     });
   });
@@ -926,7 +922,7 @@ describe("SettingsShortcutCapture", () => {
         vi.advanceTimersByTime(1100);
       });
 
-      expect(screen.getByText("Conflicts with:")).toBeTruthy();
+      expect(screen.getByText("Conflicts with")).toBeTruthy();
       expect(screen.getByText("Conflicting Action 1")).toBeTruthy();
       expect(screen.getByText("Conflicting Action 2")).toBeTruthy();
       expect(screen.getAllByText("Unbind")).toHaveLength(2);
@@ -991,8 +987,8 @@ describe("SettingsShortcutCapture", () => {
       });
 
       expect(actionService.dispatch).toHaveBeenCalledWith(
-        "keybinding.removeOverride",
-        { actionId: "conflict.action" },
+        "keybinding.setOverride",
+        { actionId: "conflict.action", combo: [] },
         { source: "user" }
       );
     });
@@ -1116,8 +1112,8 @@ describe("SettingsShortcutCapture", () => {
       });
 
       expect(actionService.dispatch).toHaveBeenCalledWith(
-        "keybinding.removeOverride",
-        { actionId: "conflict.action1" },
+        "keybinding.setOverride",
+        { actionId: "conflict.action1", combo: [] },
         { source: "user" }
       );
 
@@ -1127,12 +1123,129 @@ describe("SettingsShortcutCapture", () => {
       });
 
       expect(actionService.dispatch).toHaveBeenCalledWith(
-        "keybinding.removeOverride",
-        { actionId: "conflict.action2" },
+        "keybinding.setOverride",
+        { actionId: "conflict.action2", combo: [] },
         { source: "user" }
       );
 
       expect(notifyMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("keyboard ownership and exit", () => {
+    beforeEach(async () => {
+      const { normalizeKeyForBinding } = await import("@/services/KeybindingService");
+      vi.mocked(normalizeKeyForBinding).mockImplementation((e: KeyboardEvent) => e.key);
+    });
+
+    const press = (init: KeyboardEventInit) =>
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init }));
+      });
+
+    it("owns the app's shortcut handling only while it is recording", async () => {
+      const { keybindingService } = await import("@/services/KeybindingService");
+      const release = vi.fn();
+      vi.mocked(keybindingService.beginShortcutCapture).mockReturnValue(release);
+
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+          autoStart
+        />
+      );
+      expect(keybindingService.beginShortcutCapture).toHaveBeenCalledTimes(1);
+      expect(release).not.toHaveBeenCalled();
+
+      press({ key: "k", code: "KeyK", ctrlKey: true });
+      act(() => {
+        vi.advanceTimersByTime(1100);
+      });
+
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves on bare Escape instead of recording it", () => {
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+          autoStart
+        />
+      );
+
+      press({ key: "Escape", code: "Escape" });
+
+      expect(mockOnCancel).toHaveBeenCalledTimes(1);
+      expect(mockOnCapture).not.toHaveBeenCalled();
+      expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    });
+
+    it("puts the earlier combo back when Escape abandons a re-record", () => {
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+          autoStart
+        />
+      );
+      press({ key: "k", code: "KeyK", ctrlKey: true });
+      act(() => {
+        vi.advanceTimersByTime(1100);
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Record again" }));
+      press({ key: "Escape", code: "Escape" });
+
+      expect(mockOnCancel).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(mockOnCapture).toHaveBeenCalledWith("Cmd+k");
+    });
+
+    it("still records Escape when it carries a modifier", () => {
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+          autoStart
+        />
+      );
+
+      press({ key: "Escape", code: "Escape", shiftKey: true });
+      act(() => {
+        vi.advanceTimersByTime(1100);
+      });
+
+      expect(mockOnCancel).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(mockOnCapture).toHaveBeenCalledWith("Shift+Escape");
+    });
+
+    it("keeps Control as its own modifier on macOS instead of dropping it", async () => {
+      const { isMac } = await import("@/lib/platform");
+      vi.mocked(isMac).mockReturnValue(true);
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+          autoStart
+        />
+      );
+
+      press({ key: "r", code: "KeyR", ctrlKey: true, metaKey: true });
+      act(() => {
+        vi.advanceTimersByTime(1100);
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      expect(mockOnCapture).toHaveBeenCalledWith("Cmd+Ctrl+r");
+      vi.mocked(isMac).mockReturnValue(false);
     });
   });
 });

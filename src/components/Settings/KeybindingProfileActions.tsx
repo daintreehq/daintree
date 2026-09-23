@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { Upload, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
@@ -85,12 +84,10 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
 
   return (
     <div className="flex items-center gap-2">
-      <Button type="button" variant="outline" onClick={handleExport} disabled={isLoading}>
-        <Download aria-hidden="true" />
+      <Button type="button" variant="outline" size="sm" onClick={handleExport} disabled={isLoading}>
         Export
       </Button>
-      <Button type="button" variant="outline" onClick={handleImport} disabled={isLoading}>
-        <Upload aria-hidden="true" />
+      <Button type="button" variant="outline" size="sm" onClick={handleImport} disabled={isLoading}>
         Import
       </Button>
     </div>

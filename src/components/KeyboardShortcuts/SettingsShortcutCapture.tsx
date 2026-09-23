@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { AlertTriangle, X } from "lucide-react";
+import { useState, useEffect, useCallback, useId, useMemo, useRef } from "react";
+import { AlertTriangle } from "lucide-react";
 import { isMac } from "@/lib/platform";
 import {
   CHORD_TIMEOUT_MS,
@@ -12,6 +12,8 @@ import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { logError, logWarn } from "@/utils/logger";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { KbdChord } from "@/components/ui/Kbd";
 
 export interface SettingsShortcutCaptureProps {
   /** Called when user saves the captured key combination */
@@ -42,6 +44,17 @@ export interface SettingsShortcutCaptureProps {
    * opening the capture). The Settings-page default keeps the full card.
    */
   compact?: boolean;
+  /**
+   * Start recording on mount. Defaults to `compact`; the settings list passes it
+   * too, because its Edit click is already the intent to record.
+   */
+  autoStart?: boolean;
+  /**
+   * The binding in force now, shown above the recorder so the user can see what
+   * they are replacing. `""` means the action is unbound (and hides Remove);
+   * leave it undefined where there is no single current binding to show.
+   */
+  currentCombo?: string;
 }
 
 export function SettingsShortcutCapture({
@@ -51,17 +64,27 @@ export function SettingsShortcutCapture({
   scope = "global",
   validateCombo,
   compact = false,
+  autoStart = compact,
+  currentCombo,
 }: SettingsShortcutCaptureProps) {
-  // Compact (inline) consumers reach this widget by an explicit click, so
-  // there's no reason to require a second "Click to record" press. Defaulting
-  // `recording` to `compact` arms capture on mount without an effect.
-  const [recording, setRecording] = useState(compact);
+  // A consumer that mounts this in response to an explicit click (the compact
+  // tray, the settings list's Edit) has no reason to ask for a second "Click to
+  // record" press. Seeding `recording` from `autoStart` arms capture on mount
+  // without an effect.
+  const [recording, setRecording] = useState(autoStart);
   const [capturedCombos, setCapturedCombos] = useState<string[]>([]);
   const [chordStep, setChordStep] = useState<"first" | "waiting" | "complete">("first");
   const chordTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chordTokenRef = useRef(0);
   const [conflictRefreshKey, setConflictRefreshKey] = useState(0);
   const [isUnbinding, setIsUnbinding] = useState(false);
+  const saveRef = useRef<HTMLButtonElement>(null);
+  const recorderRef = useRef<HTMLDivElement>(null);
+  // What was captured before "Record again", so Escape can put it back rather
+  // than throwing away a combo the user already had.
+  const previousDraftRef = useRef<string[]>([]);
+  const validationId = useId();
+  const conflictsId = useId();
 
   const capturedCombo = capturedCombos.length > 0 ? capturedCombos.join(" ") : null;
 
@@ -98,6 +121,7 @@ export function SettingsShortcutCapture({
 
   useEffect(() => {
     if (!recording) return;
+    const releaseCapture = keybindingService.beginShortcutCapture();
 
     const handler = (e: KeyboardEvent) => {
       if (e.repeat) return;
@@ -112,10 +136,28 @@ export function SettingsShortcutCapture({
       e.preventDefault();
       e.stopPropagation();
 
+      // Bare Escape is the way out, never a key to record: swallowing it would
+      // leave a keyboard user no exit from the recorder but a pointer.
+      if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+        clearChordTimeout();
+        chordTokenRef.current += 1;
+        setRecording(false);
+        setChordStep("first");
+        if (previousDraftRef.current.length > 0) {
+          setCapturedCombos(previousDraftRef.current);
+        } else {
+          setCapturedCombos([]);
+          onCancel();
+        }
+        return;
+      }
+
       const parts: string[] = [];
       const mac = isMac();
 
       if (mac && e.metaKey) parts.push("Cmd");
+      // Control is its own modifier on macOS; elsewhere it is the primary one.
+      if (mac && e.ctrlKey) parts.push("Ctrl");
       if (!mac && e.ctrlKey) parts.push("Cmd");
       if (e.shiftKey) parts.push("Shift");
       if (e.altKey) parts.push("Alt");
@@ -169,10 +211,26 @@ export function SettingsShortcutCapture({
       window.removeEventListener("keydown", handler, { capture: true });
       window.removeEventListener("blur", handleBlur);
       clearChordTimeout();
+      releaseCapture();
     };
   }, [recording, clearChordTimeout, finishRecording, onCancel]);
 
+  // Land on Save once a combo is in, so Enter commits it; a combo that fails
+  // validation has no Save to land on and keeps focus where it was.
+  useEffect(() => {
+    if (chordStep !== "complete" || recording || compact) return;
+    saveRef.current?.focus();
+  }, [chordStep, recording, compact]);
+
+  // The Edit button that opened the recorder unmounts with it, so focus moves to
+  // the recorder itself rather than falling to the page.
+  useEffect(() => {
+    if (!recording || compact) return;
+    recorderRef.current?.focus({ preventScroll: true });
+  }, [recording, compact]);
+
   const handleStartRecording = () => {
+    previousDraftRef.current = capturedCombos;
     setCapturedCombos([]);
     setChordStep("first");
     setRecording(true);
@@ -232,24 +290,16 @@ export function SettingsShortcutCapture({
       }
 
       if (isOverrideConflict) {
-        if (newOverrideCombos && newOverrideCombos.length > 0) {
-          const setResult = await actionService.dispatch(
-            "keybinding.setOverride",
-            { actionId, combo: newOverrideCombos },
-            { source: "user" }
-          );
-          if (!setResult.ok) {
-            throw new Error(setResult.error?.message || "Failed to update keybinding");
-          }
-        } else {
-          const removeResult = await actionService.dispatch(
-            "keybinding.removeOverride",
-            { actionId },
-            { source: "user" }
-          );
-          if (!removeResult.ok) {
-            throw new Error(removeResult.error?.message || "Failed to remove keybinding");
-          }
+        // Removing the last custom combo stores an empty binding rather than
+        // dropping the override: dropping it would bring back the default, which
+        // can be the very combo being freed, or another one the user never asked for.
+        const setResult = await actionService.dispatch(
+          "keybinding.setOverride",
+          { actionId, combo: newOverrideCombos ?? [] },
+          { source: "user" }
+        );
+        if (!setResult.ok) {
+          throw new Error(setResult.error?.message || "Failed to update keybinding");
         }
       } else if (conflictingCombo) {
         const setResult = await actionService.dispatch(
@@ -325,141 +375,167 @@ export function SettingsShortcutCapture({
   };
 
   const isChord = capturedCombos.length > 1;
+  const hasDraft = !recording && capturedCombo !== null;
+  const hasConflicts = !validationError && conflicts.length > 0;
+  const describedBy =
+    [validationError ? validationId : null, hasConflicts ? conflictsId : null]
+      .filter(Boolean)
+      .join(" ") || undefined;
 
-  const containerClass = compact
-    ? "space-y-2"
-    : "bg-daintree-bg/50 border border-border-default rounded-[var(--radius-lg)] p-4 space-y-3";
-  const captureClass = compact
-    ? "flex-1 px-2 py-1 text-sm border rounded text-center transition-colors"
-    : "flex-1 px-4 py-2 border rounded text-center transition-colors";
+  const fieldClass = compact
+    ? "flex-1 min-w-0 px-2 py-1 text-sm border rounded-[var(--radius-md)] text-center"
+    : "flex-1 min-w-0 h-9 px-3 flex items-center gap-2 text-sm border rounded-[var(--radius-md)]";
 
   return (
-    <div className={containerClass}>
-      <div className="flex items-center gap-2" role="status" aria-live="polite" aria-atomic="true">
-        {recording ? (
-          <div
-            className={cn(
-              captureClass,
-              "border-accent-primary bg-daintree-accent/10 text-accent-primary animate-pulse"
-            )}
-          >
-            {chordStep === "first" ? (
-              "Press key combination..."
-            ) : chordStep === "waiting" ? (
-              <span>
-                <span className="font-mono font-medium">
-                  {keybindingService.formatComboForDisplay(capturedCombos[0]!)}
+    <div className={compact ? "space-y-2" : "grid gap-3"} data-testid="shortcut-capture">
+      {!compact && currentCombo !== undefined && (
+        <p className="flex items-center gap-2 text-xs text-text-secondary">
+          <span>Current</span>
+          {currentCombo ? (
+            <KbdChord shortcut={currentCombo} density="bare" className="text-text-primary" />
+          ) : (
+            <span>Not set</span>
+          )}
+        </p>
+      )}
+
+      <div className="flex items-center gap-2">
+        <div className="flex flex-1 min-w-0" role="status" aria-live="polite" aria-atomic="true">
+          {recording ? (
+            // Neutral, not accent: the field is the only thing on the row, so its
+            // state is carried by the copy and the stronger border, and the region's
+            // one accent stays with the focus ring.
+            <div
+              ref={recorderRef}
+              tabIndex={-1}
+              data-testid="shortcut-capture-field"
+              data-recording="true"
+              className={cn(fieldClass, "border-border-strong bg-overlay-subtle text-text-primary")}
+            >
+              {chordStep === "waiting" && capturedCombos[0] ? (
+                <span className="inline-flex items-center gap-2">
+                  <KbdChord shortcut={capturedCombos[0]} />
+                  <span className="text-text-secondary">Press second key or wait to finish</span>
                 </span>
-                <span className="ml-1 text-text-secondary">
-                  {" "}
-                  Press second key or wait to finish
+              ) : (
+                <span>
+                  Press a key combination
+                  <span className="text-text-secondary"> · Esc to cancel</span>
                 </span>
-              </span>
-            ) : null}
-          </div>
-        ) : capturedCombo ? (
-          <div
-            className={cn(
-              captureClass,
-              "border-border-default bg-surface-canvas text-text-primary font-mono"
-            )}
-          >
-            <span>{keybindingService.formatComboForDisplay(capturedCombo)}</span>
-            {isChord && <span className="ml-2 text-xs text-text-secondary">(chord)</span>}
-          </div>
-        ) : (
-          <button
-            onClick={handleStartRecording}
-            className={cn(
-              captureClass,
-              "border-border-default bg-surface-canvas text-text-secondary hover:text-text-primary hover:border-accent-primary"
-            )}
-          >
-            Click to record shortcut
-          </button>
+              )}
+            </div>
+          ) : capturedCombo ? (
+            <div
+              data-testid="shortcut-capture-field"
+              aria-describedby={describedBy}
+              className={cn(fieldClass, "border-border-default bg-surface-input text-text-primary")}
+            >
+              <KbdChord shortcut={capturedCombo} />
+              {isChord && <span className="text-xs text-text-secondary">Two-step shortcut</span>}
+            </div>
+          ) : (
+            <button
+              type="button"
+              data-testid="shortcut-capture-field"
+              onClick={handleStartRecording}
+              className={cn(
+                fieldClass,
+                "border-border-default bg-surface-input text-text-secondary hover:text-text-primary hover:border-border-strong transition-colors duration-150 ease-out"
+              )}
+            >
+              Click to record shortcut
+            </button>
+          )}
+        </div>
+        {hasDraft && !compact && (
+          <Button type="button" variant="outline" size="sm" onClick={handleStartRecording}>
+            Record again
+          </Button>
         )}
       </div>
 
       {validationError && (
         <div
+          id={validationId}
           className="flex items-start gap-2 text-status-error text-sm"
           role="alert"
           data-testid="shortcut-capture-validation-error"
         >
-          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" aria-hidden="true" />
           <span>{validationError}</span>
         </div>
       )}
 
-      {!validationError && conflicts.length > 0 && (
-        <div className="space-y-2">
-          <div className="flex items-start gap-2 text-status-warning text-sm">
-            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-            <span>Conflicts with:</span>
-          </div>
-          <div className="space-y-1 pl-6">
-            {conflicts.map((conflict) => (
-              <div key={conflict.actionId} className="flex items-center gap-2 text-sm">
-                <span className="text-text-primary">
-                  {conflict.description || conflict.actionId}
-                </span>
-                {conflict.kind === "shadowed" ? (
-                  // Shadowed = chord-prefix overlap. Auto-unbind can't resolve it
-                  // (the conflicting binding's combo doesn't equal the captured one),
-                  // so surface the relationship and leave resolution to the user.
-                  // Direction by chord length: shorter prefix shadows the longer chord.
-                  <span className="text-xs text-text-secondary">
-                    {(conflict.combo?.split(" ").length ?? 0) >
-                    (capturedCombo?.split(" ").length ?? 0)
-                      ? "is shadowed by this chord"
-                      : "shadows this chord"}
-                  </span>
-                ) : (
-                  <button
-                    onClick={() => handleUnbindConflict(conflict)}
-                    disabled={isUnbinding}
-                    className="flex items-center gap-1 px-2 py-0.5 text-xs text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
-                  >
-                    <X className="w-3 h-3" />
-                    <span>Unbind</span>
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
+      {hasConflicts && (
+        <div id={conflictsId} className="grid gap-1.5" data-testid="shortcut-capture-conflicts">
+          <p className="flex items-center gap-1.5 text-xs text-text-secondary">
+            <AlertTriangle
+              className="w-3.5 h-3.5 shrink-0 text-status-warning"
+              aria-hidden="true"
+            />
+            <span>Conflicts with</span>
+          </p>
+          <ul className="grid gap-1 pl-5">
+            {conflicts.map((conflict) => {
+              const name = conflict.description || conflict.actionId;
+              return (
+                <li key={conflict.actionId} className="flex items-center gap-2 min-h-7 text-sm">
+                  <span className="min-w-0 truncate text-text-primary">{name}</span>
+                  {conflict.combo && (
+                    <KbdChord shortcut={conflict.combo} density="bare" className="shrink-0" />
+                  )}
+                  {conflict.kind === "shadowed" ? (
+                    // Shadowed = chord-prefix overlap. Auto-unbind can't resolve it
+                    // (the conflicting binding's combo doesn't equal the captured one),
+                    // so surface the relationship and leave resolution to the user.
+                    // Direction by chord length: shorter prefix shadows the longer chord.
+                    <span className="text-xs text-text-secondary">
+                      {(conflict.combo?.split(" ").length ?? 0) >
+                      (capturedCombo?.split(" ").length ?? 0)
+                        ? "is shadowed by this chord"
+                        : "shadows this chord"}
+                    </span>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      className="ml-auto"
+                      onClick={() => handleUnbindConflict(conflict)}
+                      disabled={isUnbinding}
+                      aria-label={`Unbind ${name}`}
+                    >
+                      Unbind
+                    </Button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
         </div>
       )}
 
-      <div className={cn("flex justify-end", compact ? "gap-3" : "gap-2")}>
-        <button
-          onClick={handleCancel}
-          className={cn(
-            "text-text-secondary hover:text-text-primary transition-colors",
-            compact ? "text-xs" : "px-3 py-1.5 text-sm"
-          )}
-        >
+      <div className={cn("flex items-center justify-end", compact ? "gap-3" : "gap-2")}>
+        <Button type="button" variant="ghost" size={compact ? "xs" : "sm"} onClick={handleCancel}>
           Cancel
-        </button>
-        <button
-          onClick={handleClear}
-          className={cn(
-            "text-text-secondary hover:text-text-primary transition-colors",
-            compact ? "text-xs" : "px-3 py-1.5 text-sm"
-          )}
-        >
-          Clear
-        </button>
+        </Button>
+        {(compact || currentCombo !== "") && (
+          <Button type="button" variant="ghost" size={compact ? "xs" : "sm"} onClick={handleClear}>
+            {compact ? "Clear" : "Remove shortcut"}
+          </Button>
+        )}
         {capturedCombo && (
-          <button
+          <Button
+            ref={saveRef}
+            type="button"
+            variant="contrast"
+            size={compact ? "xs" : "sm"}
             onClick={handleSave}
             disabled={Boolean(validationError)}
-            className={cn(
-              "bg-accent-primary text-accent-primary-foreground rounded hover:bg-daintree-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
-              compact ? "px-2 py-0.5 text-xs" : "px-3 py-1.5 text-sm"
-            )}
+            aria-describedby={describedBy}
           >
             Save
-          </button>
+          </Button>
         )}
       </div>
     </div>

@@ -1,116 +1,88 @@
-import { useId } from "react";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
-import { RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
+import { SETTINGS_CONTROL_WIDTH, SettingsRow } from "./SettingsGroup";
 
 interface OverrideFieldProps extends Omit<
   ComponentPropsWithoutRef<"input">,
-  "id" | "value" | "onChange"
+  "id" | "value" | "onChange" | "type"
 > {
-  label: string;
-  hint?: ReactNode;
+  label: ReactNode;
+  /** Plain-text name for the reset button when `label` is not a string. */
+  labelText?: string;
+  /** Chips beside the label ("Required"). */
+  accessory?: ReactNode;
+  /** `undefined` inherits; any string is an override. */
   value: string | undefined;
   onChange: (value: string) => void;
   onReset: () => void;
+  /**
+   * What applies when nothing is overridden. Stays visible while overriding, so
+   * the row always says what Reset would go back to.
+   */
   inheritDescription: ReactNode;
-  overrideDescription?: ReactNode;
   error?: string;
+  layout?: "inline" | "stacked";
+  controlWidth?: keyof typeof SETTINGS_CONTROL_WIDTH;
   inputClassName?: string;
 }
 
+/**
+ * A settings row whose value is either inherited or overridden here. The override
+ * wears the same modified bar and rail reset as every other settings row; emptying
+ * the field goes back to inheriting rather than storing an empty override, which
+ * would silently replace the inherited value with nothing.
+ */
 export function OverrideField({
   label,
-  hint,
+  labelText,
+  accessory,
   value,
   onChange,
   onReset,
   inheritDescription,
-  overrideDescription = "Overriding app default",
   error,
+  layout = "inline",
+  controlWidth = "wide",
   inputClassName,
   className,
   disabled,
   ...props
 }: OverrideFieldProps) {
-  const id = useId();
-  const descriptionId = useId();
-  const errorId = useId();
   const isOverriding = value !== undefined;
-  const showReset = isOverriding && !disabled;
-  const describedBy =
-    [error ? errorId : null, descriptionId].filter(Boolean).join(" ") || undefined;
+  const name = labelText ?? (typeof label === "string" ? label : "setting");
 
   return (
-    <div className={cn("group", className)}>
-      <div className="flex items-center gap-2 mb-1 min-h-[1.25rem]">
-        <label htmlFor={id} className="block text-xs font-medium text-text-secondary">
-          {label}
-          {hint && <span className="ml-1 text-daintree-text/40">{hint}</span>}
-        </label>
-        {isOverriding && (
-          <span
-            className="status-mark w-1.5 h-1.5 rounded-full bg-status-info"
-            aria-hidden="true"
-            data-testid="override-indicator"
+    <SettingsRow
+      className={className}
+      label={label}
+      labelText={labelText}
+      accessory={accessory}
+      description={inheritDescription}
+      layout={layout}
+      isModified={isOverriding}
+      onReset={onReset}
+      resetAriaLabel={`Reset ${name} to default`}
+      disabled={disabled}
+      error={error}
+      control={({ labelId, descriptionId, disabled: rowDisabled }) => (
+        <div className={cn(layout === "inline" && SETTINGS_CONTROL_WIDTH[controlWidth])}>
+          <Input
+            type="text"
+            value={value ?? ""}
+            onChange={(e) => {
+              if (e.target.value === "" && value !== undefined) onReset();
+              else onChange(e.target.value);
+            }}
+            disabled={rowDisabled}
+            aria-labelledby={labelId}
+            aria-describedby={descriptionId}
+            aria-invalid={error ? true : undefined}
+            className={cn("w-full", inputClassName)}
+            {...props}
           />
-        )}
-        {showReset && (
-          <button
-            type="button"
-            aria-label="Reset to global"
-            onClick={onReset}
-            className={cn(
-              "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-2xs text-text-muted hover:text-text-primary hover:bg-overlay-subtle",
-              "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
-              "transition-colors"
-            )}
-          >
-            <RotateCcw className="w-3 h-3" />
-            Reset to global
-          </button>
-        )}
-      </div>
-      <input
-        id={id}
-        value={value ?? ""}
-        onChange={(e) => {
-          // Clearing the input while overriding is treated as a reset — keeps
-          // the visible UI state and the persisted state from drifting (empty
-          // overrides for shell/cwd/scrollback aren't meaningful).
-          if (e.target.value === "" && value !== undefined) {
-            onReset();
-          } else {
-            onChange(e.target.value);
-          }
-        }}
-        disabled={disabled}
-        aria-describedby={describedBy}
-        aria-invalid={error ? true : undefined}
-        className={cn(
-          "w-full bg-surface-canvas border rounded px-3 py-2 text-sm text-text-primary font-mono",
-          "focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30",
-          "transition-colors placeholder:text-text-placeholder disabled:opacity-50 disabled:cursor-not-allowed",
-          isOverriding ? "border-status-info/40" : "border-border-default",
-          error && "border-status-error",
-          inputClassName
-        )}
-        {...props}
-      />
-      <p
-        id={descriptionId}
-        className={cn(
-          "mt-1 text-xs",
-          isOverriding ? "text-text-muted" : "text-text-secondary italic"
-        )}
-      >
-        {isOverriding ? overrideDescription : inheritDescription}
-      </p>
-      {error && (
-        <p id={errorId} className="mt-1 text-xs text-status-error">
-          {error}
-        </p>
+        </div>
       )}
-    </div>
+    />
   );
 }
