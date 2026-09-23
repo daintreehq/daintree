@@ -10,6 +10,7 @@ import {
   FileUp,
   Check,
   Copy,
+  CopyPlus,
   Lock,
   GitBranch,
   MoreHorizontal,
@@ -45,6 +46,7 @@ import {
   FormRow,
 } from "@/components/Worktree/views";
 import { getRecipeTerminalSummary } from "@/components/Terminal/utils/recipeUtils";
+import { nextDuplicateName } from "@/components/Terminal/RecipeRunner/recipeRunnerUtils";
 import { getRecipeScope, worktreeDisplayName } from "@/utils/recipeScope";
 import { cn } from "@/lib/utils";
 import type { TerminalRecipe } from "@/types";
@@ -81,6 +83,7 @@ export function RecipeManager({
   const importRecipe = useRecipeStore((s) => s.importRecipe);
   const importRecipeFromFile = useRecipeStore((s) => s.importRecipeFromFile);
   const updateRecipe = useRecipeStore((s) => s.updateRecipe);
+  const createRecipe = useRecipeStore((s) => s.createRecipe);
   const currentProject = useProjectStore((s) => s.currentProject);
   const worktrees = useWorktreeStoreOptional((s) => s.worktrees, EMPTY_WORKTREES);
   const [filter, setFilter] = useState("");
@@ -148,6 +151,25 @@ export function RecipeManager({
     [exportRecipe]
   );
 
+  // Same naming rule as the canvas band's Duplicate, so a copy made in either
+  // place never collides with an existing recipe's name or on-disk filename.
+  // A plugin recipe's copy has no projectId and lands as a global the user owns.
+  const handleDuplicateRecipe = async (recipe: TerminalRecipe) => {
+    const existingNames = new Set(useRecipeStore.getState().recipes.map((r) => r.name));
+    try {
+      await createRecipe(
+        recipe.projectId,
+        nextDuplicateName(recipe.name, existingNames),
+        recipe.worktreeId,
+        recipe.terminals,
+        false,
+        recipe.autoAssign
+      );
+    } catch (err) {
+      logError("Failed to duplicate recipe", err);
+    }
+  };
+
   const handleSaveToRepo = async () => {
     if (!recipeToSave) return;
     setIsSaving(true);
@@ -199,6 +221,7 @@ export function RecipeManager({
   const resolveWorktreeName = (worktreeId: string) =>
     worktreeDisplayName(worktrees.get(worktreeId));
 
+  const projectRecipeIds = new Set(projectRecipes.map((r) => r.id));
   const query = filter.trim().toLowerCase();
   const matches = (r: TerminalRecipe) => !query || r.name.toLowerCase().includes(query);
   const totalCount =
@@ -211,7 +234,10 @@ export function RecipeManager({
     // "Save as team recipe" stays available: duplicating into a user-owned
     // tier is the sanctioned way to customise one.
     const fromPlugin = isPluginRecipe(recipe);
-    const isShadowed = !fromPlugin && !isInRepoRecipeId(recipe) && inRepoNames.has(recipe.name);
+    // Only a project-local recipe can be overridden: `mergeRecipes` shadows
+    // that tier alone, and a global recipe of the same name still launches as
+    // itself.
+    const isShadowed = projectRecipeIds.has(recipe.id) && inRepoNames.has(recipe.name);
     const exported = exportFeedback === recipe.id;
     const isPinned = recipe.showInEmptyState === true;
     const summary = getRecipeTerminalSummary(recipe.terminals);
@@ -222,11 +248,13 @@ export function RecipeManager({
       <div
         key={recipe.id}
         data-recipe-row={recipe.name}
-        className="flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-overlay-subtle"
+        className="flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-overlay-subtle has-[[data-state=open]]:bg-overlay-subtle"
       >
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-sm font-medium text-text-primary">{recipe.name}</span>
+            <span className="truncate text-sm font-medium text-text-primary" title={recipe.name}>
+              {recipe.name}
+            </span>
             {isPinned && (
               <Badge>
                 <Pin aria-hidden />
@@ -244,7 +272,9 @@ export function RecipeManager({
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary">
             {fromPlugin && (
               <>
-                <span className="shrink-0">From {recipe.origin.pluginId}</span>
+                <span className="max-w-[40%] truncate" title={recipe.origin.pluginId}>
+                  From {recipe.origin.pluginId}
+                </span>
                 <span aria-hidden>·</span>
               </>
             )}
@@ -317,6 +347,10 @@ export function RecipeManager({
               >
                 <Pin className="mr-2 h-3.5 w-3.5" />
                 {isPinned ? "Unpin from canvas" : "Pin to canvas"}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void handleDuplicateRecipe(recipe)}>
+                <CopyPlus className="mr-2 h-3.5 w-3.5" />
+                Duplicate recipe
               </DropdownMenuItem>
               {!isInRepoRecipeId(recipe) && currentProject && (
                 <DropdownMenuItem onSelect={() => setRecipeToSave(recipe.id)}>
@@ -429,9 +463,10 @@ export function RecipeManager({
       id: "project",
       icon: FolderOpen,
       title: "Project recipes",
-      description: "Yours, in this project only, until you save one as a team recipe",
+      description: "Yours, in this project only",
       recipes: projectRecipes,
-      emptyLine: "None yet for this project.",
+      emptyLine:
+        "None yet. A project recipe stays on this machine until you save it as a team recipe.",
       onNew: () => onCreateRecipe("project"),
       newLabel: "New project recipe",
       trailing: currentProject && (
@@ -503,8 +538,15 @@ export function RecipeManager({
               }
             />
           ) : (
-            <>
-              <div className="mb-4 flex items-center gap-2">
+            // A floor on the body height, so filtering a long inventory down to
+            // two rows does not collapse the dialog and pull the field out from
+            // under the pointer.
+            <div className="min-h-[24rem]">
+              {/* Stays put while the inventory scrolls, so filtering or
+                  importing from the bottom of a long list is not a trip back
+                  to the top. The negative margin reclaims the body's top
+                  padding so nothing scrolls visibly above it. */}
+              <div className="sticky -top-6 z-10 -mt-6 mb-4 flex items-center gap-2 bg-surface-dialog pb-2 pt-6">
                 <div className="relative min-w-0 flex-1">
                   <Search
                     className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-secondary"
@@ -542,11 +584,13 @@ export function RecipeManager({
               {hasVisibleSection ? (
                 sections
               ) : (
-                <p role="status" className="px-1 py-6 text-center text-sm text-text-secondary">
-                  No recipes match &ldquo;{filter.trim()}&rdquo;
-                </p>
+                <EmptyState
+                  variant="filtered-empty"
+                  scale="sidebar"
+                  title={`No recipes match “${filter.trim()}”`}
+                />
               )}
-            </>
+            </div>
           )}
         </AppDialog.Body>
       </AppDialog>

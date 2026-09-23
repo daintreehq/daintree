@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import { Search, Plus } from "lucide-react";
 import { RecipeRunnerItem } from "./RecipeRunnerItem";
+import { EmptyState } from "@/components/ui/EmptyState";
 import type { RecipeSections, RankedRecipe } from "./recipeRunnerUtils";
 import type { TerminalRecipe } from "@/types";
 
@@ -21,6 +22,7 @@ interface RecipeRunnerListProps {
   onUnpin: (id: string) => void;
   onDelete: (id: string) => void;
   onCreate: () => void;
+  onManage?: () => void;
 }
 
 export function RecipeRunnerList({
@@ -40,6 +42,7 @@ export function RecipeRunnerList({
   onUnpin,
   onDelete,
   onCreate,
+  onManage,
 }: RecipeRunnerListProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const isSearchActive = searchQuery.trim().length > 0;
@@ -138,6 +141,17 @@ export function RecipeRunnerList({
               className="w-full rounded-[var(--radius-md)] border border-border-subtle bg-transparent py-1 pl-7 pr-2 text-xs text-text-primary placeholder:text-text-placeholder focus:border-accent-primary focus:outline-hidden focus:ring-1 focus:ring-accent-primary"
             />
           </div>
+          {/* In list mode the inventory is long enough that a link under it
+              is a scroll away; the header is where management is findable. */}
+          {onManage && (
+            <button
+              type="button"
+              onClick={onManage}
+              className="shrink-0 rounded-[var(--radius-sm)] px-1 text-xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+            >
+              Manage
+            </button>
+          )}
         </div>
       )}
 
@@ -156,9 +170,11 @@ export function RecipeRunnerList({
             {flatRecipes.length > 0 ? (
               flatRecipes.map(renderItem)
             ) : (
-              <div className="px-3 py-2 text-sm text-text-secondary">
-                No recipes match &ldquo;{searchQuery}&rdquo;
-              </div>
+              <EmptyState
+                variant="filtered-empty"
+                scale="sidebar"
+                title={`No recipes match \u201c${searchQuery}\u201d`}
+              />
             )}
           </>
         ) : (
@@ -172,7 +188,7 @@ export function RecipeRunnerList({
                 >
                   Pinned
                 </div>
-                <div role="group" aria-labelledby="section-pinned">
+                <div role="group" aria-labelledby="section-pinned" className="flex flex-col gap-1">
                   {sections.pinned.map(renderItem)}
                 </div>
               </>
@@ -186,7 +202,7 @@ export function RecipeRunnerList({
                 >
                   Recent
                 </div>
-                <div role="group" aria-labelledby="section-recent">
+                <div role="group" aria-labelledby="section-recent" className="flex flex-col gap-1">
                   {sections.recent.map(renderItem)}
                 </div>
               </>
@@ -200,7 +216,7 @@ export function RecipeRunnerList({
                 >
                   All
                 </div>
-                <div role="group" aria-labelledby="section-all">
+                <div role="group" aria-labelledby="section-all" className="flex flex-col gap-1">
                   {sections.all.map(renderItem)}
                 </div>
               </>

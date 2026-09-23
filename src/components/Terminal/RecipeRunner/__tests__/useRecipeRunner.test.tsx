@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, renderHook } from "@testing-library/react";
+import { act, fireEvent, render, renderHook } from "@testing-library/react";
 import type { TerminalRecipe, RunCommand } from "@/types";
 import type { RecipeSpawnResults } from "@/store/recipeStore";
 
@@ -971,5 +971,70 @@ describe("useRecipeRunner — keyboard model", () => {
     });
 
     expect(result.current.focusedItemId).toBe("recipe-option-create");
+  });
+});
+
+describe("useRecipeRunner — a shadowed row describes what it will actually launch", () => {
+  it("shows the terminals of the team recipe a shadowed row defers to", () => {
+    const local = makeRecipe({
+      id: "local",
+      name: "Test watch",
+      projectId: "p",
+      shadowedBy: "Test watch",
+      terminals: [{ type: "terminal", title: "Local vitest", env: {} }],
+    });
+    const team = makeRecipe({
+      id: "inrepo-test-watch",
+      name: "Test watch",
+      scope: "inrepo",
+      terminals: [
+        { type: "terminal", title: "Team vitest", env: {} },
+        { type: "terminal", title: "Coverage", env: {} },
+      ],
+    });
+    recipes.push(local, team);
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/repo" })
+    );
+    const shown = result.current.recipes.find((r) => r.id === "local")!;
+    // The row keeps its own identity (so it stays listed and runnable) while
+    // everything it says about what launches comes from the recipe that wins.
+    expect(shown.id).toBe("local");
+    expect(shown.terminals).toEqual(team.terminals);
+  });
+});
+
+describe("useRecipeRunner — keyboard edit follows the same ownership rule as the menu", () => {
+  it("does not open the editor on a plugin recipe from Cmd+E", () => {
+    recipes.push(
+      makeRecipe({
+        id: "acme.tools.rel",
+        name: "Release",
+        origin: { kind: "plugin", pluginId: "acme.tools", contributionId: "rel" },
+      }),
+      makeRecipe({ id: "mine", name: "Mine" })
+    );
+    const events: string[] = [];
+    const listener = (e: Event) => {
+      if (e instanceof CustomEvent) events.push(String(e.detail.recipeId));
+    };
+    window.addEventListener("daintree:open-recipe-editor", listener);
+    try {
+      const { result } = renderHook(() =>
+        useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/repo" })
+      );
+      const { container } = render(
+        <div tabIndex={0} onKeyDown={(e) => result.current.handleKeyDown(e)} />
+      );
+      const press = () => fireEvent.keyDown(container.firstChild!, { key: "e", metaKey: true });
+      const flat = result.current.getFlatRecipes();
+      for (let i = 0; i < flat.length; i++) {
+        act(() => result.current.setFocusedIndex(i));
+        press();
+      }
+      expect(events).toEqual(["mine"]);
+    } finally {
+      window.removeEventListener("daintree:open-recipe-editor", listener);
+    }
   });
 });

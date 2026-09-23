@@ -117,11 +117,6 @@ export function RecipeRunnerItem({
                   >
                     {recipe.name}
                   </span>
-                  {recipe.shadowedBy && (
-                    <span className="text-2xs text-text-secondary shrink-0">
-                      Overridden by Team
-                    </span>
-                  )}
                   {isPinned && (
                     // Neutral, not accent: pinning is membership, and the accent is
                     // the one signal that means "this is where the keyboard is".
@@ -135,11 +130,8 @@ export function RecipeRunnerItem({
                     </>
                   )}
                 </div>
-                <span className="flex items-center gap-2 w-full pl-5.5 text-xs text-text-secondary">
-                  <span className="shrink-0">{scopeLabel}</span>
-                  {recipeSummary && recipeSummary !== recipe.name && (
-                    <span className="truncate">{recipeSummary}</span>
-                  )}
+                <span className="flex items-center gap-1.5 w-full min-w-0 pl-5.5 text-xs text-text-secondary">
+                  <RecipeMeta recipe={recipe} scopeLabel={scopeLabel} summary={recipeSummary} />
                 </span>
               </button>
             </TooltipTrigger>
@@ -245,12 +237,8 @@ export function RecipeRunnerItem({
               </>
             )}
           </span>
-          <span className="flex min-w-0 max-w-[55%] items-center gap-2 text-xs text-text-secondary @max-[30rem]/launcher:max-w-none @max-[30rem]/launcher:basis-full @max-[30rem]/launcher:pl-5.5">
-            <span className="shrink-0">{scopeLabel}</span>
-            {recipe.shadowedBy && <span className="shrink-0">Overridden by Team</span>}
-            {recipeSummary && recipeSummary !== recipe.name && (
-              <span className="min-w-0 truncate">{recipeSummary}</span>
-            )}
+          <span className="flex min-w-0 max-w-[55%] items-center gap-1.5 text-xs text-text-secondary @max-[30rem]/launcher:max-w-none @max-[30rem]/launcher:basis-full @max-[30rem]/launcher:pl-5.5">
+            <RecipeMeta recipe={recipe} scopeLabel={scopeLabel} summary={recipeSummary} />
           </span>
         </button>
       </ContextMenuTrigger>
@@ -265,6 +253,40 @@ export function RecipeRunnerItem({
         onDelete={onDelete}
       />
     </ContextMenu>
+  );
+}
+
+/**
+ * Scope, then — for a shadowed row — the recipe it actually runs, then what it
+ * launches. Separated the way the manager's secondary line is, so "Team" never
+ * reads as the first terminal in the list.
+ */
+function RecipeMeta({
+  recipe,
+  scopeLabel,
+  summary,
+}: {
+  recipe: TerminalRecipe;
+  scopeLabel: string;
+  summary: string;
+}) {
+  const hasSummary = summary !== "" && summary !== recipe.name;
+  return (
+    <>
+      <span className="shrink-0">{scopeLabel}</span>
+      {recipe.shadowedBy && (
+        <>
+          <span aria-hidden>·</span>
+          <span className="shrink-0">Runs team recipe</span>
+        </>
+      )}
+      {hasSummary && (
+        <>
+          <span aria-hidden>·</span>
+          <span className="min-w-0 truncate">{summary}</span>
+        </>
+      )}
+    </>
   );
 }
 
@@ -316,7 +338,7 @@ function RecipeContextMenu({
           <ContextMenuSeparator />
           <ContextMenuItem destructive onSelect={() => onDelete(recipe.id)}>
             <Trash2 className="h-3.5 w-3.5 mr-2" />
-            Delete…
+            Delete recipe…
           </ContextMenuItem>
         </>
       )}

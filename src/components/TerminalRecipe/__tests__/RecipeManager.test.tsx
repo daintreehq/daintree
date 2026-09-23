@@ -148,3 +148,22 @@ describe("RecipeManager — absence takes one place, not one per source", () => 
     expect(within(globalSection).queryAllByRole("button", { name: /More actions/ }).length).toBe(0);
   });
 });
+
+describe("RecipeManager — only a recipe that is actually overridden says so", () => {
+  it("marks a same-named project recipe, never a same-named global one", () => {
+    seed({
+      global: [recipe("g-same", "Full stack")],
+      project: [recipe("p-same", "Full stack", { projectId: "proj" })],
+      team: TEAM,
+    });
+    renderManager();
+    const overridden = rows().filter((row) =>
+      row.textContent?.includes("Overridden by team recipe")
+    );
+    // mergeRecipes shadows the project-local tier alone; a global recipe of the
+    // same name still launches as itself.
+    expect(
+      overridden.map((row) => row.closest("section")?.getAttribute("aria-labelledby"))
+    ).toEqual(["recipe-section-project"]);
+  });
+});

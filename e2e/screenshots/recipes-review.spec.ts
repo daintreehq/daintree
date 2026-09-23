@@ -194,6 +194,21 @@ test("recipes review", async ({ page }) => {
     await snap(page, DIALOG, "04-manager-row-hover.png");
   });
 
+  await step("manager-more-menu", async () => {
+    await open(page, { view: "manager" });
+    await page.getByRole("button", { name: "More actions for recipe Design review" }).click();
+    await page.locator('[role="menu"]').waitFor({ state: "visible", timeout: 5000 });
+    expected.push("04-manager-more-menu.png");
+    await settle(page, 200);
+    await page.screenshot({ path: path.join(OUT_DIR, "04-manager-more-menu.png") });
+  });
+
+  await step("manager-filter", async () => {
+    await open(page, { view: "manager", fixture: "crowded" });
+    await page.getByRole("searchbox", { name: "Filter recipes" }).fill("test");
+    await snap(page, DIALOG, "04-manager-filter.png");
+  });
+
   await step("manager-keyboard", async () => {
     await open(page, { view: "manager" });
     // Walk the tab order until focus lands inside a recipe row's actions.

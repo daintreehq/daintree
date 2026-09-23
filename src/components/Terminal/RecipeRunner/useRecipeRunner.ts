@@ -11,6 +11,8 @@ import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { detectUnresolvedVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { getAgentConfig } from "@/config/agents";
+import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
+import { isPluginRecipe } from "@shared/types/project";
 import { logError } from "@/utils/logger";
 import {
   buildRecipeSections,
@@ -130,9 +132,17 @@ export function useRecipeRunner({
 
   // Stable filtered recipe array for Fuse cache
   const recipes = useMemo(() => {
-    return allRecipes.filter(
+    const visible = allRecipes.filter(
       (r) => r.worktreeId === activeWorktreeId || r.worktreeId === undefined
     );
+    // A shadowed row launches the team recipe it defers to (`getRecipeById`
+    // redirects the run), so it has to describe that recipe's terminals, not
+    // its own — otherwise the row names one set of terminals and starts another.
+    return visible.map((r) => {
+      if (!r.shadowedBy) return r;
+      const winner = allRecipes.find((w) => w.name === r.name && isInRepoRecipeId(w));
+      return winner ? { ...r, terminals: winner.terminals } : r;
+    });
   }, [allRecipes, activeWorktreeId]);
 
   const showSearch = recipes.length > 6;
@@ -524,8 +534,10 @@ export function useRecipeRunner({
       ) {
         e.preventDefault();
         const flat = getFlatRecipes();
-        if (focusedIndex < flat.length) {
-          handleEdit(flat[focusedIndex]!.id);
+        const target = flat[focusedIndex];
+        // Same rule as the context menu: a plugin owns its recipe's content.
+        if (target && !isPluginRecipe(target)) {
+          handleEdit(target.id);
         }
       }
     },
