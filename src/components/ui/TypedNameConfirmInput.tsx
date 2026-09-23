@@ -71,7 +71,7 @@ export function TypedNameConfirmInput({
         aria-invalid={value.length > 0 && !isMatched}
         autoComplete="off"
         spellCheck={false}
-        className="w-full px-3 py-2 text-sm font-mono bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] focus:outline-hidden focus:ring-2 focus:ring-status-error disabled:opacity-50"
+        className="w-full px-3 py-2 text-sm font-mono bg-surface-canvas border border-border-input rounded-[var(--radius-md)] focus:outline-hidden focus:ring-2 focus:ring-status-error disabled:opacity-50"
         data-testid={testId}
       />
       <span className="sr-only" aria-live="polite">
