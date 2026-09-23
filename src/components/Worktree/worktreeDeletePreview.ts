@@ -464,27 +464,35 @@ export interface WorktreeDisplayChanges {
   /** Ordinary files, sorted by path so a tree reads the same on every open. */
   files: FileChangeDetail[];
   /**
-   * Submodule rows that are a change in their own right — the checkout moved
-   * to another commit, the gitlink is conflicted or removed, or the inventory
-   * listed nothing for it. A row whose only content is the nested work listed
-   * under "Inside submodules" is dropped instead of being counted as a file
-   * standing for it.
+   * Every submodule row, for display. None is dropped: the inventory compares
+   * a checkout against the index, not HEAD, so a staged pointer move looks
+   * exactly like a submodule that only has dirt inside — folding the row away
+   * on that reading could hide a change.
+   */
+  submoduleRows: FileChangeDetail[];
+  /**
+   * The submodule rows that count as a loss of their own — the checkout moved,
+   * the gitlink is conflicted or removed, or nothing inside was listed. A row
+   * whose nested work is listed under "Inside submodules" is shown but not
+   * counted, so the same loss isn't stated twice.
    */
   pointerOnly: FileChangeDetail[];
-  /** What each kept submodule row is, keyed by its display path. */
+  /** What each submodule row is, keyed by its display path. */
   pointerDescriptions: Map<string, string>;
 }
 
 /** What a submodule's own parent row means, from the inventory's own state. */
 function describeSubmoduleChange(
   change: FileChangeDetail,
-  entry: SubmoduleEntry | undefined
+  entry: SubmoduleEntry | undefined,
+  contentListed: boolean
 ): string {
   if (change.status === "deleted") return "submodule removed";
   if (change.status === "conflicted" || entry?.state === "conflicted") {
     return "submodule in a merge conflict";
   }
   if (entry?.state === "moved") return "submodule checked out at a different commit";
+  if (contentListed) return "submodule — changes inside are listed below";
   return "submodule";
 }
 
@@ -501,6 +509,7 @@ export function splitDisplayChanges(
     nested.some((file) => file.startsWith(`${path}/`)) ||
     (risk?.atRiskCommits ?? []).some((commit) => commit.submodulePaths?.includes(path));
   const files: FileChangeDetail[] = [];
+  const submoduleRows: FileChangeDetail[] = [];
   const pointerOnly: FileChangeDetail[] = [];
   const pointerDescriptions = new Map<string, string>();
   for (const change of changes) {
@@ -511,16 +520,16 @@ export function splitDisplayChanges(
     if (change.status === "ignored") continue;
     const path = toDisplayPath(change.path, rootPath).replace(/\\/g, "/");
     const entry = entries.get(path);
-    // Dropped only when the row says nothing the nested list doesn't: the
-    // checkout sits at the recorded commit and its dirt is listed below.
-    const contentOnly =
+    // Not counted when the nested list already states the loss: the checkout
+    // sits at the recorded commit and its dirt is listed below.
+    const contentListed =
       change.status === "modified" && entry?.state === "at-recorded-commit" && hasEvidence(path);
-    if (contentOnly) continue;
-    pointerOnly.push(change);
-    pointerDescriptions.set(path, describeSubmoduleChange(change, entry));
+    submoduleRows.push(change);
+    if (!contentListed) pointerOnly.push(change);
+    pointerDescriptions.set(path, describeSubmoduleChange(change, entry, contentListed));
   }
   files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  return { files, pointerOnly, pointerDescriptions };
+  return { files, submoduleRows, pointerOnly, pointerDescriptions };
 }
 
 /** The at-risk commits of one submodule, capped for display. */
@@ -836,15 +845,16 @@ export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview 
   }
   const { changes, rootPath, submodules } = preview;
   const submoduleLines = formatSubmodulePreviewLines(submodules);
-  // A submodule's own parent row stands for nested content listed below, so
-  // it is neither counted nor listed as a file of its own.
-  const { files, pointerOnly, pointerDescriptions } = splitDisplayChanges(
+  // A submodule's own parent row is listed as a submodule, never counted as a
+  // file, and counted as a change only when the nested list doesn't already
+  // state its loss.
+  const { files, submoduleRows, pointerOnly, pointerDescriptions } = splitDisplayChanges(
     changes,
     rootPath,
     submodules
   );
   const { trackedChangeCount, untrackedFileCount } = summarizeWorktreeChanges(files);
-  if (files.length === 0 && pointerOnly.length === 0) {
+  if (files.length === 0 && submoduleRows.length === 0) {
     // Only claim a clean tree when nothing nested contradicts it. Saying "No
     // uncommitted changes." above a list of submodule commits about to be
     // destroyed is the misleading-precision failure this whole surface exists
@@ -864,9 +874,15 @@ export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview 
   if (pointerOnly.length > 0) {
     parts.push(`${pointerOnly.length} submodule change${pointerOnly.length === 1 ? "" : "s"}`);
   }
+  const listedBelow = submoduleRows.length - pointerOnly.length;
+  if (listedBelow > 0) {
+    parts.push(
+      `${listedBelow} submodule${listedBelow === 1 ? "" : "s"} with changes inside, listed below`
+    );
+  }
   return [
     `${parts.join(" and ")}:`,
-    ...pointerOnly.map((change) => {
+    ...submoduleRows.map((change) => {
       const path = toDisplayPath(change.path, rootPath).replace(/\\/g, "/");
       const row = formatWorktreeChangeRows([change], 1, rootPath)[0] ?? `  ${path}`;
       return `${row} (${pointerDescriptions.get(path) ?? "submodule"})`;

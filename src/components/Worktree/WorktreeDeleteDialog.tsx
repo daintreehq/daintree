@@ -161,11 +161,12 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // can't hide it. Display only — the tier above reads the unsplit list.
   const {
     files: fileChanges,
+    submoduleRows,
     pointerOnly: pointerOnlyChanges,
     pointerDescriptions,
   } = splitDisplayChanges(previewChanges, previewRootPath, submodules);
   const previewChangeRows = buildWorktreeChangeRows(
-    [...pointerOnlyChanges, ...fileChanges],
+    [...submoduleRows, ...fileChanges],
     PREVIEW_FILE_LIMIT,
     previewRootPath
   );
@@ -1081,10 +1082,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                       )}
                       <span className="min-w-0 [overflow-wrap:anywhere]">
                         <PathText value={row.label} />
-                        {/* A submodule row only reaches this list when it is
-                            a change in its own right (moved, conflicted,
-                            removed); labelled with which, so it isn't read as
-                            a file. */}
+                        {/* Labelled with what the row actually is — moved,
+                            conflicted, removed, or dirty inside with the dirt
+                            listed below — so it isn't read as a file. */}
                         {isSubmoduleRow && (
                           <span aria-hidden="true" className="ml-2 font-sans text-text-secondary">
                             {pointerDescriptions.get(row.label) ?? "submodule"}

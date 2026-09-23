@@ -182,13 +182,13 @@ function TargetBody({ target }: { target: BulkRemoveTarget }) {
   // returns non-null for every other settled state.
   if (status.state !== "verified") return null;
   const risks = describeBulkRemoveRisks(target);
-  const { files, pointerOnly } = splitDisplayChanges(
+  const { files, submoduleRows } = splitDisplayChanges(
     status.preview.changes,
     status.preview.rootPath,
     status.preview.submodules
   );
   const changeRows = buildWorktreeChangeRows(
-    [...pointerOnly, ...files],
+    [...submoduleRows, ...files],
     BULK_PREVIEW_FILE_LIMIT,
     status.preview.rootPath
   );

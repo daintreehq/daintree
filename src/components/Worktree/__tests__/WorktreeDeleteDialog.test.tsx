@@ -1881,9 +1881,12 @@ describe("WorktreeDeleteDialog — submodule entries, rechecks, teardown", () =>
     );
     // The parent's own loss row would be the gitlink counted as a file.
     expect(consequences).not.toContain("Uncommitted changes to 1 tracked file will be");
-    // Its contents are listed under "Inside submodules", so it gets no row of
-    // its own pointing down at them.
-    expect(screen.queryByTestId("delete-worktree-file-list")).toBeNull();
+    // Still shown — a staged pointer move reads the same as this from the
+    // inventory, so folding the row away could hide one — but labelled as a
+    // submodule whose changes are listed below, and not counted.
+    expect(screen.getByTestId("delete-worktree-file-list").textContent).toContain(
+      "changes inside are listed below"
+    );
     expect(screen.getByTestId("delete-worktree-submodule-file-list").textContent).toContain(
       "vendor/lib/a.c"
     );

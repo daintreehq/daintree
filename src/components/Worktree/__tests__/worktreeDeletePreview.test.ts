@@ -824,7 +824,8 @@ describe("delete-preview parity for the MCP confirm", () => {
       )
     );
     expect(lines.join("\n")).not.toContain("uncommitted tracked file");
-    expect(lines[0]).toBe("No uncommitted changes in the worktree itself.");
+    expect(lines[0]).toBe("1 submodule with changes inside, listed below:");
+    expect(lines[1]).toBe("  M vendor/lib (submodule — changes inside are listed below)");
     expect(lines.join("\n")).toContain("vendor/lib/a.c");
   });
 
