@@ -746,14 +746,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Go-colour on the run-recipe control at hover",
     },
   ],
-  "src/components/TerminalRecipe/RecipeManager.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Recipe-exported confirmation; resets when the export flash times out",
-    },
-  ],
   "src/components/Worktree/CrossWorktreeDiff.tsx": [
     {
       category: "domain",
@@ -1062,5 +1054,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 127;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 147;
+export const EXPECTED_STATUS_SUCCESS_SITES = 126;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 146;
