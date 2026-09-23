@@ -97,8 +97,10 @@
   /* `outline-hidden` is a transparent outline so that this mode can paint it — which
      here drew a square box inside the rounded field once search took focus on open.
      The field's focus belongs on its wrapper, the same edge the pointer sees. */
+  /* !important: Tailwind's `outline-hidden` sits in the utilities layer, which outranks
+     this file, and in this mode it is exactly the outline being removed. */
   .settings-search-input:focus {
-    outline: none;
+    outline: none !important;
   }
 
   .settings-search:focus-within {

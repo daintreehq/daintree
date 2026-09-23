@@ -158,6 +158,11 @@ export function modifiedTabsFor(settingIds: ReadonlySet<string>): Set<SettingsTa
   return tabs;
 }
 
+// The page a Tab out of the sidebar lands on. Inset, so the ring sits inside the
+// scrollport instead of running under its edge fades and the header.
+const SETTINGS_PANEL_CLASS =
+  "rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2";
+
 export interface SettingsNavTarget {
   tab: SettingsTab;
   subtab?: string;
@@ -648,7 +653,7 @@ function SettingsDialogInner({
       const panel = document.getElementById(`settings-panel-${activeTab}`);
       if (panel) {
         e.preventDefault();
-        panel.focus();
+        panel.focus({ preventScroll: true });
       }
       return;
     }
@@ -987,7 +992,7 @@ function SettingsDialogInner({
                       id={`settings-panel-${entry.id}`}
                       aria-labelledby={`settings-tab-${entry.id}`}
                       tabIndex={0}
-                      className={isActive ? "" : "hidden"}
+                      className={isActive ? SETTINGS_PANEL_CLASS : "hidden"}
                     >
                       {entry.importKind === "eager" ? (
                         // Only GeneralTab is eager — render with its specific props
@@ -1045,7 +1050,7 @@ function SettingsDialogInner({
                           id={`settings-panel-${entry.id}`}
                           aria-labelledby={`settings-tab-${entry.id}`}
                           tabIndex={0}
-                          className={isActive ? "" : "hidden"}
+                          className={isActive ? SETTINGS_PANEL_CLASS : "hidden"}
                         >
                           {visitedTabs.has(tabId) && (
                             <Suspense fallback={null}>
