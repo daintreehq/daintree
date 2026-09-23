@@ -229,6 +229,12 @@ async function proveTitleSurvives(header: Locator): Promise<void> {
   }
 }
 
+/** What the header paints for a fixture title: "Claude: task" paints as the task. */
+function paintedTitle(title: string): string {
+  const at = title.indexOf(": ");
+  return at < 0 ? title : title.slice(at + 2);
+}
+
 /**
  * What proves each state is actually on screen. The default is the pane title in the
  * header; states whose header shows something else name their own proof. A relabel
@@ -311,8 +317,11 @@ async function proveState(page: Page, name: FixtureName, header: Locator): Promi
     default:
       break;
   }
-  // Every non-tab state shows the title somewhere in the header, editing aside.
-  await expect(header.getByText(fixture.title, { exact: false }).first()).toBeAttached({
+  // Every non-tab state shows the title somewhere in the header, editing aside:
+  // an agent's task alone where it has one, the brand mark carrying identity.
+  await expect(
+    header.getByText(paintedTitle(fixture.title), { exact: false }).first()
+  ).toBeAttached({
     timeout,
   });
 }
@@ -450,7 +459,7 @@ test("panel header — states, interactions and themes", async ({ page }) => {
     {
       const { pane, header } = await open(page, "focused-working", theme);
       await proveState(page, "focused-working", header);
-      await header.getByText("Claude: fix flaky auth tests").hover();
+      await header.getByText("fix flaky auth tests").hover();
       await page.waitForTimeout(200);
       await expect(
         header.getByRole("button", { name: "Duplicate panel as new tab" })

@@ -1080,10 +1080,15 @@ function PanelHeaderComponent({
                 {/* [data-no-dnd] opts the rename field out of the header drag
                     surface: without it, drag-selecting the title text travels
                     past DRAG_ACTIVATION_DISTANCE and picks the panel up instead. */}
+                {/* size={1}: an input's default intrinsic width (~20 characters)
+                    also sizes the grid track, so a title shorter than that
+                    widened the cell and pushed the next control over. The
+                    invisible copy alone decides the width. */}
                 <input
                   data-no-dnd
                   ref={titleInputRef}
                   type="text"
+                  size={1}
                   value={editingValue}
                   onChange={(e) => onEditingValueChange(e.target.value)}
                   onKeyDown={onTitleInputKeyDown}
