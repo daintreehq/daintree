@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useEffect, useEffectEvent, useRef } from "react";
+import React, { useCallback, useMemo, useEffect, useRef } from "react";
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store";
@@ -184,21 +184,23 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   }, [panels]);
 
   // isGroupFocused is read non-reactively — we only want to re-run when
-  // activeTabId changes, not when focus flickers.
-  const maybeScheduleFocus = useEffectEvent(() => {
-    if (prevActiveTabIdRef.current === activeTabId) return null;
+  // activeTabId changes, not when focus flickers. A ref synced by the effect
+  // above it rather than a `useEffectEvent`: on React 19.2 an effect event in
+  // a `memo` component keeps its first render's closure (facebook/react#34818),
+  // so `activeTabId` never moved inside it and focus was never restored.
+  const isGroupFocusedRef = useRef(isGroupFocused);
+  useEffect(() => {
+    isGroupFocusedRef.current = isGroupFocused;
+  }, [isGroupFocused]);
+  useEffect(() => {
+    if (prevActiveTabIdRef.current === activeTabId) return;
     prevActiveTabIdRef.current = activeTabId;
-    if (!activeTabId || !isGroupFocused) return null;
-    return requestAnimationFrame(() => {
+    if (!activeTabId || !isGroupFocusedRef.current) return;
+    const rafId = requestAnimationFrame(() => {
       const currentFocusedId = usePanelStore.getState().focusedId;
       if (!currentFocusedId || !panelIdsRef.current.has(currentFocusedId)) return;
       focusPanelInput(activeTabId);
     });
-  });
-  useEffect(() => {
-    void activeTabId;
-    const rafId = maybeScheduleFocus();
-    if (rafId == null) return;
     return () => cancelAnimationFrame(rafId);
   }, [activeTabId]);
 
