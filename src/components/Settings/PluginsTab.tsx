@@ -25,6 +25,9 @@ export function PluginsTab() {
   // the feature is on before we know.
   const [backgroundChecksEnabled, setBackgroundChecksEnabled] = useState<boolean | null>(null);
   const [backgroundChecksSaving, setBackgroundChecksSaving] = useState(false);
+  // A failed read is unknown, not Off: the switch would otherwise claim a state nobody read.
+  const [backgroundChecksFailed, setBackgroundChecksFailed] = useState(false);
+  const [backgroundChecksAttempt, setBackgroundChecksAttempt] = useState(0);
   const isMountedRef = useRef(true);
 
   // Re-pull the count when a plugin is installed or uninstalled anywhere so the
@@ -72,17 +75,19 @@ export function PluginsTab() {
     window.electron.plugin
       .getBackgroundUpdateCheckSettings()
       .then((result) => {
-        if (!cancelled) setBackgroundChecksEnabled(result.enabled);
+        if (cancelled) return;
+        setBackgroundChecksEnabled(result.enabled);
+        setBackgroundChecksFailed(false);
       })
       .catch((err) => {
         if (cancelled) return;
         logError("Failed to load plugin background update check setting", err);
-        setBackgroundChecksEnabled(false);
+        setBackgroundChecksFailed(true);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [backgroundChecksAttempt]);
 
   const handleBackgroundChecksToggle = async () => {
     if (backgroundChecksSaving || backgroundChecksEnabled === null) return;
@@ -148,13 +153,29 @@ export function PluginsTab() {
               </Button>
             }
           />
-          <SettingsSwitchCard
-            title="Check for plugin updates in the background"
-            subtitle="Checks URL-installed plugins about once a day and adds an inbox notification when updates are available"
-            isEnabled={backgroundChecksEnabled ?? false}
-            onChange={() => void handleBackgroundChecksToggle()}
-            disabled={backgroundChecksEnabled === null || backgroundChecksSaving}
-          />
+          {backgroundChecksFailed ? (
+            <SettingsRow
+              label="Check for plugin updates in the background"
+              description="Couldn't read whether this is on"
+              control={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setBackgroundChecksAttempt((n) => n + 1)}
+                >
+                  Retry
+                </Button>
+              }
+            />
+          ) : (
+            <SettingsSwitchCard
+              title="Check for plugin updates in the background"
+              subtitle="Checks URL-installed plugins about once a day and adds an inbox notification when updates are available"
+              isEnabled={backgroundChecksEnabled ?? false}
+              onChange={() => void handleBackgroundChecksToggle()}
+              disabled={backgroundChecksEnabled === null || backgroundChecksSaving}
+            />
+          )}
         </SettingsGroup>
       </SettingsSection>
     </div>

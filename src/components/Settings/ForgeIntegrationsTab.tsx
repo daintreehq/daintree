@@ -8,6 +8,7 @@ import type { RemoteInfo } from "@shared/types/ipc/forge";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { SettingsSelect, type SettingsSelectOption } from "./SettingsSelect";
 import { useProjectStore } from "@/store";
 import { useDohertyGate } from "@/hooks";
@@ -86,6 +87,10 @@ export function ForgeIntegrationsTab() {
   const [forgeRemote, setForgeRemote] = useState<string | null>(null);
   const [remotesLoading, setRemotesLoading] = useState(false);
   const [remotesError, setRemotesError] = useState<string | null>(null);
+  const [remotesAttempt, setRemotesAttempt] = useState(0);
+  // Null when the project's forge-remote setting couldn't be read: which remote is in
+  // use is then unknown, and the list says nothing rather than guess auto-detect.
+  const [forgeRemoteKnown, setForgeRemoteKnown] = useState(true);
   // Mirror project id + remotes into refs so a `reresolveRemotes` call that was
   // dispatched on project A doesn't run with A's id against B's remotes after
   // an active-project switch lands between the settings write and its reply.
@@ -171,6 +176,7 @@ export function ForgeIntegrationsTab() {
           .getSettings(activeProjectId)
           .catch(() => null);
         if (cancelled) return;
+        setForgeRemoteKnown(projectSettings !== null);
         setForgeRemote(projectSettings?.forgeRemote ?? projectSettings?.githubRemote ?? null);
         const resolutions = await Promise.allSettled(
           loadedRemotes.map((remote) =>
@@ -198,7 +204,7 @@ export function ForgeIntegrationsTab() {
     return () => {
       cancelled = true;
     };
-  }, [activeProjectId, activeProjectPath]);
+  }, [activeProjectId, activeProjectPath, remotesAttempt]);
 
   const selectValue = settings.defaultProviderId ?? AUTO_DETECT_VALUE;
 
@@ -300,7 +306,7 @@ export function ForgeIntegrationsTab() {
           <SettingsSelect
             label="Default provider"
             description={
-              providers.length === 0 && !loading
+              providers.length === 0 && !loading && !error
                 ? "No forge plugins are installed yet. Install one that contributes a forge provider to choose a default"
                 : "For every project without its own provider setting"
             }
@@ -320,7 +326,7 @@ export function ForgeIntegrationsTab() {
         <ProjectRoutingPanel
           activeProjectName={activeProject?.name}
           activeProjectId={activeProjectId}
-          providersInstalled={providers.length}
+          providersInstalled={error && providers.length === 0 ? null : providers.length}
           providers={providers}
           providersLoading={loading}
           remotes={remotes}
@@ -328,6 +334,8 @@ export function ForgeIntegrationsTab() {
           loading={showRemotesLoading}
           pending={remotesPending}
           error={remotesError}
+          forgeRemoteKnown={forgeRemoteKnown}
+          onRetry={() => setRemotesAttempt((n) => n + 1)}
         />
       </SettingsSection>
     </div>
@@ -337,7 +345,8 @@ export function ForgeIntegrationsTab() {
 interface ProjectRoutingPanelProps {
   activeProjectName: string | undefined;
   activeProjectId: string | undefined;
-  providersInstalled: number;
+  /** Null when the provider list failed to load, so "none installed" can't be claimed. */
+  providersInstalled: number | null;
   /** Registered providers, used to replay main's hostname-match test. */
   providers: ForgeProviderEntry[];
   // Whether the top-level provider/settings load is still in flight. Used to
@@ -353,6 +362,8 @@ interface ProjectRoutingPanelProps {
   // which would otherwise flash the "no remotes" empty state on every load.
   pending: boolean;
   error: string | null;
+  forgeRemoteKnown: boolean;
+  onRetry: () => void;
 }
 
 function ProjectRoutingPanel({
@@ -366,6 +377,8 @@ function ProjectRoutingPanel({
   loading,
   pending,
   error,
+  forgeRemoteKnown,
+  onRetry,
 }: ProjectRoutingPanelProps) {
   const groupLabel = activeProjectName ? `${activeProjectName} remotes` : "Active project remotes";
   const shell = (children: ReactNode) => (
@@ -394,7 +407,13 @@ function ProjectRoutingPanel({
 
   if (error) {
     return shell(
-      <SettingsEmptyRow>
+      <SettingsEmptyRow
+        action={
+          <Button variant="outline" size="sm" onClick={onRetry}>
+            Retry
+          </Button>
+        }
+      >
         <span className="text-status-error">{error}</span>
       </SettingsEmptyRow>
     );
@@ -409,7 +428,9 @@ function ProjectRoutingPanel({
     );
   }
 
-  const liveRemoteName = findLiveRemoteName(remotes, forgeRemote, providers);
+  const liveRemoteName = forgeRemoteKnown
+    ? findLiveRemoteName(remotes, forgeRemote, providers)
+    : null;
   const noProviders = providersInstalled === 0 && !providersLoading;
 
   return shell(

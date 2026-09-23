@@ -52,6 +52,9 @@ export function EditorIntegrationTab() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<"ok" | "error" | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Until the saved preference is read, the selection shown is a placeholder: nothing
+  // edits or saves it, and nothing claims it isn't saved yet.
+  const [isLoadingConfig, setIsLoadingConfig] = useState(true);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [showDetected, setShowDetected] = useState(false);
@@ -76,10 +79,12 @@ export function EditorIntegrationTab() {
     if (!activeProjectId) return;
     let cancelled = false;
     setLoadError(null);
+    setIsLoadingConfig(true);
     editorClient
       .getConfig(activeProjectId)
       .then(({ preferredEditor: pref, discoveredEditors: discovered }) => {
         if (cancelled || !isMountedRef.current) return;
+        setIsLoadingConfig(false);
         setDiscoveredEditors(discovered);
         if (pref) {
           setPreferredEditor(pref);
@@ -97,6 +102,7 @@ export function EditorIntegrationTab() {
       .catch((err) => {
         if (cancelled || !isMountedRef.current) return;
         logError("[EditorIntegrationTab] Failed to load config", err);
+        setIsLoadingConfig(false);
         setLoadError(formatErrorMessage(err, "Couldn't read the saved editor"));
       });
     return () => {
@@ -124,7 +130,7 @@ export function EditorIntegrationTab() {
   };
 
   const handleSave = async () => {
-    if (!activeProjectId || isSaving || loadError) return;
+    if (!activeProjectId || isSaving || isLoadingConfig || loadError) return;
     if (selectedId === "custom" && !customCommand.trim()) {
       setCommandError("Enter the command that opens your editor");
       return;
@@ -260,7 +266,7 @@ export function EditorIntegrationTab() {
                   setCommandError(null);
                   editDraft();
                 }}
-                disabled={disabled}
+                disabled={disabled || isLoadingConfig}
               >
                 <SelectTrigger
                   id={editorId}
@@ -414,7 +420,7 @@ export function EditorIntegrationTab() {
               <span className="flex items-center gap-1 text-status-error">
                 <AlertCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" /> Failed to open
               </span>
-            ) : preferredEditor ? (
+            ) : isLoadingConfig ? null : preferredEditor ? (
               <span>
                 Saved:{" "}
                 <span className="font-medium">
@@ -449,7 +455,9 @@ export function EditorIntegrationTab() {
             variant="contrast"
             size="sm"
             onClick={handleSave}
-            disabled={isSaving || !activeProjectId || !isDirty || Boolean(loadError)}
+            disabled={
+              isSaving || isLoadingConfig || !activeProjectId || !isDirty || Boolean(loadError)
+            }
           >
             {isSaving ? "Saving…" : "Save"}
           </Button>

@@ -431,6 +431,48 @@ describe("ProjectPluginsTab", () => {
     );
   });
 
+  it("sends a forge plugin's settings to its own Code forge page instead of editing them here", async () => {
+    const settings = [{ id: "instanceUrl", type: "string" as const, label: "Instance URL" }];
+    pluginApi.list.mockResolvedValue([
+      installed({
+        manifest: {
+          name: "acme.forge",
+          version: "1.0.0",
+          displayName: "Acme Forge",
+          contributes: {
+            ...EMPTY_CONTRIBUTES,
+            settings,
+            forgeProviders: [
+              {
+                id: "acme",
+                name: "Acme",
+                matches: ["acme.test"],
+                slots: { settingsTab: "acme.settingsTab" },
+              },
+            ],
+          },
+        } as LoadedPluginInfo["manifest"],
+        instanceId: "acme.forge",
+      }),
+    ]);
+    seed([]);
+    const opened = vi.fn();
+    window.addEventListener("daintree:open-settings-tab", opened);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    await select("Acme Forge");
+    // Its own page guards changes this generic form can't (a token tied to the value).
+    expect(screen.queryByRole("textbox", { name: "Instance URL" })).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Open Code forge" }));
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect((opened.mock.calls[0]![0] as CustomEvent).detail).toEqual({
+      tab: "code-forge",
+      subtab: "acme.forge.acme",
+    });
+    window.removeEventListener("daintree:open-settings-tab", opened);
+  });
+
   it("clears the override rather than storing an explicit allow when re-enabling", async () => {
     pluginApi.list.mockResolvedValue([installed()]);
     seed([]);

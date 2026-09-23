@@ -83,10 +83,20 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
 
   const refreshAuditRecords = useCallback(async (): Promise<void> => {
     try {
-      const [recordsResult, statsResult] = await Promise.allSettled([
+      const [recordsResult, statsResult, configResult] = await Promise.allSettled([
         window.electron.forgeAudit.getRecords(),
         window.electron.forgeAudit.getStats(),
+        window.electron.forgeAudit.getConfig(),
       ]);
+      // Refresh is also the retry for a failed config read, so it re-reads that too.
+      if (configResult.status === "fulfilled") {
+        setAuditEnabled(configResult.value.enabled);
+        setAuditMaxRecords(configResult.value.maxRecords);
+        setAuditConfigFailed(false);
+      } else {
+        setAuditConfigFailed(true);
+        logError("Failed to load forge audit config", configResult.reason);
+      }
       if (recordsResult.status === "fulfilled") {
         setAuditRecords(recordsResult.value);
         setAuditLoadFailed(false);
@@ -260,7 +270,7 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
                 isEnabled={auditEnabled}
                 onChange={() => void handleAuditEnabledToggle()}
                 disabled={auditConfigFailed}
-                disabledReason="Couldn't read whether recording is on"
+                disabledReason="Couldn't read whether recording is on. Refresh the log below to try again."
               />
             </SettingsGroup>
             <ForgeAuditLogViewer
@@ -403,6 +413,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
   const [hasCredential, setHasCredential] = useState(false);
   const [credentialKnown, setCredentialKnown] = useState(false);
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
   // Synchronous in-flight guard: `isSaving` state updates are batched and the
   // re-render is deferred, so two rapid event dispatches could both pass an
   // `isSaving`-derived check before the first commit. The ref flips
@@ -452,7 +463,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
   }, [result]);
 
   const primaryId = primaryFieldId(fields);
-  const canSave = !isSaving && (values[primaryId] ?? "").trim().length > 0;
+  const canSave = !isSaving && !isClearing && (values[primaryId] ?? "").trim().length > 0;
 
   const handleSave = async () => {
     if (!canSave || savingRef.current) return;
@@ -487,6 +498,11 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
 
   const handleClear = async () => {
     setConfirmingClear(false);
+    // Save and Clear share one synchronous guard, so the final credential never
+    // depends on which of two overlapping writes lands last.
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setIsClearing(true);
     try {
       await window.electron.forge.clearCredential(providerId);
       setValues({});
@@ -497,6 +513,9 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
       logError("Failed to clear forge credentials", error);
       setResult("error");
       setErrorMessage("Couldn't clear credentials");
+    } finally {
+      savingRef.current = false;
+      setIsClearing(false);
     }
   };
 
@@ -581,6 +600,8 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
               control={
                 <Button
                   onClick={() => setConfirmingClear(true)}
+                  disabled={isSaving}
+                  loading={isClearing}
                   variant="ghost-danger"
                   size="sm"
                   aria-label="Clear credentials"

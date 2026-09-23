@@ -211,7 +211,7 @@ export function ForgeAuditLogViewer({
             type="text"
             value={methodFilter}
             onChange={(e) => setMethodFilter(e.target.value)}
-            placeholder="Filter by method or provider"
+            placeholder="Method or provider"
             aria-label="Filter audit by method or provider"
             className="w-auto min-w-36 flex-1 basis-0"
           />
@@ -220,7 +220,7 @@ export function ForgeAuditLogViewer({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search arguments and errors"
+            placeholder="Arguments or error text"
             aria-label="Search audit arguments and errors"
             className="w-auto min-w-36 flex-1 basis-0"
           />

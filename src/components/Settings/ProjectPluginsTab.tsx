@@ -35,6 +35,7 @@ import {
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { useProjectStore } from "@/store/projectStore";
 import { systemClient } from "@/clients";
+import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import { actionService } from "@/services/ActionService";
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
@@ -357,7 +358,7 @@ function ProjectPluginPane({
     : plugin.muted
       ? "Switched off on its own. The project's other plugins are unaffected, and turning this back on runs it again without asking."
       : plugin.state === "staged"
-        ? "Allowed to run here. It's new to this project, so it waits for you to activate it."
+        ? undefined
         : plugin.state === "active"
           ? "Running in this project. Switching it off stops only this plugin."
           : undefined;
@@ -516,6 +517,12 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
   const setVisibilityDefault = useProjectPluginStore((s) => s.setVisibilityDefault);
 
   const hiddenByDefault = visibility.defaultHiddenPluginIds.includes(pluginId);
+  // A forge provider that ships its own settings tab owns its settings there: editing
+  // them here as well would skip the checks that page runs (a GitLab instance change
+  // that has to clear the saved token first).
+  const forgeSettingsProvider = plugin.manifest.contributes.forgeProviders?.find(
+    (provider) => provider.slots?.settingsTab
+  );
   const override = visibility.overrides[pluginId];
   const visible = override ?? !hiddenByDefault;
   const name = plugin.manifest.displayName ?? pluginId;
@@ -612,11 +619,39 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
         </SettingsGroup>
       </SettingsSection>
 
-      {hasPluginSettings(plugin) && (
-        <SettingsSection title="Settings">
-          <PluginSettingsForm plugin={plugin} />
-        </SettingsSection>
-      )}
+      {hasPluginSettings(plugin) &&
+        (forgeSettingsProvider ? (
+          <SettingsSection title="Settings">
+            <SettingsGroup>
+              <SettingsRow
+                label={`Configured in Code forge → ${forgeSettingsProvider.name}`}
+                description="Its settings sit beside its credentials there, so a change that affects the saved token is checked first"
+                control={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      window.dispatchEvent(
+                        new CustomEvent("daintree:open-settings-tab", {
+                          detail: {
+                            tab: "code-forge",
+                            subtab: makeForgeProviderId(pluginId, forgeSettingsProvider.id),
+                          },
+                        })
+                      )
+                    }
+                  >
+                    Open Code forge
+                  </Button>
+                }
+              />
+            </SettingsGroup>
+          </SettingsSection>
+        ) : (
+          <SettingsSection title="Settings">
+            <PluginSettingsForm plugin={plugin} />
+          </SettingsSection>
+        ))}
     </div>
   );
 }

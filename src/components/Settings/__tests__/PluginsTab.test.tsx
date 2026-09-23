@@ -169,4 +169,18 @@ describe("PluginsTab (settings entry point)", () => {
     // Optimistic flip, then revert on the rejected save.
     await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
   });
+
+  it("treats an unreadable background-check setting as unknown, with Retry, not as Off", async () => {
+    const get = window.electron.plugin.getBackgroundUpdateCheckSettings as ReturnType<typeof vi.fn>;
+    get.mockRejectedValueOnce(new Error("store locked"));
+    render(<PluginsTab />);
+
+    expect(await screen.findByText("Couldn't read whether this is on")).toBeTruthy();
+    expect(screen.queryByRole("switch")).toBeNull();
+
+    get.mockResolvedValueOnce({ enabled: true });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    const toggle = await screen.findByRole("switch");
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+  });
 });
