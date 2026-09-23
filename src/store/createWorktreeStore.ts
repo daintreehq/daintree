@@ -2266,6 +2266,7 @@ function worktreeChangesEqual(
     // moves without changing any other field here still has to churn identity.
     a.headOid === b.headOid &&
     a.lastCommitMessage === b.lastCommitMessage &&
+    a.lastCommitBody === b.lastCommitBody &&
     a.lastCommitTimestampMs === b.lastCommitTimestampMs &&
     a.lastCommitAuthor?.name === b.lastCommitAuthor?.name &&
     a.lastCommitAuthor?.email === b.lastCommitAuthor?.email

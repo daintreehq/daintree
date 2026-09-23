@@ -60,6 +60,27 @@ describe("CommitInfoTooltip", () => {
     expect(container.querySelector("img")).toBeNull();
   });
 
+  it("never brands a human whose address merely contains an agent id", () => {
+    const { container } = render(
+      <CommitInfoTooltip
+        lastCommitTimestampMs={Date.now()}
+        author={{ name: "Claude Monet", email: "claude.monet@example.org" }}
+      />
+    );
+    expect(container.querySelector("img")).not.toBeNull();
+  });
+
+  it("brands a GitHub noreply commit whose login is an agent", () => {
+    const { container } = render(
+      <CommitInfoTooltip
+        lastCommitTimestampMs={Date.now()}
+        author={{ name: "Copilot", email: "198982749+Copilot@users.noreply.github.com" }}
+      />
+    );
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("svg")).not.toBeNull();
+  });
+
   it("renders a square avatar for a bot author", () => {
     const { container } = render(
       <CommitInfoTooltip
@@ -135,6 +156,80 @@ describe("CommitInfoTooltip", () => {
 
     expect(screen.getByText("Committed 2 minutes ago")).toBeDefined();
     expect(screen.queryByText(/Last active/)).toBeNull();
+  });
+
+  it("lifts trailers out of the body and names co-authors in the byline", () => {
+    const { container } = render(
+      <CommitInfoTooltip
+        lastCommitTimestampMs={Date.now() - 60_000}
+        author={human}
+        commitMessage="Resume dropped parts"
+        commitBody={
+          "Why it matters.\n\nCo-authored-by: Sam Okafor <sam@x.dev>\nSigned-off-by: Jane Doe <jane@example.com>"
+        }
+      />
+    );
+    expect(screen.getByText("Why it matters.")).toBeDefined();
+    expect(screen.getByText("with Sam Okafor")).toBeDefined();
+    expect(container.textContent).not.toMatch(/-by:/);
+  });
+
+  it("shows the subject before the author", () => {
+    const { container } = render(
+      <CommitInfoTooltip
+        lastCommitTimestampMs={Date.now() - 60_000}
+        author={human}
+        commitMessage="fix: resolve the navigation race"
+      />
+    );
+    const text = container.textContent ?? "";
+    expect(text.indexOf("fix: resolve")).toBeLessThan(text.indexOf("Jane Doe"));
+  });
+
+  it("abbreviates the SHA and keeps the full id available", () => {
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    render(<CommitInfoTooltip lastCommitTimestampMs={Date.now()} author={human} commitSha={sha} />);
+    const short = screen.getByText(sha.slice(0, 7));
+    expect(short.getAttribute("title")).toBe(sha);
+  });
+
+  it("switches to an absolute date where the activity chip does", () => {
+    const { rerender } = render(
+      <CommitInfoTooltip lastCommitTimestampMs={Date.now() - 29 * 86_400_000} author={human} />
+    );
+    expect(screen.getByText(/Committed \d+ weeks? ago/)).toBeDefined();
+    rerender(
+      <CommitInfoTooltip lastCommitTimestampMs={Date.now() - 3 * 365 * 86_400_000} author={human} />
+    );
+    expect(screen.queryByText(/ago/)).toBeNull();
+    expect(screen.getByText(/^Committed on /)).toBeDefined();
+  });
+
+  it("omits the activity line when activity predates the commit", () => {
+    render(
+      <CommitInfoTooltip
+        lastCommitTimestampMs={Date.now() - 60_000}
+        author={human}
+        lastActivityTimestamp={Date.now() - 3_600_000}
+      />
+    );
+    expect(screen.queryByText(/Last active/)).toBeNull();
+  });
+
+  it("gives a bot with no picture a glyph rather than person-like initials", () => {
+    const { container } = render(
+      <CommitInfoTooltip
+        lastCommitTimestampMs={Date.now()}
+        author={{
+          name: "dependabot[bot]",
+          email: "49699333+dependabot[bot]@users.noreply.github.com",
+        }}
+      />
+    );
+    fireEvent.error(container.querySelector("img")!);
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("svg")).not.toBeNull();
+    expect(screen.queryByText("DE")).toBeNull();
   });
 
   it("renders nothing when both timestamps are invalid", () => {

@@ -560,6 +560,8 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   lastCommitTimestampMs={worktree.worktreeChanges?.lastCommitTimestampMs}
                   author={worktree.worktreeChanges?.lastCommitAuthor}
                   commitMessage={worktree.worktreeChanges?.lastCommitMessage}
+                  commitBody={worktree.worktreeChanges?.lastCommitBody}
+                  commitSha={worktree.worktreeChanges?.headOid}
                   forgeAvatarUrl={forgeAuthorAvatarUrl}
                   lastActivityTimestamp={worktree.lastActivityTimestamp}
                 />

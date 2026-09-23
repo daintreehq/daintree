@@ -28,8 +28,18 @@
  *   DAINTREE_SHOT_ONLY    comma-separated step filter (step names below)
  *   DAINTREE_SHOT_THEMES  comma-separated theme sweep (default: every built-in)
  *   DAINTREE_SHOT_SESSIONS  set to "0" to skip the (slow) session launches
+ *   DAINTREE_SHOT_DIR     optional output dir (absolute), so review rounds can
+ *                         write outside the repo
  *
- * Output: artifacts/card-shots/<NN-slug>[-tag].png (gitignored).
+ * Output: artifacts/card-shots/<NN-slug>[-tag].png (gitignored), or
+ * DAINTREE_SHOT_DIR when set.
+ *
+ * The `commit-tooltip` and `commit-tooltip-themes` steps review the commit
+ * hover card. They commit real (empty) commits into the quiet worktree with
+ * chosen authors, dates and messages, so every card they shoot is one the app
+ * built from `git log`. Gravatar is answered by a context route: one author has
+ * a picture, everyone else gets the real `d=404`, which is what drives the
+ * initials fallback.
  *
  * Hard rule, inherited from the other review harnesses and then some: this spec
  * never writes a PNG it has not verified. `snap()` asserts the target is on
@@ -40,6 +50,7 @@
 
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import { createHash } from "crypto";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
@@ -63,7 +74,9 @@ const THEME = process.env.DAINTREE_SHOT_THEME ?? "";
 const TAG = process.env.DAINTREE_SHOT_TAG ? `-${process.env.DAINTREE_SHOT_TAG}` : "";
 const SCALE = process.env.DAINTREE_SCREENSHOT_SCALE ?? "2";
 const WITH_SESSIONS = process.env.DAINTREE_SHOT_SESSIONS !== "0";
-const OUTPUT_DIR = path.resolve(process.cwd(), "artifacts", "card-shots");
+const OUTPUT_DIR = process.env.DAINTREE_SHOT_DIR
+  ? path.resolve(process.env.DAINTREE_SHOT_DIR)
+  : path.resolve(process.cwd(), "artifacts", "card-shots");
 
 /** Every built-in theme. The sweep reloads in place; no re-boot needed. */
 export const ALL_THEMES = [
@@ -137,6 +150,121 @@ const WORKTREES = {
     note: undefined,
   },
 } as const;
+
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+
+/** The one author Gravatar "knows"; every other email gets the real 404. */
+const AVATAR_EMAIL = "avery@helios.dev";
+
+const AVATAR_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" fill="#c9a27e"/>
+  <circle cx="32" cy="26" r="12" fill="#f1d3b5"/>
+  <path d="M20 22c0-9 6-14 12-14s13 5 12 15c-3-5-8-7-12-7s-9 2-12 6z" fill="#4a2f22"/>
+  <path d="M8 64c2-14 12-21 24-21s22 7 24 21z" fill="#35577a"/>
+</svg>`;
+
+interface CommitVariant {
+  slug: string;
+  subject: string;
+  body: string;
+  author: { name: string; email: string };
+  ageMs: number;
+}
+
+/**
+ * Commit shapes the hover card has to survive, committed in this order. The
+ * last one stays HEAD for the theme sweep, so it is the richest.
+ */
+const COMMIT_VARIANTS: CommitVariant[] = [
+  {
+    slug: "recent-short",
+    subject: "Fix typo in the retry docs",
+    body: "",
+    author: { name: "Avery Lindqvist", email: AVATAR_EMAIL },
+    ageMs: 2 * MINUTE_MS,
+  },
+  {
+    slug: "bot",
+    subject: "Bump esbuild from 0.21.5 to 0.25.0",
+    body: [
+      "Bumps [esbuild](https://github.com/evanw/esbuild) from 0.21.5 to 0.25.0.",
+      "- [Release notes](https://github.com/evanw/esbuild/releases)",
+      "- [Changelog](https://github.com/evanw/esbuild/blob/main/CHANGELOG.md)",
+      "",
+      "---",
+      "updated-dependencies:",
+      "- dependency-name: esbuild",
+      "  dependency-type: direct:development",
+      "",
+      "Signed-off-by: dependabot[bot] <support@github.com>",
+    ].join("\n"),
+    author: {
+      name: "dependabot[bot]",
+      email: "49699333+dependabot[bot]@users.noreply.github.com",
+    },
+    ageMs: 2 * DAY_MS + 3 * HOUR_MS,
+  },
+  {
+    slug: "agent",
+    subject: "Add a jitter option to backoffDelay",
+    body: "Per-attempt by default; per-request is opt-in until the ingest team weighs in.",
+    author: { name: "Claude", email: "noreply@anthropic.com" },
+    ageMs: 25 * MINUTE_MS,
+  },
+  {
+    slug: "ancient",
+    subject: "Initial import of the ingest console",
+    body: "",
+    author: { name: "Mo", email: "mo@helios.dev" },
+    ageMs: 3 * 365 * DAY_MS,
+  },
+  {
+    slug: "long-multiline",
+    subject:
+      "Stream multipart uploads through the retry ladder so a dropped part resumes instead of restarting the whole file",
+    body: [
+      "Large uploads restarted from byte zero whenever a single part hit a 5xx, which on a flaky link meant a 4 GB file could retry for an hour and never land.",
+      "",
+      "Thread the part index through the retry ladder and keep a per-part checksum, so a failed part is re-sent on its own and the server stitches the rest.",
+      "",
+      "- cap concurrent parts at 4",
+      "- keep the part checksum in the resume manifest",
+      "- surface the resumed byte offset in the progress event",
+      "",
+      "Co-authored-by: Sam Okafor <sam@helios.dev>",
+      "Co-authored-by: Claude <noreply@anthropic.com>",
+    ].join("\n"),
+    author: { name: "Priya Raman", email: "priya@helios.dev" },
+    ageMs: 3 * HOUR_MS + 10 * MINUTE_MS,
+  },
+];
+
+/** A real commit with a chosen author, date and message — no store patching. */
+function commitVariant(cwd: string, variant: CommitVariant): void {
+  const when = new Date(Date.now() - variant.ageMs).toISOString();
+  const msgFile = path.join(tmpdir(), `daintree-cardshot-msg-${variant.slug}-${process.pid}`);
+  writeFileSync(
+    msgFile,
+    variant.body ? `${variant.subject}\n\n${variant.body}\n` : variant.subject
+  );
+  try {
+    execSync(`git commit --allow-empty -q -F "${msgFile}"`, {
+      cwd,
+      stdio: "ignore",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: variant.author.name,
+        GIT_AUTHOR_EMAIL: variant.author.email,
+        GIT_AUTHOR_DATE: when,
+        GIT_COMMITTER_DATE: when,
+      },
+    });
+  } finally {
+    rmSync(msgFile, { force: true });
+  }
+}
 
 function git(cmd: string, cwd: string): void {
   execSync(`git ${cmd}`, { cwd, stdio: "ignore" });
@@ -304,6 +432,40 @@ async function snap(
   written.add(`${slug}${TAG}.png`);
 }
 
+/**
+ * Shoot the union of several boxes — a hover card together with the trigger
+ * and card it hangs off — padded so the pointer relationship is visible. Same
+ * refusal rules as `snap()`: every part must be on screen with a real box.
+ */
+async function snapUnion(page: Page, slug: string, parts: Locator[], pad = 16): Promise<void> {
+  await settle(page, 300);
+  const boxes = [];
+  for (const part of parts) {
+    await expect(part, `"${slug}": part never became visible — refusing to write`).toBeVisible({
+      timeout: T_LONG,
+    });
+    const box = await part.boundingBox();
+    if (!box || box.width < 8 || box.height < 8) {
+      throw new Error(`"${slug}": part box is ${JSON.stringify(box)} — refusing to write`);
+    }
+    boxes.push(box);
+  }
+  const viewport = page.viewportSize() ?? { width: 1680, height: 1050 };
+  const x = Math.max(0, Math.min(...boxes.map((b) => b.x)) - pad);
+  const y = Math.max(0, Math.min(...boxes.map((b) => b.y)) - pad);
+  const right = Math.min(viewport.width, Math.max(...boxes.map((b) => b.x + b.width)) + pad);
+  const bottom = Math.min(viewport.height, Math.max(...boxes.map((b) => b.y + b.height)) + pad);
+  const file = path.join(OUTPUT_DIR, `${slug}${TAG}.png`);
+  await page.screenshot({
+    path: file,
+    type: "png",
+    animations: "disabled",
+    caret: "hide",
+    clip: { x, y, width: right - x, height: bottom - y },
+  });
+  written.add(`${slug}${TAG}.png`);
+}
+
 /** Every capture step is named so `DAINTREE_SHOT_ONLY` can select it. */
 const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "").split(",").filter(Boolean);
 const stepFailures: string[] = [];
@@ -447,6 +609,15 @@ test("sidebar worktree card review — states and themes", async () => {
       windowSize: { width: 1680, height: 1050 },
       env: fakeAgentEnv(fakeBinDir),
       extraArgs: ["--disable-gpu", "--in-process-gpu", "--disable-breakpad", "--noerrdialogs"],
+    });
+    // Gravatar is answered locally so the avatar tiers are deterministic: the
+    // one known author gets a picture, everyone else the real d=404 miss.
+    const avatarHash = createHash("sha256").update(AVATAR_EMAIL).digest("hex");
+    await ctx.app.context().route("https://www.gravatar.com/avatar/**", (route) => {
+      if (route.request().url().includes(avatarHash)) {
+        return route.fulfill({ status: 200, contentType: "image/svg+xml", body: AVATAR_SVG });
+      }
+      return route.fulfill({ status: 404, body: "" });
     });
     const page = await openAndOnboardProject(ctx.app, ctx.window, repo.dir, "Helios Dashboard");
     if (THEME) await setAppTheme(page, THEME);
@@ -756,6 +927,135 @@ test("sidebar worktree card review — states and themes", async () => {
         await setSection(themedRow, "details", true);
         await settle(page, 800);
         await snap(page, `200-theme-${theme}`, themedRow);
+      }
+    });
+
+    // 14. The commit hover card. Each variant is a real commit in the quiet
+    //     worktree; the card is shot hanging off the activity chip that opens
+    //     it, with the card around it for scale.
+    const quietDir = path.join(repo.worktreeRoot, WORKTREES.quiet.slug);
+    const hoverCard = (text: string): Locator =>
+      page.locator("[data-radix-popper-content-wrapper]").filter({ hasText: text }).first();
+    const activityTriggers = (rowLocator: Locator): Locator =>
+      rowLocator.locator('[role="group"][aria-label="Last activity"]');
+
+    /**
+     * Hover `trigger` until its card shows `text`. Git status is polled, so a
+     * fresh commit can take a few seconds to reach the card; re-hover rather
+     * than trusting the first open, which may be the previous HEAD.
+     */
+    async function openHoverCard(trigger: Locator, text: string): Promise<Locator> {
+      const card = hoverCard(text);
+      const deadline = Date.now() + 60_000;
+      while (Date.now() < deadline) {
+        await page.mouse.move(1600, 980);
+        await page.waitForTimeout(250);
+        await trigger.hover();
+        // `isVisible` never waits, whatever its timeout says; under load the
+        // card opens after the check and the loop would move away from it.
+        const opened = await card
+          .waitFor({ state: "visible", timeout: 5000 })
+          .then(() => true)
+          .catch(() => false);
+        if (opened) return card;
+        await page.waitForTimeout(1500);
+      }
+      throw new Error(`hover card never showed "${text}"`);
+    }
+
+    /**
+     * Open the card and shoot it, then prove it was still open when the shot
+     * landed. A status poll can re-render the row and close the card between
+     * the visibility check and the capture, which leaves a PNG of the card's
+     * empty surroundings — so a card gone afterwards means reshoot, and three
+     * misses in a row is a failure, never a written lie.
+     */
+    async function shootHoverCard(slug: string, trigger: Locator, text: string): Promise<void> {
+      for (let attempt = 0; attempt < 6; attempt++) {
+        // The first open proves the new commit reached the card; the polls
+        // that follow a commit keep re-rendering the row for a few seconds, so
+        // let them land before the shot that counts.
+        await openHoverCard(trigger, text);
+        await page.mouse.move(1600, 980);
+        await page.waitForTimeout(1500 + attempt * 1500);
+        const card = await openHoverCard(trigger, text);
+        await snapUnion(page, slug, [card, trigger]);
+        if (await card.isVisible()) return;
+        if (process.env.DAINTREE_SHOT_DEBUG) {
+          const dump = await page
+            .locator("[data-radix-popper-content-wrapper]")
+            .evaluateAll((els) => els.map((e) => (e.textContent ?? "").slice(0, 60)));
+          console.log(`[card-shots] ${slug} attempt ${attempt}: wrappers=${JSON.stringify(dump)}`);
+        }
+        written.delete(`${slug}${TAG}.png`);
+        rmSync(path.join(OUTPUT_DIR, `${slug}${TAG}.png`), { force: true });
+      }
+      throw new Error(`"${slug}": hover card kept closing before the capture landed`);
+    }
+
+    const quietCard = quiet.locator(".sidebar-worktree-card").first();
+    const needle = (v: CommitVariant) => v.subject.slice(0, 24);
+
+    await step("commit-tooltip", async () => {
+      await setSection(flagship, "details", false);
+      await setSection(quiet, "details", false);
+      if ((await quietCard.getAttribute("data-active")) !== "true") await quietCard.click();
+      await expect(quietCard, "quiet card did not become active").toHaveAttribute(
+        "data-active",
+        "true",
+        { timeout: T_LONG }
+      );
+      for (const variant of COMMIT_VARIANTS) {
+        commitVariant(quietDir, variant);
+        const chip = activityTriggers(quiet).first();
+        await shootHoverCard(`300-commit-${variant.slug}`, chip, needle(variant));
+      }
+      const last = COMMIT_VARIANTS[COMMIT_VARIANTS.length - 1]!;
+
+      // The second trigger: the "Last active" footer inside expanded Details.
+      // Expanding swaps the header chip out, so the footer is the only
+      // activity trigger left on the card — assert it is the footer line.
+      await page.mouse.move(1600, 980);
+      await setSection(quiet, "details", true);
+      const footer = activityTriggers(quiet).last();
+      await expect(footer, "details footer trigger missing").toContainText("Last active", {
+        timeout: T_LONG,
+      });
+      await shootHoverCard("310-commit-details-footer", footer, needle(last));
+      await page.mouse.move(1600, 980);
+      await setSection(quiet, "details", false);
+
+      for (const [slug, media] of [
+        ["320-commit-prefers-contrast", { contrast: "more" as const }],
+        ["321-commit-forced-colors", { forcedColors: "active" as const }],
+      ] as const) {
+        await page.emulateMedia(media);
+        await shootHoverCard(slug, activityTriggers(quiet).first(), needle(last));
+      }
+      await page.emulateMedia({ contrast: "no-preference", forcedColors: "none" });
+      await page.mouse.move(1600, 980);
+    });
+
+    await step("commit-tooltip-themes", async () => {
+      const last = COMMIT_VARIANTS[COMMIT_VARIANTS.length - 1]!;
+      // Runnable on its own (`DAINTREE_SHOT_ONLY=commit-tooltip-themes`): put
+      // the richest commit at HEAD unless the previous step already did.
+      if (!(await hoverCard(needle(last)).count())) {
+        const head = execSync("git log -1 --format=%s", { cwd: quietDir }).toString().trim();
+        if (head !== last.subject) commitVariant(quietDir, last);
+      }
+      const themes = SWEEP_THEMES.length > 0 ? SWEEP_THEMES : ALL_THEMES;
+      for (const theme of themes) {
+        await page.mouse.move(1600, 980);
+        await setAppTheme(page, theme);
+        await page.addStyleTag({ content: POLISH_CSS }).catch(() => {});
+        await dismissBlockingPalette(page);
+        const themedQuiet = row(page, WORKTREES.quiet.branch);
+        await shootHoverCard(
+          `400-commit-theme-${theme}`,
+          activityTriggers(themedQuiet).first(),
+          needle(last)
+        );
       }
     });
   } finally {

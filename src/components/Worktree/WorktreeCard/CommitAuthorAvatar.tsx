@@ -1,5 +1,6 @@
 import { useEffect, useState, type ComponentType } from "react";
 import { cn } from "@/lib/utils";
+import { Bot } from "@/components/icons";
 import { CAT_COLOR_CLASSES } from "@/config/categoryColors";
 import { AGENT_REGISTRY, type AgentIconProps } from "@/config/agents";
 import { getGravatarUrl, isBotAuthor } from "@/utils/gravatar";
@@ -20,16 +21,22 @@ const MACHINE_EMAIL_TO_AGENT: Record<string, string> = {
   "noreply@anthropic.com": "claude",
 };
 
+// GitHub attributes an app account's commits to
+// `<id>+<login>@users.noreply.github.com` (Copilot commits as
+// `198982749+Copilot@…`). The login names one account, so it can be matched
+// exactly where an arbitrary address cannot.
+const GITHUB_NOREPLY = /^(?:\d+\+)?([^@]+)@users\.noreply\.github\.com$/;
+
 /**
  * Match the commit author against the agent registry. Returns the branded
  * icon component when the committer is a known AI agent (Claude, Codex,
  * Gemini, …), else null so the avatar chain falls through to a picture.
  *
- * Matching is intentionally email-only and conservative: an exact
- * machine-email map, or an email segment that exactly equals an agent id
- * (≥4 chars, to avoid short-token collisions). Author *name* is deliberately
- * not matched — a human committing as "Claude Monet" must not be painted as
- * an AI agent.
+ * Matching is email-only and conservative: an exact machine-email map, or a
+ * GitHub noreply address whose login is exactly an agent id. Neither the
+ * author *name* nor loose pieces of an address are matched — a human
+ * committing as "Claude Monet", or from `claude.monet@example.org`, must not
+ * be painted as an AI agent.
  */
 export function resolveCommitAgentIcon(author: CommitAuthor): ComponentType<AgentIconProps> | null {
   const email = author.email.trim().toLowerCase();
@@ -37,10 +44,10 @@ export function resolveCommitAgentIcon(author: CommitAuthor): ComponentType<Agen
   const mapped = MACHINE_EMAIL_TO_AGENT[email];
   if (mapped && AGENT_REGISTRY[mapped]) return AGENT_REGISTRY[mapped].icon;
 
-  const segments = email.split(/[^a-z0-9]+/).filter(Boolean);
+  const login = GITHUB_NOREPLY.exec(email)?.[1]?.replace(/\[bot\]$/, "");
+  if (!login) return null;
   for (const agent of Object.values(AGENT_REGISTRY)) {
-    const id = agent.id.toLowerCase();
-    if (id.length >= 4 && segments.includes(id)) return agent.icon;
+    if (agent.id.toLowerCase() === login) return agent.icon;
   }
   return null;
 }
@@ -71,7 +78,7 @@ export interface CommitAuthorAvatarProps {
 /**
  * Commit-author avatar. Resolves through four ordered tiers — branded agent
  * icon, forge profile picture, `d=404` Gravatar probe, then deterministic
- * coloured initials — so a real face shows when one exists and a meaningful
+ * coloured initials (a bot glyph for `[bot]` accounts) — so a real face shows when one exists and a meaningful
  * placeholder shows when it doesn't. Decorative: callers carry the accessible
  * name, so the avatar is `aria-hidden`.
  *
@@ -118,6 +125,21 @@ export function CommitAuthorAvatar({
   }
 
   const src = imgSources[srcIndex];
+  if (src == null && isBotAuthor(author.name)) {
+    return (
+      <span
+        aria-hidden="true"
+        className={cn(
+          "flex shrink-0 items-center justify-center bg-overlay-soft text-text-secondary",
+          radius,
+          className
+        )}
+        style={box}
+      >
+        <Bot style={{ width: Math.round(size * 0.6), height: Math.round(size * 0.6) }} />
+      </span>
+    );
+  }
   if (src == null) {
     const key = (author.email.trim() || author.name.trim()).toLowerCase();
     const color = CAT_COLOR_CLASSES[Math.abs(djb2(key)) % CAT_COLOR_CLASSES.length]!;
