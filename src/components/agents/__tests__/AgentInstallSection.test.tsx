@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * AgentInstallSection — drives the Settings "Installation"/"Authentication"/
- * "Not launchable" copy block. Covers the tri-state `authConfirmed` signal
+ * AgentInstallSection — drives the Settings "Not installed" / "No credentials
+ * detected" / "Blocked" / "Needs setup" block. Covers the tri-state `authConfirmed` signal
  * introduced in issue #5483: `ready + authConfirmed: undefined` should hide
  * the section; `ready + authConfirmed: false` should surface the auth nudge;
  * `installed` (WSL cap) should surface a distinct WSL message and never
@@ -103,7 +103,7 @@ describe("AgentInstallSection tri-state rendering", () => {
     expect(container.textContent).not.toMatch(/will prompt/i);
   });
 
-  it("renders the WSL 'Not launchable' message for installed WSL agents (not an auth nudge)", () => {
+  it("renders the WSL 'Needs setup' message for installed WSL agents (not an auth nudge)", () => {
     const detail: AgentCliDetail = {
       state: "installed",
       resolvedPath: "wsl:Ubuntu",
@@ -111,7 +111,7 @@ describe("AgentInstallSection tri-state rendering", () => {
       wslDistro: "Ubuntu",
     };
     const { container } = renderSection({ availability: "installed", detail });
-    expect(container.textContent).toContain("Not launchable");
+    expect(container.textContent).toContain("Needs setup");
     expect(container.textContent).toContain("WSL");
     // Must NOT claim a credential problem — the issue is launch, not auth.
     expect(container.textContent).not.toContain("no credentials were detected");

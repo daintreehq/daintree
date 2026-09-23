@@ -222,7 +222,7 @@ export function AgentInstallSection({
   const headerLabel = blocked
     ? "Blocked"
     : showWslNotice
-      ? "Not launchable"
+      ? "Needs setup"
       : showAuthNudge
         ? "No credentials detected"
         : "Not installed";

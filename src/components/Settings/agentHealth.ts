@@ -36,6 +36,8 @@ export function getAgentHealth(state: AgentAvailabilityState | undefined): Agent
     return { kind: "attention", label: "No credentials detected", Icon: KeyRound };
   }
   if (isAgentReady(state)) return { kind: "ready" };
-  if (isAgentInstalled(state)) return { kind: "attention", label: "Not launchable", Icon: Wrench };
+  // "Needs setup" is the app's word for this state everywhere else (System status,
+  // the toolbar button, the dock launcher), so the picker and inventory use it too.
+  if (isAgentInstalled(state)) return { kind: "attention", label: "Needs setup", Icon: Wrench };
   return { kind: "missing", label: "Not installed" };
 }

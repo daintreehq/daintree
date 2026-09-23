@@ -2,6 +2,7 @@ import { useId, useMemo, useRef, useState } from "react";
 import { ChevronDown, Check } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import type { AgentPreset } from "@/config/agents";
 
 /**
@@ -122,12 +123,6 @@ export function PresetSelector({
     options.findIndex((o) => o.id === (selectedPresetId ?? "") && o.source === selectedItem.source)
   );
   const [activeIndex, setActiveIndex] = useState(selectedIndex);
-  // The highlight fill alone is too faint to find by keyboard, so arrow-key movement
-  // also rings the active option. A pointer only fills it.
-  const [keyboardNav, setKeyboardNav] = useState(false);
-  // Opened with the keyboard, the ring shows from the first frame; opened with a
-  // pointer, it waits for an arrow key.
-  const openedByPointerRef = useRef(false);
 
   const optionDomId = (index: number) => `${listboxId}-option-${index}`;
 
@@ -137,11 +132,7 @@ export function PresetSelector({
   };
 
   const handleOpenChange = (next: boolean) => {
-    if (next) {
-      setActiveIndex(selectedIndex);
-      setKeyboardNav(!openedByPointerRef.current);
-    }
-    openedByPointerRef.current = false;
+    if (next) setActiveIndex(selectedIndex);
     setOpen(next);
   };
 
@@ -152,7 +143,6 @@ export function PresetSelector({
     const move = (index: number) => {
       e.preventDefault();
       setActiveIndex(index);
-      setKeyboardNav(true);
       document.getElementById(optionDomId(index))?.scrollIntoView?.({ block: "nearest" });
     };
     switch (e.key) {
@@ -187,12 +177,8 @@ export function PresetSelector({
       item={item}
       isSelected={item.source === selectedItem.source && item.id === selectedItem.id}
       isActive={index === activeIndex}
-      showRing={keyboardNav && index === activeIndex}
       onSelect={handleSelect}
-      onHover={() => {
-        setActiveIndex(index);
-        setKeyboardNav(false);
-      }}
+      onHover={() => setActiveIndex(index)}
       testid={testid}
     />
   );
@@ -219,9 +205,6 @@ export function PresetSelector({
             "focus:outline-hidden focus-visible:border-accent-primary"
           )}
           data-testid="preset-selector-trigger"
-          onPointerDown={() => {
-            openedByPointerRef.current = true;
-          }}
         >
           <span
             className="w-2.5 h-2.5 rounded-full shrink-0 border border-border-default"
@@ -312,7 +295,6 @@ function PresetOption({
   item,
   isSelected,
   isActive,
-  showRing,
   onSelect,
   onHover,
   testid,
@@ -321,7 +303,6 @@ function PresetOption({
   item: Item;
   isSelected: boolean;
   isActive: boolean;
-  showRing: boolean;
   onSelect: (id: string) => void;
   onHover: () => void;
   testid?: string;
@@ -330,9 +311,13 @@ function PresetOption({
     <div
       id={domId}
       role="option"
-      aria-selected={isSelected}
+      // The palettes' contract: `aria-selected` is the row Enter acts on, and the
+      // shared row class draws it as a fill plus a leading `selection-outline` rail
+      // (3:1 where the fill alone is ~1.1:1). The committed value is `aria-current`
+      // with a check mark, so the two never compete for one treatment.
+      aria-selected={isActive}
+      aria-current={isSelected ? "true" : undefined}
       data-testid={testid}
-      data-highlighted={isActive || undefined}
       onClick={() => onSelect(item.id)}
       onMouseMove={onHover}
       onKeyDown={(e) => {
@@ -343,9 +328,8 @@ function PresetOption({
         }
       }}
       className={cn(
+        PALETTE_ROW_CLASS,
         "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm text-text-primary",
-        isActive && "bg-overlay-selected",
-        showRing && "outline-solid outline-2 -outline-offset-2 outline-selection-outline",
         isSelected && "font-medium"
       )}
     >

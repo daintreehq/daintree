@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, type ComponentType, type CSSProperties } from "react";
 import { cn } from "@/lib/utils";
-import { Settings2, ChevronDown, Search, ShieldOff } from "lucide-react";
+import { Settings2, ChevronDown, Search, ShieldOff, Check } from "lucide-react";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { BrandMark } from "@/components/icons";
 import type { AgentAvailabilityState } from "@shared/types";
@@ -36,17 +37,6 @@ export function AgentSelectorDropdown({
   const [open, setOpen] = useState(false);
   const [filterQuery, setFilterQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
-  // The highlight fill alone is too faint to find by keyboard, so arrow-key movement
-  // also rings the active option. A pointer only fills it.
-  const [keyboardNav, setKeyboardNav] = useState(false);
-  // Opened with the keyboard, the ring shows from the first frame; opened with a
-  // pointer, it waits for an arrow key.
-  const openedByPointerRef = useRef(false);
-  const handleOpenChange = (next: boolean) => {
-    if (next) setKeyboardNav(!openedByPointerRef.current);
-    openedByPointerRef.current = false;
-    setOpen(next);
-  };
   const activeItemRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -69,11 +59,18 @@ export function AgentSelectorDropdown({
   }, [activeIndex]);
 
   useEffect(() => {
-    if (!open) {
-      setFilterQuery("");
-      setKeyboardNav(false);
-    }
+    if (!open) setFilterQuery("");
   }, [open]);
+
+  // The cursor opens on the page being shown, so Enter straight away is a no-op
+  // rather than a jump back to General.
+  const handleOpenChange = (next: boolean) => {
+    if (next) {
+      const current = [GENERAL_ID, ...agentOptions.map((a) => a.id)].indexOf(activeSubtab);
+      setActiveIndex(Math.max(0, current));
+    }
+    setOpen(next);
+  };
 
   const handleSelect = (id: string) => {
     onSubtabChange(id);
@@ -84,12 +81,10 @@ export function AgentSelectorDropdown({
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();
-        setKeyboardNav(true);
         setActiveIndex((prev) => Math.min(prev + 1, items.length - 1));
         break;
       case "ArrowUp":
         e.preventDefault();
-        setKeyboardNav(true);
         setActiveIndex((prev) => Math.max(prev - 1, 0));
         break;
       case "Enter":
@@ -112,9 +107,6 @@ export function AgentSelectorDropdown({
           aria-expanded={open}
           aria-haspopup="listbox"
           data-testid="agent-selector-trigger"
-          onPointerDown={() => {
-            openedByPointerRef.current = true;
-          }}
           className={cn(
             "flex items-center gap-2 w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
             "border border-border-strong bg-surface-canvas text-text-primary transition-colors",
@@ -191,21 +183,17 @@ export function AgentSelectorDropdown({
                 ref={isActive ? activeItemRef : undefined}
                 id={`agent-selector-item-${item.id}`}
                 role="option"
-                aria-selected={isSelected}
-                data-highlighted={isActive || undefined}
+                // The palettes' contract (paletteRowStyles): `aria-selected` is the row
+                // Enter acts on, drawn as a fill plus a leading rail; the page being
+                // shown is `aria-current` with a check.
+                aria-selected={isActive}
+                aria-current={isSelected ? "page" : undefined}
                 onClick={() => handleSelect(item.id)}
-                onMouseEnter={() => {
-                  setActiveIndex(index);
-                  setKeyboardNav(false);
-                }}
+                onMouseEnter={() => setActiveIndex(index)}
                 className={cn(
-                  "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm",
-                  isActive && "bg-overlay-selected",
-                  isActive &&
-                    keyboardNav &&
-                    "outline-solid outline-2 -outline-offset-2 outline-selection-outline",
-                  isSelected && "text-text-primary font-medium",
-                  !isActive && !isSelected && "text-text-primary"
+                  PALETTE_ROW_CLASS,
+                  "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm text-text-primary",
+                  isSelected && "font-medium"
                 )}
               >
                 {item.kind === "general" ? (
@@ -225,6 +213,7 @@ export function AgentSelectorDropdown({
                     <AgentStatusMarks agent={item.agent} />
                   </>
                 )}
+                {isSelected && <Check size={12} className="shrink-0" aria-hidden="true" />}
               </div>
             );
           })}
