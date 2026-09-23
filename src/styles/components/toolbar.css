@@ -225,25 +225,24 @@
  * DOM-last child is the absolutely positioned status stripe — so the visually
  * last segment kept a right border that doubled the container's own edge.
  * Keying on `[data-stat-segment]` (the pills and the trailing indicator slots)
- * also lets the end segments carry the container's inner radius: the pills'
- * focus ring is drawn inset (the container's overflow-hidden clips an outward
- * one), and an inset ring on a square corner would be cut by the rounded clip. */
-.toolbar-stats {
-  --_inner-radius: calc(var(--toolbar-pill-radius, var(--radius-md)) - 1px);
-}
+ * also lets the end segments carry the container's radius: the pills' focus
+ * ring is drawn inset (the container's overflow-hidden clips an outward one),
+ * and an inset ring on a square corner would be cut by the rounded clip. The
+ * container's own radius sits just outside its clip curve, so the ring's
+ * corner stays whole. */
 
 .toolbar-stats > [data-stat-segment] ~ [data-stat-segment] {
   border-inline-start: 1px solid var(--_divider);
 }
 
 .toolbar-stats > :nth-child(1 of [data-stat-segment]) {
-  border-start-start-radius: var(--_inner-radius);
-  border-end-start-radius: var(--_inner-radius);
+  border-start-start-radius: var(--toolbar-pill-radius, var(--radius-md));
+  border-end-start-radius: var(--toolbar-pill-radius, var(--radius-md));
 }
 
 .toolbar-stats > :nth-last-child(1 of [data-stat-segment]) {
-  border-start-end-radius: var(--_inner-radius);
-  border-end-end-radius: var(--_inner-radius);
+  border-start-end-radius: var(--toolbar-pill-radius, var(--radius-md));
+  border-end-end-radius: var(--toolbar-pill-radius, var(--radius-md));
 }
 
 /* Open segment: the fill alone matched hover exactly, and the old outward
