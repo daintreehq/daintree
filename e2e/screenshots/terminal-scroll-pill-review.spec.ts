@@ -102,7 +102,8 @@ async function open(page: Page, theme: string): Promise<void> {
 }
 
 function pill(page: Page, state: string) {
-  return page.locator(`[data-shot="${state}"] button[aria-label^="Scroll"]`).first();
+  // The ScrollPill button in either host, whatever its copy says.
+  return page.locator(`[data-shot="${state}"] button.rounded-full.pointer-events-auto`).first();
 }
 
 async function snapPane(page: Page, state: string, file: string): Promise<string> {

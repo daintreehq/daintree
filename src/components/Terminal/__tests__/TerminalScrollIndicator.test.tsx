@@ -28,6 +28,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 
 import { TerminalScrollIndicator } from "../TerminalScrollIndicator";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { TERMINAL_SCROLLBAR_WIDTH } from "@/config/xtermConfig";
 
 describe("TerminalScrollIndicator", () => {
   beforeEach(() => {
@@ -66,10 +67,26 @@ describe("TerminalScrollIndicator", () => {
     expect(terminalInstanceService.resumeAutoScroll).toHaveBeenCalledWith("t1");
   });
 
-  it("has correct accessible label", () => {
+  it("keeps the visible label at the start of the accessible name (WCAG 2.5.3)", () => {
     mockHasUnseenOutput = true;
     render(<TerminalScrollIndicator terminalId="t1" />);
-    expect(screen.getByLabelText("Scroll to latest output")).toBeTruthy();
+    const button = screen.getByRole("button");
+    const visible = button.textContent?.trim() ?? "";
+    expect(visible.length).toBeGreaterThan(0);
+    const name = button.getAttribute("aria-label") ?? visible;
+    expect(name.toLowerCase().startsWith(visible.toLowerCase())).toBe(true);
+  });
+
+  it("keeps the pill clear of xterm's scrollbar track", () => {
+    mockHasUnseenOutput = true;
+    const { container } = render(<TerminalScrollIndicator terminalId="t1" />);
+    const overlay = container.firstElementChild;
+    if (!(overlay instanceof HTMLElement)) throw new Error("no overlay rendered");
+    // XtermAdapter's `pr-3` wrapper padding, inside which xterm draws the track.
+    const XTERM_WRAPPER_PADDING = 12;
+    const inset = parseFloat(overlay.style.paddingRight);
+    expect(inset).toBeGreaterThan(XTERM_WRAPPER_PADDING + TERMINAL_SCROLLBAR_WIDTH);
+    expect(overlay.className.split(/\s+/).some((c) => /^pr-/.test(c))).toBe(false);
   });
 
   it("restores terminal focus after clicking pill", () => {
