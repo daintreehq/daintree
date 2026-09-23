@@ -249,6 +249,14 @@ async function capture(page: Page, name: string, theme: string, height: number, 
   await page.evaluate(() => document.fonts.ready);
   await page.mouse.move(0, 0);
   await page.waitForTimeout(350 + (fixture.settleMs ?? 0));
+  // An empty state narrower than a short sentence has collapsed around its
+  // inline-size container and is wrapping one word per line.
+  for (const empty of await dock.locator('[class*="@container/empty-state"]').all()) {
+    const emptyBox = await empty.boundingBox();
+    if (emptyBox && emptyBox.width < 200) {
+      throw new Error(`${name}: empty state collapsed to ${emptyBox.width}px — refusing to write`);
+    }
+  }
   const box = await dock.boundingBox();
   if (!box || Math.abs(box.height - height) > 2) {
     throw new Error(
