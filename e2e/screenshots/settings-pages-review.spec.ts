@@ -260,27 +260,40 @@ test("settings pages review — every tab and subtab, sliced top to bottom", asy
     const planned = [...new Set(tabs)].filter((t) => ONLY.length === 0 || ONLY.includes(t));
     if (planned.length === 0) throw new Error("discovered no settings tabs");
 
-    for (const tab of planned) {
-      try {
-        await openSettingsAt(page, { tab });
-        await settle(page, 900);
-        const subtabs = await listSubtabs(page, tab);
-        if (subtabs.length === 0) {
-          await capturePage(page, tab, null);
-        } else {
-          for (const sub of subtabs) {
-            await page
-              .locator(
-                `${DIALOG} #settings-panel-${cssEscape(tab)} [role="tablist"] [role="tab"][data-tab="${sub}"]`
-              )
-              .first()
-              .click();
-            await settle(page, 700);
-            await capturePage(page, tab, sub);
-          }
+    const captureTab = async (tab: string) => {
+      await openSettingsAt(page, { tab });
+      await settle(page, 900);
+      const subtabs = await listSubtabs(page, tab);
+      if (subtabs.length === 0) {
+        await capturePage(page, tab, null);
+      } else {
+        for (const sub of subtabs) {
+          await page
+            .locator(
+              `${DIALOG} #settings-panel-${cssEscape(tab)} [role="tablist"] [role="tab"][data-tab="${sub}"]`
+            )
+            .first()
+            .click();
+          await settle(page, 700);
+          await capturePage(page, tab, sub);
         }
-      } catch (error) {
-        failures.push(`${tab}: ${String(error).slice(0, 400)}`);
+      }
+    };
+
+    // One retry per tab: a settings panel that re-renders under a loaded machine can
+    // detach mid-screenshot. The retry drops the failed attempt's manifest entries, so a
+    // tab either lands complete or is reported as a failure — never half-captured.
+    for (const tab of planned) {
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const before = manifest.length;
+        try {
+          await captureTab(tab);
+          break;
+        } catch (error) {
+          manifest.splice(before);
+          if (attempt === 2) failures.push(`${tab}: ${String(error).slice(0, 400)}`);
+          else await closeSettings(page);
+        }
       }
     }
     await closeSettings(page);
