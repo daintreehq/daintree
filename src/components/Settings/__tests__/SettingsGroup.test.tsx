@@ -170,6 +170,43 @@ describe("SettingsChoicebox radio contract", () => {
     expect(onChange).toHaveBeenLastCalledWith("b");
   });
 
+  it("renders bare radio rows inside a group, keeping the description out of the name", () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <SettingsGroup>
+        <SettingsChoicebox
+          label="Tier"
+          value="a"
+          onChange={onChange}
+          options={[
+            { value: "a", label: "Alpha", description: "First letter" },
+            { value: "b", label: "Beta", description: "Second letter" },
+          ]}
+        />
+      </SettingsGroup>
+    );
+    const group = screen.getByRole("radiogroup", { name: "Tier" });
+    const beta = screen.getByRole("radio", { name: "Beta" });
+    expect(group.contains(beta)).toBe(true);
+    const describedBy = beta.getAttribute("aria-describedby");
+    expect(document.getElementById(describedBy ?? "")?.textContent).toBe("Second letter");
+
+    // One surface: no option draws its own bordered tile, and nothing but the focus ring takes the accent.
+    for (const radio of screen.getAllByRole("radio")) {
+      expect(radio.className).not.toMatch(
+        /(^|\s)(border|rounded-\S+|bg-accent\S*|text-accent\S*|border-accent\S*)(\s|$)/
+      );
+    }
+    expect(container.querySelectorAll(".settings-card")).toHaveLength(1);
+
+    const radios = screen.getAllByRole("radio");
+    expect(radios.filter((r) => r.tabIndex === 0)).toHaveLength(1);
+    radios[0]!.focus();
+    fireEvent.keyDown(radios[0]!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(radios[1]);
+    expect(onChange).toHaveBeenLastCalledWith("b");
+  });
+
   it("names the radiogroup itself when the caller supplies only an aria-label", () => {
     render(
       <SettingsChoicebox
@@ -323,5 +360,43 @@ describe("Preset group description", () => {
     expect(ids.map((id) => document.getElementById(id)?.textContent)).toContain(
       "Pruned at startup"
     );
+  });
+});
+
+describe("Dependents explain themselves to assistive tech", () => {
+  it("describes every control under an off parent with the reason above it", () => {
+    render(
+      <SettingsGroup>
+        <SettingsDependents disabled reason="Turn on sound to choose one">
+          <SettingsSwitchCard title="Chime" isEnabled={false} onChange={noop} />
+          <SettingsCheckbox label="Repeat" description="d" checked={false} onChange={noop} />
+        </SettingsDependents>
+      </SettingsGroup>
+    );
+    for (const control of [
+      screen.getByRole("switch", { name: "Chime" }),
+      screen.getByRole("checkbox", { name: "Repeat" }),
+    ]) {
+      const ids = (control.getAttribute("aria-describedby") ?? "").split(" ").filter(Boolean);
+      expect(ids.map((id) => document.getElementById(id)?.textContent)).toContain(
+        "Turn on sound to choose one"
+      );
+    }
+  });
+
+  it("gives a number with a unit more room than a bare number", () => {
+    const { container } = render(
+      <SettingsGroup>
+        <SettingsInput label="Bare" type="number" value={32} onChange={noop} />
+        <SettingsInput label="Threshold" type="number" value={32768} suffix="MB" onChange={noop} />
+      </SettingsGroup>
+    );
+    const widthOf = (name: string) =>
+      Array.from(
+        (screen.getByRole("spinbutton", { name }).parentElement as HTMLElement).classList
+      ).find((c) => /^w-\d+$/.test(c));
+    const px = (cls: string | undefined) => Number(cls?.slice(2) ?? 0);
+    expect(px(widthOf("Threshold"))).toBeGreaterThan(px(widthOf("Bare")));
+    expect(container).toBeTruthy();
   });
 });

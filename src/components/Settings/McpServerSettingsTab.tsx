@@ -10,7 +10,7 @@ import {
   SettingsGroup,
   SettingsRow,
 } from "@/components/Settings/SettingsGroup";
-import { SettingsChoicebox } from "@/components/Settings/SettingsChoicebox";
+import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { McpAuditLogViewer } from "@/components/Settings/McpAuditLogViewer";
 import { TurnOutcomeDiagnostics } from "@/components/Settings/TurnOutcomeDiagnostics";
@@ -810,20 +810,39 @@ export function McpServerSettingsTab() {
                   }
                 />
 
-                <div className="grid grid-cols-[minmax(0,1fr)] px-4 py-3">
-                  <SettingsChoicebox<McpClientConfigId>
-                    label="Client"
-                    description="Pick the client you're connecting, then copy its config."
-                    value={clientConfigId}
-                    onChange={handleSelectClientConfig}
-                    options={MCP_CLIENT_CONFIGS.map((entry) => ({
-                      value: entry.id,
-                      label: entry.label,
-                      description: entry.destination,
-                    }))}
-                    columns={3}
-                  />
-                </div>
+                <RadioChoiceGroup
+                  legend="Client"
+                  legendHidden
+                  className="space-y-0 divide-y divide-border-subtle"
+                >
+                  <div className="px-4 pt-3 pb-1 border-b-0">
+                    <div className="text-sm font-medium text-text-primary" aria-hidden="true">
+                      Client
+                    </div>
+                    <p className="mt-0.5 text-xs text-text-secondary select-text">
+                      Pick the client you&apos;re connecting, then copy its config.
+                    </p>
+                  </div>
+                  {MCP_CLIENT_CONFIGS.map((entry) => (
+                    <RadioChoiceRow
+                      key={entry.id}
+                      bare
+                      name="mcpClientConfig"
+                      value={entry.id}
+                      checked={clientConfigId === entry.id}
+                      onChange={() => handleSelectClientConfig(entry.id)}
+                      label={entry.label}
+                      description={entry.destination}
+                      className={cn(
+                        "px-4 py-3 transition-colors",
+                        "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary",
+                        clientConfigId === entry.id
+                          ? "bg-overlay-selected"
+                          : "hover:bg-overlay-soft"
+                      )}
+                    />
+                  ))}
+                </RadioChoiceGroup>
 
                 <SettingsRow
                   label="Client config"

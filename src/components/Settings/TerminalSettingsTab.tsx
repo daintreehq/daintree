@@ -68,6 +68,8 @@ const STRATEGIES: Array<{
   },
 ];
 
+// Mirrors DEFAULT_LAYOUT_CONFIG in layoutConfigStore, which does not export it.
+const DEFAULT_STRATEGY: PanelLayoutStrategy = "automatic";
 const DEFAULT_GRID_VALUE = 3;
 const DEFAULT_SPLIT_RATIO = 0.5;
 
@@ -177,8 +179,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const scrollbackLimits = useMemo(() => {
     const effectiveBase = performanceMode ? PERFORMANCE_MODE_SCROLLBACK : scrollbackLines;
     const types: Array<{ isAgent: boolean; label: string }> = [
-      { isAgent: true, label: "Agent (Claude/Gemini/Codex/OpenCode)" },
-      { isAgent: false, label: "Terminal" },
+      { isAgent: true, label: "Agent terminals" },
+      { isAgent: false, label: "Shells and dev servers" },
     ];
     return types.map(({ isAgent, label }) => ({
       label,
@@ -645,6 +647,13 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               description="How panels arrange in the grid as you add more."
             >
               <SettingsGroup className="overflow-hidden">
+                <SettingsRow
+                  label="Strategy"
+                  description={`Default: ${STRATEGIES.find((s) => s.id === DEFAULT_STRATEGY)?.label}`}
+                  isModified={layoutConfig.strategy !== DEFAULT_STRATEGY}
+                  onReset={() => handleStrategyChange(DEFAULT_STRATEGY)}
+                  resetAriaLabel="Reset grid layout strategy to default"
+                />
                 <RadioChoiceGroup
                   legend="Grid layout strategy"
                   legendHidden
@@ -708,7 +717,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             <SettingsGroup>
               <SettingsPresetGroup
                 label="Base scrollback"
-                description={`Lines kept for agent terminals. Shells and dev servers use reduced limits automatically. Default: ${SCROLLBACK_DEFAULT.toLocaleString()} lines`}
+                description={`The base every terminal's history scales from: agent terminals keep 10× it and shells and dev servers 0.3×, each within its own floor and ceiling. Default: ${SCROLLBACK_DEFAULT.toLocaleString()}`}
                 options={SCROLLBACK_OPTIONS}
                 value={scrollbackLines}
                 onChange={(value) => void handleScrollbackChange(value)}
@@ -720,7 +729,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             </SettingsGroup>
 
             <SettingsGroup
-              label={`Effective limits per type${performanceMode ? " (performance mode)" : ""}`}
+              label={`Lines each terminal keeps${performanceMode ? " (performance mode)" : ""}`}
             >
               {scrollbackLimits.map(({ label, limit }) => (
                 <SettingsRow

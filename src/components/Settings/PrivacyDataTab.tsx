@@ -6,6 +6,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { SettingsSection } from "./SettingsSection";
+import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import type { SettingsPresetOption } from "./SettingsPresetGroup";
@@ -18,6 +19,7 @@ import { logError } from "@/utils/logger";
 
 type TelemetryLevel = "off" | "errors" | "full";
 type LogRetention = 7 | 30 | 90 | 0;
+type LoadState = "loading" | "ready" | "error";
 
 const PRIVACY_SUBTABS: SettingsSubtabItem[] = [
   { id: "telemetry", label: "Telemetry" },
@@ -115,44 +117,34 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
     useState<LogRetention>(DEFAULT_RETENTION_DAYS);
   const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
   const [historyCleared, setHistoryCleared] = useState(false);
+  // Until a load succeeds the telemetry level and both retention pickers show
+  // fallbacks, not the user's values — so they stay disabled rather than letting an
+  // edit save over a value nobody saw.
+  const [privacyLoad, setPrivacyLoad] = useState<LoadState>("loading");
+  const [privacyLoadNonce, setPrivacyLoadNonce] = useState(0);
+  const [sessionRetentionLoad, setSessionRetentionLoad] = useState<LoadState>("loading");
+  const [sessionRetentionNonce, setSessionRetentionNonce] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
+    setPrivacyLoad("loading");
     window.electron.privacy
       .getSettings()
       .then((settings) => {
+        if (cancelled) return;
         setTelemetryLevel(settings.telemetryLevel);
         setLogRetentionDays(settings.logRetentionDays);
         setDataFolderPath(settings.dataFolderPath);
+        setPrivacyLoad("ready");
       })
       .catch((err) => {
-        const fetchAndSet = async () => {
-          const settings = await window.electron.privacy.getSettings();
-          setTelemetryLevel(settings.telemetryLevel);
-          setLogRetentionDays(settings.logRetentionDays);
-          setDataFolderPath(settings.dataFolderPath);
-        };
-        const retry = async () => {
-          try {
-            await fetchAndSet();
-          } catch (retryErr) {
-            notify({
-              type: "error",
-              title: "Couldn't load settings",
-              message: "Privacy settings couldn't be loaded.",
-              actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-            });
-            logError("Failed to load privacy settings", retryErr);
-          }
-        };
-        notify({
-          type: "error",
-          title: "Couldn't load settings",
-          message: "Privacy settings couldn't be loaded.",
-          actions: [{ label: "Try again", variant: "primary", onClick: retry }],
-        });
+        if (!cancelled) setPrivacyLoad("error");
         logError("Failed to load privacy settings", err);
       });
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [privacyLoadNonce]);
 
   // Reset confirmation state when leaving tab
   useEffect(() => {
@@ -227,21 +219,22 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
 
   useEffect(() => {
     let cancelled = false;
+    setSessionRetentionLoad("loading");
     window.electron.agentSessionHistory
       .getRetentionDays()
       .then((days) => {
-        if (!cancelled) setSessionRetentionDays(days);
+        if (cancelled) return;
+        setSessionRetentionDays(days);
+        setSessionRetentionLoad("ready");
       })
       .catch((err) => {
-        // Non-blocking: the picker falls back to the 30-day default already in
-        // state. No error toast — the setting is still adjustable and re-reads
-        // on the next open (Doherty: silent recovery over interrupting the user).
+        if (!cancelled) setSessionRetentionLoad("error");
         logError("Failed to load agent session retention", err);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sessionRetentionNonce]);
 
   const handleSessionRetentionChange = async (days: LogRetention) => {
     const prev = sessionRetentionDays;
@@ -365,6 +358,17 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
     });
   };
 
+  const privacyUnknown = privacyLoad !== "ready";
+  const sessionRetentionUnknown = sessionRetentionLoad !== "ready";
+  const privacyLoadError =
+    privacyLoad === "error" ? (
+      <SettingsLoadErrorBanner
+        title="Privacy settings didn't load"
+        message="Telemetry level and log retention are unavailable until they do."
+        onRetry={() => setPrivacyLoadNonce((n) => n + 1)}
+      />
+    ) : null;
+
   return (
     <div className="space-y-6">
       <SettingsSubtabBar
@@ -383,6 +387,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
               title="Telemetry & diagnostics"
               description="Control what data Daintree collects. No personal data, file contents, or credentials are ever collected. Turning telemetry off stops sending immediately."
             >
+              {privacyLoadError}
               <SettingsGroup id="troubleshooting-crash" className="overflow-hidden">
                 <RadioChoiceGroup
                   legend="Telemetry level"
@@ -395,16 +400,17 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                       bare
                       name="telemetryLevel"
                       value={option.level}
-                      checked={telemetryLevel === option.level}
+                      checked={!privacyUnknown && telemetryLevel === option.level}
+                      disabled={privacyUnknown}
                       onChange={() => void handleTelemetryChange(option.level)}
                       label={option.title}
                       description={option.description}
                       className={cn(
                         "px-4 py-3 transition-colors",
                         "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary",
-                        telemetryLevel === option.level
+                        !privacyUnknown && telemetryLevel === option.level
                           ? "bg-overlay-selected"
-                          : "hover:bg-overlay-soft"
+                          : !privacyUnknown && "hover:bg-overlay-soft"
                       )}
                     />
                   ))}
@@ -466,6 +472,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
               title="Local data"
               description="Where Daintree keeps settings, logs, and session data on this machine."
             >
+              {privacyLoadError}
               <SettingsGroup>
                 <SettingsRow
                   id="privacy-data-folder"
@@ -486,10 +493,11 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                   label="Log retention"
                   description="Log files older than this are pruned at startup, so a change takes effect on next launch"
                   options={RETENTION_OPTIONS}
-                  value={logRetentionDays}
+                  value={privacyUnknown ? null : logRetentionDays}
                   onChange={(days) => void handleRetentionChange(days)}
-                  isModified={logRetentionDays !== DEFAULT_RETENTION_DAYS}
+                  isModified={!privacyUnknown && logRetentionDays !== DEFAULT_RETENTION_DAYS}
                   onReset={() => void handleRetentionChange(DEFAULT_RETENTION_DAYS)}
+                  disabled={privacyUnknown}
                 />
                 <SettingsRow
                   id="privacy-clear-cache"
@@ -532,15 +540,25 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
               title="Session history"
               description="Daintree records resumable agent sessions so you can pick up where you left off."
             >
+              {sessionRetentionLoad === "error" && (
+                <SettingsLoadErrorBanner
+                  title="Session history retention didn't load"
+                  message="The retention window is unavailable until it does."
+                  onRetry={() => setSessionRetentionNonce((n) => n + 1)}
+                />
+              )}
               <SettingsGroup>
                 <SettingsPresetGroup
                   label="Keep session history for"
                   description="Applies to every project. Shortening the window prunes older records immediately."
                   options={RETENTION_OPTIONS}
-                  value={sessionRetentionDays}
+                  value={sessionRetentionUnknown ? null : sessionRetentionDays}
                   onChange={(days) => void handleSessionRetentionChange(days)}
-                  isModified={sessionRetentionDays !== DEFAULT_RETENTION_DAYS}
+                  isModified={
+                    !sessionRetentionUnknown && sessionRetentionDays !== DEFAULT_RETENTION_DAYS
+                  }
                   onReset={() => void handleSessionRetentionChange(DEFAULT_RETENTION_DAYS)}
+                  disabled={sessionRetentionUnknown}
                 />
                 <SettingsRow
                   label="Clear session history"

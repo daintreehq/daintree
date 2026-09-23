@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import { SettingsSection } from "./SettingsSection";
+import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
@@ -54,6 +55,7 @@ export function EnvironmentSettingsTab() {
   const [savedSnapshot, setSavedSnapshot] = useState<Record<string, string>>({});
 
   const [loadFailed, setLoadFailed] = useState(false);
+  const [loadNonce, setLoadNonce] = useState(0);
 
   // Report validation state to sidebar — a failed load also marks the tab
   // as in-error so the sidebar reflects the user-visible error block.
@@ -65,6 +67,8 @@ export function EnvironmentSettingsTab() {
   const notifiedFailureRef = useRef(false);
   useEffect(() => {
     let cancelled = false;
+    setLoadFailed(false);
+    setIsLoading(true);
     window.electron.globalEnv
       .get()
       .then((vars) => {
@@ -97,7 +101,7 @@ export function EnvironmentSettingsTab() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadNonce]);
 
   const updateRow = (index: number, field: "key" | "value", value: string) => {
     setEnvRows((prev) => {
@@ -235,10 +239,11 @@ export function EnvironmentSettingsTab() {
         description={sectionDescription}
         id="environment-variables"
       >
-        <div className="text-sm text-status-error px-4 py-3 border border-status-error/40 rounded-[var(--radius-lg)] bg-status-error/5">
-          Couldn't load saved environment variables. Close and reopen settings to try again. Editing
-          isn't available right now to avoid overwriting your stored values.
-        </div>
+        <SettingsLoadErrorBanner
+          title="Couldn't load saved environment variables"
+          message="Editing is unavailable until they load, so your stored values can't be overwritten."
+          onRetry={() => setLoadNonce((n) => n + 1)}
+        />
       </SettingsSection>
     );
   }

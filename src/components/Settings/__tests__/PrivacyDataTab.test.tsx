@@ -258,6 +258,70 @@ describe("PrivacyDataTab", () => {
     );
   });
 
+  it("disables session retention with an inline error and Retry when it fails to load", async () => {
+    const getRetentionDays = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("IPC fail"))
+      .mockResolvedValueOnce(90);
+    Reflect.set(window, "electron", {
+      privacy: createPrivacyApi(),
+      agentSessionHistory: createAgentSessionHistoryApi({ getRetentionDays }),
+    });
+
+    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+
+    const sessionOption = (label: string) =>
+      within(screen.getByRole("radiogroup", { name: "Keep session history for" })).getByRole(
+        "radio",
+        { name: label }
+      ) as HTMLButtonElement;
+
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect(screen.getByText("Session history retention didn't load")).toBeTruthy();
+    // The 30-day fallback is not presented as the user's value, nor as editable.
+    expect(sessionOption("30 days").getAttribute("aria-checked")).toBe("false");
+    expect(sessionOption("30 days").disabled).toBe(true);
+
+    fireEvent.click(retry);
+
+    await waitFor(() => {
+      expect(sessionOption("90 days").getAttribute("aria-checked")).toBe("true");
+    });
+    expect(sessionOption("90 days").disabled).toBe(false);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(getRetentionDays).toHaveBeenCalledTimes(2);
+  });
+
+  it("disables telemetry and log retention with an inline Retry when privacy settings fail to load", async () => {
+    const getSettings = vi.fn().mockRejectedValueOnce(new Error("IPC fail")).mockResolvedValueOnce({
+      telemetryLevel: "errors",
+      logRetentionDays: 7,
+      dataFolderPath: "/tmp",
+    });
+    Reflect.set(window, "electron", {
+      privacy: createPrivacyApi({ getSettings }),
+      agentSessionHistory: createAgentSessionHistoryApi(),
+    });
+
+    render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect(radio("Off").disabled).toBe(true);
+    expect(radio("Off").checked).toBe(false);
+    expect(mockNotify).not.toHaveBeenCalled();
+
+    fireEvent.click(retry);
+
+    await waitFor(() => {
+      expect(radio("Errors only").checked).toBe(true);
+    });
+    expect(radio("Errors only").disabled).toBe(false);
+  });
+
   describe("clear cache", () => {
     const clearCacheButton = () =>
       screen.getByRole("button", {

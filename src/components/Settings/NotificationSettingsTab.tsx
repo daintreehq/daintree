@@ -174,10 +174,48 @@ function SoundFileRow({
 
 type LoadState = "loading" | "ready" | "error";
 
+type SaveGroup = "agent" | "sound" | "flash" | "quiet";
+
+const SAVE_GROUP_BY_KEY: Record<keyof NotificationSettings, SaveGroup> = {
+  enabled: "agent",
+  completedEnabled: "agent",
+  waitingEnabled: "agent",
+  waitingEscalationEnabled: "agent",
+  waitingEscalationDelayMs: "agent",
+  workingPulseEnabled: "agent",
+  groupByContext: "agent",
+  soundEnabled: "sound",
+  completedSoundFile: "sound",
+  waitingSoundFile: "sound",
+  escalationSoundFile: "sound",
+  workingPulseSoundFile: "sound",
+  uiFeedbackSoundEnabled: "sound",
+  flashEnabled: "flash",
+  quietHoursEnabled: "quiet",
+  quietHoursStartMin: "quiet",
+  quietHoursEndMin: "quiet",
+  quietHoursWeekdays: "quiet",
+};
+
+function saveGroupOf(patch: Partial<NotificationSettings>): SaveGroup {
+  for (const [key, group] of Object.entries(SAVE_GROUP_BY_KEY)) {
+    if (key in patch) return group;
+  }
+  return "agent";
+}
+
+interface SaveFailure {
+  group: SaveGroup;
+  patch: Partial<NotificationSettings>;
+}
+
 export function NotificationSettingsTab() {
   const [settings, setSettings] = useState<NotificationSettings>(DEFAULT_SETTINGS);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [loadNonce, setLoadNonce] = useState(0);
+  // A failed save rolls the control back, which on its own looks like the click never
+  // registered — so the failure stays on the group until a save there succeeds.
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const loading = loadState === "loading";
   // Gate the inline "Loading…" hint past the Doherty threshold so fast IPC
   // resolutions don't flash a loading state for sub-400ms work.
@@ -209,43 +247,50 @@ export function NotificationSettingsTab() {
 
   const update = async (patch: Partial<NotificationSettings>) => {
     const prevStore = useNotificationSettingsStore.getState();
+    const group = saveGroupOf(patch);
     setSettings((prev) => {
       const next = { ...prev, ...patch };
-      window.electron?.notification?.setSettings(patch).catch(() => {
-        setSettings(prev);
-        const revert: Partial<{
-          enabled: boolean;
-          completedEnabled: boolean;
-          waitingEnabled: boolean;
-          workingPulseEnabled: boolean;
-          uiFeedbackSoundEnabled: boolean;
-          flashEnabled: boolean;
-          quietHoursEnabled: boolean;
-          quietHoursStartMin: number;
-          quietHoursEndMin: number;
-          quietHoursWeekdays: number[];
-        }> = {};
-        if (patch.enabled !== undefined) revert.enabled = prevStore.enabled;
-        if (patch.completedEnabled !== undefined)
-          revert.completedEnabled = prevStore.completedEnabled;
-        if (patch.waitingEnabled !== undefined) revert.waitingEnabled = prevStore.waitingEnabled;
-        if (patch.workingPulseEnabled !== undefined)
-          revert.workingPulseEnabled = prevStore.workingPulseEnabled;
-        if (patch.uiFeedbackSoundEnabled !== undefined)
-          revert.uiFeedbackSoundEnabled = prevStore.uiFeedbackSoundEnabled;
-        if (patch.flashEnabled !== undefined) revert.flashEnabled = prevStore.flashEnabled;
-        if (patch.quietHoursEnabled !== undefined)
-          revert.quietHoursEnabled = prevStore.quietHoursEnabled;
-        if (patch.quietHoursStartMin !== undefined)
-          revert.quietHoursStartMin = prevStore.quietHoursStartMin;
-        if (patch.quietHoursEndMin !== undefined)
-          revert.quietHoursEndMin = prevStore.quietHoursEndMin;
-        if (patch.quietHoursWeekdays !== undefined)
-          revert.quietHoursWeekdays = prevStore.quietHoursWeekdays;
-        if (Object.keys(revert).length > 0) {
-          useNotificationSettingsStore.setState(revert);
-        }
-      });
+      window.electron?.notification
+        ?.setSettings(patch)
+        .then(() => {
+          setSaveFailure((current) => (current?.group === group ? null : current));
+        })
+        .catch(() => {
+          setSaveFailure({ group, patch });
+          setSettings(prev);
+          const revert: Partial<{
+            enabled: boolean;
+            completedEnabled: boolean;
+            waitingEnabled: boolean;
+            workingPulseEnabled: boolean;
+            uiFeedbackSoundEnabled: boolean;
+            flashEnabled: boolean;
+            quietHoursEnabled: boolean;
+            quietHoursStartMin: number;
+            quietHoursEndMin: number;
+            quietHoursWeekdays: number[];
+          }> = {};
+          if (patch.enabled !== undefined) revert.enabled = prevStore.enabled;
+          if (patch.completedEnabled !== undefined)
+            revert.completedEnabled = prevStore.completedEnabled;
+          if (patch.waitingEnabled !== undefined) revert.waitingEnabled = prevStore.waitingEnabled;
+          if (patch.workingPulseEnabled !== undefined)
+            revert.workingPulseEnabled = prevStore.workingPulseEnabled;
+          if (patch.uiFeedbackSoundEnabled !== undefined)
+            revert.uiFeedbackSoundEnabled = prevStore.uiFeedbackSoundEnabled;
+          if (patch.flashEnabled !== undefined) revert.flashEnabled = prevStore.flashEnabled;
+          if (patch.quietHoursEnabled !== undefined)
+            revert.quietHoursEnabled = prevStore.quietHoursEnabled;
+          if (patch.quietHoursStartMin !== undefined)
+            revert.quietHoursStartMin = prevStore.quietHoursStartMin;
+          if (patch.quietHoursEndMin !== undefined)
+            revert.quietHoursEndMin = prevStore.quietHoursEndMin;
+          if (patch.quietHoursWeekdays !== undefined)
+            revert.quietHoursWeekdays = prevStore.quietHoursWeekdays;
+          if (Object.keys(revert).length > 0) {
+            useNotificationSettingsStore.setState(revert);
+          }
+        });
       return next;
     });
     const storePatch: Partial<{
@@ -300,6 +345,15 @@ export function NotificationSettingsTab() {
   const masterOff = !settings.enabled || unavailable;
   const masterOffReason = unavailable ? undefined : "Turn on notifications to use this";
 
+  const saveError = (group: SaveGroup) =>
+    saveFailure?.group === group ? (
+      <SettingsLoadErrorBanner
+        title="Couldn't save that change"
+        message="The setting is back to its previous value."
+        onRetry={() => void update(saveFailure.patch)}
+      />
+    ) : null;
+
   return (
     <div className="space-y-8">
       {showInlineLoading && <p className="text-xs text-text-secondary">Loading…</p>}
@@ -315,6 +369,7 @@ export function NotificationSettingsTab() {
             onRetry={() => setLoadNonce((n) => n + 1)}
           />
         )}
+        {saveError("agent")}
         <SettingsGroup>
           <SettingsSwitchCard
             title="Enable notifications"
@@ -357,28 +412,32 @@ export function NotificationSettingsTab() {
                 onChange={(v) => update({ waitingEscalationEnabled: v })}
                 {...reset("waitingEscalationEnabled")}
               />
-              {settings.waitingEscalationEnabled && (
-                <SettingsRow
-                  label="Escalation delay"
-                  {...reset("waitingEscalationDelayMs")}
-                  control={({ labelId, descriptionId, disabled }) => (
-                    <select
-                      aria-labelledby={labelId}
-                      aria-describedby={descriptionId}
-                      value={settings.waitingEscalationDelayMs}
-                      disabled={disabled}
-                      onChange={(e) => update({ waitingEscalationDelayMs: Number(e.target.value) })}
-                      className={NATIVE_SELECT_CLASS}
-                    >
-                      {ESCALATION_DELAY_OPTIONS.map(({ value, label }) => (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                />
-              )}
+              <SettingsRow
+                label="Escalation delay"
+                disabled={!settings.waitingEscalationEnabled}
+                disabledReason={
+                  masterOff || !settings.waitingEnabled
+                    ? undefined
+                    : "Turn on Escalate if still waiting to choose a delay"
+                }
+                {...reset("waitingEscalationDelayMs")}
+                control={({ labelId, descriptionId, disabled }) => (
+                  <select
+                    aria-labelledby={labelId}
+                    aria-describedby={descriptionId}
+                    value={settings.waitingEscalationDelayMs}
+                    disabled={disabled}
+                    onChange={(e) => update({ waitingEscalationDelayMs: Number(e.target.value) })}
+                    className={NATIVE_SELECT_CLASS}
+                  >
+                    {ESCALATION_DELAY_OPTIONS.map(({ value, label }) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              />
             </SettingsDependents>
             <SwitchRow
               id="notif-working-pulse"
@@ -393,6 +452,7 @@ export function NotificationSettingsTab() {
       </SettingsSection>
 
       <SettingsSection title="Sound">
+        {saveError("sound")}
         <SettingsGroup>
           <SettingsSwitchCard
             id="notifications-sound"
@@ -454,6 +514,7 @@ export function NotificationSettingsTab() {
       </SettingsSection>
 
       <SettingsSection title="Screen flash">
+        {saveError("flash")}
         <SettingsGroup>
           <SettingsSwitchCard
             title="Flash on all-clear"
@@ -471,6 +532,7 @@ export function NotificationSettingsTab() {
         title="Quiet hours"
         description="History still records everything, and agents waiting for input always get through."
       >
+        {saveError("quiet")}
         <SettingsGroup>
           <SettingsSwitchCard
             title="Mute on a schedule"
@@ -503,8 +565,13 @@ export function NotificationSettingsTab() {
                 label="Active days"
                 description="Leave every day selected to apply the schedule daily"
                 layout="stacked"
-                control={({ labelId, disabled }) => (
-                  <div role="group" aria-labelledby={labelId} className="flex flex-wrap gap-2">
+                control={({ labelId, descriptionId, disabled }) => (
+                  <div
+                    role="group"
+                    aria-labelledby={labelId}
+                    aria-describedby={descriptionId}
+                    className="flex flex-wrap gap-2"
+                  >
                     {WEEKDAYS.map(({ value, label }) => {
                       const active =
                         settings.quietHoursWeekdays.length === 0 ||
@@ -564,10 +631,11 @@ function QuietHoursTimeRow({
     <SettingsRow
       label={label}
       description={description}
-      control={({ disabled }) => (
+      control={({ descriptionId, disabled }) => (
         <div className="flex items-center gap-2">
           <select
             aria-label={`${label} hour`}
+            aria-describedby={descriptionId}
             value={hour}
             disabled={disabled}
             onChange={(e) => onChange(joinMinutes(Number(e.target.value), minute))}
@@ -584,6 +652,7 @@ function QuietHoursTimeRow({
           </span>
           <select
             aria-label={`${label} minute`}
+            aria-describedby={descriptionId}
             value={minute}
             disabled={disabled}
             onChange={(e) => onChange(joinMinutes(hour, Number(e.target.value)))}

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { parse as parseToml } from "smol-toml";
 import { McpServerSettingsTab } from "../McpServerSettingsTab";
@@ -1625,17 +1625,22 @@ describe("McpServerSettingsTab", () => {
       );
       await waitForApiKeyControls(container);
 
-      const group = screen.getByRole("radiogroup", { name: /client/i });
-      const choices = Array.from(group.querySelectorAll('[role="radio"]'));
-      expect(choices.map((c) => c.textContent)).toEqual([
-        expect.stringContaining("Claude Code"),
-        expect.stringContaining("Codex"),
-        expect.stringContaining("Other client"),
-      ]);
+      // Native radios in a fieldset: the group is named by its legend, and each
+      // option is named by its label alone, with the destination as its description.
+      const group = screen.getByRole("group", { name: /client/i });
+      const choices = within(group).getAllByRole("radio") as HTMLInputElement[];
+      expect(choices).toHaveLength(3);
+      expect(within(group).getByRole("radio", { name: "Claude Code" })).toBeTruthy();
+      expect(within(group).getByRole("radio", { name: "Codex" })).toBeTruthy();
+      expect(within(group).getByRole("radio", { name: "Other client" })).toBeTruthy();
 
-      const checked = choices.filter((c) => c.getAttribute("aria-checked") === "true");
+      const checked = choices.filter((c) => c.checked);
       expect(checked).toHaveLength(1);
-      expect(checked[0]?.textContent).toContain("Claude Code");
+      expect(checked[0]).toBe(within(group).getByRole("radio", { name: "Claude Code" }));
+
+      const describedBy = checked[0]!.getAttribute("aria-describedby");
+      const claude = MCP_CLIENT_CONFIGS.find((entry) => entry.label === "Claude Code")!;
+      expect(document.getElementById(describedBy ?? "")?.textContent).toBe(claude.destination);
     });
 
     it("shows each client's destination only on its own card", async () => {

@@ -1013,32 +1013,35 @@ export function GeneralTab({
               )}
             </SettingsSection>
 
-            {(sessionRestoreConfig || sectionErrors.sessionRestore) && (
-              <SettingsSection
-                title="Startup"
-                description="What comes back when Daintree restarts"
-                id="general-session-restore"
-              >
-                {sectionErrors.sessionRestore ? (
-                  <SettingsLoadErrorBanner
-                    message={sectionErrors.sessionRestore}
-                    onRetry={() => setConfigRetryNonce((n) => n + 1)}
-                  />
-                ) : sessionRestoreConfig ? (
-                  <SettingsGroup>
-                    <SettingsSwitchCard
-                      title="Restore live projects"
-                      subtitle="Bring back every project that was running, not just the one each window was showing"
-                      isEnabled={sessionRestoreConfig.enabled}
-                      onChange={() => void handleSessionRestoreToggle()}
-                      disabled={isSessionRestoreSaving}
-                      isModified={sessionRestoreConfig.enabled !== DEFAULT_SESSION_RESTORE_ENABLED}
-                      onReset={() => void handleSessionRestoreToggle()}
-                    />
-                  </SettingsGroup>
-                ) : null}
-              </SettingsSection>
-            )}
+            {/* Rendered before the config arrives so the page keeps its shape; the
+                row stays disabled until the stored value is known, so a click can't
+                save over a value the user never saw. */}
+            <SettingsSection
+              title="Startup"
+              description="What comes back when Daintree restarts"
+              id="general-session-restore"
+            >
+              {sectionErrors.sessionRestore && (
+                <SettingsLoadErrorBanner
+                  message={sectionErrors.sessionRestore}
+                  onRetry={() => setConfigRetryNonce((n) => n + 1)}
+                />
+              )}
+              <SettingsGroup>
+                <SettingsSwitchCard
+                  title="Restore live projects"
+                  subtitle="Bring back every project that was running, not just the one each window was showing"
+                  isEnabled={sessionRestoreConfig?.enabled ?? DEFAULT_SESSION_RESTORE_ENABLED}
+                  onChange={() => void handleSessionRestoreToggle()}
+                  disabled={!sessionRestoreConfig || isSessionRestoreSaving}
+                  isModified={
+                    !!sessionRestoreConfig &&
+                    sessionRestoreConfig.enabled !== DEFAULT_SESSION_RESTORE_ENABLED
+                  }
+                  onReset={() => void handleSessionRestoreToggle()}
+                />
+              </SettingsGroup>
+            </SettingsSection>
 
             <WindowOpeningSection />
 
@@ -1190,53 +1193,53 @@ export function GeneralTab({
 
         {effectiveSubtab === "hibernation" && (
           <>
-            {(idleNotifyConfig || sectionErrors.idleNotify) && (
-              <SettingsSection
-                title="Idle terminal notifications"
-                id="general-idle-terminal-notify"
-              >
-                {sectionErrors.idleNotify ? (
-                  <SettingsLoadErrorBanner
-                    message={sectionErrors.idleNotify}
-                    onRetry={() => setConfigRetryNonce((n) => n + 1)}
+            {/* Every group renders before its config arrives. Until the stored value is
+                known each switch shows the default, disabled, and each threshold shows no
+                selection — a load error sits on the group it belongs to, with Retry. */}
+            <SettingsSection title="Idle terminal notifications" id="general-idle-terminal-notify">
+              {sectionErrors.idleNotify && (
+                <SettingsLoadErrorBanner
+                  message={sectionErrors.idleNotify}
+                  onRetry={() => setConfigRetryNonce((n) => n + 1)}
+                />
+              )}
+              <SettingsGroup>
+                <SettingsSwitchCard
+                  title="Notify me about idle terminals"
+                  subtitle="A reminder when terminals in background projects go quiet — nothing is closed, and the active project is never flagged"
+                  isEnabled={idleNotifyConfig?.enabled ?? true}
+                  onChange={handleIdleNotifyToggle}
+                  disabled={!idleNotifyConfig}
+                  isModified={!!idleNotifyConfig && !idleNotifyConfig.enabled}
+                  onReset={() => void handleIdleNotifyToggle()}
+                />
+                <SettingsDependents
+                  disabled={!idleNotifyConfig?.enabled}
+                  reason={
+                    idleNotifyConfig
+                      ? "Turn on idle terminal reminders to choose when they appear"
+                      : undefined
+                  }
+                >
+                  <SettingsPresetGroup<number>
+                    id="general-idle-terminal-threshold"
+                    label="Idle threshold"
+                    description="How long background terminals stay quiet before the reminder, which offers to close them"
+                    options={IDLE_TERMINAL_THRESHOLD_PRESETS}
+                    value={idleNotifyConfig?.thresholdMinutes ?? null}
+                    onChange={(v) => void handleIdleNotifyThresholdChange(v)}
+                    disabled={isIdleNotifySaving}
+                    isModified={
+                      !!idleNotifyConfig &&
+                      idleNotifyConfig.thresholdMinutes !== DEFAULT_IDLE_TERMINAL_THRESHOLD_MINUTES
+                    }
+                    onReset={() =>
+                      void handleIdleNotifyThresholdChange(DEFAULT_IDLE_TERMINAL_THRESHOLD_MINUTES)
+                    }
                   />
-                ) : idleNotifyConfig ? (
-                  <SettingsGroup>
-                    <SettingsSwitchCard
-                      title="Notify me about idle terminals"
-                      subtitle="A reminder when terminals in background projects go quiet — nothing is closed, and the active project is never flagged"
-                      isEnabled={idleNotifyConfig.enabled}
-                      onChange={handleIdleNotifyToggle}
-                      isModified={!idleNotifyConfig.enabled}
-                      onReset={() => void handleIdleNotifyToggle()}
-                    />
-                    <SettingsDependents
-                      disabled={!idleNotifyConfig.enabled}
-                      reason="Turn on idle terminal reminders to choose when they appear"
-                    >
-                      <SettingsPresetGroup<number>
-                        id="general-idle-terminal-threshold"
-                        label="Idle threshold"
-                        description="How long background terminals stay quiet before the reminder, which offers to close them"
-                        options={IDLE_TERMINAL_THRESHOLD_PRESETS}
-                        value={idleNotifyConfig.thresholdMinutes}
-                        onChange={(v) => void handleIdleNotifyThresholdChange(v)}
-                        disabled={isIdleNotifySaving}
-                        isModified={
-                          idleNotifyConfig.thresholdMinutes !==
-                          DEFAULT_IDLE_TERMINAL_THRESHOLD_MINUTES
-                        }
-                        onReset={() =>
-                          void handleIdleNotifyThresholdChange(
-                            DEFAULT_IDLE_TERMINAL_THRESHOLD_MINUTES
-                          )
-                        }
-                      />
-                    </SettingsDependents>
-                  </SettingsGroup>
-                ) : null}
-              </SettingsSection>
-            )}
+                </SettingsDependents>
+              </SettingsGroup>
+            </SettingsSection>
             {/* One section for the two ways Daintree frees a background project: closing
                 it outright, or keeping it open with its processes stopped. They were two
                 sections whose only row repeated the heading above it. */}
@@ -1244,93 +1247,91 @@ export function GeneralTab({
               title="Background projects"
               description="Free memory and processes from projects you haven't used in a while"
             >
-              {sectionErrors.idleAutoClose ? (
-                <div id="general-idle-background-auto-close" className="scroll-mt-6">
-                  <SettingsLoadErrorBanner
-                    message={sectionErrors.idleAutoClose}
-                    onRetry={() => setConfigRetryNonce((n) => n + 1)}
-                  />
-                </div>
-              ) : idleAutoCloseConfig ? (
-                <SettingsGroup id="general-idle-background-auto-close">
-                  <SettingsSwitchCard
-                    title="Close idle projects automatically"
-                    subtitle="Frees memory from background projects with no open terminals. They stay in the switcher and reopen with their panels."
-                    isEnabled={idleAutoCloseConfig.enabled}
-                    onChange={handleIdleAutoCloseToggle}
-                    isModified={idleAutoCloseConfig.enabled}
-                    onReset={() => void handleIdleAutoCloseToggle()}
-                  />
-                  <SettingsDependents
-                    disabled={!idleAutoCloseConfig.enabled}
-                    reason="Turn on closing idle projects to choose when it happens"
-                  >
-                    <SettingsPresetGroup<number>
-                      id="general-idle-background-threshold"
-                      label="Idle threshold"
-                      description="How long a background project sits idle before it closes — the active project is never touched"
-                      options={IDLE_BACKGROUND_THRESHOLD_PRESETS}
-                      value={idleAutoCloseConfig.thresholdMinutes}
-                      onChange={(v) => void handleIdleAutoCloseThresholdChange(v)}
-                      disabled={isIdleAutoCloseSaving}
-                      isModified={
-                        idleAutoCloseConfig.thresholdMinutes !==
-                        DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES
-                      }
-                      onReset={() =>
-                        void handleIdleAutoCloseThresholdChange(
-                          DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES
-                        )
-                      }
-                    />
-                  </SettingsDependents>
-                </SettingsGroup>
-              ) : null}
-              {configError ? (
-                <div id="general-hibernation" className="scroll-mt-6">
-                  <SettingsLoadErrorBanner
-                    title="Couldn't load hibernation settings"
-                    message={configError}
-                    onRetry={() => setConfigRetryNonce((n) => n + 1)}
-                  />
-                </div>
-              ) : hibernationConfig ? (
-                <SettingsGroup id="general-hibernation">
-                  <SettingsSwitchCard
-                    title="Hibernate inactive projects"
-                    subtitle="Stops their terminals and dev servers to free resources; the project reopens where you left it"
-                    isEnabled={hibernationConfig.enabled}
-                    onChange={handleHibernationToggle}
-                    isModified={hibernationConfig.enabled}
-                    onReset={() => void handleHibernationToggle()}
-                  />
-                  <SettingsDependents
-                    disabled={!hibernationConfig.enabled}
-                    reason="Turn on hibernation to choose when it happens"
-                  >
-                    <SettingsPresetGroup<number>
-                      id="general-hibernation-threshold"
-                      label="Inactivity threshold"
-                      description="Projects idle longer than this have their processes stopped"
-                      options={THRESHOLD_PRESETS}
-                      value={hibernationConfig.inactiveThresholdHours}
-                      onChange={(v) => void handleThresholdChange(v)}
-                      disabled={isSaving}
-                      isModified={
-                        hibernationConfig.inactiveThresholdHours !==
-                        DEFAULT_HIBERNATION_THRESHOLD_HOURS
-                      }
-                      onReset={() =>
-                        void handleThresholdChange(DEFAULT_HIBERNATION_THRESHOLD_HOURS)
-                      }
-                    />
-                  </SettingsDependents>
-                </SettingsGroup>
-              ) : (
-                <div id="general-hibernation" className="text-sm text-text-secondary">
-                  Loading hibernation settings…
-                </div>
+              {sectionErrors.idleAutoClose && (
+                <SettingsLoadErrorBanner
+                  message={sectionErrors.idleAutoClose}
+                  onRetry={() => setConfigRetryNonce((n) => n + 1)}
+                />
               )}
+              <SettingsGroup id="general-idle-background-auto-close">
+                <SettingsSwitchCard
+                  title="Close idle projects automatically"
+                  subtitle="Frees memory from background projects with no open terminals. They stay in the switcher and reopen with their panels."
+                  isEnabled={idleAutoCloseConfig?.enabled ?? false}
+                  onChange={handleIdleAutoCloseToggle}
+                  disabled={!idleAutoCloseConfig}
+                  isModified={!!idleAutoCloseConfig?.enabled}
+                  onReset={() => void handleIdleAutoCloseToggle()}
+                />
+                <SettingsDependents
+                  disabled={!idleAutoCloseConfig?.enabled}
+                  reason={
+                    idleAutoCloseConfig
+                      ? "Turn on closing idle projects to choose when it happens"
+                      : undefined
+                  }
+                >
+                  <SettingsPresetGroup<number>
+                    id="general-idle-background-threshold"
+                    label="Idle threshold"
+                    description="How long a background project sits idle before it closes — the active project is never touched"
+                    options={IDLE_BACKGROUND_THRESHOLD_PRESETS}
+                    value={idleAutoCloseConfig?.thresholdMinutes ?? null}
+                    onChange={(v) => void handleIdleAutoCloseThresholdChange(v)}
+                    disabled={isIdleAutoCloseSaving}
+                    isModified={
+                      !!idleAutoCloseConfig &&
+                      idleAutoCloseConfig.thresholdMinutes !==
+                        DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES
+                    }
+                    onReset={() =>
+                      void handleIdleAutoCloseThresholdChange(
+                        DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES
+                      )
+                    }
+                  />
+                </SettingsDependents>
+              </SettingsGroup>
+              {configError && (
+                <SettingsLoadErrorBanner
+                  title="Couldn't load hibernation settings"
+                  message={configError}
+                  onRetry={() => setConfigRetryNonce((n) => n + 1)}
+                />
+              )}
+              <SettingsGroup id="general-hibernation">
+                <SettingsSwitchCard
+                  title="Hibernate inactive projects"
+                  subtitle="Stops their terminals and dev servers to free resources; the project reopens where you left it"
+                  isEnabled={hibernationConfig?.enabled ?? false}
+                  onChange={handleHibernationToggle}
+                  disabled={!hibernationConfig}
+                  isModified={!!hibernationConfig?.enabled}
+                  onReset={() => void handleHibernationToggle()}
+                />
+                <SettingsDependents
+                  disabled={!hibernationConfig?.enabled}
+                  reason={
+                    hibernationConfig ? "Turn on hibernation to choose when it happens" : undefined
+                  }
+                >
+                  <SettingsPresetGroup<number>
+                    id="general-hibernation-threshold"
+                    label="Inactivity threshold"
+                    description="Projects idle longer than this have their processes stopped"
+                    options={THRESHOLD_PRESETS}
+                    value={hibernationConfig?.inactiveThresholdHours ?? null}
+                    onChange={(v) => void handleThresholdChange(v)}
+                    disabled={isSaving}
+                    isModified={
+                      !!hibernationConfig &&
+                      hibernationConfig.inactiveThresholdHours !==
+                        DEFAULT_HIBERNATION_THRESHOLD_HOURS
+                    }
+                    onReset={() => void handleThresholdChange(DEFAULT_HIBERNATION_THRESHOLD_HOURS)}
+                  />
+                </SettingsDependents>
+              </SettingsGroup>
             </SettingsSection>
           </>
         )}

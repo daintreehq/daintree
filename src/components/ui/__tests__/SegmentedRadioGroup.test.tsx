@@ -111,4 +111,14 @@ describe("SegmentedRadioGroup keyboard model", () => {
 
     expect(onChange).toHaveBeenCalledWith("existing");
   });
+  it("steps past an option whose change was rolled back, from where focus is", () => {
+    // The owner rejected "existing" and kept "new" selected, but focus stayed on the
+    // option the user tried. The next arrow has to move on to "third".
+    const { onChange, group } = renderGroup("new");
+    screen.getByRole("radio", { name: "Existing branch" }).focus();
+
+    fireEvent.keyDown(group, { key: "ArrowRight" });
+
+    expect(onChange).toHaveBeenLastCalledWith("third");
+  });
 });

@@ -96,4 +96,53 @@ describe("NotificationSettingsTab", () => {
     fireEvent.click(resetButton);
     expect(setSettings).toHaveBeenCalledWith({ completedEnabled: false });
   });
+
+  it("keeps a failed save on its group with a Retry that re-sends the change", async () => {
+    setSettings.mockRejectedValueOnce(new Error("disk full"));
+    const { container } = render(<NotificationSettingsTab />);
+
+    const completed = container.querySelector("#notif-completed");
+    if (!(completed instanceof HTMLElement)) throw new Error("switch missing");
+    await waitFor(() => expect(completed.hasAttribute("disabled")).toBe(false));
+
+    fireEvent.click(completed);
+    await screen.findByText("Couldn't save that change");
+    expect(completed.getAttribute("aria-checked")).toBe("false");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(setSettings).toHaveBeenLastCalledWith({ completedEnabled: true });
+    await waitFor(() => expect(screen.queryByText("Couldn't save that change")).toBeNull());
+    expect(completed.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("keeps the escalation delay visible but disabled with a reason while escalation is off", async () => {
+    render(<NotificationSettingsTab />);
+    await waitFor(() => expect(getSettings).toHaveBeenCalled());
+
+    const delay = await screen.findByRole("combobox", { name: "Escalation delay" });
+    await screen.findByText("Turn on Escalate if still waiting to choose a delay");
+    expect(delay.hasAttribute("disabled")).toBe(true);
+    const reason = screen.getByText("Turn on Escalate if still waiting to choose a delay");
+    const describedBy = delay.getAttribute("aria-describedby") ?? "";
+    expect(describedBy.split(" ")).toContain(reason.closest("p")?.id);
+  });
+
+  it("describes the quiet-hours time pickers by their row description", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...BASE,
+      quietHoursEnabled: true,
+      quietHoursStartMin: 8 * 60,
+      quietHoursEndMin: 8 * 60,
+    });
+    render(<NotificationSettingsTab />);
+
+    const hour = await screen.findByRole("combobox", { name: "Ends at hour" });
+    const describedBy = hour.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy!.split(" ")[0]!)?.textContent).toMatch(
+      /Start and end match/
+    );
+  });
 });

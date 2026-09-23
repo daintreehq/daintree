@@ -17,6 +17,11 @@ interface GroupContextValue {
   depth: number;
   /** Set by a disabled `SettingsDependents`, so every row under it is really disabled. */
   disabled: boolean;
+  /**
+   * Id of the reason a disabled `SettingsDependents` shows, so every control under it
+   * is described by the explanation it sits beneath, not only by its own text.
+   */
+  reasonId?: string;
 }
 
 const GroupContext = createContext<GroupContextValue | null>(null);
@@ -91,14 +96,18 @@ export function SettingsDependents({
   reason,
 }: SettingsDependentsProps) {
   const parent = use(GroupContext);
+  const ownReasonId = useId();
   const depth = (parent?.depth ?? 0) + 1;
   const inheritedDisabled = parent?.disabled ?? false;
   const isDisabled = disabled || inheritedDisabled;
+  const showsReason = disabled && !!reason;
+  const reasonId = showsReason ? ownReasonId : parent?.reasonId;
 
   return (
     <div className="divide-y divide-border-subtle" data-settings-dependents="">
-      {disabled && reason && (
+      {showsReason && (
         <p
+          id={ownReasonId}
           className={cn(
             "flex items-start gap-1.5 py-2 pr-4 text-xs text-text-secondary select-text",
             rowInset(depth)
@@ -108,7 +117,7 @@ export function SettingsDependents({
           <span>{reason}</span>
         </p>
       )}
-      <GroupContext value={{ depth, disabled: isDisabled }}>{children}</GroupContext>
+      <GroupContext value={{ depth, disabled: isDisabled, reasonId }}>{children}</GroupContext>
     </div>
   );
 }
@@ -199,8 +208,14 @@ export function SettingsRow({
     `Reset ${labelText ?? (typeof label === "string" ? label : "setting")} to default`;
 
   const showReason = disabled && !!disabledReason;
+  const inheritedReasonId = disabled ? group?.reasonId : undefined;
   const describedBy =
-    [error ? errorId : null, description ? descriptionId : null, showReason ? reasonId : null]
+    [
+      error ? errorId : null,
+      description ? descriptionId : null,
+      showReason ? reasonId : null,
+      inheritedReasonId ?? null,
+    ]
       .filter(Boolean)
       .join(" ") || undefined;
 
@@ -358,6 +373,8 @@ export function SettingsEmptyRow({ children, action }: SettingsEmptyRowProps) {
 /** Right-rail widths so a four-digit number doesn't take the width of a file path. */
 export const SETTINGS_CONTROL_WIDTH = {
   number: "w-24",
+  /** A number with a unit inside the field: room for five digits, the unit and the stepper. */
+  numberWithUnit: "w-32",
   select: "w-52",
   wide: "w-72",
 } as const;

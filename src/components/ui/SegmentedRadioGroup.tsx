@@ -89,8 +89,14 @@ export function SegmentedRadioGroup<T extends string>({
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
     if (disabled || options.length === 0) return;
-    // Wrap from an unmatched value too: -1 still has to move somewhere sane.
-    const from = activeIndex === -1 ? 0 : activeIndex;
+    // Move from where the keyboard is, not from the selection. They differ after a
+    // rejected change — the owner rolls `value` back while focus stays on the option
+    // the user tried — and stepping from the selection would re-attempt that same
+    // option instead of moving past it. Wrap from an unmatched value too.
+    const focusedIndex = buttonRefs.current.findIndex(
+      (button) => button !== null && button === document.activeElement
+    );
+    const from = focusedIndex !== -1 ? focusedIndex : activeIndex === -1 ? 0 : activeIndex;
     switch (event.key) {
       case "ArrowRight":
       case "ArrowDown":

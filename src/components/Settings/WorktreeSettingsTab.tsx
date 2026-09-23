@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { AlertCircle, Check, RotateCcw } from "lucide-react";
+import { AlertCircle, Check } from "lucide-react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -202,41 +202,29 @@ export function WorktreeSettingsTab() {
           <SettingsRow
             layout="stacked"
             label="Pattern"
+            // Measured against the field, not the saved value: reset fills in the
+            // default and the explicit Save below still commits it.
+            isModified={!isLoading && pattern !== DEFAULT_WORKTREE_PATH_PATTERN}
+            onReset={handleReset}
+            resetAriaLabel="Reset path pattern to default"
             control={({ labelId }) => (
               <div className="grid gap-2">
-                <div className="flex gap-2">
-                  <Input
-                    id="path-pattern"
-                    type="text"
-                    value={pattern}
-                    onChange={(e) => {
-                      setPattern(e.target.value);
-                      setError(null);
-                    }}
-                    disabled={isLoading}
-                    invalid={!validation.valid && !isLoading}
-                    aria-labelledby={labelId}
-                    aria-invalid={!!patternError}
-                    aria-describedby={hasPatternMessages ? "path-pattern-error" : undefined}
-                    className="flex-1 min-w-0 font-mono"
-                    placeholder="{parent-dir}/{base-folder}-worktrees/{branch-slug}"
-                  />
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="icon"
-                        onClick={handleReset}
-                        disabled={isLoading}
-                        aria-label="Reset to default"
-                      >
-                        <RotateCcw aria-hidden="true" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Reset to default</TooltipContent>
-                  </Tooltip>
-                </div>
+                <Input
+                  id="path-pattern"
+                  type="text"
+                  value={pattern}
+                  onChange={(e) => {
+                    setPattern(e.target.value);
+                    setError(null);
+                  }}
+                  disabled={isLoading}
+                  invalid={!validation.valid && !isLoading}
+                  aria-labelledby={labelId}
+                  aria-invalid={!!patternError}
+                  aria-describedby={hasPatternMessages ? "path-pattern-error" : undefined}
+                  className="min-w-0 font-mono"
+                  placeholder="{parent-dir}/{base-folder}-worktrees/{branch-slug}"
+                />
                 {hasPatternMessages && (
                   <div
                     id="path-pattern-error"

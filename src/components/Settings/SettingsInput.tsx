@@ -62,7 +62,8 @@ export function SettingsInput({
 
   if (group) {
     const rowLayout = layout ?? (props.type === "number" ? "inline" : "stacked");
-    const width = controlWidth ?? (props.type === "number" ? "number" : "wide");
+    const width =
+      controlWidth ?? (props.type === "number" ? (suffix ? "numberWithUnit" : "number") : "wide");
     return (
       <SettingsRow
         id={rowId}
@@ -86,7 +87,7 @@ export function SettingsInput({
               aria-labelledby={labelId}
               aria-describedby={descriptionId}
               aria-invalid={isError ? true : undefined}
-              className={cn("w-full", suffix && "pr-10", className)}
+              className={cn("w-full", suffix && "pr-9", className)}
               {...props}
             />
             {suffix && (

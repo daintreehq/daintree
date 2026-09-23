@@ -78,6 +78,7 @@ export function SettingsCheckbox({
             }
           }}
           disabled={isDisabled}
+          aria-describedby={isDisabled ? group?.reasonId : undefined}
         />
         <FieldLabel accessory={scopeBadge} tinted>
           {label}

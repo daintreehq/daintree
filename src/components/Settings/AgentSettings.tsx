@@ -411,6 +411,8 @@ export function AgentSettings({
                 setDefaultAgent(value === NO_DEFAULT_AGENT ? undefined : (value as DefaultAgentId))
               }
               options={defaultAgentOptions}
+              isModified={defaultAgent !== undefined}
+              onReset={() => setDefaultAgent(undefined)}
             />
             <SettingsSwitchCard
               id="agents-skip-permissions"
@@ -423,6 +425,18 @@ export function AgentSettings({
                   onSettingsChange?.();
                 })();
               }}
+              isModified={
+                (settings?.globalSkipPermissions ?? false) !==
+                DEFAULT_AGENT_SETTINGS.globalSkipPermissions
+              }
+              onReset={() => {
+                void (async () => {
+                  await setGlobalSkipPermissions(
+                    DEFAULT_AGENT_SETTINGS.globalSkipPermissions ?? false
+                  );
+                  onSettingsChange?.();
+                })();
+              }}
             />
             <SettingsSwitchCard
               id="agents-alt-screen"
@@ -432,6 +446,16 @@ export function AgentSettings({
               onChange={() => {
                 void (async () => {
                   await setGlobalUseAltScreen(!(settings?.globalUseAltScreen ?? false));
+                  onSettingsChange?.();
+                })();
+              }}
+              isModified={
+                (settings?.globalUseAltScreen ?? false) !==
+                DEFAULT_AGENT_SETTINGS.globalUseAltScreen
+              }
+              onReset={() => {
+                void (async () => {
+                  await setGlobalUseAltScreen(DEFAULT_AGENT_SETTINGS.globalUseAltScreen ?? false);
                   onSettingsChange?.();
                 })();
               }}

@@ -8,6 +8,7 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 import { TerminalSettingsTab } from "../TerminalSettingsTab";
+import { useLayoutConfigStore } from "@/store";
 
 beforeEach(() => {
   dispatch.mockClear();
@@ -61,6 +62,32 @@ describe("TerminalSettingsTab", () => {
       { strategy: "fixed-columns" },
       { source: "user" }
     );
+  });
+
+  it("offers a strategy reset only while the strategy differs from Automatic", () => {
+    useLayoutConfigStore.setState({ layoutConfig: { strategy: "automatic", value: 3 } });
+    const { unmount } = renderSubtab("layout");
+    expect(
+      screen.queryByRole("button", { name: "Reset grid layout strategy to default" })
+    ).toBeNull();
+    unmount();
+
+    useLayoutConfigStore.setState({ layoutConfig: { strategy: "fixed-rows", value: 3 } });
+    renderSubtab("layout");
+    fireEvent.click(screen.getByRole("button", { name: "Reset grid layout strategy to default" }));
+    expect(dispatch).toHaveBeenCalledWith(
+      "panel.gridLayout.setStrategy",
+      { strategy: "automatic" },
+      { source: "user" }
+    );
+    useLayoutConfigStore.setState({ layoutConfig: { strategy: "automatic", value: 3 } });
+  });
+
+  it("states how agent and shell limits derive from the base", () => {
+    renderSubtab("scrollback");
+    expect(screen.getByText(/agent terminals keep 10× it/)).toBeTruthy();
+    expect(screen.getByText("Agent terminals")).toBeTruthy();
+    expect(screen.getByText("Shells and dev servers")).toBeTruthy();
   });
 
   it("renders screen reader mode as a segmented choice", () => {

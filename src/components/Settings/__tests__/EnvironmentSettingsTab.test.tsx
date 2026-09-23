@@ -132,6 +132,27 @@ describe("EnvironmentSettingsTab", () => {
     );
   });
 
+  it("retries a failed load in place and unlocks editing once it succeeds", async () => {
+    const get = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("IPC channel not found"))
+      .mockResolvedValueOnce({ EXISTING: "value" });
+    Reflect.set(window, "electron", {
+      globalEnv: { get, set: vi.fn().mockResolvedValue(undefined) },
+    });
+
+    renderTab();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+
+    await waitFor(() => {
+      expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+    });
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.getByRole("button", { name: /add variable/i })).toBeTruthy();
+  });
+
   it("wires aria-invalid and aria-describedby on row inputs when validation fails", async () => {
     window.electron = {
       globalEnv: {

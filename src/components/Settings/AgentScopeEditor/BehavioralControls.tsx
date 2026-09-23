@@ -1,6 +1,9 @@
 import { useMemo } from "react";
 import { Input } from "@/components/ui/input";
-import { SettingsChoicebox, type ChoiceboxOption } from "../SettingsChoicebox";
+import {
+  SegmentedRadioGroup,
+  type SegmentedRadioOption,
+} from "@/components/ui/SegmentedRadioGroup";
 import { SettingsRow } from "../SettingsGroup";
 import type { ScopeKind } from "./scopeUtils";
 import type { DangerousMode, InlineMode } from "@shared/types";
@@ -55,14 +58,11 @@ export function BehavioralControls({
   onCustomFlagsChange,
   onCustomFlagsOverrideReset,
 }: BehavioralControlsProps) {
-  const dangerousModeOptions = useMemo<ReadonlyArray<ChoiceboxOption<DangerousMode>>>(
+  // The inherit segment carries what it resolves to, so the rail alone says what the
+  // agent will actually get without reading the description.
+  const dangerousModeOptions = useMemo<SegmentedRadioOption<DangerousMode>[]>(
     () => [
-      {
-        value: "inherit",
-        label: "Default",
-        resolvedLabel: `(${inheritResolvesToOn ? "On" : "Off"})`,
-        muted: true,
-      },
+      { value: "inherit", label: `Default (${inheritResolvesToOn ? "On" : "Off"})` },
       { value: "on", label: "On" },
       { value: "off", label: "Off" },
     ],
@@ -72,13 +72,11 @@ export function BehavioralControls({
   // Alt-screen tri-state. Labels describe the effect ("Inline" / "Alt screen")
   // and are decoupled from the stored `inlineMode` value polarity ("on" = inline,
   // "off" = alt screen) so the field name and its values stay self-consistent.
-  const inlineModeOptions = useMemo<ReadonlyArray<ChoiceboxOption<InlineMode>>>(
+  const inlineModeOptions = useMemo<SegmentedRadioOption<InlineMode>[]>(
     () => [
       {
         value: "inherit",
-        label: "Default",
-        resolvedLabel: `(${inlineInheritResolvesToInline ? "Inline" : "Alt screen"})`,
-        muted: true,
+        label: `Default (${inlineInheritResolvesToInline ? "Inline" : "Alt screen"})`,
       },
       { value: "on", label: "Inline" },
       { value: "off", label: "Alt screen" },
@@ -112,54 +110,57 @@ export function BehavioralControls({
       <SettingsRow
         id="agents-skip-permissions"
         label="Skip permissions"
-        description="Auto-approve all file, command, and network actions. Off vetoes the global setting for this scope"
-        layout="stacked"
-        control={
-          <div className="grid gap-2">
-            <SettingsChoicebox<DangerousMode>
-              aria-label="Skip permissions"
-              columns={3}
-              value={dangerousMode}
-              onChange={onDangerousModeChange}
-              options={dangerousModeOptions}
-            />
+        description={
+          <>
+            Auto-approve all file, command, and network actions. Off vetoes the global setting for
+            this scope
             {dangerousMode === "inherit" && (
-              <p className="text-xs text-text-secondary select-text">
-                Inherited from {inheritOriginLabel}
-              </p>
+              <span className="block mt-1">Inherited from {inheritOriginLabel}</span>
             )}
             {effectiveSkipPerms && defaultDangerousArg && (
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
+              <span className="flex items-center gap-2 mt-1.5">
                 <code className="text-xs text-status-error font-mono">{defaultDangerousArg}</code>
-                <span className="text-xs text-text-secondary">added to command</span>
-              </div>
+                <span>added to command</span>
+              </span>
             )}
-          </div>
+          </>
         }
+        control={({ descriptionId, disabled }) => (
+          <SegmentedRadioGroup<DangerousMode>
+            aria-label="Skip permissions"
+            aria-describedby={descriptionId}
+            value={dangerousMode}
+            onChange={onDangerousModeChange}
+            options={dangerousModeOptions}
+            disabled={disabled}
+          />
+        )}
       />
 
       {supportsInlineMode && (
         <SettingsRow
           id="agents-inline-mode"
           label="Alt-screen mode"
-          description="Alt screen uses the CLI's full-screen TUI; inline keeps output in Daintree's scrollback with cleaner resizing. Choosing Inline or Alt screen overrides the inherited setting for this scope"
-          layout="stacked"
-          control={
-            <div className="grid gap-2">
-              <SettingsChoicebox<InlineMode>
-                aria-label="Alt-screen mode"
-                columns={3}
-                value={inlineMode}
-                onChange={onInlineModeChange}
-                options={inlineModeOptions}
-              />
+          description={
+            <>
+              Alt screen uses the CLI&apos;s full-screen TUI; inline keeps output in Daintree&apos;s
+              scrollback with cleaner resizing. Choosing Inline or Alt screen overrides the
+              inherited setting for this scope
               {inlineMode === "inherit" && (
-                <p className="text-xs text-text-secondary select-text">
-                  Inherited from {inlineInheritOriginLabel}
-                </p>
+                <span className="block mt-1">Inherited from {inlineInheritOriginLabel}</span>
               )}
-            </div>
+            </>
           }
+          control={({ descriptionId, disabled }) => (
+            <SegmentedRadioGroup<InlineMode>
+              aria-label="Alt-screen mode"
+              aria-describedby={descriptionId}
+              value={inlineMode}
+              onChange={onInlineModeChange}
+              options={inlineModeOptions}
+              disabled={disabled}
+            />
+          )}
         />
       )}
     </>
