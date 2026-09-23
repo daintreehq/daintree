@@ -1,0 +1,141 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
+
+const dispatchMock = vi.fn().mockResolvedValue({ ok: true, result: undefined });
+vi.mock("@/services/ActionService", () => ({
+  actionService: {
+    get: () => undefined,
+    dispatch: (...args: unknown[]) => dispatchMock(...args),
+  },
+}));
+
+import { ChordIndicator } from "../ChordIndicator";
+import { keybindingService } from "@/services/KeybindingService";
+import { isMac } from "@/lib/platform";
+
+function pressCmdK(): void {
+  const mac = isMac();
+  const event = new KeyboardEvent("keydown", {
+    key: "k",
+    code: "KeyK",
+    metaKey: mac,
+    ctrlKey: !mac,
+  });
+  act(() => {
+    keybindingService.resolveKeybinding(event);
+  });
+}
+
+/** Let `useAnimatedPresence` mount (effect → rAF) and settle. */
+async function flushFrames(): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(50);
+  });
+}
+
+const hud = () => document.querySelector<HTMLElement>("[data-command-hud]");
+const input = () => document.querySelector<HTMLInputElement>('[role="combobox"]');
+const options = () => Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'));
+
+describe("ChordIndicator (Cmd+K command HUD)", () => {
+  let terminal: HTMLTextAreaElement;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "requestAnimationFrame"] });
+    keybindingService.clearPendingChord();
+    terminal = document.createElement("textarea");
+    terminal.setAttribute("data-testid", "terminal");
+    document.body.appendChild(terminal);
+    terminal.focus();
+  });
+
+  afterEach(() => {
+    act(() => keybindingService.clearPendingChord());
+    cleanup();
+    terminal.remove();
+    vi.useRealTimers();
+  });
+
+  it("moves focus into the search input once the HUD has mounted", async () => {
+    render(<ChordIndicator />);
+    pressCmdK();
+    await flushFrames();
+
+    expect(hud()).not.toBeNull();
+    expect(document.activeElement).toBe(input());
+  });
+
+  it("hands focus back to the invoking element as soon as the chord ends", async () => {
+    render(<ChordIndicator />);
+    pressCmdK();
+    await flushFrames();
+    expect(document.activeElement).toBe(input());
+
+    act(() => keybindingService.clearPendingChord());
+
+    // Immediately — the HUD is still fading out, and a key pressed now belongs
+    // to the terminal, not to a retiring input.
+    expect(hud()).not.toBeNull();
+    expect(document.activeElement).toBe(terminal);
+  });
+
+  it("does not restore focus when a pointer press outside closed it", async () => {
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    render(<ChordIndicator />);
+    pressCmdK();
+    await flushFrames();
+
+    fireEvent.pointerDown(elsewhere);
+    elsewhere.focus();
+    await flushFrames();
+
+    expect(document.activeElement).toBe(elsewhere);
+    elsewhere.remove();
+  });
+
+  it("keeps the open list on screen, inert, while it fades out", async () => {
+    render(<ChordIndicator />);
+    pressCmdK();
+    await flushFrames();
+    const openCount = options().length;
+    expect(openCount).toBeGreaterThan(0);
+
+    act(() => keybindingService.clearPendingChord());
+
+    expect(hud()).not.toBeNull();
+    expect(options()).toHaveLength(openCount);
+    expect(hud()!.hasAttribute("inert")).toBe(true);
+  });
+
+  it("names every option's group from its visible heading", async () => {
+    render(<ChordIndicator />);
+    pressCmdK();
+    await flushFrames();
+
+    const rows = options();
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      const group = row.closest('[role="group"]');
+      expect(group).not.toBeNull();
+      const labelId = group!.getAttribute("aria-labelledby");
+      const label = labelId ? document.getElementById(labelId) : null;
+      expect(label?.textContent?.trim()).toBeTruthy();
+      expect(group!.contains(label)).toBe(true);
+    }
+  });
+
+  it("marks exactly one option selected, and it is the active descendant", async () => {
+    render(<ChordIndicator />);
+    pressCmdK();
+    await flushFrames();
+
+    fireEvent.keyDown(input()!, { key: "ArrowDown" });
+    fireEvent.keyDown(input()!, { key: "ArrowDown" });
+
+    const selected = options().filter((o) => o.getAttribute("aria-selected") === "true");
+    expect(selected).toHaveLength(1);
+    expect(input()!.getAttribute("aria-activedescendant")).toBe(selected[0]!.id);
+  });
+});

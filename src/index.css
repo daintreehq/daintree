@@ -3306,13 +3306,19 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     --overlay-surface-solid: var(--color-surface-panel-elevated);
   }
 
-  /* Cmd+K command HUD — a distinct dark-glass "spotlight" surface. Deeper and
-   * more translucent than .surface-overlay (canvas plane @70% vs sidebar @94%)
-   * so it reads as its own command mode floating over the terminals. The blur +
-   * saturation are applied on the element via Tailwind using the theme material
-   * tokens; this rule carries the tint + float shadow. */
+  /* Cmd+K command HUD — a distinct dark-glass "spotlight" surface. Deeper than
+   * .surface-overlay (canvas plane vs sidebar) so it reads as its own command
+   * mode floating over the terminals. The blur + saturation are applied on the
+   * element via Tailwind using the theme material tokens; this rule carries the
+   * tint + float shadow.
+   *
+   * The tint is dense enough to hold the text on its own. It sits over scrolling
+   * terminal output, and blur does not lower the luminance of what is behind it;
+   * at 70% a Retina Chromium frame that drops the blur for a band near the panel
+   * edge showed that output crisply through the rows and the footer. At 88% the
+   * content behind contributes an eighth, which reads as texture, not text. */
   .command-hud-glass {
-    background-color: color-mix(in oklab, var(--color-surface-canvas) 70%, transparent);
+    background-color: color-mix(in oklab, var(--color-surface-canvas) 88%, transparent);
     box-shadow:
       var(--shadow-modal),
       inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
@@ -3321,7 +3327,7 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
   /* Light schemes: lift to the elevated plane and brighten the inner sheen so the
    * glass stays legible over a near-white canvas. */
   .light .command-hud-glass {
-    background-color: color-mix(in oklab, var(--color-surface-panel-elevated) 82%, transparent);
+    background-color: color-mix(in oklab, var(--color-surface-panel-elevated) 92%, transparent);
     box-shadow:
       var(--shadow-modal),
       inset 0 1px 0 0 rgba(255, 255, 255, 0.55);
@@ -3343,6 +3349,21 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     }
 
     /* High-contrast users want solid chrome — drop the frosted material. */
+    .command-hud-glass {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      background-color: var(--color-surface-sidebar);
+    }
+
+    .light .command-hud-glass {
+      background-color: var(--color-surface-panel-elevated);
+    }
+  }
+
+  /* Reduce Transparency (macOS) / transparency effects off (Windows) asks for
+   * solid chrome; same fallback as prefers-contrast above, kept as its own
+   * at-rule because the two preferences are set independently. */
+  @media (prefers-reduced-transparency: reduce) {
     .command-hud-glass {
       -webkit-backdrop-filter: none;
       backdrop-filter: none;

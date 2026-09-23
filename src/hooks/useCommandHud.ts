@@ -10,7 +10,9 @@ import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 /** A single entry in the curated Cmd+K power-command layer. */
 export interface CommandHudItem {
   actionId: string;
-  /** Cmd+‹letter› glyphs for the shortcut chip (e.g. "⌘+R"). */
+  /** Canonical second-key combo (e.g. "Cmd+R"), rendered through `KbdChord`. */
+  combo: string;
+  /** Platform-formatted second key (e.g. "⌘+R"), matched by the text filter. */
   displayKey: string;
   /** Human label shown as the row's primary text. */
   description: string;
@@ -48,6 +50,7 @@ function buildLayerItems(): CommandHudItem[] {
     .filter((entry) => entry.actionId !== "")
     .map((entry) => ({
       actionId: entry.actionId,
+      combo: entry.secondKey,
       displayKey: entry.displayKey,
       description: entry.description,
       category: entry.category,
@@ -61,10 +64,12 @@ export function useCommandHud(): UseCommandHudReturn {
   const [query, setQueryState] = useState("");
   const [selectedIndex, setSelectedIndexState] = useState(0);
 
-  // Build the layer only while open — closed, the HUD holds no rows.
-  const layer = useMemo<CommandHudItem[]>(() => {
-    if (!isOpen) return [];
-    return buildLayerItems();
+  // Snapshot the layer on each open and keep it through the close, so the exit
+  // fade shows the list the user was looking at rather than an emptied panel
+  // reading "No commands match".
+  const [layer, setLayer] = useState<CommandHudItem[]>([]);
+  useEffect(() => {
+    if (isOpen) setLayer(buildLayerItems());
   }, [isOpen]);
 
   const { results, groups } = useMemo<{

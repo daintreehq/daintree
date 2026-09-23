@@ -205,8 +205,9 @@ test("Command HUD — states, platforms and themes", async ({ page, browser }) =
     await page.waitForTimeout(60);
     written.push(await snap(page, `08-enter-mid-${theme}.png`, "some"));
     await page.waitForTimeout(400);
+    // The palette exit tier is 100ms: capture straight after the key, with no
+    // wait, or a loaded machine lands past the end of the fade.
     await page.keyboard.press("Escape");
-    await page.waitForTimeout(60);
     // "any": the exit frame is judged on what it shows, including an emptied list.
     written.push(await snap(page, `09-exit-mid-${theme}.png`, "any"));
     await expect(hud(page)).toHaveCount(0, { timeout: 2000 });
