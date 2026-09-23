@@ -79,6 +79,8 @@ async function open(page: Page, fixture: string, theme: string, width: number): 
 
 const input = (page: Page) => page.getByRole("combobox");
 const listbox = (page: Page) => page.getByRole("listbox");
+/** Rows that run something; the band headers are disabled options. */
+const commands = (page: Page) => page.locator('[role="option"]:not([aria-disabled="true"])');
 
 async function showList(page: Page): Promise<void> {
   await input(page).click();
@@ -163,10 +165,10 @@ test("QuickRun — open, choose, run, find the task", async ({ page }) => {
     // Hovering a pinned row and a script row: the row's own actions.
     await open(page, "long-suggestions", theme, width);
     await showList(page);
-    await page.getByRole("option").first().hover();
+    await commands(page).first().hover();
     await page.waitForTimeout(200);
     await shot(`07-hover-pinned-${tag}`);
-    await page.getByRole("option").nth(4).hover();
+    await commands(page).nth(4).hover();
     await page.waitForTimeout(200);
     await shot(`08-hover-script-${tag}`);
 
@@ -179,7 +181,7 @@ test("QuickRun — open, choose, run, find the task", async ({ page }) => {
     // Run from the list, then look for the task it started.
     await open(page, "long-suggestions", theme, width);
     await showList(page);
-    await page.getByRole("option").nth(5).click();
+    await commands(page).nth(5).click();
     await page.mouse.move(width + 30, 5);
     await page.waitForTimeout(600);
     await shot(`10-after-run-${tag}`);

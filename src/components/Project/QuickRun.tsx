@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { Fragment, useState, useEffect, useMemo, useRef } from "react";
 import {
   CornerDownLeft,
   LayoutGrid,
@@ -854,10 +854,11 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                       onClick={() => toggleOption("restart")}
                       className={cn(
                         "rounded-[var(--radius-sm)] border p-1 transition-colors",
-                        // The fill alone cleared about 1.1:1; the outline is the
-                        // same neutral token the selected row's rail spends.
+                        // The fill alone cleared about 1.1:1; the outline is
+                        // the find bars' pressed treatment (TerminalSearchBar,
+                        // FindBar), the closest toggles in the app.
                         effective.restart
-                          ? "border-selection-outline bg-overlay-medium text-text-primary"
+                          ? "border-text-secondary bg-border-default text-text-primary"
                           : "border-transparent text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
                       )}
                       // The label names the control, not its state — the state
@@ -883,10 +884,11 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                       onClick={() => toggleOption("dock")}
                       className={cn(
                         "rounded-[var(--radius-sm)] border p-1 transition-colors",
-                        // The fill alone cleared about 1.1:1; the outline is the
-                        // same neutral token the selected row's rail spends.
+                        // The fill alone cleared about 1.1:1; the outline is
+                        // the find bars' pressed treatment (TerminalSearchBar,
+                        // FindBar), the closest toggles in the app.
                         effective.dock
-                          ? "border-selection-outline bg-overlay-medium text-text-primary"
+                          ? "border-text-secondary bg-border-default text-text-primary"
                           : "border-transparent text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
                       )}
                       // Same rule as auto-restart: one stable name, with the
@@ -965,18 +967,26 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                         .map((item, index) => ({ item, index }))
                         .filter(({ item }) => item.type === section);
                       if (rows.length === 0) return null;
-                      const labelId = `${SUGGESTION_LIST_ID}-${section}`;
                       return (
-                        <div key={section} role="group" aria-labelledby={labelId}>
+                        <Fragment key={section}>
+                          {/* A disabled option rather than a role="group"
+                              label, as the action palette and plugin selector
+                              do: group labels inside a listbox are dropped
+                              under Chromium + VoiceOver, which announces an
+                              empty group instead. The arrows never land on it —
+                              it has no index in `suggestions`. */}
                           <div
-                            id={labelId}
-                            role="presentation"
+                            role="option"
+                            aria-disabled="true"
+                            aria-selected="false"
+                            aria-label={SECTION_LABELS[section]}
+                            data-band={section}
                             className={cn("px-3 pb-1 pt-2", PALETTE_SECTION_LABEL_CLASS)}
                           >
                             {SECTION_LABELS[section]}
                           </div>
                           {rows.map(({ item, index }) => renderOption(item, index))}
-                        </div>
+                        </Fragment>
                       );
                     })}
                   </div>

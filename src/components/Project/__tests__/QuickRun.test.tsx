@@ -327,6 +327,11 @@ describe("QuickRun", () => {
     }
   });
 
+  /** The rows that run something — not the disabled band headers. */
+  function commandOptions() {
+    return screen.getAllByRole("option").filter((o) => o.getAttribute("aria-disabled") !== "true");
+  }
+
   function seedHistory(...commands: string[]) {
     localStorage.setItem(
       "daintree_cmd_history_test-project",
@@ -345,7 +350,7 @@ describe("QuickRun", () => {
       render(<Footer projectId="test-project" />);
       const input = openPanel();
       fireEvent.keyDown(input, { key: "ArrowDown" });
-      const options = screen.getAllByRole("option");
+      const options = commandOptions();
       expect(options.length).toBe(3);
       for (const option of options) {
         expect(option.querySelector("button, a[href], input, [tabindex]")).toBeNull();
@@ -356,7 +361,9 @@ describe("QuickRun", () => {
     }
   });
 
-  it("files every suggestion under a labelled band", () => {
+  it("files every suggestion under a named band the arrows never land on", () => {
+    // Bands are disabled options, not role="group" labels: those are dropped
+    // under Chromium + VoiceOver (the action palette's precedent).
     settingsMock.allDetectedRunners = [{ id: "r", name: "test", command: "npm test" }];
     settingsMock.runCommands = [{ id: "s", name: "Dev", command: "npm run dev" }];
     seedHistory("ls -la");
@@ -364,17 +371,22 @@ describe("QuickRun", () => {
       render(<Footer projectId="test-project" />);
       const input = openPanel();
       fireEvent.keyDown(input, { key: "ArrowDown" });
-      const labels = new Set<string>();
-      for (const option of screen.getAllByRole("option")) {
-        const group = option.closest('[role="group"]');
-        expect(group).not.toBeNull();
-        const label = document.getElementById(group!.getAttribute("aria-labelledby")!);
-        expect(label?.textContent?.trim()).toBeTruthy();
-        // The band label is never itself a row the arrows can land on.
-        expect(label?.getAttribute("role")).not.toBe("option");
-        labels.add(label!.textContent!);
+      const all = screen.getAllByRole("option");
+      const bands = new Set<string>();
+      for (const option of commandOptions()) {
+        const before = all.slice(0, all.indexOf(option)).reverse();
+        const band = before.find((o) => o.getAttribute("aria-disabled") === "true");
+        expect(band?.getAttribute("aria-label")).toBeTruthy();
+        bands.add(band!.getAttribute("aria-label")!);
       }
-      expect(labels.size).toBe(3);
+      expect(bands.size).toBe(3);
+
+      // Walking every row with the arrows never lights a band.
+      for (let i = 0; i < all.length + 2; i++) {
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        const lit = document.getElementById(input.getAttribute("aria-activedescendant")!);
+        expect(lit?.getAttribute("aria-disabled")).toBeNull();
+      }
     } finally {
       settingsMock.allDetectedRunners = [];
       settingsMock.runCommands = [];
@@ -390,7 +402,7 @@ describe("QuickRun", () => {
 
     const active = document.getElementById(input.getAttribute("aria-activedescendant")!);
     expect(active?.textContent).toContain("npm t");
-    expect(active).toBe(screen.getAllByRole("option")[0]);
+    expect(active).toBe(commandOptions()[0]);
 
     fireEvent.keyDown(input, { key: "Enter" });
     expect(mockAddTerminal).toHaveBeenCalledWith(expect.objectContaining({ command: "npm t" }));
@@ -406,11 +418,12 @@ describe("QuickRun", () => {
 
       const active = document.getElementById(input.getAttribute("aria-activedescendant")!)!;
       expect(active.getAttribute("title")).toBe("npm run dev");
-      const band = active.closest('[role="group"]');
-      expect(band).not.toBeNull();
-      expect(document.getElementById(band!.getAttribute("aria-labelledby")!)?.textContent).toBe(
-        "Pinned"
-      );
+      const all = screen.getAllByRole("option");
+      const band = all
+        .slice(0, all.indexOf(active))
+        .reverse()
+        .find((o) => o.getAttribute("aria-disabled") === "true");
+      expect(band?.getAttribute("aria-label")).toBe("Pinned");
       // No second "Run npm run dev" row competing with the pinned one.
       expect(screen.getAllByRole("option").filter((o) => o.title === "npm run dev")).toHaveLength(
         1
