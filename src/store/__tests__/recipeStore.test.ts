@@ -1693,7 +1693,11 @@ describe("recipeStore", () => {
           });
 
         expect(requestConfirmationSpy).toHaveBeenCalledWith(
-          expect.objectContaining({ currentCount: 18, allowedCount: 10, sourceName: recipe.name })
+          expect.objectContaining({
+            currentCount: 18,
+            allowedCount: 10,
+            source: { kind: "recipe", name: recipe.name },
+          })
         );
       } finally {
         usePanelLimitStore.setState({ requestConfirmation: previousRequestConfirmation });

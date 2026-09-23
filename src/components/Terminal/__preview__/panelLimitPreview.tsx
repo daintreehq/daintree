@@ -81,7 +81,7 @@ function StartBatch() {
   useEffect(() => {
     const timer = setTimeout(() => {
       void preflightSpawnBatchLimit(fixture.currentCount, fixture.requestedCount, {
-        sourceName: fixture.sourceName,
+        source: fixture.source,
       }).then((result) => {
         document.documentElement.dataset.preflightAllowed = String(result.allowed);
       });

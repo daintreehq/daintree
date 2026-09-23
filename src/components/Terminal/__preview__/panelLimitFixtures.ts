@@ -1,3 +1,5 @@
+import type { PanelLimitBatchSource } from "@/store/panelLimitStore";
+
 /**
  * Panel-limit confirm states, each reached through the production seam:
  * `preflightSpawnBatchLimit` against the store's thresholds, exactly as a recipe
@@ -10,8 +12,8 @@ export interface PanelLimitFixture {
   requestedCount: number;
   confirmationLimit: number;
   hardLimit: number;
-  /** Recipe name, when the batch is a named recipe run. */
-  sourceName?: string;
+  /** What opens the batch; absent for a caller that names nothing. */
+  source?: PanelLimitBatchSource;
 }
 
 export const PANEL_LIMIT_FIXTURES = {
@@ -21,17 +23,23 @@ export const PANEL_LIMIT_FIXTURES = {
     requestedCount: 4,
     confirmationLimit: 20,
     hardLimit: 32,
-    sourceName: "Claude + Codex pair",
+    source: { kind: "recipe", name: "Claude + Codex pair" },
   },
-  /** One panel over: a cloned one-terminal layout at the threshold, so no recipe name. */
-  single: { currentCount: 20, requestedCount: 1, confirmationLimit: 20, hardLimit: 32 },
+  /** One panel over: a cloned one-terminal layout at the threshold. */
+  single: {
+    currentCount: 20,
+    requestedCount: 1,
+    confirmationLimit: 20,
+    hardLimit: 32,
+    source: { kind: "clone-layout" },
+  },
   /** The hard limit trims the batch: six asked for, three fit. */
   trimmed: {
     currentCount: 29,
     requestedCount: 6,
     confirmationLimit: 20,
     hardLimit: 32,
-    sourceName: "Review fleet",
+    source: { kind: "recipe", name: "Review fleet" },
   },
   /** Trimmed to a single panel. */
   "trimmed-one": { currentCount: 31, requestedCount: 5, confirmationLimit: 20, hardLimit: 32 },
@@ -41,7 +49,7 @@ export const PANEL_LIMIT_FIXTURES = {
     requestedCount: 12,
     confirmationLimit: 64,
     hardLimit: 100,
-    sourceName: "Full-stack sweep: frontend, backend, e2e and docs agents",
+    source: { kind: "recipe", name: "Full-stack sweep: frontend, backend, e2e and docs agents" },
   },
 } satisfies Record<string, PanelLimitFixture>;
 

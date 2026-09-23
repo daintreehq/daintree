@@ -42,6 +42,9 @@ export function computeHardwareDefaults(totalMemoryBytes: number): {
   return { soft: 32, confirm: 64, hard: 100 };
 }
 
+/** The operations that open panels in a batch. */
+export type PanelLimitBatchSource = { kind: "recipe"; name: string } | { kind: "clone-layout" };
+
 /**
  * What a batch spawn is asking to do, captured when it asks. The thresholds are
  * snapshots so the dialog explains the decision that was actually made, even if
@@ -56,8 +59,8 @@ export interface PanelLimitConfirmRequest {
   allowedCount: number;
   confirmationLimit: number;
   hardLimit: number;
-  /** The recipe name, when the batch is a named recipe run. */
-  sourceName?: string;
+  /** What is opening the batch, so the dialog can name it. */
+  source?: PanelLimitBatchSource;
 }
 
 interface PendingConfirmation {
@@ -361,7 +364,7 @@ export function _resetInitPromise(): void {
 export async function preflightSpawnBatchLimit(
   currentCount: number,
   requestedCount: number,
-  options: { sourceName?: string } = {}
+  options: { source?: PanelLimitBatchSource } = {}
 ): Promise<{ allowed: number; declined: boolean }> {
   if (requestedCount <= 0) return { allowed: 0, declined: false };
 
@@ -395,7 +398,7 @@ export async function preflightSpawnBatchLimit(
       allowedCount: allowed,
       confirmationLimit,
       hardLimit,
-      ...(options.sourceName ? { sourceName: options.sourceName } : {}),
+      ...(options.source ? { source: options.source } : {}),
     });
     if (!confirmed) return { allowed: 0, declined: true };
   }

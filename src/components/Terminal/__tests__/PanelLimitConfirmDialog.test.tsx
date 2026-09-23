@@ -49,10 +49,10 @@ function setLimits(confirmationLimit: number, hardLimit: number) {
  * Start a batch the way a recipe run does. The answer comes back boxed: an
  * async function returning the bare promise would wait for the user.
  */
-async function startBatch(currentCount: number, requestedCount: number, sourceName?: string) {
+async function startBatch(currentCount: number, requestedCount: number) {
   let result!: Promise<{ allowed: number; declined: boolean }>;
   await act(async () => {
-    result = preflightSpawnBatchLimit(currentCount, requestedCount, { sourceName });
+    result = preflightSpawnBatchLimit(currentCount, requestedCount);
   });
   return { result };
 }
@@ -210,8 +210,30 @@ describe("describePanelLimitRequest", () => {
   });
 
   it("names the recipe when the batch is one", () => {
-    const copy = describePanelLimitRequest({ ...base, sourceName: "Claude + Codex pair" });
+    const copy = describePanelLimitRequest({
+      ...base,
+      source: { kind: "recipe", name: "Claude + Codex pair" },
+    });
     expect(copy.description).toContain("Claude + Codex pair");
+  });
+
+  it("names every kind of batch source differently from an unnamed launch", () => {
+    const unnamed = describePanelLimitRequest(base).description;
+    const cloned = describePanelLimitRequest({ ...base, source: { kind: "clone-layout" } });
+    expect(cloned.description).not.toBe(unnamed);
+    expect(cloned.description.toLowerCase()).toContain("layout");
+  });
+
+  it("says a trimmed batch keeps its first panels, since callers spawn in launch order", () => {
+    for (const allowedCount of [1, 3]) {
+      const copy = describePanelLimitRequest({
+        ...base,
+        currentCount: 32 - allowedCount,
+        requestedCount: 6,
+        allowedCount,
+      });
+      expect(copy.description).toMatch(/\bfirst\b/);
+    }
   });
 
   it("follows the confirm-dialog microcopy rules", () => {

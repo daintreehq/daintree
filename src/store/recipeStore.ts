@@ -1119,7 +1119,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     const { allowed, declined } = await preflightSpawnBatchLimit(
       currentCount,
       validIndices.length,
-      { sourceName: recipe.name }
+      { source: { kind: "recipe", name: recipe.name } }
     );
     const spawnIndices = validIndices.slice(0, allowed);
     for (const index of validIndices.slice(allowed)) {

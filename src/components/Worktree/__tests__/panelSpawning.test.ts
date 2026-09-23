@@ -651,6 +651,18 @@ describe("spawnPanelsFromRecipe", () => {
       expect(mockAddPanel).not.toHaveBeenCalled();
     });
 
+    it("names the operation in the confirm it asks", async () => {
+      await spawnPanelsFromRecipe({
+        terminals: [makeTerminal(), makeTerminal()],
+        worktreeId: "wt-1",
+        cwd: "/path/to/wt",
+        source: { kind: "clone-layout" },
+      });
+      expect(usePanelLimitStore.getState().requestConfirmation).toHaveBeenCalledWith(
+        expect.objectContaining({ source: { kind: "clone-layout" }, requestedCount: 2 })
+      );
+    });
+
     it("tells a per-panel callback the panels were declined, not refused by the limit", async () => {
       const onPanelSpawned = vi.fn();
       await spawnPanelsFromRecipe({
