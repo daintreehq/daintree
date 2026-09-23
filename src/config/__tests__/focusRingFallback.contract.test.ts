@@ -625,9 +625,9 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
     file: "src/components/Layout/LocalCommitsDropdown.tsx",
     fragment:
-      "flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-muted-foreground focus:outline-hidden",
+      "flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden",
     reason:
-      "Parent shows focus: wrapper at line 437 has `focus-within:border-accent-primary focus-within:ring-1`",
+      "Parent shows focus: the search shell carries full-strength `focus-within:border-accent-primary`, the one accent this region is allowed — same shape as GitHubResourceList.",
   },
 
   // ── Pre-existing focus-ring gaps surfaced by #8940 ───────────────────

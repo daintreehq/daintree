@@ -107,6 +107,19 @@ test("Local commits dropdown — states and themes", async ({ page }) => {
   const pageErrors: string[] = [];
   page.on("pageerror", (e) => pageErrors.push(e.message));
 
+  // Vite's dependency optimizer re-bundles when the entry's import graph has
+  // changed since the last run and answers the stale chunks with 504s, which
+  // leaves the first page blank. Load until the pill renders, then capture.
+  await stubViteHmrClient(page);
+  const warm = page.getByTestId("forge-stat-pill-commits");
+  for (let attempt = 0; attempt < 6; attempt++) {
+    await page.goto(`${baseURL}/forge-stats-preview.html?fixture=commits-only&commits=few`);
+    if (await warm.isVisible({ timeout: 15_000 }).catch(() => false)) break;
+    await page.waitForTimeout(3_000);
+  }
+  await expect(warm, "preview never rendered the commits pill").toBeVisible();
+  pageErrors.length = 0;
+
   const full = THEMES.slice(0, 2);
   const rest = THEMES.slice(2);
   let expected = 0;
@@ -191,7 +204,7 @@ test("Local commits dropdown — states and themes", async ({ page }) => {
 
     // The history read failed.
     panel = await openDropdown(page, "error", theme);
-    await settled(panel, "not a git repository");
+    await settled(panel, "Couldn't load commits");
     await shot(panel, "14-error");
 
     // Page two failed.

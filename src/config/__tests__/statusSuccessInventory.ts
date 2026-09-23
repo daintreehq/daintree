@@ -255,14 +255,6 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "transient",
       signature: "text-status-success",
-      anchor: 'copied && "text-status-success"',
-      expectedOccurrences: 1,
-      rationale: "Copy-hash confirmation on the row; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: "<span>#</span>",
       expectedOccurrences: 1,
       rationale: "Copy-hash confirmation glyph; resets when the copy flash times out",
     },

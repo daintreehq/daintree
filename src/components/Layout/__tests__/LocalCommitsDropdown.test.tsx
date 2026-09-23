@@ -8,6 +8,7 @@ import { LocalCommitsDropdown, reflowCommitBody } from "../LocalCommitsDropdown"
 import type { GitCommit, GitCommitListResponse } from "@shared/types/git";
 
 const listCommitsMock = vi.fn();
+const listPushCommitsMock = vi.fn();
 
 vi.mock("@/utils/timeAgo", () => ({
   formatTimeAgo: (date: string) => `time:${date}`,
@@ -45,8 +46,10 @@ const makeResponse = (
 
 beforeEach(() => {
   listCommitsMock.mockReset();
+  listPushCommitsMock.mockReset();
+  listPushCommitsMock.mockRejectedValue(new Error("no remote"));
   (window as unknown as { electron: unknown }).electron = {
-    git: { listCommits: listCommitsMock },
+    git: { listCommits: listCommitsMock, listPushCommits: listPushCommitsMock },
   };
 });
 
@@ -97,7 +100,7 @@ describe("LocalCommitsDropdown", () => {
 
     const { findByText } = render(<LocalCommitsDropdown cwd="/repo" open initialCount={0} />);
 
-    expect(await findByText("No commits yet")).toBeTruthy();
+    expect(await findByText("No commits on this branch yet")).toBeTruthy();
   });
 
   it("shows the search-specific empty state when a query matches nothing", async () => {
@@ -111,7 +114,7 @@ describe("LocalCommitsDropdown", () => {
     listCommitsMock.mockResolvedValue(makeResponse([]));
     fireEvent.change(getByRole("combobox"), { target: { value: "nomatch" } });
 
-    expect(await findByText('No matching commits for "nomatch"')).toBeTruthy();
+    expect(await findByText("No commits match \u201cnomatch\u201d")).toBeTruthy();
     expect(listCommitsMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ search: "nomatch", skip: 0 })
     );
@@ -162,17 +165,20 @@ describe("LocalCommitsDropdown", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("invokes onClose from the footer close button", async () => {
+  it("clears the search from the empty state and refetches the full list", async () => {
     listCommitsMock.mockResolvedValue(makeResponse([makeCommit(1)]));
-    const onClose = vi.fn();
 
-    const { findByText } = render(
-      <LocalCommitsDropdown cwd="/repo" open initialCount={1} onClose={onClose} />
+    const { getByRole, findByText, findAllByText } = render(
+      <LocalCommitsDropdown cwd="/repo" open initialCount={1} />
     );
+    await findAllByText("commit message 1");
 
-    fireEvent.click(await findByText("Close"));
+    listCommitsMock.mockResolvedValueOnce(makeResponse([]));
+    fireEvent.change(getByRole("combobox"), { target: { value: "nomatch" } });
+    fireEvent.click(await findByText("Clear search"));
 
-    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(getByRole("combobox")).toHaveProperty("value", "");
+    expect((await findAllByText("commit message 1")).length).toBeGreaterThan(0);
   });
 
   it("expands a commit body on row click", async () => {
@@ -184,7 +190,7 @@ describe("LocalCommitsDropdown", () => {
       <LocalCommitsDropdown cwd="/repo" open initialCount={2} />
     );
 
-    const row = (await findAllByText("commit message 1"))[0]?.closest('[role="option"]');
+    const row = (await findAllByText("commit message 1"))[0]?.closest('[role="row"]');
     expect(row?.getAttribute("aria-expanded")).toBe("false");
     const bodyBefore = (await findByText("Detailed body text")).closest("div[aria-hidden]");
     expect(bodyBefore?.getAttribute("aria-hidden")).toBe("true");
@@ -193,7 +199,7 @@ describe("LocalCommitsDropdown", () => {
 
     // Re-query after the re-render rather than asserting on pre-click nodes.
     await waitFor(() => {
-      const rowAfter = document.querySelector('[role="option"][aria-expanded="true"]');
+      const rowAfter = document.querySelector('[role="row"][aria-expanded="true"]');
       expect(rowAfter?.textContent).toContain("commit message 1");
     });
     const bodyAfter = (await findByText("Detailed body text")).closest("div[aria-hidden]");
@@ -207,7 +213,7 @@ describe("LocalCommitsDropdown", () => {
 
     const { findAllByText } = render(<LocalCommitsDropdown cwd="/repo" open initialCount={1} />);
 
-    const row = (await findAllByText("commit message 1"))[0]?.closest('[role="option"]');
+    const row = (await findAllByText("commit message 1"))[0]?.closest('[role="row"]');
     fireEvent.click(row!);
 
     await waitFor(() => {
@@ -269,13 +275,160 @@ describe("LocalCommitsDropdown", () => {
 
     fireEvent.click(await findByText("Load more"));
 
-    expect(await findByText("page two broke")).toBeTruthy();
+    expect(await findByText(/page two broke/)).toBeTruthy();
     expect((await findAllByText("commit message 0")).length).toBeGreaterThan(0);
 
     fireEvent.click(await findByText("Retry"));
 
     expect((await findAllByText("commit message 30")).length).toBeGreaterThan(0);
     expect(listCommitsMock).toHaveBeenLastCalledWith(expect.objectContaining({ skip: 30 }));
+  });
+});
+
+describe("LocalCommitsDropdown push status", () => {
+  const pushPreview = (
+    hashes: string[],
+    rangeBasis: "tracked" | "creates" | "unverified" = "tracked"
+  ) => ({
+    destination: { remote: "origin", branch: "main" },
+    rangeBasis,
+    total: hashes.length,
+    commits: hashes.map((hash) => ({ hash, date: "", message: "", author: "" })),
+  });
+
+  it("marks exactly the commits in the push range and summarises them in the footer", async () => {
+    listCommitsMock.mockResolvedValue(makeResponse([makeCommit(1), makeCommit(2), makeCommit(3)]));
+    listPushCommitsMock.mockResolvedValue(pushPreview(["hash-1", "hash-2"]));
+
+    const { findByText, findAllByText } = render(
+      <LocalCommitsDropdown cwd="/repo" branch="main" open initialCount={3} />
+    );
+    await findAllByText("commit message 3");
+    await findByText("2 not pushed");
+
+    const rowOf = (n: number) =>
+      document.getElementById(`local-commit-row-hash-${n}`)?.textContent ?? "";
+    expect(rowOf(1)).toContain("Not pushed");
+    expect(rowOf(2)).toContain("Not pushed");
+    expect(rowOf(3)).not.toContain("Not pushed");
+    expect(listPushCommitsMock).toHaveBeenCalledWith("/repo", "main", 100);
+  });
+
+  it("marks no rows from an unverified range", async () => {
+    listCommitsMock.mockResolvedValue(makeResponse([makeCommit(1)]));
+    listPushCommitsMock.mockResolvedValue(pushPreview(["hash-1"], "unverified"));
+
+    const { findByText, findAllByText } = render(
+      <LocalCommitsDropdown cwd="/repo" branch="main" open initialCount={1} />
+    );
+    await findAllByText("commit message 1");
+    await findByText(/Couldn't verify what origin\/main has/);
+
+    expect(document.getElementById("local-commit-row-hash-1")?.textContent).not.toContain(
+      "Not pushed"
+    );
+  });
+
+  it("does not read push status without a branch", async () => {
+    listCommitsMock.mockResolvedValue(makeResponse([makeCommit(1)]));
+
+    const { findAllByText } = render(<LocalCommitsDropdown cwd="/repo" open initialCount={1} />);
+    await findAllByText("commit message 1");
+
+    expect(listPushCommitsMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("LocalCommitsDropdown grid semantics", () => {
+  it("keeps the combobox's popup target in every state, including empty", async () => {
+    listCommitsMock.mockResolvedValue(makeResponse([]));
+
+    const { getByRole, findByText } = render(
+      <LocalCommitsDropdown cwd="/repo" open initialCount={0} />
+    );
+    await findByText("No commits on this branch yet");
+
+    const controls = getByRole("combobox").getAttribute("aria-controls");
+    expect(controls).toBeTruthy();
+    expect(document.getElementById(controls!)?.getAttribute("role")).toBe("grid");
+  });
+
+  it("puts no interactive control inside an option", async () => {
+    listCommitsMock.mockResolvedValue(makeResponse([makeCommit(1, "body"), makeCommit(2)]));
+
+    const { findAllByText } = render(<LocalCommitsDropdown cwd="/repo" open initialCount={2} />);
+    await findAllByText("commit message 2");
+
+    for (const option of document.querySelectorAll('[role="option"]')) {
+      expect(option.querySelector("button, a[href], input, [tabindex]")).toBeNull();
+    }
+    for (const row of document.querySelectorAll('#local-commit-list [role="row"]')) {
+      expect(row.querySelector('[role="gridcell"]')).not.toBeNull();
+    }
+  });
+
+  it("points aria-activedescendant at the Load more row after the last commit", async () => {
+    const firstPage = Array.from({ length: 30 }, (_, i) => makeCommit(i));
+    listCommitsMock.mockResolvedValueOnce(makeResponse(firstPage, { hasMore: true, total: 31 }));
+
+    const { getByRole, findByText } = render(
+      <LocalCommitsDropdown cwd="/repo" open initialCount={31} />
+    );
+    await findByText("Load more");
+
+    const input = getByRole("combobox");
+    for (let i = 0; i < 31; i++) fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    const id = input.getAttribute("aria-activedescendant");
+    expect(id).toBeTruthy();
+    const target = document.getElementById(id!);
+    expect(target?.getAttribute("role")).toBe("row");
+    expect(target?.textContent).toContain("Load more");
+  });
+
+  it("copies the active commit's hash with Shift+Enter even when it has a body", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    listCommitsMock.mockResolvedValue(makeResponse([makeCommit(1, "has a body")]));
+
+    const { getByRole, findAllByText } = render(
+      <LocalCommitsDropdown cwd="/repo" open initialCount={1} />
+    );
+    await findAllByText("commit message 1");
+
+    const input = getByRole("combobox");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+
+    expect(writeText).toHaveBeenCalledWith("hash-1");
+    expect(document.getElementById("local-commit-row-hash-1")?.getAttribute("aria-expanded")).toBe(
+      "false"
+    );
+  });
+
+  it("shows git's reason without the IPC transport prefix", async () => {
+    listCommitsMock.mockRejectedValue(
+      new Error("Error invoking remote method 'git:list-commits': Error: git log timed out")
+    );
+
+    const { findByText, queryByText } = render(
+      <LocalCommitsDropdown cwd="/repo" open initialCount={1} />
+    );
+
+    expect(await findByText("git log timed out")).toBeTruthy();
+    expect(queryByText(/Error invoking remote method/)).toBeNull();
+  });
+
+  it("does not claim the branch is empty before the history read answers", async () => {
+    listCommitsMock.mockImplementation(() => new Promise(() => {}));
+
+    const { queryByText } = render(<LocalCommitsDropdown cwd="/repo" open initialCount={0} />);
+    await waitFor(() => expect(listCommitsMock).toHaveBeenCalled());
+
+    expect(queryByText("No commits on this branch yet")).toBeNull();
   });
 });
 
