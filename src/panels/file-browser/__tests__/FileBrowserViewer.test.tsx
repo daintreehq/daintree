@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { createContext, forwardRef, useContext, type ReactNode } from "react";
-import { fireEvent, render, act, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, act, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Type-only: erased before the vi.mock factory runs, so it cannot pull the real
 // module in ahead of its own mock.
@@ -58,6 +58,7 @@ vi.mock("@/components/Markdown/MarkdownTextSizeControl", () => ({
       onClick={() => props.onValueChange("2xl")}
     />
   ),
+  MarkdownTextSizeMenuItems: () => null,
 }));
 // Both leaves surface the props the branch hands them: which mock renders only
 // proves the routing, and an HTML source branch wired to empty content or the
@@ -202,7 +203,6 @@ import type { GitStatus } from "@shared/types/git";
 import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { NO_HIDDEN_ROWS } from "../fileBrowserTree";
 import { ClientAppError } from "@/utils/clientAppError";
-import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import type {
   FileBrowserSortOrder,
@@ -252,6 +252,8 @@ interface ViewerOpts {
   hiddenCounts?: HiddenRowCounts;
   onCollapseAll?: () => void;
   canCollapseAll?: boolean;
+  missingFilePath?: string | null;
+  onShowFolder?: (path: string) => void;
 }
 
 function change(relativePath: string, status: GitStatus = "modified"): WorkingTreeFileChange {
@@ -305,6 +307,8 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
         hiddenCounts={opts.hiddenCounts ?? NO_HIDDEN_ROWS}
         onCollapseAll={opts.onCollapseAll ?? vi.fn()}
         canCollapseAll={opts.canCollapseAll ?? false}
+        missingFilePath={opts.missingFilePath ?? null}
+        onShowFolder={opts.onShowFolder ?? vi.fn()}
       />
     </TooltipProvider>
   );
@@ -601,7 +605,7 @@ describe("FileBrowserViewer tree-sidebar toggle (#11328)", () => {
     // The empty state has no toolbar of its own; the persistent Root is what
     // keeps a re-open control on screen once the tree is collapsed.
     expect(screen.getByTestId("file-browser-sidebar-toggle")).toBeTruthy();
-    expect(screen.getByText("Nothing selected")).toBeTruthy();
+    expect(screen.getByText("Pick a file to read")).toBeTruthy();
   });
 
   it("is the first control in the toolbar in both the empty and file-selected states", async () => {
@@ -1031,7 +1035,7 @@ describe("FileBrowserViewer PDF preview (#11427)", () => {
     const { container } = renderViewer("/repo/docs/huge.pdf");
 
     // The reason reaches the viewer's error state rather than an empty box.
-    expect(await screen.findByText("Can't show this file")).toBeTruthy();
+    expect(await screen.findByText("Too large to preview")).toBeTruthy();
     expect(pdfProbeMock).toHaveBeenCalledTimes(1);
     expect(container.querySelector("iframe")).toBeNull();
   });
@@ -1079,20 +1083,23 @@ describe("FileBrowserViewer PDF preview (#11427)", () => {
       revision: "0:0",
       surfaceRefreshNonce: 0,
     });
-    await screen.findByText("Can't show this file");
+    await screen.findByTestId("file-browser-unavailable");
 
     rerender(viewerJsx("/repo/docs/spec.pdf", { revision: "0:1", surfaceRefreshNonce: 1 }));
 
     await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
-    expect(screen.queryByText("Can't show this file")).toBeNull();
+    expect(screen.queryByTestId("file-browser-unavailable")).toBeNull();
   });
 
-  it("offers no default-app action when a non-PDF preview fails", async () => {
+  it("never offers the OS default app for a binary, which that handler may execute", async () => {
     readMock.mockRejectedValue(new ClientAppError("BINARY_FILE", "BINARY_FILE"));
     renderViewer("/repo/src/blob.bin");
 
-    expect(await screen.findByText(FILE_READ_ERROR_MESSAGES.BINARY_FILE)).toBeTruthy();
+    expect(await screen.findByText("Binary file")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open in default app" })).toBeNull();
+    // Its way out is the file manager instead — still a way out, not a dead end.
+    const unavailable = screen.getByTestId("file-browser-unavailable");
+    expect(within(unavailable).getByRole("button", { name: revealCopy().label })).toBeTruthy();
   });
 });
 
@@ -1123,7 +1130,7 @@ describe("FileBrowserViewer Refresh control (#11586, #11938)", () => {
 
     // Nothing selected still needs it: Refresh re-reads the tree too, and a
     // workspace root has only the polled reconcile to fall back on (#11590).
-    expect(screen.getByText("Nothing selected")).toBeTruthy();
+    expect(screen.getByText("Pick a file to read")).toBeTruthy();
     const button = screen.getByTestId("file-browser-refresh");
     await act(async () => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -1199,7 +1206,7 @@ describe("FileBrowserViewer idle body", () => {
 
     expect(screen.getByRole("button", { name: /Read src\/app\.ts/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Read docs\/notes\.md/ })).toBeTruthy();
-    expect(screen.queryByText("Nothing selected")).toBeNull();
+    expect(screen.queryByText("Pick a file to read")).toBeNull();
   });
 
   it("opens a summarised file through the pane's selection callback", () => {
@@ -1215,7 +1222,7 @@ describe("FileBrowserViewer idle body", () => {
     renderViewer(null, { changedFiles: [] });
 
     expect(screen.getByText("Worktree is clean")).toBeTruthy();
-    expect(screen.queryByText("Nothing selected")).toBeNull();
+    expect(screen.queryByText("Pick a file to read")).toBeNull();
   });
 
   it("keeps the generic placeholder when no git status is available", () => {
@@ -1223,7 +1230,7 @@ describe("FileBrowserViewer idle body", () => {
     // snapshot hasn't arrived is equally unknown. Neither may claim "clean".
     renderViewer(null, { changedFiles: null });
 
-    expect(screen.getByText("Nothing selected")).toBeTruthy();
+    expect(screen.getByText("Pick a file to read")).toBeTruthy();
     expect(screen.queryByText("Worktree is clean")).toBeNull();
   });
 
@@ -1245,14 +1252,14 @@ describe("folder-selected state (#11620)", () => {
 
   it("lists a selected folder's contents instead of the nothing-selected state", () => {
     renderViewer(null, { folderPath: "src", folderRows: FOLDER_ROWS });
-    expect(screen.queryByText("Nothing selected")).toBeNull();
+    expect(screen.queryByText("Pick a file to read")).toBeNull();
     expect(screen.getByLabelText("pkg")).toBeTruthy();
     expect(screen.getByLabelText("a.ts")).toBeTruthy();
   });
 
   it("still shows the nothing-selected state when neither a file nor a folder is selected", () => {
     renderViewer(null);
-    expect(screen.getByText("Nothing selected")).toBeTruthy();
+    expect(screen.getByText("Pick a file to read")).toBeTruthy();
   });
 
   it("prefers the file preview when a file is selected", () => {
@@ -1266,13 +1273,13 @@ describe("folder-selected state (#11620)", () => {
     // The #10083 trap: branching on a Doherty-gated flag would paint "This
     // folder is empty" for the first 400ms of every folder load.
     renderViewer(null, { folderPath: "src", folderRows: null, folderStatus: "pending" });
-    expect(screen.queryByText("Nothing in this folder yet")).toBeNull();
-    expect(screen.queryByText("Nothing selected")).toBeNull();
+    expect(screen.queryByText("Add a file to this folder")).toBeNull();
+    expect(screen.queryByText("Pick a file to read")).toBeNull();
   });
 
   it("shows the empty state for a folder that really holds nothing", () => {
     renderViewer(null, { folderPath: "src", folderRows: [], folderStatus: "ready" });
-    expect(screen.getByText("Nothing in this folder yet")).toBeTruthy();
+    expect(screen.getByText("Add a file to this folder")).toBeTruthy();
   });
 
   it("offers Show dotfiles only when unhiding them would reveal something", () => {
@@ -1497,7 +1504,7 @@ describe("FileBrowserViewer copy file contents (#12136)", () => {
       readMock.mockRejectedValue(new ClientAppError(code, code));
       renderViewer("/repo/src/blob.bin");
 
-      expect(await screen.findByText(FILE_READ_ERROR_MESSAGES[code])).toBeTruthy();
+      expect(await screen.findByTestId("file-browser-unavailable")).toBeTruthy();
       expect(copyButton()).toBeNull();
     }
   );
@@ -1607,6 +1614,18 @@ describe("plugin-contributed editing in the file browser", () => {
     expect(screen.queryByTestId("file-editor-hint")).toBeNull();
   });
 
+  it("hands focus to the Rendered segment, not the first one, when leaving Edit for Rendered", async () => {
+    enabled = true;
+    renderViewer("/repo/notes.md", { editorContext: context });
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.click(screen.getByRole("button", { name: "Rendered" }));
+    const rendered = screen.getByRole("button", { name: "Rendered" });
+    expect(rendered.getAttribute("aria-pressed")).toBe("true");
+    expect(document.activeElement).toBe(rendered);
+  });
+
   it("offers Edit without a hint when the plugin is already enabled", async () => {
     enabled = true;
     renderViewer("/repo/notes.md", { editorContext: context });
@@ -1686,5 +1705,181 @@ describe("plugin-contributed editing in the file browser", () => {
     expect(screen.getByRole("button", { name: "Source" }).getAttribute("aria-pressed")).toBe(
       "true"
     );
+  });
+});
+
+describe("viewer identity and ways out", () => {
+  it("names a listed folder in the toolbar, so the listing is never anonymous", () => {
+    renderViewer(null, {
+      folderPath: "assets/brand",
+      folderRows: [{ path: "assets/brand/logo.svg", name: "logo.svg", isDirectory: false }],
+    });
+    const pill = screen.getByRole("button", { name: /^Copy folder path/ });
+    expect(pill.textContent).toContain("brand");
+  });
+
+  it("says an open file was deleted, under its own name, instead of swapping views", () => {
+    const onShowFolder = vi.fn();
+    renderViewer(null, {
+      missingFilePath: "docs/architecture/notes.md",
+      changedFiles: [change("docs/architecture/notes.md", "deleted")],
+      onShowFolder,
+    });
+
+    // Not the changed-files summary that used to replace it silently.
+    expect(screen.queryByText("Changed files")).toBeNull();
+    const unavailable = screen.getByTestId("file-browser-unavailable");
+    expect(unavailable.textContent).toContain("notes.md");
+    expect(screen.getByRole("button", { name: /^Copy file path/ }).textContent).toContain(
+      "notes.md"
+    );
+
+    fireEvent.click(within(unavailable).getByRole("button", { name: /show folder/i }));
+    expect(onShowFolder).toHaveBeenCalledWith("docs/architecture");
+  });
+
+  it("offers a way out from every unavailable read", async () => {
+    for (const code of [
+      "BINARY_FILE",
+      "FILE_TOO_LARGE",
+      "LFS_POINTER",
+      "PERMISSION",
+      "NOT_FOUND",
+    ] as const) {
+      readMock.mockRejectedValueOnce(new ClientAppError(code, code));
+      const { unmount } = renderViewer(`/repo/src/${code.toLowerCase()}.dat`);
+      const unavailable = await screen.findByTestId("file-browser-unavailable");
+      expect(within(unavailable).queryAllByRole("button").length).toBeGreaterThan(0);
+      unmount();
+    }
+  });
+
+  it("folds the file's actions into one menu when the toolbar is compact", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, 320, 30)
+    );
+    readMock.mockResolvedValue({ content: "x" });
+    renderViewer("/repo/src/notes.txt");
+    await screen.findByTestId("code-viewer-mock");
+
+    expect(screen.getByRole("button", { name: "More actions" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open in editor" })).toBeNull();
+    expect(screen.queryByRole("button", { name: revealCopy().label })).toBeNull();
+    // The identity is what the fold protects, so it must still be there.
+    expect(screen.getByRole("button", { name: /^Copy file path/ })).toBeTruthy();
+  });
+});
+
+describe("viewer at tight widths and keyboard continuity", () => {
+  function atWidth(width: number) {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, width, 30)
+    );
+  }
+
+  it("folds the mode choice into one menu naming the current mode at the tightest widths", async () => {
+    atWidth(340);
+    readMock.mockResolvedValue({ content: "# Title" });
+    renderViewer("/repo/docs/readme.md");
+
+    const trigger = await screen.findByRole("button", { name: /^View mode: Rendered$/ });
+    expect(trigger).toBeTruthy();
+    // No segmented pair beside it: one control, not both.
+    expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
+  });
+
+  it("keeps the segmented control wherever it fits", async () => {
+    atWidth(700);
+    readMock.mockResolvedValue({ content: "# Title" });
+    renderViewer("/repo/docs/readme.md");
+
+    expect(await screen.findByRole("button", { name: "Source" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^View mode/ })).toBeNull();
+  });
+
+  it("hands focus to the next listing after a keyboard drill-in", () => {
+    const rows = (folder: string, names: string[]): FolderListingRow[] =>
+      names.map((name) => ({ path: `${folder}/${name}`, name, isDirectory: true }));
+    const onSelectEntry = vi.fn();
+    const { rerender } = renderViewer(null, {
+      folderPath: "src",
+      folderRows: rows("src", ["lib"]),
+      onSelectEntry,
+    });
+
+    const lib = screen.getByLabelText("lib");
+    lib.focus();
+    fireEvent.keyDown(lib, { key: "Enter" });
+    expect(onSelectEntry).toHaveBeenCalledWith("src/lib");
+
+    // The real pane passes through a pending listing first, which unmounts the
+    // activated row — the moment focus would otherwise fall to the body.
+    rerender(
+      viewerJsx(null, {
+        folderPath: "src/lib",
+        folderRows: null,
+        folderStatus: "pending",
+        onSelectEntry,
+      })
+    );
+    expect(document.activeElement).not.toBe(screen.queryByLabelText("util"));
+    rerender(
+      viewerJsx(null, {
+        folderPath: "src/lib",
+        folderRows: rows("src/lib", ["util"]),
+        onSelectEntry,
+      })
+    );
+    expect(document.activeElement).toBe(screen.getByLabelText("util"));
+  });
+
+  it("hands focus to the path pill when the folder it drilled into fails to read", () => {
+    const onSelectEntry = vi.fn();
+    const { rerender } = renderViewer(null, {
+      folderPath: "src",
+      folderRows: [{ path: "src/lib", name: "lib", isDirectory: true }],
+      onSelectEntry,
+    });
+    const lib = screen.getByLabelText("lib");
+    lib.focus();
+    fireEvent.keyDown(lib, { key: "Enter" });
+
+    rerender(
+      viewerJsx(null, {
+        folderPath: "src/lib",
+        folderRows: null,
+        folderStatus: "pending",
+        onSelectEntry,
+      })
+    );
+    rerender(
+      viewerJsx(null, {
+        folderPath: "src/lib",
+        folderRows: null,
+        folderStatus: "error",
+        onSelectEntry,
+      })
+    );
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /^Copy folder path/ }));
+  });
+
+  it("drops reading controls for a Markdown file that failed to read", async () => {
+    readMock.mockRejectedValue(new ClientAppError("FILE_TOO_LARGE", "FILE_TOO_LARGE"));
+    renderViewer("/repo/docs/huge.md");
+    await screen.findByTestId("file-browser-unavailable");
+    expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull();
+    expect(screen.queryByTestId("markdown-text-size-mock")).toBeNull();
+    // Identity and the way out survive.
+    expect(screen.getByRole("button", { name: /^Copy file path/ })).toBeTruthy();
+  });
+
+  it("announces a folder that couldn't be read, with Retry", () => {
+    const onRefresh = vi.fn();
+    renderViewer(null, { folderPath: "src", folderStatus: "error", onRefresh });
+    const status = screen.getByTestId("file-browser-unavailable");
+    expect(status.getAttribute("role")).toBe("status");
+    fireEvent.click(within(status).getByRole("button", { name: /retry/i }));
+    expect(onRefresh).toHaveBeenCalled();
   });
 });

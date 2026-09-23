@@ -9,7 +9,12 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 
-import { FileViewerToolbar } from "../FileViewerToolbar";
+import {
+  FileViewerToolbar,
+  fitFileName,
+  useFileViewerToolbarCompact,
+  useMenuCopy,
+} from "../FileViewerToolbar";
 
 // The fit is pure measurement, and jsdom measures nothing: clientWidth is 0 and
 // there is no canvas. Stub both with a monospace model — every glyph CHAR_PX
@@ -93,11 +98,12 @@ describe("FileViewerToolbar.Path", () => {
 
   function renderPath(path: string, { copied = false, onCopy = vi.fn() } = {}) {
     render(<FileViewerToolbar.Path path={path} copied={copied} onCopy={onCopy} />);
-    return screen.getByRole("button", { name: "Copy file path" });
+    return screen.getByRole("button", { name: /^Copy file path/ });
   }
 
   /** The pill's rendered text, which is what useFittedPath computed. */
-  const fittedText = () => screen.getByRole("button", { name: "Copy file path" }).textContent ?? "";
+  const fittedText = () =>
+    screen.getByRole("button", { name: /^Copy file path/ }).textContent ?? "";
 
   it("shows the path untruncated when it fits", () => {
     containerWidth = LONG_PATH.length * CHAR_PX + PAD_X + 20;
@@ -185,14 +191,14 @@ describe("FileViewerToolbar.Path", () => {
     const { rerender } = render(
       <FileViewerToolbar.Path path={LONG_PATH} copied={false} onCopy={vi.fn()} />
     );
-    expect(screen.getByRole("button", { name: "Copy file path" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Copy file path/ })).toBeTruthy();
 
     rerender(<FileViewerToolbar.Path path={LONG_PATH} copied onCopy={vi.fn()} />);
 
     // The feedback rides the tooltip and the icon, never the accessible name —
     // a name that flips to "Copied!" would make the control unfindable exactly
     // when a test or a screen-reader user goes looking for it.
-    expect(screen.getByRole("button", { name: "Copy file path" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Copy file path/ })).toBeTruthy();
   });
 
   it("copies on click", () => {
@@ -466,5 +472,104 @@ describe("FileViewerToolbar.CopyContentsButton", () => {
 
     // A surviving setTimeout would fire a setState into an unmounted tree.
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("fitFileName", () => {
+  const NAME = "useContentPanelKeyboardNavigationAndFocusRestoration.ts";
+  const fitsWithin = (chars: number) => (text: string) => text.length <= chars;
+
+  it.each([12, 18, 30, 45])(
+    "keeps the extension and a single middle ellipsis when squeezed to %i chars",
+    (chars) => {
+      const fitted = fitFileName(NAME, fitsWithin(chars));
+      expect(fitted.endsWith(".ts")).toBe(true);
+      expect(fitted.match(/…/g)).toHaveLength(1);
+      expect(fitted.length).toBeLessThanOrEqual(chars);
+      // Starts with the real name, so the reader recognises the file.
+      expect(NAME.startsWith(fitted.slice(0, fitted.indexOf("…")))).toBe(true);
+    }
+  );
+
+  it("spends the whole budget — one more character of the stem would not fit", () => {
+    const fitted = fitFileName(NAME, fitsWithin(24));
+    expect(fitted.length).toBe(24);
+  });
+
+  it("keeps the extension even when no readable stem fits", () => {
+    const fitted = fitFileName(NAME, () => false);
+    expect(fitted.endsWith(".ts")).toBe(true);
+    expect(fitted.length).toBeLessThan(NAME.length);
+  });
+
+  it("names the subject in the accessible name at every width", () => {
+    containerWidth = 2000;
+    render(<FileViewerToolbar.Path path="src/a/b.ts" copied={false} onCopy={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Copy file path: src/a/b.ts" })).toBeTruthy();
+  });
+
+  it("keeps a long extension whole", () => {
+    const fitted = fitFileName("daintree-agent-development.code-workspace", fitsWithin(28));
+    expect(fitted.endsWith(".code-workspace")).toBe(true);
+  });
+
+  it("treats a dotless name as all stem", () => {
+    const fitted = fitFileName("Makefile-for-the-whole-monorepo", fitsWithin(12));
+    expect(fitted.length).toBeLessThanOrEqual(12);
+    expect(fitted.startsWith("Makef")).toBe(true);
+  });
+});
+
+describe("FileViewerToolbar compact mode", () => {
+  function Probe() {
+    return <span data-testid="probe">{String(useFileViewerToolbarCompact())}</span>;
+  }
+
+  function renderAtWidth(width: number, compactBelow?: number) {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, width, 30)
+    );
+    render(
+      <FileViewerToolbar.Root label="Controls" {...(compactBelow ? { compactBelow } : {})}>
+        <Probe />
+      </FileViewerToolbar.Root>
+    );
+    return screen.getByTestId("probe").textContent;
+  }
+
+  it("reports compact only below the caller's threshold", () => {
+    expect(renderAtWidth(300, 400)).toBe("true");
+  });
+
+  it("stays full width at or above the threshold", () => {
+    expect(renderAtWidth(400, 400)).toBe("false");
+  });
+
+  it("is never compact for a caller that set no threshold", () => {
+    expect(renderAtWidth(10)).toBe("false");
+  });
+});
+
+describe("useMenuCopy", () => {
+  it("confirms a copy for the flash window, then clears", async () => {
+    vi.useFakeTimers();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    let api: ReturnType<typeof useMenuCopy> | null = null;
+    function Probe() {
+      api = useMenuCopy();
+      return <span data-testid="copied">{String(api.copied)}</span>;
+    }
+    render(<Probe />);
+    await act(async () => {
+      api!.copy("hello");
+    });
+    expect(writeText).toHaveBeenCalledWith("hello");
+    expect(screen.getByTestId("copied").textContent).toBe("true");
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.getByTestId("copied").textContent).toBe("false");
+    vi.useRealTimers();
   });
 });

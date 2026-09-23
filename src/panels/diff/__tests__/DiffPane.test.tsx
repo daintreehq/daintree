@@ -511,7 +511,7 @@ describe("DiffPane — content-aware toolbar", () => {
     expect(screen.queryByLabelText("Wrap long lines")).toBeNull();
 
     // Refresh and the path pill act on any file kind, so they stay.
-    expect(screen.getByLabelText("Copy file path")).toBeTruthy();
+    expect(screen.getByLabelText(/^Copy file path/)).toBeTruthy();
     expect(screen.getByLabelText("Refresh")).toBeTruthy();
   });
 
@@ -706,6 +706,14 @@ describe("DiffPane — video current-version mode (#11382)", () => {
       (el) => el.getAttribute("data-title")
     );
     expect(titles).toContain("This video couldn't be played");
+    // Not a dead end: the OS app plays codecs Chromium can't.
+    const unavailable = container.querySelector('[data-testid="diff-pane-unavailable"]');
+    expect(unavailable?.getAttribute("role")).toBe("status");
+    expect(
+      Array.from(unavailable?.querySelectorAll("button") ?? []).some(
+        (button) => button.textContent?.trim() === "Open in default app"
+      )
+    ).toBe(true);
   });
 
   it("headlines the preview's own reason rather than repeating it under a generic title", async () => {

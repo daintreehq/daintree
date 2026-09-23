@@ -235,7 +235,7 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "transient",
       signature: "text-status-success",
-      anchor: 'aria-label="Copy file path"',
+      anchor: "copyLabel}: ${path}",
       expectedOccurrences: 1,
       rationale: "Copy-path confirmation; resets when the copy flash times out",
     },
@@ -245,6 +245,14 @@ export const STATUS_SUCCESS_INVENTORY = {
       anchor: 'label="Copy file contents"',
       expectedOccurrences: 1,
       rationale: "Copy-file-contents confirmation; resets when the copy flash times out",
+    },
+    {
+      category: "transient",
+      signature: "text-status-success",
+      anchor: "{confirmed ? (",
+      expectedOccurrences: 1,
+      rationale:
+        "Copy confirmation on the More actions trigger when Copy ran from the folded menu; resets when the copy flash times out",
     },
   ],
   "src/components/FileViewer/diffChangeSet.ts": [
@@ -1003,7 +1011,7 @@ export const STATUS_SUCCESS_INVENTORY = {
   "src/panels/file-browser/FileBrowserChangeSummary.tsx": [
     {
       category: "domain",
-      signature: "text-status-success/80",
+      signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Per-file diff insertion count",
     },
@@ -1031,5 +1039,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 123;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 140;
+export const EXPECTED_STATUS_SUCCESS_SITES = 124;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 141;

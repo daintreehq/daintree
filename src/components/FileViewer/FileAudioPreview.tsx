@@ -105,8 +105,11 @@ export function FileAudioPreview({
     // Chromium's native audio control drops its scrubber and volume slider
     // below ~300px, and a docked pane can be narrower than that. The floor
     // keeps the control whole and lets the wrapper scroll instead — the same
-    // floor applies to the skeleton so settling doesn't shift the layout.
-    <div className="flex items-center justify-center overflow-x-auto p-6">
+    // floor applies to the skeleton so settling doesn't shift the layout. The
+    // side padding gives way first — 12px each side down to none as the pane
+    // closes from 324px to 300px — so the wrapper only scrolls once the
+    // control itself no longer fits.
+    <div className="flex items-center justify-center overflow-x-auto px-[clamp(0px,calc((100%-300px)/2),12px)] py-6">
       {sourceUrl ? (
         <audio
           // Keyed by the source URL so switching files (or reloading) remounts

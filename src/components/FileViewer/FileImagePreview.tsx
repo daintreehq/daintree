@@ -132,7 +132,7 @@ export function FileImagePreview({
               : `${buildDaintreeFileUrl(filePath, rootPath)}&v=${encodeURIComponent(cacheBust)}`
           }
           alt={alt}
-          className={`max-w-full ${maxHeightClassName} object-contain rounded`}
+          className={`max-w-full ${maxHeightClassName} object-contain rounded-lg`}
           draggable={false}
           onError={onError}
         />

@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { buildDaintreeFileUrl } from "./filePreviewKinds";
 import { TRANSPARENCY_CHECKERBOARD_STYLE } from "./transparencyCheckerboard";
 import { cn } from "@/lib/utils";
+import { Minus, Plus } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 
 export interface ZoomableImageProps {
   /** Absolute path of the image. */
@@ -38,6 +41,26 @@ export function zoomForWheel(currentZoom: number, deltaY: number): number {
   return clampZoom(currentZoom * Math.exp(-deltaY * WHEEL_ZOOM_SENSITIVITY));
 }
 
+/** How far one arrow press pans a zoomed image, in CSS px. */
+const KEYBOARD_PAN_STEP = 48;
+
+/** Multiplier one press of the zoom buttons applies. */
+const BUTTON_ZOOM_STEP = 1.25;
+
+/**
+ * How much of its natural size the image is drawn at when it fits the stage:
+ * `max-w-full max-h-full` only ever shrinks, so this is capped at 1. Exported
+ * for tests.
+ */
+export function fitScale(
+  natural: { width: number; height: number } | null,
+  stage: { width: number; height: number } | null
+): number {
+  if (!natural || !stage || natural.width <= 0 || natural.height <= 0) return 1;
+  if (stage.width <= 0 || stage.height <= 0) return 1;
+  return Math.min(1, stage.width / natural.width, stage.height / natural.height);
+}
+
 /**
  * Read-only image surface with a transparency checkerboard, wheel zoom and
  * drag pan.
@@ -51,7 +74,21 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
+  const controlsRef = useRef<HTMLDivElement>(null);
+  const handleControlsKeyDown = useToolbarRoving(controlsRef);
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number } | null>(null);
+  const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
+  const [stage, setStage] = useState<{ width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      setStage({ width: element.clientWidth, height: element.clientHeight });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   // Every file gets a fresh view. Without this, opening a second image inherits
   // the previous one's zoom and pan, which reads as a broken image when the two
@@ -59,6 +96,7 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
   useEffect(() => {
     setZoom(1);
     setOffset({ x: 0, y: 0 });
+    setNatural(null);
   }, [filePath]);
 
   const resetView = useCallback(() => {
@@ -107,6 +145,38 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
 
   const isZoomed = zoom !== 1 || offset.x !== 0 || offset.y !== 0;
 
+  // The keyboard's route to everything the wheel and the drag do: arrows pan,
+  // + and - zoom, 0 fits. Panning is the part the footer buttons can't give,
+  // and without it a zoomed image's edges are reachable only by pointer.
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const pan: Record<string, [number, number]> = {
+      ArrowLeft: [KEYBOARD_PAN_STEP, 0],
+      ArrowRight: [-KEYBOARD_PAN_STEP, 0],
+      ArrowUp: [0, KEYBOARD_PAN_STEP],
+      ArrowDown: [0, -KEYBOARD_PAN_STEP],
+    };
+    const delta = pan[event.key];
+    if (delta) {
+      event.preventDefault();
+      setOffset((current) => ({ x: current.x + delta[0], y: current.y + delta[1] }));
+      return;
+    }
+    if (event.key === "+" || event.key === "=") {
+      event.preventDefault();
+      setZoom((current) => clampZoom(current * BUTTON_ZOOM_STEP));
+    } else if (event.key === "-") {
+      event.preventDefault();
+      setZoom((current) => clampZoom(current / BUTTON_ZOOM_STEP));
+    } else if (event.key === "0") {
+      event.preventDefault();
+      resetView();
+    }
+  };
+  // What the reader is actually looking at, as a share of the image's own
+  // pixels. The transform multiplier alone said "100%" for an image the stage
+  // had already shrunk to a third of its size.
+  const shownPercent = Math.round(fitScale(natural, stage) * zoom * 100);
+
   return (
     <div className="relative flex h-full min-h-0 w-full flex-col">
       <div
@@ -116,11 +186,16 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
         onDoubleClick={resetView}
+        onKeyDown={handleKeyDown}
+        tabIndex={0}
+        role="group"
+        aria-label={`${alt}. Arrow keys pan, plus and minus zoom, 0 fits to screen.`}
         style={TRANSPARENCY_CHECKERBOARD_STYLE}
         className={cn(
           // select-none so drag-panning never starts a text/image selection that
           // would paint the selection highlight over the image (#11325).
           "flex h-full min-h-0 w-full flex-1 select-none items-center justify-center overflow-hidden",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
           isZoomed ? "cursor-grab" : "cursor-default"
         )}
       >
@@ -136,23 +211,99 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
           alt={alt}
           draggable={false}
           onError={onError}
+          onLoad={(event) =>
+            setNatural({
+              width: event.currentTarget.naturalWidth,
+              height: event.currentTarget.naturalHeight,
+            })
+          }
           style={{
             transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`,
           }}
           className="max-h-full max-w-full object-contain"
         />
       </div>
-      <div className="flex shrink-0 items-center justify-between border-t border-border-default px-3 py-1 text-2xs text-text-secondary">
-        <span>{Math.round(zoom * 100)}%</span>
-        <button
-          type="button"
-          onClick={resetView}
-          disabled={!isZoomed}
-          className="rounded px-2 py-0.5 transition-colors duration-150 ease-out hover:bg-overlay-subtle disabled:opacity-40"
+      {/* The image's facts on the left — its own size, and how much of it is
+          on screen — and the view controls on the right, reachable without a
+          wheel or a drag. */}
+      {/* Wraps rather than truncates: at a narrow width the facts drop to
+          their own line instead of losing the scale off the end. */}
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 border-t border-border-default px-3 py-1 text-2xs text-text-secondary">
+        <span className="tabular-nums" data-testid="zoomable-image-status">
+          {natural && (
+            <span className="whitespace-nowrap">
+              {natural.width} × {natural.height}
+              <span aria-hidden="true" className="px-1.5">
+                ·
+              </span>
+            </span>
+          )}
+          <span className="whitespace-nowrap">
+            {isZoomed ? `${shownPercent}%` : `Fit, ${shownPercent}%`}
+          </span>
+        </span>
+        {/* One tab stop with Left/Right between the three, the same toolbar
+            contract as the viewer's header. */}
+        <div
+          ref={controlsRef}
+          role="toolbar"
+          aria-label="Zoom controls"
+          onKeyDown={handleControlsKeyDown}
+          className="ml-auto flex shrink-0 items-center gap-2"
         >
-          Fit to screen
-        </button>
+          <ZoomButton
+            label="Zoom out"
+            disabled={zoom <= MIN_ZOOM}
+            onClick={() => setZoom((current) => clampZoom(current / BUTTON_ZOOM_STEP))}
+          >
+            <Minus className="h-3.5 w-3.5" aria-hidden="true" />
+          </ZoomButton>
+          <ZoomButton
+            label="Zoom in"
+            disabled={zoom >= MAX_ZOOM}
+            onClick={() => setZoom((current) => clampZoom(current * BUTTON_ZOOM_STEP))}
+          >
+            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+          </ZoomButton>
+          <button
+            type="button"
+            onClick={resetView}
+            disabled={!isZoomed}
+            className="shrink-0 rounded-lg px-2 py-1 text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary disabled:opacity-50"
+          >
+            Fit to screen
+          </button>
+        </div>
       </div>
     </div>
+  );
+}
+
+function ZoomButton({
+  label,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string;
+  disabled: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          disabled={disabled}
+          onClick={onClick}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary disabled:opacity-50"
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top">{label}</TooltipContent>
+    </Tooltip>
   );
 }

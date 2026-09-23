@@ -1,19 +1,35 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Copy,
   ExternalLink,
   FileText,
+  FileX,
+  Folder,
   FolderTree,
+  Globe,
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
+  WrapText,
   XCircle,
+  type LucideIcon,
 } from "lucide-react";
 import { CircleCheck, FolderOpen } from "@/components/icons";
+import {
+  DropdownMenuCheckboxItem,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { actionService } from "@/services/ActionService";
 import { CodeViewer } from "@/components/FileViewer/CodeViewer";
 import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
-import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
+import {
+  FileViewerToolbar,
+  TOOLBAR_ICON_CLASS,
+  useFileViewerToolbarCompact,
+  useMenuCopy,
+} from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
@@ -34,16 +50,20 @@ import {
 } from "@/components/FileViewer/filePreviewKinds";
 import { MarkdownViewer } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
-import { MarkdownTextSizeControl } from "@/components/Markdown/MarkdownTextSizeControl";
+import {
+  MarkdownTextSizeControl,
+  MarkdownTextSizeMenuItems,
+} from "@/components/Markdown/MarkdownTextSizeControl";
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
+import { toFileReadErrorCode } from "@/components/FileViewer/fileReadErrors";
 import {
-  FILE_READ_ERROR_MESSAGES,
-  toFileReadErrorCode,
-} from "@/components/FileViewer/fileReadErrors";
+  FileUnavailableState as UnavailableState,
+  unavailableCopy,
+  type UnavailableReason,
+} from "@/components/FileViewer/FileUnavailableState";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
-import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { FolderListingView } from "./FolderListingView";
@@ -66,6 +86,9 @@ import type { FileRenderMode } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
 import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { FileBrowserChangeSummary } from "./FileBrowserChangeSummary";
+import { getFileTypeIcon } from "./fileTypeIcons";
+import { basename, join } from "@shared/utils/path";
+import type { MarkdownFontSize } from "@/store/preferencesStore";
 
 export interface FileBrowserViewerProps {
   /** A governed project/worktree identity for plugin-contributed editor views. */
@@ -179,6 +202,14 @@ export interface FileBrowserViewerProps {
   hideDotfiles: boolean;
   onHideDotfilesChange: (hide: boolean) => void;
   hiddenCounts: HiddenRowCounts;
+  /**
+   * Worktree-relative path of a selected file that has since vanished from
+   * disk — its parent was re-listed without it — or null. Mutually exclusive
+   * with `filePath`, which resolves null for a path that no longer exists.
+   */
+  missingFilePath: string | null;
+  /** Points the viewer at a folder's listing; the missing state's way out. */
+  onShowFolder: (path: string) => void;
 }
 
 /** Toolbar sort menu entries, in menu order. */
@@ -204,7 +235,7 @@ type ViewerState =
   | { status: "video" }
   | { status: "audio" }
   | { status: "pdf" }
-  | { status: "error"; message: string };
+  | { status: "error"; reason: UnavailableReason; message: string };
 
 // Markdown and HTML both get a Source/Rendered switch mirroring FilePane's
 // toggle. Typed at the constant so the option values stay `FileRenderMode`
@@ -257,6 +288,8 @@ export function FileBrowserViewer({
   hideDotfiles,
   onHideDotfilesChange,
   hiddenCounts,
+  missingFilePath,
+  onShowFolder,
 }: FileBrowserViewerProps) {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
   // The reader's explicit Source/Rendered choice, `null` until they touch the
@@ -280,6 +313,7 @@ export function FileBrowserViewer({
   );
   const draftText = useFileDocumentDraftText(panelId);
   const wrapLines = usePreferencesStore((state) => state.markdownWrapLines);
+  const setWrapLines = usePreferencesStore((state) => state.setMarkdownWrapLines);
   const contentBytes = useMemo(
     () => (state.status === "text" ? new TextEncoder().encode(state.content).byteLength : null),
     [state]
@@ -311,12 +345,43 @@ export function FileBrowserViewer({
       renderMode !== "edit" &&
       document.activeElement === document.body
     ) {
-      modeToggleRef.current
-        ?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')
-        ?.focus({ preventScroll: true });
+      const toggle = modeToggleRef.current;
+      (
+        toggle?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]') ??
+        toggle?.querySelector<HTMLButtonElement>("button")
+      )?.focus({ preventScroll: true });
     }
     previousMode.current = renderMode;
   }, [renderMode]);
+  // Set when the folder listing was driven from the keyboard, so the row that
+  // was just activated — and unmounted by its own activation — hands focus to
+  // what replaced it instead of dropping it on the document body.
+  const focusAfterNavigationRef = useRef(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const handleListingSelect = useCallback(
+    (path: string, _isDirectory: boolean, viaKeyboard?: boolean) => {
+      if (viaKeyboard) focusAfterNavigationRef.current = true;
+      onSelectEntry(path);
+    },
+    [onSelectEntry]
+  );
+  useEffect(() => {
+    if (!focusAfterNavigationRef.current) return;
+    const body = bodyRef.current;
+    if (!body) return;
+    // A folder waits for its rows: the skeleton has nothing to focus, and
+    // focusing the body first would strand the reader above the list.
+    // A read that failed settles with no rows too; that one hands focus to the
+    // path pill below rather than waiting for rows that will never come.
+    if (folderPath !== null && folderRows == null && folderStatus !== "error") return;
+    focusAfterNavigationRef.current = false;
+    // The next listing's first row, or — for a file, or a state with no rows —
+    // the toolbar's path pill, which names what just opened.
+    const target =
+      body.querySelector<HTMLElement>("[data-listing-row]") ??
+      body.parentElement?.querySelector<HTMLElement>("[data-toolbar-path]");
+    target?.focus({ preventScroll: true });
+  }, [filePath, folderPath, folderRows, folderStatus, state.status]);
   const [changeTick, setChangeTick] = useState(0);
   useEffect(() => setChangeTick((value) => value + 1), [revision]);
   // The panel id rides a sentinel because this component is not remounted per
@@ -387,12 +452,20 @@ export function FileBrowserViewer({
     // Formats Chromium can't decode get a truthful "can't play" message
     // instead of falling through to the text path's size cap.
     if (isUnsupportedVideoFilePath(filePath)) {
-      setState({ status: "error", message: UNSUPPORTED_VIDEO_MESSAGE });
+      setState({
+        status: "error",
+        reason: "UNSUPPORTED_MEDIA",
+        message: UNSUPPORTED_VIDEO_MESSAGE,
+      });
       return;
     }
 
     if (isUnsupportedAudioFilePath(filePath)) {
-      setState({ status: "error", message: UNSUPPORTED_AUDIO_MESSAGE });
+      setState({
+        status: "error",
+        reason: "UNSUPPORTED_MEDIA",
+        message: UNSUPPORTED_AUDIO_MESSAGE,
+      });
       return;
     }
 
@@ -415,7 +488,7 @@ export function FileBrowserViewer({
           // the sanitizer's reason rather than a blank pane.
           const outcome = sanitizeSvg(result.content);
           if (!outcome.ok) {
-            setState({ status: "error", message: outcome.error });
+            setState({ status: "error", reason: "SVG_REJECTED", message: outcome.error });
             return;
           }
           setState({ status: "svg", markup: outcome.svg });
@@ -434,14 +507,11 @@ export function FileBrowserViewer({
       .catch((error: unknown) => {
         if (cancelled) return;
         if (isClientAppError(error)) {
-          setState({
-            status: "error",
-            message: FILE_READ_ERROR_MESSAGES[toFileReadErrorCode(error.code)],
-          });
+          setState({ status: "error", reason: toFileReadErrorCode(error.code), message: "" });
           return;
         }
         logError("[fileBrowser] failed to read file", error);
-        setState({ status: "error", message: "Couldn't read this file" });
+        setState({ status: "error", reason: "READ_FAILED", message: "" });
       });
 
     return () => {
@@ -474,7 +544,7 @@ export function FileBrowserViewer({
     setExternalError(null);
     setPendingTargets([]);
     setPathCopied(false);
-  }, [filePath]);
+  }, [filePath, folderPath]);
 
   useEffect(() => {
     return () => {
@@ -482,10 +552,25 @@ export function FileBrowserViewer({
     };
   }, []);
 
+  // What the path pill names, absolute: the open file, else the listed folder,
+  // else the file that vanished — the three things the pill can identify.
+  const identityRelativePath = filePath
+    ? (relativePath ?? fileName)
+    : folderPath !== null
+      ? folderPath
+      : missingFilePath;
+  const identityAbsolutePath =
+    filePath ??
+    (folderPath !== null
+      ? join(basePath, folderPath)
+      : missingFilePath !== null
+        ? join(basePath, missingFilePath)
+        : null);
+
   const handleCopyPath = useCallback(() => {
-    if (!filePath || !navigator.clipboard) return;
+    if (!identityAbsolutePath || !navigator.clipboard) return;
     void navigator.clipboard
-      .writeText(filePath)
+      .writeText(identityAbsolutePath)
       .then(() => {
         setPathCopied(true);
         if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
@@ -494,7 +579,7 @@ export function FileBrowserViewer({
       .catch(() => {
         /* clipboard unavailable — the tooltip simply never flips to Copied */
       });
-  }, [filePath]);
+  }, [identityAbsolutePath]);
 
   const handleExternalAction = useCallback(
     async (target: ExternalTarget) => {
@@ -556,6 +641,37 @@ export function FileBrowserViewer({
               dismiss: "Dismiss editor error",
             };
 
+  // Which external surface the toolbar's second action aims at. Text belongs in
+  // the editor; media, PDFs and images open with whatever the OS uses for that
+  // type; an HTML page opens in the browser, mirroring FilePane. Never the OS
+  // default for an unknown or binary file — that handler may execute it.
+  const openTarget: OpenTarget =
+    filePath === null
+      ? "editor"
+      : isHtml
+        ? "browser"
+        : isImageFilePath(filePath) && !isSvgFilePath(filePath)
+          ? "default-app"
+          : isVideoFilePath(filePath) ||
+              isAudioFilePath(filePath) ||
+              isPdfFilePath(filePath) ||
+              isUnsupportedVideoFilePath(filePath) ||
+              isUnsupportedAudioFilePath(filePath)
+            ? "default-app"
+            : "editor";
+  const openAction = OPEN_ACTION_COPY[openTarget];
+  const runOpen = () =>
+    void handleExternalAction(openTarget === "browser" ? "default-app" : openTarget);
+
+  const identityIcon: LucideIcon = filePath
+    ? getFileTypeIcon(fileName).Icon
+    : folderPath !== null
+      ? Folder
+      : FileX;
+  // The worktree root lists under "" — name it by its folder, not as a blank pill.
+  const identityLabel =
+    identityRelativePath === "" ? basename(basePath) : (identityRelativePath ?? undefined);
+
   // One persistent toolbar with the tree toggle as its first control, rendered
   // whether or not a file is selected: the toggle is the sidebar's only home
   // once collapsed, and the empty state has no toolbar of its own. Keeping a
@@ -564,9 +680,21 @@ export function FileBrowserViewer({
   // region only while it's mounted — omitted when collapsed to avoid a dangling
   // reference. A static "Toggle file tree" label per the toggle-label rule; the
   // icon swap and `aria-expanded` carry the open/closed state.
+  //
+  // `compactBelow` is where the secondary actions fold into "More actions" so
+  // the path pill keeps room for a file name. A row carrying the mode toggle
+  // folds earlier, because that control alone takes ~120px.
+  // Reading controls only for content that can be read: a Markdown file that
+  // failed as oversized has no source or rendered view for them to change.
+  // A plugin's Edit mode stays, since it may open what the reader could not.
+  const readable = state.status !== "error";
+  const showModeToggle = filePath !== null && ((isRenderable && readable) || canEdit);
   return (
     <>
-      <FileViewerToolbar.Root label="File viewer controls">
+      <FileViewerToolbar.Root
+        label="File viewer controls"
+        compactBelow={showModeToggle ? COMPACT_BELOW_WITH_MODES : COMPACT_BELOW}
+      >
         <FileViewerToolbar.IconButton
           label="Toggle file tree"
           expanded={!sidebarCollapsed}
@@ -581,23 +709,26 @@ export function FileBrowserViewer({
             <PanelLeftClose className={TOOLBAR_ICON_CLASS} />
           )}
         </FileViewerToolbar.IconButton>
-        {filePath && (
-          <>
-            {(isRenderable || canEdit) && (
-              <div ref={modeToggleRef} className="contents">
-                <SegmentedToggle<FileRenderMode | "edit">
-                  options={renderOptions}
-                  value={renderMode}
-                  onChange={setExplicitRenderMode}
-                />
-              </div>
-            )}
-            <FileViewerToolbar.Path
-              path={relativePath ?? fileName}
-              copied={pathCopied}
-              onCopy={handleCopyPath}
+        {showModeToggle && (
+          <div ref={modeToggleRef} className="contents">
+            <FileViewerToolbar.ModeControl<FileRenderMode | "edit">
+              options={renderOptions}
+              value={renderMode}
+              onChange={setExplicitRenderMode}
             />
-          </>
+          </div>
+        )}
+        {/* Identity for every subject the viewer can have — a file, a listed
+            folder, or a file that has just been deleted — so the row always
+            says what the body below it is about. */}
+        {identityAbsolutePath !== null && (
+          <FileViewerToolbar.Path
+            path={identityLabel}
+            icon={identityIcon}
+            copyLabel={filePath || missingFilePath !== null ? "Copy file path" : "Copy folder path"}
+            copied={pathCopied}
+            onCopy={handleCopyPath}
+          />
         )}
         {/* The right-aligned group, following whatever the viewer is showing:
             a list is sorted, a file gets its own actions, and Refresh appears
@@ -632,40 +763,26 @@ export function FileBrowserViewer({
               data-testid="file-browser-view-options"
             />
           )}
-          {/* Rendered markdown only: source is CodeMirror, which this scale
-              does not reach, and every other preview kind has no prose to
-              tune. Sits ahead of the file actions so the controls that change
-              what you are looking at stay left of the ones that leave. */}
-          {isMarkdown && renderMode === "rendered" && (
-            <MarkdownTextSizeControl
-              value={markdownFontSize}
-              onValueChange={setMarkdownFontSize}
-              data-testid="file-browser-text-size"
-            />
-          )}
           {filePath && (
-            <>
-              {/* Same control, same order as FilePane's action group. Raw text
-                  only: `svg` keeps sanitized markup rather than the source it
-                  was built from, and every media/error state carries none at
-                  all, so both fall through to `null` and render nothing. */}
-              <FileViewerToolbar.CopyContentsButton
-                key={filePath}
-                contents={state.status === "text" || state.status === "html" ? state.content : null}
-              />
-              <FileViewerToolbar.IconButton
-                label={reveal.label}
-                onClick={() => void handleExternalAction("reveal")}
-              >
-                <FolderOpen className={TOOLBAR_ICON_CLASS} />
-              </FileViewerToolbar.IconButton>
-              <FileViewerToolbar.IconButton
-                label="Open in editor"
-                onClick={() => void handleExternalAction("editor")}
-              >
-                <ExternalLink className={TOOLBAR_ICON_CLASS} />
-              </FileViewerToolbar.IconButton>
-            </>
+            <FileActions
+              filePath={filePath}
+              contents={state.status === "text" || state.status === "html" ? state.content : null}
+              textSize={
+                readable && isMarkdown && renderMode === "rendered"
+                  ? { value: markdownFontSize, onValueChange: setMarkdownFontSize }
+                  : null
+              }
+              wrap={
+                readable && isMarkdown && renderMode === "source"
+                  ? { value: wrapLines, onValueChange: setWrapLines }
+                  : null
+              }
+              revealLabel={reveal.label}
+              onReveal={() => void handleExternalAction("reveal")}
+              openLabel={openAction.label}
+              openIcon={openAction.icon}
+              onOpen={runOpen}
+            />
           )}
         </FileViewerToolbar.Actions>
       </FileViewerToolbar.Root>
@@ -697,11 +814,17 @@ export function FileBrowserViewer({
           closeAriaLabel={externalErrorCopy.dismiss}
         />
       )}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div ref={bodyRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {/* A selected folder outranks the idle body: the changed-files summary
             answers "nothing is selected", and a folder selection is a
             selection (#11620). */}
-        {filePath ? renderBody() : folderPath !== null ? renderFolderBody() : renderIdleBody()}
+        {filePath
+          ? renderBody()
+          : missingFilePath !== null
+            ? renderMissingBody(missingFilePath)
+            : folderPath !== null
+              ? renderFolderBody()
+              : renderIdleBody()}
       </div>
     </>
   );
@@ -725,8 +848,8 @@ export function FileBrowserViewer({
             variant="zero-data"
             scale="canvas"
             icon={<FileText className="h-6 w-6" />}
-            title="Nothing selected"
-            description="Pick a file in the tree to read it here."
+            title="Pick a file to read"
+            description="Choose one in the tree and it opens here."
             className="w-full"
           />
         ) : (
@@ -746,8 +869,40 @@ export function FileBrowserViewer({
   }
 
   /**
+   * The open file was deleted. Said plainly, in place, under the file's own
+   * name in the toolbar — the alternative this replaced was the viewer quietly
+   * swapping to the changed-files summary, which reads as the file never having
+   * been open. The way out is the folder it lived in; a file at the root, which
+   * has no folder row to show, gets Refresh in case it comes back.
+   */
+  function renderMissingBody(path: string) {
+    const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+    return (
+      <UnavailableState
+        data-testid="file-browser-unavailable"
+        icon={FileX}
+        title="This file was deleted"
+        description={`${basename(path)} is no longer on disk.`}
+        action={
+          parent !== "" ? (
+            <Button variant="subtle" size="sm" onClick={() => onShowFolder(parent)}>
+              <Folder />
+              Show folder
+            </Button>
+          ) : (
+            <Button variant="subtle" size="sm" onClick={onRefresh}>
+              <RefreshCw />
+              Refresh
+            </Button>
+          )
+        }
+      />
+    );
+  }
+
+  /**
    * The folder-selected state (#11620) — what a selected folder shows instead
-   * of the same "Nothing selected" a bare panel shows.
+   * of the same "Pick a file to read" a bare panel shows.
    *
    * Branches on `folderStatus`, the raw fetch state, never on a Doherty-gated
    * flag: a gated boolean is false both before the gate opens and after the
@@ -762,25 +917,18 @@ export function FileBrowserViewer({
 
     if (folderStatus === "error") {
       return (
-        <div className="flex h-full w-full items-center justify-center p-6">
-          <EmptyState
-            variant="zero-data"
-            scale="canvas"
-            icon={<FolderTree className="h-6 w-6" />}
-            title="Can't show this folder"
-            description="The folder couldn't be read. It may have been moved or deleted."
-            action={
-              <button
-                type="button"
-                onClick={onRefresh}
-                className="text-xs underline underline-offset-2"
-              >
-                Retry
-              </button>
-            }
-            className="w-full"
-          />
-        </div>
+        <UnavailableState
+          data-testid="file-browser-unavailable"
+          icon={FolderTree}
+          title="Can't show this folder"
+          description="It couldn't be read. It may have been moved or deleted."
+          action={
+            <Button variant="subtle" size="sm" onClick={onRefresh}>
+              <RefreshCw />
+              Retry
+            </Button>
+          }
+        />
       );
     }
 
@@ -817,11 +965,11 @@ export function FileBrowserViewer({
                 ? "Dotfiles are hidden here"
                 : folderHiddenCounts.alwaysHidden > 0
                   ? "Everything here is on the always-hidden list"
-                  : "Nothing in this folder yet"
+                  : "Add a file to this folder"
             }
             {...(canRevealDotfiles || folderHiddenCounts.alwaysHidden > 0
               ? {}
-              : { description: "Add a file to it and it'll show up here." })}
+              : { description: "It'll show up here." })}
             action={
               canRevealDotfiles ? (
                 <button
@@ -842,7 +990,7 @@ export function FileBrowserViewer({
       <>
         <FolderListingView
           rows={folderRows}
-          onSelect={onSelectEntry}
+          onSelect={handleListingSelect}
           {...(rowContextMenu ? { rowContextMenu } : {})}
           basePath={basePath}
           label={`Contents of ${folderName}`}
@@ -909,33 +1057,35 @@ export function FileBrowserViewer({
           </div>
         );
 
-      case "error":
+      case "error": {
+        const copy = unavailableCopy(state.reason, state.message);
+        const action =
+          copy.action === "open" ? (
+            <Button variant="subtle" size="sm" onClick={runOpen}>
+              <openAction.icon />
+              {openAction.label}
+            </Button>
+          ) : copy.action === "reveal" ? (
+            <Button variant="subtle" size="sm" onClick={() => void handleExternalAction("reveal")}>
+              <FolderOpen />
+              {reveal.label}
+            </Button>
+          ) : copy.action === "retry" ? (
+            <Button variant="subtle" size="sm" onClick={onRefresh}>
+              <RefreshCw />
+              Retry
+            </Button>
+          ) : undefined;
         return (
-          <div className="flex h-full w-full items-center justify-center p-6">
-            <EmptyState
-              variant="zero-data"
-              scale="canvas"
-              icon={<FileText className="h-6 w-6" />}
-              title="Can't show this file"
-              description={state.message}
-              // A PDF the viewer can't frame is still a perfectly good file, so
-              // hand it to something that can show it (#12598).
-              action={
-                isPdfFilePath(filePath) ? (
-                  <Button
-                    variant="subtle"
-                    size="sm"
-                    onClick={() => void handleExternalAction("default-app")}
-                  >
-                    <ExternalLink />
-                    Open in default app
-                  </Button>
-                ) : undefined
-              }
-              className="w-full"
-            />
-          </div>
+          <UnavailableState
+            data-testid="file-browser-unavailable"
+            icon={getFileTypeIcon(fileName).Icon}
+            title={copy.title}
+            description={copy.description}
+            action={action}
+          />
         );
+      }
 
       case "image":
         return (
@@ -948,13 +1098,13 @@ export function FileBrowserViewer({
             rootPath={rootPath}
             alt={fileName}
             cacheBust={revision}
-            onError={() => setState({ status: "error", message: "Couldn't load this image" })}
+            onError={() => setState({ status: "error", reason: "IMAGE_FAILED", message: "" })}
           />
         );
 
       case "svg":
         return (
-          <div className="h-full w-full overflow-auto">
+          <div className={MEDIA_STAGE_CLASS}>
             <FileImagePreview
               filePath={filePath}
               rootPath={rootPath}
@@ -967,7 +1117,7 @@ export function FileBrowserViewer({
 
       case "video":
         return (
-          <div className="h-full w-full overflow-auto">
+          <div className={MEDIA_STAGE_CLASS}>
             {/* Reloaded on `mediaReloadNonce`, never on `revision`: that ticks
                 on every worktree write, and re-fetching would reset playback
                 whenever an agent touches any file. Only a foreground refresh
@@ -983,6 +1133,7 @@ export function FileBrowserViewer({
               onError={(error) =>
                 setState({
                   status: "error",
+                  reason: error?.code === "FILE_TOO_LARGE" ? "FILE_TOO_LARGE" : "MEDIA_FAILED",
                   message: error?.title ?? "This video couldn't be played",
                 })
               }
@@ -993,7 +1144,7 @@ export function FileBrowserViewer({
 
       case "audio":
         return (
-          <div className="h-full w-full overflow-auto">
+          <div className={MEDIA_STAGE_CLASS}>
             {/* Same split as video above: a worktree write elsewhere must not
                 restart the track someone is listening to, while Refresh
                 still re-fetches it on demand. */}
@@ -1006,6 +1157,7 @@ export function FileBrowserViewer({
               onError={(error) =>
                 setState({
                   status: "error",
+                  reason: error?.code === "FILE_TOO_LARGE" ? "FILE_TOO_LARGE" : "MEDIA_FAILED",
                   message: error?.title ?? "This audio file couldn't be played",
                 })
               }
@@ -1023,7 +1175,13 @@ export function FileBrowserViewer({
             rootPath={rootPath}
             label={fileName}
             reloadKey={surfaceRefreshNonce}
-            onError={(error) => setState({ status: "error", message: error.title })}
+            onError={(error) =>
+              setState({
+                status: "error",
+                reason: error.code === "FILE_TOO_LARGE" ? "FILE_TOO_LARGE" : "PDF_FAILED",
+                message: error.title,
+              })
+            }
           />
         );
 
@@ -1059,6 +1217,7 @@ export function FileBrowserViewer({
               filePath={filePath}
               rootPath={rootPath}
               viewMode={renderMode}
+              wrapLines={wrapLines}
               className="h-full min-h-0"
             />
           );
@@ -1090,4 +1249,138 @@ export function FileBrowserViewer({
         );
     }
   }
+}
+
+/**
+ * One stage for every preview kind the viewer centres: the preview sits in the
+ * middle of the space the column gives it, the way the raster image and every
+ * unavailable state already do. Top-anchored media left a video or an audio bar
+ * pinned under the toolbar with the rest of the column empty, and the subject
+ * moved every time the file type changed.
+ */
+const MEDIA_STAGE_CLASS = "flex h-full w-full items-center justify-center overflow-auto";
+
+/** Row widths under which the secondary actions fold into "More actions". */
+const COMPACT_BELOW = 360;
+const COMPACT_BELOW_WITH_MODES = 560;
+
+type OpenTarget = "editor" | "default-app" | "browser";
+
+const OPEN_ACTION_COPY: Record<OpenTarget, { label: string; icon: LucideIcon }> = {
+  editor: { label: "Open in editor", icon: ExternalLink },
+  "default-app": { label: "Open in default app", icon: ExternalLink },
+  browser: { label: "Open in browser", icon: Globe },
+};
+
+/**
+ * The file's own actions, laid out as buttons at width and folded into one
+ * "More actions" menu once the row is compact — so at a narrow width the path
+ * pill keeps its file name instead of giving it up to a row of icons. A
+ * component rather than inline JSX because the compact flag comes from the
+ * toolbar's context, which is only readable inside `Root`.
+ */
+function FileActions({
+  filePath,
+  contents,
+  textSize,
+  wrap,
+  revealLabel,
+  onReveal,
+  openLabel,
+  openIcon: OpenIcon,
+  onOpen,
+}: {
+  filePath: string;
+  contents: string | null;
+  textSize: { value: MarkdownFontSize; onValueChange: (value: MarkdownFontSize) => void } | null;
+  wrap: { value: boolean; onValueChange: (value: boolean) => void } | null;
+  revealLabel: string;
+  onReveal: () => void;
+  openLabel: string;
+  openIcon: LucideIcon;
+  onOpen: () => void;
+}) {
+  const compact = useFileViewerToolbarCompact();
+  const menuCopy = useMenuCopy();
+
+  if (compact) {
+    return (
+      <FileViewerToolbar.MoreActions
+        data-testid="file-browser-more-actions"
+        confirmed={menuCopy.copied}
+      >
+        {textSize && (
+          <>
+            <MarkdownTextSizeMenuItems
+              value={textSize.value}
+              onValueChange={textSize.onValueChange}
+            />
+            <DropdownMenuSeparator />
+          </>
+        )}
+        {wrap && (
+          <>
+            <DropdownMenuCheckboxItem
+              checked={wrap.value}
+              onCheckedChange={(checked) => wrap.onValueChange(checked)}
+            >
+              Wrap long lines
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
+        {contents !== null && (
+          <DropdownMenuItem onSelect={() => menuCopy.copy(contents)}>
+            <Copy className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+            Copy file contents
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem onSelect={onReveal}>
+          <FolderOpen className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+          {revealLabel}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onOpen}>
+          <OpenIcon className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+          {openLabel}
+        </DropdownMenuItem>
+      </FileViewerToolbar.MoreActions>
+    );
+  }
+
+  return (
+    <>
+      {/* Rendered markdown only: source is CodeMirror, which this scale does
+          not reach, and every other preview kind has no prose to tune. Sits
+          ahead of the file actions so the controls that change what you are
+          looking at stay left of the ones that leave. */}
+      {textSize && (
+        <MarkdownTextSizeControl
+          value={textSize.value}
+          onValueChange={textSize.onValueChange}
+          data-testid="file-browser-text-size"
+        />
+      )}
+      {/* Source markdown's own reading control, the mirror of text size above —
+          the same toggle, on the same preference, as the file panel's. */}
+      {wrap && (
+        <FileViewerToolbar.IconButton
+          label="Wrap long lines"
+          pressed={wrap.value}
+          onClick={() => wrap.onValueChange(!wrap.value)}
+        >
+          <WrapText className={TOOLBAR_ICON_CLASS} />
+        </FileViewerToolbar.IconButton>
+      )}
+      {/* Same control, same order as FilePane's action group. Raw text only:
+          `svg` keeps sanitized markup rather than the source it was built
+          from, and every media/error state carries none at all. */}
+      <FileViewerToolbar.CopyContentsButton key={filePath} contents={contents} />
+      <FileViewerToolbar.IconButton label={revealLabel} onClick={onReveal}>
+        <FolderOpen className={TOOLBAR_ICON_CLASS} />
+      </FileViewerToolbar.IconButton>
+      <FileViewerToolbar.IconButton label={openLabel} onClick={onOpen}>
+        <OpenIcon className={TOOLBAR_ICON_CLASS} />
+      </FileViewerToolbar.IconButton>
+    </>
+  );
 }
