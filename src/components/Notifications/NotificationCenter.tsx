@@ -31,7 +31,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { actionService } from "@/services/ActionService";
 import type { ActionId } from "@shared/types/actions";
-import { muteForDuration, muteUntilNextMorning, notify, setSessionQuietUntil } from "@/lib/notify";
+import {
+  EVENT_KIND_TO_SETTING_KEY,
+  muteForDuration,
+  muteUntilNextMorning,
+  notify,
+  setSessionQuietUntil,
+  type NotificationEventKind,
+} from "@/lib/notify";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { useUIStore } from "@/store/uiStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -82,6 +89,17 @@ const SMALL_BUTTON_CLASS = cn(
   "text-2xs font-medium text-text-secondary transition-colors hover:bg-overlay-medium hover:text-text-primary",
   "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
 );
+
+/**
+ * Whether a kind ships switched on, so that it being off is the user's doing.
+ * Outside the component: the compiler bails on a hook referenced as a value.
+ */
+function shipsOn(kind: NotificationEventKind): boolean {
+  const key = EVENT_KIND_TO_SETTING_KEY[kind];
+  return (
+    key !== undefined && Reflect.get(useNotificationSettingsStore.getInitialState(), key) === true
+  );
+}
 
 /** The per-project silences the row menu writes, with the words the strip uses. */
 const PROJECT_SILENCEABLE = [
@@ -249,10 +267,17 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const lastClosedAt = useUIStore((s) => s.lastNotificationCenterClosedAt);
   const currentProjectId = useProjectStore((s) => s.currentProject?.id);
   const currentProjectOverrides = useProjectSettingsStore((s) =>
-    currentProjectId && s.projectId === currentProjectId
-      ? s.settings?.notificationOverrides
-      : undefined
+    currentProjectId ? s.notificationOverridesByProjectId[currentProjectId] : undefined
   );
+  // Re-read on every open. "Silence … from this project" writes straight to
+  // the project's settings file and tells no renderer store, so this is the
+  // point where the inbox can find out (and find out about an Undo).
+  useEffect(() => {
+    if (!open || !currentProjectId) return;
+    void useProjectSettingsStore
+      .getState()
+      .loadNotificationOverridesForProjects([currentProjectId]);
+  }, [open, currentProjectId]);
   const resetLastClosedAt = useUIStore((s) => s.resetNotificationCenterLastClosedAt);
 
   const [filter, setFilter] = useState<"all" | "unread" | "archived" | "snoozed">("all");
@@ -910,7 +935,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   // line that answers "what will fire right now" plus which kinds are switched
   // off. Memoized over the gate inputs so it's a stable value the rest of the
   // render (and the compiler) can lean on.
-  const { summaryHeroLine, offLabel } = useMemo(() => {
+  const { summaryHeroLine, offLabel, silencedLabel } = useMemo(() => {
     // `isQuiet` only encodes in-app suppression (session mute + scheduled
     // quiet) — OS DND must never be folded into `isQuiet` because it would
     // flip kinds to `quiet-gated`, which the hard constraint forbids.
@@ -925,10 +950,16 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       osDndActive,
     });
     const offKinds = selectKindOffKinds(states);
+    // A silence is a kind switched off that ships on. "Completed" ships off,
+    // so counting every off kind would have put the strip on screen for
+    // everyone who never touched a setting.
+    const silenced = offKinds.filter(shipsOn);
+    const label = (kinds: typeof offKinds) =>
+      kinds.length > 0 ? `Off: ${kinds.map((k) => KIND_SHORT_LABEL[k]).join(", ")}` : "";
     return {
       summaryHeroLine: heroLine(states),
-      offLabel:
-        offKinds.length > 0 ? `Off: ${offKinds.map((k) => KIND_SHORT_LABEL[k]).join(", ")}` : "",
+      offLabel: label(offKinds),
+      silencedLabel: label(silenced),
     };
   }, [
     notificationsEnabled,
@@ -955,10 +986,14 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     if (off.length === PROJECT_SILENCEABLE.length) return "This project is muted";
     return `This project: ${off.map(([, label]) => label).join(", ")} off`;
   })();
-  const hasSilences = offLabel !== "" || projectOffLabel !== "";
+  const hasSilences = silencedLabel !== "" || projectOffLabel !== "";
   const showQuietStrip = showMutedPill || hasSilences;
   const quietCause = pillLabel || (hasSilences ? "Some notifications are off" : summaryHeroLine);
-  const quietDetail = [pillLabel ? summaryHeroLine : "", offLabel, projectOffLabel]
+  const quietDetail = [
+    pillLabel ? summaryHeroLine : "",
+    pillLabel ? offLabel : silencedLabel,
+    projectOffLabel,
+  ]
     .filter(Boolean)
     .join(" · ");
   // What "Clear all" actually costs, named in the confirm. The count is the

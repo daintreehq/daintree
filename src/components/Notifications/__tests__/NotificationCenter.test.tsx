@@ -3114,28 +3114,41 @@ describe("NotificationCenter — fleet-volume triage", () => {
     }
   });
 
-  it("shows the quiet strip when notifications are silenced, even with no mute running", () => {
+  it("shows the quiet strip for silences the user made, but not for shipped defaults", () => {
     setEntries([makeEntry({ message: "One" })]);
+    // Completed ships off, so it being off is not a silence — counting it
+    // would put the strip in front of everyone who never touched a setting.
+    expect(useNotificationSettingsStore.getInitialState().completedEnabled).toBe(false);
+    useNotificationSettingsStore.setState({ completedEnabled: false });
+    const defaults = render(<NotificationCenter open onClose={vi.fn()} />);
+    expect(screen.queryByTestId("notification-muted-pill")).toBeNull();
+    defaults.unmount();
+
     useNotificationSettingsStore.setState({ waitingEnabled: false });
-    const { unmount } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const global = render(<NotificationCenter open onClose={vi.fn()} />);
     const strip = screen.getByTestId("notification-muted-pill");
     expect(strip.textContent).toContain("Waiting");
     // A route to undo it, since no Resume applies to a silence.
     expect(within(strip).getByRole("button").textContent).toBeTruthy();
-    unmount();
+    global.unmount();
 
     useNotificationSettingsStore.setState({ waitingEnabled: true });
+    const load = vi
+      .spyOn(useProjectSettingsStore.getState(), "loadNotificationOverridesForProjects")
+      .mockResolvedValue(undefined);
     useProjectStore.setState({
       currentProject: { id: "p1", path: "/repo", name: "Repo", emoji: "🌲", lastOpened: 0 },
     });
     useProjectSettingsStore.setState({
-      projectId: "p1",
-      settings: { runCommands: [], notificationOverrides: { completedEnabled: false } },
+      notificationOverridesByProjectId: { p1: { waitingEnabled: false } },
     });
     render(<NotificationCenter open onClose={vi.fn()} />);
     expect(screen.getByTestId("notification-muted-pill").textContent).toContain("This project");
+    // Re-read on open: the row menu's silence writes the settings file only.
+    expect(load).toHaveBeenCalledWith(["p1"]);
+    load.mockRestore();
     useProjectStore.setState({ currentProject: null });
-    useProjectSettingsStore.setState({ projectId: null, settings: null });
+    useProjectSettingsStore.setState({ notificationOverridesByProjectId: {} });
   });
 
   it("says how much of each grouped place is new", () => {
