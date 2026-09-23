@@ -34,7 +34,10 @@ export function TypedNameConfirmInput({
   const defaultInstructions = (
     <>
       Type{" "}
-      <code className="font-mono text-xs bg-surface-canvas px-1.5 py-0.5 rounded border border-border-strong">
+      {/* `box-decoration-break: clone` so a long name that wraps is drawn as
+          one chip per line, each with its own caps, rather than a single
+          chip split open across the break. */}
+      <code className="font-mono text-xs bg-surface-canvas px-1.5 py-0.5 rounded-[var(--radius-sm)] border border-border-strong [overflow-wrap:anywhere] [box-decoration-break:clone]">
         {target}
       </code>{" "}
       to confirm.
@@ -42,7 +45,7 @@ export function TypedNameConfirmInput({
   );
 
   return (
-    <div className="space-y-2 p-3 bg-status-error/5 border border-status-error/20 rounded">
+    <div className="space-y-2 p-3 bg-status-error/5 border border-status-error/20 rounded-[var(--radius-md)]">
       {hasPreamble && (
         <p id={preambleId} className="text-sm text-text-primary">
           {preamble}
