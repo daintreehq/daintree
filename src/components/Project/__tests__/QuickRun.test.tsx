@@ -24,7 +24,12 @@ const settingsMock = vi.hoisted(() => ({
   promoteToSaved: vi.fn(),
   removeFromSaved: vi.fn(),
   allDetectedRunners: [] as Array<{ id: string; name: string; command: string }>,
-  runCommands: [] as Array<{ id: string; name: string; command: string }>,
+  runCommands: [] as Array<{
+    id: string;
+    name: string;
+    command: string;
+    preferredLocation?: "dock" | "grid";
+  }>,
 }));
 
 vi.mock("@/hooks/useProjectSettings", () => ({
@@ -389,6 +394,50 @@ describe("QuickRun", () => {
 
     fireEvent.keyDown(input, { key: "Enter" });
     expect(mockAddTerminal).toHaveBeenCalledWith(expect.objectContaining({ command: "npm t" }));
+  });
+
+  it("lights an exact match where it sits, under its own band", () => {
+    settingsMock.runCommands = [{ id: "s", name: "Dev", command: "npm run dev" }];
+    seedHistory("npm run dev -- --host");
+    try {
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.change(input, { target: { value: "npm run dev" } });
+
+      const active = document.getElementById(input.getAttribute("aria-activedescendant")!)!;
+      expect(active.getAttribute("title")).toBe("npm run dev");
+      const band = active.closest('[role="group"]');
+      expect(band).not.toBeNull();
+      expect(document.getElementById(band!.getAttribute("aria-labelledby")!)?.textContent).toBe(
+        "Pinned"
+      );
+      // No second "Run npm run dev" row competing with the pinned one.
+      expect(screen.getAllByRole("option").filter((o) => o.title === "npm run dev")).toHaveLength(
+        1
+      );
+    } finally {
+      settingsMock.runCommands = [];
+    }
+  });
+
+  it("describes the lit row with what running it will do", () => {
+    settingsMock.runCommands = [
+      { id: "s", name: "Docs", command: "npx serve docs", preferredLocation: "dock" },
+    ];
+    try {
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      const active = document.getElementById(input.getAttribute("aria-activedescendant")!)!;
+      const summary = document.getElementById(active.getAttribute("aria-describedby")!)!;
+      expect(summary.getAttribute("aria-hidden")).toBeNull();
+      expect(summary.textContent).toContain("npx serve docs");
+      expect(summary.textContent).toContain("develop");
+      // The pinned command's own output choice, not the untouched grid toggle.
+      expect(summary.textContent).toContain("Dock");
+    } finally {
+      settingsMock.runCommands = [];
+    }
   });
 
   it("runs the same command from the arrow as from Enter", () => {

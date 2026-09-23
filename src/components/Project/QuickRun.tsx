@@ -22,6 +22,7 @@ import { RunningTaskList } from "./RunningTaskList";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { HighlightedText } from "@/components/ui/HighlightedText";
 import { KbdChord } from "@/components/ui/Kbd";
+import { isMac } from "@/lib/platform";
 
 interface QuickRunProps {
   projectId: string;
@@ -73,6 +74,26 @@ const SECTION_LABELS: Record<SuggestionSection, string> = {
 };
 const SECTION_ORDER: readonly SuggestionSection[] = ["saved", "script", "history"];
 
+const PIN_KEY_LABEL = isMac() ? "⌥P" : "Alt+P";
+const SUMMARY_ID = "quick-run-summary";
+
+/**
+ * Commands are read character by character — `--watch` is two hyphens, not an
+ * em dash — so the mono face's programming ligatures stay off wherever one is
+ * shown.
+ */
+const COMMAND_TEXT_CLASS = "font-mono [font-variant-ligatures:none]";
+
+/** The keyboard route to pin or unpin the lit row, for sighted users. */
+function PinHint({ saved, className }: { saved: boolean; className?: string }) {
+  return (
+    <span aria-hidden="true" className={cn("shrink-0 items-center gap-1", className)}>
+      <KbdChord shortcut="Alt+P" density="compact" />
+      {saved ? "Unpin" : "Pin"}
+    </span>
+  );
+}
+
 /** Case-insensitive substring ranges for `HighlightedText`. */
 function matchRanges(text: string, search: string): Array<[number, number]> | undefined {
   if (!search) return undefined;
@@ -89,6 +110,7 @@ const EXPANDED_KEY_PREFIX = "daintree_quickrun_expanded_";
 const SUGGESTION_LIST_ID = "quick-run-suggestions";
 const suggestionOptionId = (index: number) => `quick-run-suggestion-${index}`;
 const MAX_HISTORY = 10;
+const LEAD_INDEX = -2;
 
 /**
  * Normalize a command string for comparison.
@@ -221,6 +243,8 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   }, [projectId]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  // `LEAD_INDEX` means "whichever row is exactly what was typed", resolved
+  // against the list each render, since the list re-sorts under every keystroke.
   const [focusedSuggestionIndex, setFocusedSuggestionIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const isRunningRef = useRef(false);
@@ -238,15 +262,6 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   // in the field still brings the list up.
   const quietFocusRef = useRef(false);
 
-  // Keep the arrow-key selection on screen. `aria-activedescendant` names the
-  // row for assistive technology but scrolls nothing, so in a list longer than
-  // its cap Enter could run a command the user could not see.
-  useEffect(() => {
-    if (focusedSuggestionIndex < 0) return;
-    document
-      .getElementById(suggestionOptionId(focusedSuggestionIndex))
-      ?.scrollIntoView?.({ block: "nearest" });
-  }, [focusedSuggestionIndex]);
   useEffect(() => {
     if (!focusOnMountRef.current) return;
     quietFocusRef.current = true;
@@ -419,14 +434,14 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
       (opt) => opt.value.toLowerCase().includes(search) || opt.label.toLowerCase().includes(search)
     );
 
-    // Enter runs whatever row is highlighted, and typing highlights the first
-    // one — so the first row is always exactly the command Enter will run. An
-    // exact match leads its band's place; anything else is the typed text
-    // itself, stated as a row rather than left implied by an unlit list.
+    // Enter runs whatever row is lit, and typing lights the row that is exactly
+    // the typed command — so what Enter runs is always a visible row. An exact
+    // match is lit where it sits, under its own band; anything else gets the
+    // typed text itself as a leading row rather than left implied by an unlit
+    // list.
     const typed = input.trim();
     const normalizedTyped = normalizeCommand(typed);
-    const exact = matches.find((opt) => normalizeCommand(opt.value) === normalizedTyped);
-    if (exact) return [exact, ...matches.filter((opt) => opt !== exact)];
+    if (matches.some((opt) => normalizeCommand(opt.value) === normalizedTyped)) return matches;
     return [{ label: typed, value: typed, type: "typed" as const }, ...matches];
   }, [input, allDetectedRunners, history, settings]);
 
@@ -508,8 +523,29 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   };
 
   const listOpen = showSuggestions && suggestions.length > 0;
-  const highlighted = listOpen ? suggestions[focusedSuggestionIndex] : undefined;
   const searching = input.trim().length > 0;
+  const normalizedInput = normalizeCommand(input);
+  const activeIndex =
+    focusedSuggestionIndex === LEAD_INDEX
+      ? searching
+        ? Math.max(
+            0,
+            suggestions.findIndex((s) => normalizeCommand(s.value) === normalizedInput)
+          )
+        : -1
+      : focusedSuggestionIndex;
+  const highlighted = listOpen ? suggestions[activeIndex] : undefined;
+
+  // Keep the arrow-key selection on screen. `aria-activedescendant` names the
+  // row for assistive technology but scrolls nothing, so in a list longer than
+  // its cap Enter could run a command the user could not see.
+  useEffect(() => {
+    if (activeIndex < 0) return;
+    document
+      .getElementById(suggestionOptionId(activeIndex))
+      ?.scrollIntoView?.({ block: "nearest" });
+  }, [activeIndex]);
+
   // The one thing Run means, for Enter and the arrow alike: the lit row, or
   // with the list shut, the text in the field.
   const runTarget: SuggestionItem | undefined =
@@ -523,10 +559,10 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
       setShowSuggestions(true);
-      setFocusedSuggestionIndex((prev) => Math.min(prev + 1, suggestions.length - 1));
+      setFocusedSuggestionIndex(Math.min(activeIndex + 1, suggestions.length - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setFocusedSuggestionIndex((prev) => Math.max(prev - 1, -1));
+      setFocusedSuggestionIndex(Math.max(activeIndex - 1, -1));
     } else if (e.key === "Escape") {
       // Dismiss the menu, keep the field. Blurring threw the keyboard user out
       // of the one control they came here for.
@@ -546,7 +582,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   // floor; the band labels now say which kind a row is, so the leading
   // pin/clock/terminal glyphs went with the second line.
   const renderOption = (item: SuggestionItem, index: number) => {
-    const selected = index === focusedSuggestionIndex;
+    const selected = index === activeIndex;
     const primary = item.type === "saved" || item.type === "script" ? item.label : item.value;
     const secondary =
       item.type === "saved"
@@ -562,6 +598,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
         id={suggestionOptionId(index)}
         role="option"
         aria-selected={selected}
+        aria-describedby={selected ? SUMMARY_ID : undefined}
         title={item.value}
         // Hover moves the highlight rather than painting a second, lookalike
         // state beside it — so there is only ever one lit row, and it is the
@@ -581,14 +618,16 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
         {item.type === "typed" ? (
           <>
             <span className="shrink-0">Run</span>
-            <span className="min-w-0 truncate font-mono text-text-primary">{item.value}</span>
+            <span className={cn("min-w-0 truncate text-text-primary", COMMAND_TEXT_CLASS)}>
+              {item.value}
+            </span>
           </>
         ) : (
           <>
             <span
               className={cn(
                 "min-w-0 truncate text-text-primary",
-                item.type === "saved" ? "font-medium" : "font-mono"
+                item.type === "saved" ? "font-medium" : COMMAND_TEXT_CLASS
               )}
             >
               <HighlightedText text={primary} indices={matchRanges(primary, search)} />
@@ -597,7 +636,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate text-2xs",
-                  secondary === item.value && "font-mono"
+                  secondary === item.value && COMMAND_TEXT_CLASS
                 )}
               >
                 <HighlightedText text={secondary} indices={matchRanges(secondary, search)} />
@@ -611,7 +650,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
           // presentational. The keyboard route is Alt+P, named in the footer.
           <span
             aria-hidden="true"
-            title={item.type === "saved" ? "Unpin" : "Pin"}
+            title={`${item.type === "saved" ? "Unpin" : "Pin"} (${PIN_KEY_LABEL})`}
             onClick={(e) => {
               e.stopPropagation();
               togglePin(item);
@@ -683,7 +722,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                   setLaunchError(null);
                   setShowSuggestions(true);
                   // Typing lights the first row, which is always what Enter runs.
-                  setFocusedSuggestionIndex(e.target.value.trim() ? 0 : -1);
+                  setFocusedSuggestionIndex(e.target.value.trim() ? LEAD_INDEX : -1);
                 }}
                 onFocus={() => {
                   if (!quietFocusRef.current) setShowSuggestions(true);
@@ -698,16 +737,16 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                 // half nothing tells a screen reader which row Enter will run.
                 role="combobox"
                 aria-autocomplete="list"
+                aria-keyshortcuts="Alt+P"
                 aria-expanded={listOpen}
                 aria-controls={SUGGESTION_LIST_ID}
-                aria-activedescendant={
-                  highlighted ? suggestionOptionId(focusedSuggestionIndex) : undefined
-                }
+                aria-activedescendant={highlighted ? suggestionOptionId(activeIndex) : undefined}
                 className={cn(
                   // `pr-2` is load-bearing at the narrow end: without it the
                   // field's text runs flush into the button cluster and the
                   // last glyph touches the first icon.
-                  "flex-1 bg-transparent py-2 pr-2 text-xs font-mono text-text-primary placeholder:text-text-secondary",
+                  "flex-1 bg-transparent py-2 pr-2 text-xs text-text-primary placeholder:text-text-secondary",
+                  COMMAND_TEXT_CLASS,
                   // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- the wrapper paints the indicator for this field via focus-within:border-accent-primary; a ring on the bare input would sit inside that border and double it
                   "focus:outline-hidden min-w-0"
                 )}
@@ -836,13 +875,11 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                     aria-label="Commands"
                     className="min-h-0 flex-1 overflow-y-auto py-1"
                   >
-                    {searching && suggestions[0] && renderOption(suggestions[0], 0)}
+                    {suggestions[0]?.type === "typed" && renderOption(suggestions[0], 0)}
                     {SECTION_ORDER.map((section) => {
                       const rows = suggestions
                         .map((item, index) => ({ item, index }))
-                        .filter(
-                          ({ item, index }) => item.type === section && !(searching && index === 0)
-                        );
+                        .filter(({ item }) => item.type === section);
                       if (rows.length === 0) return null;
                       const labelId = `${SUGGESTION_LIST_ID}-${section}`;
                       return (
@@ -864,30 +901,55 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                       including a pinned command's own output and restart
                       choice, which override the toggles below. The branch
                       caption above the field is under this menu while it is
-                      open, so the destination is restated here. */}
+                      open, so the destination is restated here. The lit option
+                      is described by it, so a screen reader hears the same. */}
                   <div
-                    aria-hidden="true"
+                    id={SUMMARY_ID}
                     className="shrink-0 space-y-0.5 border-t border-border-subtle bg-surface-input px-3 py-1.5 text-2xs text-text-secondary"
                   >
                     {highlighted && (
                       <div className="flex items-start gap-2">
-                        <span className="line-clamp-2 min-w-0 flex-1 break-all font-mono text-text-primary">
+                        <span
+                          className={cn(
+                            "line-clamp-3 min-w-0 flex-1 text-text-primary [overflow-wrap:anywhere]",
+                            COMMAND_TEXT_CLASS
+                          )}
+                        >
                           {highlighted.value}
                         </span>
-                        <span className="flex shrink-0 items-center gap-1">
-                          <KbdChord shortcut="Alt+P" density="compact" />
-                          {highlighted.type === "saved" ? "Unpin" : "Pin"}
-                        </span>
+                        <PinHint
+                          saved={highlighted.type === "saved"}
+                          className="flex @max-[280px]/footer:hidden"
+                        />
                       </div>
                     )}
-                    <div className="flex min-w-0 items-center gap-1">
-                      <GitBranch className="h-3 w-3 shrink-0" />
-                      <span className="min-w-0 truncate">{destinationLabel}</span>
+                    {/* Below 280px the settings take their own line so the
+                        branch keeps its width, and the key hint rides with them
+                        instead of taking the command's. */}
+                    <div className="flex min-w-0 flex-wrap items-center gap-x-1">
+                      <span className="flex min-w-0 items-center gap-1 @max-[280px]/footer:basis-full">
+                        <GitBranch className="h-3 w-3 shrink-0" aria-hidden="true" />
+                        <span className="sr-only">Runs on </span>
+                        <span className="min-w-0 truncate">{destinationLabel}</span>
+                      </span>
                       <span className="shrink-0">
-                        {" · "}
+                        <span aria-hidden="true" className="@max-[280px]/footer:hidden">
+                          {"· "}
+                        </span>
                         {runSummary}
                       </span>
+                      {highlighted && (
+                        <PinHint
+                          saved={highlighted.type === "saved"}
+                          className="ml-auto hidden @max-[280px]/footer:flex"
+                        />
+                      )}
                     </div>
+                    {highlighted && (
+                      <span className="sr-only">
+                        {`${PIN_KEY_LABEL} to ${highlighted.type === "saved" ? "unpin" : "pin"}`}
+                      </span>
+                    )}
                   </div>
                 </div>
               )}

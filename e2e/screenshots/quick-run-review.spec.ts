@@ -153,6 +153,13 @@ test("QuickRun — open, choose, run, find the task", async ({ page }) => {
     await page.waitForTimeout(150);
     await shot(`06-nomatch-${tag}`);
 
+    // Typing a command that is exactly a pinned one: lit in its own band.
+    await open(page, "long-suggestions", theme, width);
+    await input(page).fill("npm run dev");
+    await expect(listbox(page)).toBeVisible();
+    await page.waitForTimeout(150);
+    await shot(`06b-exact-${tag}`);
+
     // Hovering a pinned row and a script row: the row's own actions.
     await open(page, "long-suggestions", theme, width);
     await showList(page);
@@ -179,7 +186,7 @@ test("QuickRun — open, choose, run, find the task", async ({ page }) => {
 
     // A task row's actions, on hover.
     await open(page, "many-tasks", theme, width);
-    await page.locator("[data-task-row]").nth(3).hover();
+    await page.locator('[data-task-row="t-check"]').first().hover();
     await page.waitForTimeout(200);
     await shot(`11-task-hover-${tag}`);
 

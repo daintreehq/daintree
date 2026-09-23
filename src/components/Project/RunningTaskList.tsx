@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { ChevronDown, X, Eye, RotateCw } from "lucide-react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { useShallow } from "zustand/react/shallow";
@@ -11,7 +11,6 @@ import { logError } from "@/utils/logger";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 
 const MAX_VISIBLE = 5;
-const AUTO_CLEAR_DELAY = 3000;
 
 type TaskStatus = "running" | "success" | "failed" | "restarting";
 
@@ -59,7 +58,6 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
 
   const [now, setNow] = useState(Date.now());
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => new Set());
-  const autoClearTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   // Tick for elapsed time — only active when there are running tasks
   const hasRunning = quickRunTerminals.some(
@@ -70,45 +68,23 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
   // pauses while the document is hidden.
   useVisibilityAwareInterval(() => setNow(Date.now()), 1000, hasRunning);
 
-  // Auto-clear successful tasks after delay, and clear dismiss/timers on restart
+  // A dismissed task that is restarted is live again, so it comes back.
+  //
+  // Finished tasks used to clear themselves after three seconds, which took
+  // the one-step route to a quick command's output away before the user had
+  // looked back. They stay now, quietly, until dismissed or pushed into
+  // "earlier" by newer launches.
   useEffect(() => {
-    const timers = autoClearTimers.current;
-    for (const t of quickRunTerminals) {
+    const revived = quickRunTerminals.filter((t) => {
       const status = deriveTaskStatus(t);
-
-      // If a terminal is running/restarting again (was restarted), clear its dismiss state and timer
-      if (status === "running" || status === "restarting") {
-        if (dismissedIds.has(t.id)) {
-          setDismissedIds((prev) => {
-            const next = new Set(prev);
-            next.delete(t.id);
-            return next;
-          });
-        }
-        const existingTimer = timers.get(t.id);
-        if (existingTimer) {
-          clearTimeout(existingTimer);
-          timers.delete(t.id);
-        }
-        continue;
-      }
-
-      if (status === "success" && !dismissedIds.has(t.id) && !timers.has(t.id)) {
-        const timer = setTimeout(() => {
-          setDismissedIds((prev) => new Set(prev).add(t.id));
-          timers.delete(t.id);
-        }, AUTO_CLEAR_DELAY);
-        timers.set(t.id, timer);
-      }
-    }
-
-    return () => {
-      // On unmount or dependency change, clear all timers
-      for (const [, timer] of timers) {
-        clearTimeout(timer);
-      }
-      timers.clear();
-    };
+      return (status === "running" || status === "restarting") && dismissedIds.has(t.id);
+    });
+    if (revived.length === 0) return;
+    setDismissedIds((prev) => {
+      const next = new Set(prev);
+      for (const t of revived) next.delete(t.id);
+      return next;
+    });
   }, [quickRunTerminals, dismissedIds]);
 
   // Clean dismissed IDs when terminals disappear from store
@@ -289,7 +265,8 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
     <div
       data-task-row={terminal.id}
       className={cn(
-        "flex items-center gap-1.5 px-2 rounded-[var(--radius-sm)] text-2xs font-mono group",
+        // Ligatures off: a command's `--flag` is two hyphens, not an em dash.
+        "flex items-center gap-1.5 px-2 rounded-[var(--radius-sm)] text-2xs font-mono [font-variant-ligatures:none] group",
         "hover:bg-tint/[0.04] transition-colors"
       )}
     >
@@ -343,31 +320,29 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
             <X className="h-3 w-3" />
           </button>
         )}
-        {status === "failed" && (
-          <>
-            {terminal.exitBehavior !== "restart" && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRestart(terminal.id);
-                }}
-                className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
-                aria-label="Restart task"
-              >
-                <RotateCw className="h-3 w-3" />
-              </button>
-            )}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDismiss(terminal.id);
-              }}
-              className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
-              aria-label="Dismiss"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </>
+        {status === "failed" && terminal.exitBehavior !== "restart" && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onRestart(terminal.id);
+            }}
+            className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
+            aria-label="Restart task"
+          >
+            <RotateCw className="h-3 w-3" />
+          </button>
+        )}
+        {(status === "failed" || status === "success") && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDismiss(terminal.id);
+            }}
+            className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
+            aria-label="Dismiss"
+          >
+            <X className="h-3 w-3" />
+          </button>
         )}
         <button
           onClick={(e) => {

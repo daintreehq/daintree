@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { primeRadix } from "@/components/ui/radix-loader";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -210,6 +210,24 @@ describe("RunningTaskList overflow", () => {
       const { unmount } = render(<RunningTaskList worktreeId={WORKTREE_ID} />);
       expect(screen.getByText(`cmd-${count - 1}`)).toBeTruthy();
       unmount();
+    }
+  });
+
+  it("keeps a finished task until it is dismissed", () => {
+    // A quick command finishes before the user looks back; the row is the
+    // one-step route to its output, so it must not clear itself.
+    vi.useFakeTimers();
+    try {
+      seedTasks(1, { runtimeStatus: "exited", exitCode: 0 });
+      render(<RunningTaskList worktreeId={WORKTREE_ID} />);
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      const row = screen.getByText("cmd-0").closest<HTMLElement>("[data-task-row]")!;
+      fireEvent.click(within(row).getByLabelText("Dismiss"));
+      expect(screen.queryByText("cmd-0")).toBeNull();
+    } finally {
+      vi.useRealTimers();
     }
   });
 
