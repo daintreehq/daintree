@@ -199,6 +199,10 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
   );
 
   const getOverrideMode = (commandId: string, hasArgs: boolean): OverrideMode => {
+    // A command without arguments has nothing to default, so it is always a prompt
+    // override — even when an older save left `defaults` on it, which would otherwise
+    // select a mode with no editor and no way back out.
+    if (!hasArgs) return "prompt";
     const mode = overrideModes[commandId];
     if (mode) return mode;
     return hasArgs ? "defaults" : "prompt";
