@@ -3,6 +3,7 @@ import {
   AppPaletteDialog,
   KBD_CLASS,
   PaletteFooterHints,
+  PaletteNoMatchHint,
   toHintPhrase,
   type PaletteSurfaceTier,
 } from "@/components/ui/AppPaletteDialog";
@@ -466,7 +467,10 @@ export function SearchablePalette<T>({
                   query={query}
                   emptyMessage={emptyMessage}
                   noMatchMessage={noMatchMessage}
-                  noMatchContent={noMatchContent}
+                  // Escape clears the query before it closes (see handleKeyDown),
+                  // so every no-match state has the same way back; a consumer
+                  // with a better next step passes its own.
+                  noMatchContent={noMatchContent ?? <PaletteNoMatchHint />}
                 >
                   {resolvedEmptyContent}
                 </AppPaletteDialog.Empty>

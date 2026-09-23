@@ -1002,12 +1002,13 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
  * The next step a no-match state names. Escape clears the query before it
  * closes the palette, so the way back from "nothing matched" is one key, and
  * saying so turns a dead end into an instruction. `what` is the population the
- * cleared list will show ("all actions").
+ * cleared list will show ("all actions"); without it the hint says what the key
+ * does. `SearchablePalette` renders the generic form by default.
  */
-export function PaletteNoMatchHint({ what }: { what: string }) {
+export function PaletteNoMatchHint({ what }: { what?: string }) {
   return (
     <p className="mt-2 text-xs text-text-secondary">
-      Press <kbd className={KBD_CLASS}>Esc</kbd> to see {what}
+      Press <kbd className={KBD_CLASS}>Esc</kbd> {what ? `to see ${what}` : "to clear the search"}
     </p>
   );
 }

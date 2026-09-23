@@ -205,6 +205,7 @@ describe("SearchablePalette footer", () => {
 
     expect(fn).not.toHaveBeenCalled();
     expect(document.body.querySelector("kbd")).toBeNull();
+    expect(document.querySelector('[class*="palette-footer"]')).toBeNull();
   });
 
   it("getFooter takes precedence over getActionLabel", () => {

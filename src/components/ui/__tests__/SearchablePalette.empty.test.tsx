@@ -92,8 +92,11 @@ describe("SearchablePalette empty-state chip", () => {
       emptyShortcut: "⌘N",
       emptyEntityName: "a terminal",
     });
-    expect(screen.queryByText(/Press/)).toBeNull();
+    // The create chip belongs to the zero-data state; a no-match state names
+    // the way back instead.
+    expect(screen.queryByText(/to create/)).toBeNull();
     expect(screen.queryByText("⌘N")).toBeNull();
+    expect(screen.getByText(/to clear the search/)).toBeTruthy();
   });
 
   it("does NOT render the chip when emptyShortcut is null (no keybinding bound)", () => {
