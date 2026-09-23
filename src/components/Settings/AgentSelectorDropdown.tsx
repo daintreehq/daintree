@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef, type ComponentType, type CSSProperties } from "react";
 import { cn } from "@/lib/utils";
-import { Settings2, ChevronDown, Search } from "lucide-react";
+import { Settings2, ChevronDown, Search, ShieldOff } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { BrandMark } from "@/components/icons";
+import type { AgentAvailabilityState } from "@shared/types";
+import { getAgentHealth } from "./agentHealth";
 
 export interface AgentOption {
   id: string;
@@ -10,6 +12,7 @@ export interface AgentOption {
   color: string;
   Icon: ComponentType<{ size?: number; style?: CSSProperties; className?: string }>;
   selected: boolean;
+  availability: AgentAvailabilityState | undefined;
   dangerousEnabled: boolean;
   hasCustomFlags: boolean;
 }
@@ -109,28 +112,7 @@ export function AgentSelectorDropdown({
                 <selectedAgent.Icon size={16} />
               </BrandMark>
               <span className="flex-1 text-left truncate">{selectedAgent.name}</span>
-              {(!selectedAgent.selected || selectedAgent.dangerousEnabled) && (
-                <span className="flex items-center gap-1">
-                  {!selectedAgent.selected && (
-                    <>
-                      <span
-                        className="status-mark w-1.5 h-1.5 rounded-full bg-daintree-text/30"
-                        aria-hidden="true"
-                      />
-                      <span className="sr-only">Not in workflow</span>
-                    </>
-                  )}
-                  {selectedAgent.dangerousEnabled && (
-                    <>
-                      <span
-                        className="status-mark w-1.5 h-1.5 rounded-full bg-status-error"
-                        aria-hidden="true"
-                      />
-                      <span className="sr-only">Skip permissions enabled</span>
-                    </>
-                  )}
-                </span>
-              )}
+              <AgentStatusMarks agent={selectedAgent} />
             </>
           ) : (
             <>
@@ -217,28 +199,7 @@ export function AgentSelectorDropdown({
                       <item.agent.Icon size={16} />
                     </BrandMark>
                     <span className="flex-1 min-w-0 truncate">{item.agent.name}</span>
-                    {(!item.agent.selected || item.agent.dangerousEnabled) && (
-                      <span className="flex items-center gap-1 shrink-0">
-                        {!item.agent.selected && (
-                          <>
-                            <span
-                              className="status-mark w-1.5 h-1.5 rounded-full bg-daintree-text/30"
-                              aria-hidden="true"
-                            />
-                            <span className="sr-only">Not in workflow</span>
-                          </>
-                        )}
-                        {item.agent.dangerousEnabled && (
-                          <>
-                            <span
-                              className="status-mark w-1.5 h-1.5 rounded-full bg-status-error"
-                              aria-hidden="true"
-                            />
-                            <span className="sr-only">Skip permissions enabled</span>
-                          </>
-                        )}
-                      </span>
-                    )}
+                    <AgentStatusMarks agent={item.agent} />
                   </>
                 )}
               </div>
@@ -252,5 +213,36 @@ export function AgentSelectorDropdown({
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * What the picker says about an agent without opening it: whether it is usable on this
+ * machine, and whether it skips permission prompts. Each is a glyph and words rather
+ * than a coloured dot — a dot alone could not tell "not installed" from "blocked", and
+ * said nothing at all to anyone who can't see its colour. Ready agents show nothing.
+ */
+function AgentStatusMarks({ agent }: { agent: AgentOption }) {
+  const health = getAgentHealth(agent.availability);
+  const statusLabel =
+    health.kind === "attention" || health.kind === "missing" ? health.label : null;
+  if (!statusLabel && !agent.dangerousEnabled) return null;
+  return (
+    <span className="flex shrink-0 items-center gap-3 font-normal">
+      {agent.dangerousEnabled && (
+        <span className="flex items-center gap-1" title="Skips permission prompts">
+          <ShieldOff className="h-3.5 w-3.5 text-status-error" aria-hidden="true" />
+          <span className="sr-only">Skips permission prompts</span>
+        </span>
+      )}
+      {statusLabel && (
+        <span className="flex items-center gap-1.5" data-agent-status={statusLabel}>
+          {health.kind === "attention" && (
+            <health.Icon className="h-3.5 w-3.5 text-status-warning" aria-hidden="true" />
+          )}
+          <span className="text-xs text-text-secondary">{statusLabel}</span>
+        </span>
+      )}
+    </span>
   );
 }

@@ -213,4 +213,35 @@ describe("PresetSelector", () => {
     fireEvent.keyDown(getByTestId("preset-option-user-x"), { key: "Enter" });
     expect(onChange).toHaveBeenCalledWith("user-x");
   });
+
+  it("is one tab stop: only the listbox is focusable, and arrows move the active option", () => {
+    const a = mkPreset("user-a", "A");
+    const b = mkPreset("user-b", "B");
+    const { getByRole, getAllByRole } = render(
+      <PresetSelector
+        selectedPresetId={undefined}
+        allPresets={[a, b]}
+        ccrPresets={[]}
+        customPresets={[a, b]}
+        onChange={onChange}
+        agentColor="#888"
+      />
+    );
+    const listbox = getByRole("listbox");
+    const options = getAllByRole("option");
+    expect(listbox.tabIndex).toBe(0);
+    for (const option of options) expect(option.tabIndex).toBe(-1);
+
+    const activeId = () => listbox.getAttribute("aria-activedescendant");
+    expect(activeId()).toBe(options[0]!.id);
+    fireEvent.keyDown(listbox, { key: "ArrowDown" });
+    expect(activeId()).toBe(options[1]!.id);
+    fireEvent.keyDown(listbox, { key: "End" });
+    expect(activeId()).toBe(options[options.length - 1]!.id);
+    fireEvent.keyDown(listbox, { key: "ArrowDown" });
+    expect(activeId()).toBe(options[options.length - 1]!.id);
+
+    fireEvent.keyDown(listbox, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith("user-b");
+  });
 });

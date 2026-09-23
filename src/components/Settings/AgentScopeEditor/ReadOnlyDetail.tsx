@@ -1,6 +1,5 @@
-import { Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { SettingsGroup } from "../SettingsGroup";
+import { SettingsRow } from "../SettingsGroup";
 import { stripCcrPrefix } from "./scopeUtils";
 import type { AgentPreset } from "@/config/agents";
 
@@ -10,51 +9,84 @@ interface ReadOnlyDetailProps {
   onDuplicate: (preset: AgentPreset) => void;
 }
 
+const MODE_LABEL = { inherit: "Default", on: "On", off: "Off" } as const;
+
+/**
+ * A project or CCR preset, shown as read-only rows in the same group as the preset
+ * picker. The way to change one is to duplicate it, so that is the first row's action
+ * rather than an unlabelled glyph.
+ */
 export function ReadOnlyDetail({ scopeKind, selectedPreset, onDuplicate }: ReadOnlyDetailProps) {
   const displayName =
     scopeKind === "ccr" ? stripCcrPrefix(selectedPreset.name) : selectedPreset.name;
+  const env = Object.entries(selectedPreset.env ?? {});
+  const source =
+    scopeKind === "project"
+      ? "Read-only — it lives in this project's .daintree/presets folder, so edits belong in the repository"
+      : "Read-only — it comes from your Claude Code Router config";
 
   return (
-    <SettingsGroup>
-      <div className="px-4 py-3 space-y-2">
-        <div className="flex items-center gap-1.5">
-          <span className="text-sm font-medium text-text-primary">{displayName}</span>
+    <>
+      <SettingsRow
+        label="Make an editable copy"
+        description={source}
+        control={
           <Button
-            size="icon-sm"
-            variant="ghost"
-            className="ml-auto"
+            size="sm"
+            variant="outline"
             onClick={() => onDuplicate(selectedPreset)}
             aria-label={`Duplicate ${displayName}`}
-            title="Duplicate as custom"
           >
-            <Copy />
+            Duplicate as custom
           </Button>
-        </div>
-        {selectedPreset.env && Object.keys(selectedPreset.env).length > 0 && (
-          <div className="space-y-1">
-            {Object.entries(selectedPreset.env).map(([k, v]) => (
-              <div key={k} className="flex items-center gap-2 font-mono text-2xs">
-                <span className="text-text-secondary shrink-0">{k}</span>
-                <span className="text-text-secondary">=</span>
-                <span className="text-text-secondary truncate">{v}</span>
-              </div>
-            ))}
-          </div>
-        )}
-        {selectedPreset.description && (
-          <p className="text-2xs text-text-secondary select-text">{selectedPreset.description}</p>
-        )}
-        {scopeKind === "project" && (
-          <p className="text-3xs text-text-secondary select-text">
-            Sourced from <code>.daintree/presets/</code> in this project.
-          </p>
-        )}
-      </div>
-      <div className="px-4 py-3">
-        <p className="text-xs text-text-secondary select-text">
-          Read-only. Duplicate as custom to override behavioral settings or env
-        </p>
-      </div>
-    </SettingsGroup>
+        }
+      />
+      {scopeKind === "project" && selectedPreset.description && (
+        <SettingsRow
+          label="Description"
+          layout="stacked"
+          control={
+            <p className="text-xs text-text-secondary select-text">{selectedPreset.description}</p>
+          }
+        />
+      )}
+      {env.length > 0 && (
+        <SettingsRow
+          label="Environment variables"
+          layout="stacked"
+          control={
+            <dl className="grid gap-1 font-mono text-xs select-text">
+              {env.map(([k, v]) => (
+                <div key={k} className="flex min-w-0 gap-2">
+                  <dt className="shrink-0 text-text-primary">{k}</dt>
+                  <dd className="min-w-0 truncate text-text-secondary">{v}</dd>
+                </div>
+              ))}
+            </dl>
+          }
+        />
+      )}
+      {selectedPreset.customFlags && (
+        <SettingsRow
+          label="Custom arguments"
+          layout="stacked"
+          control={
+            <code className="font-mono text-xs text-text-secondary select-text">
+              {selectedPreset.customFlags}
+            </code>
+          }
+        />
+      )}
+      {selectedPreset.dangerousMode && selectedPreset.dangerousMode !== "inherit" && (
+        <SettingsRow
+          label="Skip permissions"
+          control={
+            <span className="text-sm text-text-secondary">
+              {MODE_LABEL[selectedPreset.dangerousMode]}
+            </span>
+          }
+        />
+      )}
+    </>
   );
 }

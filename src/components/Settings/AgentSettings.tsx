@@ -18,7 +18,6 @@ import {
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import { RotateCcw, ExternalLink } from "lucide-react";
-import { BrandMark, Plug } from "@/components/icons";
 import { AgentSelectorDropdown } from "./AgentSelectorDropdown";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSection } from "./SettingsSection";
@@ -30,6 +29,9 @@ import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { actionService } from "@/services/ActionService";
 import { AgentHelpOutput } from "./AgentHelpOutput";
 import { AgentInstallSection } from "@/components/agents/AgentCard";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { AgentInventorySection } from "./AgentInventorySection";
+import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
@@ -243,6 +245,7 @@ export function AgentSettings({
   const [editName, setEditName] = useState("");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [addDialogAgentId, setAddDialogAgentId] = useState<string | null>(null);
+  const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
 
   const handleCreatePreset = async (presetData: Omit<AgentPreset, "id">) => {
     if (!addDialogAgentId) return;
@@ -328,6 +331,7 @@ export function AgentSettings({
             Icon: config.icon,
             usageUrl: config.usageUrl,
             selected: isAgentToolbarVisible(entry, cliAvailability?.[id]),
+            availability: cliAvailability?.[id],
             dangerousEnabled: entry.dangerousEnabled ?? false,
             hasCustomFlags: Boolean(entry.customFlags?.trim()),
           };
@@ -366,6 +370,8 @@ export function AgentSettings({
     <div className="space-y-8">
       {loadError && <SettingsLoadErrorBanner message={loadError} onRetry={retryAction} />}
 
+      {/* The picker names the agent, so an agent's page opens straight on its sections
+          rather than repeating the name as a second heading. */}
       <div className="flex items-center gap-3">
         <div className="min-w-0 flex-1">
           <AgentSelectorDropdown
@@ -376,24 +382,52 @@ export function AgentSettings({
             onSubtabChange={onSubtabChange}
           />
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"));
-          }}
-          className="shrink-0"
-        >
-          <Plug className="w-3.5 h-3.5" />
-          Run setup wizard
-        </Button>
+        {activeAgent?.usageUrl && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="shrink-0"
+            onClick={async () => {
+              const url = activeAgent.usageUrl?.trim();
+              if (!url) return;
+              try {
+                const result = await actionService.dispatch(
+                  "system.openExternal",
+                  { url },
+                  { source: "user" }
+                );
+                if (!result.ok) throw new Error(result.error.message);
+              } catch (error) {
+                logError("Failed to open usage URL", error);
+              }
+            }}
+          >
+            <ExternalLink aria-hidden="true" />
+            View usage
+          </Button>
+        )}
       </div>
+
+      {isGeneralActive && (
+        <AgentInventorySection
+          agents={agentOptions}
+          availability={cliAvailability}
+          isLoading={isCliLoading}
+          error={cliError}
+          isRefreshing={isRefreshingCli}
+          onRefresh={() => void handleRefreshCliAvailability()}
+          onOpenAgent={onSubtabChange}
+          onRunSetupWizard={() =>
+            window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"))
+          }
+        />
+      )}
 
       {isGeneralActive && (
         <SettingsSection
           id="agents-general"
-          title="Global agent settings"
-          description="Defaults for every agent. Each agent's page can override them"
+          title="All agents"
+          description="Each agent's page can override these"
         >
           <SettingsGroup>
             <SettingsSelect
@@ -466,50 +500,18 @@ export function AgentSettings({
 
       {!isGeneralActive && activeAgent && (
         <>
-          <div className="flex items-center gap-3">
-            <BrandMark brandColor={activeAgent.color}>
-              <activeAgent.Icon size={20} />
-            </BrandMark>
-            <h4 className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">
-              {activeAgent.name}
-            </h4>
-            <div className="flex shrink-0 items-center gap-2">
-              {activeAgent.usageUrl && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={async () => {
-                    const url = activeAgent.usageUrl?.trim();
-                    if (!url) return;
-                    try {
-                      const result = await actionService.dispatch(
-                        "system.openExternal",
-                        { url },
-                        { source: "user" }
-                      );
-                      if (!result.ok) throw new Error(result.error.message);
-                    } catch (error) {
-                      logError("Failed to open usage URL", error);
-                    }
-                  }}
-                >
-                  <ExternalLink size={14} />
-                  View usage
-                </Button>
-              )}
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={async () => {
-                  await reset(activeAgent.id);
-                  onSettingsChange?.();
-                }}
-              >
-                <RotateCcw size={14} />
-                Reset
-              </Button>
-            </div>
-          </div>
+          {/* First on the page when it renders at all: an agent that is missing,
+              blocked or has no credentials is usually why this page was opened. */}
+          <AgentInstallSection
+            agentId={activeAgent.id}
+            agentName={activeAgent.name}
+            availability={cliAvailability[activeAgent.id]}
+            detail={cliDetails[activeAgent.id]}
+            isCliLoading={isCliLoading}
+            isRefreshingCli={isRefreshingCli}
+            cliError={cliError}
+            onRefresh={() => void handleRefreshCliAvailability()}
+          />
 
           <SettingsSection title="Launching">
             <SettingsGroup>
@@ -594,23 +596,47 @@ export function AgentSettings({
             onSettingsChange={onSettingsChange}
           />
 
-          <AgentHelpOutput
-            agentId={activeAgent.id}
-            agentName={activeAgent.name}
-            usageUrl={activeAgent.usageUrl}
-            availability={cliAvailability[activeAgent.id] ?? "missing"}
-            isCliLoading={isCliLoading}
-          />
+          {/* A CLI that isn't on this machine has no help to show; the section above
+              already says so and how to install it. */}
+          {isAgentInstalled(cliAvailability[activeAgent.id]) && (
+            <AgentHelpOutput
+              agentId={activeAgent.id}
+              agentName={activeAgent.name}
+              availability={cliAvailability[activeAgent.id] ?? "missing"}
+            />
+          )}
 
-          <AgentInstallSection
-            agentId={activeAgent.id}
-            agentName={activeAgent.name}
-            availability={cliAvailability[activeAgent.id]}
-            detail={cliDetails[activeAgent.id]}
-            isCliLoading={isCliLoading}
-            isRefreshingCli={isRefreshingCli}
-            cliError={cliError}
-            onRefresh={() => void handleRefreshCliAvailability()}
+          {/* Last on the page and in a group of its own: it deletes custom presets. */}
+          <SettingsGroup id="agents-reset">
+            <SettingsRow
+              label={`Reset ${activeAgent.name} settings`}
+              description={`Returns launch and runtime settings to their defaults and deletes ${activeAgent.name}'s custom presets`}
+              control={
+                <Button
+                  size="sm"
+                  variant="ghost-danger"
+                  onClick={() => setIsResetConfirmOpen(true)}
+                >
+                  Reset settings
+                </Button>
+              }
+            />
+          </SettingsGroup>
+
+          <ConfirmDialog
+            isOpen={isResetConfirmOpen}
+            variant="destructive"
+            onClose={() => setIsResetConfirmOpen(false)}
+            onConfirm={() => {
+              setIsResetConfirmOpen(false);
+              void (async () => {
+                await reset(activeAgent.id);
+                onSettingsChange?.();
+              })();
+            }}
+            title={`Reset ${activeAgent.name} settings?`}
+            description={`Launch and runtime settings go back to their defaults, and ${activeAgent.name}'s custom presets are deleted. Project and CCR presets aren't affected.`}
+            confirmLabel="Reset settings"
           />
         </>
       )}

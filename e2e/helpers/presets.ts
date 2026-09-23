@@ -34,6 +34,13 @@ export function removeCcrConfig(): void {
   }
 }
 
+/** Deleting a custom preset confirms first; accept that confirm. */
+export async function confirmPresetDelete(window: import("@playwright/test").Page): Promise<void> {
+  const confirm = window.getByRole("button", { name: "Delete preset", exact: true });
+  await expect(confirm).toBeVisible({ timeout: 5000 });
+  await confirm.click();
+}
+
 export async function navigateToAgentSettings(
   window: import("@playwright/test").Page,
   agentId: string

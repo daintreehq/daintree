@@ -189,7 +189,7 @@ test.describe.serial("Presets: Edge Cases & Resilience (97–100)", () => {
     const labels = await getPresetOptionLabels(ctx.window);
     const distinctLabels = new Set(labels.map((l) => l.trim()));
     const expectedLabels = new Set<string>([
-      "Default (all worktrees)",
+      "Default settings",
       ...presetsAfter.map((p) => p.name),
     ]);
     expect(distinctLabels).toEqual(expectedLabels);

@@ -91,8 +91,12 @@ export function BehavioralControls({
         label="Custom arguments"
         description={customArgsDescription}
         layout="stacked"
-        isModified={scopeKind === "custom" && customFlagsOverride !== undefined}
-        onReset={onCustomFlagsOverrideReset}
+        isModified={
+          scopeKind === "custom" ? customFlagsOverride !== undefined : customArgsValue !== ""
+        }
+        onReset={
+          scopeKind === "custom" ? onCustomFlagsOverrideReset : () => onCustomFlagsChange("")
+        }
         resetAriaLabel={`Reset custom arguments override for ${scopeLabel}`}
         control={({ labelId, descriptionId }) => (
           <Input
@@ -112,7 +116,7 @@ export function BehavioralControls({
         label="Skip permissions"
         description={
           <>
-            Auto-approve all file, command, and network actions. Off vetoes the global setting for
+            Auto-approve all file, command and network actions. Off overrides the global setting for
             this scope
             {dangerousMode === "inherit" && (
               <span className="block mt-1">Inherited from {inheritOriginLabel}</span>
@@ -125,6 +129,9 @@ export function BehavioralControls({
             )}
           </>
         }
+        isModified={dangerousMode !== "inherit"}
+        onReset={() => onDangerousModeChange("inherit")}
+        resetAriaLabel={`Reset skip permissions for ${scopeLabel} to default`}
         control={({ descriptionId, disabled }) => (
           <SegmentedRadioGroup<DangerousMode>
             aria-label="Skip permissions"
@@ -151,6 +158,9 @@ export function BehavioralControls({
               )}
             </>
           }
+          isModified={inlineMode !== "inherit"}
+          onReset={() => onInlineModeChange("inherit")}
+          resetAriaLabel={`Reset alt-screen mode for ${scopeLabel} to default`}
           control={({ descriptionId, disabled }) => (
             <SegmentedRadioGroup<InlineMode>
               aria-label="Alt-screen mode"

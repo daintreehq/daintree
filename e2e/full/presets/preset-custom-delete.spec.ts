@@ -10,6 +10,7 @@ import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 import {
   navigateToAgentSettings,
+  confirmPresetDelete,
   addCustomPreset,
   getPresetRowByName,
   getSelectedPresetLabel,
@@ -98,6 +99,7 @@ test.describe.serial("Presets: Custom Delete (45–52)", () => {
 
     const delBtn = ctx.window.locator(SEL.preset.section).locator(SEL.preset.deleteButton).first();
     await delBtn.click();
+    await confirmPresetDelete(ctx.window);
 
     await expect.poll(() => customBadge.count(), { timeout: T_SHORT }).toBeLessThan(countBefore);
   });
@@ -141,6 +143,7 @@ test.describe.serial("Presets: Custom Delete (45–52)", () => {
     await goToClaudeSettings();
     const delBtn = ctx.window.locator(SEL.preset.section).locator(SEL.preset.deleteButton).first();
     await delBtn.click();
+    await confirmPresetDelete(ctx.window);
     await ctx.window.waitForTimeout(T_SETTLE);
 
     // Settings reopened for the delete — close it again so the chevron is reachable.
@@ -204,6 +207,7 @@ test.describe.serial("Presets: Custom Delete (45–52)", () => {
     await goToClaudeSettings();
     const delBtn = ctx.window.locator(SEL.preset.section).locator(SEL.preset.deleteButton).first();
     await delBtn.click();
+    await confirmPresetDelete(ctx.window);
     await ctx.window.waitForTimeout(T_SETTLE);
 
     await closeSettings();
@@ -233,9 +237,10 @@ test.describe.serial("Presets: Custom Delete (45–52)", () => {
     const delBtn = ctx.window.locator(SEL.preset.section).locator(SEL.preset.deleteButton).first();
     await expect(delBtn).toBeVisible({ timeout: T_SHORT });
     await delBtn.click();
+    await confirmPresetDelete(ctx.window);
     await ctx.window.waitForTimeout(T_SETTLE);
 
-    // The trigger label collapses to "Default (no overrides)" on delete.
+    // The trigger label collapses to "Default settings" on delete.
     const trigger = ctx.window.locator(SEL.preset.selectorTrigger);
     await expect(trigger).toBeVisible({ timeout: T_SHORT });
     await expect
@@ -254,6 +259,7 @@ test.describe.serial("Presets: Custom Delete (45–52)", () => {
       const visible = await delBtn.isVisible({ timeout: T_SETTLE + 200 }).catch(() => false);
       if (!visible) break;
       await delBtn.click();
+      await confirmPresetDelete(ctx.window);
       await ctx.window.waitForTimeout(T_SETTLE);
     }
     // After removing all custom presets AND clearing CCR config, the
@@ -348,6 +354,7 @@ test.describe.serial("Presets: Custom Delete (45–52)", () => {
     const delBtn = ctx.window.locator(SEL.preset.section).locator(SEL.preset.deleteButton).first();
     await expect(delBtn).toBeVisible({ timeout: T_SHORT });
     await delBtn.click();
+    await confirmPresetDelete(ctx.window);
     await ctx.window.waitForTimeout(T_SETTLE);
 
     // The running terminal must survive the deletion and settings stay healthy.

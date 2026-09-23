@@ -1,8 +1,10 @@
-import { Copy, Trash2, Pencil } from "lucide-react";
+import { useState } from "react";
+import { Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { PresetColorPicker } from "../PresetColorPicker";
-import { SettingsRow } from "../SettingsGroup";
+import { SETTINGS_CONTROL_WIDTH, SettingsRow } from "../SettingsGroup";
 import type { AgentPreset } from "@/config/agents";
 
 interface CustomPresetChromeProps {
@@ -17,9 +19,9 @@ interface CustomPresetChromeProps {
   onColorChange: (color: string | undefined) => void;
   onDisplayTitleChange: (value: string) => void;
   onDuplicate: (preset: AgentPreset) => void;
-  onDelete: (presetId: string) => void;
 }
 
+/** Name, colour and display title of a custom preset — the rows that identify it. */
 export function CustomPresetChrome({
   selectedPreset,
   agentColor,
@@ -32,7 +34,6 @@ export function CustomPresetChrome({
   onColorChange,
   onDisplayTitleChange,
   onDuplicate,
-  onDelete,
 }: CustomPresetChromeProps) {
   return (
     <>
@@ -48,7 +49,7 @@ export function CustomPresetChrome({
             />
             {isEditing ? (
               <input
-                className="flex-1 text-sm font-medium bg-surface-canvas border border-border-strong rounded px-2 py-0.5 focus:outline-hidden"
+                className="flex-1 text-sm font-medium bg-surface-canvas border border-border-strong rounded-[var(--radius-sm)] px-2 py-0.5 focus:outline-hidden focus-visible:border-accent-primary"
                 value={editName}
                 onChange={(e) => onEditNameChange(e.target.value)}
                 onBlur={onCommitEdit}
@@ -64,8 +65,9 @@ export function CustomPresetChrome({
                   }
                 }}
                 autoFocus
+                aria-label="Preset name"
                 data-testid="preset-edit-input"
-                placeholder="Preset name..."
+                placeholder="Preset name"
               />
             ) : (
               <button
@@ -73,7 +75,7 @@ export function CustomPresetChrome({
                 className="flex items-center gap-1.5 text-sm font-medium text-text-primary hover:underline underline-offset-2 text-left"
                 onClick={() => onStartEdit(selectedPreset)}
                 aria-label={`Edit ${selectedPreset.name}`}
-                title="Click to rename"
+                title="Rename"
               >
                 <span>{selectedPreset.name}</span>
                 <Pencil size={12} className="text-text-secondary" aria-hidden="true" />
@@ -82,45 +84,79 @@ export function CustomPresetChrome({
           </span>
         }
         labelText={selectedPreset.name}
+        description="The colour marks this preset on its launch button and panel tab"
         control={
-          <div className="flex items-center gap-1">
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={() => onDuplicate(selectedPreset)}
-              aria-label={`Duplicate ${selectedPreset.name}`}
-              title="Duplicate"
-            >
-              <Copy />
-            </Button>
-            <Button
-              size="icon-sm"
-              variant="ghost-danger"
-              onClick={() => onDelete(selectedPreset.id)}
-              aria-label={`Delete ${selectedPreset.name}`}
-              title="Delete"
-            >
-              <Trash2 />
-            </Button>
-          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onDuplicate(selectedPreset)}
+            aria-label={`Duplicate ${selectedPreset.name}`}
+          >
+            Duplicate
+          </Button>
         }
       />
       <SettingsRow
         label="Display title"
-        description="Shown on the panel tab and launch button. Leave empty to use the preset name"
-        layout="stacked"
+        description="Shown on the panel tab and launch button instead of the preset name"
         control={({ labelId, descriptionId }) => (
           <Input
             id="preset-display-title-input"
+            className={SETTINGS_CONTROL_WIDTH.wide}
             value={selectedPreset.displayTitle ?? ""}
             onChange={(e) => onDisplayTitleChange(e.target.value)}
             maxLength={100}
-            placeholder={`Uses preset name (${selectedPreset.name})`}
+            placeholder={selectedPreset.name}
             aria-labelledby={labelId}
             aria-describedby={descriptionId}
             data-testid="preset-display-title-input"
           />
         )}
+      />
+    </>
+  );
+}
+
+/**
+ * Deleting a custom preset is local and irreversible, so it confirms (D1) and sits as
+ * the last row of the preset's group, never beside its routine actions.
+ */
+export function PresetDeleteRow({
+  preset,
+  onDelete,
+}: {
+  preset: AgentPreset;
+  onDelete: (presetId: string) => void;
+}) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  return (
+    <>
+      <SettingsRow
+        label={`Delete ${preset.name}`}
+        labelText={preset.name}
+        description="Sessions that launch with it switch back to the agent's own settings"
+        control={
+          <Button
+            size="sm"
+            variant="ghost-danger"
+            onClick={() => setConfirmOpen(true)}
+            aria-label={`Delete ${preset.name}`}
+          >
+            Delete preset
+          </Button>
+        }
+      />
+      <ConfirmDialog
+        isOpen={confirmOpen}
+        variant="destructive"
+        onClose={() => setConfirmOpen(false)}
+        onConfirm={() => {
+          setConfirmOpen(false);
+          onDelete(preset.id);
+        }}
+        title={`Delete '${preset.name}'?`}
+        description="Its environment variables, arguments and fallbacks are deleted, and new sessions launch with the agent's own settings instead."
+        confirmLabel="Delete preset"
       />
     </>
   );

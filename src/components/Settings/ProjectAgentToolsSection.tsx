@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsGroup } from "@/components/Settings/SettingsGroup";
+import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import { TriangleAlert } from "lucide-react";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { pluginAgentMcpClient } from "@/clients/pluginAgentMcpClient";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
@@ -14,7 +15,29 @@ import type {
 } from "@shared/types/ipc/pluginAgentMcp";
 
 const AGENT_TOOLS_DESCRIPTION =
-  "Tools plugins offer to agents. Turning one on lets Claude agents you start in this project from now on call that plugin's tools. Turning it off cuts off agents that are already running straight away.";
+  "Which plugin tools Claude agents in this project may call. Turning one on applies to agents started from now on; turning it off also cuts off agents already running.";
+
+function openMcpSettings() {
+  window.dispatchEvent(new CustomEvent("daintree:open-settings-tab", { detail: { tab: "mcp" } }));
+}
+
+/** A failure line inside the group: severity on the glyph, the words in body text. */
+function FailureRow({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+      <p role="alert" className="flex items-start gap-1.5 text-xs text-text-secondary">
+        <TriangleAlert
+          className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
+          aria-hidden="true"
+        />
+        <span>{message}</span>
+      </p>
+      <Button variant="outline" size="sm" onClick={onRetry}>
+        Retry
+      </Button>
+    </div>
+  );
+}
 
 interface FailedToggle {
   endpoint: ProjectAgentToolEndpoint;
@@ -149,14 +172,10 @@ export function ProjectAgentToolsSection() {
       <div data-testid="project-agent-tools">
         <SettingsSection title="Agent tools" description={AGENT_TOOLS_DESCRIPTION}>
           <SettingsGroup>
-            <div className="flex items-center justify-between gap-3 px-4 py-3">
-              <p role="alert" className="text-xs text-status-error">
-                Couldn&apos;t load which plugin tools agents can use here.
-              </p>
-              <Button variant="outline" size="xs" onClick={refresh}>
-                Retry
-              </Button>
-            </div>
+            <FailureRow
+              message="Couldn't load which plugin tools agents can use here"
+              onRetry={refresh}
+            />
           </SettingsGroup>
         </SettingsSection>
       </div>
@@ -168,72 +187,70 @@ export function ProjectAgentToolsSection() {
   return (
     <div data-testid="project-agent-tools">
       <SettingsSection title="Agent tools" description={AGENT_TOOLS_DESCRIPTION}>
-        {!snapshot.mcpServerEnabled && (
-          <p className="text-xs text-text-secondary leading-relaxed">
-            Agents reach these tools through Daintree&apos;s MCP server, which is off. Turn it on in
-            Settings → MCP Server.
-          </p>
-        )}
         <SettingsGroup>
+          {/* The prerequisite sits first in the group it gates, with the way to fix it,
+              rather than as a loose paragraph above switches that look live. */}
+          {!snapshot.mcpServerEnabled && (
+            <SettingsRow
+              label="MCP server is off"
+              description="Agents reach these tools through Daintree's MCP server, which is off, so the choices below take effect once it's on"
+              control={
+                <Button variant="outline" size="sm" onClick={openMcpSettings}>
+                  Open MCP settings
+                </Button>
+              }
+            />
+          )}
           {snapshot.endpoints.map((endpoint) => {
             const key = rowKey(endpoint);
             const origin = originLabel(endpoint);
             return (
-              <div
-                key={key}
-                className="flex items-start justify-between gap-3 px-4 py-3"
-                data-testid="project-agent-tool-row"
-              >
-                <div className="min-w-0 space-y-0.5">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-sm font-medium text-text-primary break-words">
-                      {endpoint.pluginDisplayName}
-                    </span>
-                    <Badge size="xs">{origin}</Badge>
-                  </div>
-                  <p className="text-xs text-text-secondary break-words">{endpoint.name}</p>
-                  {endpoint.description && (
-                    <p className="text-xs text-text-secondary break-words">
-                      {endpoint.description}
-                    </p>
+              <div key={key} data-testid="project-agent-tool-row">
+                <SettingsRow
+                  label={endpoint.pluginDisplayName}
+                  labelText={endpoint.pluginDisplayName}
+                  accessory={<Badge size="xs">{origin}</Badge>}
+                  description={
+                    <>
+                      <span className="block">{endpoint.name}</span>
+                      {endpoint.description && (
+                        <span className="block">{endpoint.description}</span>
+                      )}
+                      {!endpoint.available && (
+                        <span className="block">
+                          {endpoint.enabled
+                            ? "Not offered here right now. Still allowed, so it applies again if the plugin comes back"
+                            : "Not offered here right now"}
+                        </span>
+                      )}
+                    </>
+                  }
+                  control={({ descriptionId }) => (
+                    <SettingsSwitch
+                      className="shrink-0"
+                      checked={endpoint.enabled}
+                      disabled={pending.has(key) || (!endpoint.available && !endpoint.enabled)}
+                      onCheckedChange={(next) => void setEnabled(endpoint, next)}
+                      aria-label={`Let agents use ${endpoint.name} from ${endpoint.pluginDisplayName} (${origin.toLowerCase()})`}
+                      aria-describedby={descriptionId}
+                      data-testid="project-agent-tool-switch"
+                    />
                   )}
-                  {!endpoint.available && (
-                    <p className="text-xs text-text-secondary leading-relaxed">
-                      Not offered here right now, but still on. It applies again if the plugin comes
-                      back.
-                    </p>
-                  )}
-                </div>
-                <SettingsSwitch
-                  className="shrink-0"
-                  checked={endpoint.enabled}
-                  disabled={pending.has(key) || (!endpoint.available && !endpoint.enabled)}
-                  onCheckedChange={(next) => void setEnabled(endpoint, next)}
-                  aria-label={`Let agents use ${endpoint.name} from ${endpoint.pluginDisplayName} (${origin.toLowerCase()})`}
-                  data-testid="project-agent-tool-switch"
                 />
               </div>
             );
           })}
           {loadFailed && (
-            <div className="flex items-center justify-between gap-3 px-4 py-2.5">
-              <p role="alert" className="text-xs text-status-error">
-                Couldn&apos;t refresh this list, so it may be out of date.
-              </p>
-              <Button variant="outline" size="xs" onClick={refresh}>
-                Retry
-              </Button>
-            </div>
+            <FailureRow
+              message="Couldn't refresh this list, so it may be out of date"
+              onRetry={refresh}
+            />
           )}
           {failed !== null && (
-            <div className="flex items-center justify-between gap-3 px-4 py-2.5">
-              <p role="alert" className="text-xs text-status-error">
-                Couldn&apos;t change access to {failed.endpoint.name}.
-              </p>
-              <Button variant="outline" size="xs" onClick={retryFailed}>
-                Retry
-              </Button>
-            </div>
+            <FailureRow
+              message={`Couldn't change access to ${failed.endpoint.name}`}
+              onRetry={retryFailed}
+            />
           )}
         </SettingsGroup>
       </SettingsSection>

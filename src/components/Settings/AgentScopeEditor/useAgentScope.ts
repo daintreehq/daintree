@@ -157,12 +157,14 @@ export function useAgentScope({
     scopeKind === "custom" && customFlagsOverride === undefined
       ? agentDefaultCustomFlags || "Using default (no flags)"
       : "--verbose --max-tokens=4096";
+  // The inherited value goes in the description, not only the placeholder: a
+  // placeholder vanishes as soon as the user starts typing over it.
   const customArgsDescription =
     scopeKind === "custom"
       ? customFlagsOverride === undefined
-        ? "Using default. Type to override."
-        : "Extra CLI flags for this preset"
-      : "Extra CLI flags appended when launching";
+        ? `Using the agent's own arguments (${agentDefaultCustomFlags || "none"}). Type here to replace them for this preset.`
+        : "Extra CLI flags for this preset, used instead of the agent's own"
+      : "Extra CLI flags appended to every launch";
 
   const agentEnvSuggestions = agentCfg?.envSuggestions ?? [];
 
