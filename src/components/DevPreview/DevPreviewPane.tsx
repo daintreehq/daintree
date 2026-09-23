@@ -39,7 +39,7 @@ import { getViewportPreset } from "@/panels/dev-preview/viewportPresets";
 import { isDevPreviewPanel } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
 import { loadWebviewUrl } from "./loadWebviewUrl";
-import { isOnOrigin } from "./urlSync";
+import { isOnOrigin, toDevServerAddress } from "./urlSync";
 import { useDevPreviewLoadLifecycle, type SessionStorageEntry } from "./useDevPreviewLoadLifecycle";
 
 import { blockedNavReducer } from "./BlockedNavBanner";
@@ -605,6 +605,11 @@ export function DevPreviewPane({
     onHardReload: handleHardReload,
   });
 
+  const toAddress = useCallback(
+    (target: string) => toDevServerAddress(target, proxyOrigin, url),
+    [proxyOrigin, url]
+  );
+
   const handleRetry = useCallback(() => {
     void start();
   }, [start]);
@@ -943,9 +948,11 @@ export function DevPreviewPane({
           viewportFit={viewportFit}
           onNavigate={handleNavigate}
           validateUrl={validateUrl}
+          toAddress={toAddress}
           onBack={handleBack}
           onForward={handleForward}
           onReload={handleReload}
+          onStop={handleCancelLoad}
           onHardReload={handleHardReload}
           onOpenExternal={handleOpenExternal}
           onPromoteToPortal={currentUrl ? () => void handlePromoteToPortal() : undefined}

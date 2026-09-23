@@ -431,7 +431,7 @@ export function FileSection({
                     // Fixed width, not min-width: the count appears and
                     // disappears as settings change, and an intrinsically-sized
                     // trigger drags the filter field with it every time.
-                    "toolbar-icon-button inline-flex w-8 shrink-0 items-center justify-center gap-1 rounded p-1",
+                    "toolbar-icon-button inline-flex w-8 shrink-0 items-center justify-center gap-1 rounded-lg p-1",
                     nonDefaultViewCount > 0 && "text-text-primary"
                   )}
                   data-testid={`${section}-section-view-trigger`}

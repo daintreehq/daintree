@@ -30,6 +30,28 @@ export function isOnOrigin(url: string, origin: string): boolean {
 }
 
 /**
+ * The address a person should see, type and copy for a URL on this panel's proxy
+ * origin: the same route on the dev server that is actually serving it. The
+ * webview stays on the stable proxy origin (#9100); the `dp-…localhost` host is
+ * plumbing, and showing it hid the one thing the address bar is for — the route.
+ *
+ * Returns `url` untouched when it is not on the proxy origin, or when no dev
+ * server URL is known yet (nothing truthful to show in its place).
+ */
+export function toDevServerAddress(
+  url: string,
+  proxyOrigin: string | null | undefined,
+  devServerUrl: string | null | undefined
+): string {
+  if (typeof proxyOrigin !== "string" || !devServerUrl) return url;
+  const parsed = parseOrNull(url);
+  const proxy = parseOrNull(proxyOrigin);
+  const upstream = parseOrNull(devServerUrl);
+  if (!parsed || !proxy || !upstream || parsed.origin !== proxy.origin) return url;
+  return graftRouteOntoOrigin(new URL(upstream.origin), parsed);
+}
+
+/**
  * Address-bar/navigation policy for a dev-preview panel (#12297).
  *
  * Dev Preview used to normalize with no options, which takes `normalizeBrowserUrl`'s
@@ -74,7 +96,7 @@ export function normalizeDevPreviewUrl(
     return { url: normalized.url };
   }
 
-  return { error: `Only localhost URLs are allowed (got "${parsed.hostname}")` };
+  return { error: `Only localhost addresses open here, not ${parsed.hostname}` };
 }
 
 /**

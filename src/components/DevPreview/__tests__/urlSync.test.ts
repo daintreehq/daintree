@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { computeDevServerUrl, isOnOrigin, normalizeDevPreviewUrl } from "../urlSync";
+import {
+  computeDevServerUrl,
+  isOnOrigin,
+  normalizeDevPreviewUrl,
+  toDevServerAddress,
+} from "../urlSync";
 
 describe("computeDevServerUrl", () => {
   it("returns false when there is no detected URL", () => {
@@ -215,7 +220,7 @@ describe("normalizeDevPreviewUrl (#12297)", () => {
     it("rejects another panel's proxy origin (same shape, different owner)", () => {
       const result = normalizeDevPreviewUrl("http://dp-proj-other.localhost:43000/x", PROXY);
       expect(result.url).toBeUndefined();
-      expect(result.error).toContain("Only localhost URLs are allowed");
+      expect(result.error).toContain("dp-proj-other.localhost");
     });
 
     it("rejects the panel's own host on a different port", () => {
@@ -270,5 +275,37 @@ describe("normalizeDevPreviewUrl (#12297)", () => {
         undefined
       );
     });
+  });
+});
+
+describe("toDevServerAddress", () => {
+  const PROXY = "http://dp-proj-panel.localhost:43000";
+  const UPSTREAM = "http://localhost:5173";
+  const ROUTES = ["/", "/dashboard", "/a/b?tab=billing#invoices", "/%E2%9C%93/encoded", "//x"];
+
+  it("never shows the proxy host for a page on the proxy origin", () => {
+    for (const route of ROUTES) {
+      const address = toDevServerAddress(`${PROXY}${route}`, PROXY, UPSTREAM);
+      expect(new URL(address).origin).toBe(UPSTREAM);
+    }
+  });
+
+  it("round-trips: the address shown, typed back, lands on the same page", () => {
+    for (const route of ROUTES) {
+      const url = normalizeDevPreviewUrl(`${PROXY}${route}`, PROXY).url!;
+      const address = toDevServerAddress(url, PROXY, UPSTREAM);
+      expect(normalizeDevPreviewUrl(address, PROXY).url).toBe(url);
+    }
+  });
+
+  it("leaves a URL alone when there is nothing truthful to map it to", () => {
+    const url = `${PROXY}/dashboard`;
+    expect(toDevServerAddress(url, null, UPSTREAM)).toBe(url);
+    expect(toDevServerAddress(url, undefined, UPSTREAM)).toBe(url);
+    expect(toDevServerAddress(url, PROXY, null)).toBe(url);
+    expect(toDevServerAddress("http://localhost:3000/x", PROXY, UPSTREAM)).toBe(
+      "http://localhost:3000/x"
+    );
+    expect(toDevServerAddress("not a url", PROXY, UPSTREAM)).toBe("not a url");
   });
 });

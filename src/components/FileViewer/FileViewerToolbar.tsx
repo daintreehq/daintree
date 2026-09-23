@@ -235,7 +235,7 @@ function IconButton({
           data-sidebar-toggle={sidebarToggle ? "" : undefined}
           data-testid={testId}
           className={cn(
-            "toolbar-icon-button p-1.5 rounded",
+            "toolbar-icon-button p-1.5 rounded-lg",
             active ? "text-text-primary" : "text-text-secondary"
           )}
         >
