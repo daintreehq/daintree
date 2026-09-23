@@ -2,10 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { Spinner } from "@/components/ui/Spinner";
-import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { AlertTriangle } from "lucide-react";
-import { cn } from "@/lib/utils";
+import {
+  CommitRows,
+  PreviewFrame,
+  PreviewNote,
+  PreviewNotice,
+  PreviewSectionHeading,
+  PreviewSkeleton,
+} from "@/components/Git/GitOperationPreview";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { GIT_REMOTE_COMMIT_PREVIEW_MAX, type GitRemoteCommitPreview } from "@shared/types/git";
 import { formatGitPushDestination } from "@/components/Git/gitRemoteOperationPreview";
@@ -17,7 +21,6 @@ import { useGitForcePushStore } from "@/store/gitForcePushStore";
  * is not enough, naming commits nothing could open (#12001).
  */
 const COMMIT_LIMIT = GIT_REMOTE_COMMIT_PREVIEW_MAX;
-const SHORT_HASH_LEN = 7;
 
 /**
  * D2 confirm for `git.forcePushWithLease`, mounted globally and driven by
@@ -120,8 +123,6 @@ function GitForcePushConfirmDialogInner() {
   const isPreviewStale =
     (commits !== null && totalRemote < commits.length) ||
     (previewGeneration !== null && previewGeneration !== generation);
-  const hiddenCount =
-    commits !== null && totalRemote > commits.length ? totalRemote - commits.length : 0;
   // Optional-chained rather than keyed off `preview` alone: this crosses the
   // IPC boundary, so a payload missing the field must degrade to the branch
   // name rather than throwing inside a destructive confirm.
@@ -190,7 +191,12 @@ function GitForcePushConfirmDialogInner() {
   return (
     <ConfirmDialog
       isOpen={true}
-      title={destinationLabel ? `Force push to ${destinationLabel}?` : `Force push ${branchName}?`}
+      // Fixed for the life of the request, like the push and pull-rebase titles
+      // (#11979): it used to switch from the branch to the destination once the
+      // preview landed, changing the dialog's accessible name mid-read. The
+      // branch is known from the record before anything loads; the destination
+      // is named in the body.
+      title={`Force push ${branchName}?`}
       onClose={() => resolveConfirmation(requestId, false)}
       onConfirm={handleConfirm}
       confirmLabel="Force push"
@@ -215,102 +221,43 @@ function GitForcePushConfirmDialogInner() {
           instead of overwriting them.
         </p>
 
-        <div className="rounded border border-tint/[0.08] bg-tint/[0.04]">
-          <div className="px-3 py-2 border-b border-tint/[0.08] flex items-center justify-between">
-            <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
-              Remote commits to discard
-              {totalRemote > 0 && (
-                <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal">
-                  {totalRemote}
-                </span>
-              )}
-            </span>
-          </div>
-
-          {isLoading && (
-            <div
-              className="flex items-center justify-center py-6"
-              data-testid="force-push-commits-loading"
+        <PreviewFrame>
+          {!isLoading && blockingMessage && (
+            <PreviewNotice
+              tone="error"
+              title="Couldn't read what this would discard"
+              onRetry={loadCommits}
+              retryTestId="force-push-commits-retry"
             >
-              <Spinner size="sm" className="text-daintree-text/40" />
-            </div>
+              {blockingMessage}
+            </PreviewNotice>
           )}
 
-          {!isLoading && blockingMessage && (
-            <div className="px-3 py-3 text-status-error flex items-start gap-2">
-              <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div>{blockingMessage}</div>
-                <button
-                  type="button"
-                  onClick={loadCommits}
-                  data-testid="force-push-commits-retry"
-                  className={cn(
-                    "mt-1 inline-flex items-center px-2 py-0.5 rounded text-2xs font-medium transition-colors",
-                    "bg-status-error/15 hover:bg-status-error/25 text-status-error",
-                    "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-error"
-                  )}
-                >
-                  Retry
-                </button>
-              </div>
-            </div>
+          <PreviewSectionHeading label="Remote commits to discard" count={totalRemote} />
+
+          {isLoading && (
+            <PreviewSkeleton
+              label="Checking what this would discard"
+              testId="force-push-commits-loading"
+            />
           )}
 
           {!isLoading && !blockingMessage && commits && commits.length === 0 && (
-            <div className="px-3 py-3 text-text-secondary">
+            <PreviewNote>
               No remote commits to discard. The remote may already match your local branch.
-            </div>
+            </PreviewNote>
           )}
 
           {!isLoading && !blockingMessage && commits && commits.length > 0 && (
-            // A scrollable region with no focusable children of its own has to
-            // be reachable by keyboard in its own right (WCAG 2.1.1), and the
-            // fades are what say "there is more" — the same shape
-            // `GitPushConfirmDialog` uses for the identical problem.
-            <ScrollShadow
-              className="max-h-[180px]"
-              scrollClassName="scroll-py-8"
-              tabIndex={0}
-              role="region"
-              aria-label={`Remote commits to discard${
-                destinationLabel ? ` from ${destinationLabel}` : ""
-              }`}
-            >
-              <ul className="px-3 py-2 space-y-1.5">
-                {commits.map((commit) => (
-                  <li
-                    key={commit.hash}
-                    className="flex items-baseline gap-2"
-                    data-testid="force-push-commit-row"
-                  >
-                    <span
-                      className={cn("font-mono text-3xs text-text-secondary shrink-0 tabular-nums")}
-                    >
-                      {commit.hash.slice(0, SHORT_HASH_LEN)}
-                    </span>
-                    <span className="text-text-primary truncate min-w-0">{commit.message}</span>
-                    <span className="text-3xs text-text-secondary shrink-0 ml-auto">
-                      {commit.author}
-                    </span>
-                  </li>
-                ))}
-                {hiddenCount > 0 && (
-                  // Past the fetch ceiling the tail states a fact rather than
-                  // promising a list: at this magnitude what decides the answer
-                  // is that the divergence runs to hundreds of commits, not
-                  // what the hundred-and-first one says.
-                  <li
-                    className="text-3xs text-text-secondary italic pt-1"
-                    data-testid="force-push-commit-cap"
-                  >
-                    Listing the {commits.length} most recent of {totalRemote}
-                  </li>
-                )}
-              </ul>
-            </ScrollShadow>
+            <CommitRows
+              commits={commits}
+              total={totalRemote}
+              label={`Remote commits to discard${destinationLabel ? ` from ${destinationLabel}` : ""}`}
+              rowTestId="force-push-commit-row"
+              capTestId="force-push-commit-cap"
+            />
           )}
-        </div>
+        </PreviewFrame>
       </div>
     </ConfirmDialog>
   );

@@ -802,8 +802,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       const resolvedCwd = requireWorktreePath(args as WorktreeLocationArgs | undefined, ctx);
       // Palette, keybinding, and the terminal push-error recovery banner reach
       // run() ungated, so enforce the rebase confirm here (#8242). The ReviewHub
-      // CTA calls the IPC directly and is gated by its own in-component dialog,
-      // so it never goes through this action path. Agent dispatch is skipped for
+      // CTA calls the IPC directly, but asks the same store for its confirm, so
+      // every entry point shows one dialog. Agent dispatch is skipped for
       // the same reason as `git.push`: ActionService already cleared it against
       // the MCP bridge's own confirm, and this deferred store can only be
       // resolved by a renderer dialog a headless client cannot reach (#11538).
