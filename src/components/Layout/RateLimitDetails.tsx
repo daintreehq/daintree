@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
-import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { useDeferredLoading, useSkeletonDisplayFloor } from "@/hooks/useDeferredLoading";
 import { UI_DOHERTY_THRESHOLD, UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 import type { RateLimitBucket, RateLimitDetails } from "@shared/types/forge";
 
@@ -120,6 +120,7 @@ export function RateLimitDetailsPanel({
   const provider = providerName ? providerName[0]!.toUpperCase() + providerName.slice(1) : "";
   const showPending = useDeferredLoading(details === undefined, UI_DOHERTY_THRESHOLD);
   const showStillWorking = useDeferredLoading(details === undefined, UI_STILL_WORKING_MS);
+  const showSkeleton = useSkeletonDisplayFloor(showPending);
   const buckets = details?.buckets ?? [];
 
   return (
@@ -131,7 +132,9 @@ export function RateLimitDetailsPanel({
         <div className="text-text-secondary mt-1 text-xs leading-snug">{copy.body}</div>
       </div>
       <ResumeSummary resumeAt={fallbackResetAt} now={now} />
-      {buckets.length > 0 ? (
+      {showSkeleton ? (
+        <BucketRowSkeleton stillWorking={showStillWorking} />
+      ) : buckets.length > 0 ? (
         <div className="flex flex-col gap-3">
           {buckets.map((bucket) => (
             <RateLimitBucketRow key={bucket.name} bucket={bucket} now={now} />
@@ -139,8 +142,6 @@ export function RateLimitDetailsPanel({
         </div>
       ) : details !== undefined ? (
         <div className="text-text-secondary text-2xs">Quota details unavailable</div>
-      ) : showPending ? (
-        <BucketRowSkeleton stillWorking={showStillWorking} />
       ) : null}
     </div>
   );
@@ -166,20 +167,39 @@ function BucketRowSkeleton({ stillWorking }: { stillWorking: boolean }) {
   );
 }
 
+/**
+ * The ticking readout is hidden from assistive tech and a fixed clock time is
+ * read in its place, so the tooltip's description is the same whenever it is
+ * announced.
+ */
+function StaticTimeAlternative({ verb, at }: { verb: string; at: number }) {
+  return (
+    <span className="sr-only">
+      {verb} at {formatClockTime(at)}
+    </span>
+  );
+}
+
 function ResumeSummary({ resumeAt, now }: { resumeAt: number | null; now: number }) {
-  const remainingMs = resumeAt === null ? null : resumeAt - now;
+  const remainingMs = resumeAt === null ? 0 : resumeAt - now;
   return (
     <div className="bg-overlay-soft flex items-baseline justify-between gap-3 rounded-[var(--radius-md)] px-2.5 py-2">
-      {remainingMs === null ? (
+      {resumeAt === null ? (
         <span className="text-text-secondary text-xs">Resume time not reported</span>
       ) : remainingMs <= 0 ? (
-        <span className="text-text-secondary text-xs">Resume time passed</span>
+        <span className="text-text-secondary text-xs">Resumes on the next check</span>
       ) : (
         <>
-          <span className="text-text-secondary text-xs">Resumes in</span>
-          <span className="text-text-primary text-sm font-semibold leading-none tabular-nums">
+          <span className="text-text-secondary text-xs" aria-hidden="true">
+            Resumes in
+          </span>
+          <span
+            className="text-text-primary text-sm font-semibold leading-none tabular-nums"
+            aria-hidden="true"
+          >
             {formatRateLimitCountdown(remainingMs)}
           </span>
+          <StaticTimeAlternative verb="Resumes" at={resumeAt} />
         </>
       )}
     </div>
@@ -222,11 +242,14 @@ function RateLimitBucketRow({ bucket, now }: { bucket: RateLimitBucket; now: num
         <span className={cn(exhausted && "text-text-primary font-medium")}>
           {exhausted ? "Limit reached" : null}
         </span>
-        <span>
-          {remainingMs > 0
-            ? `Resets in ${formatRateLimitCountdown(remainingMs)}`
-            : "Reset time passed"}
-        </span>
+        {remainingMs > 0 ? (
+          <>
+            <span aria-hidden="true">Resets in {formatRateLimitCountdown(remainingMs)}</span>
+            <StaticTimeAlternative verb="Resets" at={bucket.resetAt} />
+          </>
+        ) : (
+          <span>Reset time passed</span>
+        )}
       </div>
     </div>
   );

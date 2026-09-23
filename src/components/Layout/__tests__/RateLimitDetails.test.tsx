@@ -190,3 +190,26 @@ describe("RateLimitDetailsPanel details states", () => {
     expect(empty).toEqual(none);
   });
 });
+
+describe("RateLimitDetailsPanel timing", () => {
+  it("hides every ticking countdown from assistive tech", () => {
+    const { container } = panel({
+      fallbackResetAt: NOW + 14 * minute,
+      details: {
+        buckets: [bucket("core", 5_000, 0, 14 * minute), bucket("graphql", 5_000, 9, 3 * minute)],
+        fetchedAt: NOW,
+      },
+    });
+    const ticking = Array.from(container.querySelectorAll("span")).filter(
+      (s) => s.children.length === 0 && /\d+[hms]\b/.test(s.textContent ?? "")
+    );
+    expect(ticking.length).toBeGreaterThan(0);
+    for (const el of ticking)
+      expect(el.closest('[aria-hidden="true"]'), el.textContent!).not.toBeNull();
+  });
+
+  it("still says when updates resume once the reported time has passed", () => {
+    const { container } = panel({ fallbackResetAt: NOW - 5 * second });
+    expect(container.textContent).toMatch(/Resumes /);
+  });
+});
