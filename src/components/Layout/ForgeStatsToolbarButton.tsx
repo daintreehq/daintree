@@ -242,12 +242,18 @@ export const ForgeStatsToolbarButton = memo(
     const [issueListTimestamp, setIssueListTimestamp] = useState<number | null>(null);
     const [prListTimestamp, setPrListTimestamp] = useState<number | null>(null);
 
+    // An exact list total is something the user has now seen, so it becomes the
+    // activity baseline silently; otherwise the poll that later confirms the
+    // same total reads as an increase and re-arms the chip. A paginated `N+` is
+    // only a lower bound and never seeds an exact baseline.
     const handleIssueListCountUpdate = useCallback((count: number, hasMore: boolean) => {
+      if (!hasMore && issueCountRef.current !== undefined) issueCountRef.current = count;
       setIssueListTimestamp(Date.now());
       setIssueListCount(count);
       setIssueListHasMore(hasMore);
     }, []);
     const handlePrListCountUpdate = useCallback((count: number, hasMore: boolean) => {
+      if (!hasMore && prCountRef.current !== undefined) prCountRef.current = count;
       setPrListTimestamp(Date.now());
       setPrListCount(count);
       setPrListHasMore(hasMore);
@@ -783,10 +789,10 @@ export const ForgeStatsToolbarButton = memo(
         }
       };
 
-      if (statsLoading || statsError) {
-        setStatsJustUpdated(false);
-        return;
-      }
+      // The reset runs ahead of the loading/error guard: a project switch
+      // arrives as `statsLoading` true with `lastUpdated` null in one batch, and
+      // behind the guard the previous project's baseline and chips survived
+      // into the new one.
       if (lastUpdated == null) {
         // Project switch / reset path: useRepositoryStats clears lastUpdated
         // to null when the user switches projects. Re-seed the per-count
@@ -802,11 +808,13 @@ export const ForgeStatsToolbarButton = memo(
         prevLastUpdatedRef.current = null;
         setIssuesPulseAt(null);
         setPrsPulseAt(null);
+        setStatsJustUpdated(false);
         // List-loaded counts and their recency timestamps are reset by the
-        // dedicated project-path effect below — not here — because a fast
-        // project switch can leave `statsLoading` true while `lastUpdated` is
-        // null, and this branch sits behind the `statsLoading` guard above
-        // (issue #9741).
+        // dedicated project-path effect above (issue #9741).
+        return;
+      }
+      if (statsLoading || statsError) {
+        setStatsJustUpdated(false);
         return;
       }
       if (prevLastUpdatedRef.current != null && lastUpdated > prevLastUpdatedRef.current) {
@@ -1240,19 +1248,21 @@ export const ForgeStatsToolbarButton = memo(
             <ContextMenu onOpenChange={handleStatsMenuOpenChange}>
               <ContextMenuTrigger asChild>
                 <TooltipTrigger asChild>
-                  <div
+                  {/* A focusable toolbar item so the per-bucket panel opens on
+                      keyboard focus too; the counters' names carry the summary. */}
+                  <button
+                    type="button"
                     data-stat-segment=""
-                    role="status"
-                    aria-live="polite"
+                    data-toolbar-item=""
                     aria-label={
                       rateLimitKind === "secondary"
                         ? `${providerName} secondary rate limit — resuming in ${rateLimitCountdown}`
                         : `${providerName} rate limit — resets in ${rateLimitCountdown}`
                     }
-                    className="flex h-full w-7 shrink-0 items-center justify-center"
+                    className="flex h-full w-7 shrink-0 cursor-default items-center justify-center focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
                   >
                     <Clock className="h-3.5 w-3.5 text-text-secondary" aria-hidden />
-                  </div>
+                  </button>
                 </TooltipTrigger>
               </ContextMenuTrigger>
               <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">

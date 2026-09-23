@@ -146,6 +146,22 @@ test("Forge stats — states and themes", async ({ page }) => {
     await page.waitForTimeout(250);
     written.push(await snap(shell, `focus-issues-${theme}.png`));
 
+    // Rate-limit clock reached by keyboard: its per-bucket panel opens on focus.
+    shell = await open(page, "rate-limited", theme);
+    await page.keyboard.press("Shift");
+    await page.getByRole("button", { name: /^GitHub (secondary )?rate limit/ }).focus();
+    await page.waitForTimeout(400);
+    {
+      const box = await shell.boundingBox();
+      if (!box) throw new Error("focus-ratelimit: shell has no box");
+      const out = path.join(OUT_DIR, `focus-ratelimit-${theme}.png`);
+      await page.screenshot({
+        path: out,
+        clip: { x: box.x, y: box.y, width: box.width, height: box.height + 160 },
+      });
+      written.push(out);
+    }
+
     // Commits dropdown open: the local commits dropdown anchors below.
     shell = await open(page, "default", theme);
     await page.getByTestId("forge-stat-pill-commits").click();
@@ -169,5 +185,5 @@ test("Forge stats — states and themes", async ({ page }) => {
   expect(pageErrors, `page errors during capture:\n${pageErrors.join("\n")}`).toEqual([]);
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(written.length).toBe(THEMES.length * FIXTURES.length + Math.min(2, THEMES.length) * 4);
+  expect(written.length).toBe(THEMES.length * FIXTURES.length + Math.min(2, THEMES.length) * 5);
 });

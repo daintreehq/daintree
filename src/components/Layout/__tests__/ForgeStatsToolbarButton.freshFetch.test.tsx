@@ -126,8 +126,11 @@ describe("ForgeStatsToolbarButton digit pulse", () => {
   });
 
   it("re-seeds the count refs to undefined when lastUpdated transitions to null (project switch)", () => {
-    const effectStart = source.indexOf("if (statsLoading || statsError)");
+    const effectStart = source.indexOf("if (lastUpdated == null) {");
     expect(effectStart).toBeGreaterThan(0);
+    // Ahead of the loading/error guard: a switch lands as statsLoading=true
+    // with lastUpdated=null, and behind the guard the old baseline survived.
+    expect(effectStart).toBeLessThan(source.indexOf("if (statsLoading || statsError) {"));
     const slice = source.slice(effectStart, effectStart + 1500);
     expect(slice).toMatch(/lastUpdated\s*==\s*null/);
     expect(slice).toMatch(/issueCountRef\.current\s*=\s*undefined/);
@@ -274,8 +277,19 @@ describe("ForgeStatsToolbarButton corner activity chip wiring", () => {
     expect(source).not.toContain("new since last view");
   });
 
+  it("advances the activity baseline from exact list totals, never from N+", () => {
+    // A total the user has seen in the list must not re-arm the chip when the
+    // next poll confirms it; a paginated lower bound is not a total.
+    expect(source).toMatch(
+      /if \(!hasMore && issueCountRef\.current !== undefined\) issueCountRef\.current = count;/
+    );
+    expect(source).toMatch(
+      /if \(!hasMore && prCountRef\.current !== undefined\) prCountRef\.current = count;/
+    );
+  });
+
   it("clears both chip pulses on project switch alongside the count refs", () => {
-    const effectStart = source.indexOf("if (statsLoading || statsError)");
+    const effectStart = source.indexOf("if (lastUpdated == null) {");
     const slice = source.slice(effectStart, effectStart + 2000);
     expect(slice).toContain("setIssuesPulseAt(null)");
     expect(slice).toContain("setPrsPulseAt(null)");
