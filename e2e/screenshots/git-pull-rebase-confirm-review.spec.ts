@@ -162,6 +162,7 @@ const SUBJECTS: Array<[string, string]> = [
 function createFixtureRepo(): {
   dir: string;
   midRebaseDir: string;
+  dirtyDir: string;
   noRemoteDir: string;
   cleanup: () => void;
 } {
@@ -290,6 +291,15 @@ function createFixtureRepo(): {
     // Expected: the rebase halts on the README conflict, which is the state wanted.
   }
 
+  // dirty: a linked worktree with uncommitted changes to a tracked file, plus an
+  // untracked one that must not count. Git refuses to rebase over the first.
+  const dirtyDir = path.join(wtRoot, "dirty");
+  git(["worktree", "add", "-b", "fix/dirty-worktree", dirtyDir, "main~14"], dir);
+  git(["branch", "--set-upstream-to=origin/release/next", "fix/dirty-worktree"], dir);
+  commit(dirtyDir, "src/dirty.ts", "export const d = 1;\n", "fix: local work", "Ada Lovelace");
+  writeFileSync(path.join(dirtyDir, "README.md"), "# Helios Dashboard\nedited\n");
+  writeFileSync(path.join(dirtyDir, "scratch.txt"), "notes\n");
+
   // no remote at all: a repository nothing has ever been pulled into.
   const noRemoteDir = path.join(root, "scratch-notes");
   git(["init", "-b", "main", noRemoteDir], root);
@@ -299,6 +309,7 @@ function createFixtureRepo(): {
   return {
     dir,
     midRebaseDir,
+    dirtyDir,
     noRemoteDir,
     cleanup: () => {
       if (existsSync(wtRoot)) rmSync(wtRoot, { recursive: true, force: true });
@@ -545,6 +556,15 @@ test("git pull-rebase confirm review — preview states", async () => {
       await openRebaseConfirm(page, repo.midRebaseDir);
       await snap(page, "35-rebase-in-progress", {
         marker: '[role="alert"]',
+        locator: DIALOG,
+      });
+    });
+
+    // 6c'. Uncommitted changes to a tracked file: the pull would be refused.
+    await step("dirty", null, async () => {
+      await openRebaseConfirm(page, repo.dirtyDir);
+      await snap(page, "37-dirty-worktree", {
+        marker: '[data-testid="git-pull-rebase-dirty"]',
         locator: DIALOG,
       });
     });
