@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NotificationSettings } from "@shared/types";
 import { NotificationSettingsTab } from "../NotificationSettingsTab";
@@ -63,7 +63,7 @@ describe("NotificationSettingsTab", () => {
     await waitFor(() => expect(getSettings).toHaveBeenCalled());
 
     const picker = await screen.findByRole("combobox", { name: "Completed sound" });
-    expect(picker instanceof HTMLSelectElement && picker.disabled).toBe(true);
+    expect(picker.hasAttribute("disabled")).toBe(true);
     expect(
       screen.getByText("Turn on Play sound to choose sounds and hear UI feedback")
     ).toBeTruthy();
@@ -121,9 +121,11 @@ describe("NotificationSettingsTab", () => {
     render(<NotificationSettingsTab />);
     await waitFor(() => expect(getSettings).toHaveBeenCalled());
 
-    const delay = await screen.findByRole("combobox", { name: "Escalation delay" });
+    const delay = await screen.findByRole("radiogroup", { name: "Escalation delay" });
     await screen.findByText("Turn on Escalate if still waiting to choose a delay");
-    expect(delay.hasAttribute("disabled")).toBe(true);
+    for (const option of within(delay).getAllByRole("radio")) {
+      expect(option.hasAttribute("disabled")).toBe(true);
+    }
     const reason = screen.getByText("Turn on Escalate if still waiting to choose a delay");
     const describedBy = delay.getAttribute("aria-describedby") ?? "";
     expect(describedBy.split(" ")).toContain(reason.closest("p")?.id);
@@ -144,5 +146,60 @@ describe("NotificationSettingsTab", () => {
     expect(document.getElementById(describedBy!.split(" ")[0]!)?.textContent).toMatch(
       /Start and end match/
     );
+  });
+
+  it("never lets the last active quiet-hours day be cleared into 'every day'", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...BASE,
+      quietHoursEnabled: true,
+      quietHoursWeekdays: [3],
+    });
+    render(<NotificationSettingsTab />);
+
+    const wednesday = await screen.findByRole("button", { name: "Wednesday" });
+    await waitFor(() => expect(wednesday.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(wednesday);
+    expect(setSettings).not.toHaveBeenCalled();
+    expect(wednesday.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Monday" }).getAttribute("aria-pressed")).toBe(
+      "false"
+    );
+  });
+
+  it("marks an overnight schedule as ending the next day", async () => {
+    getSettings.mockResolvedValueOnce({ ...BASE, quietHoursEnabled: true });
+    render(<NotificationSettingsTab />);
+
+    expect(await screen.findByText("22:00 to 08:00 the next day")).toBeTruthy();
+  });
+
+  it("a failed save rolls back only its own change, not a newer one that succeeded", async () => {
+    let rejectFirst: (error: Error) => void = () => {};
+    setSettings
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectFirst = reject;
+          })
+      )
+      .mockResolvedValueOnce(undefined);
+    const { container } = render(<NotificationSettingsTab />);
+
+    const completed = container.querySelector("#notif-completed");
+    const waiting = container.querySelector("#notif-waiting");
+    if (!(completed instanceof HTMLElement) || !(waiting instanceof HTMLElement)) {
+      throw new Error("switches missing");
+    }
+    await waitFor(() => expect(completed.hasAttribute("disabled")).toBe(false));
+
+    fireEvent.click(completed);
+    fireEvent.click(waiting);
+    await act(async () => {
+      rejectFirst(new Error("disk full"));
+    });
+
+    await screen.findByText("Couldn't save that change");
+    expect(completed.getAttribute("aria-checked")).toBe("false");
+    expect(waiting.getAttribute("aria-checked")).toBe("false");
   });
 });

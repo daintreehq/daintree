@@ -184,11 +184,13 @@ describe("GeneralTab — update channel load failure (issue #11119)", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(BANNER_MESSAGE);
 
-    // The heart of #11119: a failed load must not manufacture a selection. If it fabricated
-    // "stable", the buttons would render (enabled, with stable selected) instead of the banner.
+    // The heart of #11119: a failed load must not manufacture a selection. The row stays so
+    // the setting still reads as one the app has, but nothing is selected or editable.
     const { stable, nightly } = channelButtons();
-    expect(stable).toBeNull();
-    expect(nightly).toBeNull();
+    for (const option of [stable, nightly]) {
+      expect(option?.getAttribute("aria-checked")).toBe("false");
+      expect(option?.hasAttribute("disabled")).toBe(true);
+    }
     expect(screen.queryByText(NIGHTLY_WARNING)).toBeNull();
 
     // ...and nothing on the load path may ever write the channel back to main.
@@ -244,7 +246,7 @@ describe("GeneralTab — update channel load failure (issue #11119)", () => {
 
     await screen.findByRole("alert");
     await waitFor(() => {
-      expect(screen.getByText(/Last checked:/)).toBeTruthy();
+      expect(screen.getByText(/Last checked/)).toBeTruthy();
     });
   });
 

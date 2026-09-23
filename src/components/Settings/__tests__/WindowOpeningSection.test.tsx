@@ -332,7 +332,8 @@ describe("WindowOpeningSection", () => {
     await flush();
 
     expect(container.querySelector("#general-window-opening")).not.toBeNull();
-    expect(container.querySelector("select")).toBeNull();
+    // The row stays, locked, so a failed read never looks like a missing setting.
+    expect(selectIn(container).disabled).toBe(true);
     const alert = container.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("Couldn't load window settings");
     expect(alert?.textContent).toContain("store unreadable");
@@ -351,7 +352,7 @@ describe("WindowOpeningSection", () => {
     const { container } = render(<WindowOpeningSection />);
     await flush();
 
-    expect(container.querySelector("select")).toBeNull();
+    expect(selectIn(container).disabled).toBe(true);
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(
       "Couldn't load window settings"
     );

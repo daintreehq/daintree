@@ -1,58 +1,43 @@
 import { useState, useEffect, useCallback } from "react";
-import { Play } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import {
-  SettingsDependents,
-  SettingsGroup,
-  SettingsRow,
-} from "@/components/Settings/SettingsGroup";
-import { SettingsSelect } from "@/components/Settings/SettingsSelect";
+import { SettingsDependents, SettingsGroup } from "@/components/Settings/SettingsGroup";
+import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
+import { SettingsPresetGroup } from "@/components/Settings/SettingsPresetGroup";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
+import {
+  ESCALATION_DELAY_OPTIONS,
+  NOTIFICATION_COPY,
+  SoundPickerRow,
+  escalationDelayLabel,
+  previewNotificationSound,
+  soundLabel,
+  type SoundFileKey,
+} from "@/components/Settings/notificationSettingsShared";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 import { logError } from "@/utils/logger";
-
-const AVAILABLE_SOUNDS: { file: string; label: string }[] = [
-  { file: "chime.wav", label: "Chime" },
-  { file: "ping.wav", label: "Ping" },
-  { file: "complete.wav", label: "Complete" },
-  { file: "waiting.wav", label: "Waiting" },
-  { file: "error.wav", label: "Error" },
-];
-
-const ESCALATION_DELAY_OPTIONS: { value: number; label: string }[] = [
-  { value: 60_000, label: "1 minute" },
-  { value: 180_000, label: "3 minutes" },
-  { value: 300_000, label: "5 minutes" },
-  { value: 600_000, label: "10 minutes" },
-];
-
-const SOUND_FIELDS = [
-  { label: "Completed sound", field: "completedSoundFile" },
-  { label: "Waiting sound", field: "waitingSoundFile" },
-  { label: "Escalation sound", field: "escalationSoundFile" },
-] as const;
 
 interface ProjectNotificationsTabProps {
   overrides: Partial<NotificationSettings>;
   onChange: (overrides: Partial<NotificationSettings>) => void;
 }
 
+type BooleanKey =
+  | "completedEnabled"
+  | "waitingEnabled"
+  | "waitingEscalationEnabled"
+  | "soundEnabled"
+  | "workingPulseEnabled";
+
 export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotificationsTabProps) {
   const [globalSettings, setGlobalSettings] = useState<NotificationSettings | null>(null);
-  const [globalError, setGlobalError] = useState<string | null>(null);
+  const [globalLoadFailed, setGlobalLoadFailed] = useState(false);
+  const [loadNonce, setLoadNonce] = useState(0);
 
   useEffect(() => {
     if (!window.electron?.notification) return;
 
     let mounted = true;
+    setGlobalLoadFailed(false);
     window.electron.notification
       .getSettings()
       .then((settings) => {
@@ -60,13 +45,13 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
       })
       .catch((err) => {
         logError("[ProjectNotificationsTab] Failed to load global settings", err);
-        if (mounted) setGlobalError("Failed to load global settings");
+        if (mounted) setGlobalLoadFailed(true);
       });
 
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [loadNonce]);
 
   const setOverride = useCallback(
     <K extends keyof NotificationSettings>(key: K, value: NotificationSettings[K]) => {
@@ -75,29 +60,17 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
     [overrides, onChange]
   );
 
-  const clearOverrides = useCallback(
-    (...keys: (keyof NotificationSettings)[]) => {
+  // A reset returns one row to inheriting. It never clears a dependent's override too:
+  // an escalation delay chosen for this project is a separate decision from whether
+  // waiting notifications are on, and it survives the parent being reset.
+  const clearOverride = useCallback(
+    (key: keyof NotificationSettings) => {
       const next = { ...overrides };
-      for (const key of keys) delete next[key];
+      delete next[key];
       onChange(next);
     },
     [overrides, onChange]
   );
-
-  const handlePreview = (soundFile: string) => {
-    window.electron?.notification?.playSound(soundFile).catch(() => {});
-  };
-
-  const retryGlobals = () => {
-    setGlobalError(null);
-    window.electron.notification
-      .getSettings()
-      .then(setGlobalSettings)
-      .catch((err) => {
-        logError("[ProjectNotificationsTab] Retry failed", err);
-        setGlobalError("Failed to load global settings");
-      });
-  };
 
   if (!window.electron?.notification) {
     return <div className="text-sm text-text-secondary">Notification API not available</div>;
@@ -123,39 +96,61 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
       origin = globalSettings
         ? `Set for this project · global default\u00a0is\u00a0${format(globalSettings[key])}`
         : "Set for this project";
+    } else if (globalSettings) {
+      origin = `Using global\u00a0default\u00a0·\u00a0${format(globalSettings[key])}`;
     } else {
-      origin = globalSettings
-        ? `Using global\u00a0default\u00a0·\u00a0${format(globalSettings[key])}`
-        : "Loading global default…";
+      origin = globalLoadFailed ? "Global default unavailable" : "Loading global default…";
     }
     return base ? `${base}. ${origin}` : origin;
   };
 
   const onOff = (value: unknown) => (value ? "On" : "Off");
-  const soundName = (value: unknown) =>
-    AVAILABLE_SOUNDS.find((s) => s.file === value)?.label ?? String(value);
-  const delayName = (value: unknown) =>
-    ESCALATION_DELAY_OPTIONS.find((o) => o.value === value)?.label ?? String(value);
+
+  // Every project value only applies while notifications are on globally: the project
+  // can override each event, but never the master switch. Rows stay at their own depth
+  // and each group says why once, on its first row.
+  const globalMasterOff = globalSettings?.enabled === false;
+  const MASTER_OFF_REASON =
+    "Notifications are turned off in global settings, so nothing here takes effect";
+
+  const unknownValue = (key: keyof NotificationSettings) => !loaded && !isOverridden(key);
 
   const booleanRow = (
-    key: "completedEnabled" | "waitingEnabled" | "waitingEscalationEnabled" | "soundEnabled",
-    title: string,
-    subtitle: string,
-    resetKeys: (keyof NotificationSettings)[],
-    ariaLabel?: string
+    key: BooleanKey,
+    copy: { label: string; description: string },
+    masterReason?: string
   ) => {
     const value = effective(key) === true;
     return (
       <SettingsSwitchCard
-        title={title}
-        subtitle={describe(key, subtitle, onOff)}
+        title={copy.label}
+        subtitle={describe(key, copy.description, onOff)}
         isEnabled={value}
         onChange={() => setOverride(key, !value)}
-        ariaLabel={ariaLabel}
-        disabled={!loaded && !isOverridden(key)}
+        ariaLabel={key === "soundEnabled" ? "Play sound for notifications" : undefined}
+        disabled={unknownValue(key) || globalMasterOff}
+        disabledReason={globalMasterOff ? masterReason : undefined}
         isModified={isOverridden(key)}
-        onReset={() => clearOverrides(key, ...resetKeys)}
-        resetAriaLabel={`Reset ${title.toLowerCase()} to global default`}
+        onReset={() => clearOverride(key)}
+        resetAriaLabel={`Reset ${copy.label.toLowerCase()} to global default`}
+      />
+    );
+  };
+
+  const soundRow = (key: SoundFileKey) => {
+    const value = effective(key);
+    const label = NOTIFICATION_COPY.soundFiles[key];
+    return (
+      <SoundPickerRow
+        label={label}
+        description={describe(key, undefined, soundLabel)}
+        value={typeof value === "string" ? value : undefined}
+        onChange={(v) => setOverride(key, v)}
+        onPreview={previewNotificationSound}
+        disabled={unknownValue(key)}
+        isModified={isOverridden(key)}
+        onReset={() => clearOverride(key)}
+        resetAriaLabel={`Reset ${label.toLowerCase()} to global default`}
       />
     );
   };
@@ -163,128 +158,74 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
   const waitingOn = effective("waitingEnabled") === true;
   const escalationOn = effective("waitingEscalationEnabled") === true;
   const soundOn = effective("soundEnabled") === true;
+  const pulseOn = effective("workingPulseEnabled") === true;
+  const delay = effective("waitingEscalationDelayMs");
 
   return (
     <div className="space-y-8">
-      {globalError && (
-        <div
-          role="alert"
-          className="flex items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-border-default px-4 py-3 text-xs text-status-error"
-        >
-          <span>{globalError}</span>
-          <Button variant="outline" size="xs" onClick={retryGlobals}>
-            Retry
-          </Button>
-        </div>
-      )}
-
       <SettingsSection
         title="Agent notifications"
-        description="Changing a setting overrides the global value for this project; reset it to inherit again."
+        description="A change here overrides the global value for this project; reset a row to inherit it again"
       >
+        {globalLoadFailed && (
+          <SettingsLoadErrorBanner
+            title="Couldn't load the global notification settings"
+            message="Rows you haven't set for this project stay unavailable until they load."
+            onRetry={() => setLoadNonce((n) => n + 1)}
+          />
+        )}
         <SettingsGroup>
-          {booleanRow(
-            "completedEnabled",
-            "Agent completed",
-            "Show a notification when an agent finishes its task",
-            []
-          )}
-          {booleanRow(
-            "waitingEnabled",
-            "Agent waiting for input",
-            "Show a notification immediately when an agent needs input",
-            ["waitingEscalationEnabled", "waitingEscalationDelayMs"]
-          )}
+          {booleanRow("completedEnabled", NOTIFICATION_COPY.completed, MASTER_OFF_REASON)}
+          {booleanRow("waitingEnabled", NOTIFICATION_COPY.waiting)}
           <SettingsDependents
-            disabled={!waitingOn}
-            reason="Turn on Agent waiting for input to escalate reminders"
+            disabled={!waitingOn || globalMasterOff}
+            reason={globalMasterOff || waitingOn ? undefined : NOTIFICATION_COPY.waitingOffReason}
           >
-            {booleanRow(
-              "waitingEscalationEnabled",
-              "Escalate if still waiting",
-              "Fire an additional OS notification if a docked agent remains waiting",
-              ["waitingEscalationDelayMs"]
-            )}
-            {escalationOn && (
-              <SettingsSelect
-                label="Escalation delay"
-                description={describe("waitingEscalationDelayMs", undefined, delayName)}
-                value={String(effective("waitingEscalationDelayMs") ?? "")}
-                onValueChange={(v) => setOverride("waitingEscalationDelayMs", Number(v))}
-                disabled={!loaded && !isOverridden("waitingEscalationDelayMs")}
-                isModified={isOverridden("waitingEscalationDelayMs")}
-                onReset={() => clearOverrides("waitingEscalationDelayMs")}
-                resetAriaLabel="Reset escalation delay to global default"
-                options={ESCALATION_DELAY_OPTIONS.map(({ value, label }) => ({
-                  value: String(value),
-                  label,
-                }))}
-              />
-            )}
+            {booleanRow("waitingEscalationEnabled", NOTIFICATION_COPY.escalation)}
+            <SettingsPresetGroup<number>
+              label={NOTIFICATION_COPY.escalationDelay.label}
+              description={describe(
+                "waitingEscalationDelayMs",
+                NOTIFICATION_COPY.escalationDelay.description,
+                escalationDelayLabel
+              )}
+              options={ESCALATION_DELAY_OPTIONS}
+              value={typeof delay === "number" ? delay : null}
+              onChange={(v) => setOverride("waitingEscalationDelayMs", v)}
+              disabled={!escalationOn || unknownValue("waitingEscalationDelayMs")}
+              disabledReason={
+                globalMasterOff || !waitingOn || escalationOn
+                  ? undefined
+                  : NOTIFICATION_COPY.escalationOffReason
+              }
+              isModified={isOverridden("waitingEscalationDelayMs")}
+              onReset={() => clearOverride("waitingEscalationDelayMs")}
+            />
           </SettingsDependents>
         </SettingsGroup>
       </SettingsSection>
 
       <SettingsSection title="Sound">
         <SettingsGroup>
-          {booleanRow(
-            "soundEnabled",
-            "Play sound",
-            "Enable audio alerts for agent notifications",
-            ["completedSoundFile", "waitingSoundFile", "escalationSoundFile"],
-            "Play sound for notifications"
-          )}
-          <SettingsDependents disabled={!soundOn} reason="Turn on Play sound to choose sounds">
-            {SOUND_FIELDS.map(({ label, field }) => {
-              const value = effective(field);
-              return (
-                <SettingsRow
-                  key={field}
-                  label={label}
-                  description={describe(field, undefined, soundName)}
-                  isModified={isOverridden(field)}
-                  onReset={() => clearOverrides(field)}
-                  resetAriaLabel={`Reset ${label.toLowerCase()} to global default`}
-                  disabled={!loaded && !isOverridden(field)}
-                  control={({ labelId, descriptionId, disabled }) => (
-                    <div className="flex items-center gap-2">
-                      <Select
-                        value={typeof value === "string" ? value : ""}
-                        onValueChange={(v) => setOverride(field, v)}
-                        disabled={disabled}
-                      >
-                        <SelectTrigger
-                          aria-labelledby={labelId}
-                          aria-describedby={descriptionId}
-                          className="w-36"
-                        >
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {AVAILABLE_SOUNDS.map(({ file, label: soundLabel }) => (
-                            <SelectItem key={file} value={file}>
-                              {soundLabel}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={disabled || typeof value !== "string"}
-                        onClick={() => {
-                          if (typeof value === "string") handlePreview(value);
-                        }}
-                        aria-label={`Preview ${label.toLowerCase()}`}
-                      >
-                        <Play aria-hidden="true" />
-                        Preview
-                      </Button>
-                    </div>
-                  )}
-                />
-              );
-            })}
+          {booleanRow("soundEnabled", NOTIFICATION_COPY.sound, MASTER_OFF_REASON)}
+          <SettingsDependents
+            disabled={!soundOn || globalMasterOff}
+            reason={globalMasterOff || soundOn ? undefined : "Turn on Play sound to choose sounds"}
+          >
+            {soundRow("completedSoundFile")}
+            {soundRow("waitingSoundFile")}
+            {soundRow("escalationSoundFile")}
+            {booleanRow("workingPulseEnabled", NOTIFICATION_COPY.workingPulse)}
+            <SettingsDependents
+              disabled={!pulseOn}
+              reason={
+                globalMasterOff || !soundOn || pulseOn
+                  ? undefined
+                  : NOTIFICATION_COPY.workingPulseOffReason
+              }
+            >
+              {soundRow("workingPulseSoundFile")}
+            </SettingsDependents>
           </SettingsDependents>
         </SettingsGroup>
       </SettingsSection>

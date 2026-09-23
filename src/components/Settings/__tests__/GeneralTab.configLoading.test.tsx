@@ -159,7 +159,7 @@ describe("GeneralTab — config groups render before their data", () => {
     }
     expect(screen.queryByText(/Loading hibernation settings/)).toBeNull();
     expect(switchDisabled("Hibernate inactive projects")).toBe(true);
-    const threshold = within(screen.getByRole("radiogroup", { name: "Inactivity threshold" }));
+    const threshold = within(screen.getByRole("radiogroup", { name: "Hibernate after" }));
     for (const option of threshold.getAllByRole("radio")) {
       expect(option.getAttribute("aria-checked")).toBe("false");
       expect(option.hasAttribute("disabled")).toBe(true);
