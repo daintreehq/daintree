@@ -428,13 +428,27 @@ describe("ProjectIdentityEditor", () => {
           .map((id) => document.getElementById(id)?.textContent ?? "")
           .join(" ");
       const untouched = describedText();
-      expect(untouched).not.toContain("Kept Name");
 
       fireEvent.change(nameField(), { target: { value: "  " } });
-      expect(describedText()).toContain("Kept Name");
+      const blank = describedText();
+      expect(blank.length).toBeGreaterThan(untouched.length);
 
       fireEvent.change(nameField(), { target: { value: "New" } });
       expect(describedText()).toBe(untouched);
+    });
+
+    it("treats an Enter that confirms an IME composition as text entry", () => {
+      const onOpenChange = vi.fn();
+      renderEditor(makeProject(), { onOpenChange });
+
+      fireEvent.change(nameField(), { target: { value: "にほんご" } });
+      fireEvent.keyDown(nameField(), { key: "Enter", isComposing: true });
+
+      expect(updateProjectMock).not.toHaveBeenCalled();
+      expect(onOpenChange).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(nameField(), { key: "Enter" });
+      expect(updateProjectMock).toHaveBeenCalledWith("p1", { name: "にほんご" });
     });
 
     it("does not write when the name is unchanged", () => {

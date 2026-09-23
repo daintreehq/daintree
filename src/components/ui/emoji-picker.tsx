@@ -3,6 +3,7 @@ import { Check, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { POPOVER_SEARCH_INPUT_CLASS, POPOVER_SEARCH_STRIP_CLASS } from "./PopoverSearchField";
 import { PALETTE_SECTION_LABEL_CLASS } from "./paletteRowStyles";
+import { SkeletonBone } from "./Skeleton";
 
 interface EmojiPickerProps {
   className?: string;
@@ -25,7 +26,7 @@ function sameEmoji(a: string, b: string): boolean {
 export function EmojiPicker({ className, onEmojiSelect, currentEmoji }: EmojiPickerProps) {
   return (
     <EmojiPickerPrimitive.Root
-      className={cn("isolate flex h-[320px] w-[320px] flex-col", className)}
+      className={cn("isolate flex h-[320px] w-[336px] flex-col", className)}
       onEmojiSelect={onEmojiSelect}
       emojibaseUrl="/emojibase"
       columns={COLUMNS}
@@ -49,10 +50,8 @@ export function EmojiPicker({ className, onEmojiSelect, currentEmoji }: EmojiPic
           centre on the panel and not on the viewport minus its scrollbar gutter. */}
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {/* Sized by the column rather than positioned: frimousse stamps
-            `position: relative` inline on the viewport. The gutter is reserved
-            on both edges (over frimousse's inline one-sided `stable`) so the
-            grid sits centred rather than hard against the left. */}
-        <EmojiPickerPrimitive.Viewport className="min-h-0 flex-1 outline-hidden [scrollbar-gutter:stable_both-edges]!">
+            `position: relative` inline on the viewport. */}
+        <EmojiPickerPrimitive.Viewport className="min-h-0 flex-1 outline-hidden">
           <EmojiPickerPrimitive.List
             className="select-none pb-1.5"
             components={{
@@ -70,7 +69,10 @@ export function EmojiPicker({ className, onEmojiSelect, currentEmoji }: EmojiPic
                 </div>
               ),
               Row: ({ children, ...props }) => (
-                <div className="scroll-my-1.5 flex px-1.5" {...props}>
+                // Leading inset on the panel's text column (the label, search
+                // icon and footer glyph all start at px-3); the trailing side is
+                // short by the scrollbar gutter frimousse reserves there.
+                <div className="scroll-my-1.5 flex pl-3 pr-1" {...props}>
                   {children}
                 </div>
               ),
@@ -82,7 +84,7 @@ export function EmojiPicker({ className, onEmojiSelect, currentEmoji }: EmojiPic
                     type="button"
                     aria-current={isCurrent ? "true" : undefined}
                     className={cn(
-                      "relative flex h-8 w-1/9 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-lg leading-none transition-colors",
+                      "relative flex h-8 w-1/9 min-w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-lg leading-none transition-colors",
                       // Pointer and arrow keys drive the same `data-active`, and
                       // Enter acts on it. The raised fill alone clears about
                       // 1.1-1.3:1, so the neutral outline carries the 3:1 — the
@@ -96,9 +98,11 @@ export function EmojiPicker({ className, onEmojiSelect, currentEmoji }: EmojiPic
                     {isCurrent && (
                       <span
                         aria-hidden="true"
-                        className="absolute right-0.5 bottom-0 flex size-3.5 items-center justify-center rounded-full bg-text-primary text-[var(--overlay-surface-solid)]"
+                        // Tucked into the cell's corner, clear of the glyph, and cut
+                        // out of it by a ring of the panel's own tone.
+                        className="absolute right-0 bottom-0 flex size-3 items-center justify-center rounded-full bg-text-primary text-[var(--overlay-surface-solid)] ring-2 ring-[var(--overlay-surface-solid)]"
                       >
-                        <Check className="size-2.5" strokeWidth={3.5} />
+                        <Check className="size-2" strokeWidth={4} />
                       </span>
                     )}
                   </button>
@@ -107,13 +111,17 @@ export function EmojiPicker({ className, onEmojiSelect, currentEmoji }: EmojiPic
             }}
           />
         </EmojiPickerPrimitive.Viewport>
-        <EmojiPickerPrimitive.Loading className="absolute inset-0 flex flex-col gap-1 px-1.5 pt-8">
+        {/* Laid out on the grid's own column so nothing moves when the data lands. */}
+        <EmojiPickerPrimitive.Loading className="absolute inset-0 flex flex-col pt-2.5">
           <span className="sr-only">Loading emoji</span>
+          <span aria-hidden="true" className="flex h-5 items-center px-3">
+            <SkeletonBone className="h-2 w-24 rounded-full" />
+          </span>
           {Array.from({ length: SKELETON_ROWS }, (_, row) => (
-            <span key={row} aria-hidden="true" className="flex">
+            <span key={row} aria-hidden="true" className="flex pl-3 pr-4">
               {Array.from({ length: COLUMNS }, (_, col) => (
                 <span key={col} className="flex h-8 w-1/9 shrink-0 items-center justify-center">
-                  <span className="size-5 rounded-full bg-overlay-soft animate-pulse-delayed" />
+                  <SkeletonBone className="size-5 rounded-full" />
                 </span>
               ))}
             </span>

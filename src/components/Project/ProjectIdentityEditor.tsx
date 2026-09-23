@@ -262,7 +262,9 @@ export function ProjectIdentityEditor({
               onKeyDown={(event) => {
                 // Escape is handled by onEscapeKeyDown on the content — Radix
                 // sees it first, on a document capture listener.
-                if (event.key === "Enter") {
+                // An Enter that confirms an IME composition is text entry, not
+                // a request to save and close.
+                if (event.key === "Enter" && !event.nativeEvent.isComposing) {
                   event.preventDefault();
                   lastInputWasKeyboardRef.current = true;
                   commitIdentity();
@@ -280,9 +282,7 @@ export function ProjectIdentityEditor({
                 className="flex items-center gap-1.5 text-xs text-text-secondary"
               >
                 <Info className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                <span className="min-w-0 truncate">
-                  A project needs a name — “{project.name}” is kept
-                </span>
+                <span>A project needs a name — the current one is kept</span>
               </p>
             )}
             {suggestion && (
