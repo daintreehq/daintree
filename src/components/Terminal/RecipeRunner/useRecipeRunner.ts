@@ -11,6 +11,8 @@ import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { detectUnresolvedVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { getAgentConfig } from "@/config/agents";
+import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
+import { isPluginRecipe } from "@shared/types/project";
 import { logError } from "@/utils/logger";
 import {
   buildRecipeSections,
@@ -58,6 +60,7 @@ export interface UseRecipeRunnerResult {
   confirmDelete: () => void;
   cancelDelete: () => void;
   handleCreate: () => void;
+  handleManage: () => void;
   handleRunSuggestion: (suggestion: RunCommand) => void;
   handleRetryFailed: () => void;
   dismissSpawnFailures: () => void;
@@ -129,12 +132,23 @@ export function useRecipeRunner({
 
   // Stable filtered recipe array for Fuse cache
   const recipes = useMemo(() => {
-    return allRecipes.filter(
+    const visible = allRecipes.filter(
       (r) => r.worktreeId === activeWorktreeId || r.worktreeId === undefined
     );
+    // A shadowed row launches the team recipe it defers to (`getRecipeById`
+    // redirects the run), so it has to describe that recipe's terminals, not
+    // its own — otherwise the row names one set of terminals and starts another.
+    return visible.map((r) => {
+      if (!r.shadowedBy) return r;
+      const winner = allRecipes.find((w) => w.name === r.name && isInRepoRecipeId(w));
+      return winner ? { ...r, terminals: winner.terminals } : r;
+    });
   }, [allRecipes, activeWorktreeId]);
 
-  const showSearch = recipes.length > 6;
+  // A live query keeps the list, even once the inventory drops to six or
+  // fewer: the grid has no filter field, so switching to it with a query still
+  // applied would hide recipes behind a search the user can no longer see.
+  const showSearch = recipes.length > 6 || searchQuery.trim().length > 0;
 
   const sections = useMemo(() => buildRecipeSections(recipes), [recipes]);
 
@@ -153,6 +167,18 @@ export function useRecipeRunner({
 
   // +1 for "Create new recipe" button
   const totalItems = getFlatRecipes().length + 1;
+
+  // Deleting the last filtered result, or the inventory shrinking under an
+  // open band, must not leave Enter pointed past the end of the list.
+  useEffect(() => {
+    if (focusedIndex >= totalItems) setFocusedIndex(totalItems - 1);
+  }, [focusedIndex, totalItems]);
+
+  // A query outliving every recipe would otherwise reappear, invisible, the
+  // next time one is created.
+  useEffect(() => {
+    if (recipes.length === 0) setSearchQuery("");
+  }, [recipes.length]);
 
   // Reset focused index on worktree/query change
   useEffect(() => {
@@ -453,6 +479,10 @@ export function useRecipeRunner({
     );
   }, [activeWorktreeId]);
 
+  const handleManage = useCallback(() => {
+    void actionService.dispatch("recipe.manager.open", undefined, { source: "user" });
+  }, []);
+
   const handleRunSuggestion = useCallback(
     (suggestion: RunCommand) => {
       if (!defaultCwd) return;
@@ -519,8 +549,10 @@ export function useRecipeRunner({
       ) {
         e.preventDefault();
         const flat = getFlatRecipes();
-        if (focusedIndex < flat.length) {
-          handleEdit(flat[focusedIndex]!.id);
+        const target = flat[focusedIndex];
+        // Same rule as the context menu: a plugin owns its recipe's content.
+        if (target && !isPluginRecipe(target)) {
+          handleEdit(target.id);
         }
       }
     },
@@ -553,6 +585,7 @@ export function useRecipeRunner({
     confirmDelete,
     cancelDelete,
     handleCreate,
+    handleManage,
     handleRunSuggestion,
     handleRetryFailed,
     dismissSpawnFailures,

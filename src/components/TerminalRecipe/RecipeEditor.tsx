@@ -310,12 +310,11 @@ export function RecipeEditor({
             </FormRow>
 
             <FormRow
-              label="Show in Empty State"
+              label="Pin to canvas"
               htmlFor="show-in-empty-state"
               hint={
                 <p id="show-in-empty-state-help" className="text-xs text-text-muted select-text">
-                  Display this recipe as a primary launcher when the worktree has no active
-                  terminals
+                  List this recipe first on the canvas when a worktree has no open terminals
                 </p>
               }
             >

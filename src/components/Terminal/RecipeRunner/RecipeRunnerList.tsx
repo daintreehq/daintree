@@ -1,6 +1,7 @@
-import React, { useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import { Search, Plus } from "lucide-react";
 import { RecipeRunnerItem } from "./RecipeRunnerItem";
+import { EmptyState } from "@/components/ui/EmptyState";
 import type { RecipeSections, RankedRecipe } from "./recipeRunnerUtils";
 import type { TerminalRecipe } from "@/types";
 
@@ -21,6 +22,7 @@ interface RecipeRunnerListProps {
   onUnpin: (id: string) => void;
   onDelete: (id: string) => void;
   onCreate: () => void;
+  onManage?: () => void;
 }
 
 export function RecipeRunnerList({
@@ -40,6 +42,7 @@ export function RecipeRunnerList({
   onUnpin,
   onDelete,
   onCreate,
+  onManage,
 }: RecipeRunnerListProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const isSearchActive = searchQuery.trim().length > 0;
@@ -52,6 +55,15 @@ export function RecipeRunnerList({
   // surface nobody had navigated to. `ProjectPulseStrip` states the same rule
   // for the same reason: "the empty grid must not steal focus just by
   // rendering". Tab and the arrow keys still reach the field normally.
+
+  // The active option is named by `aria-activedescendant`, so DOM focus never
+  // moves and nothing scrolls it into view on its own — arrowing down a long
+  // band would leave Enter pointed at a row below the fold. Only while the
+  // filter owns focus: a list that merely re-rendered must not scroll the canvas.
+  useEffect(() => {
+    if (!focusedItemId || document.activeElement !== inputRef.current) return;
+    document.getElementById(focusedItemId)?.scrollIntoView({ block: "nearest" });
+  }, [focusedItemId]);
 
   // Build flat list for index computation
   let flatRecipes: TerminalRecipe[];
@@ -98,7 +110,7 @@ export function RecipeRunnerList({
     // group/recipes scopes the roving aria-selected ring to keyboard use: in
     // list mode focus lives in the combobox input (not the listbox), so the
     // group must wrap both. At rest no ring shows — see RecipeRunnerItem.
-    <div className="group/recipes" onKeyDown={onKeyDown}>
+    <div className="group/recipes">
       {showSearch && (
         // A labelled header row, not a second full-width search field. Once
         // every band shared one measure this input became the same width and
@@ -123,12 +135,27 @@ export function RecipeRunnerList({
               aria-controls="recipe-listbox"
               aria-activedescendant={focusedItemId}
               aria-label="Filter recipes"
+              // On the input, not the band: the combobox owns the arrow/Enter
+              // contract, and a handler on the wrapper also caught Enter on the
+              // Manage button beside it and launched the active recipe.
+              onKeyDown={onKeyDown}
               value={searchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
               placeholder="Filter recipes…"
               className="w-full rounded-[var(--radius-md)] border border-border-subtle bg-transparent py-1 pl-7 pr-2 text-xs text-text-primary placeholder:text-text-placeholder focus:border-accent-primary focus:outline-hidden focus:ring-1 focus:ring-accent-primary"
             />
           </div>
+          {/* In list mode the inventory is long enough that a link under it
+              is a scroll away; the header is where management is findable. */}
+          {onManage && (
+            <button
+              type="button"
+              onClick={onManage}
+              className="shrink-0 rounded-[var(--radius-sm)] px-1 text-xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+            >
+              Manage
+            </button>
+          )}
         </div>
       )}
 
@@ -147,9 +174,11 @@ export function RecipeRunnerList({
             {flatRecipes.length > 0 ? (
               flatRecipes.map(renderItem)
             ) : (
-              <div className="px-3 py-2 text-sm text-text-secondary">
-                No recipes match &ldquo;{searchQuery}&rdquo;
-              </div>
+              <EmptyState
+                variant="filtered-empty"
+                scale="sidebar"
+                title={`No recipes match \u201c${searchQuery}\u201d`}
+              />
             )}
           </>
         ) : (
@@ -163,7 +192,7 @@ export function RecipeRunnerList({
                 >
                   Pinned
                 </div>
-                <div role="group" aria-labelledby="section-pinned">
+                <div role="group" aria-labelledby="section-pinned" className="flex flex-col gap-1">
                   {sections.pinned.map(renderItem)}
                 </div>
               </>
@@ -177,7 +206,7 @@ export function RecipeRunnerList({
                 >
                   Recent
                 </div>
-                <div role="group" aria-labelledby="section-recent">
+                <div role="group" aria-labelledby="section-recent" className="flex flex-col gap-1">
                   {sections.recent.map(renderItem)}
                 </div>
               </>
@@ -191,7 +220,7 @@ export function RecipeRunnerList({
                 >
                   All
                 </div>
-                <div role="group" aria-labelledby="section-all">
+                <div role="group" aria-labelledby="section-all" className="flex flex-col gap-1">
                   {sections.all.map(renderItem)}
                 </div>
               </>
@@ -219,9 +248,7 @@ export function RecipeRunnerList({
             aria-hidden
           />
           <span className="flex-1 text-sm text-text-secondary group-hover:text-text-primary transition-colors">
-            {isSearchActive && flatRecipes.length === 0
-              ? `Create recipe: "${searchQuery}"`
-              : "Create new recipe…"}
+            Create new recipe…
           </span>
         </button>
       </div>

@@ -1,26 +1,40 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Globe,
   FolderOpen,
   FolderGit2,
   Plus,
   Trash2,
-  Edit3,
-  Download,
+  Pencil,
   FileDown,
   FileUp,
   Check,
+  Copy,
+  CopyPlus,
   Lock,
   GitBranch,
+  MoreHorizontal,
+  Pin,
+  Search,
 } from "lucide-react";
 import { Plug, Workflow } from "@/components/icons";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
@@ -31,12 +45,32 @@ import {
   FormGrid,
   FormRow,
 } from "@/components/Worktree/views";
+import { getRecipeTerminalSummary } from "@/components/Terminal/utils/recipeUtils";
+import { nextDuplicateName } from "@/components/Terminal/RecipeRunner/recipeRunnerUtils";
+import { getRecipeScope, worktreeDisplayName } from "@/utils/recipeScope";
 import { cn } from "@/lib/utils";
 import type { TerminalRecipe } from "@/types";
-import { useRef } from "react";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { isPluginRecipe } from "@shared/types/project";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import type { WorktreeSnapshot } from "@shared/types/workspace-host";
+
+const EMPTY_WORKTREES = new Map<string, WorktreeSnapshot>();
+
+/**
+ * How much of the inventory the dialog is showing right now — the scroll box's
+ * height less its padding, capped by the content. Holding the full content
+ * height instead would keep an unfiltered list's scroll range around as blank
+ * space under a two-row result.
+ */
+function visibleInventoryHeight(el: HTMLElement | null): number | null {
+  const scroller = el?.parentElement;
+  if (!el || !scroller) return null;
+  const style = getComputedStyle(scroller);
+  const inner =
+    scroller.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+  return Math.min(el.offsetHeight, inner);
+}
 
 interface RecipeManagerProps {
   isOpen: boolean;
@@ -63,7 +97,25 @@ export function RecipeManager({
   const exportRecipeToFile = useRecipeStore((s) => s.exportRecipeToFile);
   const importRecipe = useRecipeStore((s) => s.importRecipe);
   const importRecipeFromFile = useRecipeStore((s) => s.importRecipeFromFile);
+  const updateRecipe = useRecipeStore((s) => s.updateRecipe);
+  const createRecipe = useRecipeStore((s) => s.createRecipe);
   const currentProject = useProjectStore((s) => s.currentProject);
+  const worktrees = useWorktreeStoreOptional((s) => s.worktrees, EMPTY_WORKTREES);
+  const [filter, setFilter] = useState("");
+  const [filterMinHeight, setFilterMinHeight] = useState<number | null>(null);
+  const inventoryRef = useRef<HTMLDivElement>(null);
+  const handleFilterChange = (next: string) => {
+    if (!filter && next) setFilterMinHeight(visibleInventoryHeight(inventoryRef.current));
+    if (!next) setFilterMinHeight(null);
+    setFilter(next);
+  };
+
+  const nameOf = (id: string | null) =>
+    (id &&
+      [...globalRecipes, ...projectRecipes, ...inRepoRecipes, ...pluginRecipes].find(
+        (r) => r.id === id
+      )?.name) ??
+    "recipe";
 
   const [recipeToDelete, setRecipeToDelete] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -77,6 +129,15 @@ export function RecipeManager({
   const [importJson, setImportJson] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
   const exportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Kept mounted between opens; a filter left from last time would reopen the
+  // manager showing a fraction of the inventory with no obvious reason why.
+  useEffect(() => {
+    if (!isOpen) {
+      setFilter("");
+      setFilterMinHeight(null);
+    }
+  }, [isOpen]);
 
   useEffect(() => {
     return () => {
@@ -121,6 +182,25 @@ export function RecipeManager({
     [exportRecipe]
   );
 
+  // Same naming rule as the canvas band's Duplicate, so a copy made in either
+  // place never collides with an existing recipe's name or on-disk filename.
+  // A plugin recipe's copy has no projectId and lands as a global the user owns.
+  const handleDuplicateRecipe = async (recipe: TerminalRecipe) => {
+    const existingNames = new Set(useRecipeStore.getState().recipes.map((r) => r.name));
+    try {
+      await createRecipe(
+        recipe.projectId,
+        nextDuplicateName(recipe.name, existingNames),
+        recipe.worktreeId,
+        recipe.terminals,
+        false,
+        recipe.autoAssign
+      );
+    } catch (err) {
+      logError("Failed to duplicate recipe", err);
+    }
+  };
+
   const handleSaveToRepo = async () => {
     if (!recipeToSave) return;
     setIsSaving(true);
@@ -129,7 +209,10 @@ export function RecipeManager({
       await saveToRepo(recipeToSave, false);
       const savedId = recipeToSave;
       setRecipeToSave(null);
-      setRecipeToDeleteAfterSave(savedId);
+      // A plugin recipe cannot be deleted — the plugin still owns the original —
+      // so there is no "delete the original?" follow-up to offer.
+      const saved = pluginRecipes.find((r) => r.id === savedId);
+      if (!saved) setRecipeToDeleteAfterSave(savedId);
     } catch (err) {
       setSaveError(formatErrorMessage(err, "Failed to save recipe to repo"));
     } finally {
@@ -166,158 +249,279 @@ export function RecipeManager({
     }
   };
 
-  const renderRecipeRow = (recipe: TerminalRecipe, forcedReadOnly = false, isShadowed = false) => {
+  const resolveWorktreeName = (worktreeId: string) =>
+    worktreeDisplayName(worktrees.get(worktreeId));
+
+  const projectRecipeIds = new Set(projectRecipes.map((r) => r.id));
+  const query = filter.trim().toLowerCase();
+  const matches = (r: TerminalRecipe) => !query || r.name.toLowerCase().includes(query);
+  const totalCount =
+    globalRecipes.length + pluginRecipes.length + inRepoRecipes.length + projectRecipes.length;
+  const isFiltering = query.length > 0;
+
+  const renderRecipeRow = (recipe: TerminalRecipe) => {
     // A plugin owns its recipes' content — editing or deleting one here would
-    // be undone on the plugin's next load, so the row reuses the existing
-    // read-only treatment rather than offering controls the store rejects
-    // (#11860). "Save to repo" stays available: duplicating into a user-owned
+    // be undone on the plugin's next load, so the row offers neither (#11860).
+    // "Save as team recipe" stays available: duplicating into a user-owned
     // tier is the sanctioned way to customise one.
     const fromPlugin = isPluginRecipe(recipe);
-    const readOnly = forcedReadOnly || fromPlugin;
+    // Only a project-local recipe can be overridden: `mergeRecipes` shadows
+    // that tier alone, and a global recipe of the same name still launches as
+    // itself.
+    const isShadowed = projectRecipeIds.has(recipe.id) && inRepoNames.has(recipe.name);
     const exported = exportFeedback === recipe.id;
-    const isGlobal = !fromPlugin && !isInRepoRecipeId(recipe) && recipe.projectId === undefined;
+    const isPinned = recipe.showInEmptyState === true;
+    const summary = getRecipeTerminalSummary(recipe.terminals);
+    const worktreeLabel = recipe.worktreeId
+      ? getRecipeScope(recipe, resolveWorktreeName).label
+      : null;
     return (
       <div
         key={recipe.id}
-        className={
-          isShadowed
-            ? "p-3 hover:bg-muted/50 transition-colors group cursor-default opacity-60"
-            : "p-3 hover:bg-muted/50 transition-colors group cursor-default"
-        }
+        data-recipe-row={recipe.name}
+        className="flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-overlay-subtle has-[[data-state=open]]:bg-overlay-subtle"
       >
-        <div className="flex items-start gap-3">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-foreground truncate">{recipe.name}</span>
-              {readOnly && (
-                <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
-                  <Lock className="h-3 w-3" />
-                  Read-only
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-sm font-medium text-text-primary" title={recipe.name}>
+              {recipe.name}
+            </span>
+            {isPinned && (
+              <Badge>
+                <Pin aria-hidden />
+                Pinned
+              </Badge>
+            )}
+            {fromPlugin && (
+              <Badge>
+                <Lock aria-hidden />
+                Read-only
+              </Badge>
+            )}
+            {isShadowed && <Badge>Overridden by team recipe</Badge>}
+          </div>
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary">
+            {fromPlugin && (
+              <>
+                <span className="max-w-[40%] truncate" title={recipe.origin.pluginId}>
+                  From {recipe.origin.pluginId}
                 </span>
-              )}
-              {isShadowed && (
-                <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
-                  Overridden by team recipe
-                </span>
-              )}
-              {isGlobal && (
-                <span className="text-2xs text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
-                  <Globe className="h-3 w-3" />
-                  Global
-                </span>
-              )}
-              {fromPlugin && (
-                <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 truncate">
-                  {recipe.origin.pluginId}
-                </span>
-              )}
-              <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
-                {recipe.terminals.length} terminal{recipe.terminals.length !== 1 ? "s" : ""}
-              </span>
-              {recipe.showInEmptyState && (
-                <span className="text-2xs text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0">
-                  Empty State
-                </span>
-              )}
-            </div>
-            <div className="text-xs text-muted-foreground mt-1">
+                <span aria-hidden>·</span>
+              </>
+            )}
+            {worktreeLabel && (
+              <>
+                <span className="shrink-0">{worktreeLabel}</span>
+                <span aria-hidden>·</span>
+              </>
+            )}
+            <span className="min-w-0 truncate">
+              {recipe.terminals.length} terminal{recipe.terminals.length !== 1 ? "s" : ""}
+              {summary && summary !== recipe.name ? `: ${summary}` : ""}
+            </span>
+            <span aria-hidden>·</span>
+            <span className="shrink-0">
               {recipe.lastUsedAt ? (
-                <span>
+                <>
                   Last used <LiveTimeAgo timestamp={recipe.lastUsedAt} />
-                </span>
+                </>
               ) : (
-                <span>Never used</span>
+                "Never used"
               )}
-            </div>
+            </span>
           </div>
-          <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
-            {!readOnly && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => onEditRecipe(recipe)}
-                    className="h-7 px-2"
-                    aria-label={`Edit recipe ${recipe.name}`}
-                  >
-                    <Edit3 />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Edit recipe</TooltipContent>
-              </Tooltip>
-            )}
-            {!isInRepoRecipeId(recipe) && currentProject && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setRecipeToSave(recipe.id)}
-                    className="h-7 px-2"
-                    aria-label={`Save recipe ${recipe.name} to repository`}
-                  >
-                    <FolderGit2 />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Save to repo</TooltipContent>
-              </Tooltip>
-            )}
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          {!fromPlugin && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
-                  size="sm"
-                  onClick={() => handleExportRecipe(recipe.id)}
-                  className="h-7 px-2"
-                  aria-label={
-                    exported
-                      ? `Recipe ${recipe.name} exported to clipboard`
-                      : `Export recipe ${recipe.name} to clipboard`
-                  }
+                  size="icon"
+                  onClick={() => onEditRecipe(recipe)}
+                  className="h-7 w-7 text-text-secondary hover:text-text-primary"
+                  aria-label={`Edit recipe ${recipe.name}`}
                 >
-                  {exported ? <Check className="text-status-success" /> : <Download />}
+                  <Pencil />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {exported ? "Exported" : "Export to clipboard"}
-              </TooltipContent>
+              <TooltipContent side="bottom">Edit recipe</TooltipContent>
             </Tooltip>
+          )}
+          <DropdownMenu>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void exportRecipeToFile(recipe.id)}
-                  className="h-7 px-2"
-                  aria-label={`Export recipe ${recipe.name} to file`}
-                >
-                  <FileUp />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Export to file</TooltipContent>
-            </Tooltip>
-            {!readOnly && (
-              <Tooltip>
-                <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
-                    size="sm"
-                    onClick={() => setRecipeToDelete(recipe.id)}
-                    className="h-7 px-2"
-                    aria-label={`Delete recipe ${recipe.name}`}
+                    size="icon"
+                    className="h-7 w-7 text-text-secondary hover:text-text-primary data-[state=open]:bg-overlay-raised"
+                    aria-label={
+                      exported
+                        ? `Recipe ${recipe.name} exported to clipboard`
+                        : `More actions for recipe ${recipe.name}`
+                    }
                   >
-                    <Trash2 className="text-status-error" />
+                    {exported ? <Check /> : <MoreHorizontal />}
                   </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Delete recipe</TooltipContent>
-              </Tooltip>
-            )}
-          </div>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{exported ? "Copied" : "More actions"}</TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent align="end" sideOffset={4} className="min-w-[200px]">
+              <DropdownMenuItem
+                onSelect={() =>
+                  void updateRecipe(recipe.id, { showInEmptyState: !isPinned }).catch((err) =>
+                    logError("Failed to update recipe pin", err)
+                  )
+                }
+              >
+                <Pin className="mr-2 h-3.5 w-3.5" />
+                {isPinned ? "Unpin from canvas" : "Pin to canvas"}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void handleDuplicateRecipe(recipe)}>
+                <CopyPlus className="mr-2 h-3.5 w-3.5" />
+                Duplicate recipe
+              </DropdownMenuItem>
+              {!isInRepoRecipeId(recipe) && currentProject && (
+                <DropdownMenuItem onSelect={() => setRecipeToSave(recipe.id)}>
+                  <FolderGit2 className="mr-2 h-3.5 w-3.5" />
+                  Save as team recipe…
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => void handleExportRecipe(recipe.id)}>
+                <Copy className="mr-2 h-3.5 w-3.5" />
+                Copy as JSON
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void exportRecipeToFile(recipe.id)}>
+                <FileUp className="mr-2 h-3.5 w-3.5" />
+                Export to file…
+              </DropdownMenuItem>
+              {!fromPlugin && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem destructive onSelect={() => setRecipeToDelete(recipe.id)}>
+                    <Trash2 className="mr-2 h-3.5 w-3.5" />
+                    Delete recipe…
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
     );
   };
+
+  const renderSection = ({
+    id,
+    icon: Icon,
+    title,
+    description,
+    recipes,
+    emptyLine,
+    onNew,
+    newLabel,
+    trailing,
+  }: {
+    id: string;
+    icon: typeof Globe;
+    title: string;
+    description: string;
+    recipes: TerminalRecipe[];
+    emptyLine?: string;
+    onNew?: () => void;
+    newLabel?: string;
+    trailing?: React.ReactNode;
+  }) => {
+    const visible = recipes.filter(matches);
+    // Plugin and team sources only exist once something is in them; the two
+    // user-owned sources always show, so "where would a new one go" has an answer.
+    if (visible.length === 0 && (isFiltering || !emptyLine)) return null;
+    return (
+      <section key={id} aria-labelledby={`recipe-section-${id}`} className="mb-5 last:mb-0">
+        <div className="mb-2 flex items-center gap-2">
+          <Icon className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden />
+          <div className="min-w-0 flex-1">
+            <h3
+              id={`recipe-section-${id}`}
+              className="flex items-baseline gap-2 text-sm font-semibold text-text-primary"
+            >
+              {title}
+              {trailing}
+            </h3>
+            <p className="text-xs text-text-secondary">{description}</p>
+          </div>
+          {onNew && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onNew}
+              aria-label={newLabel}
+              className="shrink-0"
+            >
+              <Plus />
+              New
+            </Button>
+          )}
+        </div>
+        {visible.length > 0 ? (
+          <div className="divide-y divide-border-default rounded-[var(--radius-md)] border border-border-default">
+            {visible.map(renderRecipeRow)}
+          </div>
+        ) : (
+          <p className="rounded-[var(--radius-md)] border border-dashed border-border-default px-3 py-2.5 text-xs text-text-secondary">
+            {emptyLine}
+          </p>
+        )}
+      </section>
+    );
+  };
+
+  const sections = [
+    renderSection({
+      id: "global",
+      icon: Globe,
+      title: "Global recipes",
+      description: "Yours, in every project",
+      recipes: globalRecipes,
+      emptyLine: "None yet. A global recipe launches the same terminals in any project.",
+      onNew: () => onCreateRecipe("global"),
+      newLabel: "New global recipe",
+    }),
+    renderSection({
+      id: "project",
+      icon: FolderOpen,
+      title: "Project recipes",
+      description: "Yours, in this project only",
+      recipes: projectRecipes,
+      emptyLine:
+        "None yet. A project recipe stays on this machine until you save it as a team recipe.",
+      onNew: () => onCreateRecipe("project"),
+      newLabel: "New project recipe",
+      trailing: currentProject && (
+        <span className="truncate text-xs font-normal text-text-secondary">
+          {currentProject.emoji} {currentProject.name}
+        </span>
+      ),
+    }),
+    renderSection({
+      id: "team",
+      icon: GitBranch,
+      title: "Team recipes",
+      description: "Committed to .daintree/recipes/ and shared with everyone on the repo",
+      recipes: inRepoRecipes,
+    }),
+    renderSection({
+      id: "plugin",
+      icon: Plug,
+      title: "Plugin recipes",
+      description: "Provided by installed plugins, in every project",
+      recipes: pluginRecipes,
+    }),
+  ];
+  const hasVisibleSection = sections.some((section) => section !== null);
 
   return (
     <>
@@ -326,159 +530,114 @@ export function RecipeManager({
           <AppDialog.Title>
             <span className="flex items-center gap-2">
               <Workflow className="h-5 w-5" />
-              Recipe Manager
+              Recipe manager
             </span>
           </AppDialog.Title>
           <AppDialog.CloseButton />
         </AppDialog.Header>
 
-        <AppDialog.Body>
-          {/* Global Recipes Section */}
-          <div className="mb-6">
-            <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
-              <Globe className="h-4 w-4" />
-              Global Recipes
-            </h3>
-            <p className="text-xs text-text-secondary mb-3">Available across all projects</p>
-            {globalRecipes.length === 0 ? (
-              <div className="border border-dashed border-border-default rounded-[var(--radius-md)]">
-                <EmptyState
-                  variant="zero-data"
-                  scale="canvas"
-                  icon={<Workflow />}
-                  title="No global recipes"
-                  description="Save a terminal layout once and launch it in any project."
-                  action={
-                    <Button variant="outline" size="sm" onClick={() => onCreateRecipe("global")}>
-                      <Plus className="h-3 w-3" />
-                      New global recipe
-                    </Button>
-                  }
-                />
-              </div>
-            ) : (
-              <>
-                <div className="border border-border-default rounded-[var(--radius-md)] divide-y divide-border-default">
-                  {globalRecipes.map((r) => renderRecipeRow(r))}
-                </div>
-                <div className="flex gap-2 mt-2">
-                  <Button variant="outline" size="sm" onClick={() => onCreateRecipe("global")}>
-                    <Plus className="h-3 w-3" />
-                    New global recipe
-                  </Button>
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* Plugin Recipes Section (#11860) */}
-          {pluginRecipes.length > 0 && (
-            <div className="mb-6">
-              <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
-                <Plug className="h-4 w-4" />
-                Plugin Recipes
-              </h3>
-              <p className="text-xs text-text-secondary mb-3">
-                Provided by installed plugins and available in every project
-              </p>
-              <div className="border border-border-default rounded-[var(--radius-md)] divide-y divide-border-default">
-                {pluginRecipes.map((r) => renderRecipeRow(r))}
-              </div>
-            </div>
-          )}
-
-          {/* Team Recipes Section (in-repo) */}
-          {inRepoRecipes.length > 0 && (
-            <div className="mb-6">
-              <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
-                <GitBranch className="h-4 w-4" />
-                Team Recipes
-              </h3>
-              <p className="text-xs text-text-secondary mb-3">
-                Shared via .daintree/recipes/ in the repository
-              </p>
-              <div className="border border-border-default rounded-[var(--radius-md)] divide-y divide-border-default">
-                {inRepoRecipes.map((r) => renderRecipeRow(r))}
-              </div>
-            </div>
-          )}
-
-          {/* Project Recipes Section */}
-          <div className="mb-4">
-            <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
-              <FolderOpen className="h-4 w-4" />
-              Project Recipes
-              {currentProject && (
-                <span className="text-xs font-normal text-text-secondary">
-                  {currentProject.emoji} {currentProject.name}
-                </span>
-              )}
-            </h3>
-            <p className="text-xs text-text-secondary mb-3">Specific to the current project</p>
-            {projectRecipes.length === 0 ? (
-              <div className="border border-dashed border-border-default rounded-[var(--radius-md)]">
-                <EmptyState
-                  variant="zero-data"
-                  scale="canvas"
-                  icon={<Workflow />}
-                  title="No project recipes"
-                  description="Project recipes stay private to this machine until you save them to the repo."
-                  action={
-                    <div className="flex flex-col items-center gap-2">
-                      <Button variant="outline" size="sm" onClick={() => onCreateRecipe("project")}>
-                        <Plus className="h-3 w-3" />
-                        New project recipe
-                      </Button>
-                      <div className="flex flex-wrap justify-center gap-2">
-                        <Button variant="ghost" size="sm" onClick={() => setShowImportDialog(true)}>
-                          <FileDown className="h-3 w-3" />
-                          Import from clipboard
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => void importRecipeFromFile(currentProject?.id)}
-                        >
-                          <FileUp className="h-3 w-3" />
-                          Import from file
-                        </Button>
-                      </div>
-                    </div>
-                  }
-                />
-              </div>
-            ) : (
-              <>
-                <div className="border border-border-default rounded-[var(--radius-md)] divide-y divide-border-default">
-                  {projectRecipes.map((r) => renderRecipeRow(r, false, inRepoNames.has(r.name)))}
-                </div>
-                <div className="flex gap-2 mt-2">
+        {/* Each query starts its results from the top: filtering from the
+            bottom of a long list would otherwise leave the matches scrolled
+            out of view above the sticky field. */}
+        <AppDialog.Body resetScrollKey={filter}>
+          {totalCount === 0 ? (
+            <EmptyState
+              variant="zero-data"
+              scale="canvas"
+              icon={<Workflow />}
+              title="No recipes yet"
+              description="A recipe launches a set of terminals and agents together in one click."
+              action={
+                <div className="flex flex-col items-center gap-2">
                   <Button variant="outline" size="sm" onClick={() => onCreateRecipe("project")}>
-                    <Plus className="h-3 w-3" />
+                    <Plus />
                     New project recipe
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => setShowImportDialog(true)}>
-                    <FileDown className="h-3 w-3" />
-                    Import from clipboard
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void importRecipeFromFile(currentProject?.id)}
-                  >
-                    <FileUp className="h-3 w-3" />
-                    Import from file
-                  </Button>
+                  <div className="flex flex-wrap justify-center gap-1">
+                    <Button variant="ghost" size="sm" onClick={() => onCreateRecipe("global")}>
+                      New global recipe
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => setShowImportDialog(true)}>
+                      Import from clipboard
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void importRecipeFromFile(currentProject?.id)}
+                    >
+                      Import from file
+                    </Button>
+                  </div>
                 </div>
-              </>
-            )}
-          </div>
+              }
+            />
+          ) : (
+            // While a filter is active the inventory keeps the height it had
+            // before filtering, so narrowing a long list to two rows does not
+            // shrink and recentre the dialog and pull the field out from under
+            // the pointer. The bottom padding lets the last row scroll clear of
+            // the body's edge fade.
+            <div
+              ref={inventoryRef}
+              className="min-h-[24rem] pb-6"
+              style={filterMinHeight ? { minHeight: filterMinHeight } : undefined}
+            >
+              {/* Stays put while the inventory scrolls, so filtering or
+                  importing from the bottom of a long list is not a trip back
+                  to the top. The negative margin reclaims the body's top
+                  padding so nothing scrolls visibly above it. */}
+              <div className="sticky -top-6 z-10 -mt-6 mb-4 flex items-center gap-2 bg-surface-dialog pb-2 pt-6">
+                <div className="relative min-w-0 flex-1">
+                  <Search
+                    className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-secondary"
+                    aria-hidden
+                  />
+                  <Input
+                    type="search"
+                    density="compact"
+                    value={filter}
+                    onChange={(e) => handleFilterChange(e.target.value)}
+                    placeholder="Filter recipes…"
+                    aria-label="Filter recipes"
+                    className="h-7 pl-8"
+                  />
+                </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="sm" className="shrink-0">
+                      <FileDown />
+                      Import
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" sideOffset={4}>
+                    <DropdownMenuItem onSelect={() => setShowImportDialog(true)}>
+                      Import from clipboard…
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={() => void importRecipeFromFile(currentProject?.id)}
+                    >
+                      Import from file…
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+              {hasVisibleSection ? (
+                sections
+              ) : (
+                <EmptyState
+                  variant="filtered-empty"
+                  scale="sidebar"
+                  title={`No recipes match “${filter.trim()}”`}
+                />
+              )}
+            </div>
+          )}
         </AppDialog.Body>
       </AppDialog>
 
       <ConfirmDialog
         isOpen={recipeToDelete !== null}
-        title={`Delete '${globalRecipes.find((r) => r.id === recipeToDelete)?.name ?? projectRecipes.find((r) => r.id === recipeToDelete)?.name ?? inRepoRecipes.find((r) => r.id === recipeToDelete)?.name ?? "recipe"}'?`}
+        title={`Delete '${nameOf(recipeToDelete)}'?`}
         description={
           deleteError
             ? `Error: ${deleteError}`
@@ -497,14 +656,12 @@ export function RecipeManager({
 
       <ConfirmDialog
         isOpen={recipeToSave !== null}
-        title={`Save '${globalRecipes.find((r) => r.id === recipeToSave)?.name ?? projectRecipes.find((r) => r.id === recipeToSave)?.name ?? inRepoRecipes.find((r) => r.id === recipeToSave)?.name ?? "recipe"}' to team recipes?`}
+        title={`Save '${nameOf(recipeToSave)}' as a team recipe?`}
         description={
           saveError
             ? `Error: ${saveError}`
             : (() => {
-                const recipeName =
-                  globalRecipes.find((r) => r.id === recipeToSave)?.name ??
-                  projectRecipes.find((r) => r.id === recipeToSave)?.name;
+                const recipeName = recipeToSave ? nameOf(recipeToSave) : undefined;
                 const collision = recipeName && inRepoRecipes.some((r) => r.name === recipeName);
                 const base =
                   "This recipe will be written to .daintree/recipes/ in the repository where it can be committed and shared with the team.";
@@ -513,7 +670,7 @@ export function RecipeManager({
                   : base;
               })()
         }
-        confirmLabel={saveError ? "Retry save" : "Save to repo"}
+        confirmLabel={saveError ? "Retry save" : "Save as team recipe"}
         variant="default"
         isConfirmLoading={isSaving}
         onConfirm={() => void handleSaveToRepo()}
@@ -525,7 +682,7 @@ export function RecipeManager({
 
       <ConfirmDialog
         isOpen={recipeToDeleteAfterSave !== null}
-        title={`Delete original '${globalRecipes.find((r) => r.id === recipeToDeleteAfterSave)?.name ?? projectRecipes.find((r) => r.id === recipeToDeleteAfterSave)?.name ?? inRepoRecipes.find((r) => r.id === recipeToDeleteAfterSave)?.name ?? "recipe"}'?`}
+        title={`Delete original '${nameOf(recipeToDeleteAfterSave)}'?`}
         description="The recipe has been saved to the repository. The original copy on this machine will be permanently removed."
         confirmLabel="Delete original"
         cancelLabel="Keep both"
@@ -583,7 +740,7 @@ export function RecipeManager({
           {importError && (
             <div
               id="recipe-import-error"
-              className="mt-3 text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3"
+              className="mt-3 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/10 p-3 text-sm text-status-error"
             >
               {importError}
             </div>

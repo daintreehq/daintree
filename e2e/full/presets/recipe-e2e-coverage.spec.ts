@@ -126,8 +126,8 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       const manager = await openRecipeManager(window);
       await app.evaluate(({ clipboard }) => clipboard.writeText(""));
 
-      const exportBtn = manager.locator(SEL.recipeManager.exportButton("Export Me"));
-      await exportBtn.click({ force: true });
+      await manager.locator(SEL.recipeManager.moreButton("Export Me")).click({ force: true });
+      await window.locator(SEL.recipeManager.copyJsonItem).click();
 
       // UI feedback flips only when the clipboard write resolves, so its
       // appearance confirms the copy succeeded before we read it back.
@@ -146,7 +146,15 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       const { window } = ctx;
       const manager = await openRecipeManager(window);
 
-      await manager.locator(SEL.recipeManager.importButton).first().click({ force: true });
+      // An empty manager offers import inline; a populated one files it under
+      // the toolbar's Import menu.
+      const inlineImport = manager.locator(SEL.recipeManager.importButton);
+      if ((await inlineImport.count()) > 0) {
+        await inlineImport.first().click({ force: true });
+      } else {
+        await manager.locator(SEL.recipeManager.importMenuTrigger).click({ force: true });
+        await window.locator(SEL.recipeManager.importFromClipboardItem).click();
+      }
       const importDialog = window.locator(SEL.recipeManager.importDialog);
       await expect(importDialog).toBeVisible({ timeout: T_MEDIUM });
 

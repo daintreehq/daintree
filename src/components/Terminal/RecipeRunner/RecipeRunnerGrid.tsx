@@ -120,7 +120,7 @@ export function RecipeRunnerGrid({
         onFocus={() => setFocusedIndex(createIndex)}
         onKeyDown={handleOptionKeyDown(createIndex)}
         tabIndex={disabled || focusedIndex === createIndex ? 0 : -1}
-        className="group col-span-full flex items-center justify-center gap-2 px-3 py-2 mt-1 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60"
+        className="group col-span-full flex items-center justify-center gap-2 px-3 py-2 mt-1 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary border border-transparent group-focus-within/recipes:aria-selected:bg-overlay-raised group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
       >
         <Plus
           className="h-3.5 w-3.5 text-text-secondary group-hover:text-text-primary transition-colors shrink-0"
