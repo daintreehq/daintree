@@ -28,10 +28,12 @@ import {
   type McpAnomalySignal,
 } from "@shared/types";
 
-type AuditResultFilter = "all" | McpAuditResult;
+/** "problems" is every dispatch that didn't succeed. */
+type AuditResultFilter = "all" | "problems" | McpAuditResult;
 
 const RESULT_FILTER_OPTIONS: { value: AuditResultFilter; label: string }[] = [
   { value: "all", label: "All results" },
+  { value: "problems", label: "Problems" },
   { value: "success", label: "Success" },
   { value: "error", label: "Error" },
   { value: "confirmation-pending", label: "Awaiting confirmation" },
@@ -274,6 +276,8 @@ interface McpAuditLogViewerProps {
   exportFlashActive?: boolean;
   anomalySignals?: McpAnomalySignal[];
   anomalySuppressed?: boolean;
+  /** Shown in place of the list when the records couldn't be read. */
+  loadError?: React.ReactNode;
   /**
    * What an empty log says. The default is the first-use line; a parent that
    * just cleared the log passes its own, so a deliberate clear doesn't read as
@@ -305,9 +309,13 @@ function DispatchRow({
       <div className="min-w-0 select-text">
         <div className="flex items-center gap-2">
           <span className="font-mono text-text-primary truncate">{record.toolId}</span>
-          {record.errorCode && (
-            <span className="text-3xs uppercase tracking-wide text-text-secondary">
-              {record.errorCode}
+          {record.result !== "success" && (
+            <span className="shrink-0 text-text-secondary">
+              {RESULT_LABEL[record.result]}
+              {record.errorCode ? ` · ${record.errorCode}` : ""}
+              {record.result === "rate_limited" && record.resultMeta?.retryAfter
+                ? ` · retry in ${record.resultMeta.retryAfter}s`
+                : ""}
             </span>
           )}
         </div>
@@ -433,6 +441,7 @@ export function McpAuditLogViewer({
   anomalySignals = [],
   anomalySuppressed = true,
   emptyLabel = "Tool calls show up here once an agent uses the MCP server",
+  loadError,
 }: McpAuditLogViewerProps) {
   const [toolFilter, setToolFilter] = useState("");
   const [resultFilter, setResultFilter] = useState<AuditResultFilter>("all");
@@ -471,8 +480,15 @@ export function McpAuditLogViewer({
       // The export must include them — forensic export of a tier-rejection
       // incident must still surface the grant.issued/grant.revoked events
       // for that session (#10027).
-      if (resultFilter !== "all" && isAuditRecord(record) && record.result !== resultFilter) {
-        return false;
+      if (isAuditRecord(record)) {
+        if (resultFilter === "problems" && record.result === "success") return false;
+        if (
+          resultFilter !== "all" &&
+          resultFilter !== "problems" &&
+          record.result !== resultFilter
+        ) {
+          return false;
+        }
       }
       // Tool filter and search work against the union's common fields.
       if (needle.length > 0 && !record.toolId.toLowerCase().includes(needle)) return false;
@@ -579,7 +595,7 @@ export function McpAuditLogViewer({
             {unauthorizedCount > 0 && resultFilter !== "unauthorized" && (
               <Button variant="outline" size="sm" onClick={() => setResultFilter("unauthorized")}>
                 <ShieldOff aria-hidden="true" />
-                Show tier rejections ({unauthorizedCount})
+                Show unauthorized ({unauthorizedCount})
               </Button>
             )}
             {canGroup && (
@@ -614,12 +630,16 @@ export function McpAuditLogViewer({
         </div>
       )}
 
+      {!loading && loadError && visibleRecords.length > 0 && loadError}
+
       {loading ? (
         <Skeleton label="Loading audit records" className="space-y-2 px-4 py-3">
           <SkeletonBone className="h-5 w-5/6" />
           <SkeletonBone className="h-5 w-4/6" />
           <SkeletonBone className="h-5 w-3/4" />
         </Skeleton>
+      ) : loadError && visibleRecords.length === 0 ? (
+        loadError
       ) : filteredRecords.length === 0 ? (
         visibleRecords.length === 0 ? (
           <SettingsEmptyRow>{emptyLabel}</SettingsEmptyRow>

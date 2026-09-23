@@ -375,7 +375,7 @@ export function DiagnosticsReviewDialog({
               id={previewPanelId}
               tabIndex={0}
               aria-label="Report preview"
-              className="h-80 overflow-auto text-3xs leading-relaxed font-mono bg-surface-canvas border border-border-default rounded-[var(--radius-md)] p-3 text-text-primary whitespace-pre-wrap break-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+              className="h-[28rem] overflow-auto text-xs leading-relaxed font-mono bg-surface-canvas border border-border-default rounded-[var(--radius-md)] p-3 text-text-primary whitespace-pre-wrap break-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
             >
               {previewJson}
             </pre>

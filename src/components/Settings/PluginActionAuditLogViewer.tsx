@@ -221,6 +221,11 @@ export function PluginActionAuditLogViewer({
               <div className="min-w-0 select-text">
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-text-primary truncate">{record.actionId}</span>
+                  {record.result !== "success" && (
+                    <span className="shrink-0 text-text-secondary">
+                      {RESULT_LABEL[record.result]}
+                    </span>
+                  )}
                   {record.source ? (
                     <span className="text-3xs uppercase tracking-wide text-text-secondary">
                       {record.source}

@@ -233,6 +233,7 @@ function RendererCpuProfileSection() {
 function HardwareAccelerationSection() {
   const [disabled, setDisabled] = useState<boolean | null>(null);
   const [angleFallback, setAngleFallback] = useState<boolean>(false);
+  const [readFailed, setReadFailed] = useState(false);
 
   useEffect(() => {
     window.electron.gpu
@@ -241,7 +242,10 @@ function HardwareAccelerationSection() {
         setDisabled(status.hardwareAccelerationDisabled);
         setAngleFallback(status.angleFallbackActive);
       })
-      .catch((err) => logError("Failed to read GPU status", err));
+      .catch((err) => {
+        setReadFailed(true);
+        logError("Failed to read GPU status", err);
+      });
   }, []);
 
   const handleToggle = () => {
@@ -252,7 +256,23 @@ function HardwareAccelerationSection() {
     });
   };
 
-  if (disabled === null) return null;
+  if (disabled === null) {
+    // Rendered from the start so the group doesn't shift when the read lands, and
+    // so a failed read says so instead of the setting silently missing.
+    return (
+      <SettingsSwitchCard
+        id="troubleshooting-gpu-acceleration"
+        title="Hardware acceleration"
+        subtitle="Uses the GPU to render the interface. Turn off if you see blank panels or repeated GPU crashes. The app restarts on change."
+        isEnabled={false}
+        onChange={() => {}}
+        disabled
+        disabledReason={
+          readFailed ? "Couldn't read the GPU status. Reopen settings to try again." : undefined
+        }
+      />
+    );
+  }
 
   const warning = disabled
     ? "GPU acceleration was disabled due to repeated crashes. Turn it back on to restore full performance."
@@ -330,6 +350,11 @@ export function ClearLogsRow() {
 
 export function TroubleshootingTab() {
   const [developerMode, setDeveloperMode] = useState(false);
+  // The switches show defaults until main answers; they stay disabled until then
+  // so a fallback never reads as the saved setting.
+  const [developerModeLoaded, setDeveloperModeLoaded] = useState(false);
+  const [verboseLoaded, setVerboseLoaded] = useState(false);
+  const [developerModeError, setDeveloperModeError] = useState<string | null>(null);
   const [autoOpenDiagnostics, setAutoOpenDiagnostics] = useState(false);
   const [focusEventsTab, setFocusEventsTab] = useState(false);
   const [verboseLogging, setVerboseLogging] = useState(false);
@@ -374,27 +399,33 @@ export function TroubleshootingTab() {
   };
 
   useEffect(() => {
-    appClient.getState().then((appState) => {
-      if (appState?.developerMode) {
-        setDeveloperMode(appState.developerMode.enabled);
-        setAutoOpenDiagnostics(appState.developerMode.autoOpenDiagnostics);
-        setFocusEventsTab(appState.developerMode.focusEventsTab);
-      }
-    });
+    appClient
+      .getState()
+      .then((appState) => {
+        if (appState?.developerMode) {
+          setDeveloperMode(appState.developerMode.enabled);
+          setAutoOpenDiagnostics(appState.developerMode.autoOpenDiagnostics);
+          setFocusEventsTab(appState.developerMode.focusEventsTab);
+        }
+        setDeveloperModeLoaded(true);
+      })
+      .catch((error) => {
+        setDeveloperModeError("Developer settings couldn't be read. Reopen settings to try again.");
+        logError("Failed to read developer mode settings", error);
+      });
 
     actionService
       .dispatch("logs.getVerbose", undefined, { source: "user" })
       .then((result) => {
         if (result.ok) {
           setVerboseLogging((result.result as { verbose: boolean }).verbose);
+          setVerboseLoaded(true);
         }
       })
       .catch((error) => {
         logError("Failed to get verbose logging state", error);
       });
   }, []);
-
-  const [developerModeError, setDeveloperModeError] = useState<string | null>(null);
 
   /** Resolves false when main refused the change, so the caller can put the switches back. */
   const saveDeveloperModeSettings = async (
@@ -542,7 +573,7 @@ export function TroubleshootingTab() {
             subtitle="Captures detailed debug output for troubleshooting. Resets on app restart."
             isEnabled={verboseLogging}
             onChange={handleToggleVerboseLogging}
-            disabled={verboseLoggingPending}
+            disabled={verboseLoggingPending || !verboseLoaded}
           />
           {verboseLogging && (
             <RowNote>Verbose logging may impact performance and increase log file size.</RowNote>
@@ -557,6 +588,8 @@ export function TroubleshootingTab() {
               </>
             }
           />
+        </SettingsGroup>
+        <SettingsGroup>
           <ClearLogsRow />
         </SettingsGroup>
         <SettingsGroup label="Log levels">
@@ -606,6 +639,7 @@ export function TroubleshootingTab() {
             subtitle="Turns on the debugging features below"
             isEnabled={developerMode}
             onChange={() => void handleToggleDeveloperMode()}
+            disabled={!developerModeLoaded}
             // e2e selectors (SEL.settings.developerModeToggle) find the switch by this name.
             ariaLabel="Developer Mode Toggle"
           />

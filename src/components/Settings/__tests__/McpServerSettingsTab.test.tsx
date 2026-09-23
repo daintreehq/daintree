@@ -277,7 +277,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForApiKeyControls(container);
 
-    fireEvent.click(screen.getByTitle("Rotate API key"));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate key…" }));
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
@@ -312,7 +312,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForApiKeyControls(container);
 
-    fireEvent.click(screen.getByTitle("Rotate API key"));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate key…" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
     });
@@ -339,7 +339,7 @@ describe("McpServerSettingsTab", () => {
       expect(displayArea.textContent).toContain("dnt-key-abc123");
     });
 
-    fireEvent.click(screen.getByTitle("Rotate API key"));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate key…" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
     });
@@ -368,7 +368,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForApiKeyControls(container);
 
-    fireEvent.click(screen.getByTitle("Rotate API key"));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate key…" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
     });
@@ -395,7 +395,7 @@ describe("McpServerSettingsTab", () => {
       expect(displayArea.textContent).toContain("dnt-key-abc123");
     });
 
-    fireEvent.click(screen.getByTitle("Rotate API key"));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate key…" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
     });
@@ -503,6 +503,41 @@ describe("McpServerSettingsTab", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect(screen.queryByRole("button", { name: /turn on mcp server/i })).toBeNull();
     expect(screen.queryByText("MCP server is off")).toBeNull();
+  });
+
+  it("keeps the audit history reachable while the server is off", async () => {
+    installMcpApi({
+      getStatus: vi.fn().mockResolvedValue({
+        enabled: false,
+        port: null,
+        configuredPort: null,
+        apiKey: "",
+      }),
+      getLogRecords: vi.fn().mockResolvedValue([
+        {
+          id: "1",
+          timestamp: Date.now(),
+          toolId: "files.read",
+          sessionId: "s",
+          tier: "external",
+          argsSummary: "{}",
+          result: "success",
+          durationMs: 3,
+        },
+      ]),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <McpServerSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    // Stopping the server after something suspicious must not hide what it did.
+    await waitForContent(container, "files.read");
+    expect(screen.getByRole("button", { name: "Clear audit log…" })).toBeTruthy();
+    // Connection setup is still collapsed behind the switch.
+    expect(screen.queryByLabelText("MCP server port")).toBeNull();
   });
 
   it("turning the switch on calls setEnabled(true) and reveals the connection section", async () => {

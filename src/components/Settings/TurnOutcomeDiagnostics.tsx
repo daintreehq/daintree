@@ -124,11 +124,11 @@ function RollupTable({
           <th scope="col" className={cn(TH, "text-left pr-2")}>
             Tool
           </th>
-          <th scope="col" className={cn(TH, "text-right px-2 w-20")}>
+          <th scope="col" className={cn(TH, "text-right px-2 w-28")}>
             {countLabel}
           </th>
-          <th scope="col" className={cn(TH, "text-right px-2 w-20")}>
-            Turns
+          <th scope="col" className={cn(TH, "text-right px-2 w-28")}>
+            Session turns
           </th>
           <th scope="col" className={cn(TH, "text-right pl-2 w-20")}>
             Share
@@ -183,6 +183,7 @@ export function TurnOutcomeDiagnostics({
   const failed = isControlled ? loadFailed : internalFailed;
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  const [clearFailed, setClearFailed] = useState(false);
 
   const fetchRecords = async () => {
     setInternalLoading(true);
@@ -209,6 +210,7 @@ export function TurnOutcomeDiagnostics({
   const confirmClearTurnOutcomeLog = async () => {
     if (isClearing) return;
     setIsClearing(true);
+    setClearFailed(false);
     let cleared = false;
     try {
       await window.electron.mcpServer.clearTurnOutcomeLog();
@@ -216,6 +218,7 @@ export function TurnOutcomeDiagnostics({
       if (!isControlled) setInternalRecords([]);
       setShowClearConfirm(false);
     } catch (err) {
+      setClearFailed(true);
       logError("Failed to clear turn outcome log", err);
     } finally {
       setIsClearing(false);
@@ -235,6 +238,7 @@ export function TurnOutcomeDiagnostics({
   const handleCancelClear = () => {
     if (isClearing) return;
     setShowClearConfirm(false);
+    setClearFailed(false);
   };
 
   useEffect(() => {
@@ -366,7 +370,13 @@ export function TurnOutcomeDiagnostics({
     ) : rows.length === 0 ? (
       <p className="text-xs text-text-secondary">No turn in the log used a recorded tool</p>
     ) : (
-      <RollupTable rows={rows} countLabel={countLabel} caption={what} />
+      <>
+        <RollupTable rows={rows} countLabel={countLabel} caption={what} />
+        <p className="mt-2 text-xs text-text-secondary">
+          Session turns counts every turn in the sessions that used the tool, so a turn appears
+          under each tool its session used.
+        </p>
+      </>
     );
 
   const summaryFor = (outcome: TurnOutcomeClass) => plural(outcomeCounts.get(outcome) ?? 0, "turn");
@@ -430,7 +440,11 @@ export function TurnOutcomeDiagnostics({
               title="Tool errors, by tool the session used"
               summary={summaryFor("tool-error")}
             >
-              {rollupBody(toolErrorRollups, "Errors", "Tool-error turns by tool the session used")}
+              {rollupBody(
+                toolErrorRollups,
+                "Error turns",
+                "Tool-error turns by tool the session used"
+              )}
             </DisclosureRow>
             <DisclosureRow
               title="Tier rejections, by tool the session used"
@@ -438,7 +452,7 @@ export function TurnOutcomeDiagnostics({
             >
               {rollupBody(
                 tierRejectedRollups,
-                "Rejected",
+                "Rejected turns",
                 "Tier-rejected turns by tool the session used"
               )}
             </DisclosureRow>
@@ -446,7 +460,11 @@ export function TurnOutcomeDiagnostics({
               title="Stuck agents, by tool the session used"
               summary={summaryFor("agent-stuck")}
             >
-              {rollupBody(agentStuckRollups, "Stuck", "Agent-stuck turns by tool the session used")}
+              {rollupBody(
+                agentStuckRollups,
+                "Stuck turns",
+                "Agent-stuck turns by tool the session used"
+              )}
             </DisclosureRow>
           </>
         )}
@@ -476,6 +494,7 @@ export function TurnOutcomeDiagnostics({
         cancelLabel="Cancel"
         onConfirm={confirmClearTurnOutcomeLog}
         isConfirmLoading={isClearing}
+        hint={clearFailed ? "Turn outcomes couldn't be cleared. Try again." : undefined}
         variant="destructive"
         zIndex="nested"
       />

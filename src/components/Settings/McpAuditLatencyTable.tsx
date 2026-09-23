@@ -69,6 +69,7 @@ const TD_NUM = "py-1.5 text-right tabular-nums";
 export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatencyTableProps) {
   const [isOpen, setIsOpen] = useState(true);
   const panelId = useId();
+  const tableId = useId();
 
   const stats = useMemo<ToolLatencyStats[]>(() => {
     const successBuckets = new Map<string, number[]>();
@@ -98,18 +99,29 @@ export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatency
 
   const hasRecords = stats.length > 0;
 
-  const renderBlock = (block: ToolLatencyBlock, blockLabel: string) => {
+  // Result rows sit under their tool's row, so each cell names both headers
+  // explicitly: a screen reader reads "git.getDiff, Success, p95 (ms), 6120".
+  const renderBlock = (block: ToolLatencyBlock, blockLabel: string, toolIndex: number) => {
     if (block.count === 0) return null;
     const band = sloBand(block.p95);
+    const rowId = `${tableId}-t${toolIndex}-${blockLabel === "Success" ? "ok" : "other"}`;
+    const toolId = `${tableId}-t${toolIndex}`;
+    const cellHeaders = (col: string) => `${toolId} ${rowId} ${tableId}-${col}`;
     return (
       <tr className="text-text-secondary">
-        <th scope="row" className="py-1.5 pl-4 pr-2 text-left font-normal">
+        <th id={rowId} headers={toolId} className="py-1.5 pl-4 pr-2 text-left font-normal">
           {blockLabel}
         </th>
-        <td className={cn(TD_NUM, "px-2")}>{block.count}</td>
-        <td className={cn(TD_NUM, "px-2")}>{block.p50}</td>
-        <td className={cn(TD_NUM, "px-2 text-text-primary")}>{block.p95}</td>
-        <td className="py-1.5 pl-2">
+        <td headers={cellHeaders("calls")} className={cn(TD_NUM, "px-2")}>
+          {block.count}
+        </td>
+        <td headers={cellHeaders("p50")} className={cn(TD_NUM, "px-2")}>
+          {block.p50}
+        </td>
+        <td headers={cellHeaders("p95")} className={cn(TD_NUM, "px-2 text-text-primary")}>
+          {block.p95}
+        </td>
+        <td headers={cellHeaders("speed")} className="py-1.5 pl-2">
           {band && (
             <span className="inline-flex items-center gap-1">
               {band.slow && (
@@ -157,25 +169,30 @@ export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatency
                   <th scope="col" className={cn(TH, "text-left pr-2")}>
                     Tool
                   </th>
-                  <th scope="col" className={cn(TH, "text-right px-2 w-16")}>
+                  <th
+                    id={`${tableId}-calls`}
+                    scope="col"
+                    className={cn(TH, "text-right px-2 w-16")}
+                  >
                     Calls
                   </th>
-                  <th scope="col" className={cn(TH, "text-right px-2 w-20")}>
+                  <th id={`${tableId}-p50`} scope="col" className={cn(TH, "text-right px-2 w-20")}>
                     p50 (ms)
                   </th>
-                  <th scope="col" className={cn(TH, "text-right px-2 w-20")}>
+                  <th id={`${tableId}-p95`} scope="col" className={cn(TH, "text-right px-2 w-20")}>
                     p95 (ms)
                   </th>
-                  <th scope="col" className={cn(TH, "text-left pl-2 w-24")}>
+                  <th id={`${tableId}-speed`} scope="col" className={cn(TH, "text-left pl-2 w-24")}>
                     <span className="sr-only">Speed</span>
                   </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-subtle">
-                {stats.map((row) => (
+                {stats.map((row, i) => (
                   <React.Fragment key={row.toolId}>
                     <tr>
                       <th
+                        id={`${tableId}-t${i}`}
                         scope="row"
                         className="py-1.5 pr-2 text-left font-mono font-normal text-text-primary truncate"
                       >
@@ -188,8 +205,8 @@ export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatency
                       <td />
                       <td />
                     </tr>
-                    {renderBlock(row.success, "Success")}
-                    {renderBlock(row.other, "Other results")}
+                    {renderBlock(row.success, "Success", i)}
+                    {renderBlock(row.other, "Other results", i)}
                   </React.Fragment>
                 ))}
               </tbody>

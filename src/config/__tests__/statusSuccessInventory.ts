@@ -355,77 +355,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Diff insertion count against the base branch",
     },
   ],
-  "src/components/Settings/McpAuditLogViewer.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      anchor: "copyFlashActive",
-      expectedOccurrences: 2,
-      rationale: "Copy confirmation; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      anchor: "exportFlashActive",
-      expectedOccurrences: 2,
-      rationale: "Export confirmation; resets when the export flash times out",
-    },
-  ],
-  "src/components/Settings/McpServerSettingsTab.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      anchor: 'copiedTarget === "plain"',
-      expectedOccurrences: 2,
-      rationale: "Copy-config confirmation; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      anchor: 'copiedTarget === "scoped"',
-      expectedOccurrences: 2,
-      rationale: "Copy-scoped-config confirmation; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      anchor: "copiedKey",
-      expectedOccurrences: 2,
-      rationale: "Copy-API-key confirmation; resets when the copy flash times out",
-    },
-  ],
-  "src/components/Settings/PluginActionAuditLogViewer.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      anchor: "copyFlashActive",
-      expectedOccurrences: 2,
-      rationale: "Copy confirmation; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      anchor: "exportFlashActive",
-      expectedOccurrences: 2,
-      rationale: "Export confirmation; resets when the export flash times out",
-    },
-  ],
-  "src/components/Settings/RunHistorySettingsTab.tsx": [
-    {
-      category: "outcome",
-      signature: "bg-status-success/15 text-status-success",
-      expectedOccurrences: 2,
-      rationale: "Counted results of named runs, beside the matching failure count",
-    },
-  ],
-  "src/components/Settings/TroubleshootingTab.tsx": [
-    {
-      category: "verification",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "One mark per required tool in a finite prerequisite list",
-    },
-  ],
   "src/components/Settings/VoiceInputSettingsTab.tsx": [
     {
       category: "outcome",
@@ -820,5 +749,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 97;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 109;
+export const EXPECTED_STATUS_SUCCESS_SITES = 88;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 92;

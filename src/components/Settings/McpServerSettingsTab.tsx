@@ -14,6 +14,7 @@ import {
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { McpAuditLogViewer } from "@/components/Settings/McpAuditLogViewer";
+import { AuditLoadErrorRow } from "@/components/Settings/auditLogParts";
 import { TurnOutcomeDiagnostics } from "@/components/Settings/TurnOutcomeDiagnostics";
 import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
@@ -105,6 +106,9 @@ export function McpServerSettingsTab() {
   const [maxRecordsInput, setMaxRecordsInput] = useState(MCP_AUDIT_DEFAULT_MAX_RECORDS.toString());
   const [auditLoading, setAuditLoading] = useState(true);
   const [turnsLoadFailed, setTurnsLoadFailed] = useState(false);
+  const [auditLoadFailed, setAuditLoadFailed] = useState(false);
+  const [auditConfigLoaded, setAuditConfigLoaded] = useState(false);
+  const [auditConfigFailed, setAuditConfigFailed] = useState(false);
   // Set by a deliberate clear, so the empty log says so instead of reading as
   // "nothing has ever been recorded" beside turn outcomes that were kept.
   const [auditCleared, setAuditCleared] = useState(false);
@@ -207,7 +211,9 @@ export function McpServerSettingsTab() {
       ]);
       if (recordsResult.status === "fulfilled") {
         setAuditRecords(recordsResult.value);
+        setAuditLoadFailed(false);
       } else {
+        setAuditLoadFailed(true);
         logError("Failed to load MCP audit log", recordsResult.reason);
       }
       if (turnsResult.status === "fulfilled") {
@@ -227,6 +233,21 @@ export function McpServerSettingsTab() {
     }
   };
 
+  // Until this answers, the capture switch and the cap would be showing guesses.
+  const loadAuditConfig = async (): Promise<void> => {
+    try {
+      const auditCfg = await window.electron.mcpServer.getAuditConfig();
+      setAuditEnabled(auditCfg.enabled);
+      setAuditMaxRecords(auditCfg.maxRecords);
+      setMaxRecordsInput(auditCfg.maxRecords.toString());
+      setAuditConfigLoaded(true);
+      setAuditConfigFailed(false);
+    } catch (err) {
+      setAuditConfigFailed(true);
+      logError("Failed to load MCP audit config", err);
+    }
+  };
+
   useEffect(() => {
     let settled = false;
     const timer = setTimeout(() => {
@@ -241,17 +262,13 @@ export function McpServerSettingsTab() {
     Promise.all([
       window.electron.mcpServer.getStatus(),
       window.electron.mcpServer.getRuntimeState(),
-      window.electron.mcpServer.getAuditConfig(),
     ])
-      .then(([s, runtime, auditCfg]) => {
+      .then(([s, runtime]) => {
         if (settled) return;
         setStatus(s);
         setRuntimeSnapshot(runtime);
         setPortInput(s.configuredPort?.toString() ?? "");
         portDirtyRef.current = false;
-        setAuditEnabled(auditCfg.enabled);
-        setAuditMaxRecords(auditCfg.maxRecords);
-        setMaxRecordsInput(auditCfg.maxRecords.toString());
         setError(null);
       })
       .catch((err) => {
@@ -265,6 +282,7 @@ export function McpServerSettingsTab() {
         setLoading(false);
       });
 
+    void loadAuditConfig();
     void refreshAuditRecords().finally(() => setAuditLoading(false));
     void refreshActiveBearers();
     void refreshHelpSessionBearers();
@@ -793,6 +811,10 @@ export function McpServerSettingsTab() {
         )}
       </SettingsGroup>
 
+      <p className="sr-only" role="status">
+        {copiedTarget ? "Config copied" : copiedKey ? "API key copied" : ""}
+      </p>
+
       {error && (
         <div role="alert" className="flex items-start gap-2 text-xs text-text-primary select-text">
           <SeverityMark severity="error" label="Error" className="mt-px h-3.5 w-3.5" decorative />
@@ -860,21 +882,11 @@ export function McpServerSettingsTab() {
                     layout="stacked"
                     control={
                       <div className="flex flex-wrap items-center gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleCopyConfig}
-                          className={cn(copiedTarget === "plain" && "text-status-success")}
-                        >
+                        <Button variant="outline" size="sm" onClick={handleCopyConfig}>
                           {copiedTarget === "plain" ? "Copied!" : "Copy MCP config"}
                         </Button>
                         {viewWorkspaceId ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={handleCopyScopedConfig}
-                            className={cn(copiedTarget === "scoped" && "text-status-success")}
-                          >
+                          <Button variant="outline" size="sm" onClick={handleCopyScopedConfig}>
                             {copiedTarget === "scoped" ? "Copied!" : "Copy config for this project"}
                           </Button>
                         ) : null}
@@ -953,7 +965,7 @@ export function McpServerSettingsTab() {
                 layout={status.apiKey ? "stacked" : "inline"}
                 description={
                   status.apiKey
-                    ? "Every connection must present this bearer token. It persists across restarts; rotate it if it may have leaked, and clients holding the old key will need the new one."
+                    ? "Every connection must present this bearer token. It persists across restarts."
                     : "Generated when the server starts"
                 }
                 control={
@@ -984,113 +996,141 @@ export function McpServerSettingsTab() {
                         size="sm"
                         onClick={handleCopyApiKey}
                         aria-label="Copy API key"
-                        className={cn(copiedKey && "text-status-success")}
                       >
                         {copiedKey ? "Copied!" : "Copy"}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setShowRotateConfirm(true)}
-                        disabled={!apiKeySuffix}
-                        title={apiKeySuffix ? "Rotate API key" : "Waiting for the MCP key to load…"}
-                      >
-                        Rotate key…
                       </Button>
                     </div>
                   ) : undefined
                 }
               />
             </SettingsGroup>
-          </SettingsSection>
-
-          <SettingsSection
-            title="Audit log"
-            description="Every tool call over MCP, with a redacted summary of its arguments — the values themselves are never stored."
-          >
-            <SettingsGroup>
-              <SettingsSwitchCard
-                title="Capture audit log"
-                subtitle="New tool calls are recorded while this is on"
-                isEnabled={auditEnabled}
-                onChange={handleAuditEnabledToggle}
-              />
-              <SettingsRow
-                label="Records kept"
-                description={`The oldest are dropped past this limit. ${MCP_AUDIT_MIN_RECORDS}–${MCP_AUDIT_MAX_RECORDS}, default ${MCP_AUDIT_DEFAULT_MAX_RECORDS}.`}
-                error={maxRecordsError}
-                control={({ labelId, descriptionId }) => (
-                  <>
-                    <input
-                      id="mcp-audit-max-records"
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      value={maxRecordsInput}
-                      onChange={(e) => {
-                        setMaxRecordsInput(e.target.value.replace(/\D/g, ""));
-                        setMaxRecordsError(null);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") void handleMaxRecordsSave();
-                      }}
-                      placeholder={MCP_AUDIT_DEFAULT_MAX_RECORDS.toString()}
-                      aria-labelledby={labelId}
-                      aria-describedby={descriptionId}
-                      aria-invalid={maxRecordsError ? true : undefined}
-                      className={cn(
-                        SETTINGS_CONTROL_WIDTH.number,
-                        "h-7 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 text-sm text-text-primary placeholder:text-text-placeholder font-mono tabular-nums focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                      )}
-                    />
+            {status.apiKey && (
+              <SettingsGroup>
+                <SettingsRow
+                  label="Rotate API key"
+                  description="Issues a new key and invalidates the current one. Every client holding it is cut off until it has the new config."
+                  control={
                     <Button
-                      variant="outline"
+                      variant="ghost-danger"
                       size="sm"
-                      onClick={() => void handleMaxRecordsSave()}
-                      disabled={maxRecordsUnchanged}
-                      aria-label="Apply max records"
+                      onClick={() => setShowRotateConfirm(true)}
+                      disabled={!apiKeySuffix}
                     >
-                      Apply
+                      Rotate key…
                     </Button>
-                  </>
-                )}
-              />
-            </SettingsGroup>
-
-            <McpAuditLogViewer
-              records={auditRecords}
-              turnRecords={turnRecords}
-              loading={auditLoading}
-              onRefresh={refreshAuditRecords}
-              onCopy={handleCopyAuditAsJson}
-              onClear={() => setShowClearConfirm(true)}
-              copyFlashActive={copiedAudit}
-              maxRecords={auditMaxRecords}
-              onExport={handleExportAuditLog}
-              exportFlashActive={exportedAudit}
-              anomalySignals={auditStats?.anomalySignals ?? []}
-              anomalySuppressed={auditStats?.anomalySuppressed ?? true}
-              emptyLabel={
-                auditCleared
-                  ? "Audit log cleared. New tool calls are recorded as they happen"
-                  : undefined
-              }
-            />
-          </SettingsSection>
-
-          <SettingsSection
-            title="Turn outcomes"
-            description="How each assistant turn ended, and which tools the sessions behind those outcomes used. A tool listed against an outcome was used in that session; it didn't necessarily cause it."
-          >
-            <TurnOutcomeDiagnostics
-              auditRecords={auditRecords}
-              records={turnRecords}
-              onRefresh={refreshAuditRecords}
-              loadFailed={turnsLoadFailed}
-            />
+                  }
+                />
+              </SettingsGroup>
+            )}
           </SettingsSection>
         </>
       )}
+
+      {/* The log outlives the server: turning MCP off after something suspicious
+          must not hide the record of what happened. */}
+      <>
+        <SettingsSection
+          title="Audit log"
+          description="Every tool call over MCP, with its arguments summarised and anything that looks like a secret masked."
+        >
+          <SettingsGroup>
+            <SettingsSwitchCard
+              title="Capture audit log"
+              subtitle="New tool calls are recorded while this is on"
+              isEnabled={auditEnabled}
+              onChange={handleAuditEnabledToggle}
+              disabled={!auditConfigLoaded}
+              disabledReason={
+                auditConfigFailed
+                  ? "Couldn't read this setting. Reopen settings to try again."
+                  : undefined
+              }
+            />
+            <SettingsRow
+              label="Records kept"
+              description={`The oldest are dropped past this limit. ${MCP_AUDIT_MIN_RECORDS}–${MCP_AUDIT_MAX_RECORDS}, default ${MCP_AUDIT_DEFAULT_MAX_RECORDS}.`}
+              error={maxRecordsError}
+              control={({ labelId, descriptionId }) => (
+                <>
+                  <input
+                    id="mcp-audit-max-records"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={maxRecordsInput}
+                    onChange={(e) => {
+                      setMaxRecordsInput(e.target.value.replace(/\D/g, ""));
+                      setMaxRecordsError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleMaxRecordsSave();
+                    }}
+                    placeholder={MCP_AUDIT_DEFAULT_MAX_RECORDS.toString()}
+                    aria-labelledby={labelId}
+                    aria-describedby={descriptionId}
+                    aria-invalid={maxRecordsError ? true : undefined}
+                    className={cn(
+                      SETTINGS_CONTROL_WIDTH.number,
+                      "h-7 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 text-sm text-text-primary placeholder:text-text-placeholder font-mono tabular-nums focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                    )}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void handleMaxRecordsSave()}
+                    disabled={maxRecordsUnchanged}
+                    aria-label="Apply max records"
+                  >
+                    Apply
+                  </Button>
+                </>
+              )}
+            />
+          </SettingsGroup>
+
+          <McpAuditLogViewer
+            records={auditRecords}
+            turnRecords={turnRecords}
+            loading={auditLoading}
+            onRefresh={refreshAuditRecords}
+            onCopy={handleCopyAuditAsJson}
+            onClear={() => setShowClearConfirm(true)}
+            copyFlashActive={copiedAudit}
+            maxRecords={auditMaxRecords}
+            onExport={handleExportAuditLog}
+            exportFlashActive={exportedAudit}
+            anomalySignals={auditStats?.anomalySignals ?? []}
+            anomalySuppressed={auditStats?.anomalySuppressed ?? true}
+            emptyLabel={
+              auditCleared
+                ? auditEnabled
+                  ? "Audit log cleared. New tool calls are recorded as they happen"
+                  : "Audit log cleared. Capture is off, so nothing new is recorded"
+                : undefined
+            }
+            loadError={
+              auditLoadFailed ? (
+                <AuditLoadErrorRow
+                  message="The audit log couldn't be read"
+                  onRetry={() => void refreshAuditRecords()}
+                />
+              ) : undefined
+            }
+          />
+        </SettingsSection>
+
+        <SettingsSection
+          title="Turn outcomes"
+          description="How each assistant turn ended, and which tools the sessions behind those outcomes used. A tool listed against an outcome was used in that session; it didn't necessarily cause it."
+        >
+          <TurnOutcomeDiagnostics
+            auditRecords={auditRecords}
+            records={turnRecords}
+            onRefresh={refreshAuditRecords}
+            loadFailed={turnsLoadFailed}
+          />
+        </SettingsSection>
+      </>
 
       <ConfirmDialog
         isOpen={showDisableConfirm}
@@ -1142,7 +1182,7 @@ export function McpServerSettingsTab() {
         isOpen={showClearConfirm}
         onClose={isClearing ? undefined : handleCancelClear}
         title="Clear audit log?"
-        description={`This permanently deletes ${auditRecords.length === 1 ? "1 recorded tool call" : `${auditRecords.length} recorded tool calls`} on this machine. Turn outcomes aren't affected, and new calls are still recorded.`}
+        description={`This permanently deletes ${auditRecords.length === 1 ? "1 audit record" : `${auditRecords.length} audit records`} on this machine. Turn outcomes aren't affected.${auditEnabled ? " New tool calls will still be recorded." : ""}`}
         confirmLabel="Clear audit log"
         cancelLabel="Cancel"
         onConfirm={confirmClearAuditLog}

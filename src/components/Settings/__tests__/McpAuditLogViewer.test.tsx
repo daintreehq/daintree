@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { McpAuditLogViewer } from "../McpAuditLogViewer";
 import type { AssistantTurnRecord, McpLogRecord } from "@shared/types";
@@ -60,9 +60,10 @@ describe("McpAuditLogViewer", () => {
   });
 
   it("exposes the group-by-turn view as a pressed toggle", () => {
-    renderViewer([dispatch("1", "worktree.list")], [
-      { id: "t", timestamp: Date.now(), terminalId: null, sessionId: null, outcome: "answered" },
-    ]);
+    renderViewer(
+      [dispatch("1", "worktree.list")],
+      [{ id: "t", timestamp: Date.now(), terminalId: null, sessionId: null, outcome: "answered" }]
+    );
     const toggle = screen.getByRole("button", { name: "Group by turn" });
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(toggle);
@@ -84,5 +85,25 @@ describe("McpAuditLogViewer", () => {
       />
     );
     expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe("Copied!");
+  });
+
+  it("narrows to every unsuccessful call under Problems", () => {
+    renderViewer([
+      dispatch("1", "worktree.list"),
+      dispatch("2", "git.getDiff", "error"),
+      dispatch("3", "project.getSettings", "rate_limited"),
+    ]);
+    fireEvent.change(screen.getByLabelText("Filter audit by result"), {
+      target: { value: "problems" },
+    });
+    expect(screen.queryByText("worktree.list")).toBeNull();
+    expect(screen.getByText("git.getDiff")).toBeTruthy();
+    expect(screen.getByText("project.getSettings")).toBeTruthy();
+  });
+
+  it("names an unsuccessful outcome in words beside the tool", () => {
+    renderViewer([dispatch("3", "project.getSettings", "rate_limited")]);
+    // The glyph alone can't tell rate limited from awaiting confirmation or a collision.
+    expect(within(screen.getByRole("list")).getByText(/Rate limited/)).toBeTruthy();
   });
 });

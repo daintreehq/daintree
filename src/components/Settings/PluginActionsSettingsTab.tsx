@@ -15,6 +15,7 @@ export function PluginActionsSettingsTab() {
   const [records, setRecords] = useState<PluginActionAuditRecord[]>([]);
   const [auditEnabled, setAuditEnabled] = useState(true);
   const [configLoaded, setConfigLoaded] = useState(false);
+  const [configFailed, setConfigFailed] = useState(false);
   const [maxRecords, setMaxRecords] = useState(PLUGIN_AUDIT_DEFAULT_MAX_RECORDS);
   const [loading, setLoading] = useState(true);
   const [recordsFailed, setRecordsFailed] = useState(false);
@@ -50,6 +51,7 @@ export function PluginActionsSettingsTab() {
         setMaxRecords(cfgResult.value.maxRecords);
         setConfigLoaded(true);
       } else {
+        setConfigFailed(true);
         logError("Failed to load plugin audit config", cfgResult.reason);
       }
       if (recordsResult.status === "fulfilled") {
@@ -91,6 +93,7 @@ export function PluginActionsSettingsTab() {
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
       copyTimeoutRef.current = setTimeout(() => setCopiedFlash(false), COPY_FEEDBACK_MS);
     } catch (err) {
+      setActionError("The audit log couldn't be copied. Try again.");
       logError("Failed to copy plugin audit log", err);
     }
   }, []);
@@ -104,6 +107,7 @@ export function PluginActionsSettingsTab() {
         exportTimeoutRef.current = setTimeout(() => setExportedFlash(false), COPY_FEEDBACK_MS);
       }
     } catch (err) {
+      setActionError("The audit log couldn't be exported. Try again.");
       logError("Failed to export plugin audit log", err);
     }
   }, []);
@@ -137,6 +141,9 @@ export function PluginActionsSettingsTab() {
             isEnabled={auditEnabled}
             onChange={() => void handleEnabledToggle()}
             disabled={!configLoaded}
+            disabledReason={
+              configFailed ? "Couldn't read this setting. Reopen settings to try again." : undefined
+            }
           />
         </SettingsGroup>
         {actionError && (
@@ -172,7 +179,7 @@ export function PluginActionsSettingsTab() {
         onClose={isClearing ? undefined : () => setShowClearConfirm(false)}
         isConfirmLoading={isClearing}
         title="Clear plugin audit log?"
-        description={`This permanently deletes ${records.length === 1 ? "1 recorded plugin action" : `${records.length} recorded plugin actions`} on this machine. New dispatches will still be recorded.`}
+        description={`This permanently deletes ${records.length === 1 ? "1 recorded plugin action" : `${records.length} recorded plugin actions`} on this machine.${auditEnabled ? " New dispatches will still be recorded." : ""}`}
         confirmLabel="Clear audit log"
       />
     </div>

@@ -597,6 +597,8 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                   onReset={() => requestSessionRetentionChange(DEFAULT_RETENTION_DAYS)}
                   disabled={sessionRetentionUnknown}
                 />
+              </SettingsGroup>
+              <SettingsGroup>
                 <SettingsRow
                   label="Clear session history"
                   description="Deletes every recorded session now. Bookmarked sessions are kept."
@@ -633,6 +635,14 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
           </>
         )}
       </div>
+
+      <p className="sr-only" role="status">
+        {cacheCleared
+          ? "Every cache was cleared"
+          : historyCleared
+            ? "Session history was cleared"
+            : ""}
+      </p>
 
       <ConfirmDialog
         isOpen={showResetConfirm}
