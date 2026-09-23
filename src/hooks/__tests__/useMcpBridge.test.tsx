@@ -144,6 +144,8 @@ describe("useMcpBridge", () => {
         context?: Record<string, unknown>;
         callerInfo?: { token4LastChars: string; userAgent: string };
         sessionOrigin?: "help" | "assistant-pane" | "external";
+        offerSessionApproval?: boolean;
+        approvalOnly?: boolean;
       }) => void | Promise<void>)
     | undefined;
   let cleanupManifest: ReturnType<typeof vi.fn>;
@@ -595,6 +597,125 @@ describe("useMcpBridge", () => {
         },
       },
       confirmationDecision: "rejected",
+    });
+  });
+
+  // #12692: an agent pane above its tier is asked about, not refused. Main
+  // runs the call itself once approved, so the bridge only reports back.
+  it("asks about an approval-only request whatever its danger, and never dispatches", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry({ id: "git.push", title: "Push" }));
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-ask",
+      actionId: "git.push",
+      args: {},
+      sessionOrigin: "external",
+      offerSessionApproval: true,
+      approvalOnly: true,
+    });
+
+    await Promise.resolve();
+    const pending = useMcpConfirmStore.getState().current;
+    expect(pending?.approvalReason).toBe("above-tier");
+    expect(pending?.offerSessionApproval).toBe(true);
+
+    useMcpConfirmStore.getState().resolveCurrent("approved", undefined, "session");
+    await dispatched;
+
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+      requestId: "req-ask",
+      result: { ok: true, result: null },
+      confirmationDecision: "approved",
+      approvalScope: "session",
+    });
+  });
+
+  it("reports a declined approval-only request as USER_REJECTED", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry({ id: "git.push", title: "Push" }));
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-ask-no",
+      actionId: "git.push",
+      args: {},
+      approvalOnly: true,
+    });
+
+    await Promise.resolve();
+    useMcpConfirmStore.getState().resolveCurrent("rejected");
+    await dispatched;
+
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "req-ask-no",
+        result: expect.objectContaining({ ok: false }),
+        confirmationDecision: "rejected",
+      })
+    );
+  });
+
+  it("refuses an approval-only request for an action this view does not know", async () => {
+    mocks.get.mockReturnValue(null);
+
+    renderHook(() => useMcpBridge());
+
+    await dispatchHandler?.({
+      requestId: "req-ask-unknown",
+      actionId: "no.such.action",
+      args: {},
+      approvalOnly: true,
+    });
+
+    expect(useMcpConfirmStore.getState().current).toBeNull();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+      requestId: "req-ask-unknown",
+      result: { ok: false, error: expect.objectContaining({ code: "NOT_FOUND" }) },
+    });
+  });
+
+  it("does not offer the session scope for a tool whose dialog picks its targets", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry({ id: "terminal.killBatch" }));
+
+    renderHook(() => useMcpBridge());
+
+    void dispatchHandler?.({
+      requestId: "req-no-offer",
+      actionId: "terminal.killBatch",
+      args: { terminalIds: ["t1"] },
+      offerSessionApproval: true,
+    });
+
+    await Promise.resolve();
+    expect(useMcpConfirmStore.getState().current?.offerSessionApproval).toBeUndefined();
+  });
+
+  it("reports a session-scoped approval of an ordinary confirm dialog back to main", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-confirm-session",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1" },
+      offerSessionApproval: true,
+    });
+
+    await Promise.resolve();
+    useMcpConfirmStore.getState().resolveCurrent("approved", undefined, "session");
+    await dispatched;
+
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+      requestId: "req-confirm-session",
+      result: { ok: true, result: { ok: true } },
+      confirmationDecision: "approved",
+      approvalScope: "session",
     });
   });
 

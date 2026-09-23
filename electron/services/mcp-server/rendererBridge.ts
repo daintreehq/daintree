@@ -576,7 +576,8 @@ export function createRendererBridge(
     sessionOrigin: McpSessionOrigin,
     contextOverride?: ActionContext,
     callerInfo?: McpBearerIdentity,
-    route?: BridgeRoute
+    route?: BridgeRoute,
+    approval?: Pick<WorkspaceDispatchOptions, "offerSessionApproval" | "approvalOnly">
   ): Promise<DispatchEnvelope> {
     return new Promise((resolve, reject) => {
       let webContents: Electron.WebContents;
@@ -654,6 +655,10 @@ export function createRendererBridge(
             // rather than lumping every MCP-borne spawn under one origin.
             // Always present: main resolves it, the caller never sends it.
             sessionOrigin,
+            // Agent-pane approval controls (#12692). Main decides both; the
+            // renderer only honours them.
+            ...(approval?.offerSessionApproval ? { offerSessionApproval: true } : {}),
+            ...(approval?.approvalOnly ? { approvalOnly: true } : {}),
           });
         } catch (err) {
           clearTimeout(timer);
@@ -850,7 +855,8 @@ export function createRendererBridge(
       sessionOrigin,
       options.contextOverride,
       undefined,
-      { kind: "workspace", workspaceId }
+      { kind: "workspace", workspaceId },
+      options
     );
   }
 
@@ -886,6 +892,7 @@ export function createRendererBridge(
       requestId: string;
       result: import("../../../shared/types/actions.js").ActionDispatchResult;
       confirmationDecision?: import("../../../shared/types/ipc/mcpServer.js").McpConfirmationDecision;
+      approvalScope?: unknown;
     }
   ) => {
     if (!payload || typeof payload.requestId !== "string") return;
@@ -908,6 +915,11 @@ export function createRendererBridge(
     pending.resolve({
       result: payload.result,
       confirmationDecision: payload.confirmationDecision,
+      // Read strictly: only an approval that was offered the session scope can
+      // report it, and main checks that again before minting anything.
+      ...(payload.confirmationDecision === "approved" && payload.approvalScope === "session"
+        ? { approvalScope: "session" as const }
+        : {}),
       ...(dispatchedWorkspace ? { dispatchedWorkspace } : {}),
     });
   };

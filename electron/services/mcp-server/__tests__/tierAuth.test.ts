@@ -36,6 +36,10 @@ import {
   buildUnavailableStub,
   MCP_TARGET_POLICY_VERSION,
   type TargetPolicySessionSnapshot,
+  getReachableActionIds,
+  isApprovalRequestable,
+  isTierAutoConfirmed,
+  PANE_APPROVAL_CEILING,
 } from "../tierAuth.js";
 import { McpUnavailableActionStubSchema } from "../../../../shared/types/mcpIntrospection.js";
 import { findWireStrippedKeywords } from "../../../../shared/utils/mcpWireSchema.js";
@@ -48,6 +52,7 @@ import type { McpTargetPolicy } from "../../../../shared/types/mcpTargetPolicy.j
 import {
   McpGetSchemaResultSchema,
   McpGetSchemaWireResultSchema,
+  McpTargetPolicySchema,
 } from "../../../../shared/types/mcpTargetPolicy.js";
 
 beforeEach(() => {
@@ -2586,5 +2591,112 @@ describe("shouldExposeTool with a workspace-bound session (#11789)", () => {
     for (const tier of ["workbench", "action", "system"] as const) {
       expect(shouldExposeTool(entry, tier, BOUND)).toBe(shouldExposeTool(entry, tier));
     }
+  });
+});
+
+// #12692: an agent pane's project tier decides what runs without asking, not
+// what is refused. Everything above it, up to the pane ceiling, asks.
+describe("agent-pane approval (#12692)", () => {
+  const PANE = { workspaceBound: true, paneApproval: true };
+  const paneSnapshot = (
+    tier: "workbench" | "action" | "system",
+    perToolGranted: readonly string[] = []
+  ): TargetPolicySessionSnapshot => ({
+    tier,
+    rendererOwnedOrigin: false,
+    paneApproval: true,
+    perToolGrantedActionIds: new Set(perToolGranted),
+    nativeGrantedActionIds: new Set(),
+  });
+
+  it("caps the ceiling at the system surface a non-renderer-owned origin can hold", () => {
+    expect([...PANE_APPROVAL_CEILING].sort()).toEqual(
+      [...getTierPermittedActionIds("system", false)].sort()
+    );
+    for (const id of RENDERER_OWNED_ORIGIN_ONLY_TOOLS) {
+      expect(PANE_APPROVAL_CEILING.has(id), id).toBe(false);
+    }
+  });
+
+  it("asks only for what is above the tier and inside the ceiling", () => {
+    expect(isApprovalRequestable("action", "git.push", true)).toBe(true);
+    expect(isApprovalRequestable("workbench", "worktree.delete", true)).toBe(true);
+    // At or below the tier it simply runs.
+    expect(isApprovalRequestable("action", "worktree.delete", true)).toBe(false);
+    expect(isApprovalRequestable("system", "git.push", true)).toBe(false);
+    // Nothing outside the ceiling is ever asked for.
+    for (const id of RENDERER_OWNED_ORIGIN_ONLY_TOOLS) {
+      expect(isApprovalRequestable("workbench", id, true), id).toBe(false);
+    }
+    expect(isApprovalRequestable("workbench", "no.such.action", true)).toBe(false);
+  });
+
+  it("keeps every non-pane session's tier a hard ceiling", () => {
+    expect(isApprovalRequestable("action", "git.push", false)).toBe(false);
+    expect(isApprovalRequestable("external", "git.push", true)).toBe(false);
+    expect(getReachableActionIds("action", false, false)).toBe(
+      getTierPermittedActionIds("action", false)
+    );
+    expect(getReachableActionIds("external", false, true)).toBe(
+      getTierPermittedActionIds("external", false)
+    );
+  });
+
+  it("auto-confirms only at system, only for a pane, and never for a target-picking tool", () => {
+    expect(isTierAutoConfirmed("system", "worktree.delete", true)).toBe(true);
+    expect(isTierAutoConfirmed("action", "worktree.delete", true)).toBe(false);
+    expect(isTierAutoConfirmed("system", "worktree.delete", false)).toBe(false);
+    // Its dialog is where the user picks which terminals die (#12123).
+    expect(isTierAutoConfirmed("system", "terminal.killBatch", true)).toBe(false);
+  });
+
+  it("lists ask-reachable tools for a pane so it can request them", () => {
+    const push = makeEntry({ id: "git.push", kind: "command" });
+    expect(shouldExposeTool(push, "action", PANE)).toBe(true);
+    expect(shouldExposeTool(push, "action", { workspaceBound: true })).toBe(false);
+    expect(getReachableActionIds("workbench", false, true).has("git.push")).toBe(true);
+  });
+
+  it("reports an above-tier target as reached by approval, with a dialog", () => {
+    const policy = buildTargetPolicy(
+      makeEntry({ id: "git.push", kind: "command" }),
+      paneSnapshot("action")
+    );
+    expect(policy).toMatchObject({
+      authorizedBy: "approval",
+      requiresConfirmation: true,
+      grantable: true,
+      minimumTier: "system",
+    });
+    expect(McpTargetPolicySchema.parse(policy)).toEqual(policy);
+  });
+
+  it("reports no dialog for a confirm-gated target at system, and one below it", () => {
+    const del = makeEntry({ id: "worktree.delete", kind: "command", danger: "confirm" });
+    expect(buildTargetPolicy(del, paneSnapshot("system"))?.requiresConfirmation).toBe(false);
+    expect(buildTargetPolicy(del, paneSnapshot("action"))).toMatchObject({
+      authorizedBy: "tier",
+      requiresConfirmation: true,
+    });
+  });
+
+  it("does not advertise a target-picking tool as grantable to a pane", () => {
+    const kill = makeEntry({ id: "terminal.killBatch", kind: "command", danger: "confirm" });
+    expect(buildTargetPolicy(kill, paneSnapshot("workbench"))).toMatchObject({
+      authorizedBy: "approval",
+      grantable: false,
+    });
+  });
+
+  it("reports a session approval as waiving the dialog it replaced", () => {
+    const del = makeEntry({ id: "worktree.delete", kind: "command", danger: "confirm" });
+    expect(
+      buildTargetPolicy(del, paneSnapshot("action", ["worktree.delete"]))?.requiresConfirmation
+    ).toBe(false);
+    const push = makeEntry({ id: "git.push", kind: "command" });
+    expect(buildTargetPolicy(push, paneSnapshot("action", ["git.push"]))).toMatchObject({
+      authorizedBy: "grant",
+      requiresConfirmation: false,
+    });
   });
 });

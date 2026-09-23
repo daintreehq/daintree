@@ -8,8 +8,12 @@ import { McpUnavailableActionStubSchema } from "./mcpIntrospection.js";
  */
 export type McpTargetTier = McpSurfaceTier;
 
-/** Which mechanism admits this target for this session, in dispatch-gate order. */
-export type McpTargetAuthorizedBy = "tier" | "grant" | "nativeGrant";
+/**
+ * Which mechanism admits this target for this session, in dispatch-gate order.
+ * `approval` is an agent pane calling above its project's tier: the call is
+ * admitted only once the user approves it in Daintree (#12692).
+ */
+export type McpTargetAuthorizedBy = "tier" | "grant" | "nativeGrant" | "approval";
 
 /** Whether a client may call this target through a generic invoker. */
 export type McpTargetInvocationMode = "allowed" | "wrapper-required";
@@ -87,7 +91,10 @@ export interface McpTargetPolicy {
    * Whether a dispatch right now would block on a human confirmation dialog.
    * Live, unlike {@link danger}: a native automation grant pre-authorizes the
    * dispatch, so a `confirm` target can report `false` here until that grant is
-   * spent or expires.
+   * spent or expires. An agent pane at the `system` tier, or holding a
+   * session approval for the tool, reports `false` for the same reason
+   * (#12692); a target it would have to ask for reports `true`, whatever its
+   * declared danger.
    */
   requiresConfirmation: boolean;
   /**
@@ -109,8 +116,10 @@ export interface McpTargetPolicy {
   grantable: boolean;
   /**
    * Which mechanism admits the target, resolved in the dispatch gate's own
-   * order. `tier` is durable for the session; the other two are time-bounded,
-   * so a client that wants to know whether its access can lapse reads this.
+   * order. `tier` is durable for the session; `grant` and `nativeGrant` are
+   * time-bounded, so a client that wants to know whether its access can lapse
+   * reads this. `approval` means the next call asks the user first and is
+   * refused with `USER_REJECTED` if they decline.
    */
   authorizedBy: McpTargetAuthorizedBy;
   /** Whether a generic invoker may call this target directly. */
@@ -148,7 +157,7 @@ export const McpTargetPolicySchema = z.strictObject({
     .boolean()
     .describe("Whether arguments can raise a safe target to confirmation-gated"),
   grantable: z.boolean().describe("Whether this session could be granted it on a denial"),
-  authorizedBy: z.enum(["tier", "grant", "nativeGrant"]),
+  authorizedBy: z.enum(["tier", "grant", "nativeGrant", "approval"]),
   dynamicInvocation: z.enum(["allowed", "wrapper-required"]),
   preferredTool: z.string().nullable().describe("A typed tool to prefer over generic invocation"),
 });

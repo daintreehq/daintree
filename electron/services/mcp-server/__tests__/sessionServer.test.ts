@@ -9518,3 +9518,315 @@ describe("unscoped terminal input by session origin (#12407)", () => {
     for (const id of RESERVED) expect(names).not.toContain(id);
   });
 });
+
+// #12692: an agent pane's project tier is the line below which calls run
+// without asking. Above it, up to the pane ceiling, a call asks the user
+// instead of being refused; at `system`, confirm-gated calls skip the dialog.
+describe("agent-pane approval (#12692)", () => {
+  type Tier = "workbench" | "action" | "system";
+
+  function paneServer(
+    tier: Tier,
+    overrides: Partial<SessionServerDeps> = {},
+    sessionId = "pane-s"
+  ) {
+    const sessionStore = fakeSessionStore(tier);
+    // Live, so a session approval has a session to be minted for.
+    sessionStore.sessions.set(sessionId, {} as never);
+    const requestApproval = vi
+      .fn<NonNullable<SessionServerDeps["requestApproval"]>>()
+      .mockResolvedValue({ result: { ok: true, result: null }, confirmationDecision: "approved" });
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const appendAuditRecord = vi.fn();
+    const recordDenial = vi.fn(() => ({ tripped: false }));
+    const notifyTierMismatch = vi.fn();
+    const deps = fakeDeps({
+      sessionStore,
+      requestApproval,
+      dispatchAction,
+      appendAuditRecord,
+      recordDenial,
+      notifyTierMismatch,
+      ...overrides,
+    });
+    const server = createSessionServer(sessionId, deps);
+    return {
+      server,
+      sessionStore,
+      requestApproval: deps.requestApproval as typeof requestApproval,
+      dispatchAction: deps.dispatchAction as typeof dispatchAction,
+      appendAuditRecord,
+      recordDenial,
+      notifyTierMismatch,
+    };
+  }
+
+  function lastAudit(appendAuditRecord: ReturnType<typeof vi.fn>) {
+    return appendAuditRecord.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+  }
+
+  it("runs a confirm-gated tool at system without the dialog, and audits it as the tier's", async () => {
+    const pane = paneServer("system");
+    await pane.server.connect(makeMockTransport());
+
+    const result = await callTool(pane.server, {
+      name: "worktree.delete",
+      arguments: { worktreeId: "wt-1" },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(pane.requestApproval).not.toHaveBeenCalled();
+    expect(pane.dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), true);
+    expect(lastAudit(pane.appendAuditRecord)).toMatchObject({ authorization: "tier" });
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("still leaves a confirm-gated tool to the ordinary dialog below system", async () => {
+    const pane = paneServer("action");
+    await pane.server.connect(makeMockTransport());
+
+    await callTool(pane.server, { name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
+
+    expect(pane.requestApproval).not.toHaveBeenCalled();
+    expect(pane.dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), false);
+    expect(lastAudit(pane.appendAuditRecord).authorization).toBeUndefined();
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("asks before an above-tier call instead of refusing it, then runs it once", async () => {
+    const pane = paneServer("action");
+    await pane.server.connect(makeMockTransport());
+
+    const result = await callTool(pane.server, {
+      name: "git.push",
+      arguments: { remote: "origin" },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(pane.requestApproval).toHaveBeenCalledWith("git.push", { remote: "origin" });
+    // The approval is the confirmation — one ask, not two.
+    expect(pane.dispatchAction).toHaveBeenCalledWith("git.push", { remote: "origin" }, true);
+    expect(lastAudit(pane.appendAuditRecord)).toMatchObject({
+      confirmationDecision: "approved",
+      authorization: "user",
+    });
+    expect(pane.recordDenial).not.toHaveBeenCalled();
+    expect(pane.notifyTierMismatch).not.toHaveBeenCalled();
+    // "Once" mints nothing: the next call asks again.
+    expect(pane.sessionStore.grantCache.check("pane-s", "git.push").granted).toBe(false);
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("refuses a declined ask with USER_REJECTED and does not count it as a denial", async () => {
+    const pane = paneServer("action", {
+      requestApproval: vi.fn().mockResolvedValue({
+        result: { ok: false, error: { code: USER_REJECTED_CODE, message: "declined" } },
+        confirmationDecision: "rejected",
+      }),
+    });
+    await pane.server.connect(makeMockTransport());
+
+    const result = await callTool(pane.server, { name: "git.push", arguments: {} });
+
+    expect(result.isError).toBe(true);
+    expect(toolErrorPayload(result).code).toBe(USER_REJECTED_CODE);
+    expect(toolErrorPayload(result).retriable).toBe(false);
+    expect(pane.dispatchAction).not.toHaveBeenCalled();
+    expect(pane.recordDenial).not.toHaveBeenCalled();
+    expect(pane.notifyTierMismatch).not.toHaveBeenCalled();
+    expect(lastAudit(pane.appendAuditRecord)).toMatchObject({ confirmationDecision: "rejected" });
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("reports a missed ask as CONFIRMATION_TIMEOUT", async () => {
+    const pane = paneServer("action", {
+      requestApproval: vi.fn().mockResolvedValue({
+        result: { ok: false, error: { code: CONFIRMATION_TIMEOUT_CODE, message: "timed out" } },
+        confirmationDecision: "timeout",
+      }),
+    });
+    await pane.server.connect(makeMockTransport());
+
+    const result = await callTool(pane.server, { name: "git.push", arguments: {} });
+
+    expect(toolErrorPayload(result).code).toBe(CONFIRMATION_TIMEOUT_CODE);
+    expect(pane.dispatchAction).not.toHaveBeenCalled();
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("fails closed with CONFIRMATION_REQUIRED when no window can show the ask", async () => {
+    const pane = paneServer("action", {
+      requestApproval: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
+    });
+    await pane.server.connect(makeMockTransport());
+
+    const result = await callTool(pane.server, { name: "git.push", arguments: {} });
+
+    expect(toolErrorPayload(result).code).toBe(CONFIRMATION_REQUIRED_CODE);
+    expect(pane.dispatchAction).not.toHaveBeenCalled();
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("keeps allowing a tool approved for the session, without asking again", async () => {
+    const pane = paneServer("action", {
+      requestApproval: vi.fn().mockResolvedValue({
+        result: { ok: true, result: null },
+        confirmationDecision: "approved",
+        approvalScope: "session",
+      }),
+    });
+    await pane.server.connect(makeMockTransport());
+
+    await callTool(pane.server, { name: "git.push", arguments: {} });
+    await callTool(pane.server, { name: "git.push", arguments: { force: false } });
+
+    expect(pane.requestApproval).toHaveBeenCalledTimes(1);
+    expect(pane.dispatchAction).toHaveBeenNthCalledWith(2, "git.push", { force: false }, true);
+    expect(lastAudit(pane.appendAuditRecord)).toMatchObject({ authorization: "session-grant" });
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("mints a session approval from the ordinary dialog of an own-tier tool", async () => {
+    const dispatchAction = vi
+      .fn()
+      .mockResolvedValueOnce({
+        result: { ok: true, result: { ok: 1 } },
+        confirmationDecision: "approved",
+        approvalScope: "session",
+      })
+      .mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const pane = paneServer("action", { dispatchAction });
+    await pane.server.connect(makeMockTransport());
+
+    await callTool(pane.server, { name: "worktree.delete", arguments: { worktreeId: "wt-1" } });
+    await callTool(pane.server, { name: "worktree.delete", arguments: { worktreeId: "wt-2" } });
+
+    expect(dispatchAction).toHaveBeenNthCalledWith(1, "worktree.delete", expect.any(Object), false);
+    expect(dispatchAction).toHaveBeenNthCalledWith(2, "worktree.delete", expect.any(Object), true);
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("neither runs nor remembers an approval for a session that ended while the user decided", async () => {
+    type Envelope = Awaited<ReturnType<NonNullable<SessionServerDeps["requestApproval"]>>>;
+    let approve!: (envelope: Envelope) => void;
+    const pane = paneServer("action", {
+      requestApproval: vi.fn(
+        () =>
+          new Promise<Envelope>((resolve) => {
+            approve = resolve;
+          })
+      ),
+    });
+    await pane.server.connect(makeMockTransport());
+
+    const call = callTool(pane.server, { name: "git.push", arguments: {} }).catch((err) => err);
+    await vi.waitFor(() => expect(pane.requestApproval).toHaveBeenCalled());
+    // Revoked mid-dialog.
+    pane.sessionStore.sessions.clear();
+    vi.mocked(pane.sessionStore.getTier).mockReturnValue(null);
+    approve({
+      result: { ok: true, result: null },
+      confirmationDecision: "approved",
+      approvalScope: "session",
+    });
+    await call;
+
+    expect(pane.dispatchAction).not.toHaveBeenCalled();
+    expect(pane.sessionStore.grantCache.check("pane-s", "git.push").granted).toBe(false);
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("asks before a main-executed tool above the tier runs", async () => {
+    const handleProjectRunCheck = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const requestApproval = vi.fn().mockResolvedValue({
+      result: { ok: false, error: { code: USER_REJECTED_CODE, message: "declined" } },
+      confirmationDecision: "rejected",
+    });
+    const pane = paneServer("workbench", { handleProjectRunCheck, requestApproval });
+    await pane.server.connect(makeMockTransport());
+
+    const result = await callTool(pane.server, {
+      name: "project.runCheck",
+      arguments: { projectId: "proj-1", runnerId: "npm-test" },
+    });
+
+    expect(requestApproval).toHaveBeenCalledWith("project.runCheck", expect.any(Object));
+    expect(toolErrorPayload(result).code).toBe(USER_REJECTED_CODE);
+    expect(handleProjectRunCheck).not.toHaveBeenCalled();
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("leaves a target-picking tool's own dialog in place after an approval", async () => {
+    // `terminal.killBatch` is an `action` tool, so a workbench pane asks for it.
+    const pane = paneServer("workbench");
+    await pane.server.connect(makeMockTransport());
+
+    await callTool(pane.server, { name: "terminal.killBatch", arguments: { terminalIds: ["t1"] } });
+
+    expect(pane.requestApproval).toHaveBeenCalledTimes(1);
+    expect(pane.dispatchAction).toHaveBeenCalledWith(
+      "terminal.killBatch",
+      expect.any(Object),
+      false
+    );
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("leaves a recipe dispatch's own dialog to bind the run after an approval", async () => {
+    // `recipe.run` is an `action` tool. Its dialog is what ties the run to the
+    // recipe the user read (#12263), so the above-tier approval must not stand
+    // in for it.
+    const pane = paneServer("workbench");
+    await pane.server.connect(makeMockTransport());
+
+    await callTool(pane.server, { name: "recipe.run", arguments: { recipeId: "r-1" } });
+
+    expect(pane.requestApproval).toHaveBeenCalledTimes(1);
+    expect(pane.dispatchAction).toHaveBeenCalledWith("recipe.run", expect.any(Object), false);
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("refuses what is outside the pane ceiling without asking", async () => {
+    const pane = paneServer("system");
+    await pane.server.connect(makeMockTransport());
+
+    const result = await callTool(pane.server, {
+      name: "terminal.sendCommand",
+      arguments: { terminalId: "t1", command: "ls" },
+    });
+
+    expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
+    expect(pane.requestApproval).not.toHaveBeenCalled();
+    expect(pane.dispatchAction).not.toHaveBeenCalled();
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("keeps a non-pane session's tier a hard ceiling", async () => {
+    const pane = paneServer("action", { requestApproval: undefined });
+    await pane.server.connect(makeMockTransport());
+
+    const result = await callTool(pane.server, { name: "git.push", arguments: {} });
+
+    expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
+    expect(pane.recordDenial).toHaveBeenCalledWith("pane-s", "tierMismatch");
+    expect(pane.dispatchAction).not.toHaveBeenCalled();
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("lists above-tier tools to a pane so it can ask for them", async () => {
+    const manifest = ["worktree.list", "git.push"].map((id) => makeManifestEntry(id));
+    const pane = paneServer("workbench", { requestManifest: vi.fn().mockResolvedValue(manifest) });
+    const plain = paneServer("workbench", {
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      requestApproval: undefined,
+    });
+
+    const paneNames = (await listBaseTools(pane.server)).map((tool) => tool.name);
+    const plainNames = (await listBaseTools(plain.server)).map((tool) => tool.name);
+
+    expect(paneNames).toContain("git.push");
+    expect(plainNames).not.toContain("git.push");
+    pane.sessionStore.grantCache.dispose();
+    plain.sessionStore.grantCache.dispose();
+  });
+});

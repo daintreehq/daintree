@@ -32,19 +32,20 @@ const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
   {
     value: "workbench",
     label: "Workbench",
-    description: "Read-only: worktree status, terminal output, file search, project history",
+    description:
+      "Read-only: worktree status, terminal output, file search, project history. Anything more asks you first.",
   },
   {
     value: "action",
     label: "Action",
     description:
-      "Workbench + create worktrees, open terminals and run commands in them, confirm-gated worktree deletes. Over MCP, an agent can only type into terminals it opened.",
+      "Workbench + create worktrees, open terminals and run commands in them. Destructive actions such as worktree deletes, and anything above this tier, ask you first. Over MCP, an agent can only type into terminals it opened.",
   },
   {
     value: "system",
     label: "System",
     description:
-      "Action + git commits and pushes, forge and file writes, terminal arming, worktree creation anywhere on disk",
+      "Action + git commits and pushes, forge and file writes, terminal arming, worktree creation anywhere on disk. Runs all of it, destructive actions included, without asking.",
   },
 ];
 
@@ -699,7 +700,7 @@ export function GeneralTab({
       <SettingsSection
         id="project-agent-integrations"
         title="Agent integrations"
-        description="How much of Daintree the Claude Code agents launched in this project's worktrees can reach. Newly launched agents pick up the change."
+        description="How much of Daintree the Claude Code agents launched in this project's worktrees can do without asking you. Anything beyond the tier asks for your approval first. Newly launched agents pick up the change."
       >
         <SettingsGroup className="checkbox-neutral">
           <fieldset className="divide-y divide-border-subtle">
@@ -724,8 +725,10 @@ export function GeneralTab({
               <p className="text-xs text-text-secondary leading-relaxed select-text">
                 System tier adds git commits and pushes, forge issue/PR writes, clipboard and file
                 writes, terminal arming, and worktree creation anywhere on disk — some of these are
-                irreversible or visible to teammates. Only enable it for projects where you trust
-                the agent to take that kind of action.
+                irreversible or visible to teammates. It also removes the approval step for
+                destructive actions: agents delete worktrees and run the rest without asking you. A
+                force delete that would discard changes still asks you to type its name. Only enable
+                it for projects where you trust the agent to take that kind of action.
               </p>
             </div>
           )}

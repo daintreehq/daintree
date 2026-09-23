@@ -2108,6 +2108,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          * than trusting the declaration. That fallback is the real guarantee.
          */
         sessionOrigin?: import("./mcpServer.js").McpSessionOrigin;
+        /**
+         * Offer "Allow for this session" in any dialog this dispatch raises
+         * (#12692). Set by main only for an agent pane.
+         */
+        offerSessionApproval?: boolean;
+        /**
+         * Ask the user about this call and report the decision without
+         * dispatching it (#12692): an agent pane calling above its tier.
+         */
+        approvalOnly?: boolean;
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */
@@ -2115,6 +2125,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       requestId: string;
       result: import("../actions.js").ActionDispatchResult;
       confirmationDecision?: import("./mcpServer.js").McpConfirmationDecision;
+      /** Present only when the approver chose to keep allowing the tool (#12692). */
+      approvalScope?: import("./mcpServer.js").McpApprovalScope;
     }): void;
   };
   pluginBridge: {
