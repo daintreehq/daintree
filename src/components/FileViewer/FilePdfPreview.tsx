@@ -155,10 +155,10 @@ export function FilePdfPreview({
   if (frameSrc !== null) {
     return (
       <iframe
-        // Empty string, never {true}: React omits an unknown attribute given a
-        // boolean value, which would silently drop the credentialless behavior
-        // the COEP shell depends on.
-        credentialless=""
+        // A bare boolean, never "": React 19.3 treats credentialless as a known
+        // boolean attribute and omits it for an empty string, which would
+        // silently drop the behavior the COEP shell depends on.
+        credentialless
         src={frameSrc}
         title={label}
         referrerPolicy="no-referrer"

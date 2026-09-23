@@ -127,7 +127,7 @@ export default tseslint.config(
       unicorn,
     },
     rules: {
-      "unicorn/expiring-todo-comments": ["error", { ignoreDatesOnPullRequests: true }],
+      "unicorn/expiring-todo-comments": ["error", { checkDates: true }],
     },
   },
 

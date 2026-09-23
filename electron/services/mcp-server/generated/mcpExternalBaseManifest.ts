@@ -250,14 +250,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         presetId: {
           description:
             "Applies one of the user's saved launch presets for this agent. Pass an explicit null to ignore the configured default preset rather than inherit it.",
-          anyOf: [
-            {
-              type: "string",
-            },
-            {
-              type: "null",
-            },
-          ],
+          type: ["string", "null"],
         },
         activateDockOnCreate: {
           description:
@@ -335,14 +328,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "boolean",
         },
         terminalId: {
-          anyOf: [
-            {
-              type: "string",
-            },
-            {
-              type: "null",
-            },
-          ],
+          type: ["string", "null"],
         },
         location: {
           anyOf: [
@@ -367,44 +353,16 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           ],
         },
         worktreeId: {
-          anyOf: [
-            {
-              type: "string",
-            },
-            {
-              type: "null",
-            },
-          ],
+          type: ["string", "null"],
         },
         worktreePath: {
-          anyOf: [
-            {
-              type: "string",
-            },
-            {
-              type: "null",
-            },
-          ],
+          type: ["string", "null"],
         },
         branch: {
-          anyOf: [
-            {
-              type: "string",
-            },
-            {
-              type: "null",
-            },
-          ],
+          type: ["string", "null"],
         },
         cwd: {
-          anyOf: [
-            {
-              type: "string",
-            },
-            {
-              type: "null",
-            },
-          ],
+          type: ["string", "null"],
         },
       },
       required: [
@@ -917,14 +875,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                         type: "string",
                       },
                       worktreeId: {
-                        anyOf: [
-                          {
-                            type: "string",
-                          },
-                          {
-                            type: "null",
-                          },
-                        ],
+                        type: ["string", "null"],
                       },
                       submission: {
                         type: "string",
@@ -938,14 +889,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                         type: "string",
                       },
                       agentState: {
-                        anyOf: [
-                          {
-                            type: "string",
-                          },
-                          {
-                            type: "null",
-                          },
-                        ],
+                        type: ["string", "null"],
                       },
                       waitingReason: {
                         type: "string",
@@ -972,14 +916,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                         type: "object",
                         properties: {
                           command: {
-                            anyOf: [
-                              {
-                                type: "string",
-                              },
-                              {
-                                type: "null",
-                              },
-                            ],
+                            type: ["string", "null"],
                           },
                           passed: {
                             type: "boolean",
@@ -988,14 +925,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                             type: "number",
                           },
                           failureSummary: {
-                            anyOf: [
-                              {
-                                type: "string",
-                              },
-                              {
-                                type: "null",
-                              },
-                            ],
+                            type: ["string", "null"],
                           },
                           truncated: {
                             type: "boolean",
@@ -1414,14 +1344,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
         },
         content: {
-          anyOf: [
-            {
-              type: "string",
-            },
-            {
-              type: "null",
-            },
-          ],
+          type: ["string", "null"],
         },
         lineCount: {
           type: "number",
@@ -1517,24 +1440,10 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 type: "string",
               },
               agentId: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "null",
-                  },
-                ],
+                type: ["string", "null"],
               },
               agentState: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "null",
-                  },
-                ],
+                type: ["string", "null"],
               },
               waitingReason: {
                 type: "string",
@@ -1579,14 +1488,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 type: "object",
                 properties: {
                   command: {
-                    anyOf: [
-                      {
-                        type: "string",
-                      },
-                      {
-                        type: "null",
-                      },
-                    ],
+                    type: ["string", "null"],
                   },
                   passed: {
                     type: "boolean",
@@ -1595,14 +1497,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                     type: "number",
                   },
                   failureSummary: {
-                    anyOf: [
-                      {
-                        type: "string",
-                      },
-                      {
-                        type: "null",
-                      },
-                    ],
+                    type: ["string", "null"],
                   },
                   truncated: {
                     type: "boolean",
@@ -1617,16 +1512,9 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 type: "object",
                 properties: {
                   message: {
-                    anyOf: [
-                      {
-                        type: "string",
-                      },
-                      {
-                        type: "null",
-                      },
-                    ],
                     description:
                       "Rows rejoined, so lossy — never data. Null for a bare marker. Read the agent's last message for exact text.",
+                    type: ["string", "null"],
                   },
                   observedAt: {
                     type: "number",
@@ -1642,14 +1530,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 additionalProperties: false,
               },
               recentOutput: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "null",
-                  },
-                ],
+                type: ["string", "null"],
               },
               recentOutputTruncated: {
                 description:
@@ -1874,48 +1755,20 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 ],
               },
               worktreeId: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "null",
-                  },
-                ],
+                type: ["string", "null"],
               },
               title: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "null",
-                  },
-                ],
+                type: ["string", "null"],
               },
               location: {
                 type: "string",
                 enum: ["grid", "dock", "overlay", "trash", "background", "dialog"],
               },
               agentId: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "null",
-                  },
-                ],
+                type: ["string", "null"],
               },
               agentState: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "null",
-                  },
-                ],
+                type: ["string", "null"],
               },
               isInputLocked: {
                 type: "boolean",
@@ -2074,14 +1927,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                   type: "object",
                   properties: {
                     id: {
-                      anyOf: [
-                        {
-                          type: "string",
-                        },
-                        {
-                          type: "null",
-                        },
-                      ],
+                      type: ["string", "null"],
                     },
                     text: {
                       type: "string",
@@ -2093,38 +1939,17 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                       description: "The start of the message was cut to fit.",
                     },
                     recordedAt: {
-                      anyOf: [
-                        {
-                          type: "number",
-                        },
-                        {
-                          type: "null",
-                        },
-                      ],
+                      type: ["number", "null"],
                     },
                     stopReason: {
-                      anyOf: [
-                        {
-                          type: "string",
-                        },
-                        {
-                          type: "null",
-                        },
-                      ],
                       description:
                         "Raw from the transcript, not a verdict on whether the turn ended.",
+                      type: ["string", "null"],
                     },
                     nextCursor: {
-                      anyOf: [
-                        {
-                          type: "string",
-                        },
-                        {
-                          type: "null",
-                        },
-                      ],
                       description:
                         "Pass as `cursor` for the text before this. Null once nothing earlier is in reach.",
+                      type: ["string", "null"],
                     },
                   },
                   required: ["id", "text", "truncated", "recordedAt", "stopReason", "nextCursor"],

@@ -441,7 +441,7 @@ describe("agentActions adversarial", () => {
         properties: z.record(
           z.string(),
           z.object({
-            type: z.string().optional(),
+            type: z.union([z.string(), z.array(z.string())]).optional(),
             maxLength: z.number().optional(),
             description: z.string().optional(),
           })

@@ -305,7 +305,7 @@ export async function runNew(name?: string, opts: RunNewOptions = {}): Promise<v
     const answer = await p.text({
       message: "Plugin name (also the directory)",
       placeholder: "issue-helper",
-      validate: (value) => segmentError(value, "Plugin name") ?? undefined,
+      validate: (value) => segmentError(value ?? "", "Plugin name") ?? undefined,
     });
     if (cancelled(answer)) {
       p.cancel("Cancelled");
@@ -331,7 +331,7 @@ export async function runNew(name?: string, opts: RunNewOptions = {}): Promise<v
     const answer = await p.text({
       message: "Publisher",
       placeholder: "acme",
-      validate: (value) => segmentError(value, "Publisher") ?? undefined,
+      validate: (value) => segmentError(value ?? "", "Publisher") ?? undefined,
     });
     if (cancelled(answer)) {
       p.cancel("Cancelled");

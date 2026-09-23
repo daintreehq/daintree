@@ -144,7 +144,7 @@ describe("EditorService adversarial", () => {
     expect(binary).toBe(ANTIGRAVITY_LAUNCHER);
     expect(options).toMatchObject({ detached: true, stdio: "ignore", cleanup: false });
     const child = children[0]!;
-    expect(child.unref).toHaveBeenCalledTimes(1);
+    expect(child.nodeChildProcess.unref).toHaveBeenCalledTimes(1);
     expect(child.catch).toHaveBeenCalledWith(expect.any(Function));
     expect(shellMock.openPath).not.toHaveBeenCalled();
   });

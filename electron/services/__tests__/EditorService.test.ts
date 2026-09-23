@@ -331,14 +331,14 @@ describe("EditorService.openFile", () => {
       cleanup: false,
     });
     const child = children[0]!;
-    expect(child.unref).toHaveBeenCalled();
+    expect(child.nodeChildProcess.unref).toHaveBeenCalled();
     expect(child.catch).toHaveBeenCalledWith(expect.any(Function));
     // The suppression catch is separate from the verification consumer; both
     // read the same promise.
     expect(child.then).toHaveBeenCalled();
     // 'spawn' won the race and `once` removed itself, so nothing stays attached
     // to a detached child that may outlive the app.
-    expect(child.listenerCount("spawn")).toBe(0);
+    expect(child.nodeChildProcess.listenerCount("spawn")).toBe(0);
 
     const { shell } = await import("electron");
     expect(shell.openPath).not.toHaveBeenCalled();
@@ -396,7 +396,7 @@ describe("EditorService.openFile", () => {
     expect(execaMock.execa).toHaveBeenCalledTimes(2);
     expect(execaMock.execa.mock.calls[0]?.[0]).toBe("/bin/broken-editor");
     expect(execaMock.execa.mock.calls[1]?.[0]).toBe("open");
-    expect(children[0]!.unref).toHaveBeenCalled();
+    expect(children[0]!.nodeChildProcess.unref).toHaveBeenCalled();
 
     const { shell } = await import("electron");
     expect(shell.openPath).not.toHaveBeenCalled();
