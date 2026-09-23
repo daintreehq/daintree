@@ -440,6 +440,71 @@ describe("QuickRun", () => {
     }
   });
 
+  it("completes the lit command into the field on Tab without running it", () => {
+    seedHistory("npm test -- src/components/Project/__tests__/QuickRun.test.tsx");
+    render(<Footer projectId="test-project" />);
+    const input = openPanel();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    const tab = fireEvent.keyDown(input, { key: "Tab" });
+    expect(tab).toBe(false); // default prevented: focus stays for editing
+    expect(screen.getByDisplayValue(/QuickRun\.test\.tsx$/)).toBe(input);
+    expect(mockAddTerminal).not.toHaveBeenCalled();
+
+    // With the field already holding the lit command, Tab moves on as usual.
+    expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(true);
+  });
+
+  it("shows a pinned command's own settings on the toggles, and overrides them for one launch", () => {
+    settingsMock.runCommands = [
+      { id: "s", name: "Docs", command: "npx serve docs", preferredLocation: "dock" },
+    ];
+    mockAddTerminal.mockResolvedValue(undefined);
+    try {
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      const dockToggle = screen.getByRole("button", { name: /run in the dock/i });
+      expect(dockToggle.getAttribute("aria-pressed")).toBe("false");
+
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(dockToggle.getAttribute("aria-pressed")).toBe("true");
+
+      fireEvent.click(dockToggle);
+      expect(dockToggle.getAttribute("aria-pressed")).toBe("false");
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(mockAddTerminal).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "npx serve docs", location: "grid" })
+      );
+      // The saved command itself was not rewritten.
+      expect(settingsMock.promoteToSaved).not.toHaveBeenCalled();
+    } finally {
+      settingsMock.runCommands = [];
+    }
+  });
+
+  it("brings a lit row back into view when the list reopens", () => {
+    seedHistory("a", "b", "c");
+    const scrolled: string[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.id);
+    };
+    try {
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      const lit = input.getAttribute("aria-activedescendant")!;
+      fireEvent.blur(input);
+      scrolled.length = 0;
+      fireEvent.click(input);
+      expect(input.getAttribute("aria-activedescendant")).toBe(lit);
+      expect(scrolled).toContain(lit);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
   it("runs the same command from the arrow as from Enter", () => {
     seedHistory("npm test", "npm run lint");
     mockAddTerminal.mockResolvedValue(undefined);

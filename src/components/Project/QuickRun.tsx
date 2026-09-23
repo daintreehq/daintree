@@ -84,10 +84,24 @@ const SUMMARY_ID = "quick-run-summary";
  */
 const COMMAND_TEXT_CLASS = "font-mono [font-variant-ligatures:none]";
 
-/** The keyboard route to pin or unpin the lit row, for sighted users. */
-function PinHint({ saved, className }: { saved: boolean; className?: string }) {
+/** The keyboard routes for the lit row, for sighted users. */
+function PinHint({
+  saved,
+  canComplete,
+  className,
+}: {
+  saved: boolean;
+  canComplete?: boolean;
+  className?: string;
+}) {
   return (
     <span aria-hidden="true" className={cn("shrink-0 items-center gap-1", className)}>
+      {canComplete && (
+        <>
+          <KbdChord shortcut="Tab" density="compact" />
+          <span className="mr-1">Edit</span>
+        </>
+      )}
       <KbdChord shortcut="Alt+P" density="compact" />
       {saved ? "Unpin" : "Pin"}
     </span>
@@ -225,6 +239,11 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
 
   const [input, setInput] = useState("");
   const [launchError, setLaunchError] = useState<string | null>(null);
+  const [launchOverride, setLaunchOverride] = useState<{
+    value: string;
+    dock?: boolean;
+    restart?: boolean;
+  } | null>(null);
   const [runAsDocked, setRunAsDocked] = useState(false);
   const [autoRestart, setAutoRestart] = useState(() => {
     try {
@@ -467,19 +486,25 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     });
   };
 
-  // A pinned command carries its own output and restart choice. Resolved here,
-  // before anything runs, so the summary under the list can state exactly what
-  // will happen rather than the toggles quietly flipping afterwards.
-  const resolveRunOptions = (item: SuggestionItem) => ({
-    dock:
-      item.type === "saved" && item.preferredLocation !== undefined
-        ? item.preferredLocation === "dock"
-        : runAsDocked,
-    restart:
-      item.type === "saved" && item.preferredAutoRestart !== undefined
-        ? item.preferredAutoRestart
-        : autoRestart,
-  });
+  // A pinned command carries its own output and restart choice, and a toggle
+  // pressed while that command is lit overrides it for this launch only.
+  // Resolved before anything runs, so the summary, the toggles and the launch
+  // all state the same thing.
+  const resolveRunOptions = (item: SuggestionItem) => {
+    const override = launchOverride?.value === item.value ? launchOverride : undefined;
+    return {
+      dock:
+        override?.dock ??
+        (item.type === "saved" && item.preferredLocation !== undefined
+          ? item.preferredLocation === "dock"
+          : runAsDocked),
+      restart:
+        override?.restart ??
+        (item.type === "saved" && item.preferredAutoRestart !== undefined
+          ? item.preferredAutoRestart
+          : autoRestart),
+    };
+  };
 
   const handleRunItem = async (item: SuggestionItem) => {
     const cmd = item.value;
@@ -498,6 +523,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     setInput("");
     setFocusedSuggestionIndex(-1);
     setLaunchError(null);
+    setLaunchOverride(null);
 
     try {
       await addPanel({
@@ -544,13 +570,43 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     document
       .getElementById(suggestionOptionId(activeIndex))
       ?.scrollIntoView?.({ block: "nearest" });
-  }, [activeIndex]);
+    // `listOpen` too: reopening mounts a fresh scroller at the top while the
+    // lit row may be one the user had scrolled down to.
+  }, [activeIndex, listOpen]);
 
   // The one thing Run means, for Enter and the arrow alike: the lit row, or
   // with the list shut, the text in the field.
   const runTarget: SuggestionItem | undefined =
     highlighted ??
     (searching ? { label: input.trim(), value: input.trim(), type: "typed" } : undefined);
+
+  const effective = runTarget
+    ? resolveRunOptions(runTarget)
+    : { dock: runAsDocked, restart: autoRestart };
+
+  // A toggle changes the default — unless the lit command brings its own value
+  // for it, in which case the press overrides that value for this launch and
+  // leaves the saved command alone.
+  const toggleOption = (key: "dock" | "restart") => {
+    const ownsKey =
+      runTarget?.type === "saved" &&
+      (key === "dock"
+        ? runTarget.preferredLocation !== undefined
+        : runTarget.preferredAutoRestart !== undefined);
+    if (runTarget && ownsKey) {
+      const base = launchOverride?.value === runTarget.value ? launchOverride : null;
+      setLaunchOverride({ ...base, value: runTarget.value, [key]: !effective[key] });
+      return;
+    }
+    if (key === "dock") setRunAsDocked(!runAsDocked);
+    else handleToggleAutoRestart();
+  };
+
+  // Tab completes: the lit command goes into the field to be read in full or
+  // edited, without running. Only while it differs from what is there, so a
+  // second Tab moves focus on as usual rather than trapping it.
+  const canComplete =
+    highlighted != null && normalizeCommand(highlighted.value) !== normalizedInput;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
@@ -568,6 +624,10 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
       // of the one control they came here for.
       setShowSuggestions(false);
       setFocusedSuggestionIndex(-1);
+    } else if (e.key === "Tab" && !e.shiftKey && canComplete && highlighted) {
+      e.preventDefault();
+      setInput(highlighted.value);
+      setFocusedSuggestionIndex(LEAD_INDEX);
     } else if (e.altKey && e.code === "KeyP" && listOpen && highlighted) {
       // `code`, not `key`: Option+P types "π" on a Mac layout.
       e.preventDefault();
@@ -668,9 +728,6 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   // The branch, beside a branch glyph — the worktree's folder name is often
   // something else entirely (worktree "main" on branch "develop").
   const destinationLabel = activeWorktree?.branch || activeWorktree?.name || "";
-  const effective = runTarget
-    ? resolveRunOptions(runTarget)
-    : { dock: runAsDocked, restart: autoRestart };
   const runSummary = `${effective.dock ? "Dock" : "Grid"}${effective.restart ? " · Restarts" : ""}`;
   const isWorktreeValid = activeWorktree != null && activeWorktree.path != null;
 
@@ -763,17 +820,20 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                   "@max-[280px]/footer:order-last @max-[280px]/footer:basis-full @max-[280px]/footer:justify-end @max-[280px]/footer:border-t @max-[280px]/footer:border-border-subtle @max-[280px]/footer:py-0.5 @max-[280px]/footer:pr-1.5"
                 )}
               >
-                {/* Auto-Restart Toggle */}
+                {/* The toggles show what the next run will actually do,
+                    including a lit pinned command's own choice. Mousedown is
+                    held so the field — and its lit row — keep focus. */}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={handleToggleAutoRestart}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => toggleOption("restart")}
                       className={cn(
                         "rounded-[var(--radius-sm)] border p-1 transition-colors",
                         // The fill alone cleared about 1.1:1; the outline is the
                         // same neutral token the selected row's rail spends.
-                        autoRestart
+                        effective.restart
                           ? "border-selection-outline bg-overlay-medium text-text-primary"
                           : "border-transparent text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
                       )}
@@ -781,13 +841,13 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                       // is `aria-pressed`'s job, and a label that flips reads
                       // as a different control each time it is pressed.
                       aria-label="Auto-restart"
-                      aria-pressed={autoRestart}
+                      aria-pressed={effective.restart}
                     >
                       <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
-                    {autoRestart ? "Auto-restart: on" : "Auto-restart: off"}
+                    {effective.restart ? "Auto-restart: on" : "Auto-restart: off"}
                   </TooltipContent>
                 </Tooltip>
 
@@ -796,12 +856,13 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={() => setRunAsDocked(!runAsDocked)}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => toggleOption("dock")}
                       className={cn(
                         "rounded-[var(--radius-sm)] border p-1 transition-colors",
                         // The fill alone cleared about 1.1:1; the outline is the
                         // same neutral token the selected row's rail spends.
-                        runAsDocked
+                        effective.dock
                           ? "border-selection-outline bg-overlay-medium text-text-primary"
                           : "border-transparent text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
                       )}
@@ -809,9 +870,9 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                       // state on `aria-pressed`. Pressed means docked, which
                       // is the non-default half of the pair.
                       aria-label="Run in the dock as a background task"
-                      aria-pressed={runAsDocked}
+                      aria-pressed={effective.dock}
                     >
-                      {runAsDocked ? (
+                      {effective.dock ? (
                         <PanelBottom className="h-3.5 w-3.5" aria-hidden="true" />
                       ) : (
                         <LayoutGrid className="h-3.5 w-3.5" aria-hidden="true" />
@@ -819,7 +880,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
-                    {runAsDocked
+                    {effective.dock
                       ? "Output: dock (background task)"
                       : "Output: grid (interactive terminal)"}
                   </TooltipContent>
@@ -919,6 +980,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                         </span>
                         <PinHint
                           saved={highlighted.type === "saved"}
+                          canComplete={canComplete}
                           className="flex @max-[280px]/footer:hidden"
                         />
                       </div>
@@ -947,7 +1009,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                     </div>
                     {highlighted && (
                       <span className="sr-only">
-                        {`${PIN_KEY_LABEL} to ${highlighted.type === "saved" ? "unpin" : "pin"}`}
+                        {`${canComplete ? "Tab to edit, " : ""}${PIN_KEY_LABEL} to ${highlighted.type === "saved" ? "unpin" : "pin"}`}
                       </span>
                     )}
                   </div>

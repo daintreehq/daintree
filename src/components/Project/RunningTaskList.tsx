@@ -29,6 +29,18 @@ function formatElapsed(ms: number): string {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
+/**
+ * Dismissed task ids for this renderer's session. Each project has its own view
+ * and V8 context, so this is already per project; ids are pruned as their
+ * panels go away.
+ */
+let sessionDismissedIds: ReadonlySet<string> = new Set();
+
+/** Tests seed the same panel ids in every case; real ids are never reused. */
+export function resetDismissedTasks(): void {
+  sessionDismissedIds = new Set();
+}
+
 interface RunningTaskListProps {
   worktreeId: string;
 }
@@ -57,7 +69,12 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
   const restartTerminal = usePanelStore((s) => s.restartTerminal);
 
   const [now, setNow] = useState(Date.now());
-  const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => new Set());
+  const [dismissedIds, setDismissedIds] = useState<ReadonlySet<string>>(() => sessionDismissedIds);
+  // The list unmounts whenever Quick Run is collapsed; a dismissal has to
+  // outlive that or collapsing and reopening brings every dismissed row back.
+  useEffect(() => {
+    sessionDismissedIds = dismissedIds;
+  }, [dismissedIds]);
 
   // Tick for elapsed time — only active when there are running tasks
   const hasRunning = quickRunTerminals.some(

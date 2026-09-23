@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { primeRadix } from "@/components/ui/radix-loader";
 import type { PtyPanelData } from "@shared/types/panel";
-import { RunningTaskList } from "../RunningTaskList";
+import { RunningTaskList, resetDismissedTasks } from "../RunningTaskList";
 
 const WORKTREE_ID = "wt-1";
 
@@ -47,6 +47,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetDismissedTasks();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
@@ -229,6 +230,20 @@ describe("RunningTaskList overflow", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps a dismissal when the list unmounts and mounts again", () => {
+    // Collapsing Quick Run unmounts the list; reopening must not bring back
+    // what the user already cleared.
+    seedTasks(2, { runtimeStatus: "exited", exitCode: 1 });
+    const first = render(<RunningTaskList worktreeId={WORKTREE_ID} />);
+    const row = screen.getByText("cmd-1").closest<HTMLElement>("[data-task-row]")!;
+    fireEvent.click(within(row).getByLabelText("Dismiss"));
+    first.unmount();
+
+    render(<RunningTaskList worktreeId={WORKTREE_ID} />);
+    expect(screen.queryByText("cmd-1")).toBeNull();
+    expect(screen.getByText("cmd-0")).toBeTruthy();
   });
 
   it("drops the disclosure once the tail shrinks back under the cap", () => {
