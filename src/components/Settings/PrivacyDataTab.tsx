@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
@@ -34,19 +35,18 @@ const TELEMETRY_OPTIONS: Array<{
   {
     level: "off",
     title: "Off",
-    description: "No data is collected or sent. Crash reports are not submitted.",
+    description: "Nothing is sent. Crash reports aren't submitted.",
   },
   {
     level: "errors",
     title: "Errors only",
-    description:
-      "Crash reports and error details are sent to help improve stability. No usage analytics.",
+    description: "Crash reports and error details are sent. No usage analytics.",
   },
   {
     level: "full",
     title: "Full usage",
     description:
-      "Crash reports and anonymous usage analytics are sent to help improve the product.",
+      "Crash reports plus anonymous usage analytics. Analytics recorded before you chose a level may be sent too.",
   },
 ];
 
@@ -59,13 +59,13 @@ const TELEMETRY_DISCLOSURE: Array<{
 }> = [
   {
     level: "off",
-    title: "Off level",
+    title: "Off",
     summary: "No data is collected or transmitted.",
     fields: [],
   },
   {
     level: "errors",
-    title: "Errors only level",
+    title: "Errors only",
     summary:
       "Crash reports and error details are sent to Sentry. Home-directory paths are redacted from stack frames and error messages before transmission. Usage analytics aren't sent, and any analytics events recorded before you chose a level are discarded.",
     fields: [
@@ -79,7 +79,7 @@ const TELEMETRY_DISCLOSURE: Array<{
   },
   {
     level: "full",
-    title: "Full usage level",
+    title: "Full usage",
     summary:
       "Crash reports and error details, plus anonymous usage analytics events, including those listed below. Each event carries its name, a timestamp, and event-specific properties — never file contents, prompts, or credentials. Analytics events recorded before you chose a level may be sent when you choose Full usage.",
     fields: [],
@@ -91,6 +91,16 @@ const TELEMETRY_DISCLOSURE: Array<{
 const CLEARED_FLASH_MS = 3000;
 
 const DEFAULT_RETENTION_DAYS: LogRetention = 30;
+
+/** 0 is "Keep forever", so any finite window is shorter than it. */
+function isShorterRetention(next: LogRetention, current: LogRetention): boolean {
+  if (next === 0) return false;
+  return current === 0 || next < current;
+}
+
+function retentionLabel(days: LogRetention): string {
+  return days === 0 ? "forever" : `${days} days`;
+}
 
 const RETENTION_OPTIONS: SettingsPresetOption<LogRetention>[] = [
   { value: 7, label: "7 days" },
@@ -112,7 +122,9 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
   const [dataFolderPath, setDataFolderPath] = useState("");
   const [cacheClearing, setCacheClearing] = useState(false);
   const [cacheCleared, setCacheCleared] = useState(false);
-  const [resetState, setResetState] = useState<"idle" | "confirming">("idle");
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [pendingSessionRetention, setPendingSessionRetention] = useState<LogRetention | null>(null);
+  const [showAllEvents, setShowAllEvents] = useState(false);
   const [sessionRetentionDays, setSessionRetentionDays] =
     useState<LogRetention>(DEFAULT_RETENTION_DAYS);
   const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
@@ -145,13 +157,6 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
       cancelled = true;
     };
   }, [privacyLoadNonce]);
-
-  // Reset confirmation state when leaving tab
-  useEffect(() => {
-    if (currentSubtab !== "storage") {
-      setResetState("idle");
-    }
-  }, [currentSubtab]);
 
   const handleTelemetryChange = async (level: TelemetryLevel) => {
     const prev = telemetryLevel;
@@ -270,6 +275,16 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
     }
   };
 
+  // A shorter window prunes records the moment it's saved, so it asks first;
+  // a longer one only keeps more and applies straight away.
+  const requestSessionRetentionChange = (days: LogRetention) => {
+    if (isShorterRetention(days, sessionRetentionDays)) {
+      setPendingSessionRetention(days);
+    } else {
+      void handleSessionRetentionChange(days);
+    }
+  };
+
   const handleClearSessionHistory = async () => {
     // Close the confirm dialog up front — ConfirmDialog doesn't self-close on
     // confirm, and the clear is fast + surfaces its own error toast on failure.
@@ -385,7 +400,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
             <SettingsSection
               id="privacy-telemetry-level"
               title="Telemetry & diagnostics"
-              description="Control what data Daintree collects. No personal data, file contents, or credentials are ever collected. Turning telemetry off stops sending immediately."
+              description="What Daintree sends off this machine. File contents, prompts and credentials are never sent. Logs and histories kept on this machine are managed under Data & storage."
             >
               {privacyLoadError}
               <SettingsGroup id="troubleshooting-crash" className="overflow-hidden">
@@ -429,7 +444,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
 
             <SettingsSection
               title="What's collected at each level"
-              description="This disclosure describes the data transmitted externally. File contents, prompts, API keys, and other credentials are never collected."
+              description="Exactly what each level sends."
             >
               <SettingsGroup>
                 <dl className="divide-y divide-border-subtle">
@@ -446,16 +461,38 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                           </ul>
                         )}
                         {entry.events && entry.events.length > 0 && (
-                          <ul className="flex flex-wrap gap-1.5 pt-1">
-                            {entry.events.map((name) => (
-                              <li
-                                key={name}
-                                className="font-mono text-2xs text-text-secondary bg-surface-canvas px-1.5 py-0.5 rounded-[var(--radius-sm)] border border-border-subtle"
-                              >
-                                {name}
-                              </li>
-                            ))}
-                          </ul>
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setShowAllEvents((v) => !v)}
+                              aria-expanded={showAllEvents}
+                              aria-controls="privacy-analytics-events"
+                              className="inline-flex items-center gap-1 text-xs font-medium text-text-primary rounded-[var(--radius-sm)] hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                            >
+                              <ChevronRight
+                                aria-hidden="true"
+                                data-animated-chevron
+                                className={cn(
+                                  "w-3.5 h-3.5 text-text-secondary transition-transform duration-150",
+                                  showAllEvents && "rotate-90"
+                                )}
+                              />
+                              {showAllEvents ? "Hide" : "Show"} the {entry.events.length} analytics
+                              events
+                            </button>
+                            {showAllEvents && (
+                              <ul id="privacy-analytics-events" className="flex flex-wrap gap-1.5">
+                                {entry.events.map((name) => (
+                                  <li
+                                    key={name}
+                                    className="font-mono text-2xs text-text-secondary bg-surface-canvas px-1.5 py-0.5 rounded-[var(--radius-sm)] border border-border-subtle"
+                                  >
+                                    {name}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </>
                         )}
                       </dd>
                     </div>
@@ -550,14 +587,14 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
               <SettingsGroup>
                 <SettingsPresetGroup
                   label="Keep session history for"
-                  description="Applies to every project. Shortening the window prunes older records immediately."
+                  description="Applies to every project. Shortening it deletes older records straight away, so it asks first."
                   options={RETENTION_OPTIONS}
                   value={sessionRetentionUnknown ? null : sessionRetentionDays}
-                  onChange={(days) => void handleSessionRetentionChange(days)}
+                  onChange={requestSessionRetentionChange}
                   isModified={
                     !sessionRetentionUnknown && sessionRetentionDays !== DEFAULT_RETENTION_DAYS
                   }
-                  onReset={() => void handleSessionRetentionChange(DEFAULT_RETENTION_DAYS)}
+                  onReset={() => requestSessionRetentionChange(DEFAULT_RETENTION_DAYS)}
                   disabled={sessionRetentionUnknown}
                 />
                 <SettingsRow
@@ -580,43 +617,51 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
               <SettingsGroup>
                 <SettingsRow
                   label="Reset all app data"
-                  description="Permanently deletes all settings, session data, and logs. The app restarts with factory defaults."
+                  description="Deletes every setting, API key, recorded session and log on this machine, then restarts Daintree with factory defaults."
                   control={
-                    resetState === "idle" ? (
-                      <Button
-                        variant="ghost-danger"
-                        size="sm"
-                        onClick={() => setResetState("confirming")}
-                      >
-                        Reset all data…
-                      </Button>
-                    ) : undefined
+                    <Button
+                      variant="ghost-danger"
+                      size="sm"
+                      onClick={() => setShowResetConfirm(true)}
+                    >
+                      Reset all data…
+                    </Button>
                   }
                 />
-                {resetState === "confirming" && (
-                  <div className="px-4 py-3 space-y-3" role="alert">
-                    <div>
-                      <p className="text-sm text-text-primary font-medium">Reset all app data?</p>
-                      <p className="mt-0.5 text-xs text-text-secondary">
-                        This permanently deletes all settings, API keys, session data, and logs. The
-                        app restarts with factory defaults, and this can't be undone.
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm" onClick={() => setResetState("idle")}>
-                        Cancel
-                      </Button>
-                      <Button variant="destructive" size="sm" onClick={handleResetAllData}>
-                        Reset everything &amp; restart
-                      </Button>
-                    </div>
-                  </div>
-                )}
               </SettingsGroup>
             </SettingsSection>
           </>
         )}
       </div>
+
+      <ConfirmDialog
+        isOpen={showResetConfirm}
+        variant="destructive"
+        onConfirm={handleResetAllData}
+        onClose={() => setShowResetConfirm(false)}
+        title="Reset all app data?"
+        description="This permanently deletes every setting, API key, recorded session and log on this machine. Daintree then restarts with factory defaults. It can't be undone."
+        confirmLabel="Reset and restart"
+      />
+
+      <ConfirmDialog
+        isOpen={pendingSessionRetention !== null}
+        variant="destructive"
+        onConfirm={() => {
+          if (pendingSessionRetention !== null) {
+            void handleSessionRetentionChange(pendingSessionRetention);
+          }
+          setPendingSessionRetention(null);
+        }}
+        onClose={() => setPendingSessionRetention(null)}
+        title="Shorten session history?"
+        description={
+          pendingSessionRetention === null
+            ? ""
+            : `Keeping session history for ${retentionLabel(pendingSessionRetention)} instead of ${retentionLabel(sessionRetentionDays)} deletes older recorded sessions across every project now. Bookmarked sessions are kept.`
+        }
+        confirmLabel="Shorten and delete"
+      />
 
       <ConfirmDialog
         isOpen={showClearHistoryConfirm}

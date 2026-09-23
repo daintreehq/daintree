@@ -686,24 +686,43 @@ test("settings trust pages — populated, empty, and their dialogs", async () =>
 
     await step("mcp-turn-outcomes-open", async () => {
       const disclosures = page.locator(`${panel("mcp")} button[aria-expanded="false"]`, {
-        hasText: /Turn outcomes by class|rate by tool/,
+        hasText: /Outcomes by class|by tool the session used/,
       });
       const n = await disclosures.count();
       for (let i = 0; i < n; i++) await disclosures.first().click();
       await captureAt(
         page,
         "mcp",
-        page.locator(`${panel("mcp")} button:has-text("Turn outcomes by class")`),
+        page.locator(`${panel("mcp")} button:has-text("Outcomes by class")`),
         "mcp.turn-outcomes-open"
       );
     });
 
+    // ── Latency table: rendered only by the Assistant tab's advanced diagnostics, so read it before the MCP log is cleared ──
+    await step("assistant-latency", async () => {
+      await reopenSettingsAt(page, { tab: "assistant" });
+      const advanced = page.locator(
+        `${panel("assistant")} button:has-text("Advanced diagnostics")`
+      );
+      await advanced.waitFor({ state: "visible", timeout: 15_000 });
+      if ((await advanced.getAttribute("aria-expanded")) !== "true") await advanced.click();
+      await settle(page, 500);
+      await captureAt(
+        page,
+        "assistant",
+        page.locator(`${panel("assistant")} button:has-text("Latency by tool")`),
+        "assistant.latency-table"
+      );
+    });
+
+    await reopenSettingsAt(page, { tab: "mcp" });
+
     await step("mcp-clear-confirm", async () => {
       await page
-        .locator(`${panel("mcp")} button:has-text("Clear log")`)
+        .locator(`${panel("mcp")} button:has-text("Clear audit log")`)
         .first()
         .click();
-      await confirmAndClose(page, "Clear log", "mcp.clear-confirm");
+      await confirmAndClose(page, "Clear audit log", "mcp.clear-confirm");
       await captureAt(
         page,
         "mcp",
@@ -727,8 +746,8 @@ test("settings trust pages — populated, empty, and their dialogs", async () =>
         .selectOption("all");
     });
     await step("plugin-actions-clear", async () => {
-      await page.locator(`${panel("plugin-actions")} button:has-text("Clear log")`).click();
-      await confirmAndClose(page, "Clear log", "plugin-actions.clear-confirm");
+      await page.locator(`${panel("plugin-actions")} button:has-text("Clear audit log")`).click();
+      await confirmAndClose(page, "Clear audit log", "plugin-actions.clear-confirm");
       await capturePage(page, "plugin-actions", "plugin-actions.empty", 1);
     });
 
@@ -765,17 +784,26 @@ test("settings trust pages — populated, empty, and their dialogs", async () =>
     });
     await step("privacy-reset-confirm", async () => {
       await page.locator(`${panel("privacy")} button:has-text("Reset all data")`).click();
-      await settle(page, 400);
-      await capturePage(page, "privacy", "privacy.reset-confirm", 1);
-      await tagScroller(page, "privacy");
-      await page.evaluate(() => {
-        const el = document.querySelector<HTMLElement>("[data-shot-scroller]");
-        if (el) el.scrollTop = el.scrollHeight;
-      });
-      await writeShot(page, "privacy.reset-confirm.bottom", "card");
-      const cancel = page.locator(`${panel("privacy")} button:has-text("Cancel")`);
-      if (await cancel.count()) await cancel.first().click();
-      await page.keyboard.press("Escape").catch(() => {});
+      const confirm = page
+        .locator('[role="dialog"]:not(:has(.settings-sidebar)), [role="alertdialog"]')
+        .filter({ has: page.getByRole("button", { name: "Reset and restart", exact: true }) });
+      await confirm.last().waitFor({ state: "visible", timeout: 10_000 });
+      await writeShot(page, "privacy.reset-confirm", "window");
+      await confirm.last().getByRole("button", { name: "Cancel" }).click();
+      await confirm.last().waitFor({ state: "hidden", timeout: 8_000 });
+    });
+    await step("privacy-shorten-retention-confirm", async () => {
+      await page
+        .getByRole("radiogroup", { name: "Keep session history for" })
+        .getByRole("radio", { name: "7 days" })
+        .click();
+      const confirm = page
+        .locator('[role="dialog"]:not(:has(.settings-sidebar)), [role="alertdialog"]')
+        .filter({ has: page.getByRole("button", { name: "Shorten and delete", exact: true }) });
+      await confirm.last().waitFor({ state: "visible", timeout: 10_000 });
+      await writeShot(page, "privacy.shorten-retention-confirm", "window");
+      await confirm.last().getByRole("button", { name: "Cancel" }).click();
+      await confirm.last().waitFor({ state: "hidden", timeout: 8_000 });
     });
 
     // ── Troubleshooting ──
@@ -806,31 +834,15 @@ test("settings trust pages — populated, empty, and their dialogs", async () =>
       await review.first().waitFor({ state: "visible", timeout: 60_000 });
       await settle(page, 600);
       await writeShot(page, "diagnostics-review.rest", "window");
-      const preview = page.getByRole("button", { name: /Show preview/i });
-      if (await preview.count()) {
-        await preview.first().click();
-        await settle(page, 500);
-        await writeShot(page, "diagnostics-review.preview", "window");
-      }
+      await review.getByRole("button", { name: /^Sections/ }).click();
+      await settle(page, 400);
+      await writeShot(page, "diagnostics-review.sections", "window");
+      await review.getByRole("button", { name: "Preview the report" }).click();
+      await review.getByLabel("Report preview").scrollIntoViewIfNeeded();
+      await settle(page, 500);
+      await writeShot(page, "diagnostics-review.preview", "window");
       await page.keyboard.press("Escape");
       await settle(page, 400);
-    });
-
-    // ── Latency table: rendered only by the Assistant tab's advanced diagnostics ──
-    await step("assistant-latency", async () => {
-      await reopenSettingsAt(page, { tab: "assistant" });
-      const advanced = page.locator(
-        `${panel("assistant")} button:has-text("Advanced diagnostics")`
-      );
-      await advanced.waitFor({ state: "visible", timeout: 15_000 });
-      if ((await advanced.getAttribute("aria-expanded")) !== "true") await advanced.click();
-      await settle(page, 500);
-      await captureAt(
-        page,
-        "assistant",
-        page.locator(`${panel("assistant")} button:has-text("Latency by tool")`),
-        "assistant.latency-table"
-      );
     });
 
     await closeSettings(page);

@@ -109,4 +109,27 @@ describe("PluginActionAuditLogViewer", () => {
     });
     expect(screen.getByText("acme.plugin.win")).toBeTruthy();
   });
+
+  it("means every record when the result filter says All results", () => {
+    renderViewer([
+      record({ id: "ok", result: "success", actionId: "acme.plugin.win" }),
+      record({ id: "bad", result: "error", actionId: "acme.plugin.lose" }),
+    ]);
+    const filter = screen.getByLabelText("Filter audit by result") as HTMLSelectElement;
+    // The narrower default is a named choice, not a hidden rule.
+    expect(filter.selectedOptions[0]?.textContent).toBe("Problems");
+    fireEvent.change(filter, { target: { value: "all" } });
+    expect(screen.getByText("acme.plugin.win")).toBeTruthy();
+    expect(screen.getByText("acme.plugin.lose")).toBeTruthy();
+  });
+
+  it("offers a way out of a filter that matches nothing", () => {
+    renderViewer([record({ id: "bad", actionId: "acme.plugin.lose" })]);
+    fireEvent.change(screen.getByLabelText("Filter audit by plugin or action ID"), {
+      target: { value: "no-such-plugin" },
+    });
+    expect(screen.queryByText("acme.plugin.lose")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getByText("acme.plugin.lose")).toBeTruthy();
+  });
 });

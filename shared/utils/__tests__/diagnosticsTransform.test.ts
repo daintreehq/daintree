@@ -1,5 +1,8 @@
+import { readFileSync } from "fs";
+import { resolve } from "path";
 import { describe, it, expect } from "vitest";
 import {
+  SECTION_LABELS,
   applyReplacements,
   filterLogEntriesByTime,
   filterSections,
@@ -154,5 +157,27 @@ describe("filterLogEntriesByTime", () => {
     expect(filterLogEntriesByTime({ logs: { error: "failed" } }, 100)).toEqual({
       logs: { error: "failed" },
     });
+  });
+});
+
+describe("SECTION_LABELS", () => {
+  it("names every section the collector emits, so the review dialog never shows a raw key", () => {
+    const collector = readFileSync(
+      resolve(__dirname, "../../../electron/services/DiagnosticsCollector.ts"),
+      "utf8"
+    );
+    const emitted = [...collector.matchAll(/\{ key: "([A-Za-z]+)", fn:/g)].map((m) => m[1]!);
+    expect(emitted.length).toBeGreaterThan(10);
+    const unlabelled = emitted.filter((key) => !SECTION_LABELS[key]);
+    expect(unlabelled).toEqual([]);
+  });
+
+  it("labels in sentence case", () => {
+    for (const label of Object.values(SECTION_LABELS)) {
+      const words = label.split(" ").slice(1);
+      // Acronyms (GPU, MCP) keep their case; ordinary later words are lower case.
+      const titleCased = words.filter((w) => /^[A-Z][a-z]/.test(w));
+      expect(titleCased, label).toEqual([]);
+    }
   });
 });

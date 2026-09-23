@@ -1485,11 +1485,11 @@ describe("DaintreeAssistantSettingsTab", () => {
 
     // Diagnostics are collapsed by default — the turn-outcome block is unmounted
     // until the disclosure is opened.
-    expect(container.textContent).not.toContain("Turn outcomes by class");
+    expect(container.textContent).not.toContain("Clear turn outcomes");
 
     fireEvent.click(screen.getByRole("button", { name: "Advanced diagnostics" }));
 
-    await waitForContent(container, "Turn outcomes by class");
+    await waitForContent(container, "Clear turn outcomes");
   });
 
   it("renders the recording toggle in the privacy section, on by default", async () => {

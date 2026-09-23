@@ -5,7 +5,7 @@ import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { PluginActionAuditLogViewer } from "@/components/Settings/PluginActionAuditLogViewer";
-import { appClient } from "@/clients";
+import { AuditLoadErrorRow } from "@/components/Settings/auditLogParts";
 import { logError } from "@/utils/logger";
 import { type PluginActionAuditRecord, PLUGIN_AUDIT_DEFAULT_MAX_RECORDS } from "@shared/types";
 
@@ -14,12 +14,15 @@ const COPY_FEEDBACK_MS = 2000;
 export function PluginActionsSettingsTab() {
   const [records, setRecords] = useState<PluginActionAuditRecord[]>([]);
   const [auditEnabled, setAuditEnabled] = useState(true);
+  const [configLoaded, setConfigLoaded] = useState(false);
   const [maxRecords, setMaxRecords] = useState(PLUGIN_AUDIT_DEFAULT_MAX_RECORDS);
-  const [developerMode, setDeveloperMode] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [recordsFailed, setRecordsFailed] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [copiedFlash, setCopiedFlash] = useState(false);
   const [exportedFlash, setExportedFlash] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
 
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const exportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -28,40 +31,35 @@ export function PluginActionsSettingsTab() {
     try {
       const next = await window.electron.plugin.getAuditRecords();
       setRecords(next);
+      setRecordsFailed(false);
     } catch (err) {
+      setRecordsFailed(true);
       logError("Failed to load plugin audit log", err);
     }
   }, []);
 
   useEffect(() => {
     let cancelled = false;
-    Promise.allSettled([
+    void Promise.allSettled([
       window.electron.plugin.getAuditConfig(),
       window.electron.plugin.getAuditRecords(),
-      appClient.getState(),
-    ])
-      .then(([cfgResult, recordsResult, stateResult]) => {
-        if (cancelled) return;
-        if (cfgResult.status === "fulfilled") {
-          setAuditEnabled(cfgResult.value.enabled);
-          setMaxRecords(cfgResult.value.maxRecords);
-        } else {
-          logError("Failed to load plugin audit config", cfgResult.reason);
-        }
-        if (recordsResult.status === "fulfilled") {
-          setRecords(recordsResult.value);
-        } else {
-          logError("Failed to load plugin audit log", recordsResult.reason);
-        }
-        if (stateResult.status === "fulfilled" && stateResult.value?.developerMode) {
-          setDeveloperMode(stateResult.value.developerMode.enabled === true);
-        }
-        setLoading(false);
-      })
-      .catch((err) => {
-        logError("Failed to load plugin audit settings", err);
-        if (!cancelled) setLoading(false);
-      });
+    ]).then(([cfgResult, recordsResult]) => {
+      if (cancelled) return;
+      if (cfgResult.status === "fulfilled") {
+        setAuditEnabled(cfgResult.value.enabled);
+        setMaxRecords(cfgResult.value.maxRecords);
+        setConfigLoaded(true);
+      } else {
+        logError("Failed to load plugin audit config", cfgResult.reason);
+      }
+      if (recordsResult.status === "fulfilled") {
+        setRecords(recordsResult.value);
+      } else {
+        setRecordsFailed(true);
+        logError("Failed to load plugin audit log", recordsResult.reason);
+      }
+      setLoading(false);
+    });
     return () => {
       cancelled = true;
     };
@@ -76,11 +74,12 @@ export function PluginActionsSettingsTab() {
 
   const handleEnabledToggle = useCallback(async () => {
     try {
-      const next = !auditEnabled;
-      const cfg = await window.electron.plugin.setAuditEnabled(next);
+      setActionError(null);
+      const cfg = await window.electron.plugin.setAuditEnabled(!auditEnabled);
       setAuditEnabled(cfg.enabled);
       setMaxRecords(cfg.maxRecords);
     } catch (err) {
+      setActionError("Recording couldn't be changed. Try again.");
       logError("Failed to toggle plugin audit log", err);
     }
   }, [auditEnabled]);
@@ -110,12 +109,16 @@ export function PluginActionsSettingsTab() {
   }, []);
 
   const handleClear = useCallback(async () => {
+    setIsClearing(true);
     try {
+      setActionError(null);
       await window.electron.plugin.clearAuditLog();
       setRecords([]);
     } catch (err) {
+      setActionError("The audit log couldn't be cleared. Try again.");
       logError("Failed to clear plugin audit log", err);
     } finally {
+      setIsClearing(false);
       setShowClearConfirm(false);
     }
   }, []);
@@ -124,7 +127,7 @@ export function PluginActionsSettingsTab() {
     <div className="space-y-8">
       <SettingsSection
         title="Audit log"
-        description="Every action dispatched by an installed plugin. Arguments are stored as a SHA-256 hash by default; turn on plaintext args in developer mode to keep a readable copy."
+        description="Every action an installed plugin dispatches. Arguments are kept as a SHA-256 hash unless plaintext arguments are turned on in developer mode."
       >
         <SettingsGroup>
           <SettingsSwitchCard
@@ -133,8 +136,14 @@ export function PluginActionsSettingsTab() {
             subtitle="Appends a record each time a plugin action is dispatched"
             isEnabled={auditEnabled}
             onChange={() => void handleEnabledToggle()}
+            disabled={!configLoaded}
           />
         </SettingsGroup>
+        {actionError && (
+          <p role="alert" className="text-xs text-status-error">
+            {actionError}
+          </p>
+        )}
         <PluginActionAuditLogViewer
           records={records}
           loading={loading}
@@ -145,7 +154,14 @@ export function PluginActionsSettingsTab() {
           onClear={() => setShowClearConfirm(true)}
           copyFlashActive={copiedFlash}
           exportFlashActive={exportedFlash}
-          developerMode={developerMode}
+          loadError={
+            recordsFailed ? (
+              <AuditLoadErrorRow
+                message="Plugin actions couldn't be read"
+                onRetry={() => void refreshRecords()}
+              />
+            ) : undefined
+          }
         />
       </SettingsSection>
 
@@ -153,10 +169,11 @@ export function PluginActionsSettingsTab() {
         isOpen={showClearConfirm}
         variant="destructive"
         onConfirm={() => void handleClear()}
-        onClose={() => setShowClearConfirm(false)}
+        onClose={isClearing ? undefined : () => setShowClearConfirm(false)}
+        isConfirmLoading={isClearing}
         title="Clear plugin audit log?"
-        description="This permanently deletes all recorded plugin action dispatches on this machine. New dispatches will still be recorded."
-        confirmLabel="Clear log"
+        description={`This permanently deletes ${records.length === 1 ? "1 recorded plugin action" : `${records.length} recorded plugin actions`} on this machine. New dispatches will still be recorded.`}
+        confirmLabel="Clear audit log"
       />
     </div>
   );

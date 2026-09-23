@@ -178,6 +178,12 @@ describe("PrivacyDataTab", () => {
       screen.getByRole("group", { name: /What's collected at each level/i })
     );
 
+    // The inventory sits one disclosure away, and that disclosure lists every event.
+    const toggle = within(disclosure).getByRole("button", {
+      name: `Show the ${ANALYTICS_EVENTS.length} analytics events`,
+    });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(toggle);
     for (const name of ANALYTICS_EVENTS) {
       expect(within(disclosure).getByText(name)).toBeTruthy();
     }
@@ -407,5 +413,69 @@ describe("PrivacyDataTab", () => {
       });
       expect(clearCache).toHaveBeenCalledTimes(2);
     });
+  });
+
+  describe("session retention deletes, so a shorter window asks first", () => {
+    const sessionOption = (label: string) =>
+      within(screen.getByRole("radiogroup", { name: "Keep session history for" })).getByRole(
+        "radio",
+        { name: label }
+      ) as HTMLButtonElement;
+
+    async function renderStorage() {
+      render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+        wrapper: TooltipProvider,
+      });
+      await waitFor(() => {
+        expect(sessionOption("30 days").getAttribute("aria-checked")).toBe("true");
+      });
+    }
+
+    it("holds a shorter window until the deletion is confirmed", async () => {
+      await renderStorage();
+      fireEvent.click(sessionOption("7 days"));
+
+      const dialog = await screen.findByRole("alertdialog");
+      expect(window.electron.agentSessionHistory.setRetentionDays).not.toHaveBeenCalled();
+      expect(within(dialog).getByText(/7 days instead of 30 days/)).toBeTruthy();
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Shorten and delete" }));
+      await waitFor(() => {
+        expect(window.electron.agentSessionHistory.setRetentionDays).toHaveBeenCalledWith(7);
+      });
+    });
+
+    it("keeps the current window when the shorter one is cancelled", async () => {
+      await renderStorage();
+      fireEvent.click(sessionOption("7 days"));
+      const dialog = await screen.findByRole("alertdialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(window.electron.agentSessionHistory.setRetentionDays).not.toHaveBeenCalled();
+      expect(sessionOption("30 days").getAttribute("aria-checked")).toBe("true");
+    });
+
+    it("applies a longer window straight away, since nothing is deleted", async () => {
+      await renderStorage();
+      fireEvent.click(sessionOption("Keep forever"));
+
+      await waitFor(() => {
+        expect(window.electron.agentSessionHistory.setRetentionDays).toHaveBeenCalledWith(0);
+      });
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
+  });
+
+  it("resets all app data only from a confirm dialog", async () => {
+    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Reset all data…" }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(window.electron.privacy.resetAllData).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Reset and restart" }));
+    expect(window.electron.privacy.resetAllData).toHaveBeenCalledTimes(1);
   });
 });

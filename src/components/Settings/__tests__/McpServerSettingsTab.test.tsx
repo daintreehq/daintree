@@ -208,7 +208,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForApiKeyControls(container);
 
-    const displayArea = container.querySelector(".bg-surface-disabled");
+    const displayArea = container.querySelector("[data-api-key-display]");
     expect(displayArea).toBeTruthy();
     expect(displayArea?.tagName).toBe("DIV");
 
@@ -224,7 +224,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForApiKeyControls(container);
 
-    const displayArea = container.querySelector(".bg-surface-disabled")!;
+    const displayArea = container.querySelector("[data-api-key-display]")!;
     expect(displayArea.textContent).not.toContain("dnt-key-abc123");
     expect(displayArea.textContent).toContain("•");
 
@@ -297,7 +297,7 @@ describe("McpServerSettingsTab", () => {
       expect(window.electron.mcpServer.rotateApiKey).toHaveBeenCalledTimes(1);
     });
 
-    const displayArea = container.querySelector(".bg-surface-disabled")!;
+    const displayArea = container.querySelector("[data-api-key-display]")!;
     await waitFor(() => {
       expect(displayArea.textContent).not.toContain("dnt-key-rotated789");
     });
@@ -334,7 +334,7 @@ describe("McpServerSettingsTab", () => {
     await waitForApiKeyControls(container);
 
     fireEvent.click(screen.getByLabelText("Show API key"));
-    const displayArea = container.querySelector(".bg-surface-disabled")!;
+    const displayArea = container.querySelector("[data-api-key-display]")!;
     await waitFor(() => {
       expect(displayArea.textContent).toContain("dnt-key-abc123");
     });
@@ -390,7 +390,7 @@ describe("McpServerSettingsTab", () => {
     await waitForApiKeyControls(container);
 
     fireEvent.click(screen.getByLabelText("Show API key"));
-    const displayArea = container.querySelector(".bg-surface-disabled")!;
+    const displayArea = container.querySelector("[data-api-key-display]")!;
     await waitFor(() => {
       expect(displayArea.textContent).toContain("dnt-key-abc123");
     });
@@ -425,7 +425,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForApiKeyControls(container);
 
-    const displayArea = container.querySelector(".bg-surface-disabled")!;
+    const displayArea = container.querySelector("[data-api-key-display]")!;
     const maskSpan = displayArea.querySelector("span")!;
     const bulletCount = (maskSpan.textContent ?? "").length;
     expect(bulletCount).toBe(24);
@@ -745,18 +745,16 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForContent(container, "files.read");
 
-    fireEvent.click(screen.getAllByRole("button", { name: /^clear log$/i })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "Clear audit log…" }));
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /clear audit log\?/i })).toBeTruthy();
     });
     expect(window.electron.mcpServer.clearAuditLog).not.toHaveBeenCalled();
 
-    const buttons = screen.getAllByRole("button", { name: /^clear log$/i });
-    const dialogConfirm = buttons[buttons.length - 1]!;
-    fireEvent.click(dialogConfirm);
+    fireEvent.click(screen.getByRole("button", { name: "Clear audit log" }));
 
-    await waitForContent(container, "No tool dispatches recorded yet");
+    await waitForContent(container, "Audit log cleared");
     expect(mockedNotify).not.toHaveBeenCalled();
   });
 
@@ -781,7 +779,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForContent(container, "files.read");
 
-    fireEvent.click(screen.getAllByRole("button", { name: /^clear log$/i })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "Clear audit log…" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /clear audit log\?/i })).toBeTruthy();
     });
@@ -817,14 +815,12 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForContent(container, "files.read");
 
-    fireEvent.click(screen.getAllByRole("button", { name: /^clear log$/i })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "Clear audit log…" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /clear audit log\?/i })).toBeTruthy();
     });
 
-    const buttons = screen.getAllByRole("button", { name: /^clear log$/i });
-    const dialogConfirm = buttons[buttons.length - 1]!;
-    fireEvent.click(dialogConfirm);
+    fireEvent.click(screen.getByRole("button", { name: "Clear audit log" }));
 
     await waitForContent(container, "clear failed");
     expect(mockedNotify).not.toHaveBeenCalled();

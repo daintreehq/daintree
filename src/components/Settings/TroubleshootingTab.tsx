@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, CircleCheck, CircleX } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
+import { SeverityMark } from "@/lib/statusSeverity";
 import { Spinner } from "@/components/ui/Spinner";
 import { appClient, systemClient, logsClient } from "@/clients";
 import type { AppState, SystemHealthCheckResult } from "@shared/types";
@@ -8,6 +9,7 @@ import { actionService } from "@/services/ActionService";
 import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
 import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
 import { useSettingsStore } from "@/store/settingsStore";
+import { usePaletteStore } from "@/store/paletteStore";
 import { logError, logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { SettingsSection } from "./SettingsSection";
@@ -50,12 +52,20 @@ function SystemHealthSection() {
     }
   };
 
+  const labels: Record<string, string> = {
+    git: "Git",
+    node: "Node.js",
+    npm: "npm",
+    gh: "GitHub CLI",
+  };
+  const missing = result ? result.prerequisites.filter((check) => !check.available) : [];
+
   return (
     <>
       <SettingsRow
         id="troubleshooting-health"
         label="System health check"
-        description="Verifies that Git, Node.js, and npm are installed and available"
+        description="Checks that the command-line tools Daintree relies on are installed and on your PATH"
         error={checkError}
         control={
           <Button variant="outline" size="sm" onClick={() => void runCheck()} disabled={isChecking}>
@@ -64,28 +74,37 @@ function SystemHealthSection() {
         }
       />
       {result && (
-        <ul className="px-4 py-2" aria-label="Health check results">
-          {result.prerequisites.map((check) => {
-            const labels: Record<string, string> = { git: "Git", node: "Node.js", npm: "npm" };
-            const label = labels[check.tool] ?? check.tool;
-            return (
-              <li key={check.tool} className="flex items-center gap-2.5 py-1.5">
-                {check.available ? (
-                  <CircleCheck className="w-3.5 h-3.5 text-status-success shrink-0" />
-                ) : (
-                  <CircleX className="w-3.5 h-3.5 text-status-error shrink-0" />
-                )}
-                <span className="text-sm text-text-primary">{label}</span>
-                {check.version && (
-                  <span className="text-xs text-text-secondary">v{check.version}</span>
-                )}
-                {!check.available && (
-                  <span className="ml-auto text-xs text-status-error">Not found</span>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+        <div className="py-2 pl-4 pr-4">
+          <p className="sr-only" role="status">
+            {missing.length === 0
+              ? "Health check finished. Every tool was found."
+              : `Health check finished. Not found: ${missing.map((c) => labels[c.tool] ?? c.tool).join(", ")}.`}
+          </p>
+          <ul aria-label="Health check results">
+            {result.prerequisites.map((check) => {
+              const label = labels[check.tool] ?? check.tool;
+              return (
+                <li key={check.tool} className="flex items-center gap-2.5 py-1.5">
+                  <SeverityMark
+                    severity={check.available ? "success" : "error"}
+                    label={check.available ? "Found" : "Not found"}
+                    className="w-3.5 h-3.5"
+                  />
+                  <span className="text-sm text-text-primary">{label}</span>
+                  {check.available ? (
+                    check.version && (
+                      <span className="text-xs text-text-secondary tabular-nums">
+                        {check.version}
+                      </span>
+                    )
+                  ) : (
+                    <span className="text-xs text-text-primary">Not found</span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       )}
     </>
   );
@@ -216,10 +235,13 @@ function HardwareAccelerationSection() {
   const [angleFallback, setAngleFallback] = useState<boolean>(false);
 
   useEffect(() => {
-    window.electron.gpu.getStatus().then((status) => {
-      setDisabled(status.hardwareAccelerationDisabled);
-      setAngleFallback(status.angleFallbackActive);
-    });
+    window.electron.gpu
+      .getStatus()
+      .then((status) => {
+        setDisabled(status.hardwareAccelerationDisabled);
+        setAngleFallback(status.angleFallbackActive);
+      })
+      .catch((err) => logError("Failed to read GPU status", err));
   }, []);
 
   const handleToggle = () => {
@@ -330,11 +352,16 @@ export function TroubleshootingTab() {
     };
   }, [logOverridesRefreshKey, verboseLogging]);
 
+  // The palette is where overrides change, so re-read them when it closes.
+  const logLevelPaletteOpen = usePaletteStore((s) => s.activePaletteId === "log-level");
+  const [wasLogLevelPaletteOpen, setWasLogLevelPaletteOpen] = useState(false);
+  if (logLevelPaletteOpen !== wasLogLevelPaletteOpen) {
+    setWasLogLevelPaletteOpen(logLevelPaletteOpen);
+    if (!logLevelPaletteOpen) setLogOverridesRefreshKey((k) => k + 1);
+  }
+
   const handleOpenLogLevelPalette = () => {
     window.dispatchEvent(new CustomEvent("daintree:open-log-level-palette"));
-    // Refresh on a short delay after the palette closes; simplest approach is
-    // to re-fetch whenever the user clicks the button again.
-    setLogOverridesRefreshKey((k) => k + 1);
   };
 
   const handleClearLogOverrides = async () => {
@@ -367,7 +394,13 @@ export function TroubleshootingTab() {
       });
   }, []);
 
-  const saveDeveloperModeSettings = async (settings: NonNullable<AppState["developerMode"]>) => {
+  const [developerModeError, setDeveloperModeError] = useState<string | null>(null);
+
+  /** Resolves false when main refused the change, so the caller can put the switches back. */
+  const saveDeveloperModeSettings = async (
+    settings: NonNullable<AppState["developerMode"]>
+  ): Promise<boolean> => {
+    setDeveloperModeError(null);
     try {
       const result = await actionService.dispatch(
         "app.developerMode.set",
@@ -381,12 +414,26 @@ export function TroubleshootingTab() {
       if (!result.ok) {
         throw new Error(result.error.message);
       }
+      return true;
     } catch (error) {
       logError("Failed to save developer mode settings", error);
+      setDeveloperModeError("Developer settings couldn't be saved. Try again.");
+      return false;
     }
   };
 
-  const handleToggleDeveloperMode = () => {
+  const restoreDeveloperMode = (previous: {
+    enabled: boolean;
+    autoOpenDiagnostics: boolean;
+    focusEventsTab: boolean;
+  }) => {
+    setDeveloperMode(previous.enabled);
+    setAutoOpenDiagnostics(previous.autoOpenDiagnostics);
+    setFocusEventsTab(previous.focusEventsTab);
+  };
+
+  const handleToggleDeveloperMode = async () => {
+    const previous = { enabled: developerMode, autoOpenDiagnostics, focusEventsTab };
     const newEnabled = !developerMode;
     setDeveloperMode(newEnabled);
 
@@ -398,52 +445,49 @@ export function TroubleshootingTab() {
       }
       setAutoOpenDiagnostics(false);
       setFocusEventsTab(false);
-      saveDeveloperModeSettings({
+      const saved = await saveDeveloperModeSettings({
         enabled: false,
         showStateDebug: false,
         autoOpenDiagnostics: false,
         focusEventsTab: false,
       });
+      if (!saved) restoreDeveloperMode(previous);
     } else {
-      saveDeveloperModeSettings({
+      const saved = await saveDeveloperModeSettings({
         enabled: true,
         showStateDebug: false,
         autoOpenDiagnostics,
         focusEventsTab,
       });
+      if (!saved) restoreDeveloperMode(previous);
     }
   };
 
-  const handleToggleAutoOpenDiagnostics = () => {
+  const handleToggleAutoOpenDiagnostics = async () => {
+    const previous = { enabled: developerMode, autoOpenDiagnostics, focusEventsTab };
     const newValue = !autoOpenDiagnostics;
     setAutoOpenDiagnostics(newValue);
-    if (!newValue) {
-      setFocusEventsTab(false);
-      saveDeveloperModeSettings({
-        enabled: developerMode,
-        showStateDebug: false,
-        autoOpenDiagnostics: false,
-        focusEventsTab: false,
-      });
-    } else {
-      saveDeveloperModeSettings({
-        enabled: developerMode,
-        showStateDebug: false,
-        autoOpenDiagnostics: true,
-        focusEventsTab,
-      });
-    }
+    if (!newValue) setFocusEventsTab(false);
+    const saved = await saveDeveloperModeSettings({
+      enabled: developerMode,
+      showStateDebug: false,
+      autoOpenDiagnostics: newValue,
+      focusEventsTab: newValue ? focusEventsTab : false,
+    });
+    if (!saved) restoreDeveloperMode(previous);
   };
 
-  const handleToggleFocusEventsTab = () => {
+  const handleToggleFocusEventsTab = async () => {
+    const previous = { enabled: developerMode, autoOpenDiagnostics, focusEventsTab };
     const newValue = !focusEventsTab;
     setFocusEventsTab(newValue);
-    saveDeveloperModeSettings({
+    const saved = await saveDeveloperModeSettings({
       enabled: developerMode,
       showStateDebug: false,
       autoOpenDiagnostics,
       focusEventsTab: newValue,
     });
+    if (!saved) restoreDeveloperMode(previous);
   };
 
   const handleToggleVerboseLogging = async () => {
@@ -499,19 +543,18 @@ export function TroubleshootingTab() {
             isEnabled={verboseLogging}
             onChange={handleToggleVerboseLogging}
             disabled={verboseLoggingPending}
-            colorScheme="amber"
           />
           {verboseLogging && (
             <RowNote>Verbose logging may impact performance and increase log file size.</RowNote>
           )}
           <SettingsRow
-            layout="stacked"
-            label="Persistent verbose logging"
-            description="The switch above resets on restart. To keep verbose logs across restarts, launch the app with this environment variable."
-            control={
-              <code className="block text-xs bg-surface-canvas p-2 rounded-[var(--radius-sm)] border border-border-default font-mono text-text-primary select-text">
-                DAINTREE_DEBUG=1 npm run dev
-              </code>
+            label="Verbose logging on every launch"
+            description={
+              <>
+                Set <code className="font-mono text-text-primary">DAINTREE_DEBUG=1</code> in the
+                environment Daintree starts from. In a development build that&apos;s{" "}
+                <code className="font-mono text-text-primary">DAINTREE_DEBUG=1 npm run dev</code>.
+              </>
             }
           />
           <ClearLogsRow />
@@ -562,10 +605,15 @@ export function TroubleshootingTab() {
             title="Developer mode"
             subtitle="Turns on the debugging features below"
             isEnabled={developerMode}
-            onChange={handleToggleDeveloperMode}
+            onChange={() => void handleToggleDeveloperMode()}
             // e2e selectors (SEL.settings.developerModeToggle) find the switch by this name.
             ariaLabel="Developer Mode Toggle"
           />
+          {developerModeError && (
+            <p role="alert" className="px-4 py-2 text-xs text-status-error">
+              {developerModeError}
+            </p>
+          )}
           <SettingsDependents
             disabled={!developerMode}
             reason="Turn on developer mode to use these"
@@ -575,14 +623,14 @@ export function TroubleshootingTab() {
               title="Auto-open diagnostics dock"
               subtitle="Opens the diagnostics panel on app startup"
               isEnabled={autoOpenDiagnostics}
-              onChange={handleToggleAutoOpenDiagnostics}
+              onChange={() => void handleToggleAutoOpenDiagnostics()}
             />
             <SettingsSwitchCard
               id="troubleshooting-focus-events"
               title="Focus events tab"
               subtitle="Opens diagnostics on the Events tab"
               isEnabled={focusEventsTab}
-              onChange={handleToggleFocusEventsTab}
+              onChange={() => void handleToggleFocusEventsTab()}
               disabled={!autoOpenDiagnostics}
               disabledReason={
                 developerMode ? "Turn on auto-open diagnostics dock to use this" : undefined

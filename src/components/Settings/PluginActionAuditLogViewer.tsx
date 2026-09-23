@@ -1,18 +1,42 @@
 import { useMemo, useState } from "react";
-import { Check, Copy, Download, Eye, RefreshCw } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Check, Copy, Download, RefreshCw } from "lucide-react";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
+import {
+  AUDIT_TIME_RANGE_MS,
+  AuditFilterBar,
+  AuditFilterInput,
+  AuditFilterSelect,
+  AuditRecordTime,
+  AuditTimeRangeSelect,
+  type AuditTimeRange,
+} from "./auditLogParts";
 import type {
   PluginActionAuditRecord,
   PluginActionAuditRecordType,
   PluginActionAuditResult,
 } from "@shared/types";
 
-type ResultFilter = "all" | PluginActionAuditResult;
+/**
+ * "problems" is the default: the rare error, disabled and restricted rows would
+ * otherwise drown under routine successes. It is a named choice rather than a
+ * hidden rule, so "All results" can mean all of them.
+ */
+type ResultFilter = "problems" | "all" | PluginActionAuditResult;
+
+const RESULT_FILTER_OPTIONS: { value: ResultFilter; label: string }[] = [
+  { value: "problems", label: "Problems" },
+  { value: "all", label: "All results" },
+  { value: "success", label: "Success" },
+  { value: "error", label: "Error" },
+  { value: "disabled", label: "Disabled" },
+  { value: "restricted", label: "Restricted" },
+];
+
+const DEFAULT_RESULT_FILTER: ResultFilter = "problems";
 
 // Only the non-default record types get a tag — `action-dispatch` is the common
 // case and is left unlabeled to keep ordinary dispatch rows uncluttered.
@@ -35,26 +59,6 @@ const RESULT_SEVERITY: Record<PluginActionAuditResult, StatusSeverity> = {
   restricted: "error",
 };
 
-type TimeRange = "5m" | "1h" | "24h" | "all";
-
-const TIME_RANGE_MS: Record<Exclude<TimeRange, "all">, number> = {
-  "5m": 300_000,
-  "1h": 3_600_000,
-  "24h": 86_400_000,
-};
-
-function formatRelativeTimestamp(ts: number, now: number): string {
-  const diffMs = now - ts;
-  if (diffMs < 0) return "just now";
-  const sec = Math.floor(diffMs / 1000);
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  return `${Math.floor(hr / 24)}d ago`;
-}
-
 interface PluginActionAuditLogViewerProps {
   records: PluginActionAuditRecord[];
   loading: boolean;
@@ -65,12 +69,8 @@ interface PluginActionAuditLogViewerProps {
   onClear: () => void;
   copyFlashActive?: boolean;
   exportFlashActive?: boolean;
-  /**
-   * When true, successful dispatches are included in the default view. Off by
-   * default so the rare error/restricted rows aren't drowned out by a flood of
-   * `success` records. Opt-in via the developer-mode toggle on the parent tab.
-   */
-  developerMode?: boolean;
+  /** Shown in place of the list when the records couldn't be read. */
+  loadError?: React.ReactNode;
 }
 
 export function PluginActionAuditLogViewer({
@@ -83,13 +83,12 @@ export function PluginActionAuditLogViewer({
   onClear,
   copyFlashActive,
   exportFlashActive,
-  developerMode = false,
+  loadError,
 }: PluginActionAuditLogViewerProps) {
   const [pluginFilter, setPluginFilter] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [resultFilter, setResultFilter] = useState<ResultFilter>("all");
-  const [timeRange, setTimeRange] = useState<TimeRange>("all");
-  const [showSuccessful, setShowSuccessful] = useState(false);
+  const [resultFilter, setResultFilter] = useState<ResultFilter>(DEFAULT_RESULT_FILTER);
+  const [timeRange, setTimeRange] = useState<AuditTimeRange>("all");
 
   const tick = useGlobalMinuteTicker();
   const now = useMemo(() => {
@@ -97,19 +96,16 @@ export function PluginActionAuditLogViewer({
     return Date.now();
   }, [tick]);
 
-  // Whether the rendered list will visibly hide successful records. The toggle
-  // is the user's expressed intent, but `resultFilter === "success"` means the
-  // user explicitly asked for that bucket — don't filter them back out.
-  const suppressSuccess = !showSuccessful && resultFilter !== "success";
-
   const filteredRecords = useMemo(() => {
     const needle = pluginFilter.trim().toLowerCase();
     const search = searchQuery.trim().toLowerCase();
-    const cutoffMs = timeRange !== "all" ? now - TIME_RANGE_MS[timeRange] : undefined;
+    const cutoffMs = timeRange !== "all" ? now - AUDIT_TIME_RANGE_MS[timeRange] : undefined;
     return records.filter((record) => {
       if (cutoffMs !== undefined && record.ts < cutoffMs) return false;
-      if (suppressSuccess && record.result === "success") return false;
-      if (resultFilter !== "all" && record.result !== resultFilter) return false;
+      if (resultFilter === "problems" && record.result === "success") return false;
+      if (resultFilter !== "problems" && resultFilter !== "all" && record.result !== resultFilter) {
+        return false;
+      }
       if (
         needle.length > 0 &&
         !record.pluginId.toLowerCase().includes(needle) &&
@@ -131,95 +127,53 @@ export function PluginActionAuditLogViewer({
       }
       return true;
     });
-  }, [records, pluginFilter, searchQuery, resultFilter, suppressSuccess, timeRange, now]);
+  }, [records, pluginFilter, searchQuery, resultFilter, timeRange, now]);
 
-  const isFiltering =
+  const hasNarrowingFilter =
     pluginFilter.trim().length > 0 ||
     searchQuery.trim().length > 0 ||
-    resultFilter !== "all" ||
-    timeRange !== "all" ||
-    suppressSuccess;
+    (resultFilter !== "all" && resultFilter !== DEFAULT_RESULT_FILTER) ||
+    timeRange !== "all";
   const showCopyAll = filteredRecords.length === records.length;
 
-  const countLabel = isFiltering
-    ? `${filteredRecords.length} of ${records.length}`
-    : `${records.length} of ${maxRecords}`;
+  const clearFilters = () => {
+    setPluginFilter("");
+    setSearchQuery("");
+    setResultFilter(DEFAULT_RESULT_FILTER);
+    setTimeRange("all");
+  };
+
+  const status = copyFlashActive
+    ? "Copied!"
+    : exportFlashActive
+      ? "Exported!"
+      : filteredRecords.length === records.length
+        ? `${records.length} of ${maxRecords}`
+        : `Showing ${filteredRecords.length} of ${records.length}`;
 
   return (
     <SettingsGroup>
-      <div className="flex flex-wrap items-center gap-2 px-4 py-3">
-        <input
-          type="text"
+      <AuditFilterBar label="Filter plugin actions">
+        <AuditFilterInput
           value={pluginFilter}
-          onChange={(e) => setPluginFilter(e.target.value)}
+          onChange={setPluginFilter}
           placeholder="Filter by plugin or action ID"
-          aria-label="Filter audit by plugin or action ID"
-          className="flex-1 min-w-[180px] bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+          ariaLabel="Filter audit by plugin or action ID"
         />
-        <input
-          type="text"
+        <AuditFilterInput
           value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
+          onChange={setSearchQuery}
           placeholder="Search args or errors"
-          aria-label="Search audit arguments or error messages"
-          className="w-48 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+          ariaLabel="Search audit arguments or error messages"
         />
-        <select
+        <AuditFilterSelect
           value={resultFilter}
-          onChange={(e) => {
-            const value = e.target.value;
-            if (
-              value === "all" ||
-              value === "success" ||
-              value === "error" ||
-              value === "disabled" ||
-              value === "restricted"
-            ) {
-              setResultFilter(value);
-            }
-          }}
-          aria-label="Filter audit by result"
-          className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-        >
-          <option value="all">All results</option>
-          <option value="success">Success</option>
-          <option value="error">Error</option>
-          <option value="disabled">Disabled</option>
-          <option value="restricted">Restricted</option>
-        </select>
-        <select
-          value={timeRange}
-          onChange={(e) => {
-            const value = e.target.value;
-            if (value === "5m" || value === "1h" || value === "24h" || value === "all") {
-              setTimeRange(value);
-            }
-          }}
-          aria-label="Filter audit by time range"
-          className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-        >
-          <option value="all">All</option>
-          <option value="5m">Last 5 minutes</option>
-          <option value="1h">Last hour</option>
-          <option value="24h">Last 24 hours</option>
-        </select>
-        {developerMode && (
-          <button
-            type="button"
-            onClick={() => setShowSuccessful((v) => !v)}
-            className={cn(
-              "flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
-              showSuccessful
-                ? "bg-overlay-subtle border-border-default text-text-primary"
-                : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
-            )}
-            aria-pressed={showSuccessful}
-          >
-            <Eye className="w-3.5 h-3.5" />
-            Show successful dispatches
-          </button>
-        )}
-      </div>
+          onChange={setResultFilter}
+          options={RESULT_FILTER_OPTIONS}
+          ariaLabel="Filter audit by result"
+        />
+        <AuditTimeRangeSelect value={timeRange} onChange={setTimeRange} />
+      </AuditFilterBar>
 
       {loading ? (
         <Skeleton label="Loading audit records" className="space-y-2 px-4 py-3">
@@ -227,20 +181,36 @@ export function PluginActionAuditLogViewer({
           <SkeletonBone className="h-5 w-4/6" />
           <SkeletonBone className="h-5 w-3/4" />
         </Skeleton>
+      ) : loadError ? (
+        loadError
       ) : filteredRecords.length === 0 ? (
-        <SettingsEmptyRow>
-          {records.length === 0
-            ? "Plugin actions show up here once an installed plugin dispatches one"
-            : suppressSuccess &&
-                pluginFilter.trim().length === 0 &&
-                searchQuery.trim().length === 0 &&
-                resultFilter === "all" &&
-                timeRange === "all"
-              ? "No errors or restricted dispatches"
-              : "No records match the current filters"}
-        </SettingsEmptyRow>
+        records.length === 0 ? (
+          <SettingsEmptyRow>
+            Plugin actions show up here once an installed plugin dispatches one
+          </SettingsEmptyRow>
+        ) : hasNarrowingFilter ? (
+          <SettingsEmptyRow
+            action={
+              <Button variant="outline" size="sm" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            }
+          >
+            No records match these filters
+          </SettingsEmptyRow>
+        ) : (
+          <SettingsEmptyRow
+            action={
+              <Button variant="outline" size="sm" onClick={() => setResultFilter("all")}>
+                Show all results
+              </Button>
+            }
+          >
+            No errors, disabled or restricted dispatches
+          </SettingsEmptyRow>
+        )
       ) : (
-        <ul className="max-h-64 overflow-y-auto divide-y divide-border-subtle">
+        <ul className="max-h-80 overflow-y-auto divide-y divide-border-subtle">
           {filteredRecords.map((record) => (
             <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 px-4 py-2 text-xs">
               <SeverityMark
@@ -248,7 +218,7 @@ export function PluginActionAuditLogViewer({
                 label={RESULT_LABEL[record.result]}
                 className="mt-0.5 h-3 w-3"
               />
-              <div className="min-w-0">
+              <div className="min-w-0 select-text">
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-text-primary truncate">{record.actionId}</span>
                   {record.source ? (
@@ -265,22 +235,25 @@ export function PluginActionAuditLogViewer({
                   {record.pluginId}
                 </div>
                 {record.errorMessage ? (
-                  <div className="mt-0.5 text-status-danger truncate" title={record.errorMessage}>
-                    {record.errorMessage}
-                  </div>
+                  <div className="mt-0.5 text-text-primary break-words">{record.errorMessage}</div>
                 ) : null}
                 {record.argsPlaintext ? (
-                  <div className="mt-0.5 font-mono text-text-secondary truncate">
+                  <div className="mt-0.5 font-mono text-text-secondary break-all">
                     {record.argsPlaintext}
                   </div>
                 ) : record.argsHash ? (
-                  <div className="mt-0.5 font-mono text-text-secondary truncate">
+                  <div
+                    className="mt-0.5 font-mono text-text-secondary truncate"
+                    title={`sha256:${record.argsHash}`}
+                  >
                     sha256:{record.argsHash.slice(0, 16)}…
                   </div>
                 ) : null}
               </div>
-              <div className="text-right text-text-secondary whitespace-nowrap">
-                <div>{formatRelativeTimestamp(record.ts, now)}</div>
+              <div className="text-right text-text-secondary whitespace-nowrap tabular-nums">
+                <div>
+                  <AuditRecordTime ts={record.ts} now={now} />
+                </div>
                 <div>{record.durationMs}ms</div>
               </div>
             </li>
@@ -288,7 +261,7 @@ export function PluginActionAuditLogViewer({
         </ul>
       )}
 
-      <SettingsActions status={loading ? null : countLabel}>
+      <SettingsActions status={loading ? null : status}>
         <Button
           variant="outline"
           size="sm"
@@ -303,31 +276,29 @@ export function PluginActionAuditLogViewer({
           size="sm"
           onClick={() => void onCopy(filteredRecords)}
           disabled={filteredRecords.length === 0}
-          className={cn(copyFlashActive && "text-status-success border-status-success/30")}
         >
           {copyFlashActive ? (
             <Check className="w-3.5 h-3.5" aria-hidden="true" />
           ) : (
             <Copy className="w-3.5 h-3.5" aria-hidden="true" />
           )}
-          {copyFlashActive ? "Copied!" : `Copy ${showCopyAll ? "all" : "filtered"} as JSON`}
+          {`Copy ${showCopyAll ? "all" : "shown"} as JSON`}
         </Button>
         <Button
           variant="outline"
           size="sm"
           onClick={() => void onExport(filteredRecords)}
           disabled={filteredRecords.length === 0}
-          className={cn(exportFlashActive && "text-status-success border-status-success/30")}
         >
           {exportFlashActive ? (
             <Check className="w-3.5 h-3.5" aria-hidden="true" />
           ) : (
             <Download className="w-3.5 h-3.5" aria-hidden="true" />
           )}
-          {exportFlashActive ? "Exported!" : "Export as NDJSON"}
+          Export as NDJSON
         </Button>
         <Button variant="ghost-danger" size="sm" onClick={onClear} disabled={records.length === 0}>
-          Clear log
+          Clear audit log…
         </Button>
       </SettingsActions>
     </SettingsGroup>
