@@ -72,7 +72,7 @@ describe("FileBrowserVisibilitySettings", () => {
     usePreferencesStore.getState().setFileBrowserAlwaysHiddenPatterns([]);
     render(<FileBrowserVisibilitySettings />);
 
-    expect(screen.getByText("Nothing is hidden")).toBeTruthy();
+    expect(screen.getByText("Add a name or pattern to always hide it")).toBeTruthy();
   });
 
   it("refuses to add past the cap and keeps the draft instead of silently dropping it", () => {

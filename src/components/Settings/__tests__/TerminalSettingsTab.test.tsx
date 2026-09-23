@@ -53,7 +53,7 @@ describe("TerminalSettingsTab", () => {
       { source: "user" }
     );
     // The memory estimate is a plain row, not an empty disclosure.
-    expect(screen.getByText("Estimated memory")).toBeTruthy();
+    expect(screen.getByText("Estimated scrollback memory")).toBeTruthy();
     expect(screen.queryByRole("button", { expanded: false })).toBeNull();
   });
 

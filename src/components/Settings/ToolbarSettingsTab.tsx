@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useId, useMemo, useState, useSyncExternalStore } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -24,7 +24,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVertical } from "lucide-react";
+import { ChevronRight, Ellipsis, GripVertical } from "lucide-react";
 import { useToolbarPreferencesStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -63,6 +63,7 @@ import {
 import {
   getGroupedInsertionIndex,
   orderToolbarButtonsByGroup,
+  stepToolbarButton,
 } from "@/components/Layout/toolbarButtonGrouping";
 import { getAgentConfig } from "@/config/agents";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
@@ -77,6 +78,12 @@ import {
 } from "@/lib/toolbarVisibilityDispatch";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
@@ -107,6 +114,44 @@ interface ToolbarButtonCardProps {
   draggable: boolean;
   /** Rendered inside `DragOverlay` — drops the live opacity/transition chrome. */
   isOverlay?: boolean;
+  /** The non-drag route to the same moves the grip offers (WCAG 2.2 SC 2.5.7). */
+  moves?: ButtonMoves;
+}
+
+interface ButtonMoves {
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+  onMoveAcross: () => void;
+  acrossLabel: string;
+}
+
+function ToolbarButtonMoveMenu({ label, moves }: { label: string; moves: ButtonMoves }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Move ${label}`}
+          className={cn(
+            "flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)]",
+            "text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+          )}
+        >
+          <Ellipsis className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[180px]">
+        <DropdownMenuItem disabled={!moves.onMoveUp} onSelect={() => moves.onMoveUp?.()}>
+          Move up
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={!moves.onMoveDown} onSelect={() => moves.onMoveDown?.()}>
+          Move down
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={moves.onMoveAcross}>{moves.acrossLabel}</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 // Presentational chip shared by the sortable rows and the drag overlay. It
@@ -119,6 +164,7 @@ function ToolbarButtonCard({
   gripProps,
   draggable,
   isOverlay,
+  moves,
 }: ToolbarButtonCardProps) {
   const Icon = metadata.icon;
 
@@ -153,6 +199,7 @@ function ToolbarButtonCard({
       <span className="text-sm font-medium text-text-primary truncate min-w-0 flex-1">
         {metadata.label}
       </span>
+      {moves && <ToolbarButtonMoveMenu label={metadata.label} moves={moves} />}
       <SettingsSwitch
         checked={isVisible}
         onCheckedChange={() => onToggle?.()}
@@ -168,6 +215,7 @@ interface SortableButtonItemProps {
   isVisible: boolean;
   onToggle: (buttonId: AnyToolbarButtonId) => void;
   allMetadata: AllMetadata;
+  moves?: ButtonMoves;
 }
 
 function SortableButtonItem({
@@ -175,6 +223,7 @@ function SortableButtonItem({
   isVisible,
   onToggle,
   allMetadata,
+  moves,
 }: SortableButtonItemProps) {
   const metadata = allMetadata[buttonId];
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -202,6 +251,8 @@ function SortableButtonItem({
         onToggle={() => onToggle(buttonId)}
         gripProps={{ ...attributes, ...listeners }}
         draggable={isVisible}
+        // Off buttons don't drag either — the menu offers exactly what the grip does.
+        moves={isVisible ? moves : undefined}
       />
     </div>
   );
@@ -264,6 +315,7 @@ interface ToolbarSideColumnProps {
   allMetadata: AllMetadata;
   isVisible: (id: AnyToolbarButtonId) => boolean;
   onToggle: (buttonId: AnyToolbarButtonId, side: ToolbarSide) => void;
+  getMoves: (buttonId: AnyToolbarButtonId, side: ToolbarSide) => ButtonMoves;
 }
 
 function ToolbarSideColumn({
@@ -274,6 +326,7 @@ function ToolbarSideColumn({
   allMetadata,
   isVisible,
   onToggle,
+  getMoves,
 }: ToolbarSideColumnProps) {
   // The column id doubles as a droppable target so an empty side still accepts
   // a cross-side drop (a `SortableContext` registers no droppable of its own
@@ -317,6 +370,7 @@ function ToolbarSideColumn({
                 isVisible={isVisible(buttonId)}
                 onToggle={(id) => onToggle(id, side)}
                 allMetadata={allMetadata}
+                moves={getMoves(buttonId, side)}
               />
             ))
           )}
@@ -358,6 +412,8 @@ export function ToolbarSettingsTab() {
   // speculative placement that drives the gap animation.
   const [dragState, setDragState] = useState<SideLists | null>(null);
   const [activeId, setActiveId] = useState<AnyToolbarButtonId | null>(null);
+  const [showAllAgents, setShowAllAgents] = useState(false);
+  const agentListId = useId();
 
   const liveRight = dragState?.right ?? layout.rightButtons;
 
@@ -695,7 +751,48 @@ export function ToolbarSettingsTab() {
     );
   };
 
+  // The same moves a drag can make, as menu items: up and down step past the
+  // neighbouring rendered row (on the left only within the button's own group,
+  // which is all a drag can achieve there either), and across lands at the end of
+  // the other side — grouped on the left, exactly as a drop there would be.
+  const getMoves = (buttonId: AnyToolbarButtonId, side: ToolbarSide): ButtonMoves => {
+    const list = side === "left" ? groupedLeft : layout.rightButtons;
+    const isRendered = (id: AnyToolbarButtonId) => allMetadata[id] !== undefined;
+    const stepTo = (offset: -1 | 1) => {
+      const next = stepToolbarButton(
+        list,
+        buttonId,
+        offset,
+        isRendered,
+        side === "left" ? resolveGroup : undefined
+      );
+      if (!next) return undefined;
+      return () => (side === "left" ? setLeftButtons(next) : setRightButtons(next));
+    };
+
+    return {
+      onMoveUp: stepTo(-1),
+      onMoveDown: stepTo(1),
+      acrossLabel: side === "left" ? "Move to right side" : "Move to left side",
+      onMoveAcross: () => {
+        if (side === "left") {
+          moveButton(buttonId, "left", "right", layout.rightButtons.length);
+          return;
+        }
+        const projected = orderToolbarButtonsByGroup([...groupedLeft, buttonId], resolveGroup);
+        moveButton(
+          buttonId,
+          "right",
+          "left",
+          getGroupedInsertionIndex(layout.leftButtons, projected, buttonId, resolveGroup)
+        );
+      },
+    };
+  };
+
   const activeMetadata = activeId ? allMetadata[activeId] : undefined;
+
+  const pinnedAgentCount = LAUNCHABLE_AGENT_IDS.filter(isAgentOnToolbar).length;
 
   const defaultSelectionOptions = [
     { value: NO_DEFAULT_SELECTION, label: "None (first available)" },
@@ -709,7 +806,7 @@ export function ToolbarSettingsTab() {
     <div className="space-y-8">
       <SettingsSection
         title="Toolbar buttons"
-        description="Drag to reorder within a side or move a button between the left and right groups. Left-side buttons stay grouped as launcher, agents, panels, then everything else, so dragging one across a boundary snaps it back into its own group. Toggle to show or hide."
+        description="Drag a button, or use its menu, to reorder it or move it to the other side. The left side keeps its groups in order: launcher, agents, panels, then the rest."
       >
         <DndContext
           sensors={sensors}
@@ -729,6 +826,7 @@ export function ToolbarSettingsTab() {
               allMetadata={allMetadata}
               isVisible={isVisible}
               onToggle={handleToggle}
+              getMoves={getMoves}
             />
             <ToolbarSideColumn
               id="toolbar-right-buttons"
@@ -738,6 +836,7 @@ export function ToolbarSettingsTab() {
               allMetadata={allMetadata}
               isVisible={isVisible}
               onToggle={handleToggle}
+              getMoves={getMoves}
             />
           </div>
           <DragOverlay dropAnimation={dropAnimation}>
@@ -766,19 +865,50 @@ export function ToolbarSettingsTab() {
       */}
       <SettingsSection
         title="Agent buttons"
-        description={`Every agent lives in the launcher. Pin one to give it its own toolbar button too. ${LAUNCHABLE_AGENT_IDS.filter(isAgentOnToolbar).length} of ${LAUNCHABLE_AGENT_IDS.length} pinned.`}
+        description={`Every agent lives in the launcher. Pin one to give it its own toolbar button too. ${pinnedAgentCount} of ${LAUNCHABLE_AGENT_IDS.length} pinned.`}
       >
-        <SettingsGroup>
-          {LAUNCHABLE_AGENT_IDS.map((buttonId) => (
-            <TrayButtonRow
-              key={buttonId}
-              buttonId={buttonId}
-              isVisible={isAgentOnToolbar(buttonId)}
-              onToggle={(id) => handleToggle(id, "left")}
-              metadata={allMetadata[buttonId]}
-              showDescription={false}
-            />
-          ))}
+        <SettingsGroup id={agentListId}>
+          {/* The inventory rule: what is pinned stays in view, the rest behind a
+              disclosure. Expanded, it lists every agent in one fixed order, so a
+              row never jumps sections under the pointer that just toggled it. */}
+          {LAUNCHABLE_AGENT_IDS.filter((id) => showAllAgents || isAgentOnToolbar(id)).map(
+            (buttonId) => (
+              <TrayButtonRow
+                key={buttonId}
+                buttonId={buttonId}
+                isVisible={isAgentOnToolbar(buttonId)}
+                onToggle={(id) => handleToggle(id, "left")}
+                metadata={allMetadata[buttonId]}
+                showDescription={false}
+              />
+            )
+          )}
+          {pinnedAgentCount < LAUNCHABLE_AGENT_IDS.length && (
+            <div>
+              <button
+                type="button"
+                aria-expanded={showAllAgents}
+                aria-controls={agentListId}
+                onClick={() => setShowAllAgents((v) => !v)}
+                className={cn(
+                  "group flex w-full items-center gap-2 py-2.5 pl-4 pr-4 text-left",
+                  "text-sm text-text-secondary hover:text-text-primary transition-colors",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+                )}
+              >
+                <ChevronRight
+                  className={cn(
+                    "w-3.5 h-3.5 shrink-0 transition-transform duration-150",
+                    showAllAgents ? "rotate-90" : "rotate-0"
+                  )}
+                  aria-hidden="true"
+                />
+                {showAllAgents
+                  ? "Show pinned agents only"
+                  : `Show all ${LAUNCHABLE_AGENT_IDS.length} agents`}
+              </button>
+            </div>
+          )}
         </SettingsGroup>
       </SettingsSection>
 
@@ -864,6 +994,8 @@ export function ToolbarSettingsTab() {
             subtitle="Show dev server option even if no command is configured in project settings"
             isEnabled={launcher.alwaysShowDevServer}
             onChange={() => setAlwaysShowDevServer(!launcher.alwaysShowDevServer)}
+            isModified={launcher.alwaysShowDevServer}
+            onReset={() => setAlwaysShowDevServer(false)}
           />
           <SettingsSelect
             label="Default selection"
@@ -877,6 +1009,8 @@ export function ToolbarSettingsTab() {
               )
             }
             options={defaultSelectionOptions}
+            isModified={launcher.defaultSelection !== undefined}
+            onReset={() => setDefaultSelection(undefined)}
           />
         </SettingsGroup>
       </SettingsSection>

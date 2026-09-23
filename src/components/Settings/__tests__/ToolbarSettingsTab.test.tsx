@@ -190,6 +190,29 @@ const defaultSortable = (): ReturnType<typeof useSortable> =>
     isDragging: false,
   }) as unknown as ReturnType<typeof useSortable>;
 
+// The real menu pulls in the keybinding service; a flat stand-in keeps the
+// move items reachable as plain menuitems.
+vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
+    <div role="menu">{children}</div>
+  ),
+  DropdownMenuItem: ({
+    children,
+    disabled,
+    onSelect,
+  }: {
+    children: React.ReactNode;
+    disabled?: boolean;
+    onSelect?: () => void;
+  }) => (
+    <button type="button" role="menuitem" disabled={disabled} onClick={() => onSelect?.()}>
+      {children}
+    </button>
+  ),
+}));
+
 vi.mock("@dnd-kit/utilities", () => ({
   CSS: { Transform: { toString: () => "" } },
 }));

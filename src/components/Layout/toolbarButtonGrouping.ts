@@ -102,3 +102,35 @@ export function getGroupedInsertionIndex(
 
   return rawTargetIds.length;
 }
+
+/**
+ * One step up (`-1`) or down (`1`) for `buttonId` — the non-drag route to the
+ * reorder a drag performs (WCAG 2.2 SC 2.5.7). Returns the whole new list, or
+ * `null` when there is no step to take.
+ *
+ * The neighbour is the next id the user can actually see (`isRendered`), so a
+ * step never lands behind an unrendered id and looks like a no-op; the hidden
+ * ids themselves keep their slots, because the caller writes the whole array
+ * back. With `resolveGroup` (the grouped left side) a step stops at the group
+ * boundary, which is all a drag can achieve there too, and the result comes
+ * back regrouped.
+ */
+export function stepToolbarButton(
+  ids: readonly AnyToolbarButtonId[],
+  buttonId: AnyToolbarButtonId,
+  offset: -1 | 1,
+  isRendered: (id: AnyToolbarButtonId) => boolean,
+  resolveGroup?: ResolveToolbarButtonGroup
+): AnyToolbarButtonId[] | null {
+  const rendered = ids.filter(isRendered);
+  const at = rendered.indexOf(buttonId);
+  if (at === -1) return null;
+  const neighbour = rendered[at + offset];
+  if (neighbour === undefined) return null;
+  if (resolveGroup && resolveGroup(neighbour) !== resolveGroup(buttonId)) return null;
+
+  const next = ids.filter((id) => id !== buttonId);
+  const target = next.indexOf(neighbour);
+  next.splice(offset === -1 ? target : target + 1, 0, buttonId);
+  return resolveGroup ? orderToolbarButtonsByGroup(next, resolveGroup) : next;
+}

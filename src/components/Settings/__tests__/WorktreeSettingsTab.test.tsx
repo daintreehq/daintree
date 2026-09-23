@@ -98,3 +98,37 @@ describe("WorktreeSettingsTab load failure", () => {
     expect(screen.getByRole("button", { name: RESET_NAME })).toBeTruthy();
   });
 });
+
+describe("WorktreeSettingsTab draft", () => {
+  it("offers Discard only for an unsaved change, and Discard restores the saved pattern", async () => {
+    await renderWithSavedPattern(CUSTOM_PATTERN);
+    expect(screen.queryByRole("button", { name: "Discard" })).toBeNull();
+
+    const input = screen.getByRole("textbox") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "{parent-dir}/{repo-name}-{branch-slug}" } });
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+
+    expect(input.value).toBe(CUSTOM_PATTERN);
+    expect(screen.queryByRole("button", { name: "Discard" })).toBeNull();
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("drops the Saved status as soon as the field changes again", async () => {
+    await renderWithSavedPattern(CUSTOM_PATTERN);
+    dispatch.mockImplementation(async (id: string, args?: { pattern?: string }) =>
+      id === "worktreeConfig.setPattern"
+        ? { ok: true, result: { pathPattern: args?.pattern } }
+        : { ok: true, result: { pathPattern: CUSTOM_PATTERN } }
+    );
+    const input = screen.getByRole("textbox") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "{parent-dir}/{repo-name}-{branch-slug}" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+    expect(screen.getByText("Saved")).toBeTruthy();
+
+    fireEvent.change(input, { target: { value: "{parent-dir}/{branch-slug}-x" } });
+
+    expect(screen.queryByText("Saved")).toBeNull();
+  });
+});

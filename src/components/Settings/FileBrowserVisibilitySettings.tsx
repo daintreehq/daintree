@@ -78,11 +78,13 @@ export function FileBrowserVisibilitySettings() {
           }}
           resetAriaLabel="Reset always-hidden patterns to defaults"
           error={error}
-          control={
+          control={({ labelId, descriptionId }) => (
             <div className="grid gap-3">
-              <ul className="flex flex-wrap gap-1.5" aria-label="Always-hidden patterns">
+              <ul className="flex flex-wrap gap-1.5" aria-labelledby={labelId}>
                 {patterns.length === 0 && (
-                  <li className="text-xs text-text-secondary">Nothing is hidden</li>
+                  <li className="text-xs text-text-secondary">
+                    Add a name or pattern to always hide it
+                  </li>
                 )}
                 {patterns.map((pattern) => (
                   <li
@@ -118,6 +120,8 @@ export function FileBrowserVisibilitySettings() {
                   }}
                   placeholder="Add a name or pattern"
                   aria-label="Add an always-hidden pattern"
+                  aria-describedby={descriptionId}
+                  aria-invalid={!!error || undefined}
                   invalid={!!error}
                   className="flex-1 font-mono"
                 />
@@ -133,7 +137,7 @@ export function FileBrowserVisibilitySettings() {
                 </Button>
               </div>
             </div>
-          }
+          )}
         />
       </SettingsGroup>
     </SettingsSection>

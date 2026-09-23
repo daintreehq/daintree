@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { Fragment, useState, useMemo, useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
@@ -380,7 +380,6 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 isEnabled={performanceMode}
                 onChange={() => void setPerformanceMode(!performanceMode)}
                 ariaLabel="Performance Mode Toggle"
-                colorScheme="amber"
                 isModified={performanceMode}
                 onReset={() => void setPerformanceMode(false)}
                 lifecycleBadge="New terminals"
@@ -552,7 +551,11 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               <SettingsPresetGroup
                 id="terminal-cached-project-views"
                 label="Cached project views"
-                description="Project views kept loaded in memory. More keeps switching back near-instant; fewer saves memory. The default scales with your RAM."
+                description={`Project views kept loaded in memory. More keeps switching back near-instant; fewer saves memory. ${
+                  defaultCachedViews !== null
+                    ? `Default on this machine: ${defaultCachedViews}`
+                    : "The default scales with your RAM"
+                }`}
                 options={CACHED_VIEWS_OPTIONS}
                 value={cachedProjectViews}
                 onChange={(value) => void handleCachedProjectViewsChange(value)}
@@ -679,7 +682,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             </SettingsSection>
 
             <SettingsSection
-              title="Grid layout strategy"
+              title="Grid layout"
               id="terminal-grid-layout"
               description="How panels arrange in the grid as you add more."
             >
@@ -697,49 +700,47 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   legendHidden
                   className="space-y-0 divide-y divide-border-subtle"
                 >
+                  {/* A fixed strategy's count sits directly under the choice it
+                      configures, so the consequence and its setting read together. */}
                   {STRATEGIES.map(({ id, label, description }) => (
-                    <RadioChoiceRow
-                      key={id}
-                      bare
-                      name="gridLayoutStrategy"
-                      value={id}
-                      checked={layoutConfig.strategy === id}
-                      onChange={() => handleStrategyChange(id)}
-                      label={label}
-                      description={description}
-                      className={cn(
-                        "px-4 py-3 transition-colors",
-                        "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary",
-                        layoutConfig.strategy === id
-                          ? "bg-overlay-selected"
-                          : "hover:bg-overlay-soft"
+                    <Fragment key={id}>
+                      <RadioChoiceRow
+                        bare
+                        name="gridLayoutStrategy"
+                        value={id}
+                        checked={layoutConfig.strategy === id}
+                        onChange={() => handleStrategyChange(id)}
+                        label={label}
+                        description={description}
+                        className={cn(
+                          "px-4 py-3 transition-colors",
+                          "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary",
+                          layoutConfig.strategy === id
+                            ? "bg-overlay-selected"
+                            : "hover:bg-overlay-soft"
+                        )}
+                      />
+                      {id !== "automatic" && layoutConfig.strategy === id && (
+                        <SettingsDependents>
+                          <SettingsNumberInput
+                            label={id === "fixed-columns" ? "Number of columns" : "Number of rows"}
+                            description={
+                              id === "fixed-columns"
+                                ? `Terminals stack vertically once this many columns are filled. Default: ${DEFAULT_GRID_VALUE}`
+                                : `Terminals expand horizontally once this many rows are filled. Default: ${DEFAULT_GRID_VALUE}`
+                            }
+                            min={1}
+                            max={10}
+                            value={layoutConfig.value}
+                            onChange={(e) => handleValueChange(e.target.value)}
+                            isModified={layoutConfig.value !== DEFAULT_GRID_VALUE}
+                            onReset={() => handleValueChange(String(DEFAULT_GRID_VALUE))}
+                          />
+                        </SettingsDependents>
                       )}
-                    />
+                    </Fragment>
                   ))}
                 </RadioChoiceGroup>
-
-                {layoutConfig.strategy !== "automatic" && (
-                  <SettingsDependents>
-                    <SettingsNumberInput
-                      label={
-                        layoutConfig.strategy === "fixed-columns"
-                          ? "Number of columns"
-                          : "Number of rows"
-                      }
-                      description={
-                        layoutConfig.strategy === "fixed-columns"
-                          ? `Terminals stack vertically once this many columns are filled. Default: ${DEFAULT_GRID_VALUE}`
-                          : `Terminals expand horizontally once this many rows are filled. Default: ${DEFAULT_GRID_VALUE}`
-                      }
-                      min={1}
-                      max={10}
-                      value={layoutConfig.value}
-                      onChange={(e) => handleValueChange(e.target.value)}
-                      isModified={layoutConfig.value !== DEFAULT_GRID_VALUE}
-                      onReset={() => handleValueChange(String(DEFAULT_GRID_VALUE))}
-                    />
-                  </SettingsDependents>
-                )}
               </SettingsGroup>
             </SettingsSection>
           </>
@@ -756,7 +757,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             <SettingsGroup>
               <SettingsPresetGroup
                 label="Base scrollback"
-                description={`The base every terminal's history scales from: agent terminals keep 10× it and shells and dev servers 0.3×, each within its own floor and ceiling. Default: ${SCROLLBACK_DEFAULT.toLocaleString()}`}
+                description={`Every terminal scales from this: agent terminals keep 10× it and shells 0.3×, within their own limits. Default: ${SCROLLBACK_DEFAULT.toLocaleString()}`}
                 options={SCROLLBACK_OPTIONS}
                 value={scrollbackLines}
                 onChange={(value) => void handleScrollbackChange(value)}
@@ -785,7 +786,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
             <SettingsGroup id="memory-details">
               <SettingsRow
-                label="Estimated memory"
+                label="Estimated scrollback memory"
                 description={`A typical session of ${TYPICAL_TERMINAL_COUNTS.agent} agents (${formatBytes(memoryEstimate.agent)}) and ${TYPICAL_TERMINAL_COUNTS.plain} terminals (${formatBytes(memoryEstimate.plain)})`}
                 control={
                   <span className="font-mono text-xs font-medium text-text-primary">
