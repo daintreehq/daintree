@@ -250,7 +250,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
                   icon={<WaitingIcon className="text-state-waiting" aria-hidden="true" />}
                   label="Waiting"
                   count={displayCount}
-                  detail={hereCount > 0 ? `${hereCount} here` : "none here"}
+                  hasLocal={hereCount > 0}
                   compact={compact}
                 />
               </Button>

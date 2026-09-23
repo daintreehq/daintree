@@ -1,5 +1,6 @@
 import { useCallback, useRef, type ReactNode } from "react";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
+import { FolderGit2 } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 /**
@@ -17,21 +18,29 @@ interface DockStatusPillLabelProps {
   icon: ReactNode;
   label: string;
   count: number;
-  /** A qualifier on the count ("1 here"), dropped along with the label word. */
+  /** A qualifier on the count ("1 waiting"), dropped along with the label word. */
   detail?: ReactNode;
+  /**
+   * Some of the count is in the active worktree. Marked with the worktree
+   * glyph rather than words or a second number: the tray is tight, and the
+   * exact split lives in the name and tooltip.
+   */
+  hasLocal?: boolean;
   compact: boolean;
 }
 
 /**
- * Glyph, word, count, qualifier — in that order on every pill. When the dock
- * runs short of width, or the user picks compact density, the word and the
- * qualifier go and the count stays beside its glyph, never on top of it.
+ * Glyph, word, count, qualifier, local marker — in that order on every pill.
+ * When the dock runs short of width, or the user picks compact density, the
+ * word and the qualifier go and the count stays beside its glyph, never on
+ * top of it. The local marker stays: it is the only on-pill scope cue.
  */
 export function DockStatusPillLabel({
   icon,
   label,
   count,
   detail,
+  hasLocal = false,
   compact,
 }: DockStatusPillLabelProps) {
   const condensable = "@max-[64rem]/dock:hidden";
@@ -44,6 +53,13 @@ export function DockStatusPillLabel({
       </span>
       {!compact && detail && (
         <span className={cn("tabular-nums text-text-secondary", condensable)}>· {detail}</span>
+      )}
+      {hasLocal && (
+        <FolderGit2
+          data-dock-pill-local=""
+          className="-ml-0.5 size-3! text-text-secondary"
+          aria-hidden="true"
+        />
       )}
     </>
   );

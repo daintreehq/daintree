@@ -511,6 +511,7 @@ export function TrashContainer({
                   }
                   label="Trash"
                   count={count}
+                  hasLocal={hereCount > 0}
                   compact={compact}
                 />
               </Button>

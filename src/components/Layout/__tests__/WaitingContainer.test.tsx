@@ -248,7 +248,7 @@ describe("WaitingContainer", () => {
       expect(trigger).toBeTruthy();
     });
 
-    it("names the local share of a project-wide count", () => {
+    it("marks a project-wide count that includes this worktree, and names the share", () => {
       mockTerminals = [
         makeTerminal({ id: "t1" }),
         makeTerminal({ id: "t2", worktreeId: "wt-2" }),
@@ -258,16 +258,18 @@ describe("WaitingContainer", () => {
       const trigger = screen.getByRole("button", {
         name: "Waiting: 3 agents across all worktrees, 1 in this one",
       });
-      expect(trigger.textContent).toContain("1 here");
+      expect(trigger.querySelector("[data-dock-pill-local]")).not.toBeNull();
+      expect(trigger.textContent).not.toContain("here");
     });
 
-    it("says so when nothing is waiting here", () => {
+    it("drops the local marker when nothing is waiting here", () => {
       mockTerminals = [makeTerminal({ id: "t1", worktreeId: "wt-2" })];
       render(<WaitingContainer />);
       const trigger = screen.getByRole("button", {
         name: "Waiting: 1 agent across all worktrees, none in this one",
       });
-      expect(trigger.textContent).toContain("none here");
+      expect(trigger.querySelector("[data-dock-pill-local]")).toBeNull();
+      expect(trigger.textContent).not.toContain("here");
     });
   });
 

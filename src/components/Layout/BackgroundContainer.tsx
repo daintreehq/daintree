@@ -27,6 +27,7 @@ import {
   DOCK_STATUS_PILL_CLASS,
   DOCK_STATUS_PILL_OPEN_CLASS,
   DockStatusPillLabel,
+  dockStatusScopeDescription,
   useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -109,6 +110,10 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   const waitingCount = useMemo(
     () => terminals.filter((t) => t.agentState === "waiting").length,
     [terminals]
+  );
+  const hereCount = useMemo(
+    () => terminals.filter((t) => (t.worktreeId ?? null) === (activeWorktreeId ?? null)).length,
+    [terminals, activeWorktreeId]
   );
 
   const displayItems = useMemo((): BackgroundDisplayItem[] => {
@@ -263,7 +268,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   // .dock-status-pill exit transition instead of flashing "(0)".
   const displayCount = useExitLaggedCount(count);
   const triggerLabel =
-    `Background: ${displayCount} ${displayCount === 1 ? "panel" : "panels"} across all worktrees` +
+    `Background: ${displayCount} ${displayCount === 1 ? "panel" : "panels"} ${dockStatusScopeDescription(displayCount, hereCount)}` +
     (waitingCount > 0 ? `, ${waitingCount} waiting` : "");
 
   useEffect(() => {
@@ -298,12 +303,15 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
                   label="Background"
                   count={displayCount}
                   detail={waitingCount > 0 ? `${waitingCount} waiting` : undefined}
+                  hasLocal={hereCount > 0}
                   compact={compact}
                 />
               </Button>
             </PopoverTrigger>
           </TooltipTrigger>
-          <TooltipContent side="top">Sent to background, across all worktrees</TooltipContent>
+          <TooltipContent side="top">
+            {`Sent to background ${dockStatusScopeDescription(displayCount, hereCount)}`}
+          </TooltipContent>
         </Tooltip>
 
         <PopoverContent

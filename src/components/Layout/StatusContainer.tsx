@@ -97,7 +97,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
                   icon={<Icon className={config.iconColor} aria-hidden="true" />}
                   label={config.buttonLabel}
                   count={displayCount}
-                  detail={hereCount > 0 ? `${hereCount} here` : "none here"}
+                  hasLocal={hereCount > 0}
                   compact={compact}
                 />
               </Button>
