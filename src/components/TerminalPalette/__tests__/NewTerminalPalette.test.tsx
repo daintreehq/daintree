@@ -94,6 +94,13 @@ describe("NewTerminalPalette", () => {
     expect(combobox.getAttribute("aria-controls")).toBeNull();
   });
 
+  it("clears a query on Escape without the dialog's backstop closing it", () => {
+    const { getByRole, props } = renderPalette({ query: "cla" });
+    fireEvent.keyDown(getByRole("combobox"), { key: "Escape" });
+    expect(props.onQueryChange).toHaveBeenCalledWith("");
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
   it("has a live region announcing result count", () => {
     const { getByText } = renderPalette();
     expect(getByText("3 terminal types")).toBeTruthy();

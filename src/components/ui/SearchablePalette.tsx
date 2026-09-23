@@ -316,6 +316,19 @@ export function SearchablePalette<T>({
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
 
+      // Escape clears a query before it closes anything. It has to be claimed
+      // here: the dialog's document-level Escape backstop closes the palette
+      // outright and marks the event consumed, so the clear-then-close entry
+      // this palette puts on the escape stack never ran — and "Press Esc to see
+      // everything" closed the palette instead. Stopping propagation is the
+      // backstop's documented opt-out.
+      if (e.key === "Escape" && query !== "") {
+        e.preventDefault();
+        e.stopPropagation();
+        onQueryChange("");
+        return;
+      }
+
       if (onKeyDown) {
         onKeyDown(e);
         if (e.defaultPrevented) return;
