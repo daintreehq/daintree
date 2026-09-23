@@ -35,13 +35,22 @@ import { useVerticalScrollShadows } from "@/hooks/useVerticalScrollShadows";
  * media queries stay separate on purpose — macOS fires only the former and
  * Windows swaps in system colours; see the block comments in `index.css`.
  */
-function ScrollShadowOverlay({ edge, visible }: { edge: "top" | "bottom"; visible: boolean }) {
+function ScrollShadowOverlay({
+  edge,
+  visible,
+  compact,
+}: {
+  edge: "top" | "bottom";
+  visible: boolean;
+  compact?: boolean;
+}) {
   return (
     <div
       aria-hidden="true"
       data-visible={visible}
       className={cn(
-        "pointer-events-none absolute inset-x-0 z-10 h-8 transition-opacity duration-150 ease-out",
+        "pointer-events-none absolute inset-x-0 z-10 transition-opacity duration-150 ease-out",
+        compact ? "h-4" : "h-8",
         "forced-colors:h-0",
         // Under increased contrast the gradient is swapped for a solid
         // hairline rather than removed. The wash itself is the problem — it
@@ -79,17 +88,22 @@ function mergeRefs<T>(...refs: (Ref<T> | undefined)[]) {
 interface ScrollShadowProps extends Omit<ComponentPropsWithoutRef<"div">, "className"> {
   className?: string;
   scrollClassName?: string;
+  /**
+   * A 16px fade instead of 32px, for a list of short rows that routinely overflows —
+   * the full fade covers most of a row and makes a live item read as disabled.
+   */
+  compact?: boolean;
   children: ReactNode;
 }
 
 export const ScrollShadow = forwardRef<HTMLDivElement, ScrollShadowProps>(
-  ({ className, scrollClassName, children, ...rest }, forwardedRef) => {
+  ({ className, scrollClassName, compact, children, ...rest }, forwardedRef) => {
     const internalRef = useRef<HTMLDivElement>(null);
     const { canScrollUp, canScrollDown } = useVerticalScrollShadows(internalRef);
 
     return (
       <div className={cn("relative overflow-hidden min-h-0 flex flex-col", className)}>
-        <ScrollShadowOverlay edge="top" visible={canScrollUp} />
+        <ScrollShadowOverlay edge="top" visible={canScrollUp} compact={compact} />
         <div
           ref={mergeRefs(internalRef, forwardedRef)}
           className={cn("flex-1 overflow-y-auto", scrollClassName)}
@@ -97,7 +111,7 @@ export const ScrollShadow = forwardRef<HTMLDivElement, ScrollShadowProps>(
         >
           {children}
         </div>
-        <ScrollShadowOverlay edge="bottom" visible={canScrollDown} />
+        <ScrollShadowOverlay edge="bottom" visible={canScrollDown} compact={compact} />
       </div>
     );
   }

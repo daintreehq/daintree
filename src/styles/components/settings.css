@@ -39,13 +39,19 @@
   background: var(--_bg);
 }
 
-.settings-search-icon,
+/* Fallbacks are the contrast-floored tokens, not text-muted, which has no dark-theme
+   floor: the placeholder takes the input well's placeholder tier, and the glyph and
+   the version line are read, so they take the secondary ramp. */
+.settings-search-icon {
+  color: var(--settings-search-muted, var(--theme-text-secondary));
+}
+
 .settings-search-input::placeholder {
-  color: var(--settings-search-muted, var(--theme-text-muted));
+  color: var(--settings-search-muted, var(--theme-text-placeholder));
 }
 
 .settings-meta {
-  color: var(--settings-meta-fg, var(--theme-text-muted));
+  color: var(--settings-meta-fg, var(--theme-text-secondary));
   font-size: var(--settings-meta-size, var(--text-2xs));
 }
 

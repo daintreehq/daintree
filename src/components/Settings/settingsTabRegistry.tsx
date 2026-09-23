@@ -21,7 +21,14 @@ import {
   KeyRound,
   Shield,
 } from "lucide-react";
-import { DaintreeIcon, FolderGit2, Plug, McpServerIcon, Workflow } from "@/components/icons";
+import {
+  DaintreeIcon,
+  FolderGit2,
+  PanelTop,
+  Plug,
+  McpServerIcon,
+  Workflow,
+} from "@/components/icons";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { GeneralTab } from "./GeneralTab";
@@ -912,6 +919,8 @@ export const SETTINGS_REGISTRY = [
     group: "Terminal",
     label: "Toolbar",
     headerTitle: "Toolbar customization",
+    // Not the gear: that is project General's glyph, and global General's sliders
+    // already read as "settings". This is the strip along the top of the window.
     icon: <PanelTop className="w-4 h-4" />,
     importKind: "lazy",
     importer: importToolbarSettingsTab,
