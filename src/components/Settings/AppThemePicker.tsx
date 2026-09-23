@@ -613,7 +613,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
         label="Theme"
         description={
           followSystem
-            ? "Follows system appearance; choosing a theme turns this off"
+            ? "Picking a theme turns off system matching"
             : `${allSchemes.length} themes to browse, each with a live preview`
         }
         isModified={!followSystem && selectedSchemeId !== DEFAULT_APP_SCHEME_ID}

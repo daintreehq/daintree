@@ -43,9 +43,10 @@ export function SchemePreview({
 
   return (
     <div
-      // The sample's own edge: a terminal background one step off the card (Daintree
-      // on its own settings card) otherwise dissolves into it.
-      className="rounded-[var(--radius-sm)] overflow-hidden border border-border-default"
+      // The sample's own edge, at 3:1 against the card: a terminal background one step
+      // off the card (Daintree on its own settings card) otherwise dissolves into it,
+      // and border-default is an ink at low alpha that measures about 1.05:1 there.
+      className="rounded-[var(--radius-sm)] overflow-hidden border border-text-secondary"
       style={{
         backgroundColor: c.background ?? "#000",
         padding: "6px 8px",
