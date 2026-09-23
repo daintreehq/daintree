@@ -502,6 +502,34 @@ describe("KeybindingService", () => {
     expect(binding?.effectiveCombo).toBe("");
   });
 
+  it("reports each binding's own combo for an action registered more than once", () => {
+    const service = new KeybindingService();
+    const all = service.getAllBindingsWithEffectiveCombos();
+    const counts = new Map<string, number>();
+    for (const entry of all) counts.set(entry.actionId, (counts.get(entry.actionId) ?? 0) + 1);
+    const repeated = all.filter((entry) => (counts.get(entry.actionId) ?? 0) > 1);
+
+    expect(repeated.length).toBeGreaterThan(1);
+    for (const entry of repeated) {
+      expect(entry.effectiveCombo, entry.actionId).toBe(entry.combo);
+    }
+  });
+
+  it("reports an override on every binding of a repeated action", () => {
+    const service = new KeybindingService();
+    const repeatedId = service
+      .getAllBindingsWithEffectiveCombos()
+      .map((entry) => entry.actionId)
+      .find((id, index, ids) => ids.indexOf(id) !== index)!;
+    service.applyOverrides({ [repeatedId]: ["Ctrl+Alt+Shift+F12"] });
+
+    const rows = service
+      .getAllBindingsWithEffectiveCombos()
+      .filter((entry) => entry.actionId === repeatedId);
+    expect(rows.length).toBeGreaterThan(1);
+    expect(rows.every((entry) => entry.effectiveCombo === "Ctrl+Alt+Shift+F12")).toBe(true);
+  });
+
   it("binds Cmd+T to terminal.duplicate by default", () => {
     const service = new KeybindingService();
     expect(service.getBinding("terminal.duplicate")?.combo).toBe("Cmd+T");

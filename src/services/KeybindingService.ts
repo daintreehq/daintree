@@ -645,10 +645,15 @@ class KeybindingService {
   getAllBindingsWithEffectiveCombos(): Array<
     RegisteredKeybindingConfig & { effectiveCombo: string }
   > {
+    // Resolved per binding, the way the matcher resolves it: an action can be
+    // registered twice (`terminal.close` on ⌘W and ⌃F4), and resolving by action
+    // ID would report the first binding's combo on every one of its rows.
     return Array.from(this.bindings.values())
       .flat()
       .map((binding) => {
-        const effectiveCombo = this.getEffectiveCombo(binding.actionId);
+        const effectiveCombo = this.overrides.has(binding.actionId)
+          ? this.overrides.get(binding.actionId)?.[0]
+          : binding.combo;
         return {
           ...binding,
           effectiveCombo: effectiveCombo ?? "",
