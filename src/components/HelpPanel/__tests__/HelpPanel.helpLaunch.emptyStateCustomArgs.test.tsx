@@ -735,7 +735,7 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "system.openExternal",
-      { url: "https://daintree.org/assistant" },
+      { url: "https://daintree.org/docs/daintree-assistant" },
       { source: "user" }
     );
   });
@@ -761,7 +761,7 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     );
     expect(mockDispatch).toHaveBeenCalledWith(
       "system.openExternal",
-      { url: "https://daintree.org/assistant" },
+      { url: "https://daintree.org/docs/daintree-assistant" },
       { source: "user" }
     );
     expect(mockDispatch).not.toHaveBeenCalledWith(
@@ -793,7 +793,7 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "system.openExternal",
-      { url: "https://daintree.org/assistant" },
+      { url: "https://daintree.org/docs/daintree-assistant" },
       { source: "user" }
     );
   });

@@ -84,7 +84,7 @@ const LazyHybridInputBar = lazy(() =>
 const RESIZE_STEP = 10;
 const RESIZE_PAGE_STEP = 50;
 
-const ASSISTANT_DOCS_URL = "https://daintree.org/assistant";
+const ASSISTANT_DOCS_URL = "https://daintree.org/docs/daintree-assistant";
 const ASSISTANT_INSTALLER_URL = "https://daintree.org/download";
 
 // How long `agentState` must stay "exited" before the assistant self-stops and
