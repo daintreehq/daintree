@@ -432,7 +432,7 @@ export async function openFile(
         stdio: "ignore",
         cleanup: false,
       });
-      child.unref();
+      child.nodeChildProcess.unref();
       // Suppress unhandled async rejection from the detached process
       child.catch(() => {});
       // execa never throws synchronously for a broken command — ENOENT and
@@ -443,7 +443,9 @@ export async function openFile(
       // the promise always settles on the failure paths, and a GUI editor that
       // outlives us wins on 'spawn' long before its promise would settle.
       return await Promise.race([
-        new Promise<boolean>((resolve) => child.once("spawn", () => resolve(true))),
+        new Promise<boolean>((resolve) =>
+          child.nodeChildProcess.once("spawn", () => resolve(true))
+        ),
         child.then(
           () => true,
           () => false

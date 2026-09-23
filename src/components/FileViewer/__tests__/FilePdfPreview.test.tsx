@@ -65,9 +65,9 @@ describe("FilePdfPreview", () => {
   });
 
   it("marks the frame credentialless so a COEP shell can embed a COEP-less document", async () => {
-    // Presence is what matters, and React omits unknown attributes given a
-    // boolean value — so assert the attribute actually reached the DOM rather
-    // than trusting the prop.
+    // Presence is what matters, and whether React emits it depends on how the
+    // installed version classifies the attribute — so assert it actually
+    // reached the DOM rather than trusting the prop.
     expect((await renderPreview()).hasAttribute("credentialless")).toBe(true);
   });
 

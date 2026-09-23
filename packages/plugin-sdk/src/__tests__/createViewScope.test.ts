@@ -615,8 +615,14 @@ describe("createViewScope listeners", () => {
   });
 
   it("forgets a once listener whose callback throws", () => {
-    // A bare EventTarget: jsdom swallows listener exceptions there instead of
-    // reporting them as uncaught window errors.
+    // A listener exception is reported to the window as an `error` event, and
+    // an uncancelled one surfaces as an uncaught error that fails the run.
+    // This throw is the point of the test, so claim it.
+    const reported: unknown[] = [];
+    const claim = (event: ErrorEvent) => {
+      reported.push(event.error);
+      event.preventDefault();
+    };
     const target = new EventTarget();
     const scope = createViewScope(new AbortController().signal);
     const listener = vi.fn(() => {
@@ -624,10 +630,16 @@ describe("createViewScope listeners", () => {
     });
     scope.listen(target, "ping", listener, { once: true });
 
-    target.dispatchEvent(new Event("ping"));
-    target.dispatchEvent(new Event("ping"));
+    window.addEventListener("error", claim);
+    try {
+      target.dispatchEvent(new Event("ping"));
+      target.dispatchEvent(new Event("ping"));
+    } finally {
+      window.removeEventListener("error", claim);
+    }
 
     expect(listener).toHaveBeenCalledTimes(1);
+    expect(reported).toHaveLength(1);
     expect(scope.stats().active).toBe(0);
   });
 

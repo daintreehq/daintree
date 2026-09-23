@@ -27,9 +27,9 @@
     "prepare": "tsup"
   },
   "dependencies": {
-    "svelte": "^5.57.0"
+    "svelte": "^5.57.1"
   },
   "devDependencies": {
-    "tsup": "^8.5.0"
+    "tsup": "^8.5.1"
   }
 }

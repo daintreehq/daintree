@@ -46,16 +46,16 @@
     "prepare": "tsup"
   },
   "dependencies": {
-    "@clack/prompts": "^0.11.0",
+    "@clack/prompts": "^1.8.1",
     "archiver": "^8.0.0",
-    "commander": "^14.0.0",
-    "execa": "^9.6.0",
+    "commander": "^15.0.0",
+    "execa": "^10.0.1",
     "globby": "^14.1.0",
-    "semver": "^7.8.0",
+    "semver": "^7.8.5",
     "yauzl": "^3.4.0",
-    "zod": "^4.4.0"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "tsup": "^8.5.0"
+    "tsup": "^8.5.1"
   }
 }
