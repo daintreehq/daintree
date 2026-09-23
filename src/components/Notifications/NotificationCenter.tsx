@@ -53,15 +53,41 @@ import {
 } from "@/lib/notificationEffectiveState";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { useProjectStore } from "@/store/projectStore";
-import { formatNotificationSource, worktreeNameFromId } from "@/lib/notificationSourceLabel";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import {
+  UNKNOWN_PROJECT_LABEL,
+  formatNotificationSource,
+  worktreeNameFromId,
+} from "@/lib/notificationSourceLabel";
 
-const NEEDS_ATTENTION_CAP = 5;
+// Three, not five. Even as compact previews, five pinned rows took three
+// quarters of a laptop-height list, so the first screen held one row of what
+// had actually arrived. Overflow is still counted and still in the list below.
+const NEEDS_ATTENTION_CAP = 3;
 const CONTEXT_NONE_KEY = "__none__";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
   minute: "2-digit",
 });
+
+/**
+ * The panel's one small-button shape: Resume, Manage, and the divider's mark
+ * read. Bordered because bare text at the end of a line of text didn't read
+ * as a control, and ringed because nothing in the app supplies a focus ring
+ * for an element that doesn't declare one.
+ */
+const SMALL_BUTTON_CLASS = cn(
+  "inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-border-strong px-1.5 py-0.5",
+  "text-2xs font-medium text-text-secondary transition-colors hover:bg-overlay-medium hover:text-text-primary",
+  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+);
+
+/** The per-project silences the row menu writes, with the words the strip uses. */
+const PROJECT_SILENCEABLE = [
+  ["completedEnabled", "Completed"],
+  ["waitingEnabled", "Waiting"],
+] as const;
 
 function isUnreadGroup(group: ThreadGroup): boolean {
   return group.entries.some((e) => !e.seenAsToast);
@@ -221,6 +247,12 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   );
 
   const lastClosedAt = useUIStore((s) => s.lastNotificationCenterClosedAt);
+  const currentProjectId = useProjectStore((s) => s.currentProject?.id);
+  const currentProjectOverrides = useProjectSettingsStore((s) =>
+    currentProjectId && s.projectId === currentProjectId
+      ? s.settings?.notificationOverrides
+      : undefined
+  );
   const resetLastClosedAt = useUIStore((s) => s.resetNotificationCenterLastClosedAt);
 
   const [filter, setFilter] = useState<"all" | "unread" | "archived" | "snoozed">("all");
@@ -912,8 +944,23 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   // through. `pillLabel` is empty only when nothing in-app is muted and the OS
   // signal is unknown — in that case the breakthrough line is the only thing
   // there is to say, so it becomes the lead rather than leaving a blank one.
-  const quietCause = pillLabel || summaryHeroLine;
-  const quietDetail = [pillLabel ? summaryHeroLine : "", offLabel].filter(Boolean).join(" · ");
+  // Silences the user set that aren't a mute: kinds switched off app-wide, and
+  // the ones this project has silenced (the row menu's "Silence…" and "Mute
+  // project" write these). They used to surface only if a mute happened to
+  // be on too, so a silenced inbox looked like a quiet one.
+  const projectOffLabel = (() => {
+    if (!currentProjectOverrides) return "";
+    const off = PROJECT_SILENCEABLE.filter(([key]) => currentProjectOverrides[key] === false);
+    if (off.length === 0) return "";
+    if (off.length === PROJECT_SILENCEABLE.length) return "This project is muted";
+    return `This project: ${off.map(([, label]) => label).join(", ")} off`;
+  })();
+  const hasSilences = offLabel !== "" || projectOffLabel !== "";
+  const showQuietStrip = showMutedPill || hasSilences;
+  const quietCause = pillLabel || (hasSilences ? "Some notifications are off" : summaryHeroLine);
+  const quietDetail = [pillLabel ? summaryHeroLine : "", offLabel, projectOffLabel]
+    .filter(Boolean)
+    .join(" · ");
   // What "Clear all" actually costs, named in the confirm. The count is the
   // preview; the archived and snoozed breakdown is the part a user standing on
   // the Archived tab would not otherwise expect, since the store call ignores
@@ -1174,7 +1221,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           Height: one flex row instead of a column with a nested row, and the
           detail line only renders when there is a detail. On the common
           "muted until X, nothing else unusual" case that is a single line. */}
-      {showMutedPill && (
+      {showQuietStrip && (
         <div
           data-testid="notification-muted-pill"
           className="flex shrink-0 items-start gap-2 pl-4 pr-3 py-1.5 bg-overlay-raised text-2xs text-text-secondary"
@@ -1194,9 +1241,14 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               // `forced-colors: active`, where the UA supplies the border this
               // was missing — which is the tell that it was missing. Matches the
               // secondary row action, so the panel has one button shape.
-              className="inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-border-strong px-1.5 py-0.5 text-2xs font-medium text-text-secondary hover:bg-overlay-medium hover:text-text-primary transition-colors"
+              className={SMALL_BUTTON_CLASS}
             >
               Resume
+            </button>
+          )}
+          {!isSessionMuted && hasSilences && (
+            <button type="button" onClick={openNotificationSettings} className={SMALL_BUTTON_CLASS}>
+              Manage
             </button>
           )}
         </div>
@@ -1602,6 +1654,11 @@ function ChronoSection({
           worktreeId={section.worktreeId}
           projectId={section.projectId}
           count={section.groups.length}
+          newCount={
+            lastClosedAt > 0
+              ? section.groups.filter((g) => g.latestTimestamp > lastClosedAt).length
+              : 0
+          }
           unreadIds={sectionUnreadIds}
           onMarkRead={() => onMarkIdsRead(sectionUnreadIds, { resetLastClosed: false })}
         />
@@ -1784,12 +1841,19 @@ function ContextSectionHeader({
   worktreeId,
   projectId,
   count,
+  newCount,
   unreadIds,
   onMarkRead,
 }: {
   worktreeId?: string;
   projectId?: string;
   count: number;
+  /**
+   * Rows here newer than the last look. Grouped, there's no single divider to
+   * say where new starts, so each place says how much of it is new, and its
+   * "Earlier" boundary says where that stops.
+   */
+  newCount: number;
   unreadIds: string[];
   onMarkRead: () => void;
 }) {
@@ -1805,9 +1869,9 @@ function ContextSectionHeader({
   // hasn't loaded — the normal case in a multi-project fleet.
   const label =
     formatNotificationSource(
-      projectName,
+      projectName ?? (projectId ? UNKNOWN_PROJECT_LABEL : undefined),
       worktreeId ? worktreeName?.trim() || worktreeNameFromId(worktreeId) : undefined
-    ) ?? (projectId ? "Another project" : "Other");
+    ) ?? "Other";
   const hasUnread = unreadIds.length > 0;
   return (
     <div
@@ -1826,6 +1890,11 @@ function ContextSectionHeader({
         <span className="shrink-0 tabular-nums" aria-label={`${count} notifications`}>
           {count}
         </span>
+        {newCount > 0 && (
+          <span data-testid="context-section-new" className="shrink-0 tabular-nums">
+            · {newCount} new
+          </span>
+        )}
       </span>
       {hasUnread && (
         <button
@@ -1867,10 +1936,7 @@ function NewSinceLastLookedDivider({
           // Bordered like Resume and the secondary row action — the panel's one
           // small-button shape. Bare, it was the same grey and size as the
           // label beside it and read as more of the label.
-          className={cn(
-            "ml-auto inline-flex items-center rounded-[var(--radius-sm)] border border-border-strong px-1.5 py-0.5 normal-case tracking-normal font-medium text-text-secondary hover:bg-overlay-medium hover:text-text-primary transition-colors",
-            PALETTE_ROW_FOCUS_CLASS
-          )}
+          className={cn(SMALL_BUTTON_CLASS, "ml-auto normal-case tracking-normal")}
         >
           {unreadCount === 1 ? "Mark this read" : `Mark these ${unreadCount} read`}
         </button>

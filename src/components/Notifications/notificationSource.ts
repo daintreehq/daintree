@@ -1,7 +1,11 @@
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
-import { formatNotificationSource, worktreeNameFromId } from "@/lib/notificationSourceLabel";
+import {
+  UNKNOWN_PROJECT_LABEL,
+  formatNotificationSource,
+  worktreeNameFromId,
+} from "@/lib/notificationSourceLabel";
 
 type NotificationContext = NotificationHistoryEntry["context"];
 
@@ -23,7 +27,7 @@ export function useNotificationSource(context: NotificationContext): string | nu
     undefined
   );
   return formatNotificationSource(
-    projectName,
+    projectName ?? (projectId ? UNKNOWN_PROJECT_LABEL : undefined),
     worktreeId ? worktreeName?.trim() || worktreeNameFromId(worktreeId) : undefined
   );
 }

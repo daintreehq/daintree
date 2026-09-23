@@ -54,11 +54,6 @@ const wakeTimeFormatter = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 
-function formatSnoozedUntil(snoozedUntil: number): string {
-  const target = new Date(snoozedUntil);
-  return snoozedUntilFormatter.format(target);
-}
-
 /**
  * When a snooze would end, as the picker previews it. A same-day wake is just
  * the time; anything later names the day, because "8:00 AM" alone doesn't say
@@ -355,34 +350,30 @@ export function NotificationCenterEntry({
             {entry.message}
           </p>
         )}
-        {/* Where it came from, and — on a snoozed row — when it comes back.
-            One quiet line under the message rather than more weight on the
-            title line: at fleet volume "Tests failed" is only half a fact
-            until it says which worktree, but it's the half you scan for. */}
-        {(metaSource || showSnoozeLine) && (
+        {/* Where it came from, and on a snoozed row when it comes back: quiet
+            lines under the message rather than more weight on the title line.
+            At fleet volume "Tests failed" is only half a fact until it says
+            which worktree. They get a line each; side by side, the source was
+            truncated to a fragment on the one tab that shows both. */}
+        {showSnoozeLine && (
           <p
-            data-testid="notification-meta"
-            className="col-span-2 row-start-3 mt-0.5 flex min-w-0 items-center gap-1.5 text-2xs text-text-secondary"
+            data-testid="notification-snoozed-indicator"
+            className="col-span-2 row-start-3 mt-0.5 flex items-center gap-1 text-2xs text-text-secondary"
           >
-            {showSnoozeLine && (
-              <span
-                data-testid="notification-snoozed-indicator"
-                className="inline-flex shrink-0 items-center gap-1"
-              >
-                <Clock className="h-3 w-3" aria-hidden="true" />
-                Snoozed until {formatSnoozedUntil(snoozedUntil)}
-              </span>
+            <Clock className="h-3 w-3 shrink-0" aria-hidden="true" />
+            Snoozed until {formatSnoozeWake(snoozedUntil)}
+          </p>
+        )}
+        {metaSource && (
+          <p
+            data-testid="notification-source"
+            title={metaSource}
+            className={cn(
+              "col-span-2 mt-0.5 min-w-0 truncate text-2xs text-text-secondary",
+              showSnoozeLine ? "row-start-4" : "row-start-3"
             )}
-            {showSnoozeLine && metaSource && <span aria-hidden="true">·</span>}
-            {metaSource && (
-              <span
-                data-testid="notification-source"
-                className="min-w-0 truncate"
-                title={metaSource}
-              >
-                {metaSource}
-              </span>
-            )}
+          >
+            {metaSource}
           </p>
         )}
         {showChip && !entry.title && (
@@ -400,7 +391,7 @@ export function NotificationCenterEntry({
           </span>
         )}
         {entry.actions && entry.actions.length > 0 && (
-          <div className="col-span-2 row-start-4 mt-1.5 flex flex-wrap gap-1.5">
+          <div className="col-span-2 row-start-5 mt-1.5 flex flex-wrap gap-1.5">
             {entry.actions.map((action, index) => {
               const manifest = actionService.get(action.actionId as ActionId);
               const isAvailable = manifest !== null && manifest.enabled;
@@ -803,7 +794,7 @@ function RowOptionsMenu({
                 >
                   <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                   {snoozedUntil !== undefined
-                    ? `Snoozed until ${formatSnoozedUntil(snoozedUntil)} · Unsnooze`
+                    ? `Snoozed until ${formatSnoozeWake(snoozedUntil)} · Unsnooze`
                     : "Unsnooze"}
                 </DropdownMenuItem>
               ) : (

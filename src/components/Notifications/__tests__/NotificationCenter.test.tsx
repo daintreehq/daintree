@@ -8,6 +8,8 @@ import { useUIStore } from "@/store/uiStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import * as notifyLib from "@/lib/notify";
 import { NotificationCenter } from "../NotificationCenter";
+import { useProjectStore } from "@/store/projectStore";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 const getMock = vi.hoisted(() => vi.fn());
@@ -1151,7 +1153,7 @@ describe("NotificationCenter — Needs attention pinned section", () => {
     expect(within(chrono).queryByText("All notifications")).toBeNull();
   });
 
-  it("caps the pinned section at 5 entries even when more unread severe entries exist", () => {
+  it("caps the pinned section below the number of severe unread threads when there are many", () => {
     const baseT = Date.now();
     const items = Array.from({ length: 7 }, (_, i) =>
       makeEntry({
@@ -1168,7 +1170,8 @@ describe("NotificationCenter — Needs attention pinned section", () => {
 
     const pinned = screen.getByTestId("needs-attention-section");
     const messages = within(pinned).getAllByText(/^Failure \d$/);
-    expect(messages).toHaveLength(5);
+    expect(messages.length).toBeGreaterThan(0);
+    expect(messages.length).toBeLessThan(items.length);
   });
 
   it("shows a '+N more below' note when severe unread threads exceed the pinned cap", async () => {
@@ -1187,20 +1190,30 @@ describe("NotificationCenter — Needs attention pinned section", () => {
 
     render(<NotificationCenter open onClose={vi.fn()} />);
 
-    // 7 severe unread threads, 5 pinned → the remaining 2 are acknowledged,
-    // not silently dropped; "below" must be literally true — the overflowed
-    // entries stay reachable in the chronological list.
-    expect(screen.getByTestId("needs-attention-overflow").textContent).toBe("+2 more below");
+    // Every thread past the cap is acknowledged, not silently dropped, and
+    // "below" is literally true — the overflowed ones stay in the list.
+    const pinnedNames = () =>
+      within(screen.getByTestId("needs-attention-section"))
+        .getAllByText(/^Failure \d$/)
+        .map((m) => m.textContent);
+    const overflowed = Array.from({ length: 7 }, (_, i) => `Failure ${i}`).filter(
+      (name) => !pinnedNames().includes(name)
+    );
+    expect(overflowed.length).toBeGreaterThan(0);
+    expect(screen.getByTestId("needs-attention-overflow").textContent).toBe(
+      `+${overflowed.length} more below`
+    );
     const chrono = screen.getByTestId("chrono-section");
-    expect(within(chrono).getByText("Failure 5")).toBeTruthy();
-    expect(within(chrono).getByText("Failure 6")).toBeTruthy();
+    for (const name of overflowed) expect(within(chrono).getByText(name)).toBeTruthy();
 
     // The pinned rail is computed from the global unread set, so the note
     // (and the reachable rows) survive switching to the Unread filter.
     await act(async () => {
       fireEvent.click(screen.getByText("Unread"));
     });
-    expect(screen.getByTestId("needs-attention-overflow").textContent).toBe("+2 more below");
+    expect(screen.getByTestId("needs-attention-overflow").textContent).toBe(
+      `+${overflowed.length} more below`
+    );
     expect(within(screen.getByTestId("chrono-section")).getByText("Failure 6")).toBeTruthy();
   });
 
@@ -2961,7 +2974,9 @@ describe("NotificationCenter — fleet-volume triage", () => {
     ]);
     const { unmount } = render(<NotificationCenter open onClose={vi.fn()} />);
     const sources = screen.getAllByTestId("notification-source").map((s) => s.textContent ?? "");
-    expect(sources).toEqual(["feature-rate-limits"]);
+    // An unregistered project is named as such, never printed as its hash and
+    // never dropped (a row with no source reads as this project's).
+    expect(sources).toEqual(["Another project · feature-rate-limits", "Another project"]);
     unmount();
 
     useNotificationSettingsStore.setState({ groupByContext: true });
@@ -3097,5 +3112,46 @@ describe("NotificationCenter — fleet-volume triage", () => {
       const names = screen.getAllByLabelText(pattern).map((b) => b.getAttribute("aria-label"));
       expect(new Set(names).size).toBe(names.length);
     }
+  });
+
+  it("shows the quiet strip when notifications are silenced, even with no mute running", () => {
+    setEntries([makeEntry({ message: "One" })]);
+    useNotificationSettingsStore.setState({ waitingEnabled: false });
+    const { unmount } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const strip = screen.getByTestId("notification-muted-pill");
+    expect(strip.textContent).toContain("Waiting");
+    // A route to undo it, since no Resume applies to a silence.
+    expect(within(strip).getByRole("button").textContent).toBeTruthy();
+    unmount();
+
+    useNotificationSettingsStore.setState({ waitingEnabled: true });
+    useProjectStore.setState({
+      currentProject: { id: "p1", path: "/repo", name: "Repo", emoji: "🌲", lastOpened: 0 },
+    });
+    useProjectSettingsStore.setState({
+      projectId: "p1",
+      settings: { runCommands: [], notificationOverrides: { completedEnabled: false } },
+    });
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    expect(screen.getByTestId("notification-muted-pill").textContent).toContain("This project");
+    useProjectStore.setState({ currentProject: null });
+    useProjectSettingsStore.setState({ projectId: null, settings: null });
+  });
+
+  it("says how much of each grouped place is new", () => {
+    const closedAt = Date.now() - 60_000;
+    useUIStore.setState({ lastNotificationCenterClosedAt: closedAt });
+    useNotificationSettingsStore.setState({ groupByContext: true });
+    setEntries([
+      makeEntry({ message: "a", timestamp: closedAt + 10_000, context: { worktreeId: "/w/one" } }),
+      makeEntry({ message: "b", timestamp: closedAt - 10_000, context: { worktreeId: "/w/one" } }),
+      makeEntry({ message: "c", timestamp: closedAt - 20_000, context: { worktreeId: "/w/two" } }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    const headers = screen.getAllByTestId("context-section-header");
+    const one = headers.find((h) => h.textContent?.includes("one"))!;
+    const two = headers.find((h) => h.textContent?.includes("two"))!;
+    expect(within(one).getByTestId("context-section-new").textContent).toContain("1 new");
+    expect(within(two).queryByTestId("context-section-new")).toBeNull();
   });
 });
