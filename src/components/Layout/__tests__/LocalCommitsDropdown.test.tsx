@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { LocalCommitsDropdown, reflowCommitBody } from "../LocalCommitsDropdown";
 import type { GitCommit, GitCommitListResponse } from "@shared/types/git";
@@ -499,6 +499,30 @@ describe("LocalCommitsDropdown grid semantics", () => {
 
     expect((await findAllByText("Nothing to push to origin/main")).length).toBeGreaterThan(0);
     expect(listCommitsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("says a search that keeps the old rows up is still working after five seconds", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      listCommitsMock.mockResolvedValueOnce(makeResponse([makeCommit(1)]));
+      listCommitsMock.mockImplementationOnce(() => new Promise(() => {}));
+
+      const { getByRole, findAllByText, queryAllByText } = render(
+        <LocalCommitsDropdown cwd="/repo" open initialCount={1} />
+      );
+      await findAllByText("commit message 1");
+      fireEvent.change(getByRole("combobox"), { target: { value: "slow" } });
+      expect(queryAllByText("Still working…")).toHaveLength(0);
+
+      await act(async () => {
+        vi.advanceTimersByTime(5_100);
+      });
+
+      expect(queryAllByText("Still working…").length).toBeGreaterThan(0);
+      expect(queryAllByText("commit message 1").length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retries a failed read with Enter from the search field", async () => {

@@ -481,6 +481,7 @@ export function LocalCommitsDropdown({
   // A search or retry keeps the previous rows on screen while it runs, so the
   // wait needs its own mark once it outlasts the Doherty gate.
   const showRefreshing = useDeferredLoading(loading && data.length > 0, UI_DOHERTY_THRESHOLD);
+  const isSlowRefresh = useDeferredLoading(loading && data.length > 0, UI_STILL_WORKING_MS);
   const isSlowLoadingMore = useDeferredLoading(loadingMore, UI_STILL_WORKING_MS);
   const scrollerRef = useRef<HTMLElement | null>(null);
   const { ref: scrollShadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(scrollerRef);
@@ -875,6 +876,13 @@ export function LocalCommitsDropdown({
             aria-keyshortcuts="ArrowDown ArrowUp Enter Shift+Enter PageDown PageUp Escape"
             className="flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden"
           />
+          {isSlowRefresh && (
+            // The previous rows stay up while a search runs, so the list can't
+            // carry the wait; the field that started it does.
+            <span className="shrink-0 text-xs text-text-secondary whitespace-nowrap">
+              Still working…
+            </span>
+          )}
           {searchQuery && (
             <button
               type="button"
@@ -894,7 +902,9 @@ export function LocalCommitsDropdown({
       <span role="status" aria-live="polite" className="sr-only">
         {loading
           ? data.length > 0
-            ? "Searching commits…"
+            ? isSlowRefresh
+              ? "Still working…"
+              : "Searching commits…"
             : "Loading commits…"
           : copyFailed
             ? "Couldn't copy hash"
@@ -909,7 +919,9 @@ export function LocalCommitsDropdown({
                   : pushLine
                     ? pushLineText(pushLine)
                     : showPushSummary && showCheckingPush
-                      ? "Checking push status…"
+                      ? isSlowPush
+                        ? "Still checking push status…"
+                        : "Checking push status…"
                       : ""}
       </span>
 
