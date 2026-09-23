@@ -203,7 +203,7 @@ test("settings workspace states — dependents, strategies, pattern and link edi
     await patternInput.fill("{parent-dir}/{nope}");
     await expect(patternInput).toHaveAttribute("aria-invalid", "true");
     await capture(page, "worktree.pattern-invalid");
-    await page.getByRole("button", { name: "Flat sibling" }).click();
+    await page.getByRole("button", { name: "Branch only" }).click();
     await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
     await capture(page, "worktree.pattern-unsaved");
     await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -219,6 +219,13 @@ test("settings workspace states — dependents, strategies, pattern and link edi
     await expect(hidden.getByText("Already in the list")).toBeVisible();
     await capture(page, "worktree.hidden-duplicate", hidden);
     await hidden.getByRole("textbox").fill("");
+
+    // Toolbar — the move menu, the non-drag route to reordering.
+    await openAt(page, "toolbar");
+    await page.getByRole("button", { name: "Move Gemini agent" }).click();
+    await expect(page.getByRole("menuitem", { name: "Move to right side" })).toBeVisible();
+    await capture(page, "toolbar.move-menu");
+    await page.keyboard.press("Escape");
 
     // Portal — populated custom links.
     await openAt(page, "portal");
@@ -237,9 +244,9 @@ test("settings workspace states — dependents, strategies, pattern and link edi
 
     // Portal — editing one link.
     await custom.getByRole("button", { name: "Edit" }).first().click();
-    await expect(page.getByRole("textbox", { name: "Edit link URL" })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Link URL", exact: true })).toBeVisible();
     await capture(page, "portal.editing", custom);
-    await page.getByRole("button", { name: "Cancel edit" }).click();
+    await custom.getByRole("button", { name: "Cancel", exact: true }).click();
 
     // Portal — add refused.
     await custom.getByRole("textbox").nth(-2).fill("Broken");
@@ -253,7 +260,7 @@ test("settings workspace states — dependents, strategies, pattern and link edi
     // Portal — custom new-tab URL.
     await page.locator(`${DIALOG} #portal-default-agent [role="combobox"]`).click();
     await page.getByRole("option", { name: /Custom URL/ }).click();
-    await expect(page.getByRole("button", { name: "Save custom URL" })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Custom URL" })).toBeVisible();
     await capture(page, "portal.custom-url");
   } finally {
     if (ctx) await closeApp(ctx.app).catch(() => {});
@@ -266,5 +273,5 @@ test("settings workspace states — dependents, strategies, pattern and link edi
   const missing = written.filter((f) => !onDisk.has(f));
   console.log(`[settings-states-shots] ${written.length - missing.length}/${written.length} PNGs`);
   expect(missing).toEqual([]);
-  expect(written.length).toBe(13);
+  expect(written.length).toBe(14);
 });
