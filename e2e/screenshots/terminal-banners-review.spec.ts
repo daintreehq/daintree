@@ -53,7 +53,7 @@ const WIDTHS = [320, 560, 1100] as const;
 
 /** Mirrors `TERMINAL_BANNER_FIXTURES` group sizes; a sheet short of its count has a silent gap. */
 const GROUPS = [
-  { name: "errors", count: 9 },
+  { name: "errors", count: 10 },
   { name: "status", count: 8 },
 ] as const;
 
