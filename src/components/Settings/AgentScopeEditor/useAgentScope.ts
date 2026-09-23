@@ -106,10 +106,11 @@ export function useAgentScope({
 
   // Final resolved bypass for the active scope (incl. the global baseline) —
   // drives the "<flag> added to command" chip.
-  const effectiveSkipPerms =
-    scopeKind === "custom"
-      ? resolveMode(combineDangerousModes(agentMode, presetMode))
-      : agentResolvedDangerous;
+  // Any selected preset layers onto the agent, read-only ones included: they
+  // launch through the same resolution, so they report the same way.
+  const effectiveSkipPerms = selectedPreset
+    ? resolveMode(combineDangerousModes(agentMode, presetMode))
+    : agentResolvedDangerous;
 
   // Tri-state alt-screen mode (#10876), mirroring the bypass control above. The
   // stored value polarity is "on" = inline, "off" = alt screen; "Default"
@@ -145,10 +146,9 @@ export function useAgentScope({
         ? "the agent's built-in default"
         : "global setting";
 
-  const effectiveInlineMode =
-    scopeKind === "custom"
-      ? resolveInline(combineInlineModes(agentInlineMode, presetInlineMode))
-      : agentResolvedInline;
+  const effectiveInlineMode = selectedPreset
+    ? resolveInline(combineInlineModes(agentInlineMode, presetInlineMode))
+    : agentResolvedInline;
 
   const isEditableScope = scopeKind === "default" || scopeKind === "custom";
   const customArgsValue =
@@ -156,7 +156,7 @@ export function useAgentScope({
   const customArgsPlaceholder =
     scopeKind === "custom" && customFlagsOverride === undefined
       ? agentDefaultCustomFlags || "Using default (no flags)"
-      : "--verbose --max-tokens=4096";
+      : "No extra flags";
   // The inherited value goes in the description, not only the placeholder: a
   // placeholder vanishes as soon as the user starts typing over it.
   const customArgsDescription =
@@ -204,26 +204,48 @@ export function useAgentScope({
       { ...preset, id, name: `${preset.name} (copy)`, displayTitle: undefined },
     ];
     void (async () => {
-      await updateAgent(agentId, {
-        customPresets: updated,
-        presetId: id,
-      } as Partial<AgentSettingsEntry>);
-      onSettingsChange?.();
+      try {
+        await updateAgent(agentId, {
+          customPresets: updated,
+          presetId: id,
+        } as Partial<AgentSettingsEntry>);
+        onSettingsChange?.();
+      } catch (error) {
+        logError("Failed to duplicate preset", error);
+        notify({
+          type: "error",
+          title: "Preset not duplicated",
+          message: `Couldn't save a copy of ${preset.name}.`,
+          action: { label: "Try again", onClick: () => handleDuplicatePreset(preset) },
+          context: { eventKind: "uiFeedback" },
+        });
+      }
     })();
   };
 
   const handleDeletePreset = (presetId: string) => {
     const updated = (activeEntry.customPresets ?? []).filter((f) => f.id !== presetId);
     void (async () => {
-      if (activeEntry.presetId === presetId) {
-        await updateAgent(agentId, {
-          customPresets: updated,
-          presetId: undefined,
-        } as Partial<AgentSettingsEntry>);
-      } else {
-        await updateAgent(agentId, { customPresets: updated } as Partial<AgentSettingsEntry>);
+      try {
+        if (activeEntry.presetId === presetId) {
+          await updateAgent(agentId, {
+            customPresets: updated,
+            presetId: undefined,
+          } as Partial<AgentSettingsEntry>);
+        } else {
+          await updateAgent(agentId, { customPresets: updated } as Partial<AgentSettingsEntry>);
+        }
+        onSettingsChange?.();
+      } catch (error) {
+        logError("Failed to delete preset", error);
+        notify({
+          type: "error",
+          title: "Preset not deleted",
+          message: "Couldn't save the change, so the preset is still there.",
+          action: { label: "Try again", onClick: () => handleDeletePreset(presetId) },
+          context: { eventKind: "uiFeedback" },
+        });
       }
-      onSettingsChange?.();
     })();
   };
 

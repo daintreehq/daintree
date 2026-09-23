@@ -1,29 +1,63 @@
 import { Button } from "@/components/ui/button";
-import { SettingsRow } from "../SettingsGroup";
+import { SETTINGS_CONTROL_WIDTH, SettingsRow } from "../SettingsGroup";
 import { stripCcrPrefix } from "./scopeUtils";
 import type { AgentPreset } from "@/config/agents";
+import { resolveDangerousMode, resolveInlineMode } from "@shared/types";
 
 interface ReadOnlyDetailProps {
   scopeKind: "ccr" | "project";
   selectedPreset: AgentPreset;
+  agentName: string;
+  /** The agent's own arguments, used when the preset sets none. */
+  agentCustomFlags: string;
+  /** Resolved the way a launch resolves them, preset over agent over global. */
+  effectiveSkipPerms: boolean;
+  /** Undefined for agents without a screen-mode choice. */
+  effectiveInline: boolean | undefined;
   onDuplicate: (preset: AgentPreset) => void;
 }
 
-const MODE_LABEL = { inherit: "Default", on: "On", off: "Off" } as const;
-
 /**
- * A project or CCR preset, shown as read-only rows in the same group as the preset
- * picker. The way to change one is to duplicate it, so that is the first row's action
- * rather than an unlabelled glyph.
+ * A project or CCR preset, as read-only rows under the preset picker. Each launch
+ * setting shows the value a launch would actually get and where it comes from, so a
+ * preset that sets nothing still answers "what will this do". The way to change one is
+ * to duplicate it, so that is the first row's action.
  */
-export function ReadOnlyDetail({ scopeKind, selectedPreset, onDuplicate }: ReadOnlyDetailProps) {
+export function ReadOnlyDetail({
+  scopeKind,
+  selectedPreset,
+  agentName,
+  agentCustomFlags,
+  effectiveSkipPerms,
+  effectiveInline,
+  onDuplicate,
+}: ReadOnlyDetailProps) {
   const displayName =
     scopeKind === "ccr" ? stripCcrPrefix(selectedPreset.name) : selectedPreset.name;
   const env = Object.entries(selectedPreset.env ?? {});
   const source =
     scopeKind === "project"
-      ? "Read-only — it lives in this project's .daintree/presets folder, so edits belong in the repository"
-      : "Read-only — it comes from your Claude Code Router config";
+      ? "It lives in this project's .daintree/presets folder, so edits belong in the repository"
+      : "It comes from your Claude Code Router config";
+  const fromPreset = "Set by this preset";
+  const fromAgent = `Follows ${agentName}'s own setting`;
+
+  const presetSetsArgs = selectedPreset.customFlags !== undefined;
+  const args = presetSetsArgs ? selectedPreset.customFlags : agentCustomFlags;
+  const presetSetsSkip = resolveDangerousMode(selectedPreset) !== "inherit";
+  const presetSetsInline = resolveInlineMode(selectedPreset) !== "inherit";
+
+  const value = (text: string, mono = false) => (
+    <span
+      className={
+        mono
+          ? `${SETTINGS_CONTROL_WIDTH.wide} truncate text-right font-mono text-xs text-text-primary select-text`
+          : "text-sm text-text-primary"
+      }
+    >
+      {text}
+    </span>
+  );
 
   return (
     <>
@@ -42,49 +76,40 @@ export function ReadOnlyDetail({ scopeKind, selectedPreset, onDuplicate }: ReadO
         }
       />
       {scopeKind === "project" && selectedPreset.description && (
-        <SettingsRow
-          label="Description"
-          layout="stacked"
-          control={
-            <p className="text-xs text-text-secondary select-text">{selectedPreset.description}</p>
-          }
-        />
+        <SettingsRow label="Description" description={selectedPreset.description} />
       )}
       {env.length > 0 && (
         <SettingsRow
           label="Environment variables"
+          description={`Added to ${agentName}'s own variables, replacing any with the same name`}
           layout="stacked"
           control={
-            <dl className="grid gap-1 font-mono text-xs select-text">
+            <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1 font-mono text-xs select-text">
               {env.map(([k, v]) => (
-                <div key={k} className="flex min-w-0 gap-2">
-                  <dt className="shrink-0 text-text-primary">{k}</dt>
-                  <dd className="min-w-0 truncate text-text-secondary">{v}</dd>
+                <div key={k} className="contents">
+                  <dt className="text-text-primary">{k}</dt>
+                  <dd className="truncate text-text-secondary">{v}</dd>
                 </div>
               ))}
             </dl>
           }
         />
       )}
-      {selectedPreset.customFlags && (
+      <SettingsRow
+        label="Custom arguments"
+        description={presetSetsArgs ? fromPreset : fromAgent}
+        control={value(args ? args : "None", !!args)}
+      />
+      <SettingsRow
+        label="Skip permissions"
+        description={presetSetsSkip ? fromPreset : fromAgent}
+        control={value(effectiveSkipPerms ? "On" : "Off")}
+      />
+      {effectiveInline !== undefined && (
         <SettingsRow
-          label="Custom arguments"
-          layout="stacked"
-          control={
-            <code className="font-mono text-xs text-text-secondary select-text">
-              {selectedPreset.customFlags}
-            </code>
-          }
-        />
-      )}
-      {selectedPreset.dangerousMode && selectedPreset.dangerousMode !== "inherit" && (
-        <SettingsRow
-          label="Skip permissions"
-          control={
-            <span className="text-sm text-text-secondary">
-              {MODE_LABEL[selectedPreset.dangerousMode]}
-            </span>
-          }
+          label="Alt-screen mode"
+          description={presetSetsInline ? fromPreset : fromAgent}
+          control={value(effectiveInline ? "Inline" : "Alt screen")}
         />
       )}
     </>

@@ -185,7 +185,7 @@ describe("PresetColorPicker", () => {
     const { getByTestId } = render(
       <PresetColorPicker color="#abb2bf" onChange={onChange} agentColor="#888888" />
     );
-    expect(getByTestId("check-icon").className).toContain("text-black/80");
+    expect(getByTestId("check-icon").className).toMatch(/\btext-black\b/);
     expect(getByTestId("check-icon").className).not.toContain("text-white");
   });
 

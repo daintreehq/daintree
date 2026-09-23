@@ -146,17 +146,36 @@ export function AgentHelpOutput({ agentId, agentName, availability }: AgentHelpO
     );
   };
 
-  const loadButton = (label: string) => (
+  // One button, mounted for the whole life of the section: it doesn't swap for a
+  // skeleton or move between the row and the header, so keyboard focus survives a load.
+  // It stays focusable while a load runs — `aria-disabled` rather than `disabled`,
+  // which would drop focus to the page.
+  const loadLabel = helpResult ? "Refresh" : error ? "Retry" : "Load";
+  const loadButton = (
     <Button
       size="sm"
       variant="outline"
-      onClick={() => void loadHelp(!!helpResult)}
-      disabled={isLoading}
+      onClick={() => {
+        if (!isLoading) void loadHelp(!!helpResult);
+      }}
+      aria-disabled={isLoading || undefined}
     >
       <RefreshCw aria-hidden="true" />
-      {label}
+      {loadLabel}
     </Button>
   );
+
+  const statusMessage = isLoading
+    ? "Loading help output"
+    : error
+      ? "Couldn't run the help command"
+      : helpResult?.timedOut
+        ? "The help command timed out"
+        : helpResult && helpResult.exitCode !== 0
+          ? `The help command exited with code ${helpResult.exitCode}`
+          : helpResult
+            ? "Help output loaded"
+            : "";
 
   let body: ReactNode = null;
   if (isLoading) {
@@ -171,8 +190,8 @@ export function AgentHelpOutput({ agentId, agentName, availability }: AgentHelpO
     );
   } else if (error) {
     body = (
-      <SettingsEmptyRow action={installed ? loadButton("Retry") : undefined}>
-        <span role="alert" className="flex items-start gap-1.5">
+      <SettingsEmptyRow>
+        <span className="flex items-start gap-1.5">
           <TriangleAlert
             className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-warning"
             aria-hidden="true"
@@ -185,8 +204,8 @@ export function AgentHelpOutput({ agentId, agentName, availability }: AgentHelpO
     body = renderOutput();
   } else if (installed) {
     body = (
-      <SettingsEmptyRow action={loadButton("Load")}>
-        Runs {agentName}&apos;s help command and shows what it prints
+      <SettingsEmptyRow>
+        Load runs {agentName}&apos;s help command and shows what it prints
       </SettingsEmptyRow>
     );
   }
@@ -196,24 +215,26 @@ export function AgentHelpOutput({ agentId, agentName, availability }: AgentHelpO
       title="Help output"
       description={`The flags ${agentName} accepts, as its own --help prints them`}
       action={
-        installed && helpResult ? (
+        installed ? (
           <>
-            {loadButton("Refresh")}
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => void handleCopy()}
-              disabled={isLoading}
-            >
-              <Copy aria-hidden="true" />
-              {isCopied ? "Copied!" : "Copy"}
-            </Button>
+            {loadButton}
+            {helpResult && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void handleCopy()}
+                disabled={isLoading}
+              >
+                <Copy aria-hidden="true" />
+                {isCopied ? "Copied" : "Copy"}
+              </Button>
+            )}
           </>
         ) : undefined
       }
     >
       <p role="status" className="sr-only">
-        {isLoading ? "Loading help output" : helpResult ? "Help output loaded" : ""}
+        {statusMessage}
       </p>
       {body && <SettingsGroup>{body}</SettingsGroup>}
     </SettingsSection>

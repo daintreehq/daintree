@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { ShieldOff } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
   SegmentedRadioGroup,
@@ -122,9 +123,10 @@ export function BehavioralControls({
               <span className="block mt-1">Inherited from {inheritOriginLabel}</span>
             )}
             {effectiveSkipPerms && defaultDangerousArg && (
-              <span className="flex items-center gap-2 mt-1.5">
-                <code className="text-xs text-status-error font-mono">{defaultDangerousArg}</code>
-                <span>added to command</span>
+              <span className="flex items-center gap-1.5 mt-1.5">
+                <ShieldOff className="h-3.5 w-3.5 shrink-0 text-status-error" aria-hidden="true" />
+                <code className="font-mono text-xs text-text-primary">{defaultDangerousArg}</code>
+                <span>added to the command</span>
               </span>
             )}
           </>

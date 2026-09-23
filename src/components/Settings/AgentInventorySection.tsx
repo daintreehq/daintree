@@ -61,9 +61,10 @@ export function AgentInventorySection({
   }));
   const attention = withHealth.filter((a) => a.health.kind === "attention");
   const ready = withHealth.filter((a) => a.health.kind === "ready");
-  const missing = withHealth.filter(
-    (a) => a.health.kind === "missing" || a.health.kind === "unknown"
-  );
+  // Only a confirmed "missing" counts as not installed. An agent the probe didn't
+  // report on (the built-in assistant, which isn't a CLI) is left out of the inventory
+  // rather than counted as something it isn't.
+  const missing = withHealth.filter((a) => a.health.kind === "missing");
   const installed = attention.length + ready.length;
 
   const summary = !known

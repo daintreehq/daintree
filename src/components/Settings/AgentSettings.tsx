@@ -17,21 +17,21 @@ import {
 } from "@shared/types";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
-import { RotateCcw, ExternalLink } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import { AgentSelectorDropdown } from "./AgentSelectorDropdown";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSelect } from "./SettingsSelect";
 import { AddPresetDialog } from "./AddPresetDialog";
-import { AgentScopeEditor } from "./AgentScopeEditor";
+import { AgentScopeEditor, resolveSkipPermissions } from "./AgentScopeEditor";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { actionService } from "@/services/ActionService";
 import { AgentHelpOutput } from "./AgentHelpOutput";
 import { AgentInstallSection } from "@/components/agents/AgentCard";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AgentInventorySection } from "./AgentInventorySection";
-import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
+import { isAgentLaunchable, isAgentReady } from "../../../shared/utils/agentAvailability";
 import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
@@ -106,6 +106,9 @@ function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; age
       label="Keyboard shortcut"
       description={`Launch ${agentName} from anywhere with a key combination`}
       layout={isEditing ? "stacked" : "inline"}
+      isModified={isOverridden && !isEditing}
+      onReset={() => void handleReset()}
+      resetAriaLabel={`Reset ${agentName} shortcut to default`}
       control={
         isEditing ? (
           <AgentShortcutCapture
@@ -115,17 +118,6 @@ function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; age
           />
         ) : (
           <div className="flex items-center gap-2" data-testid={`agent-shortcut-row-${agentId}`}>
-            {isOverridden && (
-              <button
-                type="button"
-                onClick={() => void handleReset()}
-                aria-label={`Reset ${agentName} shortcut to default`}
-                data-testid={`agent-shortcut-reset-${agentId}`}
-                className="p-1 rounded-sm text-text-secondary hover:text-text-primary transition-colors"
-              >
-                <RotateCcw className="w-3 h-3" aria-hidden="true" />
-              </button>
-            )}
             {displayCombo ? (
               <span
                 data-testid={`agent-shortcut-pill-${agentId}`}
@@ -216,15 +208,39 @@ export function AgentSettings({
     }
   }, [isCliLoading, fetchCliDetails]);
 
+  const [recheckStatus, setRecheckStatus] = useState("");
+  const pickerRowRef = useRef<HTMLDivElement>(null);
+
   const handleRefreshCliAvailability = async () => {
     if (isRefreshingCli) return;
+    setRecheckStatus("");
     try {
       // Explicit user gesture — bypass the 30s throttle that exists for
       // passive triggers (tray-open, window focus, visibility change).
       await refreshCliAvailability(true);
       await fetchCliDetails();
+      const agentId = activeAgentId;
+      if (agentId) {
+        const state = useCliAvailabilityStore.getState().availability[agentId];
+        const name = getAgentConfig(agentId)?.name ?? agentId;
+        setRecheckStatus(
+          isAgentReady(state) ? `${name} is ready` : `${name} still needs attention`
+        );
+      } else {
+        setRecheckStatus("Agent check finished");
+      }
+      // A re-check that fixes the agent unmounts the section holding the Re-check
+      // button, which would drop keyboard focus onto the page. Hand it to the picker.
+      requestAnimationFrame(() => {
+        if (document.activeElement === document.body || !document.activeElement) {
+          pickerRowRef.current
+            ?.querySelector<HTMLElement>('[data-testid="agent-selector-trigger"]')
+            ?.focus({ preventScroll: true });
+        }
+      });
     } catch (error) {
       logError("[AgentSettings] Failed to refresh CLI availability", error);
+      setRecheckStatus("Agent check failed");
     }
   };
 
@@ -262,6 +278,9 @@ export function AgentSettings({
       setAddDialogAgentId(null);
     } catch (error) {
       logError("[AgentSettings] Failed to create preset", error);
+      // The dialog stays open and says so; swallowing this left it open with no
+      // explanation.
+      throw error;
     }
   };
 
@@ -324,6 +343,14 @@ export function AgentSettings({
           const config = getAgentConfig(id);
           if (!config) return null;
           const entry = getAgentSettingsEntry(effectiveSettings, id);
+          const launchPreset = entry.presetId
+            ? getMergedPresets(
+                id,
+                entry.customPresets,
+                ccrPresetsByAgent[id],
+                projectPresetsByAgent[id]
+              ).find((p) => p.id === entry.presetId)
+            : undefined;
           return {
             id,
             name: config.name,
@@ -332,12 +359,19 @@ export function AgentSettings({
             usageUrl: config.usageUrl,
             selected: isAgentToolbarVisible(entry, cliAvailability?.[id]),
             availability: cliAvailability?.[id],
-            dangerousEnabled: entry.dangerousEnabled ?? false,
+            // What a launch would actually do — the launch preset and the global
+            // switch included — not the legacy per-agent boolean.
+            dangerousEnabled: resolveSkipPermissions(
+              id,
+              entry,
+              launchPreset,
+              effectiveSettings.globalSkipPermissions ?? false
+            ),
             hasCustomFlags: Boolean(entry.customFlags?.trim()),
           };
         })
         .filter((a): a is NonNullable<typeof a> => a !== null),
-    [agentIds, effectiveSettings, cliAvailability]
+    [agentIds, effectiveSettings, cliAvailability, ccrPresetsByAgent, projectPresetsByAgent]
   );
 
   const activeAgent = activeAgentId ? agentOptions.find((a) => a.id === activeAgentId) : null;
@@ -372,7 +406,10 @@ export function AgentSettings({
 
       {/* The picker names the agent, so an agent's page opens straight on its sections
           rather than repeating the name as a second heading. */}
-      <div className="flex items-center gap-3">
+      <p role="status" className="sr-only">
+        {recheckStatus}
+      </p>
+      <div ref={pickerRowRef} className="flex items-center gap-3">
         <div className="min-w-0 flex-1">
           <AgentSelectorDropdown
             agentOptions={agentOptions}
@@ -554,6 +591,13 @@ export function AgentSettings({
                     })();
                   }}
                   ariaLabel={`${activeDecorations.label} for ${activeAgent.name}`}
+                  isModified={activeEntry.decorativeEffects === true}
+                  onReset={() => {
+                    void (async () => {
+                      await updateAgent(activeAgent.id, { decorativeEffects: false });
+                      onSettingsChange?.();
+                    })();
+                  }}
                 />
               )}
 
@@ -571,6 +615,13 @@ export function AgentSettings({
                     })();
                   }}
                   ariaLabel="Share clipboard directory with Gemini"
+                  isModified={activeEntry.shareClipboardDirectory === false}
+                  onReset={() => {
+                    void (async () => {
+                      await updateAgent(activeAgent.id, { shareClipboardDirectory: undefined });
+                      onSettingsChange?.();
+                    })();
+                  }}
                 />
               )}
             </SettingsGroup>
@@ -596,9 +647,9 @@ export function AgentSettings({
             onSettingsChange={onSettingsChange}
           />
 
-          {/* A CLI that isn't on this machine has no help to show; the section above
-              already says so and how to install it. */}
-          {isAgentInstalled(cliAvailability[activeAgent.id]) && (
+          {/* Loading help runs the CLI, so it is offered only for one that can run —
+              not a missing or blocked binary, which the section above explains. */}
+          {isAgentLaunchable(cliAvailability[activeAgent.id]) && (
             <AgentHelpOutput
               agentId={activeAgent.id}
               agentName={activeAgent.name}

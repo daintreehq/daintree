@@ -105,26 +105,31 @@ export function FallbackChainEditor({
                 className="py-2"
                 control={({ disabled }) => (
                   <div className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      disabled={disabled || idx === 0}
-                      onClick={() => setChain(moveFallback(chain, idx, idx - 1))}
-                      aria-label={`Move ${name} up`}
-                      title="Move up"
-                    >
-                      <ArrowUp aria-hidden="true" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      disabled={disabled || idx === chain.length - 1}
-                      onClick={() => setChain(moveFallback(chain, idx, idx + 1))}
-                      aria-label={`Move ${name} down`}
-                      title="Move down"
-                    >
-                      <ArrowDown aria-hidden="true" />
-                    </Button>
+                    {/* Reordering needs something to reorder against. */}
+                    {chain.length > 1 && (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={disabled || idx === 0}
+                          onClick={() => setChain(moveFallback(chain, idx, idx - 1))}
+                          aria-label={`Move ${name} up`}
+                          title="Move up"
+                        >
+                          <ArrowUp aria-hidden="true" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={disabled || idx === chain.length - 1}
+                          onClick={() => setChain(moveFallback(chain, idx, idx + 1))}
+                          aria-label={`Move ${name} down`}
+                          title="Move down"
+                        >
+                          <ArrowDown aria-hidden="true" />
+                        </Button>
+                      </>
+                    )}
                     <Button
                       variant="ghost"
                       size="icon-sm"

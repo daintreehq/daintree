@@ -158,25 +158,34 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
           )}
 
           {scope.scopeKind === "custom" && scope.selectedPreset && (
-            <>
-              <FallbackChainEditor
-                selectedPreset={scope.selectedPreset}
-                allPresets={scope.allPresets}
-                onUpdatePreset={scope.handleUpdatePreset}
-              />
-              <PresetDeleteRow preset={scope.selectedPreset} onDelete={scope.handleDeletePreset} />
-            </>
+            <FallbackChainEditor
+              selectedPreset={scope.selectedPreset}
+              allPresets={scope.allPresets}
+              onUpdatePreset={scope.handleUpdatePreset}
+            />
           )}
 
           {(scope.scopeKind === "ccr" || scope.scopeKind === "project") && scope.selectedPreset && (
             <ReadOnlyDetail
               scopeKind={scope.scopeKind}
               selectedPreset={scope.selectedPreset}
+              agentName={agentName}
+              agentCustomFlags={scope.agentDefaultCustomFlags}
+              effectiveSkipPerms={scope.effectiveSkipPerms}
+              effectiveInline={scope.supportsInlineMode ? scope.effectiveInlineMode : undefined}
               onDuplicate={scope.handleDuplicatePreset}
             />
           )}
         </Fragment>
       </SettingsGroup>
+
+      {/* A group of its own after the preset's settings: destructive actions are
+          never mixed into a group of ordinary ones. */}
+      {scope.scopeKind === "custom" && scope.selectedPreset && (
+        <SettingsGroup key={`delete-${scope.selectedPreset.id}`}>
+          <PresetDeleteRow preset={scope.selectedPreset} onDelete={scope.handleDeletePreset} />
+        </SettingsGroup>
+      )}
     </SettingsSection>
   );
 }

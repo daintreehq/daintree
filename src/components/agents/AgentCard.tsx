@@ -194,6 +194,9 @@ export function AgentInstallSection({
   // would be misleading, but we do want to show why it isn't runnable and
   // where it was found. "installed" covers the WSL cap.
   if (availability === "ready" && !authMissing) return null;
+  // Not part of CLI detection (the built-in assistant, say): there is nothing to
+  // install and no probe result to report, so a "Not installed" heading would be a guess.
+  if (availability === undefined && !isCliLoading) return null;
 
   if (isCliLoading) {
     return (
@@ -224,6 +227,9 @@ export function AgentInstallSection({
         ? "No credentials detected"
         : "Not installed";
 
+  const installCommandCount =
+    installBlocks?.reduce((n, block) => n + (block.commands?.length ?? 0), 0) ?? 0;
+
   const headerDescription = blocked
     ? `${agentName} CLI was found but couldn't run — check your security software or file permissions`
     : showWslNotice
@@ -234,8 +240,8 @@ export function AgentInstallSection({
           // where we looked, and the state is launchable — the CLI resolves auth at run
           // time and may well just work.
           `${agentName} CLI found, but no credentials were detected — it may still launch, or ask you to sign in`
-        : installBlocks && installBlocks.length > 0
-          ? `Install the ${agentName} CLI with one of the commands below, then re-check`
+        : installCommandCount > 0
+          ? `Install the ${agentName} CLI with ${installCommandCount === 1 ? "the command" : "one of the commands"} below, then re-check`
           : `The ${agentName} CLI isn't on your PATH. Install it, then re-check.`;
 
   const openDocs = () => {
@@ -283,8 +289,15 @@ export function AgentInstallSection({
     >
       <SettingsGroup>
         {cliError && (
-          <p className="px-4 py-3 text-xs text-status-error" role="alert">
-            Re-check failed. Try again or restart the app.
+          <p
+            className="flex items-start gap-1.5 px-4 py-3 text-xs text-text-secondary"
+            role="alert"
+          >
+            <TriangleAlert
+              className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
+              aria-hidden="true"
+            />
+            <span>Re-check failed. Try again, or restart Daintree if it keeps failing.</span>
           </p>
         )}
 

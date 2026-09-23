@@ -36,6 +36,9 @@ export function AgentSelectorDropdown({
   const [open, setOpen] = useState(false);
   const [filterQuery, setFilterQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
+  // The highlight fill alone is too faint to find by keyboard, so arrow-key movement
+  // also rings the active option. A pointer only fills it.
+  const [keyboardNav, setKeyboardNav] = useState(false);
   const activeItemRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -60,6 +63,7 @@ export function AgentSelectorDropdown({
   useEffect(() => {
     if (!open) {
       setFilterQuery("");
+      setKeyboardNav(false);
     }
   }, [open]);
 
@@ -72,10 +76,12 @@ export function AgentSelectorDropdown({
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();
+        setKeyboardNav(true);
         setActiveIndex((prev) => Math.min(prev + 1, items.length - 1));
         break;
       case "ArrowUp":
         e.preventDefault();
+        setKeyboardNav(true);
         setActiveIndex((prev) => Math.max(prev - 1, 0));
         break;
       case "Enter":
@@ -177,10 +183,16 @@ export function AgentSelectorDropdown({
                 aria-selected={isSelected}
                 data-highlighted={isActive || undefined}
                 onClick={() => handleSelect(item.id)}
-                onMouseEnter={() => setActiveIndex(index)}
+                onMouseEnter={() => {
+                  setActiveIndex(index);
+                  setKeyboardNav(false);
+                }}
                 className={cn(
                   "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm",
                   isActive && "bg-overlay-selected",
+                  isActive &&
+                    keyboardNav &&
+                    "outline-solid outline-2 -outline-offset-2 outline-selection-outline",
                   isSelected && "text-text-primary font-medium",
                   !isActive && !isSelected && "text-text-primary"
                 )}

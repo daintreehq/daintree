@@ -122,6 +122,9 @@ export function PresetSelector({
     options.findIndex((o) => o.id === (selectedPresetId ?? "") && o.source === selectedItem.source)
   );
   const [activeIndex, setActiveIndex] = useState(selectedIndex);
+  // The highlight fill alone is too faint to find by keyboard, so arrow-key movement
+  // also rings the active option. A pointer only fills it.
+  const [keyboardNav, setKeyboardNav] = useState(false);
 
   const optionDomId = (index: number) => `${listboxId}-option-${index}`;
 
@@ -131,7 +134,10 @@ export function PresetSelector({
   };
 
   const handleOpenChange = (next: boolean) => {
-    if (next) setActiveIndex(selectedIndex);
+    if (next) {
+      setActiveIndex(selectedIndex);
+      setKeyboardNav(false);
+    }
     setOpen(next);
   };
 
@@ -142,6 +148,7 @@ export function PresetSelector({
     const move = (index: number) => {
       e.preventDefault();
       setActiveIndex(index);
+      setKeyboardNav(true);
       document.getElementById(optionDomId(index))?.scrollIntoView?.({ block: "nearest" });
     };
     switch (e.key) {
@@ -176,8 +183,12 @@ export function PresetSelector({
       item={item}
       isSelected={item.source === selectedItem.source && item.id === selectedItem.id}
       isActive={index === activeIndex}
+      showRing={keyboardNav && index === activeIndex}
       onSelect={handleSelect}
-      onHover={() => setActiveIndex(index)}
+      onHover={() => {
+        setActiveIndex(index);
+        setKeyboardNav(false);
+      }}
       testid={testid}
     />
   );
@@ -213,8 +224,6 @@ export function PresetSelector({
           <span id={valueId} className="flex-1 text-left truncate">
             {selectedItem.label}
           </span>
-          {selectedItem.source === "ccr" && <SourceBadge>CCR</SourceBadge>}
-          {selectedItem.source === "project" && <SourceBadge>Project</SourceBadge>}
           <ChevronDown
             size={14}
             className={cn(
@@ -279,14 +288,6 @@ export function PresetSelector({
   );
 }
 
-function SourceBadge({ children }: { children: string }) {
-  return (
-    <span className="shrink-0 rounded-[var(--radius-sm)] bg-overlay-subtle px-1.5 py-0.5 text-2xs text-text-secondary">
-      {children}
-    </span>
-  );
-}
-
 function Divider({ label }: { label: string }) {
   return (
     <div
@@ -304,6 +305,7 @@ function PresetOption({
   item,
   isSelected,
   isActive,
+  showRing,
   onSelect,
   onHover,
   testid,
@@ -312,6 +314,7 @@ function PresetOption({
   item: Item;
   isSelected: boolean;
   isActive: boolean;
+  showRing: boolean;
   onSelect: (id: string) => void;
   onHover: () => void;
   testid?: string;
@@ -335,6 +338,7 @@ function PresetOption({
       className={cn(
         "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm text-text-primary",
         isActive && "bg-overlay-selected",
+        showRing && "outline-solid outline-2 -outline-offset-2 outline-selection-outline",
         isSelected && "font-medium"
       )}
     >

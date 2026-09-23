@@ -219,7 +219,7 @@ export function ProjectAgentToolsSection() {
                       {!endpoint.available && (
                         <span className="block">
                           {endpoint.enabled
-                            ? "Not offered here right now. Still allowed, so it applies again if the plugin comes back"
+                            ? "Not offered here right now. Still allowed, so it applies again if the plugin comes back."
                             : "Not offered here right now"}
                         </span>
                       )}

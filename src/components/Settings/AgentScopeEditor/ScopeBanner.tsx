@@ -35,8 +35,8 @@ export function describeScope(scopeKind: ScopeKind, agentName: string): string {
     case "custom":
       return `New ${agentName} sessions launch with this preset. The settings below edit it; anything left on Default follows the agent's own settings`;
     case "project":
-      return `New ${agentName} sessions launch with this preset, shared from this project's .daintree/presets folder. Duplicate it to change it`;
+      return `New ${agentName} sessions launch with this preset, which this project shares with everyone who opens it`;
     case "ccr":
-      return `New ${agentName} sessions launch through this Claude Code Router route. Duplicate it to change it`;
+      return `New ${agentName} sessions launch through this Claude Code Router route`;
   }
 }
