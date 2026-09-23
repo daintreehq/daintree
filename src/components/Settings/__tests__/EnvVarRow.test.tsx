@@ -41,6 +41,7 @@ describe("EnvVarRow", () => {
     render(
       <EnvVarRow
         row={row("r1", "API_TOKEN", "secret")}
+        position={1}
         sensitive={false}
         revealed={false}
         onToggleReveal={noop}
@@ -95,6 +96,7 @@ describe("EnvVarRow", () => {
     rerender(
       <EnvVarRow
         row={row("r1", "API_TOKEN", "secret")}
+        position={1}
         sensitive
         revealed
         onToggleReveal={noop}

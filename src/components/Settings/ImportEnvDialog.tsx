@@ -296,17 +296,17 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
               <div
                 id={errorsId}
                 role="alert"
-                className="rounded-[var(--radius-md)] border border-status-warning/20 bg-status-warning/10 px-3 py-2 text-xs leading-[inherit]"
+                className="rounded-[var(--radius-md)] border border-status-error/30 bg-status-error/10 px-3 py-2 text-xs leading-[inherit]"
                 data-testid="import-env-errors"
               >
-                <div className="flex items-center gap-1.5 font-medium mb-1 text-status-warning">
+                <div className="flex items-center gap-1.5 font-medium mb-1 text-status-error">
                   <AlertTriangle size={12} aria-hidden="true" />
                   <span>
                     {parsed.errors.length} parse error
                     {parsed.errors.length === 1 ? "" : "s"}
                   </span>
                 </div>
-                {/* The tint, border and icon carry "this is a warning". The
+                {/* The tint, border and icon carry "this blocks the import". The
                     lines themselves are what the user has to read and act on,
                     so they run on the audited text tiers — the amber tri-tone
                     this replaced flattened to one uniform run under

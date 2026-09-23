@@ -11,6 +11,8 @@ import {
 } from "@/components/Settings/SettingsGroup";
 import { ENV_ROW_GRID, EnvVarRow, validateEnvRows } from "@/components/Settings/EnvVarRow";
 import { useRowFocus } from "@/components/Settings/useRowFocus";
+import { useSettingsTabFlush } from "@/components/Settings/SettingsFlushRegistry";
+import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { EnvVar } from "./projectSettingsDirty";
@@ -154,7 +156,14 @@ export function EnvironmentVariablesEditor({
       return !original || original.key !== row.key || original.value !== row.value;
     });
 
-  const helperText = `Applies to new terminals in ${projectLabel} — reopen a terminal to pick up changes`;
+  // Same contract as the global Environment page: closing Settings saves a valid
+  // draft rather than dropping it, and an invalid one is kept out of storage.
+  useSettingsTabFlush("project:variables", handleSave, showSaveControls && isDirty);
+  useSettingsTabValidation("project:variables", errorCount > 0);
+
+  const helperText = isDirty
+    ? "Unsaved changes — they're also saved when you close Settings"
+    : `Applies to new terminals in ${projectLabel} — reopen a terminal to pick up changes`;
   const status = saveError ? (
     <span role="alert" className="text-status-error">
       {saveError}
@@ -211,8 +220,10 @@ export function EnvironmentVariablesEditor({
                     =
                   </span>
                   <span
-                    className="min-w-0 truncate text-text-secondary"
-                    title={isSensitive ? undefined : value}
+                    className={cn(
+                      "min-w-0 text-text-secondary select-text",
+                      isSensitive ? "truncate" : "break-all"
+                    )}
                   >
                     {isSensitive ? MASKED_VALUE : value}
                   </span>
@@ -269,6 +280,7 @@ export function EnvironmentVariablesEditor({
               <EnvVarRow
                 key={row.id}
                 row={row}
+                position={index + 1}
                 error={rowErrors[row.id]}
                 sensitive={isSensitive}
                 revealed={visibleEnvVars.has(row.id)}

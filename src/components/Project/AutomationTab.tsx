@@ -459,7 +459,7 @@ export function AutomationTab({
             description="Machine-local, not shared with the repository"
             {...overrideInputProps(terminalShell, onTerminalShellChange, onTerminalShellReset)}
             resetAriaLabel="Reset shell program to app default"
-            placeholder="/bin/zsh"
+            placeholder="App default"
             spellCheck={false}
             autoComplete="off"
             className="font-mono"
@@ -474,7 +474,7 @@ export function AutomationTab({
               onTerminalShellArgsReset
             )}
             resetAriaLabel="Reset shell arguments to app default"
-            placeholder="-l"
+            placeholder="App default"
             spellCheck={false}
             autoComplete="off"
             className="font-mono"
@@ -487,7 +487,7 @@ export function AutomationTab({
               onTerminalDefaultCwdReset
             )}
             resetAriaLabel="Reset default working directory to app default"
-            placeholder="/path/to/working/directory"
+            placeholder="Worktree root"
             spellCheck={false}
             autoComplete="off"
             className="font-mono"

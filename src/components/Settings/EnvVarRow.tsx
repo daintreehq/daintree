@@ -51,6 +51,8 @@ export const ENV_ROW_GRID =
 
 interface EnvVarRowProps {
   row: EnvVarDraft;
+  /** 1-based, so two rows holding the same name still get distinct action names. */
+  position: number;
   error?: string;
   /** Mask the value behind a reveal toggle. */
   sensitive: boolean;
@@ -70,6 +72,7 @@ interface EnvVarRowProps {
 
 export function EnvVarRow({
   row,
+  position,
   error,
   sensitive,
   revealed,
@@ -141,7 +144,7 @@ export function EnvVarRow({
           variant="ghost-danger"
           size="icon-sm"
           onClick={onDelete}
-          aria-label={name ? `Delete ${name}` : "Delete empty variable"}
+          aria-label={`Delete ${name || "unnamed variable"} (row ${position})`}
         >
           <Trash2 />
         </Button>

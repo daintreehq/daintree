@@ -497,11 +497,12 @@ export function GeneralTab({
                         type="color"
                         value={color ?? "#6366f1"}
                         onChange={(e) => onColorChange(e.target.value.toLowerCase())}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        className="peer absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                         aria-label="Pick a custom color"
                       />
+                      {/* The native input is invisible, so its keyboard ring is drawn here. */}
                       <div
-                        className="h-8 w-8 rounded-[var(--radius-md)] border border-border-strong flex items-center justify-center cursor-pointer"
+                        className="h-8 w-8 rounded-[var(--radius-md)] border border-border-strong flex items-center justify-center cursor-pointer peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-accent-primary"
                         style={{
                           backgroundColor: color ?? undefined,
                         }}
@@ -607,11 +608,7 @@ export function GeneralTab({
 
             <SettingsRow
               label="Location"
-              description={
-                <span className="block truncate font-mono" title={currentProject.path}>
-                  {currentProject.path}
-                </span>
-              }
+              description={<span className="block break-all font-mono">{currentProject.path}</span>}
               control={
                 <Button variant="outline" size="sm" onClick={handleMoveOrRename}>
                   <FolderInput />
@@ -728,7 +725,7 @@ export function GeneralTab({
         <SettingsGroup>
           <SettingsSwitchCard
             title="Keep workspace resident"
-            subtitle="Holds this project's view in the cache so a bound MCP session stays reachable. Other projects close first to stay within your cached-view limit; low memory can still unload this one."
+            subtitle="Keeps this project loaded so an agent's MCP session can always reach it. Other projects unload first when the cache is full; low memory can still unload this one."
             isEnabled={keepResident}
             onChange={() => void handleKeepResidentToggle()}
             disabled={keepResidentBusy}

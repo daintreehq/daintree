@@ -1,7 +1,24 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render as rtlRender, screen, fireEvent, waitFor } from "@testing-library/react";
+import { useContext, type ReactElement, type ReactNode } from "react";
+import { SettingsValidationProvider } from "@/components/Settings/SettingsValidationRegistry";
+import {
+  SettingsFlushContext,
+  SettingsFlushProvider,
+} from "@/components/Settings/SettingsFlushRegistry";
+
+// The editor reports errors to the sidebar and registers a close-time flush, both
+// through the dialog's registries.
+function Providers({ children }: { children: ReactNode }) {
+  return (
+    <SettingsValidationProvider>
+      <SettingsFlushProvider>{children}</SettingsFlushProvider>
+    </SettingsValidationProvider>
+  );
+}
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: Providers });
 import { EnvironmentVariablesEditor } from "../EnvironmentVariablesEditor";
 import type { EnvVar } from "../projectSettingsDirty";
 import type { ProjectSettings } from "@shared/types/project";
@@ -343,5 +360,60 @@ describe("EnvironmentVariablesEditor save controls", () => {
 
     fireEvent.click(discard);
     expect(save.disabled).toBe(true);
+  });
+});
+
+describe("EnvironmentVariablesEditor close-time flush", () => {
+  // Matches the global Environment page: closing Settings keeps a valid draft
+  // rather than silently dropping it, and never stores an invalid one.
+  let flushAll: (() => Promise<void>) | undefined;
+  function CaptureFlush() {
+    flushAll = useContext(SettingsFlushContext)?.flushAll;
+    return null;
+  }
+
+  const renderEditor = (onChange: (value: EnvVar[]) => void, onFlush: () => Promise<void>) =>
+    render(
+      <>
+        <CaptureFlush />
+        <EnvironmentVariablesEditor
+          {...defaultProps}
+          environmentVariables={[makeEnvVar("MY_VAR", "a")]}
+          onEnvironmentVariablesChange={onChange}
+          onFlush={onFlush}
+        />
+      </>
+    );
+
+  it("saves a valid draft when the dialog flushes", async () => {
+    const onChange = vi.fn<(value: EnvVar[]) => void>();
+    const onFlush = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    renderEditor(onChange, onFlush);
+    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+      target: { value: "b" },
+    });
+    await flushAll!();
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange.mock.calls[0]![0][0]).toMatchObject({ key: "MY_VAR", value: "b" });
+    expect(onFlush).toHaveBeenCalled();
+  });
+
+  it("does not store a draft with an invalid name when the dialog flushes", async () => {
+    const onChange = vi.fn<(value: EnvVar[]) => void>();
+    const onFlush = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    renderEditor(onChange, onFlush);
+    fireEvent.change(screen.getByLabelText("Environment variable name"), {
+      target: { value: "1BAD" },
+    });
+    await flushAll!();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onFlush).not.toHaveBeenCalled();
+  });
+
+  it("registers nothing while the draft is clean", async () => {
+    const onChange = vi.fn<(value: EnvVar[]) => void>();
+    renderEditor(onChange, vi.fn<() => Promise<void>>().mockResolvedValue(undefined));
+    await flushAll!();
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

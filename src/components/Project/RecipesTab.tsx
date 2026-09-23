@@ -170,6 +170,14 @@ export function RecipesTab({
       return;
     }
     try {
+      JSON.parse(importJson);
+    } catch (err) {
+      // The engine's own message carries the position ("at position 35 (line 1
+      // column 36)"), which is what the user needs to find the mistake.
+      setImportError(`That isn't valid JSON: ${formatErrorMessage(err, "parse failed")}`);
+      return;
+    }
+    try {
       await importRecipe(projectId, importJson);
       setShowImportDialog(false);
       setImportJson("");
@@ -250,7 +258,7 @@ export function RecipesTab({
                   </Button>
                 }
               >
-                No recipes yet — a recipe opens a set of terminals with their commands in one step
+                Add a recipe to open a set of terminals in one step
               </SettingsEmptyRow>
             </SettingsGroup>
           ) : (

@@ -257,7 +257,7 @@ export function ResourceEnvironmentsSection({
               </Button>
             }
           >
-            No environments yet — add one to provision worktrees in a container, VM, or remote host
+            Add an environment to run worktrees off this machine
           </SettingsEmptyRow>
         )}
 
@@ -332,7 +332,7 @@ export function ResourceEnvironmentsSection({
                     aria-describedby={
                       addEnvironmentError ? "new-environment-name-error" : undefined
                     }
-                    className="flex-1 min-w-0 font-mono"
+                    className={cn(SETTINGS_CONTROL_WIDTH.wide, "font-mono")}
                   />
                   <Button type="button" variant="contrast" size="sm" onClick={handleAddEnv}>
                     Add

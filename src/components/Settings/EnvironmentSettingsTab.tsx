@@ -237,6 +237,8 @@ export function EnvironmentSettingsTab() {
         ? "Fix the name above to save"
         : `Fix the ${errorCount} names above to save`}
     </span>
+  ) : isDirty ? (
+    "Unsaved changes — they're also saved when you close Settings"
   ) : (
     "Applies to new terminals — reopen a terminal to pick up changes"
   );
@@ -258,6 +260,7 @@ export function EnvironmentSettingsTab() {
             <EnvVarRow
               key={envVar.id}
               row={envVar}
+              position={index + 1}
               error={rowErrors[envVar.id]}
               sensitive={isSensitiveEnvKey(envVar.key)}
               revealed={visibleEnvVars.has(envVar.id)}
