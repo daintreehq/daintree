@@ -146,15 +146,19 @@ export function RateLimitDetailsPanel({
   );
 }
 
-/** Holds the shape of one bucket row while the details read is in flight. */
+/**
+ * Holds the shape of one bucket row while the details read is in flight. Only
+ * mounted past the Doherty gate, so it pulses immediately rather than waiting
+ * out a second anti-flicker delay.
+ */
 function BucketRowSkeleton({ stillWorking }: { stillWorking: boolean }) {
   return (
     <div className="flex flex-col gap-1.5" aria-busy="true">
       <div className="flex items-baseline justify-between gap-3">
-        <span className="bg-overlay-emphasis animate-pulse-delayed h-3 w-16 rounded-[var(--radius-xs)]" />
-        <span className="bg-overlay-emphasis animate-pulse-delayed h-2.5 w-20 rounded-[var(--radius-xs)]" />
+        <span className="bg-overlay-emphasis animate-pulse-immediate h-3 w-16 rounded-[var(--radius-xs)]" />
+        <span className="bg-overlay-emphasis animate-pulse-immediate h-2.5 w-20 rounded-[var(--radius-xs)]" />
       </div>
-      <div className="bg-overlay-emphasis animate-pulse-delayed h-1.5 rounded-full" />
+      <div className="bg-overlay-emphasis animate-pulse-immediate h-1.5 rounded-full" />
       <span className="text-text-secondary text-2xs">
         {stillWorking ? "Still checking quotas…" : "Checking quotas…"}
       </span>
