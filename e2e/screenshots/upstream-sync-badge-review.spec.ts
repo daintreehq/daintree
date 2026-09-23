@@ -574,8 +574,14 @@ test("upstream sync badge review — states and themes", async () => {
           isFetchInFlight: false,
           lastFetchedAt: tenMinutesAgo,
           ...(s.branch === B.baseBehind ? { baseCompareRef: BASE } : {}),
-          // A fetch in flight suspends the stale treatment on its own card.
+          // A fetch in flight on its own card: it keeps the stale mark, since
+          // the counts are that old until the answer lands.
           ...(s.branch === B.ahead ? { isFetchInFlight: true } : {}),
+          // No base resolved at all, on a branch with no upstream: the marker
+          // has to stand on its own.
+          ...(s.branch === B.localResting
+            ? { baseBranchName: null, baseAheadCount: null, baseBehindCount: null }
+            : {}),
         });
       }
       await expect(badge, "stale never rendered").toHaveAttribute("data-stale", "true", {
@@ -585,6 +591,7 @@ test("upstream sync badge review — states and themes", async () => {
       await snap(page, "B0-stale", cardOf(row(page, B.both)), "↓3");
       await snap(page, "B1-sidebar-stale", sidebar);
       await snap(page, "B4-in-flight", cardOf(row(page, B.ahead)), /↑\d/);
+      await snap(page, "B5-local-no-base", cardOf(row(page, B.localResting)), "local");
       await snapTooltip(page, "B2-tip-stale", badge, /stale|out of date/i);
       await snapTooltip(
         page,
