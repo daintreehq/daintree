@@ -578,3 +578,22 @@ describe("buildReportIssueUrl — plugin diagnostics", () => {
     expect(urlBody).toContain("2 plugins loaded");
   });
 });
+
+describe("buildReportIssueUrl scrubbing beyond the stack", () => {
+  it("removes personal paths from the message and context in every output", () => {
+    const secretPath = "/Users/alice/clients/acme";
+    const input = makeInput({
+      message: `ENOENT: no such file ${secretPath}/package.json`,
+      context: { worktreeId: `${secretPath}/worktrees/feature` },
+    });
+    const small = buildReportIssueUrl(input);
+    const huge = buildReportIssueUrl({ ...input, stack: "x".repeat(40_000) });
+
+    for (const result of [small, huge]) {
+      expect(decodeURIComponent(result.url)).not.toContain("alice");
+      expect(result.fullBody).not.toContain("alice");
+    }
+    // Scrubbed, not dropped: the triage value of the message survives.
+    expect(small.fullBody).toContain("ENOENT: no such file");
+  });
+});

@@ -44,7 +44,7 @@ describe("Panel wrapper ErrorBoundary + Suspense nesting", () => {
       </ErrorBoundary>
     );
 
-    expect(screen.getByText("BrowserPane error")).toBeTruthy();
+    expect(screen.getByText("Browser pane stopped working")).toBeTruthy();
     expect(screen.getByText("Try again")).toBeTruthy();
     expect(screen.queryByText("Loading...")).toBeNull();
   });
