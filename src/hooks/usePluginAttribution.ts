@@ -10,19 +10,29 @@ export interface PluginAttribution {
    * is shown beside it as the part a user can match against the plugin list.
    */
   manifestId: string | null;
+  /** `'<name>' plugin`, with the manifest id in parentheses when it differs. */
+  label: string;
   /** The attribution as one sentence, for accessible names and descriptions. */
   text: string;
 }
 
+function describe(instanceKey: string, displayName: string | undefined): PluginAttribution {
+  const manifestId = pluginManifestIdFromInstanceKey(instanceKey);
+  const name = displayName ?? manifestId;
+  const distinctId = name === manifestId ? null : manifestId;
+  const label = `'${name}' plugin${distinctId ? ` (${distinctId})` : ""}`;
+  return { name, manifestId: distinctId, label, text: `Requested by the ${label}` };
+}
+
 /**
- * A plugin's name for copy, outside React: its display name, else its manifest
- * id — never the instance key, which for a project plugin carries a
+ * The same attribution outside React, for copy built in a callback (a toast).
+ * `instanceKey` is never shown: for a project plugin it carries a
  * machine-local project id (#12211).
  */
-export function resolvePluginName(instanceKey: string): string {
-  return (
-    usePluginRuntimeStore.getState().pluginMetaById.get(instanceKey)?.displayName ??
-    pluginManifestIdFromInstanceKey(instanceKey)
+export function resolvePluginAttribution(instanceKey: string): PluginAttribution {
+  return describe(
+    instanceKey,
+    usePluginRuntimeStore.getState().pluginMetaById.get(instanceKey)?.displayName
   );
 }
 
@@ -30,14 +40,9 @@ export function resolvePluginName(instanceKey: string): string {
  * Who is asking, for a prompt a plugin raised. `instanceKey` is the host's
  * plugin instance key, which for a project plugin is
  * `project__{projectId}__{manifestId}` — a machine-local id that must never
- * reach copy (#12211), so it is resolved here once for every prompt surface.
+ * reach copy (#12211), so it is resolved here once for every plugin surface.
  */
 export function usePluginAttribution(instanceKey: string): PluginAttribution {
-  const manifestId = pluginManifestIdFromInstanceKey(instanceKey);
-  const name = usePluginRuntimeStore(
-    (s) => s.pluginMetaById.get(instanceKey)?.displayName ?? manifestId
-  );
-  const distinctId = name === manifestId ? null : manifestId;
-  const text = `Requested by the '${name}' plugin${distinctId ? ` (${distinctId})` : ""}`;
-  return { name, manifestId: distinctId, text };
+  const displayName = usePluginRuntimeStore((s) => s.pluginMetaById.get(instanceKey)?.displayName);
+  return describe(instanceKey, displayName);
 }

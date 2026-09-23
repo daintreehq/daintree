@@ -314,7 +314,9 @@ describe("PluginConfirmDialog", () => {
     });
     render(<PluginConfirmDialog />);
 
-    expect(screen.getByText("Action contributed by the 'My Plugin' plugin.")).toBeTruthy();
+    expect(
+      screen.getByText("Action contributed by the 'My Plugin' plugin (acme.my-plugin).")
+    ).toBeTruthy();
     expect(document.body.textContent).not.toContain("project__b6700c7a__");
     _resetPluginRuntimeStoreForTest();
   });

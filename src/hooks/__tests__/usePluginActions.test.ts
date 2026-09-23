@@ -338,7 +338,9 @@ describe("usePluginActions", () => {
     await actionService.dispatch(action.id, { x: 1 });
 
     expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("'My Plugin' plugin") })
+      expect.objectContaining({
+        message: expect.stringContaining("'My Plugin' plugin (acme.my-plugin)"),
+      })
     );
     expect(notifyMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("project__b6700c7a__") })
