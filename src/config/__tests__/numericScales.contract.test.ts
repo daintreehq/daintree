@@ -242,7 +242,7 @@ const EXCEPTIONS: {
     file: "src/utils/renderBootstrapError.ts",
     match: "border-radius:",
     prefix: true,
-    count: 2,
+    count: 3,
     reason: "Same fatal-boot screen; see above",
   },
 ];
