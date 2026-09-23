@@ -1,15 +1,23 @@
 import { useEffect, useState } from "react";
-import { Radio } from "lucide-react";
+import { Copy, Radio } from "lucide-react";
 import { Workflow } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import {
+  SettingsActions,
+  SettingsEmptyRow,
+  SettingsGroup,
+  SettingsRow,
+} from "@/components/Settings/SettingsGroup";
+import { InlineErrorRow } from "@/components/Settings/auditLogParts";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { useRunHistoryStore } from "@/store/runHistoryStore";
 import type { RunHistoryRecord } from "@shared/types";
+
+const COPY_FEEDBACK_MS = 2000;
 
 function plural(count: number, one: string, many: string = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
@@ -159,6 +167,9 @@ export function RunHistorySettingsTab() {
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   const [clearFailed, setClearFailed] = useState(false);
+  const [cleared, setCleared] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
 
   useEffect(() => {
     init();
@@ -173,7 +184,21 @@ export function RunHistorySettingsTab() {
     const ok = await clear();
     setIsClearing(false);
     setShowClearConfirm(false);
-    if (!ok) setClearFailed(true);
+    if (ok) setCleared(true);
+    else setClearFailed(true);
+  };
+
+  // Snapshots of what each run did, so a failed fleet send can be reported
+  // without reconstructing it by hand.
+  const copyRecords = async () => {
+    setCopyFailed(false);
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(records, null, 2));
+      setCopied(true);
+      setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
+    } catch {
+      setCopyFailed(true);
+    }
   };
 
   return (
@@ -206,6 +231,17 @@ export function RunHistorySettingsTab() {
               ))}
             </ul>
           )}
+          {!loading && records.length > 0 && (
+            <SettingsActions status={copied ? "Copied!" : plural(records.length, "run")}>
+              <Button variant="outline" size="sm" onClick={() => void copyRecords()}>
+                <Copy aria-hidden="true" />
+                Copy all as JSON
+              </Button>
+            </SettingsActions>
+          )}
+          {copyFailed && (
+            <InlineErrorRow>Run history couldn&apos;t be copied. Try again.</InlineErrorRow>
+          )}
           <SettingsRow
             label="Clear run history"
             description="Deletes every recorded run on this machine. New runs are still recorded."
@@ -223,6 +259,10 @@ export function RunHistorySettingsTab() {
           />
         </SettingsGroup>
       </SettingsSection>
+
+      <p className="sr-only" role="status">
+        {cleared ? "Run history cleared" : ""}
+      </p>
 
       <ConfirmDialog
         isOpen={showClearConfirm}

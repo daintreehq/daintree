@@ -165,3 +165,13 @@ export function AuditLoadErrorRow({ message, onRetry }: { message: string; onRet
     </SettingsEmptyRow>
   );
 }
+
+/** A failed action, shown in its group right beside the control or actions it belongs to. */
+export function InlineErrorRow({ children }: { children: ReactNode }) {
+  return (
+    <p role="alert" className="flex items-start gap-2 px-4 py-2.5 text-xs text-text-primary">
+      <SeverityMark severity="error" label="Error" className="mt-px h-3.5 w-3.5" decorative />
+      <span>{children}</span>
+    </p>
+  );
+}

@@ -375,7 +375,8 @@ describe("McpServerSettingsTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^rotate key$/i }));
 
-    await waitForContent(container, "rotate failed");
+    // The error sits inside the still-open confirm, which portals out of the tab.
+    await screen.findByText(new RegExp("rotate failed"));
     expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
     expect(window.electron.mcpServer.rotateApiKey).toHaveBeenCalledTimes(1);
     expect(mockedLogError).toHaveBeenCalledWith("Failed to rotate MCP API key", expect.any(Error));
@@ -857,7 +858,8 @@ describe("McpServerSettingsTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Clear audit log" }));
 
-    await waitForContent(container, "clear failed");
+    // The error sits inside the still-open confirm, which portals out of the tab.
+    await screen.findByText(new RegExp("clear failed"));
     expect(mockedNotify).not.toHaveBeenCalled();
     expect(mockedLogError).toHaveBeenCalledWith("Failed to clear MCP audit log", expect.any(Error));
   });

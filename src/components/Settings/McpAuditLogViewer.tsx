@@ -8,6 +8,7 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import {
   AUDIT_TIME_RANGE_MS,
+  InlineErrorRow,
   AuditFilterBar,
   AuditFilterInput,
   AuditFilterSelect,
@@ -278,6 +279,8 @@ interface McpAuditLogViewerProps {
   anomalySuppressed?: boolean;
   /** Shown in place of the list when the records couldn't be read. */
   loadError?: React.ReactNode;
+  /** A copy or export that failed, shown beside the actions. */
+  actionError?: string | null;
   /**
    * What an empty log says. The default is the first-use line; a parent that
    * just cleared the log passes its own, so a deliberate clear doesn't read as
@@ -308,7 +311,7 @@ function DispatchRow({
       </div>
       <div className="min-w-0 select-text">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-text-primary truncate">{record.toolId}</span>
+          <span className="min-w-0 font-mono text-text-primary break-all">{record.toolId}</span>
           {record.result !== "success" && (
             <span className="shrink-0 text-text-secondary">
               {RESULT_LABEL[record.result]}
@@ -360,7 +363,7 @@ function GrantRow({ record, now }: { record: McpGrantRecord; now: number }) {
       <div className="min-w-0 select-text">
         <div className="flex items-center gap-2">
           <span className="text-text-primary">{GRANT_TYPE_LABEL[record.type]}</span>
-          <span className="font-mono text-text-secondary truncate">{record.toolId}</span>
+          <span className="min-w-0 font-mono text-text-secondary break-all">{record.toolId}</span>
         </div>
         {tierMove && <div className="mt-0.5 text-text-secondary">{tierMove}</div>}
         {record.type === "grant.revoked" && record.revokedReason && (
@@ -442,6 +445,7 @@ export function McpAuditLogViewer({
   anomalySuppressed = true,
   emptyLabel = "Tool calls show up here once an agent uses the MCP server",
   loadError,
+  actionError,
 }: McpAuditLogViewerProps) {
   const [toolFilter, setToolFilter] = useState("");
   const [resultFilter, setResultFilter] = useState<AuditResultFilter>("all");
@@ -470,34 +474,40 @@ export function McpAuditLogViewer({
   );
 
   const filteredRecords = useMemo(() => {
+    // Grants carry no result or arguments of their own. With no narrowing they
+    // all show; once the view is narrowed, a grant stays only as context for a
+    // session that has a matching call (#10027 keeps them in forensic exports),
+    // so an unrelated session's grant never props up an otherwise empty result.
     const needle = toolFilter.trim().toLowerCase();
     const searchNeedle = searchQuery.trim().toLowerCase();
     const cutoffMs = timeRange !== "all" ? now - AUDIT_TIME_RANGE_MS[timeRange] : undefined;
-    return visibleRecords.filter((record) => {
-      if (cutoffMs !== undefined && record.timestamp < cutoffMs) return false;
-      // The result filter is dispatch-taxonomy; grant records have no
-      // `result` field, so they pass through the result filter unchanged.
-      // The export must include them — forensic export of a tier-rejection
-      // incident must still surface the grant.issued/grant.revoked events
-      // for that session (#10027).
-      if (isAuditRecord(record)) {
-        if (resultFilter === "problems" && record.result === "success") return false;
-        if (
-          resultFilter !== "all" &&
-          resultFilter !== "problems" &&
-          record.result !== resultFilter
-        ) {
-          return false;
-        }
+    const narrowed = needle.length > 0 || searchNeedle.length > 0 || resultFilter !== "all";
+    const matchesDispatch = (record: McpAuditRecord) => {
+      if (resultFilter === "problems" && record.result === "success") return false;
+      if (resultFilter !== "all" && resultFilter !== "problems" && record.result !== resultFilter) {
+        return false;
       }
-      // Tool filter and search work against the union's common fields.
       if (needle.length > 0 && !record.toolId.toLowerCase().includes(needle)) return false;
-      if (searchNeedle.length > 0) {
-        const haystack = isAuditRecord(record) ? (record.argsSummary ?? "") : "";
-        if (!haystack.toLowerCase().includes(searchNeedle)) return false;
+      if (
+        searchNeedle.length > 0 &&
+        !(record.argsSummary ?? "").toLowerCase().includes(searchNeedle)
+      ) {
+        return false;
       }
       return true;
-    });
+    };
+    const inRange = visibleRecords.filter(
+      (record) => cutoffMs === undefined || record.timestamp >= cutoffMs
+    );
+    const matchingSessions = new Set<string>();
+    for (const record of inRange) {
+      if (isAuditRecord(record) && matchesDispatch(record)) matchingSessions.add(record.sessionId);
+    }
+    return inRange.filter((record) =>
+      isAuditRecord(record)
+        ? matchesDispatch(record)
+        : !narrowed || matchingSessions.has(record.sessionId)
+    );
   }, [visibleRecords, resultFilter, toolFilter, timeRange, searchQuery, now]);
 
   const canGroup = !!turnRecords && turnRecords.length > 0;
@@ -554,12 +564,16 @@ export function McpAuditLogViewer({
     return counts;
   }, [visibleSignals]);
 
+  const relatedEventCount = isFiltering ? filteredRecords.filter(isGrantRecord).length : 0;
+
   const status = copyFlashActive
     ? "Copied!"
     : exportFlashActive
       ? "Exported!"
       : isFiltering
-        ? `Showing ${filteredRecords.length} of ${visibleRecords.length}`
+        ? relatedEventCount > 0
+          ? `Showing ${filteredRecords.length - relatedEventCount} of ${visibleRecords.length} · ${plural(relatedEventCount, "related event")}`
+          : `Showing ${filteredRecords.length} of ${visibleRecords.length}`
         : maxRecords !== undefined
           ? `${visibleRecords.length} of ${maxRecords}`
           : plural(visibleRecords.length, "record");
@@ -711,6 +725,8 @@ export function McpAuditLogViewer({
           ))}
         </ul>
       )}
+
+      {actionError && <InlineErrorRow>{actionError}</InlineErrorRow>}
 
       <SettingsActions status={loading ? null : status}>
         <Button

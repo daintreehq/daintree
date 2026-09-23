@@ -242,6 +242,10 @@ export function DiagnosticsReviewDialog({
 
         <fieldset className="space-y-2">
           <legend className="text-sm font-medium text-text-primary">Redact</legend>
+          <p className="text-xs text-text-secondary">
+            These match patterns, so they can miss things. Check the preview before you share the
+            report.
+          </p>
           <div className="space-y-1.5">
             {PREBUILT_REDACTIONS.map((preset) => (
               <label

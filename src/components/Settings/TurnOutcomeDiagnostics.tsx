@@ -166,6 +166,8 @@ interface TurnOutcomeDiagnosticsProps {
   onRefresh?: () => Promise<void> | void;
   /** Controlled mode: the parent's read of the turn records failed. */
   loadFailed?: boolean;
+  /** Controlled mode: the parent is still reading, so no empty state is claimed yet. */
+  loading?: boolean;
 }
 
 export function TurnOutcomeDiagnostics({
@@ -173,13 +175,14 @@ export function TurnOutcomeDiagnostics({
   records: controlledRecords,
   onRefresh,
   loadFailed = false,
+  loading: controlledLoading = false,
 }: TurnOutcomeDiagnosticsProps) {
   const isControlled = controlledRecords !== undefined;
   const [internalRecords, setInternalRecords] = useState<AssistantTurnRecord[]>([]);
   const [internalLoading, setInternalLoading] = useState(true);
   const [internalFailed, setInternalFailed] = useState(false);
   const records = isControlled ? controlledRecords : internalRecords;
-  const loading = isControlled ? false : internalLoading;
+  const loading = isControlled ? controlledLoading : internalLoading;
   const failed = isControlled ? loadFailed : internalFailed;
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [isClearing, setIsClearing] = useState(false);

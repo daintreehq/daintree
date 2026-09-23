@@ -106,4 +106,34 @@ describe("McpAuditLogViewer", () => {
     // The glyph alone can't tell rate limited from awaiting confirmation or a collision.
     expect(within(screen.getByRole("list")).getByText(/Rate limited/)).toBeTruthy();
   });
+
+  it("keeps a grant as context only for a session with a matching call", () => {
+    const grant = (id: string, sessionId: string, toolId: string) =>
+      ({
+        type: "grant.issued",
+        id,
+        timestamp: Date.now(),
+        sessionId,
+        toolId,
+        ttlMs: 60_000,
+      }) as McpLogRecord;
+    const call = (id: string, sessionId: string, toolId: string, result: string) =>
+      ({ ...dispatch(id, toolId, result), sessionId }) as McpLogRecord;
+    renderViewer([
+      call("1", "s-a", "terminal.sendKeys", "unauthorized"),
+      grant("g-a", "s-a", "grant.for.session.a"),
+      grant("g-b", "s-b", "grant.for.session.b"),
+    ]);
+    fireEvent.change(screen.getByLabelText("Filter audit by result"), {
+      target: { value: "unauthorized" },
+    });
+    expect(screen.getByText("grant.for.session.a")).toBeTruthy();
+    expect(screen.queryByText("grant.for.session.b")).toBeNull();
+
+    // An unrelated grant can't hold up a result that matches no call.
+    fireEvent.change(screen.getByLabelText("Filter audit by result"), {
+      target: { value: "error" },
+    });
+    expect(screen.getByRole("button", { name: "Clear filters" })).toBeTruthy();
+  });
 });

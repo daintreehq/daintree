@@ -5,7 +5,7 @@ import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { PluginActionAuditLogViewer } from "@/components/Settings/PluginActionAuditLogViewer";
-import { AuditLoadErrorRow } from "@/components/Settings/auditLogParts";
+import { InlineErrorRow, AuditLoadErrorRow } from "@/components/Settings/auditLogParts";
 import { logError } from "@/utils/logger";
 import { type PluginActionAuditRecord, PLUGIN_AUDIT_DEFAULT_MAX_RECORDS } from "@shared/types";
 
@@ -20,6 +20,7 @@ export function PluginActionsSettingsTab() {
   const [loading, setLoading] = useState(true);
   const [recordsFailed, setRecordsFailed] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [toggleError, setToggleError] = useState<string | null>(null);
   const [copiedFlash, setCopiedFlash] = useState(false);
   const [exportedFlash, setExportedFlash] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -76,17 +77,18 @@ export function PluginActionsSettingsTab() {
 
   const handleEnabledToggle = useCallback(async () => {
     try {
-      setActionError(null);
+      setToggleError(null);
       const cfg = await window.electron.plugin.setAuditEnabled(!auditEnabled);
       setAuditEnabled(cfg.enabled);
       setMaxRecords(cfg.maxRecords);
     } catch (err) {
-      setActionError("Recording couldn't be changed. Try again.");
+      setToggleError("Recording couldn't be changed. Try again.");
       logError("Failed to toggle plugin audit log", err);
     }
   }, [auditEnabled]);
 
   const handleCopy = useCallback(async (toCopy: PluginActionAuditRecord[]) => {
+    setActionError(null);
     try {
       await navigator.clipboard.writeText(JSON.stringify(toCopy, null, 2));
       setCopiedFlash(true);
@@ -99,6 +101,7 @@ export function PluginActionsSettingsTab() {
   }, []);
 
   const handleExport = useCallback(async (toExport: PluginActionAuditRecord[]) => {
+    setActionError(null);
     try {
       const saved = await window.electron.plugin.exportAuditLog(toExport);
       if (saved) {
@@ -145,12 +148,8 @@ export function PluginActionsSettingsTab() {
               configFailed ? "Couldn't read this setting. Reopen settings to try again." : undefined
             }
           />
+          {toggleError && <InlineErrorRow>{toggleError}</InlineErrorRow>}
         </SettingsGroup>
-        {actionError && (
-          <p role="alert" className="text-xs text-status-error">
-            {actionError}
-          </p>
-        )}
         <PluginActionAuditLogViewer
           records={records}
           loading={loading}
@@ -161,6 +160,7 @@ export function PluginActionsSettingsTab() {
           onClear={() => setShowClearConfirm(true)}
           copyFlashActive={copiedFlash}
           exportFlashActive={exportedFlash}
+          actionError={actionError}
           loadError={
             recordsFailed ? (
               <AuditLoadErrorRow

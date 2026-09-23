@@ -109,6 +109,13 @@ export function McpServerSettingsTab() {
   const [auditLoadFailed, setAuditLoadFailed] = useState(false);
   const [auditConfigLoaded, setAuditConfigLoaded] = useState(false);
   const [auditConfigFailed, setAuditConfigFailed] = useState(false);
+  // Each failure is shown where its action lives: beside the audit actions, or
+  // inside the confirm that is still open — never behind a dialog.
+  const [auditActionError, setAuditActionError] = useState<string | null>(null);
+  const [disableError, setDisableError] = useState<string | null>(null);
+  const [rotateError, setRotateError] = useState<string | null>(null);
+  const [clearError, setClearError] = useState<string | null>(null);
+  const [bearersFailed, setBearersFailed] = useState(false);
   // Set by a deliberate clear, so the empty log says so instead of reading as
   // "nothing has ever been recorded" beside turn outcomes that were kept.
   const [auditCleared, setAuditCleared] = useState(false);
@@ -179,7 +186,9 @@ export function McpServerSettingsTab() {
     try {
       const bearers = await window.electron.mcpServer.listActiveBearers();
       setActiveBearers(bearers);
+      setBearersFailed(false);
     } catch (err) {
+      setBearersFailed(true);
       logError("Failed to load MCP active bearers", err);
     }
   };
@@ -356,12 +365,12 @@ export function McpServerSettingsTab() {
     if (isDisabling) return;
     setIsDisabling(true);
     try {
-      setError(null);
+      setDisableError(null);
       await applyEnabled(false);
       setShowDisableConfirm(false);
       setDisableClients([]);
     } catch (err) {
-      setError(formatErrorMessage(err, "Failed to update MCP server"));
+      setDisableError(formatErrorMessage(err, "Failed to update MCP server"));
       logError("Failed to update MCP server", err);
     } finally {
       setIsDisabling(false);
@@ -372,6 +381,7 @@ export function McpServerSettingsTab() {
     if (isDisabling) return;
     setShowDisableConfirm(false);
     setDisableClients([]);
+    setDisableError(null);
   };
 
   /**
@@ -445,7 +455,7 @@ export function McpServerSettingsTab() {
     if (isRotating) return;
     setIsRotating(true);
     try {
-      setError(null);
+      setRotateError(null);
       const key = await window.electron.mcpServer.rotateApiKey();
       setStatus((prev) => ({ ...prev, apiKey: key }));
       // The rotated key invalidates whatever config was last copied.
@@ -454,7 +464,7 @@ export function McpServerSettingsTab() {
       setShowApiKey(false);
       setShowRotateConfirm(false);
     } catch (err) {
-      setError(formatErrorMessage(err, "Failed to rotate API key"));
+      setRotateError(formatErrorMessage(err, "Failed to rotate API key"));
       logError("Failed to rotate MCP API key", err);
     } finally {
       setIsRotating(false);
@@ -465,6 +475,7 @@ export function McpServerSettingsTab() {
     if (isRotating) return;
     setShowRotateConfirm(false);
     setShowApiKey(false);
+    setRotateError(null);
   };
 
   const handleCopyApiKey = async () => {
@@ -558,14 +569,14 @@ export function McpServerSettingsTab() {
     if (isClearing) return;
     setIsClearing(true);
     try {
-      setError(null);
+      setClearError(null);
       await window.electron.mcpServer.clearAuditLog();
       setAuditRecords([]);
       setAuditStats(null);
       setAuditCleared(true);
       setShowClearConfirm(false);
     } catch (err) {
-      setError(formatErrorMessage(err, "Failed to clear audit log"));
+      setClearError(formatErrorMessage(err, "Failed to clear audit log"));
       logError("Failed to clear MCP audit log", err);
     } finally {
       setIsClearing(false);
@@ -575,11 +586,12 @@ export function McpServerSettingsTab() {
   const handleCancelClear = () => {
     if (isClearing) return;
     setShowClearConfirm(false);
+    setClearError(null);
   };
 
   const handleCopyAuditAsJson = async (records: McpLogRecord[]) => {
     try {
-      setError(null);
+      setAuditActionError(null);
       await navigator.clipboard.writeText(JSON.stringify(records, null, 2));
       setCopiedAudit(true);
       if (auditCopyTimeoutRef.current) clearTimeout(auditCopyTimeoutRef.current);
@@ -590,7 +602,7 @@ export function McpServerSettingsTab() {
         clearTimeout(auditCopyTimeoutRef.current);
         auditCopyTimeoutRef.current = null;
       }
-      setError(formatErrorMessage(err, "Failed to copy audit log"));
+      setAuditActionError(formatErrorMessage(err, "Failed to copy audit log"));
       logError("Failed to copy MCP audit log", err);
     }
   };
@@ -599,7 +611,7 @@ export function McpServerSettingsTab() {
     if (isExporting) return;
     setIsExporting(true);
     try {
-      setError(null);
+      setAuditActionError(null);
       const written = await window.electron.mcpServer.exportAuditLog(records);
       if (written) {
         setExportedAudit(true);
@@ -612,7 +624,7 @@ export function McpServerSettingsTab() {
         clearTimeout(auditExportTimeoutRef.current);
         auditExportTimeoutRef.current = null;
       }
-      setError(formatErrorMessage(err, "Failed to export audit log"));
+      setAuditActionError(formatErrorMessage(err, "Failed to export audit log"));
       logError("Failed to export MCP audit log", err);
     } finally {
       setIsExporting(false);
@@ -700,6 +712,13 @@ export function McpServerSettingsTab() {
         />
 
         {statusRow}
+
+        {status.enabled && runtimeSnapshot.state === "ready" && bearersFailed && (
+          <AuditLoadErrorRow
+            message="Connected clients couldn't be read"
+            onRetry={() => void refreshActiveBearers()}
+          />
+        )}
 
         {status.enabled && runtimeSnapshot.state === "ready" && activeBearers.length > 0 && (
           <div>
@@ -1058,6 +1077,7 @@ export function McpServerSettingsTab() {
                     inputMode="numeric"
                     pattern="[0-9]*"
                     value={maxRecordsInput}
+                    disabled={!auditConfigLoaded}
                     onChange={(e) => {
                       setMaxRecordsInput(e.target.value.replace(/\D/g, ""));
                       setMaxRecordsError(null);
@@ -1078,7 +1098,7 @@ export function McpServerSettingsTab() {
                     variant="outline"
                     size="sm"
                     onClick={() => void handleMaxRecordsSave()}
-                    disabled={maxRecordsUnchanged}
+                    disabled={!auditConfigLoaded || maxRecordsUnchanged}
                     aria-label="Apply max records"
                   >
                     Apply
@@ -1108,6 +1128,7 @@ export function McpServerSettingsTab() {
                   : "Audit log cleared. Capture is off, so nothing new is recorded"
                 : undefined
             }
+            actionError={auditActionError}
             loadError={
               auditLoadFailed ? (
                 <AuditLoadErrorRow
@@ -1128,6 +1149,7 @@ export function McpServerSettingsTab() {
             records={turnRecords}
             onRefresh={refreshAuditRecords}
             loadFailed={turnsLoadFailed}
+            loading={auditLoading}
           />
         </SettingsSection>
       </>
@@ -1145,6 +1167,7 @@ export function McpServerSettingsTab() {
         cancelLabel="Keep running"
         onConfirm={confirmDisable}
         isConfirmLoading={isDisabling}
+        hint={disableError ?? undefined}
         variant="default"
         zIndex="nested"
       >
@@ -1174,6 +1197,7 @@ export function McpServerSettingsTab() {
         cancelLabel="Cancel"
         onConfirm={confirmRotateApiKey}
         isConfirmLoading={isRotating}
+        hint={rotateError ?? undefined}
         variant="destructive"
         zIndex="nested"
       />
@@ -1187,6 +1211,7 @@ export function McpServerSettingsTab() {
         cancelLabel="Cancel"
         onConfirm={confirmClearAuditLog}
         isConfirmLoading={isClearing}
+        hint={clearError ?? undefined}
         variant="destructive"
         zIndex="nested"
       />

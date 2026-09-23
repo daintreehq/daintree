@@ -137,10 +137,16 @@ export const PREBUILT_REDACTIONS: PrebuiltRedaction[] = [
     id: "filepath",
     label: "Strip absolute file paths",
     rules: [
+      // Home directory first, taking the whole user segment even when it has a
+      // space in it ("/Users/Alice Smith"), which the general rule below would
+      // split and half-leak.
+      regexRule(/\/(?:Users|home)\/[^/"\\\n]+(?:\/[^\s/"\\]+)*/),
       // POSIX absolute path with 2+ segments (avoids mangling every lone `/`).
       regexRule(/\/(?:[^\s/"\\]+\/)+[^\s/"\\]+/),
-      // Windows drive-letter path.
-      regexRule(/[A-Za-z]:\\(?:[^\\/\s"]+\\)*[^\\/\s"]*/),
+      // Windows drive-letter path, raw (`C:\Users\x`) or JSON-escaped
+      // (`C:\\Users\\x`): each separator is one backslash optionally doubled,
+      // consumed whole so the replacement never leaves a dangling escape.
+      regexRule(/[A-Za-z]:(?:\\\\?|\/)(?:[^\\/\s"]+(?:\\\\?|\/))*[^\\/\s"]*/),
     ],
   },
 ];

@@ -7,6 +7,7 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import {
   AUDIT_TIME_RANGE_MS,
+  InlineErrorRow,
   AuditFilterBar,
   AuditFilterInput,
   AuditFilterSelect,
@@ -71,6 +72,8 @@ interface PluginActionAuditLogViewerProps {
   exportFlashActive?: boolean;
   /** Shown in place of the list when the records couldn't be read. */
   loadError?: React.ReactNode;
+  /** A copy, export or clear that failed, shown beside the actions. */
+  actionError?: string | null;
 }
 
 export function PluginActionAuditLogViewer({
@@ -84,6 +87,7 @@ export function PluginActionAuditLogViewer({
   copyFlashActive,
   exportFlashActive,
   loadError,
+  actionError,
 }: PluginActionAuditLogViewerProps) {
   const [pluginFilter, setPluginFilter] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -220,7 +224,9 @@ export function PluginActionAuditLogViewer({
               />
               <div className="min-w-0 select-text">
                 <div className="flex items-center gap-2">
-                  <span className="font-mono text-text-primary truncate">{record.actionId}</span>
+                  <span className="min-w-0 font-mono text-text-primary break-all">
+                    {record.actionId}
+                  </span>
                   {record.result !== "success" && (
                     <span className="shrink-0 text-text-secondary">
                       {RESULT_LABEL[record.result]}
@@ -236,7 +242,7 @@ export function PluginActionAuditLogViewer({
                     </span>
                   ) : null}
                 </div>
-                <div className="mt-0.5 font-mono text-text-secondary truncate">
+                <div className="mt-0.5 font-mono text-text-secondary break-all">
                   {record.pluginId}
                 </div>
                 {record.errorMessage ? (
@@ -265,6 +271,8 @@ export function PluginActionAuditLogViewer({
           ))}
         </ul>
       )}
+
+      {actionError && <InlineErrorRow>{actionError}</InlineErrorRow>}
 
       <SettingsActions status={loading ? null : status}>
         <Button

@@ -181,3 +181,28 @@ describe("SECTION_LABELS", () => {
     }
   });
 });
+
+describe("file path redaction", () => {
+  const rules = PREBUILT_REDACTIONS.find((p) => p.id === "filepath")!.rules;
+  const redactJson = (value: unknown) => applyReplacements(JSON.stringify(value), rules);
+
+  it("takes a whole home directory even when the user name has a space", () => {
+    const out = redactJson({ p: "/Users/Alice Smith/private/project.txt" });
+    expect(out).not.toContain("Alice");
+    expect(out).not.toContain("Smith");
+    expect(out).not.toContain("private");
+  });
+
+  it("redacts a JSON-escaped Windows path whole and keeps the JSON valid", () => {
+    const out = redactJson({ p: "C:\\Users\\Alice\\secret\\file.txt" });
+    expect(out).not.toContain("Alice");
+    expect(out).not.toContain("secret");
+    expect(() => JSON.parse(out)).not.toThrow();
+  });
+
+  it("redacts a raw Windows path in plain log text", () => {
+    const out = applyReplacements("open C:\\Users\\Alice\\file.txt failed", rules);
+    expect(out).not.toContain("Alice");
+    expect(out).toContain("failed");
+  });
+});

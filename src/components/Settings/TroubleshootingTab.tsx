@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle } from "lucide-react";
 import { SeverityMark } from "@/lib/statusSeverity";
+import { AuditLoadErrorRow, InlineErrorRow } from "./auditLogParts";
 import { Spinner } from "@/components/ui/Spinner";
 import { appClient, systemClient, logsClient } from "@/clients";
 import type { AppState, SystemHealthCheckResult } from "@shared/types";
@@ -354,6 +355,8 @@ export function TroubleshootingTab() {
   // so a fallback never reads as the saved setting.
   const [developerModeLoaded, setDeveloperModeLoaded] = useState(false);
   const [verboseLoaded, setVerboseLoaded] = useState(false);
+  const [verboseError, setVerboseError] = useState<string | null>(null);
+  const [logOverridesFailed, setLogOverridesFailed] = useState(false);
   const [developerModeError, setDeveloperModeError] = useState<string | null>(null);
   const [autoOpenDiagnostics, setAutoOpenDiagnostics] = useState(false);
   const [focusEventsTab, setFocusEventsTab] = useState(false);
@@ -367,10 +370,12 @@ export function TroubleshootingTab() {
     void logsClient
       .getLevelOverrides()
       .then((overrides) => {
-        if (!cancelled) setLogOverrides(overrides);
+        if (cancelled) return;
+        setLogOverrides(overrides);
+        setLogOverridesFailed(false);
       })
       .catch(() => {
-        if (!cancelled) setLogOverrides({});
+        if (!cancelled) setLogOverridesFailed(true);
       });
     return () => {
       cancelled = true;
@@ -423,6 +428,9 @@ export function TroubleshootingTab() {
         }
       })
       .catch((error) => {
+        setVerboseError(
+          "Couldn't read whether verbose logging is on. Reopen settings to try again."
+        );
         logError("Failed to get verbose logging state", error);
       });
   }, []);
@@ -525,6 +533,7 @@ export function TroubleshootingTab() {
     if (verboseLoggingPending) return;
 
     const newState = !verboseLogging;
+    setVerboseError(null);
     setVerboseLoggingPending(true);
     setVerboseLogging(newState);
 
@@ -537,10 +546,12 @@ export function TroubleshootingTab() {
       if (!result.ok) {
         logWarn("Backend rejected verbose logging toggle");
         setVerboseLogging(!newState);
+        setVerboseError("Verbose logging couldn't be changed. Try again.");
       }
     } catch (error) {
       logError("Failed to set verbose logging", error);
       setVerboseLogging(!newState);
+      setVerboseError("Verbose logging couldn't be changed. Try again.");
     } finally {
       setVerboseLoggingPending(false);
     }
@@ -575,6 +586,7 @@ export function TroubleshootingTab() {
             onChange={handleToggleVerboseLogging}
             disabled={verboseLoggingPending || !verboseLoaded}
           />
+          {verboseError && <InlineErrorRow>{verboseError}</InlineErrorRow>}
           {verboseLogging && (
             <RowNote>Verbose logging may impact performance and increase log file size.</RowNote>
           )}
@@ -602,6 +614,12 @@ export function TroubleshootingTab() {
               </Button>
             }
           />
+          {logOverridesFailed && (
+            <AuditLoadErrorRow
+              message="Active overrides couldn't be read"
+              onRetry={() => setLogOverridesRefreshKey((k) => k + 1)}
+            />
+          )}
           {hasLogOverrides && (
             <SettingsRow
               label="Active overrides"
@@ -643,11 +661,7 @@ export function TroubleshootingTab() {
             // e2e selectors (SEL.settings.developerModeToggle) find the switch by this name.
             ariaLabel="Developer Mode Toggle"
           />
-          {developerModeError && (
-            <p role="alert" className="px-4 py-2 text-xs text-status-error">
-              {developerModeError}
-            </p>
-          )}
+          {developerModeError && <InlineErrorRow>{developerModeError}</InlineErrorRow>}
           <SettingsDependents
             disabled={!developerMode}
             reason="Turn on developer mode to use these"
