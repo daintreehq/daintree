@@ -473,6 +473,33 @@ describe("list-push-commits — publish range", () => {
     ]);
     expect(result.total).toBe(7);
   });
+
+  // A destination holding commits the branch lacks refuses the push. The count
+  // is measured from the same tip the range was, so the two describe one remote.
+  it("measures what the destination has that the branch lacks, from the same tip", async () => {
+    const git = makePreviewGit({ knownRefs: [PUSH_REF] });
+
+    const result = (await listPushCommits(git)) as unknown as { behind: number };
+
+    expect(git.raw).toHaveBeenCalledWith(["rev-list", "--count", `${LOCAL_REF}..${PUSH_REF}`]);
+    expect(result.behind).toBe(7);
+  });
+
+  // Unmeasured is not level: with no tip read, there is nothing to count against.
+  it("claims no lead for a range it could not settle against a tip", async () => {
+    const git = makePreviewGit({
+      knownRefs: [],
+      lsRemote: () => Promise.reject(new Error("offline")),
+    });
+
+    const result = (await listPushCommits(git)) as unknown as { behind: number };
+
+    expect(result.behind).toBe(0);
+    const countsFromBranch = argvOf(git.raw).filter(
+      (argv) => argv[0] === "rev-list" && argv.some((a) => a.startsWith(`${LOCAL_REF}..`))
+    );
+    expect(countsFromBranch).toHaveLength(0);
+  });
 });
 
 describe("list-rebase-commits — replay range", () => {
@@ -567,6 +594,20 @@ describe("list-rebase-commits — replay range", () => {
 
     expect(git.raw).toHaveBeenCalledWith(["rev-list", "--count", `${LOCAL_REF}..${UPSTREAM_REF}`]);
     expect(result.behind).toBe(7);
+  });
+
+  // The incoming rows come from the same range the count does, so the list and
+  // the number beside it describe one set of commits.
+  it("lists the incoming commits over the same range it counts", async () => {
+    const git = makeRebaseGit([UPSTREAM_REF]);
+
+    const result = (await listRebaseCommits(git)) as unknown as { incoming: unknown[] };
+
+    const incomingLog = git.log.mock.calls
+      .map((call: unknown[]) => (call[0] ?? []) as string[])
+      .find((argv: string[]) => argv.includes(`${LOCAL_REF}..${UPSTREAM_REF}`));
+    expect(incomingLog).toBeDefined();
+    expect(result.incoming).toHaveLength(1);
   });
 
   it("never reaches the network to measure a replay set", async () => {

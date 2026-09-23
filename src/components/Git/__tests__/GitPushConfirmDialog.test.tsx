@@ -224,7 +224,9 @@ describe("GitPushConfirmDialog", () => {
     expect(screen.getAllByTestId("git-push-commit-row")).toHaveLength(2);
     const region = screen.getByTestId("git-push-destination-summary").parentElement!;
     expect(region.textContent).toContain("7");
-    expect(region.textContent).toContain("and 5 more");
+    const cap = screen.getByTestId("git-push-commit-cap").textContent ?? "";
+    expect(cap).toContain("7");
+    expect(cap).toContain("2");
   });
 
   it("names the resolved destination rather than leaving it to the title", async () => {
@@ -446,5 +448,104 @@ describe("GitPushConfirmDialog", () => {
     });
 
     expect(decision).toBe(true);
+  });
+
+  // A halted rebase detaches HEAD, so it arrives looking exactly like a detached
+  // HEAD. Telling someone mid-rebase to "check out a branch" is the wrong
+  // diagnosis and a fix that makes things worse, so the operation wins.
+  it("diagnoses a halted rebase as an operation in progress, not a detached HEAD", async () => {
+    mocks.buildPreview.mockResolvedValue({
+      branch: null,
+      repoOperation: "REBASING",
+      rebaseStep: 2,
+      rebaseTotalSteps: 3,
+      hasRemote: true,
+      destination: null,
+      pullSource: null,
+      commits: [],
+      pushRange: null,
+    });
+    render(<GitPushConfirmDialog />);
+
+    await act(async () => {
+      void useGitPushConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    expect(screen.getByTestId("git-push-operation-in-progress")).toBeTruthy();
+    expect(screen.queryByTestId("git-push-detached-head")).toBeNull();
+    expect(screen.queryByTestId("git-push-no-destination")).toBeNull();
+    expect(pushButton().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  // "More than one remote could be meant" and `git push -u <remote>` are both
+  // false for a repository with no remote at all; the fix starts one step earlier.
+  it("tells a repository with no remote to add one, not to pick between remotes", async () => {
+    mocks.buildPreview.mockResolvedValue({
+      branch: "main",
+      repoOperation: null,
+      rebaseStep: null,
+      rebaseTotalSteps: null,
+      hasRemote: false,
+      destination: null,
+      pullSource: null,
+      commits: [],
+      pushRange: null,
+    });
+    render(<GitPushConfirmDialog />);
+
+    await act(async () => {
+      void useGitPushConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    expect(screen.getByTestId("git-push-no-remote")).toBeTruthy();
+    expect(screen.queryByTestId("git-push-no-destination")).toBeNull();
+    expect(pushButton().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  // A destination that already holds commits the branch lacks refuses the push.
+  // That is said before approval — but approval stays open, because the refusal
+  // is what captures the lease a force push needs (#7822).
+  it("warns that a diverged destination will refuse the push without blocking it", async () => {
+    mocks.buildPreview.mockResolvedValue({
+      branch: "topic",
+      repoOperation: null,
+      rebaseStep: null,
+      rebaseTotalSteps: null,
+      hasRemote: true,
+      destination: { remote: "origin", branch: "topic" },
+      pullSource: null,
+      commits: [{ hash: "abcdef12", message: "Local", author: "Ada" }],
+      pushRange: { total: 1, rangeBasis: "tracked" as const, behind: 3 },
+    });
+    render(<GitPushConfirmDialog />);
+
+    await act(async () => {
+      void useGitPushConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    const warning = screen.getByTestId("git-push-diverged");
+    expect(warning.textContent).toContain("3");
+    expect(pushButton().hasAttribute("aria-disabled")).toBe(false);
+  });
+
+  it("raises no divergence warning when the destination has nothing the branch lacks", async () => {
+    mocks.buildPreview.mockResolvedValue({
+      branch: "topic",
+      repoOperation: null,
+      rebaseStep: null,
+      rebaseTotalSteps: null,
+      hasRemote: true,
+      destination: { remote: "origin", branch: "topic" },
+      pullSource: null,
+      commits: [{ hash: "abcdef12", message: "Local", author: "Ada" }],
+      pushRange: { total: 1, rangeBasis: "tracked" as const, behind: 0 },
+    });
+    render(<GitPushConfirmDialog />);
+
+    await act(async () => {
+      void useGitPushConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    expect(screen.queryByTestId("git-push-diverged")).toBeNull();
   });
 });

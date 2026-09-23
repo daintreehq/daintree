@@ -278,8 +278,13 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
           // destination branch, which this push would add.
           let rangeBasis: GitPushCommitPreview["rangeBasis"];
           let revArgs: string[];
+          // The destination tip the range was measured from, when there is one.
+          // The same tip decides `behind`, so the two can never describe
+          // different states of the remote.
+          let destinationTip: string | null = null;
           if (hasRemoteRef) {
             rangeBasis = "tracked";
+            destinationTip = destination.remoteTrackingRef;
             revArgs = [`${destination.remoteTrackingRef}..${localRef}`];
           } else {
             const remoteTip = await readRemoteBranchTip(
@@ -296,6 +301,7 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
               // The remote named a tip this repository already holds, so the
               // delta is exact even without a tracking ref.
               rangeBasis = "tracked";
+              destinationTip = remoteTip;
               revArgs = [`${remoteTip}..${localRef}`];
             } else {
               // No answer, or a tip we cannot resolve. Fall back to the local
@@ -309,11 +315,19 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
           // rows and `total` describe the same set the push would write.
           const log = await git.log([`--max-count=${limit}`, ...revArgs]);
           const total = await countCommitsInRange(git, revArgs);
+          // Measured in the other direction: a destination holding commits the
+          // branch lacks refuses the push as non-fast-forward, and the approver
+          // should see that before approving rather than after.
+          const behind =
+            destinationTip === null
+              ? 0
+              : await countCommitsInRange(git, [`${localRef}..${destinationTip}`]);
 
           return {
             destination: { remote: destination.remote, branch: destination.branch },
             rangeBasis,
             total,
+            behind,
             commits: log.all.map((commit) => ({
               hash: commit.hash,
               date: commit.date,
@@ -388,6 +402,7 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
               commits: [],
               total: 0,
               behind: 0,
+              incoming: [],
             };
           }
 
@@ -415,9 +430,10 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
           // Measured separately and in the other direction: an empty replay set
           // is produced both by a branch level with its upstream and by one
           // purely behind it, and only the second is moved by the rebase.
-          const behind = await countCommitsInRange(git, [
-            `${localRef}..${upstream.remoteTrackingRef}`,
-          ]);
+          const incomingRange = `${localRef}..${upstream.remoteTrackingRef}`;
+          const behind = await countCommitsInRange(git, [incomingRange]);
+          const incomingLog =
+            behind > 0 ? await git.log([`--max-count=${limit}`, incomingRange]) : null;
 
           return {
             upstream: { remote: upstream.remote, branch: upstream.branch },
@@ -425,6 +441,12 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
             total,
             behind,
             commits: log.all.map((commit) => ({
+              hash: commit.hash,
+              date: commit.date,
+              message: commit.message,
+              author: commit.author_name,
+            })),
+            incoming: (incomingLog?.all ?? []).map((commit) => ({
               hash: commit.hash,
               date: commit.date,
               message: commit.message,

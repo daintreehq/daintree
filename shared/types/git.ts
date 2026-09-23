@@ -210,6 +210,13 @@ export interface GitPushCommitPreview {
   commits: GitRemoteCommit[];
   /** Total commits in the range, which may exceed the returned `commits`. */
   total: number;
+  /**
+   * Commits the destination tip has that the branch does not, measured against
+   * the same tip the range was. Above zero means git will refuse this push as
+   * non-fast-forward. `0` for `creates` (there is no tip) and for `unverified`,
+   * where no tip could be read — so `0` there is "unmeasured", not "level".
+   */
+  behind: number;
 }
 
 /**
@@ -246,6 +253,12 @@ export interface GitRebaseCommitPreview {
    * `0` when the range could not be measured.
    */
   behind: number;
+  /**
+   * The upstream's commits the branch does not have — the rows behind `behind`,
+   * newest first, capped at the request limit. What the pull brings in, as of
+   * the last fetch. Empty when the range could not be measured.
+   */
+  incoming: GitRemoteCommit[];
 }
 
 /**

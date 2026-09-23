@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { Button } from "@/components/ui/button";
-import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { Skeleton } from "@/components/ui/Skeleton";
-import { AlertTriangle, RefreshCw } from "lucide-react";
-import { cn } from "@/lib/utils";
+import {
+  Bone,
+  CommitRows,
+  MissingValue,
+  PreviewFrame,
+  PreviewNote,
+  PreviewNotice,
+  PreviewSectionHeading,
+  PreviewSkeleton,
+  PreviewSummary,
+  RefChip,
+  SummaryRow,
+} from "@/components/Git/GitOperationPreview";
+import { OPERATION_LABEL, buildInProgressDescription } from "@/components/Git/repoOperationCopy";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -15,15 +24,8 @@ import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import {
   buildGitRemoteOperationPreview,
   formatGitPushDestination,
-  type GitPreviewCommit,
-  type GitPushRangeFacts,
+  type GitRemoteOperationPreview,
 } from "@/components/Git/gitRemoteOperationPreview";
-import type { GitPushDestination } from "@shared/types/git";
-
-const SHORT_HASH_LEN = 7;
-
-/** Rows the skeleton draws. Enough to hold the panel's height without claiming a count. */
-const SKELETON_ROWS = 3;
 
 /**
  * D2 confirm for `git.push` dispatched from the action palette or a keybinding
@@ -50,10 +52,7 @@ function GitPushConfirmDialogInner() {
 
   const cwd = pendingConfirm?.cwd ?? null;
 
-  const [branch, setBranch] = useState<string | null>(null);
-  const [destination, setDestination] = useState<GitPushDestination | null>(null);
-  const [commits, setCommits] = useState<GitPreviewCommit[] | null>(null);
-  const [pushRange, setPushRange] = useState<GitPushRangeFacts | null>(null);
+  const [preview, setPreview] = useState<GitRemoteOperationPreview | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   /**
@@ -74,22 +73,16 @@ function GitPushConfirmDialogInner() {
     const requestId = ++requestIdRef.current;
     setIsLoading(true);
     setLoadError(null);
-    setBranch(null);
-    setDestination(null);
-    setCommits(null);
-    setPushRange(null);
+    setPreview(null);
     setLoadedFor(null);
 
     safeFireAndForget(
       // Shared with the MCP confirm surface so agent and human approvers see
       // the identical fresh destination and publish range (#11538).
       buildGitRemoteOperationPreview(cwd, "push")
-        .then((preview) => {
+        .then((result) => {
           if (requestIdRef.current !== requestId) return;
-          setBranch(preview.branch);
-          setDestination(preview.destination);
-          setCommits(preview.commits);
-          setPushRange(preview.pushRange);
+          setPreview(result);
           setLoadedFor(cwd);
         })
         .catch((err: unknown) => {
@@ -116,10 +109,7 @@ function GitPushConfirmDialogInner() {
       // closes would otherwise land its `.then` and repopulate state while
       // hidden, ready to be shown to whatever asks next.
       requestIdRef.current++;
-      setBranch(null);
-      setDestination(null);
-      setCommits(null);
-      setPushRange(null);
+      setPreview(null);
       setLoadedFor(null);
       setLoadError(null);
       setIsLoading(false);
@@ -145,46 +135,136 @@ function GitPushConfirmDialogInner() {
 
   if (!pendingConfirm) return null;
 
+  const branch = preview?.branch ?? null;
+  const destination = preview?.destination ?? null;
+  const commits = preview?.commits ?? null;
+  const pushRange = preview?.pushRange ?? null;
+  const hasRemote = preview?.hasRemote ?? true;
   const destinationLabel = destination ? formatGitPushDestination(destination) : null;
   // Settled means "this request's own fresh answer is on screen". `isLoading`
   // starts false and the fetch only begins in an effect, so a check that asked
   // merely whether loading had finished classified the first painted frame as
   // "no destination" and flashed that error before anything had been read.
   const isSettled = !isLoading && !loadError && loadedFor === cwd;
+  const isPending = !isSettled && !loadError;
+  // Checked before detached HEAD: a halted rebase detaches HEAD too, and telling
+  // someone mid-rebase to check out a branch is the wrong diagnosis and the
+  // wrong fix. A merge in progress keeps its branch, and git pushes it as usual.
+  const haltedOperation = isSettled && branch === null ? (preview?.repoOperation ?? null) : null;
   // Checked BEFORE the missing-destination branch. A detached HEAD also resolves
   // no destination, but telling someone with no branch checked out to configure
   // a push remote for it is both the wrong diagnosis and an unfollowable fix.
-  const isDetached = isSettled && commits !== null && branch === null;
-  const isDestinationMissing = isSettled && !isDetached && destination === null;
-  const isLoaded = isSettled && commits !== null;
+  const isDetached = isSettled && commits !== null && branch === null && !haltedOperation;
+  const isRemoteMissing = isSettled && branch !== null && !hasRemote;
+  const isDestinationMissing = isSettled && branch !== null && hasRemote && destination === null;
+  const isLoaded = isSettled && commits !== null && destination !== null;
   const isCreatingBranch = pushRange?.rangeBasis === "creates";
   const isUnverified = pushRange?.rangeBasis === "unverified";
+  const behind = pushRange?.behind ?? 0;
   // "Already has everything" is a categorical claim, so it needs a range that was
   // actually settled against the destination. An unverified one was not, and an
   // empty one there means "nothing found locally", not "nothing to send".
-  const isInSync = isLoaded && commits.length === 0 && destination !== null && !isUnverified;
-  const isEmptyUnverified =
-    isLoaded && commits.length === 0 && destination !== null && isUnverified;
+  const isInSync = isLoaded && commits.length === 0 && !isUnverified && behind === 0;
+  const isEmptyUnverified = isLoaded && commits.length === 0 && isUnverified;
   const total = pushRange?.total ?? commits?.length ?? 0;
-  const hiddenCount = commits ? Math.max(0, total - commits.length) : 0;
 
   // A destination nobody can name can't be approved — the handler would refuse
   // the write anyway, and guessing `origin` is the bug (#11746). `commits === null`
   // is "not loaded", which is a different thing from a loaded empty range: an
   // in-sync branch is approvable and pushes nothing (#9575).
+  //
+  // A diverged destination is NOT blocked. Git refuses the push itself, and that
+  // refusal is the one moment the force-push lease can be captured (#7822) — a
+  // confirm that blocked here would take away the only route to that recovery.
   const confirmDisabled = !isSettled || commits === null || !destination || !!loadError;
 
   // Names the one unmet prerequisite rather than leaving a dead button to be
-  // read as arbitrary. Ordered by which the user can act on first.
+  // read as arbitrary. Ordered by which the user can act on first, and short
+  // enough to sit on one line beside the buttons.
   const blockedReason = loadError
-    ? "Push stays blocked until the preview loads"
-    : isDetached
-      ? "Push stays blocked until a branch is checked out"
-      : isDestinationMissing
-        ? "Push stays blocked until a destination is set"
-        : showPendingHint
-          ? "Checking what this would publish…"
-          : null;
+    ? "Retry the preview to continue"
+    : haltedOperation
+      ? `Finish the ${OPERATION_LABEL[haltedOperation].toLowerCase()} to continue`
+      : isDetached
+        ? "Check out a branch to continue"
+        : isRemoteMissing
+          ? "Add a remote to continue"
+          : isDestinationMissing
+            ? "Set a destination to continue"
+            : showPendingHint
+              ? "Checking what this would publish…"
+              : null;
+
+  const notice = loadError ? (
+    <PreviewNotice
+      tone="error"
+      title="Couldn't read what this would publish"
+      onRetry={loadPreview}
+      retryTestId="git-push-commits-retry"
+    >
+      {loadError}
+    </PreviewNotice>
+  ) : haltedOperation ? (
+    <PreviewNotice
+      tone="error"
+      title={`${OPERATION_LABEL[haltedOperation]} in progress`}
+      testId="git-push-operation-in-progress"
+    >
+      {buildInProgressDescription(
+        haltedOperation,
+        preview?.rebaseStep ?? null,
+        preview?.rebaseTotalSteps ?? null
+      )}
+    </PreviewNotice>
+  ) : isDetached ? (
+    <PreviewNotice tone="error" title="No branch checked out" testId="git-push-detached-head">
+      This worktree is on a detached HEAD, so there is no branch to publish. Check one out and try
+      again.
+    </PreviewNotice>
+  ) : isRemoteMissing ? (
+    <PreviewNotice
+      tone="error"
+      title="No remote to publish to"
+      command="git remote add <name> <url>"
+      testId="git-push-no-remote"
+    >
+      This repository has no remote configured. Add one, then push again to publish the branch:
+    </PreviewNotice>
+  ) : isDestinationMissing ? (
+    <PreviewNotice
+      tone="error"
+      title="No destination for this branch"
+      // `git config branch.<n>.pushRemote <remote>` alone is NOT reliable here:
+      // under the default push.default it leaves the push ref empty, the
+      // resolver still refuses, and the user lands back on this screen having
+      // followed the instruction.
+      command={`git push -u <remote> ${branch ?? "<branch>"}`}
+      testId="git-push-no-destination"
+    >
+      Git won&apos;t guess one: the branch has no upstream, or more than one remote could be meant.
+      Publishing it to the remote you mean sets the upstream:
+    </PreviewNotice>
+  ) : isLoaded && behind > 0 ? (
+    <PreviewNotice
+      tone="warning"
+      title={`${destinationLabel} has ${behind} commit${behind === 1 ? "" : "s"} this branch doesn't`}
+      testId="git-push-diverged"
+    >
+      As of the last fetch. Git will refuse this push rather than overwrite them — integrate them
+      first, or force push once the push is refused.
+    </PreviewNotice>
+  ) : isLoaded && isUnverified ? (
+    <PreviewNotice
+      tone="warning"
+      title={`Couldn't reach ${destination?.remote}`}
+      onRetry={loadPreview}
+      retryTestId="git-push-unverified-retry"
+      testId="git-push-unverified"
+    >
+      So what {destinationLabel} already has couldn&apos;t be checked, and the list below is worked
+      out from this repository alone — it may include commits the remote already has.
+    </PreviewNotice>
+  ) : null;
 
   return (
     <ConfirmDialog
@@ -215,247 +295,85 @@ function GitPushConfirmDialogInner() {
       hint={blockedReason}
       onConfirm={() => resolveConfirmation(true)}
     >
-      <div className="rounded border border-tint/[0.08] bg-tint/[0.04] text-xs">
-        <dl className="px-3 py-2 space-y-1.5" data-testid="git-push-destination-summary">
+      <PreviewFrame>
+        {notice}
+        <PreviewSummary testId="git-push-destination-summary">
           <SummaryRow label="From">
             {branch && isSettled ? (
               <RefChip value={branch} />
-            ) : !isSettled && !loadError ? (
+            ) : isPending ? (
               <Bone className="w-40" />
-            ) : loadError ? (
-              <Unknown />
             ) : (
-              <Unresolved />
+              <MissingValue />
             )}
           </SummaryRow>
-          <SummaryRow label="To">
-            {destinationLabel && isSettled ? (
-              <span className="flex flex-wrap items-baseline gap-1.5">
-                <RefChip value={destinationLabel} emphasis />
-                {isCreatingBranch && (
-                  <span className="text-3xs text-text-secondary">creates this branch</span>
-                )}
-                {isUnverified && <span className="text-3xs text-status-error">unverified</span>}
-              </span>
-            ) : !isSettled && !loadError ? (
-              <Bone className="w-48" />
-            ) : loadError ? (
-              <Unknown />
-            ) : (
-              <Unresolved />
-            )}
-          </SummaryRow>
-        </dl>
-
-        <div className="px-3 py-2 border-y border-tint/[0.08] flex items-center justify-between gap-2">
-          <span
-            role="heading"
-            aria-level={3}
-            className="text-2xs font-semibold uppercase tracking-wider text-text-secondary"
+          <SummaryRow
+            label="To"
+            aside={
+              isLoaded && isCreatingBranch
+                ? "creates this branch"
+                : isLoaded && isUnverified
+                  ? "not checked"
+                  : undefined
+            }
           >
-            Commits to push
-            {isSettled && total > 0 && (
-              <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal">
-                {total}
-              </span>
+            {destinationLabel && isSettled ? (
+              <RefChip value={destinationLabel} />
+            ) : isPending ? (
+              <Bone className="w-48" />
+            ) : (
+              <MissingValue label={isDestinationMissing ? "Not resolved" : "—"} />
             )}
-          </span>
-        </div>
+          </SummaryRow>
+        </PreviewSummary>
 
-        {!isSettled && !loadError && (
-          // `Skeleton` is what makes this reach a screen reader: the bones alone
-          // are decorative, so a blocked Push with no announced busy state left
-          // an AT user with a dead button and no explanation.
-          <Skeleton label="Checking what this would publish" data-testid="git-push-commits-loading">
-            <ul className="px-3 py-2 space-y-1.5">
-              {Array.from({ length: SKELETON_ROWS }).map((_, i) => (
-                <li key={i} className="flex items-baseline gap-2">
-                  <Bone className="w-[3.5rem]" />
-                  <Bone className={i === 1 ? "w-40" : "w-52"} />
-                  <Bone className="w-16 ml-auto" />
-                </li>
-              ))}
-            </ul>
-          </Skeleton>
-        )}
-
-        {!isLoading && loadError && (
-          <div className="px-3 py-3 text-status-error flex items-start gap-2" role="alert">
-            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="font-medium">Couldn&apos;t read what this would publish</div>
-              <div className="mt-0.5 text-text-secondary break-words">{loadError}</div>
-              <Button
-                variant="ghost-danger"
-                size="sm"
-                onClick={loadPreview}
-                data-testid="git-push-commits-retry"
-                className="mt-1.5 h-6 px-2 text-2xs"
-              >
-                <RefreshCw className="w-3 h-3" />
-                Retry
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {isDetached && (
-          <div className="px-3 py-3 text-status-error flex items-start gap-2" role="alert">
-            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0" data-testid="git-push-detached-head">
-              <div className="font-medium">No branch checked out</div>
-              <div className="mt-0.5 text-text-secondary">
-                This worktree is on a detached HEAD, so there is no branch to publish. Check one out
-                and try again.
-              </div>
-            </div>
-          </div>
-        )}
-
-        {isDestinationMissing && (
-          <div className="px-3 py-3 text-status-error flex items-start gap-2" role="alert">
-            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0" data-testid="git-push-no-destination">
-              <div className="font-medium">No destination git can name</div>
-              <div className="mt-0.5 text-text-secondary">
-                This branch has no push destination, or more than one remote could be meant. Setting
-                an upstream resolves both:
-                {/* `git config branch.<n>.pushRemote <remote>` alone is NOT
-                    reliable here: under the default push.default it leaves the
-                    push ref empty, the resolver still refuses, and the user
-                    lands back on this screen having followed the instruction. */}
-                <span className="mt-1 block font-mono text-text-primary whitespace-nowrap overflow-x-auto">
-                  git push -u &lt;remote&gt; {branch ?? "<branch>"}
-                </span>
-              </div>
-            </div>
-          </div>
+        {isPending && (
+          <PreviewSkeleton
+            label="Checking what this would publish"
+            testId="git-push-commits-loading"
+          />
         )}
 
         {isInSync && (
-          <div className="px-3 py-3 text-text-secondary" data-testid="git-push-in-sync">
+          <PreviewNote testId="git-push-in-sync">
             Nothing to publish &mdash; {destinationLabel} already has everything on this branch.
-          </div>
+          </PreviewNote>
         )}
 
         {isEmptyUnverified && (
-          <div className="px-3 py-3 text-text-secondary" data-testid="git-push-empty-unverified">
-            Nothing found to publish, but {destination?.remote} couldn&apos;t be reached to check{" "}
-            {destinationLabel} &mdash; so this isn&apos;t confirmed.
-          </div>
+          <PreviewNote testId="git-push-empty-unverified">
+            Nothing found to publish, but that isn&apos;t confirmed.
+          </PreviewNote>
         )}
 
         {isLoaded && commits.length > 0 && (
-          // A scrollable region with no focusable children of its own has to be
-          // reachable by keyboard in its own right (WCAG 2.1.1), and the fades
-          // are what say "there is more" — a row clipped by the panel edge was
-          // the only previous cue, and a clip that happens to land on a row
-          // boundary says the opposite.
-          <ScrollShadow
-            className="max-h-[180px]"
-            scrollClassName="scroll-py-8"
-            tabIndex={0}
-            role="region"
-            aria-label={`Commits to push${destinationLabel ? ` to ${destinationLabel}` : ""}`}
-          >
-            <ul className="px-3 py-2 space-y-1.5">
-              {commits.map((commit) => (
-                <li
-                  key={commit.hash}
-                  className="flex items-baseline gap-2"
-                  data-testid="git-push-commit-row"
-                >
-                  <span className="font-mono text-2xs text-text-secondary shrink-0 tabular-nums">
-                    {commit.hash.slice(0, SHORT_HASH_LEN)}
-                  </span>
-                  <span className="flex-1 min-w-0 truncate text-text-primary">
-                    {commit.message}
-                  </span>
-                  {/* Bounded, unlike the rest of the row: an author is the least
-                    important column here, and left unbounded a long name took
-                    40% of the width and truncated the subject to nothing. */}
-                  <span className="text-2xs text-text-secondary shrink-0 max-w-[7rem] truncate">
-                    {commit.author}
-                  </span>
-                </li>
-              ))}
-              {isUnverified && (
-                <li className="text-2xs text-status-error pt-0.5">
-                  Couldn&apos;t reach {destination?.remote} to check {destinationLabel}, so this
-                  list is unverified.
-                </li>
-              )}
-              {hiddenCount > 0 && (
-                <li className="text-2xs text-text-secondary italic pt-0.5">
-                  &hellip;and {hiddenCount} more
-                </li>
-              )}
-            </ul>
-          </ScrollShadow>
+          <>
+            <PreviewSectionHeading
+              label={isUnverified ? "Commits to push, unverified" : "Commits to push"}
+              count={total}
+            />
+            <CommitRows
+              commits={commits}
+              total={total}
+              label={`Commits to push to ${destinationLabel}`}
+              rowTestId="git-push-commit-row"
+              capTestId="git-push-commit-cap"
+            />
+          </>
         )}
-      </div>
-      {/* The quietest tier on the surface, and last: this is the least specific
-          thing the dialog has to say, but it is the one question a push raises
-          that nothing else here answers. */}
-      <p className="text-2xs text-text-secondary">
-        If the remote has moved on, Git refuses the push rather than overwriting it.
-      </p>
-    </ConfirmDialog>
-  );
-}
-
-function SummaryRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-baseline gap-2">
-      <dt className="text-3xs uppercase tracking-wider text-text-secondary shrink-0 w-10">
-        {label}
-      </dt>
-      <dd className="flex-1 min-w-0">{children}</dd>
-    </div>
-  );
-}
-
-/**
- * A ref as a value rather than a word in a sentence.
- *
- * `break-all` rather than truncation: a push destination is the one fact on this
- * surface that must never be shortened, and a 90-character fork ref wrapping
- * across three lines is a better outcome than an ellipsis in the middle of the
- * repository name being written to.
- */
-function RefChip({ value, emphasis }: { value: string; emphasis?: boolean }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-baseline px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-2xs font-mono break-words",
-        emphasis ? "text-text-primary" : "text-text-secondary"
+      </PreviewFrame>
+      {/* The quietest tier on the surface, and last: the one question a push
+          raises that nothing else here answers. Only where a push is actually
+          about to happen, and not where the notice above already answers it —
+          a caution about a refusal under a panel saying the push is blocked, or
+          saying it WILL be refused, is noise. */}
+      {isLoaded && commits.length > 0 && behind === 0 && (
+        <p className="text-2xs text-text-secondary">
+          If the remote has moved on since the last fetch, Git refuses the push rather than
+          overwriting it.
+        </p>
       )}
-    >
-      {value}
-    </span>
-  );
-}
-
-/** Git answered, and the answer was "no destination anyone can name". */
-function Unresolved() {
-  return <span className="text-status-error text-2xs">Not resolved</span>;
-}
-
-/** Git did not answer at all. The failure is stated once, below, not per row. */
-function Unknown() {
-  return <span className="text-text-secondary text-2xs">&mdash;</span>;
-}
-
-/**
- * Skeleton bone. `animate-pulse-delayed` carries the 400ms Doherty gate in its
- * own `animation-delay`, so a fetch that returns quickly paints nothing at all.
- */
-function Bone({ className }: { className?: string }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn("inline-block h-3.5 rounded bg-tint/[0.08] animate-pulse-delayed", className)}
-    />
+    </ConfirmDialog>
   );
 }
 
