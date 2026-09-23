@@ -262,4 +262,28 @@ describe("GeneralTab — config groups render before their data", () => {
     ).length;
     expect(after - before).toBe(1);
   });
+
+  it("a new edit retires the old Retry, so a stale resend can't roll it back", async () => {
+    await renderGeneralTab("overview");
+    await act(async () => {
+      pending.get("sessionRestore.getConfig")?.resolve({ ok: true, result: { enabled: true } });
+    });
+    await waitFor(() => expect(switchDisabled("Restore live projects")).toBe(false));
+
+    mockDispatch.mockImplementationOnce(() =>
+      Promise.resolve({ ok: false, error: { message: "disk full" } })
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("switch", { name: "Restore live projects" }));
+    });
+    const startup = screen.getByTestId("section-Startup");
+    await within(startup).findByRole("button", { name: "Retry" });
+
+    // The new edit's own save stays in flight, so only the edit starting can clear it.
+    mockDispatch.mockImplementationOnce(() => new Promise(() => {}));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("switch", { name: "Restore live projects" }));
+    });
+    expect(within(startup).queryByRole("button", { name: "Retry" })).toBeNull();
+  });
 });

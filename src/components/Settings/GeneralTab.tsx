@@ -194,6 +194,8 @@ export function GeneralTab({
   const retryingRef = useRef(new Set<SaveTarget>());
   const recordSaveFailure = (target: SaveTarget, retry: () => Promise<void>) =>
     setSaveFailures((failures) => ({ ...failures, [target]: retry }));
+  // Cleared when a save to the group succeeds, and when a new edit there begins: the new
+  // edit supersedes whatever the old Retry would have resent.
   const clearSaveFailure = (target: SaveTarget) =>
     setSaveFailures((failures) => {
       if (!failures[target]) return failures;
@@ -344,6 +346,7 @@ export function GeneralTab({
     if (storeUpdateSettingsSaving || storeUpdateNotificationsEnabled === null) return;
     if (!window.electron?.storeUpdate?.setSettings) return;
     const prev = storeUpdateNotificationsEnabled;
+    clearSaveFailure("updates");
     const next = !prev;
     setStoreUpdateNotificationsEnabled(next);
     setStoreUpdateSettingsSaving(true);
@@ -364,6 +367,7 @@ export function GeneralTab({
     if (updatesManagedByStore) return;
     if (channelSaving || channel === updateChannel) return;
     const prev = updateChannel;
+    clearSaveFailure("updates");
     setUpdateChannel(channel);
     setChannelSaving(true);
     try {
@@ -569,6 +573,7 @@ export function GeneralTab({
   const handleHibernationToggle = async () => {
     if (!hibernationConfig || isSaving) return;
     const prev = hibernationConfig;
+    clearSaveFailure("hibernation");
     setHibernationConfig({ ...prev, enabled: !prev.enabled });
     setIsSaving(true);
     try {
@@ -598,6 +603,7 @@ export function GeneralTab({
   const handleSessionRestoreToggle = async () => {
     if (!sessionRestoreConfig || isSessionRestoreSaving) return;
     const prev = sessionRestoreConfig;
+    clearSaveFailure("sessionRestore");
     setSessionRestoreConfig({ enabled: !prev.enabled });
     setIsSessionRestoreSaving(true);
     try {
@@ -627,6 +633,7 @@ export function GeneralTab({
   const handleIdleNotifyToggle = async () => {
     if (!idleNotifyConfig || isIdleNotifySaving) return;
     const prev = idleNotifyConfig;
+    clearSaveFailure("idleNotify");
     setIdleNotifyConfig({ ...prev, enabled: !prev.enabled });
     setIsIdleNotifySaving(true);
     try {
@@ -656,6 +663,7 @@ export function GeneralTab({
   const handleIdleNotifyThresholdChange = async (value: number) => {
     if (!idleNotifyConfig || isIdleNotifySaving) return;
     const prev = idleNotifyConfig;
+    clearSaveFailure("idleNotify");
     setIdleNotifyConfig({ ...prev, thresholdMinutes: value });
     setIsIdleNotifySaving(true);
     try {
@@ -685,6 +693,7 @@ export function GeneralTab({
   const handleIdleAutoCloseToggle = async () => {
     if (!idleAutoCloseConfig || isIdleAutoCloseSaving) return;
     const prev = idleAutoCloseConfig;
+    clearSaveFailure("idleAutoClose");
     setIdleAutoCloseConfig({ ...prev, enabled: !prev.enabled });
     setIsIdleAutoCloseSaving(true);
     try {
@@ -714,6 +723,7 @@ export function GeneralTab({
   const handleIdleAutoCloseThresholdChange = async (value: number) => {
     if (!idleAutoCloseConfig || isIdleAutoCloseSaving) return;
     const prev = idleAutoCloseConfig;
+    clearSaveFailure("idleAutoClose");
     setIdleAutoCloseConfig({ ...prev, thresholdMinutes: value });
     setIsIdleAutoCloseSaving(true);
     try {
@@ -743,6 +753,7 @@ export function GeneralTab({
   const handleThresholdChange = async (value: number) => {
     if (!hibernationConfig || isSaving) return;
     const prev = hibernationConfig;
+    clearSaveFailure("hibernation");
     setHibernationConfig({ ...prev, inactiveThresholdHours: value });
     setIsSaving(true);
     try {
