@@ -123,13 +123,13 @@ export function WorktreeDetails({
       )}
       <div className="flex min-w-0 items-center gap-1.5">
         <span className="shrink-0 font-medium text-text-secondary">Last active</span>
-        <LiveTimeAgo timestamp={activityTime} className="shrink-0 text-text-muted" noTooltip />
+        <LiveTimeAgo timestamp={activityTime} className="shrink-0 text-text-secondary" noTooltip />
         {activityAuthor && (
           <>
-            <span className="shrink-0 text-text-muted" aria-hidden="true">
+            <span className="shrink-0 text-text-secondary" aria-hidden="true">
               ·
             </span>
-            <span className="min-w-0 truncate text-text-muted">{activityAuthor.name}</span>
+            <span className="min-w-0 truncate text-text-secondary">{activityAuthor.name}</span>
           </>
         )}
       </div>

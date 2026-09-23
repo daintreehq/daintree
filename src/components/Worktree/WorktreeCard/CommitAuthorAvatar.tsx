@@ -21,16 +21,22 @@ const MACHINE_EMAIL_TO_AGENT: Record<string, string> = {
   "noreply@anthropic.com": "claude",
 };
 
+// GitHub attributes an app account's commits to
+// `<id>+<login>@users.noreply.github.com` (Copilot commits as
+// `198982749+Copilot@…`). The login names one account, so it can be matched
+// exactly where an arbitrary address cannot.
+const GITHUB_NOREPLY = /^(?:\d+\+)?([^@]+)@users\.noreply\.github\.com$/;
+
 /**
  * Match the commit author against the agent registry. Returns the branded
  * icon component when the committer is a known AI agent (Claude, Codex,
  * Gemini, …), else null so the avatar chain falls through to a picture.
  *
- * Matching is intentionally email-only and conservative: an exact
- * machine-email map, or an email segment that exactly equals an agent id
- * (≥4 chars, to avoid short-token collisions). Author *name* is deliberately
- * not matched — a human committing as "Claude Monet" must not be painted as
- * an AI agent.
+ * Matching is email-only and conservative: an exact machine-email map, or a
+ * GitHub noreply address whose login is exactly an agent id. Neither the
+ * author *name* nor loose pieces of an address are matched — a human
+ * committing as "Claude Monet", or from `claude.monet@example.org`, must not
+ * be painted as an AI agent.
  */
 export function resolveCommitAgentIcon(author: CommitAuthor): ComponentType<AgentIconProps> | null {
   const email = author.email.trim().toLowerCase();
@@ -38,10 +44,10 @@ export function resolveCommitAgentIcon(author: CommitAuthor): ComponentType<Agen
   const mapped = MACHINE_EMAIL_TO_AGENT[email];
   if (mapped && AGENT_REGISTRY[mapped]) return AGENT_REGISTRY[mapped].icon;
 
-  const segments = email.split(/[^a-z0-9]+/).filter(Boolean);
+  const login = GITHUB_NOREPLY.exec(email)?.[1]?.replace(/\[bot\]$/, "");
+  if (!login) return null;
   for (const agent of Object.values(AGENT_REGISTRY)) {
-    const id = agent.id.toLowerCase();
-    if (id.length >= 4 && segments.includes(id)) return agent.icon;
+    if (agent.id.toLowerCase() === login) return agent.icon;
   }
   return null;
 }

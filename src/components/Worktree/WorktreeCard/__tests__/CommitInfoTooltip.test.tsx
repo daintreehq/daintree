@@ -60,6 +60,27 @@ describe("CommitInfoTooltip", () => {
     expect(container.querySelector("img")).toBeNull();
   });
 
+  it("never brands a human whose address merely contains an agent id", () => {
+    const { container } = render(
+      <CommitInfoTooltip
+        lastCommitTimestampMs={Date.now()}
+        author={{ name: "Claude Monet", email: "claude.monet@example.org" }}
+      />
+    );
+    expect(container.querySelector("img")).not.toBeNull();
+  });
+
+  it("brands a GitHub noreply commit whose login is an agent", () => {
+    const { container } = render(
+      <CommitInfoTooltip
+        lastCommitTimestampMs={Date.now()}
+        author={{ name: "Copilot", email: "198982749+Copilot@users.noreply.github.com" }}
+      />
+    );
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("svg")).not.toBeNull();
+  });
+
   it("renders a square avatar for a bot author", () => {
     const { container } = render(
       <CommitInfoTooltip

@@ -46,7 +46,7 @@ export function WorktreeActivityChip({
     <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>
         <div
-          className="relative z-10 ml-3 flex shrink-0 items-center gap-1.5 text-xs text-text-muted"
+          className="relative z-10 ml-3 flex shrink-0 items-center gap-1.5 text-xs text-text-secondary"
           role="group"
           aria-label="Last activity"
           tabIndex={0}
