@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { WorktreeCardErrorFallback } from "../WorktreeCardErrorFallback";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { actionService } from "@/services/ActionService";
 
 function wrap(ui: React.ReactElement) {
   return <TooltipProvider>{ui}</TooltipProvider>;
@@ -125,5 +126,30 @@ describe("WorktreeCardErrorFallback", () => {
     expect(screen.queryByText("Try again")).toBeNull();
     fireEvent.click(screen.getByText("Reload window"));
     expect(resetError).not.toHaveBeenCalled();
+  });
+
+  it("reloads through the bridge when the reload action can't dispatch", async () => {
+    vi.stubEnv("DEV", false);
+    const bridgeReload = vi.fn();
+    vi.stubGlobal("electron", { window: { reload: bridgeReload } });
+    vi.mocked(actionService.dispatch).mockResolvedValueOnce({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "unavailable" },
+    } as Awaited<ReturnType<typeof actionService.dispatch>>);
+    try {
+      render(
+        wrap(
+          <WorktreeCardErrorFallback
+            error={new Error("Card broke")}
+            resetError={vi.fn()}
+            retryCount={1}
+          />
+        )
+      );
+      fireEvent.click(screen.getByText("Reload window"));
+      await waitFor(() => expect(bridgeReload).toHaveBeenCalledOnce());
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

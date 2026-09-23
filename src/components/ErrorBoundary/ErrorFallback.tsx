@@ -6,10 +6,10 @@ import { actionService } from "@/services/ActionService";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { scrubReportText } from "@shared/utils/reportScrubbers";
 import { resolveBoundaryDisplayName } from "./boundaryDisplayName";
 import { StackLines } from "./StackLines";
+import { reloadWindow } from "./reloadWindow";
 
 export interface ErrorFallbackProps {
   error: Error;
@@ -47,15 +47,6 @@ function buildDetailsText(
     lines.push("", "Component stack:", scrub(errorInfo.componentStack.replace(/^\n+/, "")));
   }
   return lines.join("\n");
-}
-
-function reloadWindow() {
-  safeFireAndForget(
-    actionService
-      .dispatch("window.reload", undefined, { source: "user" })
-      .then((result) => (result.ok ? undefined : window.electron?.window?.reload?.())),
-    { context: "ErrorFallback reload window" }
-  );
 }
 
 function openLogs() {

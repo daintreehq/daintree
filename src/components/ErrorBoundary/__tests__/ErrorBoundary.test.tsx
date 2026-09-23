@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import type React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { useEffect, useLayoutEffect } from "react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { ErrorBoundary, withErrorBoundary } from "../ErrorBoundary";
+import { ErrorBoundary, RETRY_RECOVERY_CONFIRM_MS, withErrorBoundary } from "../ErrorBoundary";
 import { useErrorStore } from "@/store/errorStore";
 import { captureRendererException, getRendererSentryConsent } from "@/utils/rendererSentry";
 import { notify } from "@/lib/notify";
@@ -903,6 +904,45 @@ describe("ErrorBoundary retry escalation", () => {
     });
   });
 
+  function ThrowsInEffect(): React.ReactNode {
+    useEffect(() => {
+      throw new Error("effect broken");
+    }, []);
+    return <div>mounted</div>;
+  }
+
+  function ThrowsInLayoutEffect(): React.ReactNode {
+    useLayoutEffect(() => {
+      throw new Error("layout effect broken");
+    }, []);
+    return <div>mounted</div>;
+  }
+
+  it.each([
+    ["useEffect", ThrowsInEffect],
+    ["useLayoutEffect", ThrowsInLayoutEffect],
+  ])("escalates to a window reload when the child throws from %s", async (_name, Child) => {
+    render(
+      <ErrorBoundary variant="section" componentName="ContentGrid">
+        <Child />
+      </ErrorBoundary>
+    );
+    expect(screen.queryByTestId("error-fallback-reload-window")).toBeNull();
+
+    // The child commits once, error-free, before its effect throws again —
+    // that commit is not a recovery.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("error-fallback-restart"));
+    });
+    expect(screen.getByTestId("error-fallback-reload-window")).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("error-fallback-restart"));
+    });
+    expect(screen.getByTestId("error-fallback-reload-window")).toBeTruthy();
+    expect(screen.getByTestId("error-fallback-title").textContent).toContain("stopped working");
+  });
+
   it("offers a window reload from the first render of the fullscreen fallback", () => {
     render(
       <ErrorBoundary variant="fullscreen" componentName="App">
@@ -932,6 +972,7 @@ describe("ErrorBoundary retry episodes", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   const fault = { on: true };
@@ -940,7 +981,8 @@ describe("ErrorBoundary retry episodes", () => {
     return <div>recovered</div>;
   }
 
-  it("forgets failed attempts once the child renders again", () => {
+  it("forgets failed attempts once the child has stayed up", () => {
+    vi.useFakeTimers();
     fault.on = true;
     const { rerender } = render(
       <ErrorBoundary variant="section" componentName="Sidebar">
@@ -953,6 +995,9 @@ describe("ErrorBoundary retry episodes", () => {
     fault.on = false;
     fireEvent.click(screen.getByTestId("error-fallback-restart"));
     expect(screen.getByText("recovered")).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(RETRY_RECOVERY_CONFIRM_MS);
+    });
 
     // A later, unrelated crash is a new episode: nobody has tried again yet.
     fault.on = true;

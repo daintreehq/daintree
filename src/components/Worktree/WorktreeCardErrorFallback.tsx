@@ -4,20 +4,13 @@ import type { ErrorFallbackProps } from "@/components/ErrorBoundary/ErrorFallbac
 import { Button } from "@/components/ui/button";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
-import { actionService } from "@/services/ActionService";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { reloadWindow } from "@/components/ErrorBoundary/reloadWindow";
 
 /**
  * One sidebar row's worth of the shared fallback: same neutral surface, same
  * single red glyph, same `Try again` — compact enough that the list keeps its
  * rhythm around it.
  */
-function reloadWindow() {
-  safeFireAndForget(actionService.dispatch("window.reload", undefined, { source: "user" }), {
-    context: "WorktreeCardErrorFallback reload window",
-  });
-}
-
 export function WorktreeCardErrorFallback({
   error,
   resetError,
