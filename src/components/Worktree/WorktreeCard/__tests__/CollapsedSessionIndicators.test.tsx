@@ -6,7 +6,7 @@ import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import type { AgentState } from "@/types";
 import { CollapsedSessionIndicators } from "../CollapsedSessionIndicators";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { summarizeSessionStates } from "../../terminalStateConfig";
+import { STATE_COLORS, summarizeSessionStates } from "../../terminalStateConfig";
 
 /**
  * Rendered against the real tooltip primitive (`vitest.setup.ts` primes it), so
@@ -150,6 +150,24 @@ describe("CollapsedSessionIndicators", () => {
       const textStep = seg.className.match(/\btext-(3xs|2xs|xs)\b/)?.[1] ?? "xs";
       const textPx = textStep === "3xs" ? 10 : textStep === "2xs" ? 11 : 12;
       expect(Number(size![1]) * 4).toBeGreaterThan(textPx);
+    }
+  });
+
+  it("keeps the hue on the glyph and the count neutral", () => {
+    // State colours are tuned as graphics (3:1). As 11px text they drop under
+    // 4.5:1 in every light theme, so no count may inherit one, while each glyph
+    // must still carry its own state's hue.
+    const stateHues = new Set<string>(REACHABLE.map((state) => STATE_COLORS[state]));
+    const { segments } = renderCluster({ working: 1, directing: 1, waiting: 1 });
+    for (const seg of segments) {
+      const count = seg.querySelector(".tabular-nums")!;
+      const inherited = [seg, count].flatMap((el) => (el.getAttribute("class") ?? "").split(/\s+/));
+      expect(
+        inherited.filter((c) => stateHues.has(c)),
+        `${seg.dataset.state} count is state-coloured`
+      ).toEqual([]);
+      const glyphClasses = (seg.firstElementChild!.getAttribute("class") ?? "").split(/\s+/);
+      expect(glyphClasses.some((c) => stateHues.has(c))).toBe(true);
     }
   });
 

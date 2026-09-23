@@ -15,6 +15,11 @@ interface CollapsedSessionIndicatorsProps {
  * 10px the ring drew at ~8px with a sub-pixel stroke, so working and waiting
  * separated on hue alone and collapsed to one shape under forced colors.
  *
+ * The hue lives on the glyph and the count stays neutral. The state colours
+ * are tuned as graphics (3:1), and as 11px text they fall under 4.5:1 in every
+ * light theme — hokkaido's waiting amber reads at 3.2:1 — so a count in its
+ * state's colour was the hardest thing in the row to read.
+ *
  * A `<span>`, not a `<div>`: one placement renders it inside the Sessions
  * disclosure `<button>`, which only admits phrasing content.
  *
@@ -43,14 +48,12 @@ export function CollapsedSessionIndicators({
                 key={state}
                 aria-hidden="true"
                 data-state={state}
-                className={cn(
-                  "flex items-center gap-0.5 text-2xs font-medium",
-                  STATE_COLORS[state]
-                )}
+                className="flex items-center gap-0.5 text-2xs font-medium text-text-secondary"
               >
                 <Icon
                   className={cn(
                     "w-3 h-3 shrink-0",
+                    STATE_COLORS[state],
                     state === "working" && "animate-spin-slow motion-reduce:animate-none"
                   )}
                 />
