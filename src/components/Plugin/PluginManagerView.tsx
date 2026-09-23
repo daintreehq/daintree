@@ -809,7 +809,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                   // than stranding the keyboard on document.body.
                   searchInputRef.current?.focus();
                 }}
-                className="w-full flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20 text-left transition-colors hover:bg-status-danger/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                // Hover moves the border, not the fill: the danger text only
+                // just clears 4.5:1 on the resting tint, and a deeper hover tint
+                // dropped the screen's most urgent line below it.
+                className="w-full flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20 text-left transition-colors hover:border-status-danger/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
               >
                 <AlertCircle
                   className="w-3.5 h-3.5 text-status-danger shrink-0"
