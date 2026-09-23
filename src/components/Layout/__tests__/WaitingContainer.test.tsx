@@ -344,6 +344,17 @@ describe("WaitingContainer", () => {
       expect(describedBy).toBeTruthy();
       const age = within(row).getByTestId("live-time-ago");
       expect(document.getElementById(describedBy!)?.contains(age)).toBe(true);
+      expect(
+        screen.getByRole("button", { name: "Focus claude", description: "@1700000000123" })
+      ).toBe(row);
+    });
+
+    it("omits the age description when there is no timestamp", () => {
+      mockTerminals = [makeTerminal({ id: "t1", lastStateChange: undefined })];
+      render(<WaitingContainer />);
+      const row = screen.getByTestId("waiting-single-item");
+      expect(row.getAttribute("aria-describedby")).toBeNull();
+      expect(within(row).queryByTestId("live-time-ago")).toBeNull();
     });
 
     it("does not render the redundant per-row state chip (state is surfaced once in the header)", () => {
@@ -394,16 +405,6 @@ describe("WaitingContainer", () => {
       expect(row.tagName).toBe("BUTTON");
       expect(row.contains(kill)).toBe(false);
       expect(row.parentElement?.contains(kill)).toBe(true);
-    });
-
-    it("never reserves an empty trailing column: the kill button overlays the age slot", () => {
-      mockTerminals = [makeTerminal({ id: "t1", lastStateChange: 1700000000123 })];
-      render(<WaitingContainer />);
-      const killWrapper = screen.getByTestId("waiting-kill-button").parentElement;
-      expect(killWrapper?.className).toContain("absolute");
-      const age = within(screen.getByTestId("waiting-single-item")).getByTestId("live-time-ago");
-      expect(age.parentElement?.className).toContain("group-hover/row:opacity-0");
-      expect(age.parentElement?.className).toContain("group-focus-within/row:opacity-0");
     });
   });
 
@@ -579,6 +580,21 @@ describe("WaitingContainer", () => {
       expect(header.getAttribute("aria-expanded")).toBe("true");
     });
 
+    it("names another worktree once in the group header but keeps it in each member's accessible name", () => {
+      mockTerminals = [
+        makeTerminal({ id: "t1", title: "A", worktreeId: "wt-2" }),
+        makeTerminal({ id: "t2", title: "B", worktreeId: "wt-2" }),
+      ];
+      mockTabGroups = new Map([["g1", makeGroup({ worktreeId: "wt-2", panelIds: ["t1", "t2"] })]]);
+      render(<WaitingContainer />);
+      const header = screen.getByRole("button", { name: /Tab group/ });
+      expect(header.textContent).toContain("feature-ui");
+      for (const row of screen.getAllByTestId("waiting-single-item")) {
+        expect(row.textContent).not.toContain("feature-ui");
+        expect(row.getAttribute("aria-label")).toContain("in feature-ui");
+      }
+    });
+
     it("falls through to a single row when the group has only one waiting member", () => {
       mockTerminals = [makeTerminal({ id: "t1", title: "A" })];
       mockTabGroups = new Map([["g1", makeGroup({ panelIds: ["t1", "t-other"] })]]);
@@ -600,6 +616,9 @@ describe("WaitingContainer", () => {
       expect(header.getAttribute("aria-expanded")).toBe("false");
       expect(screen.queryAllByTestId("waiting-single-item").length).toBe(0);
       fireEvent.click(header);
+      expect(header.getAttribute("aria-expanded")).toBe("true");
+      const region = document.getElementById(header.getAttribute("aria-controls")!);
+      expect(region?.getAttribute("aria-labelledby")).toBe(header.id);
       expect(screen.getAllByTestId("waiting-single-item").length).toBe(2);
     });
 

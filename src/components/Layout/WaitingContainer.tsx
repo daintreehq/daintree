@@ -366,6 +366,8 @@ interface WaitingSingleItemProps {
   terminal: PtyPanelData;
   groupId: string | null;
   worktreeName: string | undefined;
+  /** False inside a group whose header already shows the worktree; it stays in the accessible name. */
+  showWorktreeInline?: boolean;
   onActivate: (terminal: PtyPanelData, groupId: string | null) => void;
   onKill: (terminalId: string) => void;
 }
@@ -380,6 +382,7 @@ function WaitingSingleItem({
   terminal,
   groupId,
   worktreeName,
+  showWorktreeInline = true,
   onActivate,
   onKill,
 }: WaitingSingleItemProps) {
@@ -391,7 +394,7 @@ function WaitingSingleItem({
   // Only classifier-backed reasons earn a chip — the `prompt` fallback stays
   // an unlabeled row so the list doesn't overclaim.
   const reason = actionableWaitingReason(terminal.waitingReason);
-  const context = [worktreeName, task].filter(Boolean).join(" · ");
+  const context = [showWorktreeInline ? worktreeName : undefined, task].filter(Boolean).join(" · ");
   const ageId = useId();
 
   return (
@@ -459,13 +462,13 @@ function WaitingSingleItem({
         </span>
       </button>
 
-      <div className="absolute inset-y-0 right-0.5 flex items-center invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 ease-out motion-reduce:transition-none group-hover/row:visible group-hover/row:opacity-100 group-hover/row:pointer-events-auto group-focus-within/row:visible group-focus-within/row:opacity-100 group-focus-within/row:pointer-events-auto">
+      <div className="absolute inset-y-0 right-0.5 flex items-center pointer-events-none invisible opacity-0 transition-[opacity,visibility] duration-150 ease-out motion-reduce:transition-none group-hover/row:visible group-hover/row:opacity-100 group-focus-within/row:visible group-focus-within/row:opacity-100">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
               variant="ghost-danger"
               size="icon-xs"
-              className="transition-colors"
+              className="pointer-events-auto transition-colors"
               onClick={() => onKill(terminal.id)}
               aria-label={`Kill ${title}${task ? `: ${task}` : ""}`}
               data-testid="waiting-kill-button"
@@ -503,11 +506,13 @@ function WaitingGroupItem({
   const groupWorktreeName =
     showWorktree && groupWorktreeId ? worktreeMap.get(groupWorktreeId)?.name : undefined;
   const Chevron = isExpanded ? ChevronDown : ChevronRight;
+  const headerId = useId();
 
   return (
     <div className="flex flex-col gap-px">
       <div className={ROW_SURFACE_CLASS}>
         <button
+          id={headerId}
           type="button"
           className={ROW_TARGET_CLASS}
           onClick={() => setIsExpanded(!isExpanded)}
@@ -532,19 +537,23 @@ function WaitingGroupItem({
         <div
           id={`waiting-group-${group.id}`}
           role="region"
-          aria-label="Group panels"
+          aria-labelledby={headerId}
           className="ml-3.5 flex flex-col gap-px border-l border-divider pl-1"
         >
           {/* Members arrive attention-sorted from displayItems — rendering
               them as-is keeps the expanded group consistent with the triage
-              order that promoted the group in the first place. The group
-              header already names the worktree, so members don't repeat it. */}
+              order that promoted the group in the first place. */}
           {waitingTerminals.map((terminal) => (
             <WaitingSingleItem
               key={terminal.id}
               terminal={terminal}
               groupId={group.id}
-              worktreeName={undefined}
+              worktreeName={
+                showWorktree && terminal.worktreeId
+                  ? worktreeMap.get(terminal.worktreeId)?.name
+                  : undefined
+              }
+              showWorktreeInline={false}
               onActivate={onActivate}
               onKill={onKill}
             />
