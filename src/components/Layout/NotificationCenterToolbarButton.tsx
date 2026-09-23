@@ -294,19 +294,25 @@ export function NotificationCenterToolbarButton({
                 aria-expanded={notificationCenterOpen}
                 aria-haspopup="dialog"
               >
-                <span
-                  data-testid="notification-bell-icon"
-                  className={isBellBlipping ? "inline-flex animate-activity-blip" : "inline-flex"}
-                  onAnimationEnd={handleBellAnimationEnd}
-                >
-                  <Icon />
+                {/* Anchored to the glyph, not the button box, with the shared pip
+                    geometry — so the unread dot sits where the agent and
+                    assistant pips sit on their marks. Neutral, never a status
+                    colour: unread is ambient, not something going wrong. */}
+                <span className="relative inline-flex">
+                  <span
+                    data-testid="notification-bell-icon"
+                    className={isBellBlipping ? "inline-flex animate-activity-blip" : "inline-flex"}
+                    onAnimationEnd={handleBellAnimationEnd}
+                  >
+                    <Icon />
+                  </span>
+                  <span
+                    data-testid="notification-unread-dot"
+                    data-visible={notificationUnreadCount > 0}
+                    data-dnd-active={isDndActive ? "true" : undefined}
+                    className="toolbar-pip toolbar-badge bg-text-secondary"
+                  />
                 </span>
-                <span
-                  data-testid="notification-unread-dot"
-                  data-visible={notificationUnreadCount > 0}
-                  data-dnd-active={isDndActive ? "true" : undefined}
-                  className="toolbar-badge absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-daintree-text/50 ring-1 ring-daintree-bg/60"
-                />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">{createTooltipContent(label, shortcut)}</TooltipContent>

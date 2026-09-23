@@ -188,25 +188,54 @@
   overflow-clip-margin: 4px;
 }
 
-/* Split-button seam: persistent 1px hairline at rest so the chevron half
- * reads as a separate control. The color chain mirrors .toolbar-divider so
- * per-theme --toolbar-divider overrides apply identically. Suppressed when
- * the chevron dropdown is open via the named group/agent-split parent: the
- * chevron's armed-state inset ring (above) would otherwise stack with this
- * 1px right border and read as a 2px smudge on light themes (same failure
- * the L97-117 comment block above documents). Forced-colors mode keeps a
- * 1px system-color edge so the seam survives Windows High Contrast. */
-.toolbar-agent-split-seam {
-  border-right-color: var(--toolbar-divider, var(--theme-border-divider));
+/* Preset split button (AgentButton). One control at rest: no seam, so nothing
+ * in an agent run can be mistaken for a group divider — a permanent full-height
+ * hairline read as a stronger boundary than the real dividers either side of
+ * it. On hover, focus or while its menu is open the pair shares a quiet wash
+ * and a short partition appears, which is when "which half does what" matters.
+ * The hovered half still takes the ordinary control fill on top of the wash.
+ * Gated on data-split-live so a chevron that can't open (#8131) never draws as
+ * a second half. */
+.toolbar-agent-split {
+  border-radius: var(--radius-md);
+  transition: background-color 150ms ease-out;
 }
 
-.group\/agent-split:has(.toolbar-agent-button[data-state="open"]) .toolbar-agent-split-seam {
-  border-right-color: transparent;
+.toolbar-agent-split[data-split-live="true"]:is(:hover, :focus-within),
+.toolbar-agent-split:has(.toolbar-agent-button[data-state="open"]) {
+  background: var(--theme-overlay-hover);
 }
 
+.toolbar-agent-split-toggle::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  background: var(--toolbar-divider, var(--theme-border-divider));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease-out;
+}
+
+.toolbar-agent-split[data-split-live="true"]:is(:hover, :focus-within)
+  .toolbar-agent-split-toggle::before {
+  opacity: 1;
+}
+
+/* The open chevron's armed ring already draws that edge; a partition on top
+ * doubles it into a 2px smudge on light themes. */
+.toolbar-agent-split .toolbar-agent-split-toggle[data-state="open"]::before {
+  opacity: 0;
+}
+
+/* Forced colors drops the wash, so the partition is the only thing left that
+ * says the button has two halves — keep it drawn at rest there. */
 @media (forced-colors: active) {
-  .toolbar-agent-split-seam {
-    border-right-color: ButtonText;
+  .toolbar-agent-split[data-split-live="true"] .toolbar-agent-split-toggle::before {
+    opacity: 1;
+    background: ButtonText;
   }
 }
 
@@ -438,12 +467,11 @@
  *      - ring-surface-sidebar — semantic-status pips on a colored dot
  *        (AssistantButton MCP/agent pips, AgentButton, LauncherMenuButton
  *        running-state pip, plus LauncherMenuButton's separate discovery
- *        badge — see `showDiscoveryBadge` in LauncherMenuButton.tsx). Ring
- *        color matches the toolbar / sidebar surface (they share a token
- *        across themes) so the gap reads as a clean cut-out.
- *      - ring-daintree-bg/60 — ambient muted indicator (NotificationCenter
- *        dot, bg-daintree-text/50 base). The softer canvas-tinted ring blends
- *        with the overlay-elevated hover state.
+ *        badge — see `showDiscoveryBadge` in LauncherMenuButton.tsx), and
+ *        the NotificationCenter unread dot, which takes the same ring on a
+ *        neutral text-secondary fill. Ring color matches the toolbar /
+ *        sidebar surface (they share a token across themes) so the gap reads
+ *        as a clean cut-out.
  *      - No ring — .toolbar-problems-badge (size is the differentiator, see
  *        rule 3) and VoiceRecordingToolbarButton (inline live-audio dot, not
  *        a .toolbar-badge and out of scope here). .toolbar-overflow-badge

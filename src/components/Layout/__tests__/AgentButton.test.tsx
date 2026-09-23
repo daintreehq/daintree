@@ -1316,14 +1316,18 @@ describe("AgentButton preset UX", () => {
     });
   });
 
-  describe("split-button seam class (issue #9823)", () => {
-    // The seam is implemented as a custom toolbar.css class, not a Tailwind
-    // utility, because .border-divider resolves to the plain --border-divider
-    // alias and skips the --toolbar-divider override chain. The chevron's
-    // open-state suppression lives in CSS via the :has() group selector and
-    // is asserted in Toolbar.responsive.test.ts as a CSS source guard.
+  describe("split-button structure", () => {
+    // The split draws as one control at rest; its partition and shared wash
+    // only appear on a split the chevron can actually open (toolbar.css gates
+    // them on data-split-live). A gated chevron blocks clicks (#8131), so a
+    // split drawn as two halves there would advertise a control that isn't.
+    function splitWrapper(chevronIcon: HTMLElement): HTMLElement {
+      const wrapper = chevronIcon.closest<HTMLElement>(".toolbar-agent-split");
+      expect(wrapper).not.toBeNull();
+      return wrapper!;
+    }
 
-    it("applies toolbar-agent-split-seam to the primary half when ready + 1 preset", () => {
+    it("wraps both halves in one split container, primary first", () => {
       mockSettings = settingsWith({ claude: {} });
       mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
 
@@ -1332,109 +1336,87 @@ describe("AgentButton preset UX", () => {
       );
 
       const chevronIcon = getByTestId("chevron-icon");
-      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
-      const chevron = getAllByRole("button").find((b) => b.contains(chevronIcon));
-      expect(primary).toBeTruthy();
-      expect(primary!.className).toContain("toolbar-agent-split-seam");
-      // The seam paints the right border of the primary half; the chevron
-      // would never carry the class because the divider would be on the
-      // wrong side and would clash with the chevron's own armed-state
-      // ring. Pin this so a future refactor that propagates the class via
-      // a shared string doesn't silently double-paint.
-      expect(chevron!.className).not.toContain("toolbar-agent-split-seam");
+      const wrapper = splitWrapper(chevronIcon);
+      const halves = getAllByRole("button").filter((b) => wrapper.contains(b));
+      expect(halves).toHaveLength(2);
+      expect(halves[0]!.contains(chevronIcon)).toBe(false);
+      expect(halves[1]!.contains(chevronIcon)).toBe(true);
     });
 
-    it("applies toolbar-agent-split-seam when ready + multiple presets", () => {
-      mockSettings = settingsWith({ claude: {} });
-      mockMergedPresetsFn = () => [
-        { id: "user-blue", name: "Blue" },
-        { id: "user-red", name: "Red" },
-      ];
-
-      const { getAllByRole, getByTestId } = render(
-        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
-      );
-
-      const chevronIcon = getByTestId("chevron-icon");
-      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
-      const chevron = getAllByRole("button").find((b) => b.contains(chevronIcon));
-      expect(primary!.className).toContain("toolbar-agent-split-seam");
-      expect(chevron!.className).not.toContain("toolbar-agent-split-seam");
-    });
-
-    it("omits the seam class while the agent is loading (availability === undefined)", () => {
-      // Loading disables both halves (#8131) — advertising a seam here would
-      // claim a usable chevron when neither half is clickable.
+    it.each([
+      ["ready", "true"],
+      ["missing", "false"],
+      ["installed", "false"],
+    ])("marks the split live only when the chevron can open (%s)", (state, live) => {
       mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
 
-      const { getAllByRole, getByTestId } = render(
-        <AgentButton type="claude" availability={undefined} />
+      const { getByTestId } = render(
+        <AgentButton type="claude" availability={state as unknown as CliAvailability[string]} />
       );
-
-      const chevronIcon = getByTestId("chevron-icon");
-      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
-      expect(primary).toBeTruthy();
-      expect(primary!.className).not.toContain("toolbar-agent-split-seam");
+      expect(splitWrapper(getByTestId("chevron-icon")).getAttribute("data-split-live")).toBe(live);
     });
 
-    it("omits the seam class when the CLI is missing", () => {
+    it("is not live while availability is still loading", () => {
       mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
 
-      const { getAllByRole, getByTestId } = render(
-        <AgentButton type="claude" availability={"missing" as unknown as CliAvailability[string]} />
+      const { getByTestId } = render(<AgentButton type="claude" availability={undefined} />);
+      expect(splitWrapper(getByTestId("chevron-icon")).getAttribute("data-split-live")).toBe(
+        "false"
       );
-
-      const chevronIcon = getByTestId("chevron-icon");
-      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
-      expect(primary!.className).not.toContain("toolbar-agent-split-seam");
     });
 
-    it("omits the seam class when the CLI is installed but not launchable (needs setup)", () => {
-      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
-
-      const { getAllByRole, getByTestId } = render(
-        <AgentButton
-          type="claude"
-          availability={"installed" as unknown as CliAvailability[string]}
-        />
-      );
-
-      const chevronIcon = getByTestId("chevron-icon");
-      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
-      expect(primary!.className).not.toContain("toolbar-agent-split-seam");
-    });
-
-    it("does not apply the seam class in the no-presets (plain button) branch", () => {
-      // The seam is only meaningful on the split-button JSX — the plain
-      // button branch doesn't render a chevron and shouldn't carry the
-      // class even when launchable.
+    it("renders no split container on the plain button branch", () => {
       mockMergedPresetsFn = () => [];
       mockSettings = settingsWith({ claude: {} });
 
       const { getByRole } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-
-      const button = getByRole("button");
-      expect(button.className).not.toContain("toolbar-agent-split-seam");
+      expect(getByRole("button").closest(".toolbar-agent-split")).toBeNull();
     });
+  });
 
-    it("keeps border-r and border-transparent in the className so geometry is constant", () => {
-      // The seam is a color swap, not a layout shift. `border-r` stays in
-      // both states so the 1px width is constant; the color moves between
-      // `border-transparent` and the toolbar-divider token.
-      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
-      mockSettings = settingsWith({ claude: {} });
+  describe("primary half describes the preset it launches", () => {
+    function primaryOf(
+      getAllByRole: (role: string) => HTMLElement[],
+      getByTestId: (id: string) => HTMLElement
+    ): HTMLElement {
+      const chevronIcon = getByTestId("chevron-icon");
+      return getAllByRole("button").find((b) => !b.contains(chevronIcon))!;
+    }
+
+    it("carries the saved preset in its description, leaving the name stable", () => {
+      mockSettings = settingsWith({ claude: { presetId: "ccr-sonnet" } });
+      mockMergedPresetsFn = () => [{ id: "ccr-sonnet", name: "CCR: Sonnet 4.5" }];
 
       const { getAllByRole, getByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
+      const primary = primaryOf(getAllByRole, getByTestId);
+      expect(primary.getAttribute("aria-label")).toBe("Start Claude");
+      const description = primary.getAttribute("aria-description");
+      expect(description).toContain("Sonnet 4.5");
+      expect(description).not.toContain("CCR:");
+    });
 
-      const chevronIcon = getByTestId("chevron-icon");
-      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
-      expect(primary!.className).toContain("border-r");
-      expect(primary!.className).toContain("border-transparent");
-      expect(primary!.className).toContain("toolbar-agent-split-seam");
+    it("has no description when nothing is saved or the saved preset is gone", () => {
+      mockSettings = settingsWith({ claude: { presetId: "ghost" } });
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+
+      const { getAllByRole, getByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      expect(primaryOf(getAllByRole, getByTestId).hasAttribute("aria-description")).toBe(false);
+    });
+
+    it("drops the description when the agent can't launch", () => {
+      mockSettings = settingsWith({ claude: { presetId: "user-blue" } });
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+
+      const { getAllByRole, getByTestId } = render(
+        <AgentButton type="claude" availability={"missing" as unknown as CliAvailability[string]} />
+      );
+      expect(primaryOf(getAllByRole, getByTestId).hasAttribute("aria-description")).toBe(false);
     });
   });
 

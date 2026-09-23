@@ -317,10 +317,10 @@ export function AgentButton({
   // Moved above the tooltip/aria ternaries so they can consume it.
   const dotColor = dominantState ? agentStateDotColor(dominantState) : null;
   const visibleStateSuffix = dotColor ? ` — ${STATE_LABELS[dominantState!]}` : "";
-  // Suppress the at-rest split-button seam when the chevron is gated — the
-  // chevron blocks clicks in these states anyway (issue #8131), so a seam
-  // would advertise a control that isn't usable.
-  const showSeam = !isLoading && isLaunchable;
+  // The split's hover wash and inner partition only draw while the chevron is
+  // usable — it blocks clicks when gated (issue #8131), so drawing it as a
+  // second half would advertise a control that isn't there.
+  const isSplitLive = !isLoading && isLaunchable;
 
   const presetSegment = activePresetName ? ` · ${activePresetName}` : "";
   // The click still launches when the CLI is unavailable — it lands on the
@@ -584,7 +584,11 @@ export function AgentButton({
       }}
     >
       <ContextMenuTrigger asChild>
-        <span className="inline-flex group/agent-split">
+        {/* One control at rest: no seam, the chevron tucked against its own
+            brand mark and a little extra room after it, so it can only be read
+            as this agent's. The partition and the shared wash appear on hover
+            or focus, when which half does what actually matters. */}
+        <span className="toolbar-agent-split mr-1 inline-flex" data-split-live={isSplitLive}>
           <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
             <TooltipTrigger asChild>
               <Button
@@ -602,12 +606,17 @@ export function AgentButton({
                 onFocus={hover.onFocus}
                 onBlur={hover.onBlur}
                 className={cn(
-                  "toolbar-agent-button text-text-primary rounded-r-none border-r border-transparent relative",
-                  showSeam && "toolbar-agent-split-seam",
+                  "toolbar-agent-button text-text-primary rounded-r-none relative",
                   needsSetup && "opacity-70",
                   "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                 )}
                 aria-label={ariaLabel}
+                // The tooltip names the preset a click will use; the name stays
+                // stable for selectors and voice control, so the preset rides in
+                // the description instead.
+                aria-description={
+                  isLaunchable && activePresetName ? `Preset: ${activePresetName}` : undefined
+                }
                 aria-keyshortcuts={ariaShortcut}
               >
                 {iconElement}
@@ -650,8 +659,11 @@ export function AgentButton({
                     data-toolbar-item={dataToolbarItem}
                     onPointerEnter={clearFocusRestoreSuppression}
                     className={cn(
-                      "toolbar-agent-button text-text-primary rounded-l-none",
-                      "h-8 w-6 p-0 flex items-center justify-center",
+                      "toolbar-agent-button toolbar-agent-split-toggle text-text-secondary rounded-l-none",
+                      // 24px keeps the target at the WCAG 2.5.8 minimum; the
+                      // glyph sits at its leading edge so it reads as part of
+                      // the mark beside it rather than centred between agents.
+                      "h-8 w-6 p-0 pl-0.5 flex items-center justify-start",
                       "aria-disabled:opacity-60 aria-disabled:cursor-not-allowed"
                     )}
                     aria-label={chevronTooltip}
