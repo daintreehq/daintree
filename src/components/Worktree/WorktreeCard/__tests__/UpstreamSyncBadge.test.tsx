@@ -564,7 +564,7 @@ describe("UpstreamSyncBadge — degraded states qualify the counts, never erase 
       const root = screen.getByTestId("upstream-sync-indicator");
       const marks = root.querySelectorAll('[data-testid="upstream-sync-status"]');
       expect(marks, name).toHaveLength(1);
-      seen.add(marks[0].getAttribute("data-status") ?? "");
+      seen.add(marks[0]?.getAttribute("data-status") ?? "");
       for (let el: Element | null = root; el; el = el.parentElement) {
         expect(el.className.toString(), name).not.toMatch(/(^|\s)opacity-/);
       }

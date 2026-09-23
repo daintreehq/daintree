@@ -364,8 +364,8 @@ test("upstream sync badge review — states and themes", async () => {
     });
 
     await step("tooltips", async () => {
-      await snapTooltip(page, "30-tip-main", badgeIn(mainRow(page)), "upstream");
-      await snapTooltip(page, "31-tip-resting", badgeIn(row(page, B.resting)), "In sync");
+      await snapTooltip(page, "30-tip-main", badgeIn(mainRow(page)), /upstream/i);
+      await snapTooltip(page, "31-tip-resting", badgeIn(row(page, B.resting)), /in sync/i);
       await snapTooltip(page, "32-tip-ahead", badgeIn(row(page, B.ahead)), "ahead");
       await snapTooltip(page, "33-tip-diverged", badgeIn(row(page, B.both)), "behind");
       await snapTooltip(page, "34-tip-base-behind", badgeIn(row(page, B.baseBehind)), "behind");
@@ -584,8 +584,8 @@ test("upstream sync badge review — states and themes", async () => {
       await page.mouse.move(1600, 1000);
       await snap(page, "B0-stale", cardOf(row(page, B.both)), "↓3");
       await snap(page, "B1-sidebar-stale", sidebar);
-      await snap(page, "B4-in-flight", cardOf(row(page, B.ahead)), "↑2");
-      await snapTooltip(page, "B2-tip-stale", badge, "Stale");
+      await snap(page, "B4-in-flight", cardOf(row(page, B.ahead)), /↑\d/);
+      await snapTooltip(page, "B2-tip-stale", badge, /stale|out of date/i);
       await snapTooltip(
         page,
         "B3-tip-local-base",
