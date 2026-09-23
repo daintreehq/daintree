@@ -34,6 +34,13 @@ export function removeCcrConfig(): void {
   }
 }
 
+/** Deleting a custom preset confirms first; accept that confirm. */
+export async function confirmPresetDelete(window: import("@playwright/test").Page): Promise<void> {
+  const confirm = window.getByRole("button", { name: "Delete preset", exact: true });
+  await expect(confirm).toBeVisible({ timeout: 5000 });
+  await confirm.click();
+}
+
 export async function navigateToAgentSettings(
   window: import("@playwright/test").Page,
   agentId: string
@@ -192,8 +199,8 @@ export async function getPresetRowByName(
       }
       await expect(listbox).not.toBeVisible({ timeout: 5000 });
 
-      // The selected scope owns the detail view; its test id survives card styling changes.
-      return window.locator(SEL.preset.section).getByTestId("scope-editor-body");
+      // The preset section holds only the selected scope's editor, so it is the detail view.
+      return window.locator(SEL.preset.section);
     },
     { box: true }
   );

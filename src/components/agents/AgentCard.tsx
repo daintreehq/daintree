@@ -10,7 +10,7 @@ import {
 import type { AgentAvailabilityState, AgentCliDetail } from "@shared/types";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { RefreshCw, ExternalLink } from "lucide-react";
+import { RefreshCw, ExternalLink, TriangleAlert } from "lucide-react";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
 import { CopyableCommand } from "@/components/Setup/InstallBlock";
@@ -194,6 +194,9 @@ export function AgentInstallSection({
   // would be misleading, but we do want to show why it isn't runnable and
   // where it was found. "installed" covers the WSL cap.
   if (availability === "ready" && !authMissing) return null;
+  // Not part of CLI detection (the built-in assistant, say): there is nothing to
+  // install and no probe result to report, so a "Not installed" heading would be a guess.
+  if (availability === undefined && !isCliLoading) return null;
 
   if (isCliLoading) {
     return (
@@ -214,13 +217,18 @@ export function AgentInstallSection({
   const showWslNotice = availability === "installed";
   const showAuthNudge = authMissing;
 
+  // The title states what the probe found, so the section reads as a status line
+  // from its heading down — the same words the agent picker and inventory use.
   const headerLabel = blocked
     ? "Blocked"
     : showWslNotice
-      ? "Not launchable"
+      ? "Needs setup"
       : showAuthNudge
-        ? "Authentication"
-        : "Installation";
+        ? "No credentials detected"
+        : "Not installed";
+
+  const installCommandCount =
+    installBlocks?.reduce((n, block) => n + (block.commands?.length ?? 0), 0) ?? 0;
 
   const headerDescription = blocked
     ? `${agentName} CLI was found but couldn't run — check your security software or file permissions`
@@ -232,7 +240,9 @@ export function AgentInstallSection({
           // where we looked, and the state is launchable — the CLI resolves auth at run
           // time and may well just work.
           `${agentName} CLI found, but no credentials were detected — it may still launch, or ask you to sign in`
-        : `${agentName} CLI not found`;
+        : installCommandCount > 0
+          ? `Install the ${agentName} CLI with ${installCommandCount === 1 ? "the command" : "one of the commands"} below, then re-check`
+          : `The ${agentName} CLI isn't on your PATH. Install it, then re-check.`;
 
   const openDocs = () => {
     const url = agentConfig?.install?.docsUrl;
@@ -250,7 +260,12 @@ export function AgentInstallSection({
     </Button>
   );
 
-  const hasBlocks = !!installBlocks && installBlocks.length > 0;
+  // A binary that was found needs a different fix than one that wasn't: offering to
+  // install it again would send the user to reinstall something already on disk. The
+  // commands stay for a missing CLI only; everything else keeps the diagnosis, the
+  // troubleshooting and the docs.
+  const binaryFound = isAgentInstalled(availability);
+  const hasBlocks = !binaryFound && !!installBlocks && installBlocks.length > 0;
   const troubleshooting = agentConfig?.install?.troubleshooting ?? [];
   const location = detail?.resolvedPath
     ? detail.via === "wsl"
@@ -274,8 +289,15 @@ export function AgentInstallSection({
     >
       <SettingsGroup>
         {cliError && (
-          <p className="px-4 py-3 text-xs text-status-error" role="alert">
-            Re-check failed. Try again or restart the app.
+          <p
+            className="flex items-start gap-1.5 px-4 py-3 text-xs text-text-secondary"
+            role="alert"
+          >
+            <TriangleAlert
+              className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
+              aria-hidden="true"
+            />
+            <span>Re-check failed. Try again, or restart Daintree if it keeps failing.</span>
           </p>
         )}
 
@@ -291,14 +313,22 @@ export function AgentInstallSection({
                   </div>
                 )}
                 {detail.message && (
-                  <div className="text-xs text-status-warning select-text">{detail.message}</div>
+                  // Severity rides the glyph; the sentence stays body text so it holds
+                  // contrast on every theme.
+                  <div className="flex items-start gap-1.5 text-xs text-text-secondary select-text">
+                    <TriangleAlert
+                      className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
+                      aria-hidden="true"
+                    />
+                    <span>{detail.message}</span>
+                  </div>
                 )}
               </div>
             }
           />
         )}
 
-        {hasBlocks ? (
+        {hasBlocks && (
           <>
             {installBlocks.map((block, blockIndex) => (
               <SettingsRow
@@ -337,42 +367,41 @@ export function AgentInstallSection({
                 }
               />
             ))}
-
-            {troubleshooting.length > 0 && (
-              <SettingsRow
-                label="Troubleshooting"
-                layout="stacked"
-                control={
-                  <ul className="list-disc list-inside space-y-0.5 text-xs text-text-secondary select-text">
-                    {troubleshooting.map((tip, tipIndex) => (
-                      <li key={tipIndex}>{tip}</li>
-                    ))}
-                  </ul>
-                }
-              />
-            )}
-
-            {hasInstallConfig?.docsUrl && (
-              <SettingsRow
-                label="Official documentation"
-                description="Review commands before running them in your terminal"
-                control={openDocsButton}
-              />
-            )}
-            {!hasInstallConfig?.docsUrl && (
-              <p className="px-4 py-3 text-xs text-text-secondary select-text">
-                Review commands before running them in your terminal
-              </p>
-            )}
           </>
-        ) : hasInstallConfig?.docsUrl ? (
-          <SettingsEmptyRow action={openDocsButton}>
-            No OS-specific install instructions available
+        )}
+
+        {!binaryFound && !hasBlocks && (
+          <SettingsEmptyRow action={hasInstallConfig?.docsUrl ? openDocsButton : undefined}>
+            {hasInstallConfig?.docsUrl
+              ? "No install commands for this operating system — the docs have the steps"
+              : "No install instructions for this agent yet"}
           </SettingsEmptyRow>
-        ) : (
-          <SettingsEmptyRow>
-            No installation instructions configured for this agent
-          </SettingsEmptyRow>
+        )}
+
+        {troubleshooting.length > 0 && (
+          <SettingsRow
+            label="Troubleshooting"
+            layout="stacked"
+            control={
+              <ul className="list-disc list-inside space-y-0.5 text-xs text-text-secondary select-text">
+                {troubleshooting.map((tip, tipIndex) => (
+                  <li key={tipIndex}>{tip}</li>
+                ))}
+              </ul>
+            }
+          />
+        )}
+
+        {hasInstallConfig?.docsUrl && (hasBlocks || binaryFound) && (
+          <SettingsRow
+            label="Official documentation"
+            description={
+              hasBlocks
+                ? "Review commands before running them in your terminal"
+                : `Setup, sign-in and permissions help for ${agentName}`
+            }
+            control={openDocsButton}
+          />
         )}
       </SettingsGroup>
     </SettingsSection>

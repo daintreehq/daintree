@@ -11,6 +11,7 @@ import {
   CHOICE_LABEL_INSET,
 } from "@/components/ui/RadioChoice";
 import { cn } from "@/lib/utils";
+import { TriangleAlert } from "lucide-react";
 
 type CreationChoice = "blank" | "clone" | "template";
 
@@ -32,6 +33,8 @@ export function AddPresetDialog({
   const [choice, setChoice] = useState<CreationChoice>("blank");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
   const providerId = useId();
+  const [createFailed, setCreateFailed] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
 
   const templates = useMemo(() => getAgentConfig(agentId)?.providerTemplates ?? [], [agentId]);
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId);
@@ -45,21 +48,34 @@ export function AddPresetDialog({
 
   useEffect(() => {
     if (isOpen) {
+      setCreateFailed(false);
       setChoice("blank");
       setSelectedTemplateId(templates[0]?.id ?? "");
     }
   }, [isOpen, templates]);
 
+  // A failed save keeps the dialog open and says so, with the same button as the retry.
+  const submit = async (preset: Omit<AgentPreset, "id">) => {
+    setCreateFailed(false);
+    setIsCreating(true);
+    try {
+      await onCreate(preset);
+    } catch {
+      setCreateFailed(true);
+    }
+    setIsCreating(false);
+  };
+
   const handleCreate = () => {
     switch (choice) {
       case "blank":
-        onCreate({ name: "New preset", env: {} });
+        void submit({ name: "New preset", env: {} });
         break;
       case "clone":
         // Guarded rather than defaulted: `canCreate` keeps the button disabled
         // instead of quietly creating something other than what was asked for.
         if (!currentPreset) return;
-        onCreate({
+        void submit({
           name: `${currentPreset.name} (copy)`,
           env: currentPreset.env ? { ...currentPreset.env } : {},
           args: currentPreset.args ? [...currentPreset.args] : undefined,
@@ -73,7 +89,7 @@ export function AddPresetDialog({
         break;
       case "template":
         if (!selectedTemplate) return;
-        onCreate({
+        void submit({
           name: selectedTemplate.name,
           description: selectedTemplate.description,
           env: selectedTemplate.env ? { ...selectedTemplate.env } : {},
@@ -185,11 +201,24 @@ export function AddPresetDialog({
             provider templates.
           </p>
         )}
+        {createFailed && (
+          <p role="alert" className="mt-3 flex items-start gap-1.5 text-xs text-text-secondary">
+            <TriangleAlert
+              className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
+              aria-hidden="true"
+            />
+            <span>Couldn&apos;t save the preset. Try again.</span>
+          </p>
+        )}
       </AppDialog.Body>
 
       <AppDialog.Footer
         secondaryAction={{ label: "Cancel", onClick: onClose }}
-        primaryAction={{ label: "Create preset", onClick: handleCreate, disabled: !canCreate }}
+        primaryAction={{
+          label: "Create preset",
+          onClick: handleCreate,
+          disabled: !canCreate || isCreating,
+        }}
       />
     </AppDialog>
   );

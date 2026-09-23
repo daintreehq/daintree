@@ -100,13 +100,13 @@ export function PresetColorPicker({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="shrink-0 rounded-full ring-1 ring-transparent hover:ring-daintree-accent/50 focus-visible:ring-accent-primary focus-visible:outline-hidden transition-shadow"
+          className="shrink-0 rounded-full ring-1 ring-transparent hover:ring-border-strong focus-visible:ring-accent-primary focus-visible:outline-hidden transition-shadow"
           aria-label={ariaLabel}
           title={ariaLabel}
           data-testid="preset-color-picker-trigger"
         >
           <span
-            className="block w-4 h-4 rounded-full border border-daintree-border/60"
+            className="block w-4 h-4 rounded-full border border-border-default/60"
             style={{ backgroundColor: effectiveColor }}
           />
         </button>
@@ -131,7 +131,7 @@ export function PresetColorPicker({
                 key={c}
                 type="button"
                 className={cn(
-                  "w-5 h-5 rounded-full border border-daintree-border/60 relative focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
+                  "w-5 h-5 rounded-full border border-border-default/60 relative focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
                   "hover:scale-110 transition-transform"
                 )}
                 style={{ backgroundColor: c }}
@@ -151,7 +151,7 @@ export function PresetColorPicker({
                       // #abb2bf) and dark ink disappears on the dark ones.
                       contrastRatio("#ffffff", c) >= contrastRatio("#000000", c)
                         ? "text-white"
-                        : "text-black/80"
+                        : "text-black"
                     )}
                     strokeWidth={3}
                   />
@@ -160,12 +160,12 @@ export function PresetColorPicker({
             );
           })}
         </div>
-        <div className="flex items-center gap-2 pt-1 border-t border-daintree-border/50">
+        <div className="flex items-center gap-2 pt-1 border-t border-border-default/50">
           <HexColorInput
             color={draftColor}
             onChange={setDraftColor}
             prefixed
-            className="w-20 rounded border border-daintree-border/60 bg-surface-canvas px-1.5 py-0.5 text-2xs font-mono uppercase text-text-primary focus:outline-hidden focus:border-daintree-accent/40"
+            className="w-20 rounded-[var(--radius-sm)] border border-border-default/60 bg-surface-canvas px-1.5 py-0.5 text-2xs font-mono uppercase text-text-primary focus:outline-hidden focus:border-accent-primary"
             aria-label="Hex color"
             data-testid="preset-color-hex-input"
           />

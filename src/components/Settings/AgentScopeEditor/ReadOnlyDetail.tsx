@@ -1,60 +1,122 @@
-import { Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { SettingsGroup } from "../SettingsGroup";
+import { SettingsRow } from "../SettingsGroup";
 import { stripCcrPrefix } from "./scopeUtils";
 import type { AgentPreset } from "@/config/agents";
+import { resolveDangerousMode, resolveInlineMode } from "@shared/types";
 
 interface ReadOnlyDetailProps {
   scopeKind: "ccr" | "project";
   selectedPreset: AgentPreset;
+  agentName: string;
+  /** The agent's own arguments, used when the preset sets none. */
+  agentCustomFlags: string;
+  /** Resolved the way a launch resolves them, preset over agent over global. */
+  effectiveSkipPerms: boolean;
+  /** Undefined for agents without a screen-mode choice. */
+  effectiveInline: boolean | undefined;
   onDuplicate: (preset: AgentPreset) => void;
 }
 
-export function ReadOnlyDetail({ scopeKind, selectedPreset, onDuplicate }: ReadOnlyDetailProps) {
+/**
+ * A project or CCR preset, as read-only rows under the preset picker. Each launch
+ * setting shows the value a launch would actually get and where it comes from, so a
+ * preset that sets nothing still answers "what will this do". The way to change one is
+ * to duplicate it, so that is the first row's action.
+ */
+export function ReadOnlyDetail({
+  scopeKind,
+  selectedPreset,
+  agentName,
+  agentCustomFlags,
+  effectiveSkipPerms,
+  effectiveInline,
+  onDuplicate,
+}: ReadOnlyDetailProps) {
   const displayName =
     scopeKind === "ccr" ? stripCcrPrefix(selectedPreset.name) : selectedPreset.name;
+  const env = Object.entries(selectedPreset.env ?? {});
+  const source =
+    scopeKind === "project"
+      ? "It lives in this project's .daintree/presets folder, so edits belong in the repository"
+      : "It comes from your Claude Code Router config";
+  const fromPreset = "Set by this preset";
+  const fromAgent = `Follows ${agentName}'s own setting`;
+
+  const presetSetsArgs = selectedPreset.customFlags !== undefined;
+  const args = presetSetsArgs ? selectedPreset.customFlags : agentCustomFlags;
+  const presetSetsSkip = resolveDangerousMode(selectedPreset) !== "inherit";
+  const presetSetsInline = resolveInlineMode(selectedPreset) !== "inherit";
+
+  const value = (text: string) => <span className="text-sm text-text-primary">{text}</span>;
 
   return (
-    <SettingsGroup>
-      <div className="px-4 py-3 space-y-2">
-        <div className="flex items-center gap-1.5">
-          <span className="text-sm font-medium text-text-primary">{displayName}</span>
+    <>
+      <SettingsRow
+        label="Make an editable copy"
+        description={source}
+        control={
           <Button
-            size="icon-sm"
-            variant="ghost"
-            className="ml-auto"
+            size="sm"
+            variant="outline"
             onClick={() => onDuplicate(selectedPreset)}
             aria-label={`Duplicate ${displayName}`}
-            title="Duplicate as custom"
           >
-            <Copy />
+            Duplicate as custom
           </Button>
-        </div>
-        {selectedPreset.env && Object.keys(selectedPreset.env).length > 0 && (
-          <div className="space-y-1">
-            {Object.entries(selectedPreset.env).map(([k, v]) => (
-              <div key={k} className="flex items-center gap-2 font-mono text-2xs">
-                <span className="text-text-secondary shrink-0">{k}</span>
-                <span className="text-text-secondary">=</span>
-                <span className="text-text-secondary truncate">{v}</span>
-              </div>
-            ))}
-          </div>
-        )}
-        {selectedPreset.description && (
-          <p className="text-2xs text-text-secondary select-text">{selectedPreset.description}</p>
-        )}
-        {scopeKind === "project" && (
-          <p className="text-3xs text-text-secondary select-text">
-            Sourced from <code>.daintree/presets/</code> in this project.
-          </p>
-        )}
-      </div>
-      <div className="px-4 py-3">
-        <p className="text-xs text-text-secondary select-text">
-          Read-only. Duplicate as custom to override behavioral settings or env
-        </p>
-      </div>
-    </SettingsGroup>
+        }
+      />
+      {scopeKind === "project" && selectedPreset.description && (
+        <SettingsRow label="Description" description={selectedPreset.description} />
+      )}
+      {env.length > 0 && (
+        <SettingsRow
+          label="Environment variables"
+          description={`Added to ${agentName}'s own variables, replacing any with the same name`}
+          layout="stacked"
+          control={
+            <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1 font-mono text-xs select-text">
+              {env.map(([k, v]) => (
+                <div key={k} className="contents">
+                  <dt className="text-text-primary">{k}</dt>
+                  {/* Wrapped, never truncated: an endpoint or model id is exactly what
+                      someone opens this to read. */}
+                  <dd className="break-all text-text-secondary">{v}</dd>
+                </div>
+              ))}
+            </dl>
+          }
+        />
+      )}
+      {args ? (
+        <SettingsRow
+          label="Custom arguments"
+          description={presetSetsArgs ? fromPreset : fromAgent}
+          layout="stacked"
+          control={
+            <code className="block whitespace-pre-wrap break-all font-mono text-xs text-text-primary select-text">
+              {args}
+            </code>
+          }
+        />
+      ) : (
+        <SettingsRow
+          label="Custom arguments"
+          description={presetSetsArgs ? fromPreset : fromAgent}
+          control={value("None")}
+        />
+      )}
+      <SettingsRow
+        label="Skip permissions"
+        description={presetSetsSkip ? fromPreset : fromAgent}
+        control={value(effectiveSkipPerms ? "On" : "Off")}
+      />
+      {effectiveInline !== undefined && (
+        <SettingsRow
+          label="Alt-screen mode"
+          description={presetSetsInline ? fromPreset : fromAgent}
+          control={value(effectiveInline ? "Inline" : "Alt screen")}
+        />
+      )}
+    </>
   );
 }

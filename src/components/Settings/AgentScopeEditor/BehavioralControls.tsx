@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { ShieldOff } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
   SegmentedRadioGroup,
@@ -91,8 +92,12 @@ export function BehavioralControls({
         label="Custom arguments"
         description={customArgsDescription}
         layout="stacked"
-        isModified={scopeKind === "custom" && customFlagsOverride !== undefined}
-        onReset={onCustomFlagsOverrideReset}
+        isModified={
+          scopeKind === "custom" ? customFlagsOverride !== undefined : customArgsValue !== ""
+        }
+        onReset={
+          scopeKind === "custom" ? onCustomFlagsOverrideReset : () => onCustomFlagsChange("")
+        }
         resetAriaLabel={`Reset custom arguments override for ${scopeLabel}`}
         control={({ labelId, descriptionId }) => (
           <Input
@@ -112,19 +117,23 @@ export function BehavioralControls({
         label="Skip permissions"
         description={
           <>
-            Auto-approve all file, command, and network actions. Off vetoes the global setting for
-            this scope
+            Auto-approve all file, command and network actions. Off overrides the global setting for
+            this scope.
             {dangerousMode === "inherit" && (
               <span className="block mt-1">Inherited from {inheritOriginLabel}</span>
             )}
             {effectiveSkipPerms && defaultDangerousArg && (
-              <span className="flex items-center gap-2 mt-1.5">
-                <code className="text-xs text-status-error font-mono">{defaultDangerousArg}</code>
-                <span>added to command</span>
+              <span className="flex items-center gap-1.5 mt-1.5">
+                <ShieldOff className="h-3.5 w-3.5 shrink-0 text-status-error" aria-hidden="true" />
+                <code className="font-mono text-xs text-text-primary">{defaultDangerousArg}</code>
+                <span>added to the command</span>
               </span>
             )}
           </>
         }
+        isModified={dangerousMode !== "inherit"}
+        onReset={() => onDangerousModeChange("inherit")}
+        resetAriaLabel={`Reset skip permissions for ${scopeLabel} to default`}
         control={({ descriptionId, disabled }) => (
           <SegmentedRadioGroup<DangerousMode>
             aria-label="Skip permissions"
@@ -145,12 +154,15 @@ export function BehavioralControls({
             <>
               Alt screen uses the CLI&apos;s full-screen TUI; inline keeps output in Daintree&apos;s
               scrollback with cleaner resizing. Choosing Inline or Alt screen overrides the
-              inherited setting for this scope
+              inherited setting for this scope.
               {inlineMode === "inherit" && (
                 <span className="block mt-1">Inherited from {inlineInheritOriginLabel}</span>
               )}
             </>
           }
+          isModified={inlineMode !== "inherit"}
+          onReset={() => onInlineModeChange("inherit")}
+          resetAriaLabel={`Reset alt-screen mode for ${scopeLabel} to default`}
           control={({ descriptionId, disabled }) => (
             <SegmentedRadioGroup<InlineMode>
               aria-label="Alt-screen mode"

@@ -60,7 +60,6 @@ describe("PresetSelector", () => {
     const label = getByTestId("preset-selector-trigger").textContent ?? "";
     expect(label).toContain("Opus");
     expect(label).not.toContain("CCR:"); // prefix is stripped in the visible label
-    expect(label).toContain("CCR"); // but the "CCR" badge is present
   });
 
   it("renders a group label for each non-empty category (Settings is explicit-management context)", () => {
@@ -156,7 +155,9 @@ describe("PresetSelector", () => {
       />
     );
     expect(queryByTestId("preset-group-project-shared")).toBeTruthy();
-    expect(getByTestId("preset-selector-trigger").textContent).toContain("Project");
+    // The source is named once, by the chip on the row that owns the picker, so the
+    // trigger carries only the preset's own name.
+    expect(getByTestId("preset-selector-trigger").textContent).toContain("Team Opus");
     expect(getByTestId("preset-option-project-team-opus")).toBeTruthy();
   });
 
@@ -178,9 +179,10 @@ describe("PresetSelector", () => {
     );
     expect(queryByTestId("preset-group-project-shared")).toBeTruthy();
     expect(queryByTestId("preset-group-ccr-routes")).toBeNull();
-    const triggerText = getByTestId("preset-selector-trigger").textContent ?? "";
-    expect(triggerText).toContain("Project");
-    expect(triggerText).not.toContain("CCR");
+    // The selection resolves to the project entry, not a CCR one.
+    expect(getByTestId("preset-option-project-ccr-team").getAttribute("aria-selected")).toBe(
+      "true"
+    );
   });
 
   it("project group is absent when projectPresets is empty", () => {
@@ -212,5 +214,36 @@ describe("PresetSelector", () => {
     );
     fireEvent.keyDown(getByTestId("preset-option-user-x"), { key: "Enter" });
     expect(onChange).toHaveBeenCalledWith("user-x");
+  });
+
+  it("is one tab stop: only the listbox is focusable, and arrows move the active option", () => {
+    const a = mkPreset("user-a", "A");
+    const b = mkPreset("user-b", "B");
+    const { getByRole, getAllByRole } = render(
+      <PresetSelector
+        selectedPresetId={undefined}
+        allPresets={[a, b]}
+        ccrPresets={[]}
+        customPresets={[a, b]}
+        onChange={onChange}
+        agentColor="#888"
+      />
+    );
+    const listbox = getByRole("listbox");
+    const options = getAllByRole("option");
+    expect(listbox.tabIndex).toBe(0);
+    for (const option of options) expect(option.tabIndex).toBe(-1);
+
+    const activeId = () => listbox.getAttribute("aria-activedescendant");
+    expect(activeId()).toBe(options[0]!.id);
+    fireEvent.keyDown(listbox, { key: "ArrowDown" });
+    expect(activeId()).toBe(options[1]!.id);
+    fireEvent.keyDown(listbox, { key: "End" });
+    expect(activeId()).toBe(options[options.length - 1]!.id);
+    fireEvent.keyDown(listbox, { key: "ArrowDown" });
+    expect(activeId()).toBe(options[options.length - 1]!.id);
+
+    fireEvent.keyDown(listbox, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith("user-b");
   });
 });

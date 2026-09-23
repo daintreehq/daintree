@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { getAgentConfig, getMergedPresets, type AgentPreset } from "@/config/agents";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
@@ -47,6 +47,8 @@ export function useAgentScope({
   updateAgent,
   onSettingsChange,
 }: UseAgentScopeProps) {
+  const [renameError, setRenameError] = useState<string | null>(null);
+
   // ── derived values ──────────────────────────────────────────────────────
   const customPresets = activeEntry.customPresets;
   const allPresets = useMemo(
@@ -106,10 +108,11 @@ export function useAgentScope({
 
   // Final resolved bypass for the active scope (incl. the global baseline) —
   // drives the "<flag> added to command" chip.
-  const effectiveSkipPerms =
-    scopeKind === "custom"
-      ? resolveMode(combineDangerousModes(agentMode, presetMode))
-      : agentResolvedDangerous;
+  // Any selected preset layers onto the agent, read-only ones included: they
+  // launch through the same resolution, so they report the same way.
+  const effectiveSkipPerms = selectedPreset
+    ? resolveMode(combineDangerousModes(agentMode, presetMode))
+    : agentResolvedDangerous;
 
   // Tri-state alt-screen mode (#10876), mirroring the bypass control above. The
   // stored value polarity is "on" = inline, "off" = alt screen; "Default"
@@ -145,10 +148,9 @@ export function useAgentScope({
         ? "the agent's built-in default"
         : "global setting";
 
-  const effectiveInlineMode =
-    scopeKind === "custom"
-      ? resolveInline(combineInlineModes(agentInlineMode, presetInlineMode))
-      : agentResolvedInline;
+  const effectiveInlineMode = selectedPreset
+    ? resolveInline(combineInlineModes(agentInlineMode, presetInlineMode))
+    : agentResolvedInline;
 
   const isEditableScope = scopeKind === "default" || scopeKind === "custom";
   const customArgsValue =
@@ -156,13 +158,15 @@ export function useAgentScope({
   const customArgsPlaceholder =
     scopeKind === "custom" && customFlagsOverride === undefined
       ? agentDefaultCustomFlags || "Using default (no flags)"
-      : "--verbose --max-tokens=4096";
+      : "No extra flags";
+  // The inherited value goes in the description, not only the placeholder: a
+  // placeholder vanishes as soon as the user starts typing over it.
   const customArgsDescription =
     scopeKind === "custom"
       ? customFlagsOverride === undefined
-        ? "Using default. Type to override."
-        : "Extra CLI flags for this preset"
-      : "Extra CLI flags appended when launching";
+        ? `Using the agent's own arguments (${agentDefaultCustomFlags || "none"}). Type here to replace them for this preset.`
+        : "Extra CLI flags for this preset, used instead of the agent's own"
+      : "Extra CLI flags appended to every launch";
 
   const agentEnvSuggestions = agentCfg?.envSuggestions ?? [];
 
@@ -202,56 +206,100 @@ export function useAgentScope({
       { ...preset, id, name: `${preset.name} (copy)`, displayTitle: undefined },
     ];
     void (async () => {
-      await updateAgent(agentId, {
-        customPresets: updated,
-        presetId: id,
-      } as Partial<AgentSettingsEntry>);
-      onSettingsChange?.();
+      try {
+        await updateAgent(agentId, {
+          customPresets: updated,
+          presetId: id,
+        } as Partial<AgentSettingsEntry>);
+        onSettingsChange?.();
+        // Selecting the copy re-keys the editor, removing the Duplicate button that had
+        // focus. Hand it to the preset picker, which now names the copy.
+        requestAnimationFrame(() => {
+          const active = document.activeElement;
+          if (!active || active === document.body) {
+            document
+              .querySelector<HTMLElement>('#agents-presets [data-testid="preset-selector-trigger"]')
+              ?.focus();
+          }
+        });
+      } catch (error) {
+        logError("Failed to duplicate preset", error);
+        notify({
+          type: "error",
+          title: "Preset not duplicated",
+          message: `Couldn't save a copy of ${preset.name}.`,
+          action: { label: "Try again", onClick: () => handleDuplicatePreset(preset) },
+          context: { eventKind: "uiFeedback" },
+        });
+      }
     })();
   };
 
   const handleDeletePreset = (presetId: string) => {
     const updated = (activeEntry.customPresets ?? []).filter((f) => f.id !== presetId);
     void (async () => {
-      if (activeEntry.presetId === presetId) {
-        await updateAgent(agentId, {
-          customPresets: updated,
-          presetId: undefined,
-        } as Partial<AgentSettingsEntry>);
-      } else {
-        await updateAgent(agentId, { customPresets: updated } as Partial<AgentSettingsEntry>);
+      try {
+        if (activeEntry.presetId === presetId) {
+          await updateAgent(agentId, {
+            customPresets: updated,
+            presetId: undefined,
+          } as Partial<AgentSettingsEntry>);
+        } else {
+          await updateAgent(agentId, { customPresets: updated } as Partial<AgentSettingsEntry>);
+        }
+        onSettingsChange?.();
+      } catch (error) {
+        logError("Failed to delete preset", error);
+        notify({
+          type: "error",
+          title: "Preset not deleted",
+          message: "Couldn't save the change, so the preset is still there.",
+          action: { label: "Try again", onClick: () => handleDeletePreset(presetId) },
+          context: { eventKind: "uiFeedback" },
+        });
       }
-      onSettingsChange?.();
     })();
   };
 
   const handleStartEdit = (preset: AgentPreset) => {
-    if (!preset.name || preset.name.length > 200) {
-      console.warn("Invalid preset name length");
-      return;
-    }
-    if (/[<>'"&]/.test(preset.name)) {
-      console.warn("Preset name contains dangerous characters");
-      return;
-    }
+    setRenameError(null);
     setEditingPresetId(preset.id);
     setEditName(preset.name);
   };
 
-  const handleCommitEdit = () => {
+  /**
+   * Commits the rename, or keeps the draft and says why. The rules are the preset
+   * sanitizer's own (`sanitizePreset` in config/agents): a name it would reject is
+   * one that would make the preset vanish on the next load, so it is refused here
+   * instead — and ordinary punctuation like an apostrophe is not.
+   */
+  const handleCommitEdit = (): boolean => {
+    if (!editingPresetId) return true;
     const trimmed = editName.trim();
-    if (editingPresetId && trimmed && trimmed.length <= 200 && !/[<>'"&]/.test(trimmed)) {
-      // Stamp lastEditTimeRef so external rate-limit consumers can detect
-      // a recent edit. Double-commit between Enter+blur is already prevented
-      // by the `editingPresetId &&` guard above (the second call sees null).
-      lastEditTimeRef.current = Date.now();
-      handleUpdatePreset(editingPresetId, { name: trimmed });
+    const problem = !trimmed
+      ? "Give the preset a name"
+      : trimmed.length > 200
+        ? "Keep the name under 200 characters"
+        : /[<>]/.test(trimmed)
+          ? "Names can't contain < or >"
+          : null;
+    if (problem) {
+      setRenameError(problem);
+      return false;
     }
+    // Stamp lastEditTimeRef so external rate-limit consumers can detect a recent
+    // edit. Double-commit between Enter+blur is prevented by the `editingPresetId`
+    // guard above (the second call sees null).
+    lastEditTimeRef.current = Date.now();
+    handleUpdatePreset(editingPresetId, { name: trimmed });
+    setRenameError(null);
     setEditingPresetId(null);
     setEditName("");
+    return true;
   };
 
   const handleCancelEdit = () => {
+    setRenameError(null);
     setEditingPresetId(null);
     setEditName("");
   };
@@ -348,6 +396,7 @@ export function useAgentScope({
     handleStartEdit,
     handleCommitEdit,
     handleCancelEdit,
+    renameError,
     handleDangerousModeChange,
     handleInlineModeChange,
     handleCustomFlagsChange,

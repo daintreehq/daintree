@@ -1,7 +1,7 @@
 {
   "generated": "2026-09-23",
-  "total": 166,
-  "files": 78,
+  "total": 165,
+  "files": 77,
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
@@ -1427,21 +1427,6 @@
       "decision": "keep",
       "category": "prior-ruling-40",
       "evidence": "#12003 ruled on this /40 site; no in-scope partner reopens it"
-    },
-    {
-      "file": "src/components/Settings/PresetSelector.tsx",
-      "ordinal": 0,
-      "line": 134,
-      "start": 4715,
-      "end": 4736,
-      "token": "text-daintree-text/40",
-      "variants": "",
-      "step": 40,
-      "group": "src/components/Settings/PresetSelector.tsx#4663",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<ChevronDown> is an icon — the colour is an affordance, not prose"
     },
     {
       "file": "src/components/Settings/TurnOutcomeDiagnostics.tsx",

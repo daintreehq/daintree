@@ -3,12 +3,12 @@ import type { ReactNode } from "react";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import { Button } from "@/components/ui/button";
-import { Copy, RefreshCw } from "lucide-react";
+import { Copy, RefreshCw, TriangleAlert } from "lucide-react";
 import { agentHelpClient } from "@/clients";
 
 import type { AgentHelpResult } from "@shared/types/ipc/agent";
 import type { AgentAvailabilityState } from "@shared/types";
-import { isAgentInstalled, isAgentMissing } from "../../../shared/utils/agentAvailability";
+import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { sanitizeErrorText } from "@/utils/errorText";
 import { logError } from "@/utils/logger";
@@ -16,18 +16,10 @@ import { logError } from "@/utils/logger";
 interface AgentHelpOutputProps {
   agentId: string;
   agentName: string;
-  usageUrl?: string;
   availability: AgentAvailabilityState;
-  isCliLoading?: boolean;
 }
 
-export function AgentHelpOutput({
-  agentId,
-  agentName,
-  usageUrl,
-  availability,
-  isCliLoading,
-}: AgentHelpOutputProps) {
+export function AgentHelpOutput({ agentId, agentName, availability }: AgentHelpOutputProps) {
   const [helpResult, setHelpResult] = useState<AgentHelpResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -106,7 +98,6 @@ export function AgentHelpOutput({
   };
 
   const installed = isAgentInstalled(availability);
-  const showMissing = isAgentMissing(availability) && !isCliLoading;
 
   const renderOutput = () => {
     if (!helpResult) return null;
@@ -118,14 +109,25 @@ export function AgentHelpOutput({
     return (
       <div>
         {hasError && (
-          <p className="px-4 pt-3 text-xs text-status-warning">
+          <p className="flex items-center gap-1.5 px-4 pt-3 text-xs text-text-secondary">
+            <TriangleAlert
+              className="h-3.5 w-3.5 shrink-0 text-status-warning"
+              aria-hidden="true"
+            />
             {helpResult.timedOut
-              ? "Command timed out"
-              : `Command exited with code ${helpResult.exitCode}`}
+              ? "The help command timed out"
+              : `The help command exited with code ${helpResult.exitCode}`}
           </p>
         )}
-        <div className="relative max-h-80 overflow-auto">
-          <pre className="px-4 py-3 text-xs font-mono text-text-primary whitespace-pre-wrap break-words select-text">
+        {/* Focusable and named so a keyboard user can reach and scroll the output, and
+            Tab carries on past it. */}
+        <div
+          className="relative max-h-80 overflow-auto focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+          tabIndex={0}
+          role="region"
+          aria-label={`${agentName} help output`}
+        >
+          <pre className="px-4 py-3 text-xs font-mono text-text-primary whitespace-pre select-text">
             {cleanStdout}
             {cleanStderr && (
               <>
@@ -144,17 +146,36 @@ export function AgentHelpOutput({
     );
   };
 
-  const loadButton = (label: string) => (
+  // One button, mounted for the whole life of the section: it doesn't swap for a
+  // skeleton or move between the row and the header, so keyboard focus survives a load.
+  // It stays focusable while a load runs — `aria-disabled` rather than `disabled`,
+  // which would drop focus to the page.
+  const loadLabel = helpResult ? "Refresh" : error ? "Retry" : "Load";
+  const loadButton = (
     <Button
       size="sm"
       variant="outline"
-      onClick={() => void loadHelp(!!helpResult)}
-      disabled={isLoading}
+      onClick={() => {
+        if (!isLoading) void loadHelp(!!helpResult);
+      }}
+      aria-disabled={isLoading || undefined}
     >
       <RefreshCw aria-hidden="true" />
-      {label}
+      {loadLabel}
     </Button>
   );
+
+  const statusMessage = isLoading
+    ? "Loading help output"
+    : error
+      ? "Couldn't run the help command"
+      : helpResult?.timedOut
+        ? "The help command timed out"
+        : helpResult && helpResult.exitCode !== 0
+          ? `The help command exited with code ${helpResult.exitCode}`
+          : helpResult
+            ? "Help output loaded"
+            : "";
 
   let body: ReactNode = null;
   if (isLoading) {
@@ -167,36 +188,24 @@ export function AgentHelpOutput({
         <div className="h-3 bg-overlay-medium rounded-sm w-1/3" />
       </div>
     );
-  } else if (showMissing) {
-    body = (
-      <SettingsEmptyRow
-        action={
-          usageUrl ? (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => window.electron.system.openExternal(usageUrl)}
-            >
-              Install instructions
-            </Button>
-          ) : undefined
-        }
-      >
-        CLI not found — {agentName} is not installed or not in your PATH
-      </SettingsEmptyRow>
-    );
   } else if (error) {
     body = (
-      <SettingsEmptyRow action={installed ? loadButton("Retry") : undefined}>
-        <span className="text-status-error">{error}</span>
+      <SettingsEmptyRow>
+        <span className="flex items-start gap-1.5">
+          <TriangleAlert
+            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-warning"
+            aria-hidden="true"
+          />
+          <span>Couldn&apos;t run the help command: {error}</span>
+        </span>
       </SettingsEmptyRow>
     );
   } else if (helpResult) {
     body = renderOutput();
   } else if (installed) {
     body = (
-      <SettingsEmptyRow action={loadButton("Load")}>
-        Load the output of {agentName}&apos;s help command to see its flags
+      <SettingsEmptyRow>
+        Load runs {agentName}&apos;s help command and shows what it prints
       </SettingsEmptyRow>
     );
   }
@@ -204,24 +213,29 @@ export function AgentHelpOutput({
   return (
     <SettingsSection
       title="Help output"
-      description={`Available CLI flags for ${agentName}`}
+      description={`The flags ${agentName} accepts, as its own --help prints them`}
       action={
-        installed && helpResult ? (
+        installed ? (
           <>
-            {loadButton("Refresh")}
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => void handleCopy()}
-              disabled={isLoading}
-            >
-              <Copy aria-hidden="true" />
-              {isCopied ? "Copied!" : "Copy"}
-            </Button>
+            {loadButton}
+            {helpResult && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void handleCopy()}
+                disabled={isLoading}
+              >
+                <Copy aria-hidden="true" />
+                {isCopied ? "Copied" : "Copy"}
+              </Button>
+            )}
           </>
         ) : undefined
       }
     >
+      <p role="status" className="sr-only">
+        {statusMessage}
+      </p>
       {body && <SettingsGroup>{body}</SettingsGroup>}
     </SettingsSection>
   );

@@ -428,6 +428,12 @@ type FocusRingAllowlistEntry = {
 
 const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
+    file: "src/components/Settings/PresetSelector.tsx",
+    fragment: "overflow-y-auto max-h-80 focus:outline-hidden",
+    reason:
+      "The preset listbox keeps DOM focus while aria-activedescendant names the active option, which PALETTE_ROW_CLASS draws as a fill plus a leading selection-outline rail — the same one-focus-owner model as the palettes; a ring on the listbox itself would be a second indicator around the whole list",
+  },
+  {
     file: "src/components/Worktree/views/WorktreePathPicker.tsx",
     fragment: "focus:outline-hidden disabled:opacity-50",
     reason:
