@@ -58,6 +58,7 @@ export interface UseRecipeRunnerResult {
   confirmDelete: () => void;
   cancelDelete: () => void;
   handleCreate: () => void;
+  handleManage: () => void;
   handleRunSuggestion: (suggestion: RunCommand) => void;
   handleRetryFailed: () => void;
   dismissSpawnFailures: () => void;
@@ -453,6 +454,10 @@ export function useRecipeRunner({
     );
   }, [activeWorktreeId]);
 
+  const handleManage = useCallback(() => {
+    void actionService.dispatch("recipe.manager.open", undefined, { source: "user" });
+  }, []);
+
   const handleRunSuggestion = useCallback(
     (suggestion: RunCommand) => {
       if (!defaultCwd) return;
@@ -553,6 +558,7 @@ export function useRecipeRunner({
     confirmDelete,
     cancelDelete,
     handleCreate,
+    handleManage,
     handleRunSuggestion,
     handleRetryFailed,
     dismissSpawnFailures,

@@ -81,3 +81,47 @@ describe("RecipeRunnerList — the canvas home does not take the caret", () => {
     expect(stops).toEqual([]);
   });
 });
+
+describe("RecipeRunnerList — the row Enter will act on stays on screen", () => {
+  function listWith(focusedItemId: string | undefined) {
+    return (
+      <RecipeRunnerList
+        sections={buildRecipeSections(RECIPES)}
+        searchQuery=""
+        searchResults={[]}
+        focusedIndex={0}
+        focusedItemId={focusedItemId}
+        showSearch
+        onSearchChange={noop}
+        onKeyDown={noop}
+        onRun={noop}
+        onEdit={noop}
+        onDuplicate={noop}
+        onPin={noop}
+        onUnpin={noop}
+        onDelete={noop}
+        onCreate={noop}
+      />
+    );
+  }
+
+  it("reveals the active option while the filter owns focus, and only then", () => {
+    const scrolled: string[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.id);
+    };
+    try {
+      const { rerender } = render(listWith("recipe-option-a"));
+      // A list that merely re-rendered must not scroll the canvas under the user.
+      rerender(listWith("recipe-option-g"));
+      expect(scrolled).toEqual([]);
+
+      screen.getByRole("combobox", { name: "Filter recipes" }).focus();
+      rerender(listWith("recipe-option-f"));
+      expect(scrolled).toEqual(["recipe-option-f"]);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+});

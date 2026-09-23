@@ -1,4 +1,4 @@
-import React, { useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import { Search, Plus } from "lucide-react";
 import { RecipeRunnerItem } from "./RecipeRunnerItem";
 import type { RecipeSections, RankedRecipe } from "./recipeRunnerUtils";
@@ -52,6 +52,15 @@ export function RecipeRunnerList({
   // surface nobody had navigated to. `ProjectPulseStrip` states the same rule
   // for the same reason: "the empty grid must not steal focus just by
   // rendering". Tab and the arrow keys still reach the field normally.
+
+  // The active option is named by `aria-activedescendant`, so DOM focus never
+  // moves and nothing scrolls it into view on its own — arrowing down a long
+  // band would leave Enter pointed at a row below the fold. Only while the
+  // filter owns focus: a list that merely re-rendered must not scroll the canvas.
+  useEffect(() => {
+    if (!focusedItemId || document.activeElement !== inputRef.current) return;
+    document.getElementById(focusedItemId)?.scrollIntoView({ block: "nearest" });
+  }, [focusedItemId]);
 
   // Build flat list for index computation
   let flatRecipes: TerminalRecipe[];
@@ -219,9 +228,7 @@ export function RecipeRunnerList({
             aria-hidden
           />
           <span className="flex-1 text-sm text-text-secondary group-hover:text-text-primary transition-colors">
-            {isSearchActive && flatRecipes.length === 0
-              ? `Create recipe: "${searchQuery}"`
-              : "Create new recipe…"}
+            Create new recipe…
           </span>
         </button>
       </div>

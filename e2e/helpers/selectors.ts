@@ -543,18 +543,26 @@ export const SEL = {
     promptHistoryDialog: '[role="dialog"][aria-label="Prompt history search"]',
   },
   recipeManager: {
-    dialog: '[role="dialog"]:has-text("Recipe Manager")',
-    teamSection: 'h3:has-text("Team Recipes")',
-    globalSection: 'h3:has-text("Global Recipes")',
-    newProjectRecipeButton: 'button:has-text("New project recipe")',
+    dialog: '[role="dialog"]:has-text("Recipe manager")',
+    teamSection: 'h3:has-text("Team recipes")',
+    globalSection: 'h3:has-text("Global recipes")',
+    // The section header's "New" button carries the full name as its label;
+    // the all-empty state spells it out as visible text.
+    newProjectRecipeButton:
+      'button[aria-label="New project recipe"], button:has-text("New project recipe")',
+    // Present only in the all-empty state; a populated manager files import
+    // under the toolbar's Import menu (`importMenuTrigger`).
     importButton: 'button:has-text("Import from clipboard")',
+    importMenuTrigger: 'button[aria-haspopup="menu"]:has-text("Import")',
+    importFromClipboardItem: '[role="menuitem"]:has-text("Import from clipboard")',
     importDialog: '[role="dialog"]:has-text("Import recipe")',
     importTextarea: '[data-testid="recipe-import-textarea"]',
     // Scope this with the importDialog locator in specs — the import dialog's
     // footer has only "Cancel" and "Import", so a bare text match is unambiguous.
     importConfirmButton: 'button:has-text("Import")',
     overriddenBadge: 'text="Overridden by team recipe"',
-    exportButton: (name: string) => `[aria-label="Export recipe ${name} to clipboard"]`,
+    moreButton: (name: string) => `[aria-label="More actions for recipe ${name}"]`,
+    copyJsonItem: '[role="menuitem"]:has-text("Copy as JSON")',
     exportedButton: (name: string) => `[aria-label="Recipe ${name} exported to clipboard"]`,
   },
   recipeConflict: {

@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import { getRecipeTerminalSummary } from "../utils/recipeUtils";
 import { getRecipeScope } from "@/utils/recipeScope";
+import { isPluginRecipe } from "@shared/types/project";
 import type { TerminalRecipe } from "@/types";
 
 interface RecipeRunnerItemProps {
@@ -97,8 +98,7 @@ export function RecipeRunnerItem({
                   // over 150ms. A disabled card never enters :active, so the scale
                   // needs no disabled: reset. `launcher-press` is what lets reduced
                   // motion suppress the scale — see the rule in `index.css`.
-                  "launcher-press group flex flex-col items-start gap-1.5 p-3 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60",
-                  recipe.shadowedBy && "opacity-60"
+                  "launcher-press group flex flex-col items-start gap-1.5 p-3 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:bg-overlay-raised group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
                 )}
               >
                 <div className="flex items-center gap-2 w-full">
@@ -109,7 +109,12 @@ export function RecipeRunnerItem({
                     )}
                     aria-hidden
                   />
-                  <span className="flex-1 text-sm font-medium text-text-primary truncate">
+                  <span
+                    className={cn(
+                      "flex-1 text-sm font-medium truncate",
+                      recipe.shadowedBy ? "text-text-secondary" : "text-text-primary"
+                    )}
+                  >
                     {recipe.name}
                   </span>
                   {recipe.shadowedBy && (
@@ -208,38 +213,45 @@ export function RecipeRunnerItem({
             // the canvas all day: it would light the default-focused first row
             // at rest, the exact thing the grid comment above forbids. Hence the
             // `group-focus-within` gate stays and only the treatment is shared.
-            "launcher-press group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:bg-overlay-raised group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]",
-            recipe.shadowedBy && "opacity-60"
+            //
+            // In a narrow canvas the metadata drops to a second line under the
+            // name instead of squeezing it: the name is what a user chooses by,
+            // and "Migrate remaining Je…" beside an intact "Project-wide" gave
+            // the classification priority over the thing being classified.
+            "launcher-press group w-full flex flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:bg-overlay-raised group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
           )}
         >
           <Play
             className="h-3.5 w-3.5 text-status-success transition-colors shrink-0"
             aria-hidden
           />
-          <span className="flex-1 text-sm font-medium text-text-primary truncate">
+          <span
+            className={cn(
+              "min-w-0 flex-1 text-sm font-medium truncate",
+              recipe.shadowedBy ? "text-text-secondary" : "text-text-primary"
+            )}
+          >
             {recipe.name}
           </span>
-          <span className="text-2xs text-text-secondary shrink-0">{scopeLabel}</span>
-          {recipe.shadowedBy && (
-            <span className="text-2xs text-text-secondary shrink-0">Overridden by Team</span>
-          )}
-          {recipeSummary && recipeSummary !== recipe.name && (
-            <span className="text-xs text-text-secondary truncate max-w-[30%]">
-              {recipeSummary}
-            </span>
-          )}
-          {isPinned && (
-            // Neutral, not accent: pinning is membership, and the accent is
-            // the one signal that means "this is where the keyboard is".
-            // Spending it on a static badge left two greens on screen at
-            // once in the dense state, and made the brightest glyph on the
-            // card the one that does nothing. The state was also
-            // `aria-hidden`, so it existed for sighted users only.
-            <>
-              <Pin className="h-3 w-3 text-text-secondary shrink-0" aria-hidden />
-              <span className="sr-only">Pinned</span>
-            </>
-          )}
+          {/* A fixed slot whether or not the recipe is pinned, so the metadata
+              column ends at the same edge on every row. Neutral, not accent:
+              pinning is membership, and the accent is the one signal that
+              means "this is where the keyboard is". */}
+          <span className="order-last flex w-3 shrink-0 justify-end @max-[30rem]/launcher:order-none">
+            {isPinned && (
+              <>
+                <Pin className="h-3 w-3 text-text-secondary" aria-hidden />
+                <span className="sr-only">Pinned</span>
+              </>
+            )}
+          </span>
+          <span className="flex min-w-0 max-w-[55%] items-center gap-2 text-xs text-text-secondary @max-[30rem]/launcher:max-w-none @max-[30rem]/launcher:basis-full @max-[30rem]/launcher:pl-5.5">
+            <span className="shrink-0">{scopeLabel}</span>
+            {recipe.shadowedBy && <span className="shrink-0">Overridden by Team</span>}
+            {recipeSummary && recipeSummary !== recipe.name && (
+              <span className="min-w-0 truncate">{recipeSummary}</span>
+            )}
+          </span>
         </button>
       </ContextMenuTrigger>
       <RecipeContextMenu
@@ -275,16 +287,21 @@ function RecipeContextMenu({
   onUnpin: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
+  // A plugin owns its recipe's content, so Edit and Delete would only be
+  // rejected by the store (#11860); Duplicate is how one gets customised.
+  const fromPlugin = isPluginRecipe(recipe);
   return (
     <ContextMenuContent>
       <ContextMenuItem onSelect={() => onRun(recipe.id)}>
         <Play className="h-3.5 w-3.5 mr-2" />
         Run
       </ContextMenuItem>
-      <ContextMenuItem onSelect={() => onEdit(recipe.id)}>
-        <Pencil className="h-3.5 w-3.5 mr-2" />
-        Edit
-      </ContextMenuItem>
+      {!fromPlugin && (
+        <ContextMenuItem onSelect={() => onEdit(recipe.id)}>
+          <Pencil className="h-3.5 w-3.5 mr-2" />
+          Edit
+        </ContextMenuItem>
+      )}
       <ContextMenuItem onSelect={() => onDuplicate(recipe.id)}>
         <Copy className="h-3.5 w-3.5 mr-2" />
         Duplicate
@@ -292,13 +309,17 @@ function RecipeContextMenu({
       <ContextMenuSeparator />
       <ContextMenuItem onSelect={() => (isPinned ? onUnpin : onPin)(recipe.id)}>
         <Pin className="h-3.5 w-3.5 mr-2" />
-        {isPinned ? "Unpin from empty state" : "Pin to empty state"}
+        {isPinned ? "Unpin from canvas" : "Pin to canvas"}
       </ContextMenuItem>
-      <ContextMenuSeparator />
-      <ContextMenuItem destructive onSelect={() => onDelete(recipe.id)}>
-        <Trash2 className="h-3.5 w-3.5 mr-2" />
-        Delete
-      </ContextMenuItem>
+      {!fromPlugin && (
+        <>
+          <ContextMenuSeparator />
+          <ContextMenuItem destructive onSelect={() => onDelete(recipe.id)}>
+            <Trash2 className="h-3.5 w-3.5 mr-2" />
+            Delete…
+          </ContextMenuItem>
+        </>
+      )}
     </ContextMenuContent>
   );
 }
