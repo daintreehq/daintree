@@ -2,7 +2,7 @@ import { Fragment, type ComponentPropsWithRef } from "react";
 import { ChevronsUpDown, FileText, GitBranch, GitCommitHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SkeletonBone } from "@/components/ui/Skeleton";
-import { truncateBranchName } from "@/utils/textParsing";
+import { shortSha, truncateBranchName } from "@/utils/textParsing";
 import type { ActiveWorkspaceIdentity, BranchChipState } from "@/lib/workspaceIdentity";
 
 /** Characters of branch name the chip shows before it middle-truncates. */
@@ -17,10 +17,6 @@ export interface ToolbarProjectPillProps extends Omit<ComponentPropsWithRef<"but
   /** HEAD's commit, shown when the chip is `detached`. */
   headSha: string | undefined;
   isDropdownOpen: boolean;
-}
-
-export function shortSha(sha: string | undefined): string | undefined {
-  return sha ? sha.slice(0, 7) : undefined;
 }
 
 /**

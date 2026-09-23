@@ -133,9 +133,25 @@ describe("truncateBranchName", () => {
     }
   });
 
-  it("keeps a leading ticket number whole when there is room left for the slug", () => {
+  it("keeps two branches that differ early distinguishable", () => {
+    const pairs: [string, string][] = [
+      [
+        "release/2026-09-production-compatibility-rollout",
+        "release/2026-10-production-compatibility-rollout",
+      ],
+      [
+        "v2-1-maintenance-branch-for-the-old-api-line",
+        "v2-2-maintenance-branch-for-the-old-api-line",
+      ],
+    ];
+    for (const [a, b] of pairs) {
+      expect(truncateBranchName(a, 24), a).not.toBe(truncateBranchName(b, 24));
+    }
+  });
+
+  it("keeps a leading ticket or date run whole when there is room left for the slug", () => {
     for (const branch of BRANCHES) {
-      const ticket = /^(?:[^/]+\/)?(\d+)[-_]/.exec(branch);
+      const ticket = /^(?:[^/]+\/)?(\d+(?:[-_.]\d+)*)[-_]/.exec(branch);
       if (!ticket || ticket[0].length + 7 > 24) continue;
       expect(truncateBranchName(branch, 24).split("…")[0], branch).toContain(ticket[1]);
     }

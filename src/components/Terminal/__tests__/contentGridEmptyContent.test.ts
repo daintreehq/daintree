@@ -52,18 +52,18 @@ describe("ContentGrid richer project identity (issue #7472)", () => {
   it("ContentGridEmptyState formats path via shared utilities and useHomeDir", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
     expect(content).toContain('from "@/hooks/app/useHomeDir"');
-    expect(content).toContain('formatPath, middleTruncate } from "@/utils/textParsing"');
+    expect(content).toMatch(/formatPath, middleTruncate[^}]*\} from "@\/utils\/textParsing"/);
     expect(content).toContain("useHomeDir()");
     expect(content).toContain("formatPath(activeWorktreePath, homeDir)");
     expect(content).toContain("middleTruncate(");
   });
 
-  it("ContentGridEmptyState handles detached HEAD and surfaces the branch chip", async () => {
+  it("ContentGridEmptyState handles detached HEAD with the commit glyph the toolbar pill uses", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
     expect(content).toContain("detached at ");
-    expect(content).toContain("activeWorktreeHead.slice(0, 7)");
-    expect(content).toMatch(/import \{ .*GitBranch, Settings \} from "lucide-react"/);
-    expect(content).toContain("<GitBranch ");
+    expect(content).toContain("shortSha(activeWorktreeHead)");
+    expect(content).toMatch(/isDetachedLabel \? GitCommitHorizontal : GitBranch/);
+    expect(content).toContain("<BranchGlyph ");
   });
 });
 

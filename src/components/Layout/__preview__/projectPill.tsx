@@ -6,7 +6,8 @@ import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { BrandSurface } from "@/components/icons";
 import { activeWorkspaceIdentity, branchChipState } from "@/lib/workspaceIdentity";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { ToolbarProjectPill, ToolbarProjectPillTooltipBody, shortSha } from "../ToolbarProjectPill";
+import { shortSha } from "@/utils/textParsing";
+import { ToolbarProjectPill, ToolbarProjectPillTooltipBody } from "../ToolbarProjectPill";
 import "@/index.css";
 
 /**

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { FolderOpen, FolderX, GitBranch, Settings } from "lucide-react";
+import { FolderOpen, FolderX, GitBranch, GitCommitHorizontal, Settings } from "lucide-react";
 import { DaintreeIcon } from "@/components/icons";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { useRecipeStore } from "@/store/recipeStore";
-import { formatPath, middleTruncate } from "@/utils/textParsing";
+import { formatPath, middleTruncate, shortSha } from "@/utils/textParsing";
 import { RotatingTip } from "./contentGridTips";
 import { RecipeRunner } from "./RecipeRunner/RecipeRunner";
 import { ResumeSessionLine } from "./ResumeSessionLine";
@@ -227,10 +227,11 @@ export function ContentGridEmptyState({
     });
   }, []);
 
-  const branchLabel =
-    activeWorktreeIsDetached && activeWorktreeHead
-      ? `detached at ${activeWorktreeHead.slice(0, 7)}`
-      : activeWorktreeBranch || null;
+  const isDetachedLabel = Boolean(activeWorktreeIsDetached && activeWorktreeHead);
+  const branchLabel = isDetachedLabel
+    ? `detached at ${shortSha(activeWorktreeHead)}`
+    : activeWorktreeBranch || null;
+  const BranchGlyph = isDetachedLabel ? GitCommitHorizontal : GitBranch;
   const pathLabel = activeWorktreePath
     ? middleTruncate(formatPath(activeWorktreePath, homeDir), PATH_TRUNCATE_LENGTH)
     : null;
@@ -364,7 +365,7 @@ export function ContentGridEmptyState({
                       <div className="flex flex-col items-center gap-0.5 text-text-secondary max-w-full min-w-0 font-mono">
                         {branchLabel && (
                           <div className="flex items-center gap-1.5 text-sm max-w-full min-w-0">
-                            <GitBranch className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                            <BranchGlyph className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                             <span className="truncate min-w-0">{branchLabel}</span>
                           </div>
                         )}
