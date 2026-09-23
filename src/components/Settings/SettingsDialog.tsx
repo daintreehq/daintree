@@ -546,6 +546,17 @@ function SettingsDialogInner({
 
   const tablistRef = useRef<HTMLDivElement>(null);
 
+  // A deep link or search hit can land on a tab below the nav's fold — MCP, Plugins,
+  // Run history — leaving the page with no visible "you are here". Keep the active
+  // item on screen, moving the list only as far as it has to.
+  useEffect(() => {
+    if (!isOpen || isSearching) return;
+    const item = tablistRef.current?.querySelector<HTMLElement>(
+      `[role="tab"][data-tab="${activeTab}"]`
+    );
+    item?.scrollIntoView?.({ block: "nearest" });
+  }, [isOpen, isSearching, activeTab, activeScope]);
+
   const handleTablistKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     const container = tablistRef.current;
     if (!container) return;

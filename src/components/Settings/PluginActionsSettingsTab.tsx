@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ScrollText } from "lucide-react";
+
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
+import { SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { PluginActionAuditLogViewer } from "@/components/Settings/PluginActionAuditLogViewer";
 import { appClient } from "@/clients";
 import { logError } from "@/utils/logger";
@@ -120,21 +121,21 @@ export function PluginActionsSettingsTab() {
   }, []);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="space-y-8">
       <SettingsSection
-        icon={ScrollText}
-        title="Plugin action audit log"
-        description="Records every action dispatched by an installed plugin. Arguments are stored as a SHA-256 hash by default; turn on plaintext args in Developer mode to keep a readable copy."
+        title="Audit log"
+        description="Every action dispatched by an installed plugin. Arguments are stored as a SHA-256 hash by default; turn on plaintext args in developer mode to keep a readable copy."
       >
         <div className="flex flex-col gap-4">
-          <SettingsSwitchCard
-            id="plugin-audit-enable"
-            title="Record plugin actions"
-            subtitle="Append a record each time a plugin action is dispatched"
-            isEnabled={auditEnabled}
-            onChange={() => void handleEnabledToggle()}
-            ariaLabel="Toggle plugin action audit log"
-          />
+          <SettingsGroup>
+            <SettingsSwitchCard
+              id="plugin-audit-enable"
+              title="Record plugin actions"
+              subtitle="Appends a record each time a plugin action is dispatched"
+              isEnabled={auditEnabled}
+              onChange={() => void handleEnabledToggle()}
+            />
+          </SettingsGroup>
           <PluginActionAuditLogViewer
             records={records}
             loading={loading}

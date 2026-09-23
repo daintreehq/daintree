@@ -1,11 +1,13 @@
-import { useState, useEffect, useId } from "react";
-import { Play, Bell, BellOff, Volume2, AudioLines, Moon, Zap } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsCheckbox } from "./SettingsCheckbox";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { Button } from "@/components/ui/button";
 import type { NotificationSettings } from "@shared/types";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 
@@ -74,7 +76,10 @@ function joinMinutes(hour: number, minute: number): number {
   return Math.max(0, Math.min(1439, hour * 60 + minute));
 }
 
-function SoundFileSelect({
+const NATIVE_SELECT_CLASS =
+  "px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors disabled:opacity-50";
+
+function SoundFileRow({
   label,
   value,
   onChange,
@@ -85,35 +90,37 @@ function SoundFileSelect({
   onChange: (value: string) => void;
   onPreview: () => void;
 }) {
-  const id = useId();
   return (
-    <div className="space-y-1">
-      <label htmlFor={id} className="text-sm font-medium text-text-primary block">
-        {label}
-      </label>
-      <div className="flex items-center gap-2">
-        <select
-          id={id}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="flex-1 px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
-        >
-          {AVAILABLE_SOUNDS.map(({ file, label: soundLabel }) => (
-            <option key={file} value={file}>
-              {soundLabel}
-            </option>
-          ))}
-        </select>
-        <button
-          onClick={onPreview}
-          title={`Preview ${label.toLowerCase()}`}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-default bg-surface-canvas text-text-primary hover:bg-tint/[0.06] transition-colors"
-        >
-          <Play className="h-3.5 w-3.5" />
-          Preview
-        </button>
-      </div>
-    </div>
+    <SettingsRow
+      label={label}
+      control={({ labelId, disabled }) => (
+        <div className="flex items-center gap-2">
+          <select
+            aria-labelledby={labelId}
+            value={value}
+            disabled={disabled}
+            onChange={(e) => onChange(e.target.value)}
+            className={cn(NATIVE_SELECT_CLASS, "w-36")}
+          >
+            {AVAILABLE_SOUNDS.map(({ file, label: soundLabel }) => (
+              <option key={file} value={file}>
+                {soundLabel}
+              </option>
+            ))}
+          </select>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onPreview}
+            disabled={disabled}
+            aria-label={`Preview ${label.toLowerCase()}`}
+          >
+            <Play aria-hidden="true" />
+            Preview
+          </Button>
+        </div>
+      )}
+    />
   );
 }
 
@@ -126,8 +133,6 @@ export function NotificationSettingsTab() {
   // Gate the inline "Loading…" hint past the Doherty threshold so fast IPC
   // resolutions don't flash a loading state for sub-400ms work.
   const showInlineLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
-  const escalationDelayId = useId();
-  const activeDaysId = useId();
 
   useEffect(() => {
     let settled = false;
@@ -237,68 +242,68 @@ export function NotificationSettingsTab() {
     );
   }
 
-  return (
-    <div className="space-y-6">
-      {showInlineLoading && <p className="text-xs text-text-secondary">Loading…</p>}
-      <SettingsSwitchCard
-        variant="compact"
-        title="Enable notifications"
-        subtitle="Show toast popups and the notification bell. When disabled, notifications are still recorded in history."
-        isEnabled={settings.enabled}
-        onChange={() => update({ enabled: !settings.enabled })}
-        ariaLabel="Enable notifications"
-        icon={settings.enabled ? Bell : BellOff}
-        disabled={loading}
-      />
+  // The master switch gates every section below. Each row takes the disabled state
+  // explicitly: a group resets the dependents context, so it can't reach across
+  // sections from one wrapper.
+  const masterOff = !settings.enabled || loading;
+  const masterOffReason = loading ? undefined : "Turn on notifications to use this";
 
-      <div
-        className={cn(
-          "space-y-6",
-          (!settings.enabled || loading) && "opacity-50 pointer-events-none"
-        )}
+  return (
+    <div className="space-y-8">
+      {showInlineLoading && <p className="text-xs text-text-secondary">Loading…</p>}
+
+      <SettingsSection
+        title="Agent notifications"
+        description="Suppressed while you're already viewing the relevant worktree."
       >
-        <SettingsSection
-          icon={Bell}
-          title="Agent notifications"
-          description="OS notifications are off by default. Enable individual event types below to receive native alerts for agent activity. Notifications are suppressed when you are already viewing the relevant worktree."
-        >
-          <div className="contents">
+        <SettingsGroup>
+          <SettingsSwitchCard
+            title="Enable notifications"
+            subtitle="Show toast popups and the notification bell. When off, notifications are still recorded in history"
+            isEnabled={settings.enabled}
+            onChange={() => update({ enabled: !settings.enabled })}
+            ariaLabel="Enable notifications"
+            disabled={loading}
+          />
+
+          <SettingsDependents disabled={masterOff} reason={masterOffReason}>
             <SettingsCheckbox
               id="notif-completed"
               label="Agent completed"
-              description="Show a notification when an agent finishes its task"
+              description="Send an OS notification when an agent finishes its task"
               checked={settings.completedEnabled}
               onChange={(v) => update({ completedEnabled: v })}
             />
             <SettingsCheckbox
               id="notif-waiting"
               label="Agent waiting for input"
-              description="Show a notification immediately when an agent needs input — always fires regardless of focus"
+              description="Send an OS notification as soon as an agent needs input, whatever has focus"
               checked={settings.waitingEnabled}
               onChange={(v) => update({ waitingEnabled: v })}
             />
-            {settings.waitingEnabled && (
-              <div className="ml-6 space-y-3 border-l border-border-default pl-4">
-                <SettingsCheckbox
-                  id="notif-waiting-escalation"
-                  label="Escalate if still waiting"
-                  description="Fire an additional OS notification if a docked agent remains waiting after the delay below"
-                  checked={settings.waitingEscalationEnabled}
-                  onChange={(v) => update({ waitingEscalationEnabled: v })}
-                />
-                {settings.waitingEscalationEnabled && (
-                  <div className="space-y-1">
-                    <label
-                      htmlFor={escalationDelayId}
-                      className="text-sm font-medium text-text-primary block"
-                    >
-                      Escalation delay
-                    </label>
+            <SettingsDependents
+              disabled={!settings.waitingEnabled}
+              reason={
+                masterOff ? undefined : "Turn on Agent waiting for input to escalate reminders"
+              }
+            >
+              <SettingsCheckbox
+                id="notif-waiting-escalation"
+                label="Escalate if still waiting"
+                description="Send a second OS notification if a docked agent is still waiting after the delay"
+                checked={settings.waitingEscalationEnabled}
+                onChange={(v) => update({ waitingEscalationEnabled: v })}
+              />
+              {settings.waitingEscalationEnabled && (
+                <SettingsRow
+                  label="Escalation delay"
+                  control={({ labelId, disabled }) => (
                     <select
-                      id={escalationDelayId}
+                      aria-labelledby={labelId}
                       value={settings.waitingEscalationDelayMs}
+                      disabled={disabled}
                       onChange={(e) => update({ waitingEscalationDelayMs: Number(e.target.value) })}
-                      className="px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
+                      className={NATIVE_SELECT_CLASS}
                     >
                       {ESCALATION_DELAY_OPTIONS.map(({ value, label }) => (
                         <option key={value} value={value}>
@@ -306,10 +311,10 @@ export function NotificationSettingsTab() {
                         </option>
                       ))}
                     </select>
-                  </div>
-                )}
-              </div>
-            )}
+                  )}
+                />
+              )}
+            </SettingsDependents>
             <SettingsCheckbox
               id="notif-working-pulse"
               label="Working pulse"
@@ -317,111 +322,119 @@ export function NotificationSettingsTab() {
               checked={settings.workingPulseEnabled}
               onChange={(v) => update({ workingPulseEnabled: v })}
             />
-          </div>
-        </SettingsSection>
+          </SettingsDependents>
+        </SettingsGroup>
+      </SettingsSection>
 
-        <SettingsSection
-          icon={Volume2}
-          title="Sound"
-          description="Play a sound when a notification fires."
-        >
-          <div className="contents">
-            <SettingsSwitchCard
-              variant="compact"
-              title="Play sound"
-              subtitle="Master switch for every sound, including UI feedback sounds"
-              isEnabled={settings.soundEnabled}
-              onChange={() => update({ soundEnabled: !settings.soundEnabled })}
-              ariaLabel="Play sound for notifications"
-            />
+      <SettingsSection title="Sound">
+        <SettingsGroup>
+          <SettingsSwitchCard
+            id="notifications-sound"
+            title="Play sound"
+            subtitle="Master switch for every sound, including UI feedback sounds"
+            isEnabled={settings.soundEnabled}
+            onChange={() => update({ soundEnabled: !settings.soundEnabled })}
+            ariaLabel="Play sound for notifications"
+            disabled={masterOff}
+            disabledReason={masterOffReason}
+          />
 
+          <SettingsDependents
+            disabled={!settings.soundEnabled || masterOff}
+            reason={
+              !masterOff && !settings.soundEnabled
+                ? "Turn on Play sound to hear UI feedback sounds"
+                : undefined
+            }
+          >
             {settings.soundEnabled && (
-              <div className="contents">
-                <SoundFileSelect
+              <>
+                <SoundFileRow
                   label="Completed sound"
                   value={settings.completedSoundFile}
                   onChange={(v) => update({ completedSoundFile: v })}
                   onPreview={() => handlePreview(settings.completedSoundFile)}
                 />
-                <SoundFileSelect
+                <SoundFileRow
                   label="Waiting sound"
                   value={settings.waitingSoundFile}
                   onChange={(v) => update({ waitingSoundFile: v })}
                   onPreview={() => handlePreview(settings.waitingSoundFile)}
                 />
-                <SoundFileSelect
+                <SoundFileRow
                   label="Escalation sound"
                   value={settings.escalationSoundFile}
                   onChange={(v) => update({ escalationSoundFile: v })}
                   onPreview={() => handlePreview(settings.escalationSoundFile)}
                 />
-                <SoundFileSelect
+                <SoundFileRow
                   label="Working pulse sound"
                   value={settings.workingPulseSoundFile}
                   onChange={(v) => update({ workingPulseSoundFile: v })}
                   onPreview={() => handlePreview(settings.workingPulseSoundFile)}
                 />
-              </div>
+              </>
             )}
-          </div>
-        </SettingsSection>
+            <SettingsSwitchCard
+              title="UI feedback sounds"
+              subtitle="Short audio cues for git commit and push, worktree create and delete, agent spawn, and context injection"
+              isEnabled={settings.uiFeedbackSoundEnabled}
+              onChange={() => update({ uiFeedbackSoundEnabled: !settings.uiFeedbackSoundEnabled })}
+            />
+          </SettingsDependents>
+        </SettingsGroup>
+      </SettingsSection>
 
-        <SettingsSection
-          icon={Zap}
-          title="Screen flash"
-          description="Flash the screen once a working fleet of agents goes fully idle."
-        >
+      <SettingsSection title="Screen flash">
+        <SettingsGroup>
           <SettingsSwitchCard
-            variant="compact"
             title="Flash on all-clear"
-            subtitle="Briefly flash the screen when a working fleet goes fully idle"
+            subtitle="Briefly flash the screen once a working fleet of agents goes fully idle"
             isEnabled={settings.flashEnabled}
             onChange={() => update({ flashEnabled: !settings.flashEnabled })}
-            ariaLabel="Flash screen on all-clear"
+            disabled={masterOff}
+            disabledReason={masterOffReason}
           />
-        </SettingsSection>
+        </SettingsGroup>
+      </SettingsSection>
 
-        <SettingsSection
-          icon={Moon}
-          title="Quiet hours"
-          description="Suppress in-app toasts and OS notifications during a daily time window. History still records everything, and agents waiting for input always page through."
-        >
-          <div className="contents">
-            <SettingsSwitchCard
-              variant="compact"
-              title="Enable quiet hours"
-              subtitle="Mute non-urgent notifications during the configured window"
-              isEnabled={settings.quietHoursEnabled}
-              onChange={() => update({ quietHoursEnabled: !settings.quietHoursEnabled })}
-              ariaLabel="Enable quiet hours"
-            />
+      <SettingsSection
+        title="Quiet hours"
+        description="History still records everything, and agents waiting for input always get through."
+      >
+        <SettingsGroup>
+          <SettingsSwitchCard
+            title="Mute on a schedule"
+            subtitle="Suppress in-app toasts and OS notifications during a daily time window"
+            isEnabled={settings.quietHoursEnabled}
+            onChange={() => update({ quietHoursEnabled: !settings.quietHoursEnabled })}
+            disabled={masterOff}
+            disabledReason={masterOffReason}
+          />
 
-            {settings.quietHoursEnabled && (
-              <div className="space-y-4 ml-6 border-l border-border-default pl-4">
-                <QuietHoursTimeRow
-                  label="Starts at"
-                  totalMinutes={settings.quietHoursStartMin}
-                  onChange={(value) => update({ quietHoursStartMin: value })}
-                />
-                <QuietHoursTimeRow
-                  label="Ends at"
-                  totalMinutes={settings.quietHoursEndMin}
-                  onChange={(value) => update({ quietHoursEndMin: value })}
-                />
-                {settings.quietHoursStartMin === settings.quietHoursEndMin && (
-                  <div className="text-xs text-text-secondary">
-                    Start and end match — the schedule is effectively disabled until the times
-                    differ.
-                  </div>
-                )}
-                <div className="space-y-1">
-                  <span id={activeDaysId} className="text-sm font-medium text-text-primary block">
-                    Active days
-                  </span>
-                  <div className="text-xs text-text-secondary mb-2">
-                    Leave all boxes checked to apply every day.
-                  </div>
-                  <div role="group" aria-labelledby={activeDaysId} className="flex flex-wrap gap-2">
+          {settings.quietHoursEnabled && (
+            <SettingsDependents disabled={masterOff}>
+              <QuietHoursTimeRow
+                label="Starts at"
+                totalMinutes={settings.quietHoursStartMin}
+                onChange={(value) => update({ quietHoursStartMin: value })}
+              />
+              <QuietHoursTimeRow
+                label="Ends at"
+                description={
+                  settings.quietHoursStartMin === settings.quietHoursEndMin
+                    ? "Start and end match, so the schedule does nothing until the times differ"
+                    : undefined
+                }
+                totalMinutes={settings.quietHoursEndMin}
+                onChange={(value) => update({ quietHoursEndMin: value })}
+              />
+              <SettingsRow
+                label="Active days"
+                description="Leave every day selected to apply the schedule daily"
+                layout="stacked"
+                control={({ labelId, disabled }) => (
+                  <div role="group" aria-labelledby={labelId} className="flex flex-wrap gap-2">
                     {WEEKDAYS.map(({ value, label }) => {
                       const active =
                         settings.quietHoursWeekdays.length === 0 ||
@@ -430,6 +443,7 @@ export function NotificationSettingsTab() {
                         <button
                           key={value}
                           type="button"
+                          disabled={disabled}
                           onClick={() => {
                             const current = settings.quietHoursWeekdays;
                             const allDays = current.length === 0;
@@ -442,7 +456,7 @@ export function NotificationSettingsTab() {
                             update({ quietHoursWeekdays: normalized });
                           }}
                           className={cn(
-                            "px-2.5 py-1 text-xs rounded-[var(--radius-md)] border transition-colors",
+                            "px-2.5 py-1 text-xs rounded-[var(--radius-md)] border transition-colors disabled:opacity-50",
                             active
                               ? "border-border-strong bg-overlay-medium text-text-primary"
                               : "border-border-default bg-surface-canvas text-text-secondary hover:text-text-primary"
@@ -454,73 +468,65 @@ export function NotificationSettingsTab() {
                       );
                     })}
                   </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </SettingsSection>
-
-        <SettingsSection
-          icon={AudioLines}
-          title="UI feedback sounds"
-          description="Play subtle audio cues for git operations, worktree lifecycle, agent spawning, and context injection. They only play while Play sound is on."
-        >
-          <SettingsSwitchCard
-            variant="compact"
-            title="Enable UI feedback sounds"
-            subtitle="Short audio cues for git commit, push, worktree create/delete, agent spawn, and context injection"
-            isEnabled={settings.uiFeedbackSoundEnabled}
-            onChange={() => update({ uiFeedbackSoundEnabled: !settings.uiFeedbackSoundEnabled })}
-            ariaLabel="Enable UI feedback sounds"
-          />
-        </SettingsSection>
-      </div>
+                )}
+              />
+            </SettingsDependents>
+          )}
+        </SettingsGroup>
+      </SettingsSection>
     </div>
   );
 }
 
 function QuietHoursTimeRow({
   label,
+  description,
   totalMinutes,
   onChange,
 }: {
   label: string;
+  description?: string;
   totalMinutes: number;
   onChange: (value: number) => void;
 }) {
   const { hour, minute } = splitMinutes(totalMinutes);
-  const selectClass =
-    "px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors";
   return (
-    <div className="space-y-1">
-      <span className="text-sm font-medium text-text-primary block">{label}</span>
-      <div className="flex items-center gap-2">
-        <select
-          aria-label={`${label} hour`}
-          value={hour}
-          onChange={(e) => onChange(joinMinutes(Number(e.target.value), minute))}
-          className={selectClass}
-        >
-          {HOUR_OPTIONS.map(({ value, label: hourLabel }) => (
-            <option key={value} value={value}>
-              {hourLabel}
-            </option>
-          ))}
-        </select>
-        <span className="text-sm text-daintree-text/60">:</span>
-        <select
-          aria-label={`${label} minute`}
-          value={minute}
-          onChange={(e) => onChange(joinMinutes(hour, Number(e.target.value)))}
-          className={selectClass}
-        >
-          {MINUTE_OPTIONS.map(({ value, label: minuteLabel }) => (
-            <option key={value} value={value}>
-              {minuteLabel}
-            </option>
-          ))}
-        </select>
-      </div>
-    </div>
+    <SettingsRow
+      label={label}
+      description={description}
+      control={({ disabled }) => (
+        <div className="flex items-center gap-2">
+          <select
+            aria-label={`${label} hour`}
+            value={hour}
+            disabled={disabled}
+            onChange={(e) => onChange(joinMinutes(Number(e.target.value), minute))}
+            className={NATIVE_SELECT_CLASS}
+          >
+            {HOUR_OPTIONS.map(({ value, label: hourLabel }) => (
+              <option key={value} value={value}>
+                {hourLabel}
+              </option>
+            ))}
+          </select>
+          <span className="text-sm text-text-secondary" aria-hidden="true">
+            :
+          </span>
+          <select
+            aria-label={`${label} minute`}
+            value={minute}
+            disabled={disabled}
+            onChange={(e) => onChange(joinMinutes(hour, Number(e.target.value)))}
+            className={NATIVE_SELECT_CLASS}
+          >
+            {MINUTE_OPTIONS.map(({ value, label: minuteLabel }) => (
+              <option key={value} value={value}>
+                {minuteLabel}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+    />
   );
 }

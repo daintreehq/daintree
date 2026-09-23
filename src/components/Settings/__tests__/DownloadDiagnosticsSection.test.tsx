@@ -32,8 +32,7 @@ const setCollecting = (isCollecting: boolean) => {
 };
 
 const getButton = () => screen.getByRole<HTMLButtonElement>("button");
-// Scoped to the button: SettingsSection renders its own Download glyph in the
-// section heading, which is not part of the busy state under test.
+// Scoped to the button: the only glyph it ever holds is the busy spinner.
 const glyphCount = () => getButton().querySelectorAll("svg").length;
 
 describe("DownloadDiagnosticsSection — collecting state", () => {
@@ -42,32 +41,31 @@ describe("DownloadDiagnosticsSection — collecting state", () => {
     useDiagnosticsReviewStore.setState({ isCollecting: false, downloadError: null });
   });
 
-  it("shows the action glyph and no spinner while idle", () => {
+  it("shows no glyph and no spinner while idle", () => {
     render(<DownloadDiagnosticsSection />);
 
     expect(spinner()).not.toHaveBeenCalled();
-    expect(glyphCount()).toBe(1);
+    expect(glyphCount()).toBe(0);
   });
 
-  it("swaps the action glyph for the spinner while collecting", () => {
+  it("shows the spinner while collecting", () => {
     render(<DownloadDiagnosticsSection />);
     setCollecting(true);
 
     // The bug being fixed was one glyph spinning in place. The spinner must be
-    // rendered (not the Download glyph animating), and the two must be mutually
-    // exclusive rather than layered — hence exactly one SVG either way.
+    // rendered, and only once — exactly one SVG while busy.
     expect(spinner()).toHaveBeenCalled();
     expect(glyphCount()).toBe(1);
   });
 
-  it("restores the action glyph once collecting ends", () => {
+  it("drops the spinner once collecting ends", () => {
     render(<DownloadDiagnosticsSection />);
     setCollecting(true);
     spinner().mockClear();
     setCollecting(false);
 
     expect(spinner()).not.toHaveBeenCalled();
-    expect(glyphCount()).toBe(1);
+    expect(glyphCount()).toBe(0);
   });
 
   it("swaps the label when collecting starts", () => {

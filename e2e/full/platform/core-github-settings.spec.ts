@@ -25,7 +25,7 @@ async function openGitHubSettings(window: Page): Promise<void> {
 
   await window
     .locator(SEL.settings.navSidebar)
-    .getByRole("tab", { name: "Code Forge", exact: true })
+    .getByRole("tab", { name: "Code forge", exact: true })
     .click();
   await expect(window.locator("h3", { hasText: "Code Forge" })).toBeVisible({ timeout: T_SHORT });
   await selectGitHubSettingsProvider(window);

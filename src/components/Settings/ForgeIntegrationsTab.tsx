@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { GitBranch, Route } from "lucide-react";
 import type {
   ForgeProviderEntry,
   ForgeProviderResolutionVia,
@@ -7,6 +6,7 @@ import type {
 } from "@shared/types";
 import type { RemoteInfo } from "@shared/types/ipc/forge";
 import { SettingsSection } from "./SettingsSection";
+import { SettingsGroup } from "./SettingsGroup";
 import { SettingsSelect, type SettingsSelectOption } from "./SettingsSelect";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useProjectStore } from "@/store";
@@ -295,36 +295,33 @@ export function ForgeIntegrationsTab() {
   );
 
   return (
-    <div className="space-y-6">
-      <SettingsSection
-        icon={GitBranch}
-        title="Default forge provider"
-        description="Pick the forge provider used for newly opened projects. The per-project setting still wins when set; otherwise the resolver falls back to hostname auto-match."
-        id="forge-default-provider"
-      >
-        <SettingsSelect
-          label="Default provider"
-          description={
-            providers.length === 0 && !loading
-              ? "No forge plugins are installed yet. Install a plugin that contributes a forge provider to choose a default."
-              : undefined
-          }
-          scope="global"
-          value={selectValue}
-          onValueChange={(value) => {
-            void handleChange(value);
-          }}
-          options={options}
-          disabled={loading}
-          placeholder={loading ? "Loading…" : AUTO_DETECT_LABEL}
-          error={error ?? undefined}
-        />
+    <div className="space-y-8">
+      <SettingsSection title="Default forge provider" id="forge-default-provider">
+        <SettingsGroup>
+          <SettingsSelect
+            label="Global default"
+            description={
+              providers.length === 0 && !loading
+                ? "No forge plugins are installed yet. Install a plugin that contributes a forge provider to choose a default"
+                : "Used for newly opened projects. A project's own setting still wins; otherwise the remote's hostname decides"
+            }
+            scope="global"
+            value={selectValue}
+            onValueChange={(value) => {
+              void handleChange(value);
+            }}
+            options={options}
+            controlWidth="wide"
+            disabled={loading}
+            placeholder={loading ? "Loading…" : AUTO_DETECT_LABEL}
+            error={error ?? undefined}
+          />
+        </SettingsGroup>
       </SettingsSection>
 
       <SettingsSection
-        icon={Route}
         title="Active project routing"
-        description="Shows which forge provider each git remote of the active project resolves to and why."
+        description="Which forge provider each git remote of the active project resolves to, and why"
         id="forge-active-project-routing"
       >
         <ProjectRoutingPanel
@@ -415,41 +412,43 @@ function ProjectRoutingPanel({
           installed.
         </p>
       )}
-      <ul className="space-y-2">
-        {remotes.map(({ remote, resolved }) => (
-          <li
-            key={remote.name}
-            className="flex items-center gap-3 justify-between rounded-[var(--radius-md)] border border-daintree-border/50 bg-overlay-subtle px-3 py-2"
-          >
-            <div className="min-w-0 flex-1">
-              <div className="flex items-baseline gap-2">
-                <span className="text-xs font-medium text-text-primary">{remote.name}</span>
-                {remote.name === liveRemoteName && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span
-                        className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium border border-daintree-border/60 text-text-secondary cursor-default"
-                        tabIndex={0}
-                      >
-                        Active
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top">
-                      {forgeRemote
-                        ? "This project is set to use this remote for issues, PRs, and pulse data."
-                        : "Auto-detected as this project's forge remote for issues, PRs, and pulse data."}
-                    </TooltipContent>
-                  </Tooltip>
-                )}
+      <SettingsGroup>
+        <ul className="divide-y divide-border-subtle">
+          {remotes.map(({ remote, resolved }) => (
+            <li key={remote.name} className="flex items-center gap-3 justify-between px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-sm font-medium text-text-primary">{remote.name}</span>
+                  {remote.name === liveRemoteName && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span
+                          className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium border border-border-default text-text-secondary cursor-default"
+                          tabIndex={0}
+                        >
+                          Active
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">
+                        {forgeRemote
+                          ? "This project is set to use this remote for issues, PRs, and pulse data."
+                          : "Auto-detected as this project's forge remote for issues, PRs, and pulse data."}
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+                </div>
+                <p
+                  className="text-xs text-text-secondary font-mono truncate"
+                  title={remote.fetchUrl}
+                >
+                  {remote.fetchUrl}
+                </p>
               </div>
-              <p className="text-xs text-text-secondary font-mono truncate" title={remote.fetchUrl}>
-                {remote.fetchUrl}
-              </p>
-            </div>
-            <RoutingBadge resolved={resolved} />
-          </li>
-        ))}
-      </ul>
+              <RoutingBadge resolved={resolved} />
+            </li>
+          ))}
+        </ul>
+      </SettingsGroup>
     </div>
   );
 }
@@ -460,7 +459,7 @@ function RoutingBadge({ resolved }: { resolved: ResolvedForgeProvider }) {
       <Tooltip>
         <TooltipTrigger asChild>
           <span
-            className="inline-flex items-center px-2 py-0.5 rounded-sm text-3xs font-medium border border-daintree-border/60 text-text-secondary cursor-default"
+            className="inline-flex items-center px-2 py-0.5 rounded-sm text-3xs font-medium border border-border-default text-text-secondary cursor-default"
             tabIndex={0}
           >
             No match
@@ -479,7 +478,7 @@ function RoutingBadge({ resolved }: { resolved: ResolvedForgeProvider }) {
     <Tooltip>
       <TooltipTrigger asChild>
         <span
-          className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm text-3xs font-medium border border-daintree-border/60 bg-status-info/10 text-text-primary cursor-default"
+          className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm text-3xs font-medium border border-border-default bg-status-info/10 text-text-primary cursor-default"
           tabIndex={0}
         >
           <span>{providerName}</span>

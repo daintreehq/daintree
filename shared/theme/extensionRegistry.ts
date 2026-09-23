@@ -243,8 +243,6 @@ export const EXTENSION_KEY_REGISTRY = {
   "settings-scope-bg": OPTIONAL,
   "settings-search-bg": OPTIONAL,
   "settings-search-muted": OPTIONAL,
-  "settings-section-header-bg": OPTIONAL,
-  "settings-section-header-bg-solid": OPTIONAL,
   "settings-sidebar-bg": OPTIONAL,
   // Scroll-fade color for the settings sidebar's ScrollShadow. Only needed by
   // themes that author a custom settings-sidebar-bg; the CSS fallback in

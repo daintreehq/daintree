@@ -218,7 +218,9 @@ test.describe.serial("Core: Settings Pages Load", () => {
     const { window } = ctx;
 
     await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Environment" }).click();
-    await expect(window.locator("h3", { hasText: "Environment Variables" })).toBeVisible({
+    await expect(
+      window.getByRole("heading", { name: /environment variables/i }).first()
+    ).toBeVisible({
       timeout: T_SHORT,
     });
   });
@@ -247,7 +249,7 @@ test.describe.serial("Core: Settings Pages Load", () => {
 
     await window
       .locator(SEL.settings.navSidebar)
-      .getByRole("tab", { name: "Code Forge", exact: true })
+      .getByRole("tab", { name: "Code forge", exact: true })
       .click();
     await expect(window.locator("h3", { hasText: "Code Forge" })).toBeVisible({
       timeout: T_SHORT,
@@ -345,7 +347,9 @@ test.describe.serial("Core: Settings Pages Load", () => {
       await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Variables" }).click();
 
       // The EnvironmentVariablesEditor heading should appear
-      await expect(window.locator("h3", { hasText: "Environment Variables" })).toBeVisible({
+      await expect(
+        window.getByRole("heading", { name: /environment variables/i }).first()
+      ).toBeVisible({
         timeout: T_SHORT,
       });
 
@@ -384,7 +388,7 @@ test.describe.serial("Core: Settings Pages Load", () => {
 
       // The Resource Environments heading should appear (scoped to the automation panel)
       const automationPanel = window.locator("#settings-panel-project\\:automation");
-      await expect(automationPanel.locator("h2", { hasText: "Resource Environments" })).toBeVisible(
+      await expect(automationPanel.locator("h4", { hasText: "Resource environments" })).toBeVisible(
         {
           timeout: T_SHORT,
         }

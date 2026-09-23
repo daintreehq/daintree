@@ -1,27 +1,14 @@
 import { useCallback, useState, useEffect, useRef } from "react";
-import {
-  Mic,
-  Eye,
-  EyeOff,
-  Plus,
-  X,
-  Key,
-  BookText,
-  Shield,
-  Check,
-  AlertCircle,
-  ExternalLink,
-  Sparkles,
-  ChevronRight,
-  FileSearch,
-  RotateCcw,
-} from "lucide-react";
+import type { ReactNode } from "react";
+import { Eye, EyeOff, Plus, X, Check, AlertCircle, ExternalLink, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsTextarea } from "./SettingsTextarea";
+import { SettingsInput } from "./SettingsInput";
+import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { dispatchVoiceInputSettingsChanged } from "@/lib/voiceInputSettingsEvents";
@@ -264,72 +251,52 @@ export function VoiceInputSettingsTab() {
   useSettingsTabValidation("voice", Boolean(loadError));
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {loadError && <SettingsLoadErrorBanner message={loadError} onRetry={retryAction} />}
 
-      {/* ── Speech-to-Text ── */}
       <SettingsSection
-        icon={Mic}
         title="Speech-to-text"
         description="Real-time transcription. Requires a provider API key and microphone access."
         id="voice-speech-to-text"
       >
-        <SettingsSwitchCard
-          icon={Mic}
-          title="Voice input"
-          subtitle="Dictate commands using your microphone"
-          isEnabled={settings.enabled}
-          onChange={() => update({ enabled: !settings.enabled })}
-          ariaLabel="Toggle voice input"
-          disabled={isLoading}
-        />
+        <SettingsGroup>
+          <SettingsSwitchCard
+            id="voice-enable"
+            title="Voice input"
+            subtitle="Dictate commands using your microphone"
+            isEnabled={settings.enabled}
+            onChange={() => update({ enabled: !settings.enabled })}
+            ariaLabel="Toggle voice input"
+            disabled={isLoading}
+          />
 
-        {settings.enabled && (
-          <div className="space-y-4">
-            <MicPermissionRow
-              status={micPermission}
-              isRequesting={isRequestingMic}
-              onRequest={handleRequestMicPermission}
-              onOpenSettings={handleOpenMicSettings}
-              onRefresh={handleRefreshMicPermission}
-            />
+          {settings.enabled && (
+            <SettingsDependents>
+              <MicPermissionRow
+                status={micPermission}
+                isRequesting={isRequestingMic}
+                onRequest={handleRequestMicPermission}
+                onOpenSettings={handleOpenMicSettings}
+                onRefresh={handleRefreshMicPermission}
+              />
 
-            <SettingsSelect
-              label="Transcription provider"
-              description="The backend that turns your speech into text"
-              value={settings.transcriptionProvider}
-              onValueChange={(v) => {
-                // Narrow the select's string value to the union via a guard
-                // rather than an unsafe assertion.
-                if (v === "openai" || v === "deepgram") update({ transcriptionProvider: v });
-              }}
-              options={TRANSCRIPTION_PROVIDERS.map(({ value, label, description }) => ({
-                value,
-                label,
-                description,
-              }))}
-            />
-
-            <div
-              role="note"
-              className="rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-bg/40 p-3"
-            >
-              <p className="text-xs text-text-secondary select-text">
-                {settings.transcriptionProvider === "deepgram"
-                  ? "Microphone audio is streamed over an encrypted connection to Deepgram for transcription using your API key. Deepgram does not retain streaming audio or transcripts by default."
-                  : "Microphone audio is streamed over an encrypted connection to OpenAI for transcription using your API key. Audio is not used for model training. OpenAI may retain audio in abuse-monitoring logs for up to 30 days."}
-              </p>
-            </div>
-
-            <div className="flex items-center justify-between">
               <SettingsSelect
                 label="Microphone"
                 description={
-                  devicesError
-                    ? devicesError
-                    : devicesLoading
-                      ? "Detecting devices..."
-                      : "Select which microphone to use for dictation"
+                  <>
+                    {devicesError
+                      ? devicesError
+                      : devicesLoading
+                        ? "Detecting devices…"
+                        : "The input device used for dictation"}{" "}
+                    <button
+                      type="button"
+                      onClick={refreshDevices}
+                      className="text-text-secondary underline underline-offset-2 hover:text-text-primary transition-colors"
+                    >
+                      Refresh list
+                    </button>
+                  </>
                 }
                 error={devicesError ?? undefined}
                 value={settings.deviceId || SYSTEM_DEFAULT_VALUE}
@@ -337,142 +304,155 @@ export function VoiceInputSettingsTab() {
                 options={devices}
                 disabled={devicesLoading && devices.length <= 1}
               />
-              <button
-                type="button"
-                onClick={refreshDevices}
-                className="mt-0.5 p-1.5 rounded-sm text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
-                aria-label="Refresh microphone list"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-              </button>
-            </div>
 
-            {settings.transcriptionProvider === "deepgram" ? (
-              <>
+              <SettingsSelect
+                label="Transcription provider"
+                description={
+                  settings.transcriptionProvider === "deepgram"
+                    ? "Microphone audio is streamed over an encrypted connection to Deepgram for transcription using your API key. Deepgram does not retain streaming audio or transcripts by default."
+                    : "Microphone audio is streamed over an encrypted connection to OpenAI for transcription using your API key. Audio is not used for model training. OpenAI may retain audio in abuse-monitoring logs for up to 30 days."
+                }
+                value={settings.transcriptionProvider}
+                onValueChange={(v) => {
+                  // Narrow the select's string value to the union via a guard
+                  // rather than an unsafe assertion.
+                  if (v === "openai" || v === "deepgram") update({ transcriptionProvider: v });
+                }}
+                options={TRANSCRIPTION_PROVIDERS.map(({ value, label, description }) => ({
+                  value,
+                  label,
+                  description,
+                }))}
+              />
+
+              {settings.transcriptionProvider === "deepgram" ? (
                 <ApiKeyRow
-                  label="Deepgram API Key"
+                  label="Deepgram API key"
                   value={settings.deepgramApiKey}
                   placeholder="Deepgram API key"
                   onSave={(key) => update({ deepgramApiKey: key })}
                   helpUrl="https://console.deepgram.com/"
                   helpLabel="Get API key"
+                  description={
+                    settings.deepgramApiKey
+                      ? "Your API key is stored locally in plain text. Set usage limits on your Deepgram account to cap exposure."
+                      : undefined
+                  }
                 />
-
-                {settings.deepgramApiKey && (
-                  <p className="text-xs text-text-secondary mt-1">
-                    Your API key is stored locally in plain text. Set usage limits on your Deepgram
-                    account to cap exposure.
-                  </p>
-                )}
-              </>
-            ) : (
-              <>
+              ) : (
                 <ApiKeyRow
-                  label="OpenAI API Key"
+                  id="voice-stt-openai-key"
+                  label="OpenAI API key"
                   value={settings.openaiApiKey}
                   placeholder="sk-..."
                   onSave={(key) => update({ openaiApiKey: key })}
                   onValidate={(key) => window.electron?.voiceInput?.validateApiKey(key)}
                   helpUrl="https://platform.openai.com/api-keys"
                   helpLabel="Get API key"
+                  description={
+                    <>
+                      {(!settings.openaiApiKey ||
+                        !settings.openaiApiKey.startsWith("sk-proj-")) && (
+                        <span className="block">
+                          Use a Project API key (starts with{" "}
+                          <code className="font-mono">sk-proj-</code>) for the best security.
+                        </span>
+                      )}
+                      {settings.openaiApiKey && (
+                        <span className="block">
+                          Your API key is stored locally in plain text. Set billing limits on your
+                          OpenAI account to cap exposure.
+                        </span>
+                      )}
+                    </>
+                  }
                 />
+              )}
 
-                {(!settings.openaiApiKey || !settings.openaiApiKey.startsWith("sk-proj-")) && (
-                  <p className="text-xs text-text-secondary">
-                    Use a Project API key (starts with <code className="font-mono">sk-proj-</code>)
-                    for the best security
-                  </p>
-                )}
+              {settings.openaiApiKey && <AdvancedRows settings={settings} update={update} />}
 
-                {settings.openaiApiKey && (
-                  <p className="text-xs text-text-secondary mt-1">
-                    Your API key is stored locally in plain text. Set billing limits on your OpenAI
-                    account to cap exposure.
-                  </p>
-                )}
-              </>
-            )}
+              <SettingsSelect
+                id="voice-language"
+                label="Language"
+                value={settings.language}
+                onValueChange={(v) => update({ language: v })}
+                options={LANGUAGES.map(({ code, label }) => ({ value: code, label }))}
+              />
 
-            {settings.openaiApiKey && <AdvancedSection settings={settings} update={update} />}
+              <ParagraphingStrategyRow
+                value={settings.paragraphingStrategy ?? "spoken-command"}
+                language={settings.language}
+                onChange={(v) => update({ paragraphingStrategy: v })}
+              />
 
-            <SettingsSelect
-              label="Language"
-              value={settings.language}
-              onValueChange={(v) => update({ language: v })}
-              options={LANGUAGES.map(({ code, label }) => ({ value: code, label }))}
-            />
-
-            <ParagraphingStrategyRow
-              value={settings.paragraphingStrategy ?? "spoken-command"}
-              language={settings.language}
-              onChange={(v) => update({ paragraphingStrategy: v })}
-            />
-
-            <RecordingModeRow
-              value={settings.recordingMode ?? "toggle"}
-              onChange={(v) => update({ recordingMode: v })}
-            />
-
-            <DictionarySection
-              words={settings.customDictionary}
-              suggestedWords={settings.suggestedDictionary}
-              learnFromCorrections={settings.learnFromCorrections}
-              onLearnFromCorrectionsChange={(v) => update({ learnFromCorrections: v })}
-              onAcceptSuggestion={acceptSuggestion}
-              onDismissSuggestion={dismissSuggestion}
-              newWord={newDictionaryWord}
-              onNewWordChange={setNewDictionaryWord}
-              onAdd={addDictionaryWord}
-              onRemove={removeDictionaryWord}
-              inputRef={dictionaryInputRef}
-            />
-          </div>
-        )}
+              <RecordingModeRow
+                value={settings.recordingMode ?? "toggle"}
+                onChange={(v) => update({ recordingMode: v })}
+              />
+            </SettingsDependents>
+          )}
+        </SettingsGroup>
       </SettingsSection>
 
-      {/* ── AI Text Correction ── */}
       {settings.enabled && (
         <SettingsSection
-          icon={Sparkles}
+          title="Custom dictionary"
+          description="Domain-specific terms sent to the transcription service to boost recognition accuracy."
+          id="voice-custom-dictionary"
+        >
+          <DictionaryGroup
+            words={settings.customDictionary}
+            suggestedWords={settings.suggestedDictionary}
+            learnFromCorrections={settings.learnFromCorrections}
+            onLearnFromCorrectionsChange={(v) => update({ learnFromCorrections: v })}
+            onAcceptSuggestion={acceptSuggestion}
+            onDismissSuggestion={dismissSuggestion}
+            newWord={newDictionaryWord}
+            onNewWordChange={setNewDictionaryWord}
+            onAdd={addDictionaryWord}
+            onRemove={removeDictionaryWord}
+            inputRef={dictionaryInputRef}
+          />
+        </SettingsSection>
+      )}
+
+      {settings.enabled && (
+        <SettingsSection
           title="AI text correction"
           description="Post-process transcriptions with GPT-5.6 Luna to fix technical terms, punctuation, and filler words. Optional."
           id="voice-ai-correction"
         >
-          <SettingsSwitchCard
-            icon={Sparkles}
-            title="AI text correction"
-            subtitle="Clean up transcriptions automatically after dictation"
-            isEnabled={settings.correctionEnabled}
-            onChange={() => update({ correctionEnabled: !settings.correctionEnabled })}
-            ariaLabel="Toggle AI text correction"
-          />
+          <SettingsGroup>
+            <SettingsSwitchCard
+              id="voice-ai-correction-enable"
+              title="Clean up transcriptions"
+              subtitle="Correct each transcription automatically after dictation"
+              isEnabled={settings.correctionEnabled}
+              onChange={() => update({ correctionEnabled: !settings.correctionEnabled })}
+              ariaLabel="Toggle AI text correction"
+            />
 
-          {settings.correctionEnabled && settings.openaiApiKey && (
-            <div className="space-y-4">
-              <SettingsSwitchCard
-                icon={FileSearch}
-                title="Resolve file references"
-                subtitle={
-                  'Voice commands like "link to the input component" insert @file references'
-                }
-                isEnabled={settings.resolveFileLinks}
-                onChange={() => update({ resolveFileLinks: !settings.resolveFileLinks })}
-                ariaLabel="Toggle file reference resolution from voice commands"
-              />
+            {settings.correctionEnabled && settings.openaiApiKey && (
+              <SettingsDependents>
+                <SettingsSwitchCard
+                  title="Resolve file references"
+                  subtitle={
+                    'Voice commands like "link to the input component" insert @file references'
+                  }
+                  isEnabled={settings.resolveFileLinks}
+                  onChange={() => update({ resolveFileLinks: !settings.resolveFileLinks })}
+                  ariaLabel="Toggle file reference resolution from voice commands"
+                />
 
-              <CustomInstructionsRow
-                value={settings.correctionCustomInstructions}
-                onChange={(v) => update({ correctionCustomInstructions: v })}
-              />
+                <CustomInstructionsRow
+                  value={settings.correctionCustomInstructions}
+                  onChange={(v) => update({ correctionCustomInstructions: v })}
+                />
 
-              <CorePromptViewer />
-
-              <p className="text-xs text-text-secondary">
-                Your project name and custom dictionary are included automatically. Prompt caching
-                keeps costs minimal.
-              </p>
-            </div>
-          )}
+                <CorePromptRow />
+              </SettingsDependents>
+            )}
+          </SettingsGroup>
         </SettingsSection>
       )}
     </div>
@@ -482,7 +462,9 @@ export function VoiceInputSettingsTab() {
 // ── API key row ──
 
 interface ApiKeyRowProps {
+  id?: string;
   label: string;
+  description?: ReactNode;
   value: string;
   placeholder: string;
   onSave: (key: string) => void;
@@ -496,7 +478,9 @@ interface ApiKeyRowProps {
 }
 
 function ApiKeyRow({
+  id,
   label,
+  description,
   value,
   placeholder,
   onSave,
@@ -554,97 +538,102 @@ function ApiKeyRow({
   };
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <label className="text-sm text-text-secondary flex items-center gap-2">
-          <Key className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
-          {label}
-        </label>
-        {!value && (
-          <button
-            onClick={() => window.electron?.system?.openExternal(helpUrl)}
-            className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline flex items-center gap-1"
-          >
-            {helpLabel}
-            <ExternalLink className="w-3 h-3" />
-          </button>
-        )}
-      </div>
-
-      <div className="flex gap-2">
-        <div className="relative flex-1">
-          <input
-            type={showKey ? "text" : "password"}
-            value={keyInput}
-            onChange={(e) => {
-              setKeyInput(e.target.value);
-              if (validation === "invalid") {
-                setValidation("idle");
-                setValidationError(null);
-              }
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                void handleSave();
-              }
-            }}
-            placeholder={value ? "Enter new key to replace" : placeholder}
-            className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
-            autoComplete="new-password"
-            spellCheck={false}
-            disabled={validation === "testing"}
-          />
+    <SettingsRow
+      id={id}
+      label={label}
+      description={description}
+      layout="stacked"
+      accessory={
+        !value ? (
           <button
             type="button"
-            onClick={() => setShowKey((v) => !v)}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-daintree-text/40 hover:text-daintree-text/70"
-            aria-label={showKey ? "Hide API key" : "Show API key"}
+            onClick={() => window.electron?.system?.openExternal(helpUrl)}
+            className="ml-auto text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline flex items-center gap-1"
           >
-            {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            {helpLabel}
+            <ExternalLink className="w-3 h-3" aria-hidden="true" />
           </button>
-        </div>
-        <Button
-          onClick={() => void handleSave()}
-          disabled={!keyInput.trim()}
-          loading={validation === "testing"}
-          size="sm"
-          variant="outline"
-          className="text-text-primary border-border-default hover:bg-border-default"
-        >
-          Save
-        </Button>
-        {value && (
-          <Button
-            onClick={handleClear}
-            variant="outline"
-            size="sm"
-            className="text-text-secondary border-border-default hover:text-status-error hover:border-status-error/30"
-          >
-            Clear
-          </Button>
-        )}
-      </div>
+        ) : undefined
+      }
+      control={({ labelId, disabled }) => (
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <input
+                type={showKey ? "text" : "password"}
+                value={keyInput}
+                aria-labelledby={labelId}
+                onChange={(e) => {
+                  setKeyInput(e.target.value);
+                  if (validation === "invalid") {
+                    setValidation("idle");
+                    setValidationError(null);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void handleSave();
+                  }
+                }}
+                placeholder={value ? "Enter new key to replace" : placeholder}
+                className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
+                autoComplete="new-password"
+                spellCheck={false}
+                disabled={disabled || validation === "testing"}
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey((v) => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-text-secondary hover:text-text-primary transition-colors"
+                aria-label={showKey ? "Hide API key" : "Show API key"}
+              >
+                {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              </button>
+            </div>
+            <Button
+              onClick={() => void handleSave()}
+              disabled={disabled || !keyInput.trim()}
+              loading={validation === "testing"}
+              size="sm"
+              variant="outline"
+            >
+              Save
+            </Button>
+            {value && (
+              <Button
+                onClick={handleClear}
+                variant="outline"
+                size="sm"
+                disabled={disabled}
+                className="text-text-secondary hover:text-status-error"
+              >
+                Clear
+              </Button>
+            )}
+          </div>
 
-      {validation === "valid" && (
-        <p className="text-xs text-status-success flex items-center gap-1">
-          <Check className="w-3 h-3" />
-          API key is valid
-        </p>
+          {validation === "valid" && (
+            <p className="text-xs text-status-success flex items-center gap-1">
+              <Check className="w-3 h-3" aria-hidden="true" />
+              API key is valid
+            </p>
+          )}
+          {validation === "invalid" && (
+            <p className="text-xs text-status-error flex items-center gap-1">
+              <AlertCircle className="w-3 h-3" aria-hidden="true" />
+              {validationError || "Invalid API key"}
+            </p>
+          )}
+        </div>
       )}
-      {validation === "invalid" && (
-        <p className="text-xs text-status-error flex items-center gap-1">
-          <AlertCircle className="w-3 h-3" />
-          {validationError || "Invalid API key"}
-        </p>
-      )}
-    </div>
+    />
   );
 }
 
-// ── Advanced section (org/project ID for legacy keys) ──
+// ── Advanced rows (org/project ID for legacy keys) ──
 
-function AdvancedSection({
+function AdvancedRows({
   settings,
   update,
 }: {
@@ -652,63 +641,63 @@ function AdvancedSection({
   update: (patch: Partial<VoiceInputSettings>) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const isLegacyKey = settings.openaiApiKey && !settings.openaiApiKey.startsWith("sk-proj-");
+  const isLegacyKey = !!settings.openaiApiKey && !settings.openaiApiKey.startsWith("sk-proj-");
+  const legacyReason = "Only used with legacy user keys (starting with sk-)";
 
   return (
-    <div className="space-y-2">
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors"
-      >
-        <ChevronRight
-          data-animated-chevron
-          className={cn("w-3.5 h-3.5 transition-transform duration-150", expanded && "rotate-90")}
-        />
-        Advanced
-      </button>
+    <>
+      <SettingsRow
+        label="Organization and project IDs"
+        description={
+          <>
+            Only needed for legacy user keys (starts with <code className="font-mono">sk-</code>)
+          </>
+        }
+        control={
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
+          >
+            <ChevronRight
+              data-animated-chevron
+              aria-hidden="true"
+              className={cn("transition-transform duration-150", expanded && "rotate-90")}
+            />
+            {expanded ? "Hide" : "Show"}
+          </Button>
+        }
+      />
       {expanded && (
-        <div className="space-y-3">
-          <p className="text-xs text-text-secondary">
-            Only needed for legacy user keys (starts with <code className="font-mono">sk-</code>).
-          </p>
-          <div className="space-y-1.5">
-            <label className="text-sm text-text-secondary flex items-center gap-2">
-              <Shield className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
-              Organization ID
-            </label>
-            <input
-              type="text"
-              value={settings.organizationId}
-              onChange={(e) => update({ organizationId: e.target.value })}
-              onBlur={(e) => update({ organizationId: e.target.value.trim() })}
-              placeholder={isLegacyKey ? "org-..." : ""}
-              disabled={!isLegacyKey}
-              className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors disabled:opacity-50"
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-sm text-text-secondary flex items-center gap-2">
-              <Shield className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
-              Project ID
-            </label>
-            <input
-              type="text"
-              value={settings.projectId}
-              onChange={(e) => update({ projectId: e.target.value })}
-              onBlur={(e) => update({ projectId: e.target.value.trim() })}
-              placeholder={isLegacyKey ? "proj_..." : ""}
-              disabled={!isLegacyKey}
-              className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors disabled:opacity-50"
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </div>
-        </div>
+        <>
+          <SettingsInput
+            label="Organization ID"
+            value={settings.organizationId}
+            onChange={(e) => update({ organizationId: e.target.value })}
+            onBlur={(e) => update({ organizationId: e.target.value.trim() })}
+            placeholder={isLegacyKey ? "org-..." : ""}
+            disabled={!isLegacyKey}
+            disabledReason={legacyReason}
+            className="font-mono"
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <SettingsInput
+            label="Project ID"
+            value={settings.projectId}
+            onChange={(e) => update({ projectId: e.target.value })}
+            onBlur={(e) => update({ projectId: e.target.value.trim() })}
+            placeholder={isLegacyKey ? "proj_..." : ""}
+            disabled={!isLegacyKey}
+            disabledReason={legacyReason}
+            className="font-mono"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </>
       )}
-    </div>
+    </>
   );
 }
 
@@ -791,15 +780,8 @@ function MicPermissionRow({
           actions: (
             <div className="flex gap-2">
               {(isMac || isWindows) && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={onRequest}
-                  loading={isRequesting}
-                  className="text-text-primary border-border-default hover:bg-border-default"
-                >
-                  <Mic className="w-3.5 h-3.5" />
-                  Request
+                <Button size="sm" variant="outline" onClick={onRequest} loading={isRequesting}>
+                  Request access
                 </Button>
               )}
             </div>
@@ -807,7 +789,7 @@ function MicPermissionRow({
         };
       default:
         return {
-          dot: "bg-daintree-text/30",
+          dot: "bg-text-muted",
           text: "Microphone status unknown",
           description: "Permission will be requested when you start recording.",
           actions: (
@@ -823,20 +805,17 @@ function MicPermissionRow({
   })();
 
   return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-2">
-          <Shield className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
-          <span className="text-sm text-text-secondary">Microphone</span>
+    <SettingsRow
+      label="Microphone access"
+      accessory={
+        <span className="inline-flex items-center gap-1.5 text-xs text-text-secondary">
           <span className={cn("w-2 h-2 rounded-full shrink-0", statusDisplay.dot)} />
-          <span className="text-xs text-text-secondary">{statusDisplay.text}</span>
-        </div>
-        {statusDisplay.actions}
-      </div>
-      {statusDisplay.description && (
-        <p className="text-xs text-text-secondary ml-[22px]">{statusDisplay.description}</p>
-      )}
-    </div>
+          {statusDisplay.text}
+        </span>
+      }
+      description={statusDisplay.description}
+      control={statusDisplay.actions}
+    />
   );
 }
 
@@ -861,7 +840,8 @@ function ParagraphingStrategyRow({
 
   return (
     <SettingsSelect
-      label="Paragraph Breaks"
+      id="voice-paragraph-breaks"
+      label="Paragraph breaks"
       description={description}
       value={value}
       onValueChange={(v) => onChange(v as VoiceParagraphingStrategy)}
@@ -901,9 +881,9 @@ function RecordingModeRow({
   );
 }
 
-// ── Dictionary section ──
+// ── Dictionary group ──
 
-function DictionarySection({
+function DictionaryGroup({
   words,
   suggestedWords,
   learnFromCorrections,
@@ -929,17 +909,8 @@ function DictionarySection({
   inputRef: React.RefObject<HTMLInputElement | null>;
 }) {
   return (
-    <div className="space-y-2">
-      <label className="text-sm text-text-secondary flex items-center gap-2">
-        <BookText className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
-        Custom Dictionary
-        <span className="text-xs tabular-nums text-text-placeholder">
-          {words.length > 0 && `${words.length}/100`}
-        </span>
-      </label>
-
+    <SettingsGroup>
       <SettingsSwitchCard
-        variant="compact"
         title="Learn words from corrections"
         subtitle="Suggest dictionary terms when you fix a mishearing before sending"
         isEnabled={learnFromCorrections}
@@ -948,91 +919,96 @@ function DictionarySection({
       />
 
       {suggestedWords.length > 0 && (
-        <div className="space-y-1.5">
-          <p className="text-xs text-text-secondary">Suggested from corrections</p>
-          <div className="flex flex-wrap gap-1.5">
-            {suggestedWords.map((entry) => (
-              <span
-                key={entry.word}
-                className="inline-flex items-center gap-1.5 rounded-full border border-border-default bg-overlay-subtle px-2 py-0.5 text-xs text-text-primary"
-                title={entry.utterance ? `Heard as "${entry.utterance}"` : undefined}
-              >
-                {entry.word}
-                <button
-                  type="button"
-                  onClick={() => onAcceptSuggestion(entry.word)}
-                  className="inline-flex items-center gap-0.5 text-text-secondary hover:text-text-primary transition-colors"
-                  aria-label={`Add ${entry.word} to dictionary`}
+        <SettingsRow
+          label="Suggested from corrections"
+          layout="stacked"
+          control={
+            <div className="flex flex-wrap gap-1.5">
+              {suggestedWords.map((entry) => (
+                <span
+                  key={entry.word}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border-default bg-overlay-subtle px-2 py-0.5 text-xs text-text-primary"
+                  title={entry.utterance ? `Heard as "${entry.utterance}"` : undefined}
                 >
-                  <Plus className="h-3 w-3" />
-                  Add
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onDismissSuggestion(entry.word)}
-                  className="text-daintree-text/30 hover:text-daintree-text/70 transition-colors"
-                  aria-label={`Dismiss ${entry.word}`}
-                >
-                  <X className="h-2.5 w-2.5" />
-                </button>
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="flex gap-2">
-        <input
-          ref={inputRef}
-          type="text"
-          value={newWord}
-          onChange={(e) => onNewWordChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              onAdd();
-            }
-          }}
-          placeholder="Add term…"
-          className="flex-1 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
+                  {entry.word}
+                  <button
+                    type="button"
+                    onClick={() => onAcceptSuggestion(entry.word)}
+                    className="inline-flex items-center gap-0.5 text-text-secondary hover:text-text-primary transition-colors"
+                    aria-label={`Add ${entry.word} to dictionary`}
+                  >
+                    <Plus className="h-3 w-3" aria-hidden="true" />
+                    Add
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDismissSuggestion(entry.word)}
+                    className="text-text-secondary hover:text-text-primary transition-colors"
+                    aria-label={`Dismiss ${entry.word}`}
+                  >
+                    <X className="h-2.5 w-2.5" aria-hidden="true" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          }
         />
-        <Button
-          onClick={onAdd}
-          disabled={!newWord.trim()}
-          size="sm"
-          variant="outline"
-          className="text-text-primary border-border-default hover:bg-border-default"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Add
-        </Button>
-      </div>
-
-      {words.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5">
-          {words.map((word) => (
-            <span
-              key={word}
-              className="inline-flex items-center gap-1 rounded-full border border-border-default bg-surface-canvas px-2.5 py-0.5 text-xs text-text-primary"
-            >
-              {word}
-              <button
-                type="button"
-                onClick={() => onRemove(word)}
-                className="text-daintree-text/30 hover:text-daintree-text/70 transition-colors"
-                aria-label={`Remove ${word}`}
-              >
-                <X className="h-2.5 w-2.5" />
-              </button>
-            </span>
-          ))}
-        </div>
-      ) : (
-        <p className="text-xs text-text-secondary select-text">
-          Domain-specific terms sent to the transcription service to boost recognition accuracy.
-        </p>
       )}
-    </div>
+
+      <SettingsRow
+        label="Terms"
+        description={
+          words.length > 0 ? `${words.length} of 100` : "Add product names, APIs, or jargon"
+        }
+        layout="stacked"
+        control={({ labelId }) => (
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              <input
+                ref={inputRef}
+                type="text"
+                value={newWord}
+                aria-labelledby={labelId}
+                onChange={(e) => onNewWordChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    onAdd();
+                  }
+                }}
+                placeholder="Add term…"
+                className="flex-1 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
+              />
+              <Button onClick={onAdd} disabled={!newWord.trim()} size="sm" variant="outline">
+                <Plus aria-hidden="true" />
+                Add
+              </Button>
+            </div>
+
+            {words.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {words.map((word) => (
+                  <span
+                    key={word}
+                    className="inline-flex items-center gap-1 rounded-full border border-border-default bg-surface-canvas px-2.5 py-0.5 text-xs text-text-primary"
+                  >
+                    {word}
+                    <button
+                      type="button"
+                      onClick={() => onRemove(word)}
+                      className="text-text-secondary hover:text-text-primary transition-colors"
+                      aria-label={`Remove ${word}`}
+                    >
+                      <X className="h-2.5 w-2.5" aria-hidden="true" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      />
+    </SettingsGroup>
   );
 }
 
@@ -1047,8 +1023,9 @@ function CustomInstructionsRow({
 }) {
   return (
     <SettingsTextarea
-      label="Custom Instructions"
-      description="Project-specific rules appended to the core correction prompt."
+      rowId="voice-custom-instructions"
+      label="Custom instructions"
+      description="Project-specific rules appended to the core correction prompt"
       value={value}
       onChange={(e) => onChange(e.target.value)}
       rows={3}
@@ -1058,29 +1035,39 @@ function CustomInstructionsRow({
   );
 }
 
-// ── Core prompt viewer ──
+// ── Core prompt row ──
 
-function CorePromptViewer() {
+function CorePromptRow() {
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="space-y-1">
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors"
-      >
-        <ChevronRight
-          data-animated-chevron
-          className={cn("w-3.5 h-3.5 transition-transform duration-150", expanded && "rotate-90")}
-        />
-        Inspect core prompt
-      </button>
-      {expanded && (
-        <pre className="bg-surface-canvas border border-border-default rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-text-secondary whitespace-pre-wrap overflow-y-auto max-h-48 select-text">
-          {CORE_CORRECTION_PROMPT}
-        </pre>
-      )}
-    </div>
+    <SettingsRow
+      label="Core prompt"
+      description="Your project name and custom dictionary are included automatically. Prompt caching keeps costs minimal."
+      layout="stacked"
+      control={
+        <div className="space-y-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
+            className="-ml-2"
+          >
+            <ChevronRight
+              data-animated-chevron
+              aria-hidden="true"
+              className={cn("transition-transform duration-150", expanded && "rotate-90")}
+            />
+            {expanded ? "Hide core prompt" : "Inspect core prompt"}
+          </Button>
+          {expanded && (
+            <pre className="bg-surface-canvas border border-border-default rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-text-secondary whitespace-pre-wrap overflow-y-auto max-h-48 select-text">
+              {CORE_CORRECTION_PROMPT}
+            </pre>
+          )}
+        </div>
+      }
+    />
   );
 }

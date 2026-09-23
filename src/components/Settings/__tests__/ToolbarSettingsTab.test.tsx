@@ -518,8 +518,8 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
     // somewhere the button will never land.
     fire("onDragStart", { active: { id: "terminal" } });
     fire("onDragOver", {
-      active: { id: "terminal", rect: { current: { translated: { right: 0 } } } },
-      over: { id: "gemini", rect: { left: 0, width: 100 } },
+      active: { id: "terminal", rect: { current: { translated: { top: 0, height: 20 } } } },
+      over: { id: "gemini", rect: { top: 0, height: 100 } },
     });
 
     const order = Array.from(container.querySelectorAll('[role="switch"]'))
@@ -552,8 +552,8 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
     // leading half, i.e. between claude and terminal in the grouped view.
     fire("onDragStart", { active: { id: "codex" } });
     fire("onDragOver", {
-      active: { id: "codex", rect: { current: { translated: { right: 0 } } } },
-      over: { id: "terminal", rect: { left: 0, width: 100 } },
+      active: { id: "codex", rect: { current: { translated: { top: 0, height: 20 } } } },
+      over: { id: "terminal", rect: { top: 0, height: 100 } },
     });
     fire("onDragEnd", { active: { id: "codex" }, over: { id: "terminal" } });
 
@@ -563,16 +563,16 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
     expect(moveButtonMock).toHaveBeenCalledWith("codex", "right", "left", 2);
   });
 
-  it("commits a cross-side move after the hovered item (right edge past midpoint)", () => {
+  it("commits a cross-side move after the hovered item (centre below its midpoint)", () => {
     render(<ToolbarSettingsTab />);
 
     // Drag "claude" onto "settings" (right side, last at index 1) with its
-    // right edge well past the midpoint → it should land *after* settings,
+    // centre well below the midpoint → it should land *after* settings,
     // i.e. at index 2 (the end of the right list).
     fire("onDragStart", { active: { id: "claude" } });
     fire("onDragOver", {
-      active: { id: "claude", rect: { current: { translated: { right: 1000 } } } },
-      over: { id: "settings", rect: { left: 0, width: 100 } },
+      active: { id: "claude", rect: { current: { translated: { top: 1000, height: 20 } } } },
+      over: { id: "settings", rect: { top: 0, height: 100 } },
     });
     fire("onDragEnd", { active: { id: "claude" }, over: { id: "settings" } });
 
@@ -582,16 +582,16 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
     expect(setRightButtonsMock).not.toHaveBeenCalled();
   });
 
-  it("commits a cross-side move before the hovered item (right edge before midpoint)", () => {
+  it("commits a cross-side move before the hovered item (centre above its midpoint)", () => {
     render(<ToolbarSettingsTab />);
 
     // Drag "claude" onto "copy-tree" (right side, first at index 0) with its
-    // right edge before the midpoint → it should land *before* copy-tree,
+    // centre above the midpoint → it should land *before* copy-tree,
     // i.e. at index 0.
     fire("onDragStart", { active: { id: "claude" } });
     fire("onDragOver", {
-      active: { id: "claude", rect: { current: { translated: { right: 0 } } } },
-      over: { id: "copy-tree", rect: { left: 0, width: 100 } },
+      active: { id: "claude", rect: { current: { translated: { top: 0, height: 20 } } } },
+      over: { id: "copy-tree", rect: { top: 0, height: 100 } },
     });
     fire("onDragEnd", { active: { id: "claude" }, over: { id: "copy-tree" } });
 
@@ -610,8 +610,8 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
 
     fire("onDragStart", { active: { id: "terminal" } });
     fire("onDragOver", {
-      active: { id: "terminal", rect: { current: { translated: { right: 1000 } } } },
-      over: { id: "copy-tree", rect: { left: 0, width: 100 } },
+      active: { id: "terminal", rect: { current: { translated: { top: 1000, height: 20 } } } },
+      over: { id: "copy-tree", rect: { top: 0, height: 100 } },
     });
     fire("onDragEnd", { active: { id: "terminal" }, over: { id: "copy-tree" } });
 
@@ -645,8 +645,8 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
 
     fire("onDragStart", { active: { id: "terminal" } });
     fire("onDragOver", {
-      active: { id: "terminal", rect: { current: { translated: { right: 1000 } } } },
-      over: { id: "right", rect: { left: 0, width: 100 } },
+      active: { id: "terminal", rect: { current: { translated: { top: 1000, height: 20 } } } },
+      over: { id: "right", rect: { top: 0, height: 100 } },
     });
     fire("onDragEnd", { active: { id: "terminal" }, over: { id: "right" } });
 
@@ -675,11 +675,10 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
   });
 });
 
-describe("ToolbarSettingsTab — drag-source vs hidden opacity deconfliction", () => {
-  // The drag-source ghost (DRAG_GHOST_OPACITY) and the hidden-in-toolbar
-  // preview (0.5) are semantically distinct states that previously shared a
-  // magic 0.5. These tests lock the deconfliction so the two values can't
-  // silently collapse back together.
+describe("ToolbarSettingsTab — drag-source vs off-row opacity", () => {
+  // Only the drag-source ghost (DRAG_GHOST_OPACITY) dims a row. A button that
+  // is merely off used to be dimmed to 0.5 as well, which read as disabled;
+  // these tests keep the ghost the sole opacity state.
   beforeEach(() => {
     clearStoreMocks();
     vi.mocked(useSortable).mockImplementation(defaultSortable);
@@ -725,13 +724,14 @@ describe("ToolbarSettingsTab — drag-source vs hidden opacity deconfliction", (
     expect(row.style.opacity).toBe(String(DRAG_GHOST_OPACITY));
   });
 
-  it("keeps the hidden-in-toolbar preview at 0.5 (distinct from the drag ghost)", () => {
-    // gemini unpinned → not visible → hidden-preview opacity.
+  it("keeps a row that is merely off at full opacity (off is not disabled)", () => {
+    // gemini unpinned → not on the toolbar. The switch says so; dimming the
+    // whole row would make an available setting read as a disabled one.
     mockAgentSettings = agentSettings({ gemini: { pinned: false } });
 
     const { container } = render(<ToolbarSettingsTab />);
     const row = rowFor("Gemini agent", container);
-    expect(row.style.opacity).toBe("0.5");
+    expect(row.style.opacity).toBe("1");
   });
 
   it("renders a visible, non-dragged row at full opacity", () => {

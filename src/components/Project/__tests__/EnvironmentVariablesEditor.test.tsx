@@ -43,7 +43,7 @@ describe("EnvironmentVariablesEditor", () => {
         />
       );
 
-      expect(screen.getByText("Inherited (Global)")).toBeTruthy();
+      expect(screen.getByText("Inherited from global")).toBeTruthy();
       expect(screen.getByText("API_URL")).toBeTruthy();
       expect(screen.getByText("NODE_ENV")).toBeTruthy();
 
@@ -54,13 +54,13 @@ describe("EnvironmentVariablesEditor", () => {
     it("does not render inherited section when globalEnvironmentVariables is undefined", () => {
       render(<EnvironmentVariablesEditor {...defaultProps} />);
 
-      expect(screen.queryByText("Inherited (Global)")).toBeNull();
+      expect(screen.queryByText("Inherited from global")).toBeNull();
     });
 
     it("does not render inherited section when globalEnvironmentVariables is empty", () => {
       render(<EnvironmentVariablesEditor {...defaultProps} globalEnvironmentVariables={{}} />);
 
-      expect(screen.queryByText("Inherited (Global)")).toBeNull();
+      expect(screen.queryByText("Inherited from global")).toBeNull();
     });
 
     it("shows Overridden badge with line-through when project var overrides a global var", () => {
@@ -89,10 +89,10 @@ describe("EnvironmentVariablesEditor", () => {
         />
       );
 
-      expect(screen.getByText("Inherited (Global)")).toBeTruthy();
+      expect(screen.getByText("Inherited from global")).toBeTruthy();
       expect(screen.getByText("API_KEY")).toBeTruthy();
 
-      const globalSection = screen.getByText("Inherited (Global)").parentElement!.parentElement!;
+      const globalSection = screen.getByRole("group", { name: "Inherited from global" });
       const deleteButtons = globalSection.querySelectorAll(
         '[aria-label="Delete environment variable"]'
       );
@@ -111,7 +111,7 @@ describe("EnvironmentVariablesEditor", () => {
         />
       );
 
-      expect(screen.getByText("Inherited (Global)")).toBeTruthy();
+      expect(screen.getByText("Inherited from global")).toBeTruthy();
 
       const nameInputs = screen.getAllByLabelText("Environment variable name");
       expect(nameInputs.length).toBe(1);
@@ -133,8 +133,8 @@ describe("EnvironmentVariablesEditor", () => {
         />
       );
 
-      const globalSection = screen.getByText("Inherited (Global)").closest("div")!;
-      const textContent = globalSection.parentElement!.textContent!;
+      const globalSection = screen.getByRole("group", { name: "Inherited from global" });
+      const textContent = globalSection.textContent!;
       const appleIdx = textContent.indexOf("APPLE");
       const mangoIdx = textContent.indexOf("MANGO");
       const zebraIdx = textContent.indexOf("ZEBRA");
@@ -319,5 +319,31 @@ describe("EnvironmentVariablesEditor — DOM anchors for settings deep-links", (
   it("exposes the project-env-vars anchor for settings deep-links", () => {
     const { container } = render(<EnvironmentVariablesEditor {...defaultProps} />);
     expect(container.querySelector("#project-env-vars")).not.toBeNull();
+  });
+});
+
+describe("EnvironmentVariablesEditor save controls", () => {
+  it("keeps Save changes and Discard disabled until the draft differs from what was loaded", () => {
+    render(
+      <EnvironmentVariablesEditor
+        {...defaultProps}
+        environmentVariables={[makeEnvVar("MY_VAR", "a")]}
+        onFlush={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    const save = screen.getByRole("button", { name: "Save changes" }) as HTMLButtonElement;
+    const discard = screen.getByRole("button", { name: "Discard" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    expect(discard.disabled).toBe(true);
+
+    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+      target: { value: "b" },
+    });
+    expect(save.disabled).toBe(false);
+    expect(discard.disabled).toBe(false);
+
+    fireEvent.click(discard);
+    expect(save.disabled).toBe(true);
   });
 });

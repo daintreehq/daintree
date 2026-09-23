@@ -3,7 +3,13 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import type { RemoteInfo } from "@shared/types/ipc/forge";
 import type { RegisteredForgeProvider } from "@shared/types/forge";
-import { FIELD_INPUT, FormGrid, FormRow } from "@/components/Worktree/views";
+import { FIELD_INPUT } from "@/components/Worktree/views";
+import { SettingsSection } from "@/components/Settings/SettingsSection";
+import {
+  SETTINGS_CONTROL_WIDTH,
+  SettingsGroup,
+  SettingsRow,
+} from "@/components/Settings/SettingsGroup";
 import { cn } from "@/lib/utils";
 
 interface CodeForgeTabProps {
@@ -108,86 +114,82 @@ export function CodeForgeTab({
     );
 
   return (
-    <div id="project-code-forge-remote">
-      <FormGrid>
-        <FormRow
-          // A dangling `for` names nothing: while the remotes are still
-          // loading — or failed to — there is no select to point at.
+    <SettingsSection
+      id="project-code-forge-remote"
+      title="Remote and provider"
+      description="Which remote and provider this project's issues, pull requests, and pulse data come from"
+    >
+      <SettingsGroup>
+        <SettingsRow
           label="Forge remote"
-          htmlFor={loading || error ? undefined : "forge-remote-select"}
-          hint={
-            <p id="forge-remote-hint" className="text-xs text-text-secondary">
-              Select which git remote to use for forge integration (issues, PRs, and pulse data).
-              Auto-detect prefers origin, then any other remote a forge provider recognizes.
-            </p>
-          }
-        >
-          {loading ? (
-            <div className="text-sm text-text-secondary">Loading remotes...</div>
-          ) : error ? (
-            <div className="text-sm text-status-error">{error}</div>
-          ) : (
-            <select
-              id="forge-remote-select"
-              value={forgeRemote || ""}
-              onChange={(e) => onForgeRemoteChange(e.target.value || undefined)}
-              aria-describedby="forge-remote-hint"
-              className={cn(FIELD_INPUT, "pr-8")}
-            >
-              <option value="">Auto-detect</option>
-              {remotes.map((r) => (
-                <option key={r.name} value={r.name}>
-                  {r.name}
-                  {r.parsedRepo ? ` — ${r.parsedRepo.owner}/${r.parsedRepo.repo}` : ""}
-                </option>
-              ))}
-              {!savedRemoteKnown && forgeRemote ? (
-                <option value={forgeRemote}>{forgeRemote} (unavailable)</option>
-              ) : null}
-            </select>
-          )}
-        </FormRow>
-
-        <FormRow
-          label="Forge provider"
-          htmlFor={providersLoading || providersError ? undefined : "forge-provider-select"}
-          hint={
-            <p id="forge-provider-hint" className="text-xs text-text-secondary">
-              Pin this project to a specific forge provider. Auto-detects from the remote URL when
-              no override is set.
-            </p>
-          }
-        >
-          {providersLoading ? (
-            <div className="text-sm text-text-secondary">Loading providers...</div>
-          ) : providersError ? (
-            <div className="text-sm text-status-error">{providersError}</div>
-          ) : (
-            <select
-              id="forge-provider-select"
-              value={forgeProviderOverride ?? ""}
-              onChange={(e) =>
-                onForgeProviderOverrideChange(e.target.value === "" ? null : e.target.value)
-              }
-              aria-describedby="forge-provider-hint"
-              className={cn(FIELD_INPUT, "pr-8")}
-            >
-              <option value="">Auto-detect</option>
-              {providers.map((p) => {
-                const providerId = makeForgeProviderId(p.pluginId, p.contribution.id);
-                return (
-                  <option key={providerId} value={providerId}>
-                    {p.contribution.name}
+          description="Auto-detect prefers origin, then any other remote a forge provider recognizes"
+          control={({ labelId, descriptionId }) =>
+            loading ? (
+              <span className="text-sm text-text-secondary">Loading remotes…</span>
+            ) : error ? (
+              <span className="text-sm text-status-error">{error}</span>
+            ) : (
+              <select
+                id="forge-remote-select"
+                value={forgeRemote || ""}
+                onChange={(e) => onForgeRemoteChange(e.target.value || undefined)}
+                aria-labelledby={labelId}
+                aria-describedby={descriptionId}
+                className={cn(FIELD_INPUT, SETTINGS_CONTROL_WIDTH.wide, "pr-8")}
+              >
+                <option value="">Auto-detect</option>
+                {remotes.map((r) => (
+                  <option key={r.name} value={r.name}>
+                    {r.name}
+                    {r.parsedRepo ? ` — ${r.parsedRepo.owner}/${r.parsedRepo.repo}` : ""}
                   </option>
-                );
-              })}
-              {!savedProviderKnown && forgeProviderOverride !== null ? (
-                <option value={forgeProviderOverride}>{forgeProviderOverride} (unavailable)</option>
-              ) : null}
-            </select>
-          )}
-        </FormRow>
-      </FormGrid>
-    </div>
+                ))}
+                {!savedRemoteKnown && forgeRemote ? (
+                  <option value={forgeRemote}>{forgeRemote} (unavailable)</option>
+                ) : null}
+              </select>
+            )
+          }
+        />
+
+        <SettingsRow
+          label="Forge provider"
+          description="Pins this project to one provider. Auto-detects from the remote URL when unset."
+          control={({ labelId, descriptionId }) =>
+            providersLoading ? (
+              <span className="text-sm text-text-secondary">Loading providers…</span>
+            ) : providersError ? (
+              <span className="text-sm text-status-error">{providersError}</span>
+            ) : (
+              <select
+                id="forge-provider-select"
+                value={forgeProviderOverride ?? ""}
+                onChange={(e) =>
+                  onForgeProviderOverrideChange(e.target.value === "" ? null : e.target.value)
+                }
+                aria-labelledby={labelId}
+                aria-describedby={descriptionId}
+                className={cn(FIELD_INPUT, SETTINGS_CONTROL_WIDTH.wide, "pr-8")}
+              >
+                <option value="">Auto-detect</option>
+                {providers.map((p) => {
+                  const providerId = makeForgeProviderId(p.pluginId, p.contribution.id);
+                  return (
+                    <option key={providerId} value={providerId}>
+                      {p.contribution.name}
+                    </option>
+                  );
+                })}
+                {!savedProviderKnown && forgeProviderOverride !== null ? (
+                  <option value={forgeProviderOverride}>
+                    {forgeProviderOverride} (unavailable)
+                  </option>
+                ) : null}
+              </select>
+            )
+          }
+        />
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

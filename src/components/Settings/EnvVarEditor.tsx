@@ -20,8 +20,8 @@ import { ImportEnvDialog } from "./ImportEnvDialog";
  *  - Inherited rows render disabled and muted, with a `+ Override` action in
  *    the actions cell that promotes the row to an editable override seeded
  *    with the inherited value.
- *  - Override rows (env entries that shadow an inherited key) get an accent
- *    left-stripe and a revert (RotateCcw) action that clears the override
+ *  - Override rows (env entries that shadow an inherited key) get a
+ *    modified left-stripe and a revert (RotateCcw) action that clears the override
  *    back to inherited.
  *  - Clearing an override's value on blur also reverts to inherited, so we
  *    don't silently ship empty-string overrides.
@@ -253,7 +253,7 @@ function EnvVarKeyCell({
               "disabled:cursor-default",
               showChevron ? "pl-2.5 pr-8" : "px-2.5",
               disabled
-                ? "text-daintree-text/40"
+                ? "text-text-secondary"
                 : isEmptyKey
                   ? "text-status-error"
                   : isDuplicate
@@ -326,7 +326,7 @@ function EnvVarKeyCell({
                 e.preventDefault();
                 inputRef.current?.focus();
               }}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded text-daintree-text/40 hover:text-daintree-text/70 hover:bg-daintree-bg/60 transition-colors"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary hover:bg-daintree-bg/60 transition-colors"
               data-testid="env-editor-key-suggestions-trigger"
             >
               <ChevronDown size={12} aria-hidden="true" />
@@ -740,7 +740,7 @@ export function EnvVarEditor({
               : isDuplicate || hasSecretWarning
                 ? "before:bg-status-warning/70"
                 : isOverride
-                  ? "before:bg-accent-primary"
+                  ? "before:bg-state-modified"
                   : "before:bg-transparent";
             // Keys taken by *other* editable rows — used to filter the
             // suggestion popover so a single key can't be picked twice.
@@ -787,10 +787,10 @@ export function EnvVarEditor({
                       "disabled:cursor-default",
                       isSecret ? "pl-2.5 pr-8" : "px-2.5",
                       row.isInherited
-                        ? "text-daintree-text/40"
+                        ? "text-text-secondary"
                         : hasSecretWarning
                           ? "text-status-warning"
-                          : "text-daintree-accent/90"
+                          : "text-text-primary"
                     )}
                     value={row.value}
                     placeholder={valuePlaceholder}
@@ -828,7 +828,7 @@ export function EnvVarEditor({
                       onClick={() => toggleReveal(row.rowId)}
                       aria-pressed={isRevealed}
                       aria-label={isRevealed ? "Hide value" : "Show value"}
-                      className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded text-daintree-text/40 hover:text-daintree-text/70 hover:bg-daintree-bg/60 transition-colors"
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary hover:bg-daintree-bg/60 transition-colors"
                       data-testid="env-editor-reveal"
                     >
                       {isRevealed ? (
@@ -861,7 +861,7 @@ export function EnvVarEditor({
                   {row.isInherited ? (
                     <button
                       type="button"
-                      className="p-1 rounded text-daintree-text/40 hover:text-text-primary hover:bg-daintree-bg/60 transition-colors"
+                      className="p-1 rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary hover:bg-daintree-bg/60 transition-colors"
                       aria-label={`Override ${trimmedKey} in this preset`}
                       onClick={() => handleOverride(row.rowId)}
                       data-testid="env-editor-override"
@@ -872,7 +872,7 @@ export function EnvVarEditor({
                   ) : isOverride ? (
                     <button
                       type="button"
-                      className="p-1 rounded text-daintree-text/40 hover:text-text-primary hover:bg-daintree-bg/60 transition-colors"
+                      className="p-1 rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary hover:bg-daintree-bg/60 transition-colors"
                       aria-label={`Revert ${trimmedKey} to inherited value`}
                       onClick={() => handleRevert(row.rowId)}
                       data-testid="env-editor-revert"
@@ -883,7 +883,7 @@ export function EnvVarEditor({
                   ) : (
                     <button
                       type="button"
-                      className="p-1 rounded text-daintree-text/30 hover:text-status-error hover:bg-daintree-bg/60 transition-colors"
+                      className="p-1 rounded-[var(--radius-sm)] text-text-secondary hover:text-status-error hover:bg-daintree-bg/60 transition-colors"
                       aria-label={`Remove ${trimmedKey || "empty"} env var`}
                       onClick={() => handleRemove(row.rowId)}
                       data-testid="env-editor-remove"

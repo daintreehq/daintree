@@ -1,31 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import {
-  ChevronRight,
-  History,
-  Moon,
-  ShieldBan,
-  KeyRound,
-  Wrench,
-  LayoutGrid,
-  PanelBottom,
-  Keyboard,
-  Info,
-  ExternalLink,
-  RefreshCw,
-  Gauge,
-  Type,
-  Bell,
-  MemoryStick,
-} from "lucide-react";
+import { ChevronRight, ShieldBan, KeyRound, Wrench, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { DaintreeIcon, Activity } from "@/components/icons";
+import { DaintreeIcon } from "@/components/icons";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { KeepAwakeSection } from "@/components/Settings/KeepAwakeSection";
 import { WindowOpeningSection } from "@/components/Settings/WindowOpeningSection";
 import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
-import { SettingsPresetGroup } from "./SettingsPresetGroup";
+import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { getAgentIds } from "@/config/agents";
 import { AgentIdentityBlock, resolveIdentity } from "@/components/agents/AgentCard";
@@ -132,6 +116,49 @@ interface ShortcutDisplay {
 interface ShortcutCategory {
   category: string;
   shortcuts: ShortcutDisplay[];
+}
+
+interface PresetRowProps<T extends string | number> {
+  id?: string;
+  label: string;
+  description?: string;
+  options: readonly { value: T; label: string }[];
+  /** Null while the stored value is unknown: nothing is shown as selected. */
+  value: T | null;
+  onChange: (value: T) => void;
+  disabled?: boolean;
+}
+
+/** A row whose control is a short run of exclusive presets on the right rail. */
+function PresetRow<T extends string | number>({
+  id,
+  label,
+  description,
+  options,
+  value,
+  onChange,
+  disabled,
+}: PresetRowProps<T>) {
+  const segments = options.map((option) => ({ value: String(option.value), label: option.label }));
+  return (
+    <SettingsRow
+      id={id}
+      label={label}
+      description={description}
+      control={({ disabled: rowDisabled }) => (
+        <SegmentedRadioGroup
+          aria-label={label}
+          options={segments}
+          value={value === null ? "" : String(value)}
+          onChange={(next) => {
+            const match = options.find((option) => String(option.value) === next);
+            if (match) onChange(match.value);
+          }}
+          disabled={disabled || rowDisabled}
+        />
+      )}
+    />
+  );
 }
 
 export function GeneralTab({
@@ -828,11 +855,10 @@ export function GeneralTab({
         ariaLabel="General settings sections"
       />
 
-      <div {...subtabPanelProps("general", effectiveSubtab)} className="space-y-6">
+      <div {...subtabPanelProps("general", effectiveSubtab)} className="space-y-8">
         {effectiveSubtab === "overview" && (
           <>
             <SettingsSection
-              icon={Info}
               title="System status"
               description={systemStatusSummary}
               id="general-system-status"
@@ -1012,9 +1038,8 @@ export function GeneralTab({
 
             {(sessionRestoreConfig || sectionErrors.sessionRestore) && (
               <SettingsSection
-                icon={History}
                 title="Startup"
-                description="What comes back when Daintree restarts."
+                description="What comes back when Daintree restarts"
                 id="general-session-restore"
               >
                 {sectionErrors.sessionRestore ? (
@@ -1023,15 +1048,15 @@ export function GeneralTab({
                     onRetry={() => setConfigRetryNonce((n) => n + 1)}
                   />
                 ) : sessionRestoreConfig ? (
-                  <SettingsSwitchCard
-                    icon={History}
-                    title="Restore live projects"
-                    subtitle="Bring back every project that was running, not just the one each window was showing"
-                    isEnabled={sessionRestoreConfig.enabled}
-                    onChange={() => void handleSessionRestoreToggle()}
-                    ariaLabel="Restore Live Projects Toggle"
-                    disabled={isSessionRestoreSaving}
-                  />
+                  <SettingsGroup>
+                    <SettingsSwitchCard
+                      title="Restore live projects"
+                      subtitle="Bring back every project that was running, not just the one each window was showing"
+                      isEnabled={sessionRestoreConfig.enabled}
+                      onChange={() => void handleSessionRestoreToggle()}
+                      disabled={isSessionRestoreSaving}
+                    />
+                  </SettingsGroup>
                 ) : null}
               </SettingsSection>
             )}
@@ -1042,49 +1067,42 @@ export function GeneralTab({
 
             {updatesManagedByStore ? (
               <SettingsSection
-                icon={RefreshCw}
                 title="Updates"
-                description="Updates are managed by the Microsoft Store on Windows."
+                description="Updates are managed by the Microsoft Store on Windows"
                 id="general-update-channel"
               >
-                <SettingsSwitchCard
-                  icon={RefreshCw}
-                  title="Notify when a new version is available"
-                  subtitle="Show an inbox notification with a link to the Microsoft Store"
-                  isEnabled={storeUpdateNotificationsEnabled ?? true}
-                  onChange={() => void handleStoreUpdateNotificationsToggle()}
-                  ariaLabel="Toggle Microsoft Store update notifications"
-                  disabled={storeUpdateNotificationsEnabled === null}
-                />
+                <SettingsGroup>
+                  <SettingsSwitchCard
+                    title="Notify when a new version is available"
+                    subtitle="Show an inbox notification with a link to the Microsoft Store"
+                    isEnabled={storeUpdateNotificationsEnabled ?? true}
+                    onChange={() => void handleStoreUpdateNotificationsToggle()}
+                    disabled={storeUpdateNotificationsEnabled === null}
+                  />
+                </SettingsGroup>
               </SettingsSection>
             ) : (
-              <SettingsSection
-                icon={RefreshCw}
-                title="Update channel"
-                description="Choose between stable releases and nightly builds."
-                id="general-update-channel"
-              >
+              <SettingsSection title="Updates" id="general-update-channel">
                 {updateChannelLoadFailed ? (
                   <SettingsLoadErrorBanner
                     message="Couldn't load the update channel"
                     onRetry={() => setChannelRetryNonce((n) => n + 1)}
                   />
                 ) : (
-                  <>
-                    <SettingsPresetGroup
-                      label="Channel"
+                  <SettingsGroup>
+                    <PresetRow
+                      label="Update channel"
+                      description={
+                        updateChannel === "nightly"
+                          ? "Nightly builds may contain unstable features. You can switch back to stable at any time."
+                          : "Stable releases, or nightly builds with the newest changes"
+                      }
                       options={UPDATE_CHANNEL_OPTIONS}
                       value={updateChannel}
                       onChange={(ch) => void handleChannelChange(ch)}
                       disabled={updateChannel === null || channelSaving}
                     />
-                    {updateChannel === "nightly" && (
-                      <p className="text-xs text-status-warning">
-                        Nightly builds may contain unstable features. You can switch back to stable
-                        at any time.
-                      </p>
-                    )}
-                  </>
+                  </SettingsGroup>
                 )}
                 {lastUpdateCheck && (
                   <p className="text-xs text-text-secondary">
@@ -1095,9 +1113,8 @@ export function GeneralTab({
             )}
 
             <SettingsSection
-              icon={Keyboard}
               title="Quick reference"
-              description="Common keyboard shortcuts. Edit all shortcuts in the Keyboard settings tab."
+              description="Common keyboard shortcuts — edit them all in Keyboard settings"
             >
               <button
                 type="button"
@@ -1131,7 +1148,7 @@ export function GeneralTab({
                           >
                             <dt className="text-text-primary">{shortcut.description}</dt>
                             <dd>
-                              <kbd className="settings-kbd px-2 py-1 rounded border text-xs font-mono text-text-primary">
+                              <kbd className="settings-kbd px-2 py-1 rounded-[var(--radius-sm)] border text-xs font-mono text-text-primary">
                                 {shortcut.key}
                               </kbd>
                             </dd>
@@ -1192,9 +1209,7 @@ export function GeneralTab({
           <>
             {(idleNotifyConfig || sectionErrors.idleNotify) && (
               <SettingsSection
-                icon={Bell}
                 title="Idle terminal notifications"
-                description="Get a friendly reminder when terminals in background projects have been idle for a while. Doesn't kill anything — just lets you decide."
                 id="general-idle-terminal-notify"
               >
                 {sectionErrors.idleNotify ? (
@@ -1203,38 +1218,33 @@ export function GeneralTab({
                     onRetry={() => setConfigRetryNonce((n) => n + 1)}
                   />
                 ) : idleNotifyConfig ? (
-                  <>
+                  <SettingsGroup>
                     <SettingsSwitchCard
-                      icon={Bell}
                       title="Notify me about idle terminals"
-                      subtitle="Applies to background projects only — the active one is never flagged"
+                      subtitle="A reminder when terminals in background projects go quiet — nothing is closed, and the active project is never flagged"
                       isEnabled={idleNotifyConfig.enabled}
                       onChange={handleIdleNotifyToggle}
-                      ariaLabel="Idle Terminal Notifications Toggle"
                     />
-
                     {idleNotifyConfig.enabled && (
-                      <SettingsPresetGroup
-                        id="general-idle-terminal-threshold"
-                        disabled={isIdleNotifySaving}
-                        label="Idle threshold"
-                        options={IDLE_TERMINAL_THRESHOLD_PRESETS}
-                        value={idleNotifyConfig.thresholdMinutes}
-                        onChange={(v) => handleIdleNotifyThresholdChange(v)}
-                        description={
-                          "A toast appears when background project terminals have been quiet this long, with options to close them or dismiss the reminder."
-                        }
-                      />
+                      <SettingsDependents>
+                        <PresetRow
+                          id="general-idle-terminal-threshold"
+                          label="Idle threshold"
+                          description="How long background terminals stay quiet before the reminder, which offers to close them"
+                          options={IDLE_TERMINAL_THRESHOLD_PRESETS}
+                          value={idleNotifyConfig.thresholdMinutes}
+                          onChange={(v) => void handleIdleNotifyThresholdChange(v)}
+                          disabled={isIdleNotifySaving}
+                        />
+                      </SettingsDependents>
                     )}
-                  </>
+                  </SettingsGroup>
                 ) : null}
               </SettingsSection>
             )}
             {(idleAutoCloseConfig || sectionErrors.idleAutoClose) && (
               <SettingsSection
-                icon={MemoryStick}
                 title="Auto-close idle projects"
-                description="Reclaim memory from background projects that have no terminals and have been idle for a while. They stay in the switcher and reopen right where you left off."
                 id="general-idle-background-auto-close"
               >
                 {sectionErrors.idleAutoClose ? (
@@ -1243,30 +1253,27 @@ export function GeneralTab({
                     onRetry={() => setConfigRetryNonce((n) => n + 1)}
                   />
                 ) : idleAutoCloseConfig ? (
-                  <>
+                  <SettingsGroup>
                     <SettingsSwitchCard
-                      icon={MemoryStick}
                       title="Close idle projects automatically"
-                      subtitle="Only projects with no open terminals — panels are restored when you reopen them"
+                      subtitle="Frees memory from background projects with no open terminals. They stay in the switcher and reopen with their panels."
                       isEnabled={idleAutoCloseConfig.enabled}
                       onChange={handleIdleAutoCloseToggle}
-                      ariaLabel="Auto-Close Idle Projects Toggle"
                     />
-
                     {idleAutoCloseConfig.enabled && (
-                      <SettingsPresetGroup
-                        id="general-idle-background-threshold"
-                        disabled={isIdleAutoCloseSaving}
-                        label="Idle threshold"
-                        options={IDLE_BACKGROUND_THRESHOLD_PRESETS}
-                        value={idleAutoCloseConfig.thresholdMinutes}
-                        onChange={(v) => handleIdleAutoCloseThresholdChange(v)}
-                        description={
-                          "Only projects with no terminals are auto-closed. The active project is never touched, and reopening a project restores its panels."
-                        }
-                      />
+                      <SettingsDependents>
+                        <PresetRow
+                          id="general-idle-background-threshold"
+                          label="Idle threshold"
+                          description="How long a background project sits idle before it closes — the active project is never touched"
+                          options={IDLE_BACKGROUND_THRESHOLD_PRESETS}
+                          value={idleAutoCloseConfig.thresholdMinutes}
+                          onChange={(v) => void handleIdleAutoCloseThresholdChange(v)}
+                          disabled={isIdleAutoCloseSaving}
+                        />
+                      </SettingsDependents>
                     )}
-                  </>
+                  </SettingsGroup>
                 ) : null}
               </SettingsSection>
             )}
@@ -1277,34 +1284,28 @@ export function GeneralTab({
                 onRetry={() => setConfigRetryNonce((n) => n + 1)}
               />
             ) : hibernationConfig ? (
-              <SettingsSection
-                icon={Moon}
-                title="Auto-hibernation"
-                description="Automatically stop terminals and servers for projects that have been inactive for a period of time. Reduces system resource usage."
-                id="general-hibernation"
-              >
-                <SettingsSwitchCard
-                  icon={Moon}
-                  title="Hibernate inactive projects"
-                  subtitle="Stops their terminals and dev servers; the project reopens where you left it"
-                  isEnabled={hibernationConfig.enabled}
-                  onChange={handleHibernationToggle}
-                  ariaLabel="Auto-Hibernation Toggle"
-                />
-
-                {hibernationConfig.enabled && (
-                  <SettingsPresetGroup
-                    id="general-hibernation-threshold"
-                    disabled={isSaving}
-                    label="Inactivity threshold"
-                    options={THRESHOLD_PRESETS}
-                    value={hibernationConfig.inactiveThresholdHours}
-                    onChange={(v) => handleThresholdChange(v)}
-                    description={
-                      "Projects idle longer than this will have their processes stopped automatically."
-                    }
+              <SettingsSection title="Auto-hibernation" id="general-hibernation">
+                <SettingsGroup>
+                  <SettingsSwitchCard
+                    title="Hibernate inactive projects"
+                    subtitle="Stops their terminals and dev servers to free resources; the project reopens where you left it"
+                    isEnabled={hibernationConfig.enabled}
+                    onChange={handleHibernationToggle}
                   />
-                )}
+                  {hibernationConfig.enabled && (
+                    <SettingsDependents>
+                      <PresetRow
+                        id="general-hibernation-threshold"
+                        label="Inactivity threshold"
+                        description="Projects idle longer than this have their processes stopped"
+                        options={THRESHOLD_PRESETS}
+                        value={hibernationConfig.inactiveThresholdHours}
+                        onChange={(v) => void handleThresholdChange(v)}
+                        disabled={isSaving}
+                      />
+                    </SettingsDependents>
+                  )}
+                </SettingsGroup>
               </SettingsSection>
             ) : (
               <div className="text-sm text-text-secondary">Loading hibernation settings…</div>
@@ -1314,153 +1315,143 @@ export function GeneralTab({
 
         {effectiveSubtab === "display" && (
           <SettingsSection
-            icon={Activity}
             title="Interface elements"
-            description="Choose what Daintree shows while you work."
+            description="What Daintree shows while you work"
             id="general-project-pulse"
           >
-            <SettingsSwitchCard
-              icon={Activity}
-              title="Project pulse"
-              subtitle="Show activity heatmap on the empty panel grid"
-              isEnabled={showProjectPulse}
-              onChange={() =>
-                void actionService.dispatch(
-                  "preferences.showProjectPulse.set",
-                  { show: !showProjectPulse },
-                  { source: "user" }
-                )
-              }
-              ariaLabel="Project Pulse Toggle"
-              isModified={!showProjectPulse}
-              onReset={() =>
-                void actionService.dispatch(
-                  "preferences.showProjectPulse.set",
-                  { show: true },
-                  { source: "user" }
-                )
-              }
-            />
+            <SettingsGroup>
+              <SettingsSwitchCard
+                title="Project pulse"
+                subtitle="Show activity heatmap on the empty panel grid"
+                isEnabled={showProjectPulse}
+                onChange={() =>
+                  void actionService.dispatch(
+                    "preferences.showProjectPulse.set",
+                    { show: !showProjectPulse },
+                    { source: "user" }
+                  )
+                }
+                ariaLabel="Project Pulse Toggle"
+                isModified={!showProjectPulse}
+                onReset={() =>
+                  void actionService.dispatch(
+                    "preferences.showProjectPulse.set",
+                    { show: true },
+                    { source: "user" }
+                  )
+                }
+              />
 
-            <SettingsSwitchCard
-              id="general-developer-tools"
-              icon={Wrench}
-              title="Developer tools"
-              subtitle="Show problems panel button in the toolbar"
-              isEnabled={showDeveloperTools}
-              onChange={() =>
-                void actionService.dispatch(
-                  "preferences.showDeveloperTools.set",
-                  { show: !showDeveloperTools },
-                  { source: "user" }
-                )
-              }
-              ariaLabel="Developer Tools Toggle"
-              isModified={showDeveloperTools}
-              onReset={() =>
-                void actionService.dispatch(
-                  "preferences.showDeveloperTools.set",
-                  { show: false },
-                  { source: "user" }
-                )
-              }
-            />
+              <SettingsSwitchCard
+                id="general-developer-tools"
+                title="Developer tools"
+                subtitle="Show problems panel button in the toolbar"
+                isEnabled={showDeveloperTools}
+                onChange={() =>
+                  void actionService.dispatch(
+                    "preferences.showDeveloperTools.set",
+                    { show: !showDeveloperTools },
+                    { source: "user" }
+                  )
+                }
+                isModified={showDeveloperTools}
+                onReset={() =>
+                  void actionService.dispatch(
+                    "preferences.showDeveloperTools.set",
+                    { show: false },
+                    { source: "user" }
+                  )
+                }
+              />
 
-            <SettingsSwitchCard
-              id="general-grid-agent-highlights"
-              icon={LayoutGrid}
-              title="Grid panel agent highlights"
-              subtitle="Show waiting and working state borders on grid panels. Failed state borders are always visible."
-              isEnabled={showGridAgentHighlights}
-              onChange={() =>
-                void actionService.dispatch(
-                  "preferences.showGridAgentHighlights.set",
-                  { show: !showGridAgentHighlights },
-                  { source: "user" }
-                )
-              }
-              ariaLabel="Grid Panel Agent Highlights Toggle"
-              isModified={showGridAgentHighlights}
-              onReset={() =>
-                void actionService.dispatch(
-                  "preferences.showGridAgentHighlights.set",
-                  { show: false },
-                  { source: "user" }
-                )
-              }
-            />
+              <SettingsSwitchCard
+                id="general-grid-agent-highlights"
+                title="Grid panel agent highlights"
+                subtitle="Show waiting and working state borders on grid panels. Failed state borders are always visible."
+                isEnabled={showGridAgentHighlights}
+                onChange={() =>
+                  void actionService.dispatch(
+                    "preferences.showGridAgentHighlights.set",
+                    { show: !showGridAgentHighlights },
+                    { source: "user" }
+                  )
+                }
+                isModified={showGridAgentHighlights}
+                onReset={() =>
+                  void actionService.dispatch(
+                    "preferences.showGridAgentHighlights.set",
+                    { show: false },
+                    { source: "user" }
+                  )
+                }
+              />
 
-            <SettingsSwitchCard
-              id="general-dock-agent-highlights"
-              icon={PanelBottom}
-              title="Dock item agent highlights"
-              subtitle="Show waiting state borders on dock items. Failed state borders are always visible."
-              isEnabled={showDockAgentHighlights}
-              onChange={() =>
-                void actionService.dispatch(
-                  "preferences.showDockAgentHighlights.set",
-                  { show: !showDockAgentHighlights },
-                  { source: "user" }
-                )
-              }
-              ariaLabel="Dock Item Agent Highlights Toggle"
-              isModified={showDockAgentHighlights}
-              onReset={() =>
-                void actionService.dispatch(
-                  "preferences.showDockAgentHighlights.set",
-                  { show: false },
-                  { source: "user" }
-                )
-              }
-            />
+              <SettingsSwitchCard
+                id="general-dock-agent-highlights"
+                title="Dock item agent highlights"
+                subtitle="Show waiting state borders on dock items. Failed state borders are always visible."
+                isEnabled={showDockAgentHighlights}
+                onChange={() =>
+                  void actionService.dispatch(
+                    "preferences.showDockAgentHighlights.set",
+                    { show: !showDockAgentHighlights },
+                    { source: "user" }
+                  )
+                }
+                isModified={showDockAgentHighlights}
+                onReset={() =>
+                  void actionService.dispatch(
+                    "preferences.showDockAgentHighlights.set",
+                    { show: false },
+                    { source: "user" }
+                  )
+                }
+              />
 
-            <SettingsSwitchCard
-              id="general-agent-task-titles"
-              icon={Type}
-              title="Agent task in terminal titles"
-              subtitle="Show the agent's current task next to its name in tabs and panel headers"
-              isEnabled={showAgentTaskTitles}
-              onChange={() =>
-                void actionService.dispatch(
-                  "preferences.showAgentTaskTitles.set",
-                  { show: !showAgentTaskTitles },
-                  { source: "user" }
-                )
-              }
-              ariaLabel="Agent Task Titles Toggle"
-              isModified={!showAgentTaskTitles}
-              onReset={() =>
-                void actionService.dispatch(
-                  "preferences.showAgentTaskTitles.set",
-                  { show: true },
-                  { source: "user" }
-                )
-              }
-            />
+              <SettingsSwitchCard
+                id="general-agent-task-titles"
+                title="Agent task in terminal titles"
+                subtitle="Show the agent's current task next to its name in tabs and panel headers"
+                isEnabled={showAgentTaskTitles}
+                onChange={() =>
+                  void actionService.dispatch(
+                    "preferences.showAgentTaskTitles.set",
+                    { show: !showAgentTaskTitles },
+                    { source: "user" }
+                  )
+                }
+                isModified={!showAgentTaskTitles}
+                onReset={() =>
+                  void actionService.dispatch(
+                    "preferences.showAgentTaskTitles.set",
+                    { show: true },
+                    { source: "user" }
+                  )
+                }
+              />
 
-            <SettingsSwitchCard
-              id="general-reduce-animations"
-              icon={Gauge}
-              title="Reduce UI animations"
-              subtitle="Minimize motion across the interface, independent of your OS reduce-motion setting"
-              isEnabled={reduceAnimations}
-              onChange={() =>
-                void actionService.dispatch(
-                  "preferences.reduceAnimations.set",
-                  { value: !reduceAnimations },
-                  { source: "user" }
-                )
-              }
-              ariaLabel="Reduce UI Animations Toggle"
-              isModified={reduceAnimations}
-              onReset={() =>
-                void actionService.dispatch(
-                  "preferences.reduceAnimations.set",
-                  { value: false },
-                  { source: "user" }
-                )
-              }
-            />
+              <SettingsSwitchCard
+                id="general-reduce-animations"
+                title="Reduce UI animations"
+                subtitle="Minimize motion across the interface, independent of your OS reduce-motion setting"
+                isEnabled={reduceAnimations}
+                onChange={() =>
+                  void actionService.dispatch(
+                    "preferences.reduceAnimations.set",
+                    { value: !reduceAnimations },
+                    { source: "user" }
+                  )
+                }
+                isModified={reduceAnimations}
+                onReset={() =>
+                  void actionService.dispatch(
+                    "preferences.reduceAnimations.set",
+                    { value: false },
+                    { source: "user" }
+                  )
+                }
+              />
+            </SettingsGroup>
           </SettingsSection>
         )}
       </div>

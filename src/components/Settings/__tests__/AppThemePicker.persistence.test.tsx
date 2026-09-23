@@ -195,7 +195,7 @@ describe("AppThemePicker — follow-system and preferred schemes", () => {
     client.setFollowSystem.mockReturnValue(write.promise);
 
     render(<AppThemePicker />);
-    await act(async () => screen.getByLabelText("Toggle automatic theme switching").click());
+    await act(async () => screen.getByRole("switch", { name: "Match system appearance" }).click());
     expect(state().followSystem).toBe(true);
 
     await act(async () => {
@@ -226,7 +226,7 @@ describe("AppThemePicker — follow-system and preferred schemes", () => {
 
     // A successful write to a DIFFERENT field must not dismiss a failure the
     // user has not dealt with.
-    await act(async () => screen.getByLabelText("Toggle automatic theme switching").click());
+    await act(async () => screen.getByRole("switch", { name: "Match system appearance" }).click());
 
     expect(screen.getByRole("alert")).toBeTruthy();
   });
@@ -370,7 +370,7 @@ describe("AppThemePicker — theme selection is three separate durable writes", 
     client.setFollowSystem.mockReturnValueOnce(toggleWrite.promise);
 
     render(<AppThemePicker />);
-    await act(async () => screen.getByLabelText("Toggle automatic theme switching").click());
+    await act(async () => screen.getByRole("switch", { name: "Match system appearance" }).click());
     expect(state().followSystem).toBe(true);
 
     client.setFollowSystem.mockResolvedValue(undefined);
@@ -394,7 +394,7 @@ describe("AppThemePicker — theme selection is three separate durable writes", 
     await selectDarkB(); // in flight, will fail
 
     // User turns system matching ON while that write is pending; it saves.
-    await act(async () => screen.getByLabelText("Toggle automatic theme switching").click());
+    await act(async () => screen.getByRole("switch", { name: "Match system appearance" }).click());
     expect(state().followSystem).toBe(true);
 
     await act(async () => {

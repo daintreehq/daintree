@@ -255,11 +255,9 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await fontSizeInput.fill(newValue);
     await fontSizeInput.blur();
 
-    // The "Current: Npx" readout updates after a debounced blur; the polled
-    // expect covers the settle window without a fixed sleep.
-    await expect(window.locator(`text=Current: ${newValue}px`)).toBeVisible({
-      timeout: T_MEDIUM,
-    });
+    // The field commits on a debounced blur; the polled expect covers the settle
+    // window without a fixed sleep.
+    await expect(fontSizeInput).toHaveValue(newValue, { timeout: T_MEDIUM });
 
     await window.keyboard.press("Escape");
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
@@ -475,7 +473,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
       .locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" })
       .click();
     const panel = window.locator("#settings-panel-project\\:automation");
-    await expect(panel.locator("h2", { hasText: "Resource Environments" })).toBeVisible({
+    await expect(panel.locator("h4", { hasText: "Resource environments" })).toBeVisible({
       timeout: T_SHORT,
     });
 
@@ -562,7 +560,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
       .locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" })
       .click();
     const panel = window.locator("#settings-panel-project\\:automation");
-    await expect(panel.locator("h2", { hasText: "Resource Environments" })).toBeVisible({
+    await expect(panel.locator("h4", { hasText: "Resource environments" })).toBeVisible({
       timeout: T_MEDIUM,
     });
 
@@ -593,7 +591,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
       .locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" })
       .click();
     const panel = window.locator("#settings-panel-project\\:automation");
-    await expect(panel.locator("h2", { hasText: "Resource Environments" })).toBeVisible({
+    await expect(panel.locator("h4", { hasText: "Resource environments" })).toBeVisible({
       timeout: T_SHORT,
     });
 
@@ -660,7 +658,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
       .locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" })
       .click();
     const panel = window.locator("#settings-panel-project\\:automation");
-    await expect(panel.locator("h2", { hasText: "Resource Environments" })).toBeVisible({
+    await expect(panel.locator("h4", { hasText: "Resource environments" })).toBeVisible({
       timeout: T_SHORT,
     });
 
@@ -725,7 +723,9 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
 
     // Navigate to Variables tab
     await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Variables" }).click();
-    await expect(window.locator("h3", { hasText: "Environment Variables" })).toBeVisible({
+    await expect(
+      window.getByRole("heading", { name: /environment variables/i }).first()
+    ).toBeVisible({
       timeout: T_SHORT,
     });
 
@@ -774,7 +774,9 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await window.waitForTimeout(T_SETTLE);
 
     await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Variables" }).click();
-    await expect(window.locator("h3", { hasText: "Environment Variables" })).toBeVisible({
+    await expect(
+      window.getByRole("heading", { name: /environment variables/i }).first()
+    ).toBeVisible({
       timeout: T_SHORT,
     });
 

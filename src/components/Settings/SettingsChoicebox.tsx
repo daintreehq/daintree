@@ -1,4 +1,4 @@
-import { useId, useState, useRef, useEffect } from "react";
+import { useId, useRef, useEffect } from "react";
 import type { ComponentPropsWithoutRef, KeyboardEvent, ReactNode } from "react";
 import { Check, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -55,6 +55,7 @@ export function SettingsChoicebox<T extends string = string>({
   columns = 1,
   disabled,
   className,
+  "aria-label": ariaLabel,
   ...props
 }: SettingsChoiceboxProps<T>) {
   const id = useId();
@@ -68,7 +69,6 @@ export function SettingsChoicebox<T extends string = string>({
     [isError ? errorId : null, description ? descriptionId : null].filter(Boolean).join(" ") ||
     undefined;
 
-  const [focusedIndex, setFocusedIndex] = useState<number>(-1);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const initiallyFocusableIndex = (() => {
@@ -115,9 +115,14 @@ export function SettingsChoicebox<T extends string = string>({
         return;
       }
 
+      // Radio semantics: moving is choosing. A radiogroup whose arrows only move focus
+      // leaves a screen-reader user hearing "checked" on one option while standing on
+      // another, and needing a second key to commit what the pattern already implies.
       if (nextIndex !== currentIndex && nextIndex >= 0 && nextIndex < buttons.length) {
-        buttons[nextIndex]?.focus();
-        setFocusedIndex(nextIndex);
+        const next = buttons[nextIndex];
+        next?.focus();
+        const nextValue = next?.getAttribute("data-value");
+        if (nextValue !== null && nextValue !== undefined) onChange(nextValue as T);
       }
     };
 
@@ -144,7 +149,7 @@ export function SettingsChoicebox<T extends string = string>({
               type="button"
               aria-label={resetAriaLabel ?? `Reset ${label} to default`}
               className={cn(
-                "p-0.5 rounded-sm text-text-muted hover:text-text-primary",
+                "p-0.5 rounded-sm text-text-secondary hover:text-text-primary",
                 "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
                 "transition-colors"
@@ -162,7 +167,7 @@ export function SettingsChoicebox<T extends string = string>({
             type="button"
             aria-label="Reset to default"
             className={cn(
-              "p-0.5 rounded-sm text-text-muted hover:text-text-primary",
+              "p-0.5 rounded-sm text-text-secondary hover:text-text-primary",
               "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
               "transition-colors"
@@ -177,7 +182,11 @@ export function SettingsChoicebox<T extends string = string>({
         ref={containerRef}
         id={id}
         role="radiogroup"
-        aria-labelledby={label && labelId}
+        // The group's name belongs on the radiogroup itself, not the wrapper around it:
+        // an unlabelled choicebox named by the caller's `aria-label` announced as an
+        // anonymous radio group.
+        aria-labelledby={label ? labelId : undefined}
+        aria-label={label ? undefined : ariaLabel}
         aria-describedby={describedBy}
         aria-invalid={isError ? true : undefined}
         className={cn("flex gap-2", {
@@ -197,22 +206,14 @@ export function SettingsChoicebox<T extends string = string>({
               role="radio"
               aria-checked={isSelected}
               aria-disabled={isOptionDisabled}
-              tabIndex={
-                isSelected
-                  ? 0
-                  : focusedIndex === index
-                    ? 0
-                    : focusedIndex === -1 && index === initiallyFocusableIndex
-                      ? 0
-                      : -1
-              }
+              // One tab stop for the whole group: the selected option, or the first
+              // enabled one when nothing selectable is selected.
+              tabIndex={index === initiallyFocusableIndex ? 0 : -1}
               disabled={isOptionDisabled}
               data-value={option.value}
               onClick={() => {
                 if (!isOptionDisabled) onChange(option.value);
               }}
-              onFocus={() => setFocusedIndex(index)}
-              onBlur={() => setFocusedIndex(-1)}
               className={cn(
                 CARD_BASE_CLASSES,
                 isSelected ? CARD_SELECTED_CLASSES : CARD_UNSELECTED_CLASSES,
@@ -230,14 +231,14 @@ export function SettingsChoicebox<T extends string = string>({
                     {option.resolvedLabel && (
                       <>
                         {" "}
-                        <span className="text-xs font-normal text-text-muted">
+                        <span className="text-xs font-normal text-text-secondary">
                           {option.resolvedLabel}
                         </span>
                       </>
                     )}
                   </div>
                   {option.description && (
-                    <div className="text-xs text-text-muted mt-0.5">{option.description}</div>
+                    <div className="text-xs text-text-secondary mt-0.5">{option.description}</div>
                   )}
                 </div>
               </div>
@@ -246,7 +247,7 @@ export function SettingsChoicebox<T extends string = string>({
         })}
       </div>
       {description && (
-        <p id={descriptionId} className="text-xs text-text-muted select-text">
+        <p id={descriptionId} className="text-xs text-text-secondary select-text">
           {description}
         </p>
       )}

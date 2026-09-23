@@ -18,7 +18,7 @@ function SchemePreview({ scheme }: { scheme: TerminalColorScheme }) {
 
   return (
     <div
-      className="rounded overflow-hidden"
+      className="rounded-[var(--radius-sm)] overflow-hidden"
       style={{
         backgroundColor: c.background ?? "#000",
         padding: "6px 8px",
@@ -170,7 +170,7 @@ export function ColorSchemePicker() {
       <div className="flex flex-col rounded-[var(--radius-md)] border border-border-default overflow-hidden">
         <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-border-default shrink-0">
           <div className="flex items-center gap-1.5 flex-1 min-w-0 focus-within:border-daintree-accent/40">
-            <Search className="w-3.5 h-3.5 shrink-0 text-daintree-text/40 pointer-events-none" />
+            <Search className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none" />
             <input
               type="search"
               value={query}
@@ -245,7 +245,7 @@ export function ColorSchemePicker() {
                       "[&>*]:pointer-events-none",
                       isSelected
                         ? "border-border-strong bg-overlay-selected"
-                        : "border-border-default bg-surface-canvas hover:border-daintree-text/30"
+                        : "border-border-default bg-surface-canvas hover:border-border-strong"
                     )}
                   >
                     <SchemePreview scheme={resolved} />

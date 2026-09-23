@@ -45,10 +45,10 @@ describe("ApplicationLogsSection — clear confirmation", () => {
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
   });
 
-  it("opens a confirmation instead of clearing when Clear Logs is clicked", async () => {
+  it("opens a confirmation instead of clearing when Clear logs is clicked", async () => {
     render(<ApplicationLogsSection />);
 
-    fireEvent.click(screen.getByText("Clear Logs"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear logs" }));
 
     expect(await screen.findByRole("alertdialog")).toBeTruthy();
     expect(clearDispatches()).toHaveLength(0);
@@ -57,7 +57,7 @@ describe("ApplicationLogsSection — clear confirmation", () => {
   it("preserves the logs when the confirmation is cancelled", async () => {
     render(<ApplicationLogsSection />);
 
-    fireEvent.click(screen.getByText("Clear Logs"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear logs" }));
     const dialog = await screen.findByRole("alertdialog");
     fireEvent.click(within(dialog).getByText("Cancel"));
 
@@ -68,7 +68,7 @@ describe("ApplicationLogsSection — clear confirmation", () => {
   it("clears exactly once when confirmed, then closes", async () => {
     render(<ApplicationLogsSection />);
 
-    fireEvent.click(screen.getByText("Clear Logs"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear logs" }));
     const dialog = await screen.findByRole("alertdialog");
     fireEvent.click(within(dialog).getByText("Clear logs"));
 
@@ -80,7 +80,7 @@ describe("ApplicationLogsSection — clear confirmation", () => {
     mockDispatch.mockResolvedValue({ ok: false, error: { message: "buffer locked" } });
     render(<ApplicationLogsSection />);
 
-    fireEvent.click(screen.getByText("Clear Logs"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear logs" }));
     const dialog = await screen.findByRole("alertdialog");
     fireEvent.click(within(dialog).getByText("Clear logs"));
 
@@ -106,7 +106,7 @@ describe("ApplicationLogsSection — clear confirmation", () => {
     const confirmSpy = vi.spyOn(window, "confirm");
 
     render(<ApplicationLogsSection />);
-    fireEvent.click(screen.getByText("Clear Logs"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear logs" }));
 
     expect(confirmSpy).not.toHaveBeenCalled();
     confirmSpy.mockRestore();

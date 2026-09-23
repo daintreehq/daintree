@@ -1,7 +1,10 @@
 import { useState, useEffect, useRef, useId } from "react";
-import { Code2, CheckCircle, AlertCircle, RefreshCw, ExternalLink } from "lucide-react";
+import { CheckCircle, AlertCircle, RefreshCw, ExternalLink } from "lucide-react";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { editorClient } from "@/clients/editorClient";
 import type { EditorConfig, DiscoveredEditor, KnownEditorId } from "@shared/types/editor";
@@ -152,23 +155,22 @@ export function EditorIntegrationTab() {
   }
 
   return (
-    <div className="space-y-6">
-      <SettingsSection
-        icon={Code2}
-        title="External editor"
-        description="Choose the editor that opens when you click 'Open in editor' in the diff viewer or worktree cards."
-      >
-        <div className="contents">
-          <div className="space-y-1">
-            <label htmlFor={editorId} className="text-xs text-text-secondary">
-              Editor
-            </label>
+    <SettingsSection
+      id="editor-external"
+      title="External editor"
+      description="The editor that opens when you click 'Open in editor' in the diff viewer or worktree cards"
+    >
+      <SettingsGroup>
+        <SettingsRow
+          label="Editor"
+          control={({ labelId }) => (
             <div className="flex items-center gap-2">
               <select
                 id={editorId}
+                aria-labelledby={labelId}
                 value={selectedId}
                 onChange={(e) => setSelectedId(e.target.value as KnownEditorId)}
-                className="flex-1 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
+                className="w-72 bg-surface-input border border-border-input rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
               >
                 {KNOWN_EDITOR_IDS.map((id) => {
                   const disc = availabilityMap.get(id);
@@ -183,120 +185,132 @@ export function EditorIntegrationTab() {
               </select>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
                     onClick={handleRescan}
                     disabled={isRescanning}
                     aria-label="Re-scan for installed editors"
-                    className="p-2 rounded-[var(--radius-md)] border border-border-default hover:bg-tint/5 text-daintree-text/60 hover:text-text-primary transition-colors disabled:opacity-40 disabled:pointer-events-none"
                   >
-                    <SpinningIcon icon={RefreshCw} active={isRescanning} className="w-4 h-4" />
-                  </button>
+                    <SpinningIcon icon={RefreshCw} active={isRescanning} />
+                  </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">Re-scan for installed editors</TooltipContent>
               </Tooltip>
             </div>
-          </div>
+          )}
+        />
 
-          {selectedId !== "custom" && (
-            <div className="space-y-1">
-              <p className="text-xs text-text-secondary select-text">Detected editors:</p>
-              <div className="space-y-1">
+        {selectedId !== "custom" && discoveredEditors.length > 0 && (
+          <SettingsRow
+            label="Detected editors"
+            layout="stacked"
+            control={
+              <ul className="space-y-1">
                 {discoveredEditors.map((d) => (
-                  <div key={d.id} className="flex items-center gap-2 text-xs text-text-secondary">
+                  <li key={d.id} className="flex items-center gap-2 text-xs text-text-secondary">
                     {d.available ? (
-                      <CheckCircle className="w-3.5 h-3.5 text-daintree-text/60 shrink-0" />
+                      <CheckCircle
+                        className="w-3.5 h-3.5 text-text-secondary shrink-0"
+                        aria-label="Found"
+                      />
                     ) : (
-                      <AlertCircle className="w-3.5 h-3.5 text-daintree-text/30 shrink-0" />
+                      <AlertCircle
+                        className="w-3.5 h-3.5 text-text-secondary shrink-0"
+                        aria-label="Not found"
+                      />
                     )}
-                    <span className={d.available ? "text-text-primary" : "text-text-placeholder"}>
+                    <span className={d.available ? "text-text-primary" : "text-text-secondary"}>
                       {EDITOR_LABELS[d.id]}
                     </span>
                     {d.executablePath && (
-                      <span className="font-mono text-text-placeholder truncate">
+                      <span className="font-mono text-text-secondary truncate">
                         {d.executablePath}
                       </span>
                     )}
-                  </div>
+                  </li>
                 ))}
-              </div>
-            </div>
-          )}
+              </ul>
+            }
+          />
+        )}
 
-          {selectedId === "custom" && (
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <label htmlFor={commandId} className="text-xs text-text-secondary">
-                  Command
-                </label>
-                <input
+        {selectedId === "custom" && (
+          <>
+            <SettingsRow
+              label="Command"
+              layout="stacked"
+              control={({ labelId }) => (
+                <Input
                   id={commandId}
                   type="text"
                   value={customCommand}
                   onChange={(e) => setCustomCommand(e.target.value)}
                   placeholder="e.g. code, nvim, subl"
-                  className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary focus:outline-hidden focus:border-daintree-accent/40 transition-colors font-mono"
+                  aria-labelledby={labelId}
+                  className="font-mono"
                 />
-              </div>
-              <div className="space-y-1">
-                <label htmlFor={argsId} className="text-xs text-text-secondary">
-                  Arguments template
-                </label>
-                <input
+              )}
+            />
+            <SettingsRow
+              label="Arguments template"
+              description={
+                <>
+                  Use <code className="font-mono">{"{file}"}</code>,{" "}
+                  <code className="font-mono">{"{line}"}</code>,{" "}
+                  <code className="font-mono">{"{col}"}</code> as placeholders
+                </>
+              }
+              layout="stacked"
+              control={({ labelId, descriptionId }) => (
+                <Input
                   id={argsId}
                   type="text"
                   value={customTemplate}
                   onChange={(e) => setCustomTemplate(e.target.value)}
                   placeholder="{file}:{line}:{col}"
-                  className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary focus:outline-hidden focus:border-daintree-accent/40 transition-colors font-mono"
+                  aria-labelledby={labelId}
+                  aria-describedby={descriptionId}
+                  className="font-mono"
                 />
-                <p className="text-xs text-text-secondary select-text">
-                  Use <code className="font-mono">{"{file}"}</code>,{" "}
-                  <code className="font-mono">{"{line}"}</code>,{" "}
-                  <code className="font-mono">{"{col}"}</code> as placeholders.
-                </p>
-              </div>
-            </div>
+              )}
+            />
+          </>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+          <Button
+            variant="contrast"
+            size="sm"
+            onClick={handleSave}
+            disabled={isSaving || !activeProjectId}
+          >
+            {isSaving ? "Saving…" : "Save"}
+          </Button>
+          <Button variant="subtle" size="sm" onClick={handleTest} disabled={isTesting}>
+            <ExternalLink />
+            {isTesting ? "Testing…" : "Test"}
+          </Button>
+
+          {testResult === "ok" && (
+            <span className="flex items-center gap-1 text-xs text-text-secondary">
+              <CheckCircle className="w-3.5 h-3.5" aria-hidden="true" /> Open requested
+            </span>
           )}
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleSave}
-              disabled={isSaving || !activeProjectId}
-              className="px-4 py-2 rounded-[var(--radius-md)] bg-accent-primary text-accent-primary-foreground text-sm font-medium hover:bg-daintree-accent/90 disabled:opacity-50 disabled:pointer-events-none transition-colors"
-            >
-              {isSaving ? "Saving…" : "Save"}
-            </button>
-
-            <button
-              onClick={handleTest}
-              disabled={isTesting}
-              className="px-4 py-2 rounded-[var(--radius-md)] border border-border-default text-sm text-text-secondary hover:text-text-primary hover:bg-tint/5 disabled:opacity-50 disabled:pointer-events-none transition-colors flex items-center gap-1.5"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              {isTesting ? "Testing…" : "Test"}
-            </button>
-
-            {testResult === "ok" && (
-              <span className="flex items-center gap-1 text-xs text-status-success">
-                <CheckCircle className="w-3.5 h-3.5" /> Open requested
-              </span>
-            )}
-            {testResult === "error" && (
-              <span className="flex items-center gap-1 text-xs text-status-error">
-                <AlertCircle className="w-3.5 h-3.5" /> Failed to open
-              </span>
-            )}
-          </div>
-
-          {saveError && <p className="text-xs text-status-error">{saveError}</p>}
+          {testResult === "error" && (
+            <span className="flex items-center gap-1 text-xs text-status-error">
+              <AlertCircle className="w-3.5 h-3.5" aria-hidden="true" /> Failed to open
+            </span>
+          )}
 
           {preferredEditor && (
-            <p className="text-xs text-text-secondary">
+            <span className="ml-auto text-xs text-text-secondary">
               Saved: <span className="font-medium">{EDITOR_LABELS[preferredEditor.id]}</span>
-            </p>
+            </span>
           )}
+          {saveError && <p className="basis-full text-xs text-status-error">{saveError}</p>}
         </div>
-      </SettingsSection>
-    </div>
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

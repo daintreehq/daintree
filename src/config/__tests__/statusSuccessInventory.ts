@@ -341,14 +341,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Recorded result of the named context test the user ran",
     },
   ],
-  "src/components/Project/GeneralTab.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Copy-gitignore confirmation; resets when the copy flash times out",
-    },
-  ],
   "src/components/Project/GitInitDialog.tsx": [
     {
       category: "outcome",
@@ -423,30 +415,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Diff insertion count against the base branch",
     },
   ],
-  "src/components/Settings/CodeForgeSettingsTab.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Credentials-saved confirmation; resets on the next input change",
-    },
-  ],
-  "src/components/Settings/DaintreeAssistantSettingsTab.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      expectedOccurrences: 2,
-      rationale: "Copy-config confirmation; resets when the copy flash times out",
-    },
-  ],
-  "src/components/Settings/EditorIntegrationTab.tsx": [
-    {
-      category: "outcome",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Recorded result of the editor test the user ran",
-    },
-  ],
   "src/components/Settings/ForgeAuditLogViewer.tsx": [
     {
       category: "transient",
@@ -461,14 +429,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       anchor: "exportFlashActive",
       expectedOccurrences: 2,
       rationale: "Export confirmation; resets when the export flash times out",
-    },
-  ],
-  "src/components/Settings/ImageViewerTab.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Saved confirmation; resets on the next edit",
     },
   ],
   "src/components/Settings/McpAuditLogViewer.tsx": [

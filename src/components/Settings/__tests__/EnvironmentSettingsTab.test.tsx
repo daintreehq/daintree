@@ -42,7 +42,7 @@ describe("EnvironmentSettingsTab", () => {
     renderTab();
 
     await waitFor(() => {
-      expect(screen.getByText("Environment variables")).toBeTruthy();
+      expect(screen.getByText("Global variables")).toBeTruthy();
     });
     expect(screen.queryByText("No project open")).toBeNull();
   });
@@ -143,7 +143,7 @@ describe("EnvironmentSettingsTab", () => {
     renderTab();
 
     await waitFor(() => {
-      expect(screen.getByText("No environment variables configured yet")).toBeTruthy();
+      expect(screen.getByText("Add a variable to set it in every new terminal")).toBeTruthy();
     });
 
     fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
@@ -181,7 +181,7 @@ describe("EnvironmentSettingsTab", () => {
     renderTab();
 
     await waitFor(() => {
-      expect(screen.getByText("No environment variables configured yet")).toBeTruthy();
+      expect(screen.getByText("Add a variable to set it in every new terminal")).toBeTruthy();
     });
 
     const addButton = screen.getByRole("button", { name: /add variable/i });

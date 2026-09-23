@@ -93,8 +93,9 @@ describe("FileBrowserVisibilitySettings", () => {
     // beforeEach left a custom list, which differs from defaults.
     render(<FileBrowserVisibilitySettings />);
 
-    fireEvent.click(screen.getByText("Reset to defaults"));
+    fireEvent.click(screen.getByLabelText("Reset always-hidden patterns to defaults"));
 
     expect(patterns()).toEqual(defaults);
+    expect(screen.queryByLabelText("Reset always-hidden patterns to defaults")).toBeNull();
   });
 });

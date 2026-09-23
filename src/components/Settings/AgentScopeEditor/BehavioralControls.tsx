@@ -1,6 +1,7 @@
 import { useMemo } from "react";
-import { RotateCcw } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { SettingsChoicebox, type ChoiceboxOption } from "../SettingsChoicebox";
+import { SettingsRow } from "../SettingsGroup";
 import type { ScopeKind } from "./scopeUtils";
 import type { DangerousMode, InlineMode } from "@shared/types";
 
@@ -87,75 +88,79 @@ export function BehavioralControls({
 
   return (
     <>
-      <div id="agents-custom-args" className="group/args space-y-1.5">
-        <div className="flex items-center gap-2">
-          <label className="text-sm font-medium text-text-primary">Custom arguments</label>
-          {scopeKind === "custom" && customFlagsOverride !== undefined && (
-            <>
-              <span
-                className="status-mark w-1.5 h-1.5 rounded-full bg-state-modified"
-                aria-hidden="true"
-              />
-              <button
-                type="button"
-                aria-label={`Reset custom arguments override for ${scopeLabel}`}
-                className="p-0.5 rounded-sm text-daintree-text/40 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary transition-colors"
-                onClick={onCustomFlagsOverrideReset}
-                data-testid="preset-custom-flags-reset"
-              >
-                <RotateCcw className="w-3 h-3" />
-              </button>
-            </>
-          )}
-        </div>
-        <input
-          className="w-full rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-3 py-2 text-sm font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 placeholder:text-text-placeholder"
-          value={customArgsValue}
-          onChange={(e) => onCustomFlagsChange(e.target.value)}
-          placeholder={customArgsPlaceholder}
-          data-testid={scopeKind === "custom" ? "preset-custom-flags-input" : undefined}
-        />
-        <p className="text-xs text-text-secondary select-text">{customArgsDescription}</p>
-      </div>
+      <SettingsRow
+        id="agents-custom-args"
+        label="Custom arguments"
+        description={customArgsDescription}
+        layout="stacked"
+        isModified={scopeKind === "custom" && customFlagsOverride !== undefined}
+        onReset={onCustomFlagsOverrideReset}
+        resetAriaLabel={`Reset custom arguments override for ${scopeLabel}`}
+        control={({ labelId, descriptionId }) => (
+          <Input
+            className="font-mono"
+            value={customArgsValue}
+            onChange={(e) => onCustomFlagsChange(e.target.value)}
+            placeholder={customArgsPlaceholder}
+            aria-labelledby={labelId}
+            aria-describedby={descriptionId}
+            data-testid={scopeKind === "custom" ? "preset-custom-flags-input" : undefined}
+          />
+        )}
+      />
 
-      <div id="agents-skip-permissions" className="space-y-1.5">
-        <SettingsChoicebox<DangerousMode>
-          label="Skip permissions"
-          description="Auto-approve all file, command, and network actions. Off vetoes the global setting for this scope."
-          columns={3}
-          value={dangerousMode}
-          onChange={onDangerousModeChange}
-          options={dangerousModeOptions}
-        />
-        {dangerousMode === "inherit" && (
-          <p className="text-xs text-text-secondary select-text">
-            Inherited from {inheritOriginLabel}
-          </p>
-        )}
-        {effectiveSkipPerms && defaultDangerousArg && (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
-            <code className="text-xs text-status-error font-mono">{defaultDangerousArg}</code>
-            <span className="text-xs text-text-secondary">added to command</span>
+      <SettingsRow
+        id="agents-skip-permissions"
+        label="Skip permissions"
+        description="Auto-approve all file, command, and network actions. Off vetoes the global setting for this scope"
+        layout="stacked"
+        control={
+          <div className="grid gap-2">
+            <SettingsChoicebox<DangerousMode>
+              aria-label="Skip permissions"
+              columns={3}
+              value={dangerousMode}
+              onChange={onDangerousModeChange}
+              options={dangerousModeOptions}
+            />
+            {dangerousMode === "inherit" && (
+              <p className="text-xs text-text-secondary select-text">
+                Inherited from {inheritOriginLabel}
+              </p>
+            )}
+            {effectiveSkipPerms && defaultDangerousArg && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
+                <code className="text-xs text-status-error font-mono">{defaultDangerousArg}</code>
+                <span className="text-xs text-text-secondary">added to command</span>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        }
+      />
 
       {supportsInlineMode && (
-        <div id="agents-inline-mode" className="space-y-1.5">
-          <SettingsChoicebox<InlineMode>
-            label="Alt-screen mode"
-            description="Alt screen uses the CLI's full-screen TUI; inline keeps output in Daintree's scrollback with cleaner resizing. Choosing Inline or Alt screen overrides the inherited setting for this scope."
-            columns={3}
-            value={inlineMode}
-            onChange={onInlineModeChange}
-            options={inlineModeOptions}
-          />
-          {inlineMode === "inherit" && (
-            <p className="text-xs text-text-secondary select-text">
-              Inherited from {inlineInheritOriginLabel}
-            </p>
-          )}
-        </div>
+        <SettingsRow
+          id="agents-inline-mode"
+          label="Alt-screen mode"
+          description="Alt screen uses the CLI's full-screen TUI; inline keeps output in Daintree's scrollback with cleaner resizing. Choosing Inline or Alt screen overrides the inherited setting for this scope"
+          layout="stacked"
+          control={
+            <div className="grid gap-2">
+              <SettingsChoicebox<InlineMode>
+                aria-label="Alt-screen mode"
+                columns={3}
+                value={inlineMode}
+                onChange={onInlineModeChange}
+                options={inlineModeOptions}
+              />
+              {inlineMode === "inherit" && (
+                <p className="text-xs text-text-secondary select-text">
+                  Inherited from {inlineInheritOriginLabel}
+                </p>
+              )}
+            </div>
+          }
+        />
       )}
     </>
   );

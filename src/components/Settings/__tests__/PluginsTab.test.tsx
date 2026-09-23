@@ -90,7 +90,7 @@ describe("PluginsTab (settings entry point)", () => {
       makePlugin("b.two"),
     ]);
     render(<PluginsTab />);
-    await waitFor(() => expect(screen.getByText("2 plugins installed.")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("2 plugins installed")).toBeTruthy());
   });
 
   it("singularizes the count for a single plugin", async () => {
@@ -98,12 +98,12 @@ describe("PluginsTab (settings entry point)", () => {
       makePlugin("a.one"),
     ]);
     render(<PluginsTab />);
-    await waitFor(() => expect(screen.getByText("1 plugin installed.")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("1 plugin installed")).toBeTruthy());
   });
 
   it("shows an empty summary when no plugins are installed", async () => {
     render(<PluginsTab />);
-    await waitFor(() => expect(screen.getByText("No plugins installed yet.")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("No plugins installed yet")).toBeTruthy());
   });
 
   it("dispatches app.pluginManager when the CTA is clicked", async () => {
@@ -123,7 +123,7 @@ describe("PluginsTab (settings entry point)", () => {
     const listMock = window.electron.plugin.list as ReturnType<typeof vi.fn>;
     listMock.mockResolvedValue([]);
     render(<PluginsTab />);
-    await waitFor(() => expect(screen.getByText("No plugins installed yet.")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("No plugins installed yet")).toBeTruthy());
     expect(listMock).toHaveBeenCalledTimes(1);
 
     fireProvenance?.();
@@ -133,7 +133,7 @@ describe("PluginsTab (settings entry point)", () => {
   it("loads the background update check toggle as off by default", async () => {
     render(<PluginsTab />);
     const toggle = await screen.findByRole("switch", {
-      name: "Background plugin update checks",
+      name: "Check for plugin updates in the background",
     });
     await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
   });
@@ -141,7 +141,7 @@ describe("PluginsTab (settings entry point)", () => {
   it("optimistically enables background checks and persists via IPC", async () => {
     render(<PluginsTab />);
     const toggle = await screen.findByRole("switch", {
-      name: "Background plugin update checks",
+      name: "Check for plugin updates in the background",
     });
     await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
 
@@ -158,7 +158,7 @@ describe("PluginsTab (settings entry point)", () => {
     ).mockRejectedValue(new Error("boom"));
     render(<PluginsTab />);
     const toggle = await screen.findByRole("switch", {
-      name: "Background plugin update checks",
+      name: "Check for plugin updates in the background",
     });
     await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
 

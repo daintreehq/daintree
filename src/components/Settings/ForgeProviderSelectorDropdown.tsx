@@ -112,21 +112,21 @@ export function ForgeProviderSelectorDropdown({
               const Icon = getProviderIcon(selectedProvider.id);
               return (
                 <>
-                  <Icon size={16} className="text-daintree-text/60" />
+                  <Icon size={16} className="text-text-secondary" />
                   <span className="flex-1 text-left truncate">{selectedProvider.name}</span>
                 </>
               );
             })()
           ) : (
             <>
-              <GitBranch size={16} className="text-daintree-text/60" />
+              <GitBranch size={16} className="text-text-secondary" />
               <span className="flex-1 text-left truncate">General</span>
             </>
           )}
           <ChevronDown
             size={14}
             className={cn(
-              "shrink-0 text-daintree-text/40 transition-transform",
+              "shrink-0 text-text-secondary transition-transform",
               open && "rotate-180"
             )}
           />
@@ -140,7 +140,7 @@ export function ForgeProviderSelectorDropdown({
         onEscapeKeyDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border-default">
-          <Search size={14} className="shrink-0 text-daintree-text/40" aria-hidden="true" />
+          <Search size={14} className="shrink-0 text-text-secondary" aria-hidden="true" />
           <input
             ref={inputRef}
             type="text"
@@ -192,7 +192,7 @@ export function ForgeProviderSelectorDropdown({
               >
                 {item.kind === "general" ? (
                   <>
-                    <GitBranch size={16} className="shrink-0 text-daintree-text/60" />
+                    <GitBranch size={16} className="shrink-0 text-text-secondary" />
                     <div className="flex-1 min-w-0">
                       <div className="truncate">General</div>
                       <div className="text-xs text-text-secondary truncate">
@@ -205,7 +205,7 @@ export function ForgeProviderSelectorDropdown({
                     const Icon = getProviderIcon(item.provider.id);
                     return (
                       <>
-                        <Icon size={16} className="shrink-0 text-daintree-text/60" />
+                        <Icon size={16} className="shrink-0 text-text-secondary" />
                         <span className="flex-1 min-w-0 truncate">{item.provider.name}</span>
                       </>
                     );

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Package, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
@@ -119,43 +120,39 @@ export function PluginsTab() {
     count === null
       ? null
       : count === 0
-        ? "No plugins installed yet."
-        : `${count} plugin${count === 1 ? "" : "s"} installed.`;
+        ? "No plugins installed yet"
+        : `${count} plugin${count === 1 ? "" : "s"} installed`;
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h3 className="text-sm font-medium text-text-primary">Plugins</h3>
-        <p className="text-xs text-text-secondary mt-1 select-text">
-          Extend Daintree with panels, commands, and integrations. Install, enable, and update
-          plugins from the plugin manager.
-        </p>
-      </div>
-
-      <div className="flex items-center justify-between gap-4 p-4 rounded-[var(--radius-lg)] border border-border-default">
-        <div className="flex items-center gap-3 min-w-0">
-          <Package className="w-5 h-5 text-daintree-text/70 shrink-0" aria-hidden="true" />
-          <div className="min-w-0 text-left">
-            <div className="text-sm font-medium text-text-primary">Plugin manager</div>
-            <div className="text-xs text-text-secondary mt-0.5 min-h-[1rem]">
-              {summary ?? (showInlineLoading ? "Loading…" : "")}
-            </div>
-          </div>
-        </div>
-        <Button variant="outline" size="sm" onClick={openManager} className="shrink-0">
-          Open plugin manager
-        </Button>
-      </div>
-
-      <SettingsSwitchCard
-        icon={RefreshCw}
-        title="Check for plugin updates in the background"
-        subtitle="Checks URL-installed plugins about once a day and adds an inbox notification when updates are available"
-        isEnabled={backgroundChecksEnabled ?? false}
-        onChange={() => void handleBackgroundChecksToggle()}
-        ariaLabel="Background plugin update checks"
-        disabled={backgroundChecksEnabled === null || backgroundChecksSaving}
-      />
+    <div className="space-y-8">
+      <SettingsSection
+        id="plugins-manage"
+        title="Installed plugins"
+        description="Extend Daintree with panels, commands, and integrations. Install, enable, and update plugins from the plugin manager."
+      >
+        <SettingsGroup>
+          <SettingsRow
+            label="Plugin manager"
+            description={
+              <span className="block min-h-[1rem]">
+                {summary ?? (showInlineLoading ? "Loading…" : "")}
+              </span>
+            }
+            control={
+              <Button variant="subtle" size="sm" onClick={openManager}>
+                Open plugin manager
+              </Button>
+            }
+          />
+          <SettingsSwitchCard
+            title="Check for plugin updates in the background"
+            subtitle="Checks URL-installed plugins about once a day and adds an inbox notification when updates are available"
+            isEnabled={backgroundChecksEnabled ?? false}
+            onChange={() => void handleBackgroundChecksToggle()}
+            disabled={backgroundChecksEnabled === null || backgroundChecksSaving}
+          />
+        </SettingsGroup>
+      </SettingsSection>
     </div>
   );
 }

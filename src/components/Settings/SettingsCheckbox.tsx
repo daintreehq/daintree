@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { settingsRowFrameClass, useSettingsGroup } from "./SettingsGroup";
 
 interface SettingsCheckboxProps {
   id?: string;
@@ -30,17 +31,23 @@ export function SettingsCheckbox({
   touched = true,
   scope,
 }: SettingsCheckboxProps) {
+  const group = useSettingsGroup();
+  const isDisabled = !!disabled || (group?.disabled ?? false);
   const isError = touched && error !== undefined && error !== "";
 
   const scopeBadge = scope ? (
-    <Badge size="xs" className="bg-text-secondary/10 dark:bg-text-secondary/20">
+    <Badge size="xs">
       {scope === "project" ? "Project" : scope === "global" ? "Global" : "Default"}
     </Badge>
   ) : null;
 
   return (
-    <div className="grid grid-cols-subgrid col-span-full gap-2">
-      <Field orientation="horizontal" controlId={id} invalid={isError} disabled={disabled}>
+    <div
+      className={
+        group ? settingsRowFrameClass(group.depth) : "grid grid-cols-subgrid col-span-full gap-2"
+      }
+    >
+      <Field orientation="horizontal" controlId={id} invalid={isError} disabled={isDisabled}>
         <Checkbox
           checked={checked}
           onCheckedChange={(checkedState) => {
@@ -48,12 +55,12 @@ export function SettingsCheckbox({
               onChange(checkedState);
             }
           }}
-          disabled={disabled}
+          disabled={isDisabled}
         />
         <FieldLabel accessory={scopeBadge} tinted>
           {label}
         </FieldLabel>
-        <FieldDescription>{description}</FieldDescription>
+        <FieldDescription className="text-text-secondary">{description}</FieldDescription>
         {isError && <FieldError>{error}</FieldError>}
       </Field>
     </div>

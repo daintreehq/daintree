@@ -93,7 +93,7 @@ async function navigateToResourcesTab(
 
   await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" }).click();
   const panel = window.locator("#settings-panel-project\\:automation");
-  await expect(panel.locator("h2", { hasText: "Resource Environments" })).toBeVisible({
+  await expect(panel.locator("h4", { hasText: "Resource environments" })).toBeVisible({
     timeout: T_MEDIUM,
   });
   await expect(panel.locator('[aria-label="Add environment"]')).toBeVisible({

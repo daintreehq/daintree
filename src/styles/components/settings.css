@@ -110,27 +110,6 @@
   border-color: var(--settings-kbd-border, var(--theme-border-default));
 }
 
-/* 80% let scrolled list rows read straight through the heading — an agent name sitting
-   legibly on top of "System status" is worse than losing the material effect. 96% keeps
-   the blur reading as glass without letting anything behind it stay readable. */
-.settings-section-header {
-  --_bg: var(
-    --settings-section-header-bg,
-    color-mix(in srgb, var(--theme-surface-panel) 96%, transparent)
-  );
-  background: var(--_bg);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-
-@media (prefers-reduced-transparency: reduce) {
-  .settings-section-header {
-    --_bg: var(--settings-section-header-bg-solid, var(--theme-surface-panel));
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
-}
-
 @media (prefers-contrast: more) {
   /* The scope switch and the active nav row are the two selection signals in this
      shell, and both were carried by a low-delta neutral fill — in the mode whose whole
@@ -151,12 +130,6 @@
      square-cornered box inside the rounded pill. One control, one border. */
   .settings-search-input {
     border: none;
-  }
-
-  .settings-section-header {
-    --_bg: var(--settings-section-header-bg-solid, var(--theme-surface-panel));
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
   }
 }
 

@@ -1,4 +1,4 @@
-import type { ComponentPropsWithoutRef, ReactNode, Ref } from "react";
+import type { ComponentPropsWithoutRef, ComponentProps, ReactNode, Ref } from "react";
 import { SettingsInput } from "./SettingsInput";
 
 interface SettingsNumberInputProps extends Omit<ComponentPropsWithoutRef<"input">, "id" | "type"> {
@@ -10,6 +10,10 @@ interface SettingsNumberInputProps extends Omit<ComponentPropsWithoutRef<"input"
   onReset?: () => void;
   resetAriaLabel?: string;
   ref?: Ref<HTMLInputElement>;
+  rowId?: string;
+  suffix?: ReactNode;
+  disabledReason?: string;
+  layout?: ComponentProps<typeof SettingsInput>["layout"];
 }
 
 export function SettingsNumberInput(props: SettingsNumberInputProps) {

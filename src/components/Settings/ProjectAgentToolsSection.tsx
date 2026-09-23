@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { pluginAgentMcpClient } from "@/clients/pluginAgentMcpClient";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
@@ -10,10 +13,8 @@ import type {
   ProjectAgentToolsSnapshot,
 } from "@shared/types/ipc/pluginAgentMcp";
 
-const SECTION_HEADING_CLASS = "text-2xs font-medium uppercase tracking-wide text-text-secondary";
-
-const BADGE_CLASS =
-  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-border-default/50 text-text-secondary uppercase tracking-wide";
+const AGENT_TOOLS_DESCRIPTION =
+  "Tools plugins offer to agents. Turning one on lets Claude agents you start in this project from now on call that plugin's tools. Turning it off cuts off agents that are already running straight away.";
 
 interface FailedToggle {
   endpoint: ProjectAgentToolEndpoint;
@@ -145,19 +146,19 @@ export function ProjectAgentToolsSection() {
   // a failed read is the whole section, so say so rather than render nothing.
   if (loadFailed && (snapshot === null || snapshot.endpoints.length === 0)) {
     return (
-      <div
-        className="space-y-2 pt-1 border-t border-border-default"
-        data-testid="project-agent-tools"
-      >
-        <h5 className={SECTION_HEADING_CLASS}>Agent tools</h5>
-        <div className="flex items-center gap-2 flex-wrap">
-          <p role="alert" className="text-xs text-status-error">
-            Couldn&apos;t load which plugin tools agents can use here.
-          </p>
-          <Button variant="ghost" size="sm" onClick={refresh}>
-            Retry
-          </Button>
-        </div>
+      <div data-testid="project-agent-tools">
+        <SettingsSection title="Agent tools" description={AGENT_TOOLS_DESCRIPTION}>
+          <SettingsGroup>
+            <div className="flex items-center justify-between gap-3 px-4 py-3">
+              <p role="alert" className="text-xs text-status-error">
+                Couldn&apos;t load which plugin tools agents can use here.
+              </p>
+              <Button variant="outline" size="xs" onClick={refresh}>
+                Retry
+              </Button>
+            </div>
+          </SettingsGroup>
+        </SettingsSection>
       </div>
     );
   }
@@ -165,82 +166,77 @@ export function ProjectAgentToolsSection() {
   if (snapshot === null || snapshot.endpoints.length === 0) return null;
 
   return (
-    <div
-      className="space-y-2 pt-1 border-t border-border-default"
-      data-testid="project-agent-tools"
-    >
-      <h5 className={SECTION_HEADING_CLASS}>Agent tools</h5>
-      <p className="text-xs text-text-secondary leading-relaxed">
-        Tools plugins offer to agents. Turning one on lets Claude agents you start in this project
-        from now on call that plugin&apos;s tools. Turning it off cuts off agents that are already
-        running straight away.
-      </p>
-      {!snapshot.mcpServerEnabled && (
-        <p className="text-2xs text-text-secondary leading-relaxed">
-          Agents reach these tools through Daintree&apos;s MCP server, which is off. Turn it on in
-          Settings → MCP Server.
-        </p>
-      )}
-      {loadFailed && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <p role="alert" className="text-xs text-status-error">
-            Couldn&apos;t refresh this list, so it may be out of date.
+    <div data-testid="project-agent-tools">
+      <SettingsSection title="Agent tools" description={AGENT_TOOLS_DESCRIPTION}>
+        {!snapshot.mcpServerEnabled && (
+          <p className="text-xs text-text-secondary leading-relaxed">
+            Agents reach these tools through Daintree&apos;s MCP server, which is off. Turn it on in
+            Settings → MCP Server.
           </p>
-          <Button variant="ghost" size="sm" onClick={refresh}>
-            Retry
-          </Button>
-        </div>
-      )}
-      {failed !== null && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <p role="alert" className="text-xs text-status-error">
-            Couldn&apos;t change access to {failed.endpoint.name}.
-          </p>
-          <Button variant="ghost" size="sm" onClick={retryFailed}>
-            Retry
-          </Button>
-        </div>
-      )}
-      <ul className="space-y-3">
-        {snapshot.endpoints.map((endpoint) => {
-          const key = rowKey(endpoint);
-          const origin = originLabel(endpoint);
-          return (
-            <li
-              key={key}
-              className="flex items-start justify-between gap-3"
-              data-testid="project-agent-tool-row"
-            >
-              <div className="min-w-0 space-y-0.5">
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-xs text-text-primary break-words">
-                    {endpoint.pluginDisplayName}
-                  </span>
-                  <span className={BADGE_CLASS}>{origin}</span>
+        )}
+        <SettingsGroup>
+          {snapshot.endpoints.map((endpoint) => {
+            const key = rowKey(endpoint);
+            const origin = originLabel(endpoint);
+            return (
+              <div
+                key={key}
+                className="flex items-start justify-between gap-3 px-4 py-3"
+                data-testid="project-agent-tool-row"
+              >
+                <div className="min-w-0 space-y-0.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-sm font-medium text-text-primary break-words">
+                      {endpoint.pluginDisplayName}
+                    </span>
+                    <Badge size="xs">{origin}</Badge>
+                  </div>
+                  <p className="text-xs text-text-secondary break-words">{endpoint.name}</p>
+                  {endpoint.description && (
+                    <p className="text-xs text-text-secondary break-words">
+                      {endpoint.description}
+                    </p>
+                  )}
+                  {!endpoint.available && (
+                    <p className="text-xs text-text-secondary leading-relaxed">
+                      Not offered here right now, but still on. It applies again if the plugin comes
+                      back.
+                    </p>
+                  )}
                 </div>
-                <p className="text-2xs text-text-secondary break-words">{endpoint.name}</p>
-                {endpoint.description && (
-                  <p className="text-2xs text-text-secondary break-words">{endpoint.description}</p>
-                )}
-                {!endpoint.available && (
-                  <p className="text-2xs text-text-secondary leading-relaxed">
-                    Not offered here right now, but still on. It applies again if the plugin comes
-                    back.
-                  </p>
-                )}
+                <SettingsSwitch
+                  className="shrink-0"
+                  checked={endpoint.enabled}
+                  disabled={pending.has(key) || (!endpoint.available && !endpoint.enabled)}
+                  onCheckedChange={(next) => void setEnabled(endpoint, next)}
+                  aria-label={`Let agents use ${endpoint.name} from ${endpoint.pluginDisplayName} (${origin.toLowerCase()})`}
+                  data-testid="project-agent-tool-switch"
+                />
               </div>
-              <SettingsSwitch
-                className="shrink-0"
-                checked={endpoint.enabled}
-                disabled={pending.has(key) || (!endpoint.available && !endpoint.enabled)}
-                onCheckedChange={(next) => void setEnabled(endpoint, next)}
-                aria-label={`Let agents use ${endpoint.name} from ${endpoint.pluginDisplayName} (${origin.toLowerCase()})`}
-                data-testid="project-agent-tool-switch"
-              />
-            </li>
-          );
-        })}
-      </ul>
+            );
+          })}
+          {loadFailed && (
+            <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+              <p role="alert" className="text-xs text-status-error">
+                Couldn&apos;t refresh this list, so it may be out of date.
+              </p>
+              <Button variant="outline" size="xs" onClick={refresh}>
+                Retry
+              </Button>
+            </div>
+          )}
+          {failed !== null && (
+            <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+              <p role="alert" className="text-xs text-status-error">
+                Couldn&apos;t change access to {failed.endpoint.name}.
+              </p>
+              <Button variant="outline" size="xs" onClick={retryFailed}>
+                Retry
+              </Button>
+            </div>
+          )}
+        </SettingsGroup>
+      </SettingsSection>
     </div>
   );
 }

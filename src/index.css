@@ -2420,12 +2420,6 @@ body[data-performance-mode="true"] .surface-toolbar {
   background-color: var(--color-surface-toolbar) !important;
 }
 
-body[data-performance-mode="true"] .settings-section-header {
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
-  background: var(--settings-section-header-bg-solid, var(--theme-surface-panel)) !important;
-}
-
 /* Disable terminal glow in performance mode */
 /* `.terminal-selected-quiet` is absent on purpose: it carries no box-shadow
    to simplify, and its outline is a 1px hairline with no glow to strip. */

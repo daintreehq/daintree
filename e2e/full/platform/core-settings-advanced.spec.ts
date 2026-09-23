@@ -399,51 +399,47 @@ test.describe.serial("Core: Settings Advanced", () => {
     });
   });
 
-  // ── MCP Server empty state + enable flow ──────────────────
+  // ── MCP Server enable flow ────────────────────────────────
 
   test.describe.serial("MCP server", () => {
-    test("empty state, enable reveals Connection, then disable", async () => {
+    test("off, enable reveals Connection, then disable", async () => {
       const { window } = ctx;
       await openSettings(window);
       await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
-      await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "MCP Server" }).click();
+      await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "MCP server" }).click();
 
-      const emptyState = window.locator(SEL.settings.mcpServerEmptyState);
+      const toggle = window.locator(SEL.settings.mcpServerToggle);
       const connectionMarker = window.locator(SEL.settings.mcpConnectionMarker);
+      await expect(toggle).toBeVisible({ timeout: T_MEDIUM });
 
-      // Wait for the initial status load to settle (either state is fine).
-      await expect(emptyState.or(connectionMarker).first()).toBeVisible({ timeout: T_MEDIUM });
-
-      // Normalize to disabled so we can assert the empty state.
-      if (await connectionMarker.isVisible().catch(() => false)) {
-        await window.locator(SEL.settings.mcpServerToggle).click();
+      const stopSharingIfAsked = async () => {
         // A disable-confirm dialog only appears when external clients are
         // connected (none in E2E), but handle it defensively.
         const stopButton = window.getByRole("button", { name: "Stop sharing" });
         if (await stopButton.isVisible({ timeout: T_SHORT }).catch(() => false)) {
           await stopButton.click();
         }
-        await expect(emptyState).toBeVisible({ timeout: T_MEDIUM });
+      };
+
+      // Normalize to disabled. The switch is the one control for the server.
+      if ((await toggle.getAttribute("aria-checked")) === "true") {
+        await toggle.click();
+        await stopSharingIfAsked();
       }
+      await expect(toggle).toHaveAttribute("aria-checked", "false", { timeout: T_MEDIUM });
+      await expect(connectionMarker).not.toBeVisible({ timeout: T_SHORT });
 
-      await expect(emptyState).toBeVisible({ timeout: T_SHORT });
-
-      // Enable via the empty-state CTA → the Connection section appears.
-      await window.locator(SEL.settings.mcpServerEnableButton).click();
+      await toggle.click();
       await expect(connectionMarker).toBeVisible({ timeout: T_MEDIUM });
-      await expect(emptyState).not.toBeVisible({ timeout: T_SHORT });
       await expect(window.getByText(/Server is starting|Running on port/)).toBeVisible({
         timeout: T_LONG,
       });
 
       // Cleanup — turn the server back off so the bound port is released.
-      await window.locator(SEL.settings.mcpServerToggle).click();
-      const stopButton = window.getByRole("button", { name: "Stop sharing" });
-      if (await stopButton.isVisible({ timeout: T_SHORT }).catch(() => false)) {
-        await stopButton.click();
-      }
-      await expect(emptyState).toBeVisible({ timeout: T_MEDIUM });
+      await toggle.click();
+      await stopSharingIfAsked();
+      await expect(toggle).toHaveAttribute("aria-checked", "false", { timeout: T_MEDIUM });
 
       await window.keyboard.press("Escape");
       await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
@@ -476,7 +472,9 @@ test.describe.serial("Core: Settings Advanced", () => {
 
       // Navigate to a project tab so it becomes the remembered project tab.
       await nav.locator("button", { hasText: "Variables" }).click();
-      await expect(window.locator("h3", { hasText: "Environment Variables" })).toBeVisible({
+      await expect(
+        window.getByRole("heading", { name: /environment variables/i }).first()
+      ).toBeVisible({
         timeout: T_SHORT,
       });
 
@@ -487,7 +485,9 @@ test.describe.serial("Core: Settings Advanced", () => {
       });
 
       await selectSettingsScope(window, "Project");
-      await expect(window.locator("h3", { hasText: "Environment Variables" })).toBeVisible({
+      await expect(
+        window.getByRole("heading", { name: /environment variables/i }).first()
+      ).toBeVisible({
         timeout: T_SHORT,
       });
 

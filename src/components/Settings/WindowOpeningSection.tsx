@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { AppWindow } from "@/components/icons";
+
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSelect, type SettingsSelectOption } from "@/components/Settings/SettingsSelect";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
+import { SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
@@ -123,9 +124,8 @@ export function WindowOpeningSection() {
 
   return (
     <SettingsSection
-      icon={AppWindow}
       title="Opening folders"
-      description="Where a folder goes when you open it. Switching between projects isn't affected."
+      description="Where a folder goes when you open it — switching between projects isn't affected"
       id="general-window-opening"
     >
       {mode === null && loadError !== null ? (
@@ -139,16 +139,19 @@ export function WindowOpeningSection() {
         />
       ) : (
         <>
-          <SettingsSelect
-            label="Open folders in a new window"
-            description={MODE_COPY[value].description}
-            options={MODE_OPTIONS}
-            value={value}
-            onValueChange={(next) => {
-              if (isOpenFoldersInNewWindow(next) && next !== value) void save(next);
-            }}
-            disabled={mode === null || pendingMode !== null}
-          />
+          <SettingsGroup>
+            <SettingsSelect
+              label="Open folders in a new window"
+              description={MODE_COPY[value].description}
+              options={MODE_OPTIONS}
+              value={value}
+              onValueChange={(next) => {
+                if (isOpenFoldersInNewWindow(next) && next !== value) void save(next);
+              }}
+              disabled={mode === null || pendingMode !== null}
+              controlWidth="wide"
+            />
+          </SettingsGroup>
           {saveFailure && (
             <SettingsLoadErrorBanner
               title="Couldn't save window setting"

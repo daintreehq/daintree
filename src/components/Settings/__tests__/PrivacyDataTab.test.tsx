@@ -14,8 +14,15 @@ vi.mock("@/components/ui/button", () => ({
 }));
 
 vi.mock("../SettingsSection", () => ({
-  SettingsSection: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  SettingsSection: ({ title, children }: { title: string; children: React.ReactNode }) => (
+    <div role="group" aria-label={title}>
+      <h4>{title}</h4>
+      {children}
+    </div>
+  ),
 }));
+
+const radio = (name: string) => screen.getByRole("radio", { name }) as HTMLInputElement;
 
 vi.mock("../SettingsSubtabBar", () => ({
   SettingsSubtabBar: () => null,
@@ -79,8 +86,7 @@ describe("PrivacyDataTab", () => {
     render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />);
 
     await waitFor(() => {
-      const errorsButton = screen.getByText("Errors Only").closest("button")!;
-      expect(errorsButton.className).toContain("border-border-strong");
+      expect(radio("Errors only").checked).toBe(true);
     });
   });
 
@@ -100,21 +106,15 @@ describe("PrivacyDataTab", () => {
     render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Off").closest("button")!.className).toContain(
-        "border-border-strong"
-      );
+      expect(radio("Off").checked).toBe(true);
     });
 
-    fireEvent.click(screen.getByText("Errors Only").closest("button")!);
+    fireEvent.click(radio("Errors only"));
 
     await waitFor(() => {
       // Should revert back to "Off" being selected
-      expect(screen.getByText("Off").closest("button")!.className).toContain(
-        "border-border-strong"
-      );
-      expect(screen.getByText("Errors Only").closest("button")!.className).not.toContain(
-        "border-border-strong"
-      );
+      expect(radio("Off").checked).toBe(true);
+      expect(radio("Errors only").checked).toBe(false);
     });
 
     expect(window.electron.privacy.setTelemetryLevel).toHaveBeenCalledWith("errors");
@@ -144,38 +144,31 @@ describe("PrivacyDataTab", () => {
     render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Off").closest("button")!.className).toContain(
-        "border-border-strong"
-      );
+      expect(radio("Off").checked).toBe(true);
     });
 
     // First change: off → errors (succeeds)
-    fireEvent.click(screen.getByText("Errors Only").closest("button")!);
+    fireEvent.click(radio("Errors only"));
     await waitFor(() => {
-      expect(screen.getByText("Errors Only").closest("button")!.className).toContain(
-        "border-border-strong"
-      );
+      expect(radio("Errors only").checked).toBe(true);
     });
 
     // Second change: errors → full (fails)
-    fireEvent.click(screen.getByText("Full Usage").closest("button")!);
+    fireEvent.click(radio("Full usage"));
     await waitFor(() => {
       // Should revert to "errors" (the last successful value), NOT "off"
-      expect(screen.getByText("Errors Only").closest("button")!.className).toContain(
-        "border-border-strong"
-      );
-      expect(screen.getByText("Full Usage").closest("button")!.className).not.toContain(
-        "border-border-strong"
-      );
+      expect(radio("Errors only").checked).toBe(true);
+      expect(radio("Full usage").checked).toBe(false);
     });
   });
 
   it("renders telemetry disclosure listing all allowlisted analytics events", async () => {
     render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />);
 
-    const heading = await waitFor(() => screen.getByText(/What's collected at each level/i));
+    const disclosure = await waitFor(() =>
+      screen.getByRole("group", { name: /What's collected at each level/i })
+    );
 
-    const disclosure = heading.parentElement as HTMLElement;
     for (const name of ANALYTICS_EVENTS) {
       expect(within(disclosure).getByText(name)).toBeTruthy();
     }
@@ -186,14 +179,13 @@ describe("PrivacyDataTab", () => {
     // error is eligible for transmission. Consent copy must not suggest otherwise.
     render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />);
 
-    const heading = await waitFor(() => screen.getByText(/What's collected at each level/i));
+    const disclosure = await waitFor(() =>
+      screen.getByRole("group", { name: /What's collected at each level/i })
+    );
 
     // Scoped to the per-level summaries: field lists may legitimately carry
     // percentages (CPU, memory) that aren't sampling claims.
-    const summaries = Array.from(
-      (heading.parentElement as HTMLElement).querySelectorAll("dd > p"),
-      (p) => p.textContent ?? ""
-    );
+    const summaries = Array.from(disclosure.querySelectorAll("dd > p"), (p) => p.textContent ?? "");
     expect(summaries).toHaveLength(3);
     for (const summary of summaries) {
       expect(summary).not.toMatch(/sampl/i);
@@ -228,20 +220,21 @@ describe("PrivacyDataTab", () => {
 
     render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />);
 
-    // The log-retention picker renders before the session-history picker, so
-    // index 0 of each duplicated day label is the log-retention control.
-    const logRetentionButton = (label: string) => screen.getAllByText(label)[0]!.closest("button")!;
+    const logRetentionOption = (label: string) =>
+      within(screen.getByRole("radiogroup", { name: "Log retention" })).getByRole("radio", {
+        name: label,
+      });
 
     await waitFor(() => {
-      expect(logRetentionButton("30 days").className).toContain("bg-overlay-selected");
+      expect(logRetentionOption("30 days").getAttribute("aria-checked")).toBe("true");
     });
 
-    fireEvent.click(logRetentionButton("90 days"));
+    fireEvent.click(logRetentionOption("90 days"));
 
     await waitFor(() => {
       // Should revert back to 30 days
-      expect(logRetentionButton("30 days").className).toContain("bg-overlay-selected");
-      expect(logRetentionButton("90 days").className).not.toContain("bg-overlay-selected");
+      expect(logRetentionOption("30 days").getAttribute("aria-checked")).toBe("true");
+      expect(logRetentionOption("90 days").getAttribute("aria-checked")).toBe("false");
     });
 
     expect(window.electron.privacy.setLogRetention).toHaveBeenCalledWith(90);
@@ -251,7 +244,10 @@ describe("PrivacyDataTab", () => {
   });
 
   describe("clear cache", () => {
-    const clearCacheButton = () => screen.getByText("Clear Cache").closest("button")!;
+    const clearCacheButton = () =>
+      screen.getByRole("button", {
+        name: /^Clear cache$|^Clearing|^Cache cleared$/,
+      }) as HTMLButtonElement;
 
     type ClearCache = typeof window.electron.privacy.clearCache;
 
@@ -267,7 +263,7 @@ describe("PrivacyDataTab", () => {
       fireEvent.click(clearCacheButton());
 
       await waitFor(() => {
-        expect(screen.queryByText("Cache Cleared")).not.toBeNull();
+        expect(screen.queryByText("Cache cleared")).not.toBeNull();
       });
       expect(mockNotify).not.toHaveBeenCalled();
     });
@@ -288,7 +284,7 @@ describe("PrivacyDataTab", () => {
           })
         );
       });
-      expect(screen.queryByText("Cache Cleared")).toBeNull();
+      expect(screen.queryByText("Cache cleared")).toBeNull();
       expect(clearCacheButton().disabled).toBe(false);
     });
 
@@ -318,7 +314,7 @@ describe("PrivacyDataTab", () => {
           })
         );
       });
-      expect(screen.queryByText("Cache Cleared")).toBeNull();
+      expect(screen.queryByText("Cache cleared")).toBeNull();
 
       expect(retryLabels).toEqual(["Try again"]);
       act(() => {
@@ -326,7 +322,7 @@ describe("PrivacyDataTab", () => {
       });
 
       await waitFor(() => {
-        expect(screen.queryByText("Cache Cleared")).not.toBeNull();
+        expect(screen.queryByText("Cache cleared")).not.toBeNull();
       });
       expect(clearCache).toHaveBeenCalledTimes(2);
     });

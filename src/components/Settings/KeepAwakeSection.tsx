@@ -1,8 +1,8 @@
 import { useRef, useState } from "react";
-import { BatteryMedium } from "lucide-react";
-import { Coffee } from "@/components/icons";
+
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
+import { SettingsDependents, SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { keepAwakeClient } from "@/clients/keepAwakeClient";
 import { loadKeepAwakeState } from "@/hooks/useKeepAwakeSync";
@@ -67,7 +67,6 @@ export function KeepAwakeSection() {
 
   return (
     <SettingsSection
-      icon={Coffee}
       title="Keep awake"
       description={
         state === null
@@ -86,24 +85,27 @@ export function KeepAwakeSection() {
         />
       ) : (
         <>
-          <SettingsSwitchCard
-            icon={Coffee}
-            title="Keep awake while agents work"
-            subtitle="Holds off idle sleep while an agent is working — the display can still turn off"
-            isEnabled={config.enabled}
-            onChange={() => void save({ enabled: !config.enabled })}
-            ariaLabel="Keep awake while agents work"
-            disabled={locked}
-          />
-          <SettingsSwitchCard
-            icon={BatteryMedium}
-            title="Keep awake on battery"
-            subtitle="Also holds off idle sleep when this machine is unplugged, which drains its battery"
-            isEnabled={config.onBattery}
-            onChange={() => void save({ onBattery: !config.onBattery })}
-            ariaLabel="Keep awake on battery"
-            disabled={locked || !config.enabled}
-          />
+          <SettingsGroup>
+            <SettingsSwitchCard
+              title="Keep awake while agents work"
+              subtitle="Holds off idle sleep while an agent is working — the display can still turn off"
+              isEnabled={config.enabled}
+              onChange={() => void save({ enabled: !config.enabled })}
+              disabled={locked}
+            />
+            <SettingsDependents
+              disabled={state !== null && !config.enabled}
+              reason="Turn on keep awake while agents work to extend it to battery power"
+            >
+              <SettingsSwitchCard
+                title="Keep awake on battery"
+                subtitle="Also holds off idle sleep when this machine is unplugged, which drains its battery"
+                isEnabled={config.onBattery}
+                onChange={() => void save({ onBattery: !config.onBattery })}
+                disabled={locked}
+              />
+            </SettingsDependents>
+          </SettingsGroup>
           {saveFailure && (
             <SettingsLoadErrorBanner
               title="Couldn't save keep-awake setting"

@@ -1,19 +1,11 @@
 import { useState, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
-import {
-  Plus,
-  Trash2,
-  Edit3,
-  Download,
-  FileDown,
-  Check,
-  Globe,
-  Pin,
-  AlertTriangle,
-} from "lucide-react";
-import { Workflow } from "@/components/icons";
+import { Plus, Trash2, Edit3, Download, FileDown, Check, Pin, AlertTriangle } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { EmptyState } from "@/components/ui/EmptyState";
+import { cn } from "@/lib/utils";
+import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { useRecipeStore } from "@/store/recipeStore";
 import { actionService } from "@/services/ActionService";
@@ -190,17 +182,26 @@ export function RecipesTab({
 
   return (
     <>
-      <div className="mb-6">
-        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
-          <Workflow className="h-4 w-4" />
-          Terminal Recipes
-        </h3>
-        <p className="text-xs text-text-secondary mb-4">
-          Manage saved terminal configurations. Recipes can spawn multiple terminals with predefined
-          commands and settings.
-        </p>
-
-        <div id="project-default-recipe" className="space-y-2">
+      <SettingsSection
+        id="project-default-recipe"
+        title="Terminal recipes"
+        description="Manage saved terminal configurations. Recipes can spawn multiple terminals with predefined commands and settings."
+        action={
+          <>
+            <Button variant="outline" size="sm" onClick={() => setShowImportDialog(true)}>
+              <FileDown />
+              Import recipe
+            </Button>
+            {!recipesLoading && recipes.length > 0 && (
+              <Button variant="outline" size="sm" onClick={handleAddRecipe}>
+                <Plus />
+                Add recipe
+              </Button>
+            )}
+          </>
+        }
+      >
+        <div className="space-y-3">
           {!recipesLoading &&
             defaultWorktreeRecipeId &&
             !recipes.find(
@@ -218,10 +219,10 @@ export function RecipesTab({
                     recipe or clear the default below.
                   </p>
                   <Button
-                    variant="ghost"
-                    size="sm"
+                    variant="outline"
+                    size="xs"
                     onClick={() => onDefaultWorktreeRecipeIdChange(undefined)}
-                    className="mt-2 h-7 px-2 text-xs"
+                    className="mt-2"
                   >
                     Clear default
                   </Button>
@@ -229,25 +230,28 @@ export function RecipesTab({
               </div>
             )}
           {recipesLoading ? (
-            <Skeleton
-              label="Loading recipes"
-              className="space-y-2 p-3 border border-dashed border-border-default rounded-[var(--radius-md)]"
-            >
-              <SkeletonBone className="h-14 w-full" />
-              <SkeletonBone className="h-14 w-full" />
-              <SkeletonBone className="h-14 w-full" />
-            </Skeleton>
+            <SettingsGroup>
+              <Skeleton label="Loading recipes" className="space-y-2 p-3">
+                <SkeletonBone className="h-12 w-full" />
+                <SkeletonBone className="h-12 w-full" />
+                <SkeletonBone className="h-12 w-full" />
+              </Skeleton>
+            </SettingsGroup>
           ) : recipes.length === 0 ? (
-            <div className="border border-dashed border-border-default rounded-[var(--radius-md)]">
-              <EmptyState
-                variant="zero-data"
-                scale="sidebar"
-                icon={<Workflow />}
-                title="No recipes"
+            <SettingsGroup>
+              <SettingsRow
+                label="No recipes yet"
+                description="A recipe opens a set of terminals with their commands in one step"
+                control={
+                  <Button variant="outline" size="sm" onClick={handleAddRecipe}>
+                    <Plus />
+                    Add recipe
+                  </Button>
+                }
               />
-            </div>
+            </SettingsGroup>
           ) : (
-            <div className="border border-border-default rounded-[var(--radius-md)] divide-y divide-border-default">
+            <SettingsGroup>
               {recipes.map((recipe) => {
                 const exported = exportFeedback === recipe.id;
                 const isEligibleForDefault = !recipe.worktreeId && !recipe.shadowedBy;
@@ -261,18 +265,17 @@ export function RecipesTab({
                 return (
                   <div
                     key={recipe.id}
-                    className={
-                      isShadowed
-                        ? "p-3 hover:bg-muted/50 transition-colors group cursor-default opacity-60"
-                        : "p-3 hover:bg-muted/50 transition-colors group cursor-default"
-                    }
+                    className={cn(
+                      "px-4 py-3 hover:bg-overlay-subtle transition-colors group cursor-default",
+                      isShadowed && "opacity-60"
+                    )}
                   >
                     <div className="flex items-start gap-3">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <span className="text-sm font-medium text-foreground truncate">
+                              <span className="text-sm font-medium text-text-primary truncate">
                                 {recipe.name}
                               </span>
                             </TooltipTrigger>
@@ -280,41 +283,17 @@ export function RecipesTab({
                           </Tooltip>
                           {(() => {
                             const scopeInfo = getRecipeScope(recipe, resolveWorktreeName);
-                            return (
-                              <span
-                                className={`text-2xs px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1 ${
-                                  scopeInfo.isGlobal
-                                    ? "text-status-info bg-status-info/10"
-                                    : "text-muted-foreground bg-muted"
-                                }`}
-                              >
-                                {scopeInfo.isGlobal && <Globe className="h-3 w-3" />}
-                                {scopeInfo.label}
-                              </span>
-                            );
+                            return <Badge size="xs">{scopeInfo.label}</Badge>;
                           })()}
-                          <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
+                          <Badge size="xs">
                             {recipe.terminals.length} terminal
                             {recipe.terminals.length !== 1 ? "s" : ""}
-                          </span>
-                          {isShadowed && (
-                            <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
-                              Overridden
-                            </span>
-                          )}
-                          {isDefault && (
-                            <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
-                              <Pin className="h-3 w-3" />
-                              Default
-                            </span>
-                          )}
-                          {recipe.showInEmptyState && (
-                            <span className="text-2xs text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0">
-                              Empty State
-                            </span>
-                          )}
+                          </Badge>
+                          {isShadowed && <Badge size="xs">Overridden</Badge>}
+                          {isDefault && <Badge size="xs">Default</Badge>}
+                          {recipe.showInEmptyState && <Badge size="xs">Empty state</Badge>}
                         </div>
-                        <div className="text-xs text-muted-foreground mt-1">
+                        <div className="text-xs text-text-secondary mt-1">
                           {recipe.lastUsedAt ? (
                             <span>
                               Last used <LiveTimeAgo timestamp={recipe.lastUsedAt} />
@@ -417,28 +396,15 @@ export function RecipesTab({
                   </div>
                 );
               })}
-            </div>
+            </SettingsGroup>
           )}
           {exportError && (
-            <div
-              className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3"
-              role="alert"
-            >
+            <p className="text-xs text-status-error" role="alert">
               {exportError}
-            </div>
+            </p>
           )}
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={handleAddRecipe} className="flex-1">
-              <Plus />
-              Add recipe
-            </Button>
-            <Button variant="outline" onClick={() => setShowImportDialog(true)}>
-              <FileDown />
-              Import recipe
-            </Button>
-          </div>
         </div>
-      </div>
+      </SettingsSection>
 
       <RecipeEditor
         recipe={editingRecipe}
@@ -494,7 +460,7 @@ export function RecipesTab({
             spellCheck={false}
           />
           {importError && (
-            <div className="mt-3 text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3">
+            <div className="mt-3 text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] p-3">
               {importError}
             </div>
           )}

@@ -12,17 +12,18 @@ import { appThemeClient } from "@/clients/appThemeClient";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import type { ColorVisionMode } from "@shared/types";
 import { logError } from "@/utils/logger";
+import { SETTINGS_CONTROL_WIDTH, SettingsRow } from "./SettingsGroup";
 
 const COLOR_VISION_OPTIONS: Array<{ id: ColorVisionMode; label: string; description: string }> = [
   { id: "default", label: "Default", description: "No color adjustments" },
   {
     id: "red-green",
-    label: "Red-Green",
-    description: "Deuteranopia & Protanopia",
+    label: "Red-green",
+    description: "Deuteranopia and protanopia",
   },
   {
     id: "blue-yellow",
-    label: "Blue-Yellow",
+    label: "Blue-yellow",
     description: "Tritanopia",
   },
 ];
@@ -57,11 +58,11 @@ function SwatchPreview() {
   if (colors.length === 0) return null;
 
   return (
-    <div className="flex items-center gap-1.5 mt-2">
+    <div className="flex items-center gap-1.5" aria-hidden="true">
       {SWATCH_TOKENS.map((token, i) => (
         <div key={token.var} className="flex flex-col items-center gap-0.5">
           <div
-            className="w-6 h-6 rounded-sm border border-daintree-border/30"
+            className="w-6 h-6 rounded-sm border border-border-subtle"
             style={{ backgroundColor: colors[i] }}
             title={token.label}
           />
@@ -107,38 +108,52 @@ export function ColorVisionPicker() {
     }
   };
 
+  // One divided block in the group: the swatches and any save error belong to this row,
+  // so they sit inside it rather than behind a hairline of their own.
   return (
-    <div>
-      <Select
-        value={colorVisionMode}
-        onValueChange={(value) => {
-          if (isColorVisionMode(value)) void handleChange(value);
-        }}
-      >
-        <SelectTrigger aria-label="Color vision mode">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {COLOR_VISION_OPTIONS.map((option) => (
-            <SelectItem key={option.id} value={option.id} description={option.description}>
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      {failedMode && (
-        <InlineStatusBanner
-          className="mt-2 rounded-[var(--radius-md)]"
-          severity="error"
-          icon={AlertCircle}
-          title="Couldn't save color vision mode"
-          description="The mode was restored to the last saved one, so it won't be lost on restart."
-          action={{ id: "retry", label: "Retry", onClick: () => void handleChange(failedMode) }}
-          onClose={() => setFailedMode(null)}
-          closeAriaLabel="Dismiss color vision error"
-        />
-      )}
-      <SwatchPreview />
+    <div id="appearance-color-vision" className="scroll-mt-6">
+      <SettingsRow
+        label="Color vision"
+        description="Adjusts status indicators and the default terminal palette for color vision deficiency"
+        control={({ labelId, descriptionId }) => (
+          <Select
+            value={colorVisionMode}
+            onValueChange={(value) => {
+              if (isColorVisionMode(value)) void handleChange(value);
+            }}
+          >
+            <SelectTrigger
+              aria-labelledby={labelId}
+              aria-describedby={descriptionId}
+              className={SETTINGS_CONTROL_WIDTH.select}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {COLOR_VISION_OPTIONS.map((option) => (
+                <SelectItem key={option.id} value={option.id} description={option.description}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+      />
+      <div className="space-y-2 px-4 pb-3">
+        <SwatchPreview />
+        {failedMode && (
+          <InlineStatusBanner
+            className="rounded-[var(--radius-md)]"
+            severity="error"
+            icon={AlertCircle}
+            title="Couldn't save color vision mode"
+            description="The mode was restored to the last saved one, so it won't be lost on restart."
+            action={{ id: "retry", label: "Retry", onClick: () => void handleChange(failedMode) }}
+            onClose={() => setFailedMode(null)}
+            closeAriaLabel="Dismiss color vision error"
+          />
+        )}
+      </div>
     </div>
   );
 }
