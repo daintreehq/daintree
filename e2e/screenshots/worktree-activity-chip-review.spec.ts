@@ -517,6 +517,31 @@ test("worktree activity chip review — states and themes", async () => {
         await parkPointer(page);
       });
 
+      // The same commit card is reused inside expanded Details, on its own
+      // "Last activity" line. Opened here so the two cannot drift apart.
+      await step("details", async () => {
+        await parkPointer(page);
+        const r = rows.stale;
+        const button = r.locator('[id$="-details-button"]').first();
+        if ((await button.getAttribute("aria-expanded")) !== "true") await button.click();
+        const line = r.locator('[role="group"][aria-label="Last activity"]').first();
+        await expect(line, "expanded Details has no Last activity line").toContainText(
+          "Last active",
+          {
+            timeout: T_LONG,
+          }
+        );
+        await line.evaluate((el) => el.scrollIntoView({ block: "center" }));
+        await snap(page, `${t}-40-details-expanded`, r, "Last active");
+        await tabTo(page, line);
+        await ensureFocusOpened(page, line, `${t} details`);
+        await snapRegion(page, `${t}-41-details-focus`, [line, openHoverCard(page)]);
+        await page.keyboard.press("Escape");
+        await page.locator(SEL.worktree.searchInput).first().click();
+        await collapseDetails(r);
+        await parkPointer(page);
+      });
+
       // Tabbing to a chip that is below the fold scrolls the list to reveal it.
       // The shot is named after what the hover card actually did, so it can
       // never pass off one outcome as the other.
