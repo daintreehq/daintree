@@ -39,7 +39,7 @@ import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import { FocusedSubLine } from "./WorktreeCard/FocusedSubLine";
-import { collapsedAlarmDescriptionId } from "./WorktreeCard/CollapsedAlarmPill";
+import { selectButtonDescribedBy, worktreeRowDescriptionId } from "./WorktreeCard/rowDescriptions";
 import { isTooltipFocusOpenSuppressed } from "@/lib/tooltipDismissRegistry";
 import { isTooltipSuppressedForElement } from "@/lib/tooltipFocusSuppression";
 import {
@@ -1099,6 +1099,14 @@ export function WorktreeCard({
               </TooltipContent>
             </Tooltip>
           )}
+          {chipState !== null && variant === "sidebar" && (
+            // For the select button to be described by; see rowDescriptions.
+            // Sidebar only, like the button: the overview grid renders the same
+            // worktree while the sidebar is mounted, and ids must be unique.
+            <span id={worktreeRowDescriptionId(worktree.id, "lifecycle")} hidden>
+              {CHIP_LABELS[chipState]}
+            </span>
+          )}
 
           {/* Sidebar only. This is a real keyboard target there: it is
               tabbable, sidebar.css paints its focus ring via
@@ -1122,12 +1130,14 @@ export function WorktreeCard({
                 (isDraggingSort || isWorktreeSortDragging) && "pointer-events-none"
               )}
               aria-label={`Select worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}`}
-              // Collapsed, the alarm mark is a non-focusable span on this row,
-              // so this button is where a keyboard user meets it: described by
-              // the mark's words, and revealing its tooltip while ringed.
-              aria-describedby={
-                effectiveIsCollapsed ? collapsedAlarmDescriptionId(worktree.id) : undefined
-              }
+              // The row's marks are non-focusable, so this button is where a
+              // keyboard user meets them: described by each mark's words, and,
+              // collapsed, revealing the alarm's tooltip while ringed.
+              aria-describedby={selectButtonDescribedBy(worktree.id, {
+                lifecycle: chipState !== null,
+                alarm: !!effectiveIsCollapsed,
+                external: isExternal,
+              })}
               onFocus={handleSelectFocus}
               onBlur={handleSelectBlur}
             />

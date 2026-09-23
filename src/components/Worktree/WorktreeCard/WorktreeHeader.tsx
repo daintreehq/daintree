@@ -15,6 +15,7 @@ import { EnvironmentPopover } from "./EnvironmentPopover";
 import { DevServerIndicator } from "./DevServerIndicator";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
 import { CollapsedAlarmPill, collapsedAlarmDescriptionId } from "./CollapsedAlarmPill";
+import { worktreeRowDescriptionId } from "./rowDescriptions";
 import { isExternalWorktree, isLiveDevServerStatus } from "@/lib/worktreeFilters";
 import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
@@ -415,6 +416,13 @@ export function WorktreeHeader({
                   <span className="mt-0.5 block font-mono text-2xs break-all">{worktree.path}</span>
                 </TooltipContent>
               </Tooltip>
+            )}
+            {isExternal && variant === "sidebar" && (
+              // For the card's select button to be described by, which only the
+              // sidebar card has; see rowDescriptions.
+              <span id={worktreeRowDescriptionId(worktree.id, "external")} hidden>
+                {`External worktree at ${worktree.path}`}
+              </span>
             )}
             {isProjectNotificationsMuted && (
               <BellOff

@@ -388,10 +388,27 @@ describe("worktree error banner stacking (issue #12087)", () => {
 // the alarm's words at `collapsedAlarmDescriptionId(worktree.id)` and opens the
 // tooltip from `isKeyboardFocused`; this is the card's half of each contract.
 describe("collapsed alarm reaches the select overlay", () => {
-  it("describes the overlay by the header's alarm node while collapsed", () => {
+  it("describes the overlay by every mounted row mark", () => {
+    // Each part is gated on the same condition that mounts its node:
+    // `selectButtonDescribedBy` drops the unmounted ones, so a wrong gate here
+    // is a dangling IDREF or a silent mark.
     const tag = openingTagWith(cardSource, "button", 'data-card-select-overlay=""');
-    expect(tag).toMatch(
-      /aria-describedby=\{\s*effectiveIsCollapsed \? collapsedAlarmDescriptionId\(worktree\.id\) : undefined\s*\}/
+    const call = tag.match(
+      /aria-describedby=\{selectButtonDescribedBy\(worktree\.id, \{([^}]*)\}\)\}/
+    );
+    expect(
+      call,
+      "the overlay's aria-describedby is not built by selectButtonDescribedBy"
+    ).not.toBeNull();
+    const gates = call![1]!;
+    expect(gates).toMatch(/lifecycle:\s*chipState !== null/);
+    expect(gates).toMatch(/alarm:\s*!!effectiveIsCollapsed/);
+    expect(gates).toMatch(/external:\s*isExternal/);
+  });
+
+  it("mounts the lifecycle description beside the tick, sidebar only", () => {
+    expect(cardSource).toMatch(
+      /\{chipState !== null && variant === "sidebar" && \([\s\S]{0,400}<span id=\{worktreeRowDescriptionId\(worktree\.id, "lifecycle"\)\} hidden>\s*\{CHIP_LABELS\[chipState\]\}/
     );
   });
 

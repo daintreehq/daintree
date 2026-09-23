@@ -3,6 +3,7 @@ import { ArrowDown, CircleX, KeyRound } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { AlarmDescriptor, AlarmKind } from "@/lib/worktreeAlarmTier";
+import { worktreeRowDescriptionId } from "./rowDescriptions";
 
 /**
  * One silhouette per alarm kind.
@@ -19,13 +20,9 @@ const ALARM_ICONS: Record<Exclude<AlarmKind, "none">, typeof ArrowDown> = {
   "ci-failed": CircleX,
 };
 
-/**
- * The id of the collapsed row's alarm description, for the card's select button
- * to point `aria-describedby` at. Worktree ids are paths, and a path can hold a
- * space, which would split one IDREF into two.
- */
+/** The id the card's select button points `aria-describedby` at for this mark. */
 export function collapsedAlarmDescriptionId(worktreeId: string): string {
-  return `worktree-alarm-${encodeURIComponent(worktreeId)}`;
+  return worktreeRowDescriptionId(worktreeId, "alarm");
 }
 
 interface CollapsedAlarmPillProps {
