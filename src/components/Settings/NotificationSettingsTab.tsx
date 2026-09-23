@@ -450,7 +450,7 @@ export function NotificationSettingsTab() {
             <SwitchRow
               id="notif-all-clear-flash"
               label="Flash when agents stop working"
-              description="Briefly flash the window once two or more agents were working and none still is. An agent waiting for input counts as stopped."
+              description="Briefly flash the window, with or without sound, once two or more agents were working and none still is. An agent waiting for input counts as stopped."
               checked={settings.flashEnabled}
               onChange={(v) => update({ flashEnabled: v })}
               {...reset("flashEnabled")}

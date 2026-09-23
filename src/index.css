@@ -1010,7 +1010,8 @@ body,
  * "no agent is still working" is not a success and may include agents waiting
  * for input. The same alpha reads far louder as a dim on a light canvas than
  * as a lift on a dark one, so the peak is set per polarity. Rest opacity is 0
- * so a killed animation (performance mode) leaves nothing on screen. */
+ * so a killed animation (performance mode) leaves nothing on screen. The
+ * duration comes from the component (ALL_CLEAR_FLASH_DURATION), never here. */
 :root {
   --all-clear-flash-peak: 0.09;
 }
@@ -1022,7 +1023,7 @@ body,
 .animate-all-clear-flash {
   opacity: 0;
   background-color: var(--theme-tint);
-  animation: all-clear-flash var(--all-clear-flash-duration, 300ms) ease-out forwards;
+  animation: all-clear-flash var(--all-clear-flash-duration) ease-out forwards;
   will-change: opacity;
 }
 
