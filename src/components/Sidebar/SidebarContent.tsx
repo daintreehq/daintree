@@ -428,7 +428,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     // keyboard reorder reads the same headline the user sees on the card rather
     // than the bare (rarely-visible) name (issue #10317).
     const wt = worktreesRef.current.find((w) => w.id === worktreeId);
-    const label = wt?.issueTitle ?? wt?.branch ?? wt?.name ?? worktreeId;
+    const label = wt?.issueTitle ?? wt?.branch ?? wt?.name ?? "worktree";
     const message = `Moved '${label}' to position ${targetIdx + 1} of ${visible.length}`;
     if (reorderAnnouncementTimerRef.current !== null) {
       clearTimeout(reorderAnnouncementTimerRef.current);
@@ -472,7 +472,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       const wt = worktreeId ? worktreesRef.current.find((w) => w.id === worktreeId) : undefined;
       // Match DndProvider.resolveWorktreeLabel so the assertive interrupt
       // reads the same human-readable name the polite announcer would.
-      const label = wt?.issueTitle ?? wt?.branch ?? wt?.name ?? worktreeId ?? "worktree";
+      const label = wt?.issueTitle ?? wt?.branch ?? wt?.name ?? "worktree";
       // Drop any pending trailing reorder announcement so the polite region
       // doesn't speak a stale "Moved to position N" after the cancel lands.
       if (reorderAnnouncementTimerRef.current !== null) {

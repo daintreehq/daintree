@@ -364,8 +364,8 @@ function SettingsDialogInner({
 
   const projectForm = useProjectSettingsForm({ projectId: projectId ?? null, isOpen });
   const showProjectLoading = useDohertyGate(projectForm.projectIsLoading);
-  const projectLabel =
-    projectForm.currentProject?.name ?? projectForm.currentProject?.id ?? "project";
+  // Never the id: a project id is a sha256, not something to read aloud.
+  const projectLabel = projectForm.currentProject?.name ?? "project";
 
   // Validation error tracking from the registry provider
   const validationRegistry = useContext(SettingsValidationContext);
