@@ -116,4 +116,14 @@ describe("telemetryPreviewStore", () => {
     appendEvents([]);
     expect(useTelemetryPreviewStore.getState().events).toBe(prev);
   });
+
+  it("treats any setActive as an authoritative answer that settles the read state", () => {
+    const { setStateRead, setActive } = useTelemetryPreviewStore.getState();
+    setStateRead("failed");
+    // e.g. the toggle action's result, arriving after the tab's own read failed.
+    setActive(true);
+    const state = useTelemetryPreviewStore.getState();
+    expect(state.active).toBe(true);
+    expect(state.stateRead).toBe("known");
+  });
 });

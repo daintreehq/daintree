@@ -489,8 +489,11 @@ export const SEL = {
     timeline: '[role="log"][aria-label="Event timeline"]',
     row: '[role="log"][aria-label="Event timeline"] button',
     emptyState: 'text="No events captured yet"',
-    detailPlaceholder: 'text="Select an event to view details"',
-    searchInput: 'input[placeholder="Search events..."]',
+    detailPlaceholder: 'text="Select an event to see its payload"',
+    searchInput: 'input[aria-label="Search events"]',
+    moreFilters: 'button[aria-label^="More filters"]',
+    // Lives in the "Filters" popover, which portals outside the events panel —
+    // locate it from the window, not the panel, after opening moreFilters.
     traceInput: 'input[placeholder="Filter by trace ID..."]',
     clearSearch: '[aria-label="Clear search"]',
     clearTraceId: '[aria-label="Clear trace ID filter"]',

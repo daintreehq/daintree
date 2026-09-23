@@ -128,11 +128,10 @@ test.describe.serial("Core: Event Inspector", () => {
 
     const panel = window.locator(SEL.diagnostics.panel("events"));
     const search = panel.locator(SEL.events.searchInput);
-    const trace = panel.locator(SEL.events.traceInput);
+    const trace = window.locator(SEL.events.traceInput);
 
     await test.step("Filter inputs render in the events panel", async () => {
       await expect(search).toBeVisible({ timeout: T_SHORT });
-      await expect(trace).toBeVisible({ timeout: T_SHORT });
     });
 
     await test.step("Typing a search shows the clear button, clearing empties it", async () => {
@@ -145,12 +144,15 @@ test.describe.serial("Core: Event Inspector", () => {
     });
 
     await test.step("Typing a trace ID shows its clear button, clearing empties it", async () => {
+      await panel.locator(SEL.events.moreFilters).click();
+      await expect(trace).toBeVisible({ timeout: T_SHORT });
       await trace.fill("trace-123");
-      const clearTrace = panel.locator(SEL.events.clearTraceId);
+      const clearTrace = window.locator(SEL.events.clearTraceId);
       await expect(clearTrace).toBeVisible({ timeout: T_SHORT });
       await clearTrace.click();
       await expect(trace).toHaveValue("");
       await expect(clearTrace).toHaveCount(0, { timeout: T_SHORT });
+      await window.keyboard.press("Escape");
     });
   });
 
@@ -207,7 +209,9 @@ test.describe.serial("Core: Event Inspector", () => {
       // is unaffected by any other events prior tests left in the buffer (and
       // by any residual filter state). The search filter matches the recorded
       // `action:dispatched` payload, which carries our marker query.
-      await panel.locator(SEL.events.traceInput).fill("");
+      await panel.locator(SEL.events.moreFilters).click();
+      await window.locator(SEL.events.traceInput).fill("");
+      await window.keyboard.press("Escape");
       await panel.locator(SEL.events.searchInput).fill(marker);
     });
 

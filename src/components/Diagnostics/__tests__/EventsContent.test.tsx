@@ -119,7 +119,7 @@ describe("EventsContent — disposed guard", () => {
     expect(mockUnsubscribe).toHaveBeenCalledTimes(1);
   });
 
-  it("calls addEvents when onEventBatch fires while mounted", async () => {
+  it("calls addEvents when onEventBatch fires after the snapshot has loaded", async () => {
     let batchCallback: ((events: EventRecord[]) => void) | null = null;
     mockOnEventBatch.mockImplementation((cb: (events: EventRecord[]) => void) => {
       batchCallback = cb;
@@ -127,11 +127,30 @@ describe("EventsContent — disposed guard", () => {
     });
 
     render(<EventsContent />);
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     batchCallback!([
       { id: "2", timestamp: 2, type: "test", category: "agent", payload: {}, source: "main" },
     ]);
 
     expect(mockAddEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a batch that lands before the snapshot instead of letting the snapshot drop it", async () => {
+    let batchCallback: ((events: EventRecord[]) => void) | null = null;
+    mockOnEventBatch.mockImplementation((cb: (events: EventRecord[]) => void) => {
+      batchCallback = cb;
+      return () => {};
+    });
+
+    render(<EventsContent />);
+    batchCallback!([
+      { id: "2", timestamp: 2, type: "test", category: "agent", payload: {}, source: "main" },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockSetEvents).toHaveBeenCalledTimes(1);
+    const hydrated = mockSetEvents.mock.calls[0]![0] as EventRecord[];
+    expect(hydrated.map((e) => e.id)).toEqual(["1", "2"]);
   });
 });

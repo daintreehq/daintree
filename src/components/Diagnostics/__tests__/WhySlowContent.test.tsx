@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
-import { WhySlowContent } from "../WhySlowContent";
+import { WhySlowContent, describeSlowdowns, isAllClear } from "../WhySlowContent";
 import type { WhySlowSnapshot } from "@shared/types/whySlow";
 
 const getWhySlowSnapshot = vi.fn();
@@ -13,6 +13,32 @@ vi.mock("@/clients/systemClient", () => ({
 
 const logError = vi.fn();
 vi.mock("@/utils/logger", () => ({ logError: (...args: unknown[]) => logError(...args) }));
+
+const quietRenderer: WhySlowSnapshot["rendererTerminals"] = [
+  {
+    webContentsId: 1,
+    webglMode: "webgl",
+    wantsWebgl: 2,
+    terminalCount: 2,
+    countsByTier: { VISIBLE: 2 },
+    timestamp: 1,
+    ageMs: 500,
+    stale: false,
+  },
+];
+
+const quietMemory: WhySlowSnapshot["memory"] = {
+  appMemoryMb: 400,
+  terminalWorkloads: {
+    available: true,
+    stale: false,
+    ageMs: 1000,
+    totalMemoryMb: 800,
+    processCount: 10,
+    terminalCount: 3,
+    topProjects: [],
+  },
+};
 
 function makeSnapshot(overrides?: Partial<WhySlowSnapshot>): WhySlowSnapshot {
   return {
@@ -100,8 +126,8 @@ describe("WhySlowContent", () => {
 
     render(<WhySlowContent />);
 
-    // One webgl + one dom view → "mixed"; counts sum across views.
-    expect(await screen.findByText("mixed")).toBeTruthy();
+    // One webgl + one dom view → mixed; counts sum across views.
+    expect(await screen.findByText("Partly GPU")).toBeTruthy();
     expect(screen.getByText("7")).toBeTruthy(); // summed terminalCount
     expect(screen.getByText("FOCUSED: 2")).toBeTruthy(); // summed tier bucket
     expect(screen.getByText("BACKGROUND: 5")).toBeTruthy();
@@ -121,7 +147,7 @@ describe("WhySlowContent", () => {
 
     render(<WhySlowContent />);
 
-    expect(await screen.findByText("Worker queue")).toBeTruthy();
+    expect(await screen.findByText("Queued jobs")).toBeTruthy();
     expect(screen.getByText("3")).toBeTruthy();
     expect(screen.getByText("degraded: copytree-worker:/proj")).toBeTruthy();
     expect(screen.getByText("degraded: analysis-worker-1")).toBeTruthy();
@@ -132,7 +158,7 @@ describe("WhySlowContent", () => {
 
     render(<WhySlowContent />);
 
-    expect(await screen.findByText("Worker queue")).toBeTruthy();
+    expect(await screen.findByText("Queued jobs")).toBeTruthy();
     expect(screen.queryByText(/^degraded:/)).toBeNull();
   });
 
@@ -220,7 +246,7 @@ describe("WhySlowContent", () => {
 
     render(<WhySlowContent />);
 
-    expect(await screen.findByText("Memory attribution unavailable.")).toBeTruthy();
+    expect(await screen.findByText("Memory breakdown unavailable")).toBeTruthy();
   });
 
   it("does not start overlapping refreshes while one is in flight", async () => {
@@ -338,8 +364,8 @@ describe("WhySlowContent", () => {
 
     render(<WhySlowContent />);
 
-    const items = await screen.findAllByRole("listitem");
-    const texts = items.map((li) => li.textContent);
+    const list = await screen.findByRole("list", { name: "Pressure contributions" });
+    const texts = Array.from(list.querySelectorAll("li")).map((li) => li.textContent);
     // fleetSize (+3) leads despite the collector emitting memory (+1) first;
     // the tied +1 reasons keep their collector order (stable sort).
     expect(texts[0]).toContain("24 active agents");
@@ -353,6 +379,8 @@ describe("WhySlowContent", () => {
         resource: makeQuietResource(),
         pty: makeQuietPty(),
         worktrees: quietWorktrees,
+        memory: quietMemory,
+        rendererTerminals: quietRenderer,
       })
     );
 
@@ -361,13 +389,50 @@ describe("WhySlowContent", () => {
     expect(await screen.findByTestId("why-slow-all-clear")).toBeTruthy();
   });
 
+  it("qualifies a quiet verdict when a reading is missing instead of claiming all clear", async () => {
+    getWhySlowSnapshot.mockResolvedValue(
+      makeSnapshot({
+        resource: makeQuietResource(),
+        pty: makeQuietPty(),
+        worktrees: quietWorktrees,
+        memory: null,
+        rendererTerminals: quietRenderer,
+      })
+    );
+
+    render(<WhySlowContent />);
+
+    expect(
+      await screen.findByText("No slowdowns found, but some readings are unavailable")
+    ).toBeTruthy();
+    expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
+  });
+
+  it("treats an unreadable app-memory sweep as a missing reading", async () => {
+    getWhySlowSnapshot.mockResolvedValue(
+      makeSnapshot({
+        resource: makeQuietResource(),
+        pty: makeQuietPty(),
+        worktrees: quietWorktrees,
+        memory: { ...quietMemory!, appMemoryMb: null },
+        rendererTerminals: quietRenderer,
+      })
+    );
+
+    render(<WhySlowContent />);
+
+    expect(
+      await screen.findByText("No slowdowns found, but some readings are unavailable")
+    ).toBeTruthy();
+  });
+
   it("does not claim all-clear when the resource section degraded to null", async () => {
     // Partial payload: resource section missing — "unknown" must not read as healthy.
     getWhySlowSnapshot.mockResolvedValue(makeSnapshot({ pty: makeQuietPty() }));
 
     render(<WhySlowContent />);
 
-    expect(await screen.findByText("Resource profile unavailable.")).toBeTruthy();
+    expect(await screen.findByText("Resource mode unavailable")).toBeTruthy();
     expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
   });
 
@@ -376,7 +441,7 @@ describe("WhySlowContent", () => {
 
     render(<WhySlowContent />);
 
-    await screen.findByText("Resource profile");
+    await screen.findByText("Resource mode");
     expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
   });
 
@@ -385,12 +450,15 @@ describe("WhySlowContent", () => {
       makeSnapshot({
         resource: makeQuietResource(),
         pty: makeQuietPty(),
+        worktrees: quietWorktrees,
+        memory: quietMemory,
+        rendererTerminals: quietRenderer,
         focusThrottle: { throttled: true, pollMultiplier: 4 },
       })
     );
 
     const { unmount } = render(<WhySlowContent />);
-    await screen.findByText("Resource profile");
+    expect(await screen.findByText(/background checks run 4× less often/)).toBeTruthy();
     expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
     unmount();
 
@@ -399,18 +467,26 @@ describe("WhySlowContent", () => {
       makeSnapshot({
         resource: makeQuietResource(),
         pty: { ...makeQuietPty(), eventLoopP99Ms: 80 },
+        worktrees: quietWorktrees,
+        memory: quietMemory,
+        rendererTerminals: quietRenderer,
       })
     );
 
     render(<WhySlowContent />);
-    await screen.findByText("Resource profile");
+    expect(await screen.findByText(/terminal host is busy: 80ms/)).toBeTruthy();
     expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
   });
 
   it("hides the all-clear line while a refresh is failing", async () => {
     vi.useFakeTimers();
     getWhySlowSnapshot.mockResolvedValueOnce(
-      makeSnapshot({ resource: makeQuietResource(), pty: makeQuietPty() })
+      makeSnapshot({
+        resource: makeQuietResource(),
+        pty: makeQuietPty(),
+        memory: quietMemory,
+        rendererTerminals: quietRenderer,
+      })
     );
 
     render(<WhySlowContent />);
@@ -427,5 +503,144 @@ describe("WhySlowContent", () => {
     });
     expect(screen.getByTestId("why-slow-stale-note")).toBeTruthy();
     expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
+  });
+
+  it("never claims all-clear while a reading is flagged, and every flag has a finding", () => {
+    const quiet = makeSnapshot({
+      resource: {
+        currentProfile: "performance",
+        targetProfile: "performance",
+        pressureScore: 0,
+        reasons: [],
+        lagPressureActive: false,
+        lagEscalatedActive: false,
+        thermalState: "nominal",
+        isOnBattery: false,
+        speedLimit: 100,
+      },
+      pty: {
+        totalPendingBytes: 0,
+        terminalCount: 1,
+        pausedCount: 0,
+        suspendedCount: 0,
+        maxPausedDurationMs: 0,
+        eventLoopP99Ms: 5,
+        eventLoopMaxMs: 8,
+        eventLoopUtilization: 0.1,
+      },
+      worktrees: { monitorCount: 2, fetchInFlightCount: 0 },
+      workers: { subsystemCount: 2, aliveWorkerCount: 2, totalQueueDepth: 0, degraded: [] },
+    });
+    expect(isAllClear(quiet)).toBe(true);
+    expect(describeSlowdowns(quiet)).toEqual([]);
+
+    const flagged: WhySlowSnapshot[] = [
+      { ...quiet, workers: { ...quiet.workers!, totalQueueDepth: 4 } },
+      { ...quiet, workers: { ...quiet.workers!, degraded: ["file-search"] } },
+      { ...quiet, worktrees: { monitorCount: 2, fetchInFlightCount: 1 } },
+      { ...quiet, focusThrottle: { throttled: true, pollMultiplier: 4 } },
+      { ...quiet, pty: { ...quiet.pty!, pausedCount: 2, totalPendingBytes: 2048 } },
+      { ...quiet, pty: { ...quiet.pty!, eventLoopP99Ms: 120 } },
+      { ...quiet, resource: { ...quiet.resource!, isOnBattery: true } },
+      { ...quiet, resource: { ...quiet.resource!, currentProfile: "balanced" } },
+    ];
+    for (const snapshot of flagged) {
+      expect(isAllClear(snapshot)).toBe(false);
+      expect(describeSlowdowns(snapshot).length).toBeGreaterThan(0);
+    }
+  });
+
+  it("puts alert findings ahead of warnings", () => {
+    const findings = describeSlowdowns(
+      makeSnapshot({
+        focusThrottle: { throttled: true, pollMultiplier: 4 },
+        resource: {
+          currentProfile: "efficiency",
+          targetProfile: "efficiency",
+          pressureScore: 4,
+          reasons: [],
+          lagPressureActive: true,
+          lagEscalatedActive: false,
+          thermalState: "nominal",
+          isOnBattery: true,
+          speedLimit: 100,
+        },
+      })
+    );
+    const firstWarn = findings.findIndex((f) => f.tone === "warn");
+    const lastAlert = findings.map((f) => f.tone).lastIndexOf("alert");
+    expect(lastAlert).toBeGreaterThanOrEqual(0);
+    expect(lastAlert).toBeLessThan(firstWarn);
+  });
+
+  it("treats terminals with no renderer report as a missing reading", async () => {
+    getWhySlowSnapshot.mockResolvedValue(
+      makeSnapshot({
+        resource: makeQuietResource(),
+        pty: makeQuietPty(),
+        worktrees: quietWorktrees,
+        memory: quietMemory,
+        rendererTerminals: [],
+      })
+    );
+
+    render(<WhySlowContent />);
+
+    expect(
+      await screen.findByText("No slowdowns found, but some readings are unavailable")
+    ).toBeTruthy();
+    expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
+  });
+
+  it("qualifies a quiet verdict when a reading is present but out of date", async () => {
+    getWhySlowSnapshot.mockResolvedValue(
+      makeSnapshot({
+        resource: makeQuietResource(),
+        pty: makeQuietPty(),
+        worktrees: quietWorktrees,
+        memory: {
+          ...quietMemory!,
+          terminalWorkloads: { ...quietMemory!.terminalWorkloads, stale: true },
+        },
+        rendererTerminals: quietRenderer,
+      })
+    );
+
+    render(<WhySlowContent />);
+
+    expect(
+      await screen.findByText("No slowdowns found, but some readings are out of date")
+    ).toBeTruthy();
+    expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
+  });
+
+  it("says which way a pending profile switch is heading", () => {
+    const base = makeQuietResource();
+    const easing = describeSlowdowns(
+      makeSnapshot({
+        resource: { ...base, currentProfile: "efficiency", targetProfile: "balanced" },
+      })
+    ).find((f) => f.id === "profile");
+    const worsening = describeSlowdowns(
+      makeSnapshot({
+        resource: { ...base, currentProfile: "balanced", targetProfile: "efficiency" },
+      })
+    ).find((f) => f.id === "profile");
+    expect(easing?.suggestion).toMatch(/eased/);
+    // The lag latch holds the profile down whatever the target says.
+    const held = describeSlowdowns(
+      makeSnapshot({
+        resource: {
+          ...base,
+          currentProfile: "efficiency",
+          targetProfile: "performance",
+          lagPressureActive: true,
+        },
+      })
+    ).find((f) => f.id === "profile");
+    expect(held?.suggestion).not.toMatch(/eased/);
+    expect(held?.suggestion).toMatch(/catches up/);
+    expect(worsening?.suggestion).not.toMatch(/eased/);
+    expect(worsening?.suggestion).toMatch(/power-saving/);
   });
 });

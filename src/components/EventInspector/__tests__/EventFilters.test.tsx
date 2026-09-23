@@ -18,13 +18,14 @@ describe("EventFilters accessibility", () => {
 
   it("renders search input with type='search'", () => {
     render(<EventFilters {...baseProps} />);
-    const input = screen.getByPlaceholderText("Search events...") as HTMLInputElement;
+    const input = screen.getByRole("searchbox", { name: "Search events" }) as HTMLInputElement;
     expect(input.type).toBe("search");
   });
 
-  it("renders traceId input with type='text'", () => {
+  it("renders traceId input with type='text' inside the filters popover", async () => {
     render(<EventFilters {...baseProps} />);
-    const input = screen.getByPlaceholderText("Filter by trace ID...") as HTMLInputElement;
+    fireEvent.click(screen.getByRole("button", { name: "More filters" }));
+    const input = (await screen.findByLabelText("Trace ID")) as HTMLInputElement;
     expect(input.type).toBe("text");
   });
 

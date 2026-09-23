@@ -184,8 +184,11 @@ export function EmptyState(props: EmptyStateProps) {
   return (
     <div
       aria-describedby={hasDescription ? descriptionId : undefined}
+      // `w-full` is load-bearing: the root is an inline-size container, so its
+      // content can't size it. Centred by a flex parent without a width, it
+      // shrinks to ~0 and the title wraps one word per line.
       className={cn(
-        "@container/empty-state flex flex-col items-center justify-center text-center px-4 py-8",
+        "@container/empty-state flex w-full flex-col items-center justify-center text-center px-4 py-8",
         className
       )}
     >

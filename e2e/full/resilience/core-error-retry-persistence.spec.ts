@@ -88,7 +88,7 @@ async function getStoreErrorId(window: Page, message: string): Promise<string> {
 async function clearErrorsAndCloseDock(window: Page) {
   const dock = window.locator(SEL.diagnostics.dock);
   if (await dock.isVisible().catch(() => false)) {
-    const clearButton = window.locator('button:has-text("Clear All")');
+    const clearButton = window.locator('button:has-text("Dismiss all")');
     if (await clearButton.isVisible().catch(() => false)) {
       if (await clearButton.isEnabled().catch(() => false)) {
         await clearButton.click();
@@ -144,8 +144,10 @@ test.describe.serial("Core: Error Retry & Cancellation", () => {
     await emitRetryProgress(ctx.app, { id: storeId, attempt: 1, maxAttempts: 3 });
 
     const errorRow = panel.locator("tr").filter({ hasText: msg });
-    await expect(errorRow.getByText("Retrying 1/3...")).toBeVisible({ timeout: T_MEDIUM });
-    await expect(errorRow.locator('button:text-is("Cancel")')).toBeVisible();
+    await expect(errorRow.getByText("Retrying automatically (attempt 1 of 3)")).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+    await expect(errorRow.locator('button:text-is("Cancel retry")')).toBeVisible();
     await expect(errorRow.locator('button:text-is("Retry")')).not.toBeVisible();
   });
 
@@ -197,10 +199,12 @@ test.describe.serial("Core: Error Retry & Cancellation", () => {
     await emitRetryProgress(ctx.app, { id: storeId, attempt: 2, maxAttempts: 3 });
 
     const errorRow = panel.locator("tr").filter({ hasText: msg });
-    await expect(errorRow.getByText("Retrying 2/3...")).toBeVisible({ timeout: T_MEDIUM });
+    await expect(errorRow.getByText("Retrying automatically (attempt 2 of 3)")).toBeVisible({
+      timeout: T_MEDIUM,
+    });
 
     // Click Cancel
-    const cancelButton = errorRow.locator('button:text-is("Cancel")');
+    const cancelButton = errorRow.locator('button:text-is("Cancel retry")');
     await cancelButton.click();
 
     // Progress should disappear
