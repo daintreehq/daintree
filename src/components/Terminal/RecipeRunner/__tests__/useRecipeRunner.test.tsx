@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, renderHook } from "@testing-library/react";
 import type { TerminalRecipe, RunCommand } from "@/types";
 import type { RecipeSpawnResults } from "@/store/recipeStore";
+import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
 
 const recipes: TerminalRecipe[] = [];
 const runRecipeWithResultsMock =
@@ -232,6 +233,103 @@ describe("useRecipeRunner — spawn failure capture", () => {
       "Terminal 1",
       "Terminal 2",
     ]);
+  });
+});
+
+describe("useRecipeRunner — panel limit decline", () => {
+  const threeTerminals = () =>
+    makeRecipe({
+      id: "r1",
+      name: "Mixed",
+      terminals: [
+        { type: "terminal", env: {} },
+        { type: "claude-code", env: {} },
+        { type: "codex", env: {} },
+      ],
+    });
+
+  it("shows no banner when every missing terminal was declined at the confirm", async () => {
+    recipes.push(threeTerminals());
+    runRecipeWithResultsMock.mockResolvedValue({
+      spawned: [],
+      failed: [
+        { index: 0, error: PANEL_LIMIT_DECLINED_REASON },
+        { index: 1, error: PANEL_LIMIT_DECLINED_REASON },
+        { index: 2, error: PANEL_LIMIT_DECLINED_REASON },
+      ],
+    });
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleRun("r1");
+    });
+    await flush();
+
+    expect(result.current.spawnFailureSummary).toBeNull();
+  });
+
+  it("still reports real failures alongside a decline", async () => {
+    recipes.push(threeTerminals());
+    runRecipeWithResultsMock.mockResolvedValue({
+      spawned: [{ index: 0, terminalId: "t-0" }],
+      failed: [
+        { index: 1, error: PANEL_LIMIT_DECLINED_REASON },
+        { index: 2, error: "spawn ENOENT" },
+      ],
+    });
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleRun("r1");
+    });
+    await flush();
+
+    expect(result.current.spawnFailureSummary?.failures.map((f) => f.index)).toEqual([1, 2]);
+  });
+
+  it("keeps the existing banner unchanged when a retry is declined", async () => {
+    recipes.push(threeTerminals());
+    runRecipeWithResultsMock.mockResolvedValueOnce({
+      spawned: [{ index: 0, terminalId: "t-0" }],
+      failed: [
+        { index: 1, error: "spawn ENOENT" },
+        { index: 2, error: "spawn ENOENT" },
+      ],
+    });
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleRun("r1");
+    });
+    await flush();
+    const before = result.current.spawnFailureSummary;
+    expect(before?.failures).toHaveLength(2);
+
+    runRecipeWithResultsMock.mockResolvedValueOnce({
+      spawned: [],
+      failed: [
+        { index: 1, error: PANEL_LIMIT_DECLINED_REASON },
+        { index: 2, error: PANEL_LIMIT_DECLINED_REASON },
+      ],
+    });
+
+    act(() => {
+      result.current.handleRetryFailed();
+    });
+    await flush();
+
+    expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(2);
+    expect(result.current.spawnFailureSummary).toBe(before);
+    expect(result.current.isRetryingFailed).toBe(false);
   });
 });
 
