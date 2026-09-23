@@ -460,6 +460,47 @@ describe("LocalCommitsDropdown grid semantics", () => {
     }
   });
 
+  it("moves the cursor with PageDown so Enter acts on a row that is on screen", async () => {
+    listCommitsMock.mockResolvedValue(makeResponse([makeCommit(0), makeCommit(1), makeCommit(2)]));
+
+    const { getByRole, findAllByText } = render(
+      <LocalCommitsDropdown cwd="/repo" open initialCount={3} />
+    );
+    await findAllByText("commit message 2");
+
+    const input = getByRole("combobox");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    const before = input.getAttribute("aria-activedescendant");
+    fireEvent.keyDown(input, { key: "PageDown" });
+    const after = input.getAttribute("aria-activedescendant");
+
+    expect(after).toBeTruthy();
+    expect(after).not.toBe(before);
+    fireEvent.keyDown(input, { key: "PageUp" });
+    expect(input.getAttribute("aria-activedescendant")).toBe(before);
+  });
+
+  it("retries a failed push-status read with Enter when no row is under the cursor", async () => {
+    listCommitsMock.mockResolvedValue(makeResponse([makeCommit(1)]));
+    listPushCommitsMock.mockRejectedValueOnce(new Error("git exploded"));
+    listPushCommitsMock.mockResolvedValueOnce({
+      destination: { remote: "origin", branch: "main" },
+      rangeBasis: "tracked",
+      total: 0,
+      commits: [],
+    });
+
+    const { getByRole, findAllByText } = render(
+      <LocalCommitsDropdown cwd="/repo" branch="main" open initialCount={1} />
+    );
+    await findAllByText("Couldn't read push status");
+
+    fireEvent.keyDown(getByRole("combobox"), { key: "Enter" });
+
+    expect((await findAllByText("Nothing to push to origin/main")).length).toBeGreaterThan(0);
+    expect(listCommitsMock).toHaveBeenCalledTimes(1);
+  });
+
   it("retries a failed read with Enter from the search field", async () => {
     listCommitsMock.mockRejectedValueOnce(new Error("git went away"));
     listCommitsMock.mockResolvedValueOnce(makeResponse([makeCommit(1)]));

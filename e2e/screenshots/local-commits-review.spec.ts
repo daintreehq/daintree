@@ -173,12 +173,17 @@ test("Local commits dropdown — states and themes", async ({ page }) => {
     await shot(panel, "09-long-cursor-deep");
     await panel.evaluate((el) => {
       const scroller = [...el.querySelectorAll<HTMLElement>("*")].find(
-        (n) => n.scrollHeight > n.clientHeight + 4 && getComputedStyle(n).overflowY !== "visible"
+        // The list scroller, not a collapsed body's overflow-hidden wrapper,
+        // which also reports more content than it shows.
+        (n) =>
+          n.scrollHeight > n.clientHeight + 4 &&
+          ["auto", "scroll"].includes(getComputedStyle(n).overflowY)
       );
       if (!scroller) throw new Error("no scrolling list in the panel");
       scroller.scrollTop = scroller.scrollHeight;
     });
     await expect(panel).toContainText(DEEP);
+    await expect(page.getByRole("button", { name: /load more/i })).toBeInViewport();
     await page.waitForTimeout(350);
     await shot(panel, "10-long-bottom");
 

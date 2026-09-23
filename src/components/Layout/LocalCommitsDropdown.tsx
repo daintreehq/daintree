@@ -478,11 +478,15 @@ export function LocalCommitsDropdown({
 
   const debouncedSearch = useDebounce(searchQuery, 300);
   const showLoadingMore = useDeferredLoading(loadingMore, UI_DOHERTY_THRESHOLD);
+  // A search or retry keeps the previous rows on screen while it runs, so the
+  // wait needs its own mark once it outlasts the Doherty gate.
+  const showRefreshing = useDeferredLoading(loading && data.length > 0, UI_DOHERTY_THRESHOLD);
   const isSlowLoadingMore = useDeferredLoading(loadingMore, UI_STILL_WORKING_MS);
   const scrollerRef = useRef<HTMLElement | null>(null);
   const { ref: scrollShadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(scrollerRef);
   const revealHashRef = useRef<string | null>(null);
   const showCheckingPush = useDeferredLoading(pushStatus.kind === "loading", UI_DOHERTY_THRESHOLD);
+  const isSlowPush = useDeferredLoading(pushStatus.kind === "loading", UI_STILL_WORKING_MS);
 
   const maxCursor = data.length - 1 + (hasMore ? 1 : 0);
   const activeCommit = cursorIndex >= 0 && cursorIndex < data.length ? data[cursorIndex] : null;
@@ -690,10 +694,10 @@ export function LocalCommitsDropdown({
     inputRef.current?.focus();
   }, [fetchData, fetchPushStatus, pushStatus.kind]);
 
-  const handleRetryPush = () => {
+  const handleRetryPush = useCallback(() => {
     void fetchPushStatus();
     inputRef.current?.focus();
-  };
+  }, [fetchPushStatus]);
 
   const handleClearSearch = () => {
     setSearchQuery("");
@@ -724,8 +728,10 @@ export function LocalCommitsDropdown({
         case "Enter": {
           e.preventDefault();
           e.stopPropagation();
-          if (error && !data.length) {
+          if (error && !activeCommit && !isLoadMoreActive) {
             handleRetry();
+          } else if (!activeCommit && !isLoadMoreActive && pushStatus.kind === "failed") {
+            handleRetryPush();
           } else if (isLoadMoreActive) {
             handleLoadMore();
           } else if (activeCommit) {
@@ -739,13 +745,34 @@ export function LocalCommitsDropdown({
         }
         case "PageDown":
         case "PageUp": {
-          // A body taller than the list is still readable without leaving search.
-          const scroller = scrollerRef.current;
-          if (!scroller) break;
           e.preventDefault();
           e.stopPropagation();
-          const step = scroller.clientHeight * 0.8;
-          scroller.scrollTop += e.key === "PageDown" ? step : -step;
+          const down = e.key === "PageDown";
+          const scroller = scrollerRef.current;
+          const viewport = scroller?.clientHeight ?? 0;
+          // An expanded body taller than the list pages through itself first,
+          // so it can be read without leaving search; once its far edge is in
+          // view, paging moves on like any other row.
+          const activeRow =
+            activeCommit && expandedHashes.has(activeCommit.hash)
+              ? document.getElementById(optionIdFor(activeCommit.hash))
+              : null;
+          if (scroller && activeRow && activeRow.offsetHeight > viewport) {
+            const rowBox = activeRow.getBoundingClientRect();
+            const listBox = scroller.getBoundingClientRect();
+            const remaining = down ? rowBox.bottom - listBox.bottom : listBox.top - rowBox.top;
+            if (remaining > 1) {
+              const step = Math.min(viewport * 0.8, remaining);
+              scroller.scrollTop += down ? step : -step;
+              break;
+            }
+          }
+          // Otherwise the cursor pages with the viewport, so the row that
+          // Enter and Shift+Enter act on is always the one on screen.
+          const pageRows = Math.max(1, Math.floor(viewport / COMMIT_ROW_HEIGHT_PX) - 1);
+          setCursorIndex((prev) =>
+            down ? Math.min(prev + pageRows, maxCursor) : Math.max(prev - pageRows, 0)
+          );
           break;
         }
         case "Escape":
@@ -757,7 +784,9 @@ export function LocalCommitsDropdown({
     },
     [
       error,
-      data.length,
+      pushStatus.kind,
+      handleRetryPush,
+      expandedHashes,
       handleRetry,
       maxCursor,
       isLoadMoreActive,
@@ -773,7 +802,8 @@ export function LocalCommitsDropdown({
   const showSkeleton = loading && !data.length;
   // The branch-level line waits for the list it describes, and stands down
   // when the history read failed with nothing to show.
-  const showPushSummary = !loading && data.length > 0;
+  // Kept through a search refetch, which holds the previous rows on screen.
+  const showPushSummary = data.length > 0;
   const pushLine = showPushSummary ? describePush(pushStatus) : null;
 
   const renderEmpty = () =>
@@ -816,10 +846,17 @@ export function LocalCommitsDropdown({
             "focus-within:border-accent-primary"
           )}
         >
-          <Search
-            className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none"
-            aria-hidden="true"
-          />
+          {showRefreshing ? (
+            <RefreshCw
+              className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none animate-spin"
+              aria-hidden="true"
+            />
+          ) : (
+            <Search
+              className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none"
+              aria-hidden="true"
+            />
+          )}
           <input
             ref={inputRef}
             type="text"
@@ -856,7 +893,9 @@ export function LocalCommitsDropdown({
           Errors are alerts of their own, so they stay out of here. */}
       <span role="status" aria-live="polite" className="sr-only">
         {loading
-          ? "Loading commits…"
+          ? data.length > 0
+            ? "Searching commits…"
+            : "Loading commits…"
           : copyFailed
             ? "Couldn't copy hash"
             : copiedHash
@@ -869,7 +908,9 @@ export function LocalCommitsDropdown({
                   ? "Loading more commits…"
                   : pushLine
                     ? pushLineText(pushLine)
-                    : ""}
+                    : showPushSummary && showCheckingPush
+                      ? "Checking push status…"
+                      : ""}
       </span>
 
       {/* The combobox points `aria-controls` here, so it exists in every state
@@ -891,7 +932,7 @@ export function LocalCommitsDropdown({
               firstThreshold={UI_STILL_WORKING_MS}
               message="Still working…"
               onRetry={handleRetry}
-              className="shrink-0 px-3 py-2 border-t border-[var(--border-divider)]"
+              className="shrink-0 px-3"
             />
           </div>
         ) : data.length > 0 ? (
@@ -1040,7 +1081,9 @@ export function LocalCommitsDropdown({
             {pushLine ? (
               <PushSummary line={pushLine} />
             ) : showPushSummary && showCheckingPush ? (
-              <span className="truncate">Checking push status…</span>
+              <span className="truncate">
+                {isSlowPush ? "Still checking push status…" : "Checking push status…"}
+              </span>
             ) : null}
             {showPushSummary && pushStatus.kind === "failed" && (
               <Button
