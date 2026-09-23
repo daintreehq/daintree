@@ -26,6 +26,7 @@ import {
   _resetOverflowAnnouncements,
 } from "@/lib/notify";
 import { usePanelStore, type BackendStatus, type WatchdogStatus } from "@/store/panelStore";
+import { useUIStore } from "@/store/uiStore";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 
@@ -82,6 +83,12 @@ export interface NotificationsE2EApi {
   seedHistory: (input: E2ESeedHistoryInput) => void;
   archiveHistoryEntry: (id: string) => void;
   snoozeThread: (correlationId: string, snoozedUntil: number) => void;
+  /**
+   * Pins the "last closed" watermark the "New since you last looked" divider
+   * is drawn from. Closing the panel writes `Date.now()`, so a fixture with
+   * real ages can't otherwise put the divider anywhere but the top.
+   */
+  setCenterLastClosedAt: (timestamp: number) => void;
   clearHistory: () => void;
   resetNotifyInternals: () => void;
   setBackendStatus: (status: BackendStatus) => void;
@@ -144,6 +151,8 @@ function buildApi(): NotificationsE2EApi {
     archiveHistoryEntry: (id) => useNotificationHistoryStore.getState().archiveEntry(id),
     snoozeThread: (correlationId, snoozedUntil) =>
       useNotificationHistoryStore.getState().snoozeThread(correlationId, snoozedUntil),
+    setCenterLastClosedAt: (timestamp) =>
+      useUIStore.setState({ lastNotificationCenterClosedAt: timestamp }),
     clearHistory: () => useNotificationHistoryStore.getState().clearAll(),
     resetNotifyInternals: () => {
       _resetRateLimitBuckets();
