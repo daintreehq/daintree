@@ -25,6 +25,7 @@
  *   menu       a row's overflow menu, then its Snooze submenu
  *   snoozekey  `h` on a focused row, which opens the durations directly
  *   snoozed    the Snoozed tab
+ *   silenced   the quiet strip after silencing a kind from a row's menu
  *   caughtup   everything read: the All tab without a rail, and Unread empty
  *   toast      a toast arriving while the inbox is closed
  *   forced     `forced-colors: active` on the fleet rest state
@@ -799,6 +800,28 @@ test("notification center at fleet volume", async () => {
       await settle(page, 400);
       await snap(page, "16-fleet-light-grouped-popover", POPOVER);
       await page.locator('button[aria-label="Group by project or worktree"]').first().click();
+    });
+    // Last: the silence persists in project settings, and no earlier state
+    // should be captured with it. Runs on the light palette as a result.
+    await step(page, "silenced", async () => {
+      await seedAndOpen(page, fleet);
+      const row = page
+        .locator(POPOVER)
+        .locator(SEL.notifications.centerRow, { hasText: "Claude is waiting for input" })
+        .first();
+      await row.hover();
+      await row.locator('button[aria-label^="Options for "]').click();
+      await page
+        .locator('[role="menuitem"]', { hasText: /^Silence .* from this project$/ })
+        .first()
+        .click();
+      await settle(page, 800);
+      await closeCenter(page);
+      await openCenter(page);
+      await page
+        .locator('[data-testid="notification-muted-pill"]')
+        .waitFor({ state: "visible", timeout: 5000 });
+      await snap(page, "17-silenced-strip-popover", POPOVER);
     });
   } finally {
     if (ctx?.app) await closeApp(ctx.app).catch(() => {});
