@@ -140,10 +140,11 @@ export function SegmentedRadioGroup<T extends string>({
           className={cn(
             "absolute top-0.5 bottom-0.5 left-0 z-0 rounded-[var(--radius-sm)] pointer-events-none",
             // Per docs/themes/interaction-state-recipes.md "Segmented Toggle Group Active
-            // State": overlay-medium fill, border-strong boundary. The previous
-            // panel-elevated + border-default pairing put the selected segment 1.15:1
-            // against its track, well under SC 1.4.11's 3:1 for a selection indicator.
-            "bg-overlay-medium border border-border-strong shadow-[var(--theme-shadow-ambient)]",
+            // State": overlay-medium fill. The boundary is text-secondary, not
+            // border-strong: border-strong measured 1.5–1.7:1 against the track in dark
+            // and light themes, and the fill barely moves, so the selection leaned on
+            // the label alone — under SC 1.4.11's 3:1 for a state indicator.
+            "bg-overlay-medium border border-text-secondary shadow-[var(--theme-shadow-ambient)]",
             // forced-colors discards the fill and the ambient shadow, so the thumb says
             // "selected" with a system-coloured border. Not a Highlight *fill*: that
             // makes Chromium paint a backplate behind the label and the text vanishes.
@@ -185,7 +186,7 @@ export function SegmentedRadioGroup<T extends string>({
               // selected state.
               isActive &&
                 !thumb &&
-                "bg-overlay-medium border border-border-strong forced-colors:border-[Highlight]",
+                "bg-overlay-medium border border-text-secondary forced-colors:border-[Highlight]",
               disabled && "opacity-40"
             )}
           >
