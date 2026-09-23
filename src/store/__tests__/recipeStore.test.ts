@@ -1,3 +1,4 @@
+import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -1691,7 +1692,13 @@ describe("recipeStore", () => {
             hostApprovedRecipeRun: approvalFor(recipe),
           });
 
-        expect(requestConfirmationSpy).toHaveBeenCalledWith(28, null);
+        expect(requestConfirmationSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            currentCount: 18,
+            allowedCount: 10,
+            source: { kind: "recipe", name: recipe.name },
+          })
+        );
       } finally {
         usePanelLimitStore.setState({ requestConfirmation: previousRequestConfirmation });
       }
@@ -1754,8 +1761,38 @@ describe("recipeStore", () => {
           });
 
         // The cap trimmed the batch to three, and the prompt fired anyway.
-        expect(requestConfirmationSpy).toHaveBeenCalledWith(21, null);
+        expect(requestConfirmationSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ currentCount: 18, allowedCount: 3 })
+        );
         expect(results.spawned).toHaveLength(3);
+      } finally {
+        usePanelLimitStore.setState({ requestConfirmation: previousRequestConfirmation });
+      }
+    });
+
+    it("records a panel-limit decline as the user's answer, not the limit refusing", async () => {
+      const requestConfirmationSpy = vi.fn().mockResolvedValue(false);
+      const previousRequestConfirmation = usePanelLimitStore.getState().requestConfirmation;
+      usePanelLimitStore.setState({ requestConfirmation: requestConfirmationSpy });
+      try {
+        const ambientIds = Array.from({ length: 18 }, (_, i) => `ambient-${i}`);
+        panelStoreState.panelIds = ambientIds;
+        panelStoreState.panelsById = Object.fromEntries(
+          ambientIds.map((id) => [id, { location: "grid" }])
+        );
+        useRecipeStore.setState({
+          recipes: [tenTerminalRecipe()],
+          isLoading: false,
+          currentProjectId: "project-1",
+        });
+
+        const results = await useRecipeStore
+          .getState()
+          .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
+
+        expect(addTerminalMock).not.toHaveBeenCalled();
+        expect(results.failed).toHaveLength(10);
+        expect(results.failed.every((f) => f.error === PANEL_LIMIT_DECLINED_REASON)).toBe(true);
       } finally {
         usePanelLimitStore.setState({ requestConfirmation: previousRequestConfirmation });
       }

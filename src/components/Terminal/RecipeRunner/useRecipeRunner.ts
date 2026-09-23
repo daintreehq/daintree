@@ -14,6 +14,7 @@ import { getAgentConfig } from "@/config/agents";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { isPluginRecipe } from "@shared/types/project";
 import { logError } from "@/utils/logger";
+import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
 import {
   buildRecipeSections,
   rankSearchResults,
@@ -22,6 +23,15 @@ import {
   type RankedRecipe,
 } from "./recipeRunnerUtils";
 import type { TerminalRecipe, RecipeTerminal, RunCommand } from "@/types";
+
+// Every missing terminal is one the user chose not to open at the panel-limit
+// confirm. They answered it a moment ago; a failure banner would blame the limit.
+function allDeclined(results: RecipeSpawnResults): boolean {
+  return (
+    results.failed.length > 0 &&
+    results.failed.every((f) => f.error === PANEL_LIMIT_DECLINED_REASON)
+  );
+}
 
 export interface UseRecipeRunnerOptions {
   activeWorktreeId: string | null | undefined;
@@ -244,6 +254,7 @@ export function useRecipeRunner({
   const summarizeFailures = useCallback(
     (recipe: TerminalRecipe, results: RecipeSpawnResults): SpawnFailureSummary | null => {
       if (results.failed.length === 0) return null;
+      if (allDeclined(results)) return null;
       return {
         recipeName: recipe.name,
         totalCount: results.spawned.length + results.failed.length,
@@ -342,6 +353,9 @@ export function useRecipeRunner({
           { spawnedBy: "recipe", terminalIndices: indices }
         );
         if (runGenerationRef.current !== runId) return;
+        // Declining the confirm opened nothing, so the outstanding failures
+        // are unchanged — keep the banner as it was rather than re-reporting.
+        if (allDeclined(results)) return;
         if (results.failed.length === 0) {
           setSpawnFailureSummary(null);
         } else {

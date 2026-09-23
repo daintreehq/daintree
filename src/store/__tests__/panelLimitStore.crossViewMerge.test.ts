@@ -99,7 +99,13 @@ describe("panelLimitStore cross-view write merge (#11351)", () => {
 
     // A transient, non-persisted state change (requestSeq/pendingConfirm) still
     // triggers a persist write of this stale view's unchanged limits.
-    void store.getState().requestConfirmation(10, null);
+    void store.getState().requestConfirmation({
+      currentCount: 8,
+      requestedCount: 2,
+      allowedCount: 2,
+      confirmationLimit: 8,
+      hardLimit: 32,
+    });
 
     const written = readBlob(backing);
     expect(written.state.hardLimit).toBe(50); // sibling's edit not clobbered
