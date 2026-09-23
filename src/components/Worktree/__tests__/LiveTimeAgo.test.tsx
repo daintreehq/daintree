@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, cleanup } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { LiveTimeAgo } from "../LiveTimeAgo";
+import { LiveTimeAgo, msUntilNextFlip } from "../LiveTimeAgo";
 
 function renderTimeAgo(props: Parameters<typeof LiveTimeAgo>[0]) {
   return render(
@@ -164,17 +164,39 @@ describe("LiveTimeAgo", () => {
     expect(timeEl!.getAttribute("dateTime")).toBe(new Date(now - 120_000).toISOString());
   });
 
-  it("renders absolute date for timestamps 30 days or older", () => {
-    const now = 1_700_000_000_000;
+  it("renders an absolute date for timestamps 30 days or older, without the current year", () => {
+    const now = new Date(2025, 9, 20, 12).getTime();
     vi.setSystemTime(now);
-    const thirtyOneDaysMs = 31 * 24 * 60 * 60 * 1000;
-    const { container } = renderTimeAgo({ timestamp: now - thirtyOneDaysMs });
-    const timeEl = container.querySelector("time");
-    expect(timeEl).toBeTruthy();
-    const expected = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
-      new Date(now - thirtyOneDaysMs)
+    const timestamp = now - 31 * 24 * 60 * 60 * 1000;
+    const { container } = renderTimeAgo({ timestamp });
+    const timeEl = container.querySelector("time")!;
+    const full = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
+      new Date(timestamp)
     );
-    expect(timeEl!.textContent).toBe(expected);
+    expect(timeEl.textContent).not.toContain("2025");
+    expect(full).toContain(timeEl.textContent!.split(" ")[0]!);
+    // The accessible name keeps the whole date.
+    expect(timeEl.getAttribute("aria-label")).toBe(full);
+  });
+
+  it("keeps the year for a date in an earlier year", () => {
+    const now = new Date(2026, 0, 20, 12).getTime();
+    vi.setSystemTime(now);
+    const timestamp = new Date(2025, 10, 3, 12).getTime();
+    const { container } = renderTimeAgo({ timestamp });
+    expect(container.querySelector("time")!.textContent).toContain("2025");
+  });
+
+  it("gains the year when the calendar year turns over", () => {
+    const now = new Date(2025, 11, 31, 23, 0).getTime();
+    vi.setSystemTime(now);
+    const timestamp = new Date(2025, 5, 3, 12).getTime();
+    const { container } = renderTimeAgo({ timestamp });
+    expect(container.querySelector("time")!.textContent).not.toContain("2025");
+    act(() => {
+      vi.advanceTimersByTime(2 * 3_600_000);
+    });
+    expect(container.querySelector("time")!.textContent).toContain("2025");
   });
 
   it("does not schedule a per-second timer beyond 30 days", () => {
@@ -203,5 +225,44 @@ describe("LiveTimeAgo", () => {
       document.dispatchEvent(new Event("visibilitychange"));
     });
     expect(container.textContent).toContain("55s");
+  });
+});
+
+describe("msUntilNextFlip", () => {
+  const label = (ageMs: number) => {
+    const now = 1_700_000_000_000;
+    vi.setSystemTime(now);
+    const { container, unmount } = render(
+      <TooltipProvider>
+        <LiveTimeAgo timestamp={now - ageMs} noTooltip />
+      </TooltipProvider>
+    );
+    const text = container.textContent;
+    unmount();
+    return text;
+  };
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  // Ages chosen off every unit boundary, and against a wall clock that is not
+  // aligned with them either, which is where a clock-aligned schedule drifts.
+  it.each([
+    7_300,
+    42_500,
+    5 * 60_000 + 17_000,
+    90 * 60_000 + 11_000,
+    3 * 86_400_000 + 5_000_000,
+    10 * 86_400_000 + 7_777_000,
+    29 * 86_400_000 + 3_600_000,
+  ])("wakes exactly when the label for age %i ms changes", (age) => {
+    const now = 1_700_000_000_000 + 123_457;
+    const delay = msUntilNextFlip(age, now);
+    expect(delay).toBeGreaterThan(0);
+    expect(label(age + delay - 1)).toBe(label(age));
+    expect(label(age + delay)).not.toBe(label(age));
   });
 });
