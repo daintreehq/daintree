@@ -80,7 +80,7 @@ describe("GettingStartedChecklist", () => {
     render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
 
     const buttons = screen.getAllByRole("button", {
-      name: /open your project|ask ai to help with your code|start a parallel task|run two agents in parallel/i,
+      name: /open your project|launch your first agent|start a parallel task|run two agents in parallel/i,
     });
     expect(buttons).toHaveLength(4);
   });
@@ -89,12 +89,12 @@ describe("GettingStartedChecklist", () => {
     render(<GettingStartedChecklist {...defaultProps} checklist={allComplete} />);
 
     const stepButtons = screen.queryAllByRole("button", {
-      name: /open your project|ask ai to help with your code|start a parallel task|run two agents in parallel/i,
+      name: /open your project|launch your first agent|start a parallel task|run two agents in parallel/i,
     });
     expect(stepButtons).toHaveLength(0);
 
     expect(screen.getByText("Open your project")).toBeTruthy();
-    expect(screen.getByText("Ask AI to help with your code")).toBeTruthy();
+    expect(screen.getByText("Launch your first agent")).toBeTruthy();
     expect(screen.getByText("Start a parallel task")).toBeTruthy();
     expect(screen.getByText("Run two agents in parallel")).toBeTruthy();
   });
@@ -103,7 +103,7 @@ describe("GettingStartedChecklist", () => {
     render(<GettingStartedChecklist {...defaultProps} checklist={mixedState} />);
 
     const stepButtons = screen.getAllByRole("button", {
-      name: /ask ai to help with your code|start a parallel task|run two agents in parallel/i,
+      name: /launch your first agent|start a parallel task|run two agents in parallel/i,
     });
     expect(stepButtons).toHaveLength(3);
 
@@ -119,10 +119,10 @@ describe("GettingStartedChecklist", () => {
     expect(dispatchMock).toHaveBeenCalledWith("project.add", undefined, { source: "user" });
   });
 
-  it("dispatches panel.palette when 'Ask AI to help with your code' is clicked", () => {
+  it("dispatches panel.palette when 'Launch your first agent' is clicked", () => {
     render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /ask ai to help with your code/i }));
+    fireEvent.click(screen.getByRole("button", { name: /launch your first agent/i }));
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect(dispatchMock).toHaveBeenCalledWith("panel.palette", undefined, { source: "user" });
   });
@@ -226,39 +226,46 @@ describe("GettingStartedChecklist", () => {
     return className.split(/\s+/).find((token) => /^text-text-[a-z]+$/.test(token));
   }
 
-  describe("completed-state surface", () => {
-    it("uses neutral elevated surface tokens and drops the accent tint when allComplete is true", () => {
-      render(<GettingStartedChecklist {...defaultProps} checklist={allComplete} />);
+  describe("accent restraint", () => {
+    // Accent is the one load-bearing signal of a focus region — a focus ring
+    // or a primary action. Chrome, progress and completion marks are neither.
+    function accentTokensOutsideFocus(root: Element): string[] {
+      return Array.from(root.querySelectorAll("*"))
+        .concat(root)
+        .flatMap((el) => (el.getAttribute("class") ?? "").split(/\s+/))
+        .filter((token) => token.includes("accent") && !token.startsWith("focus-visible:"));
+    }
+
+    it.each([
+      ["incomplete", mixedState],
+      ["complete", allComplete],
+    ])("spends no accent on the panel when %s", (_, checklist) => {
+      render(<GettingStartedChecklist {...defaultProps} checklist={checklist} />);
       const region = screen.getByRole("region", { name: "Getting started checklist" });
-      expect(region.className).toContain("bg-surface-panel");
-      expect(region.className).toContain("border-border-default");
-      expect(region.className).not.toContain("color-mix");
+      expect(accentTokensOutsideFocus(region)).toEqual([]);
     });
 
-    it("keeps the accent-tinted surface when not all items are complete", () => {
-      render(<GettingStartedChecklist {...defaultProps} checklist={mixedState} />);
-      const region = screen.getByRole("region", { name: "Getting started checklist" });
-      expect(region.className).toContain("color-mix");
-      expect(region.className).not.toContain("bg-surface-panel");
-    });
-
-    it("accents the counter label on completion and mutes it otherwise", () => {
+    it("keeps a neutral text role on the counter in both states", () => {
       const { rerender } = render(
         <GettingStartedChecklist {...defaultProps} checklist={mixedState} />
       );
-      // The incomplete counter carries a neutral text role and no accent; the
-      // complete one carries the accent and drops the neutral. Naming which
-      // neutral would only copy the component, but the counter must have one —
-      // deleting it entirely would let the label inherit primary and still
-      // satisfy a bare "not accented" check.
-      const muted = screen.getByText("2/5");
-      expect(textRole(muted.className)).toBeDefined();
-      expect(muted.className).not.toContain("text-accent-primary");
-
+      expect(textRole(screen.getByText("2/5").className)).toBeDefined();
       rerender(<GettingStartedChecklist {...defaultProps} checklist={allComplete} />);
-      const accented = screen.getByText("All set");
-      expect(accented.className).toContain("text-accent-primary");
-      expect(textRole(accented.className)).toBeUndefined();
+      expect(textRole(screen.getByText("All set").className)).toBeDefined();
+    });
+  });
+
+  describe("next step", () => {
+    it("describes only the next step and marks it current", () => {
+      render(<GettingStartedChecklist {...defaultProps} checklist={mixedState} />);
+      const current = document.querySelectorAll('[aria-current="step"]');
+      expect(current).toHaveLength(1);
+      expect(current[0]!.textContent).toContain("Launch your first agent");
+      expect(current[0]!.textContent).toContain("Then ask it");
+      expect(
+        screen.queryByText("Work on two things at once without switching branches")
+      ).toBeNull();
+      expect(screen.queryByText(/Connect a local folder/)).toBeNull();
     });
   });
 
@@ -293,6 +300,31 @@ describe("GettingStartedChecklist", () => {
 
       expect(defaultProps.onToggleCollapse).toHaveBeenCalledTimes(1);
       expect(defaultProps.onDismiss).not.toHaveBeenCalled();
+    });
+
+    it("collapses without re-expanding, handing focus to the header first", () => {
+      const { rerender } = render(
+        <GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />
+      );
+      const region = screen.getByRole("region", { name: "Getting started checklist" });
+      const row = screen.getByRole("button", { name: /start a parallel task/i });
+      act(() => {
+        row.focus();
+        region.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+      });
+      act(() => {
+        dispatchEscape();
+      });
+      // The body is about to go inert; focus must not be left inside it.
+      const toggle = screen.getByRole("button", { name: /getting started/i, expanded: true });
+      expect(document.activeElement).toBe(toggle);
+      expect(defaultProps.onToggleCollapse).toHaveBeenCalledTimes(1);
+
+      rerender(<GettingStartedChecklist {...defaultProps} collapsed checklist={allIncomplete} />);
+      act(() => {
+        dispatchEscape();
+      });
+      expect(defaultProps.onToggleCollapse).toHaveBeenCalledTimes(1);
     });
 
     it("does nothing when Escape is pressed while focus is outside the panel", () => {

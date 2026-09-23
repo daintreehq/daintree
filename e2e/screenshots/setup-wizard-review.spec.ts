@@ -249,12 +249,12 @@ test("agent setup wizard review — every step of both flows", async () => {
     });
 
     // 4. Nothing selected — the disabled-Continue state plus its footer hint.
-    // AgentCard renders a native <input type="checkbox">, not a role=checkbox.
+    // AgentCard renders the house Radix checkbox: a button with role=checkbox.
     await step("no-selection", async () => {
       await openWizard(page, false);
-      const boxes = page.locator(`${DIALOG} input[type="checkbox"]:checked`);
+      const boxes = page.locator(`${DIALOG} [role="checkbox"][aria-checked="true"]`);
       for (let guard = 0; guard < 20 && (await boxes.count()) > 0; guard++) {
-        await boxes.first().uncheck({ force: true });
+        await boxes.first().click();
         await settle(page, 120);
       }
       expect(await boxes.count(), "agents remained selected").toBe(0);
@@ -267,9 +267,9 @@ test("agent setup wizard review — every step of both flows", async () => {
     await step("cli", async () => {
       await openWizard(page, true);
       await clickContinue(page); // appearance -> agents
-      const unchecked = page.locator(`${DIALOG} input[type="checkbox"]:not(:checked)`);
+      const unchecked = page.locator(`${DIALOG} [role="checkbox"][aria-checked="false"]`);
       if ((await unchecked.count()) > 0) {
-        await unchecked.first().check({ force: true });
+        await unchecked.first().click();
         await settle(page, 250);
       }
       for (let guard = 0; guard < 4 && (await currentStep(page)) !== "cli"; guard++) {

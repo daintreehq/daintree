@@ -14,6 +14,8 @@ const STEP_ORDER: OnboardingStep[] = ["agentSetup"];
 
 interface OnboardingFlowProps {
   availability: CliAvailability;
+  /** Forwarded to the wizard so its completion leads somewhere useful. */
+  hasWorkspace?: boolean;
   onRefreshSettings: () => Promise<void>;
   onComplete?: () => void;
 }
@@ -29,6 +31,7 @@ function trackOnboarding(event: string, properties: Record<string, unknown> = {}
 
 export function OnboardingFlow({
   availability,
+  hasWorkspace = true,
   onRefreshSettings,
   onComplete,
 }: OnboardingFlowProps) {
@@ -167,6 +170,7 @@ export function OnboardingFlow({
         onClose={handleManualWizardClose}
         initialAvailability={availability}
         isFirstRun={manualWizardIsFirstRun}
+        hasWorkspace={hasWorkspace}
         onStepChange={handleWizardStepChange}
       />
     ) : null;
@@ -183,6 +187,7 @@ export function OnboardingFlow({
         onClose={handleManualWizardClose}
         initialAvailability={availability}
         isFirstRun={manualWizardIsFirstRun}
+        hasWorkspace={hasWorkspace}
         onStepChange={handleWizardStepChange}
       />
     );

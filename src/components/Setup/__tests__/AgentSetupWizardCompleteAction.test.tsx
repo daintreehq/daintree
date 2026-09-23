@@ -73,18 +73,27 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 vi.mock("@/services/KeybindingService", () => ({
-  keybindingService: { getDisplayCombo: () => "" },
+  keybindingService: { getDisplayCombo: () => "", getEffectiveCombo: () => undefined },
 }));
 
 vi.mock("../useAgentSetupPoll", () => ({
   useAgentSetupPoll: () => undefined,
 }));
 
+const systemState = vi.hoisted(() => ({ fatal: false }));
+
 vi.mock("../SystemRequirementsSection", () => ({
-  SystemRequirementsSection: ({ onCheckingChange }: { onCheckingChange: (v: boolean) => void }) => {
+  SystemRequirementsSection: ({
+    onCheckingChange,
+    onFatalFailureChange,
+  }: {
+    onCheckingChange: (v: boolean) => void;
+    onFatalFailureChange: (v: boolean) => void;
+  }) => {
     React.useEffect(() => {
       onCheckingChange(false);
-    }, [onCheckingChange]);
+      onFatalFailureChange(systemState.fatal);
+    }, [onCheckingChange, onFatalFailureChange]);
     return <div data-testid="system-requirements-stub" />;
   },
 }));
@@ -94,7 +103,19 @@ vi.mock("../AgentCliStep", () => ({
 }));
 
 vi.mock("@/components/agents/AgentCard", () => ({
-  AgentCard: ({ agentId }: { agentId: string }) => <div data-testid={`agent-card-${agentId}`} />,
+  AgentCard: ({
+    agentId,
+    onToggle,
+  }: {
+    agentId: string;
+    onToggle: (id: string, checked: boolean) => void;
+  }) => (
+    <button
+      data-testid={`agent-card-${agentId}`}
+      aria-label={`select ${agentId}`}
+      onClick={() => onToggle(agentId, true)}
+    />
+  ),
 }));
 
 vi.mock("@/components/ui/AppDialog", () => {
@@ -123,7 +144,12 @@ vi.mock("@/components/ui/AppDialog", () => {
     ) : null;
   const Header = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
   const Body = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
-  const Footer = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
+  const Footer = ({ children, hint }: { children: React.ReactNode; hint?: React.ReactNode }) => (
+    <div>
+      {hint}
+      {children}
+    </div>
+  );
   const Title = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
   const CloseButton = () => <button data-testid="close-button-stub" />;
   Dialog.Header = Header;
@@ -199,13 +225,18 @@ async function clickButton(label: string) {
   });
 }
 
-async function openAt(availability: Record<string, string>, onClose = vi.fn()) {
+async function openAt(
+  availability: Record<string, string>,
+  onClose = vi.fn(),
+  hasWorkspace = true
+) {
   await act(async () => {
     render(
       <AgentSetupWizard
         isOpen
         onClose={onClose}
         isFirstRun={false}
+        hasWorkspace={hasWorkspace}
         initialAvailability={availability as never}
       />
     );
@@ -223,6 +254,20 @@ describe("AgentSetupWizard completion action", () => {
     dispatchMock.mockClear();
     notifyMock.mockClear();
     setGlobalSkipPermissionsMock.mockClear();
+    systemState.fatal = false;
+  });
+
+  it("leads to a project, not an agent, when no workspace is open", async () => {
+    const onClose = await openAt({ claude: "ready" }, vi.fn(), false);
+    await clickButton("Continue");
+
+    // An agent launched with no workspace starts in the home directory, so the
+    // one forward move is to acquire a workspace first.
+    expect(buttonLabels().filter((l) => l !== "Close dialog")).toEqual(["Open a project"]);
+    await clickButton("Open a project");
+    expect(dispatchMock).toHaveBeenCalledWith("project.add", undefined, { source: "user" });
+    expect(dispatchMock).not.toHaveBeenCalledWith("panel.palette", undefined, expect.anything());
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("resolves to exactly one action, and it moves forward", async () => {
@@ -251,6 +296,25 @@ describe("AgentSetupWizard completion action", () => {
     // way a user with an unusable environment would: by skipping out of agents.
     const labels = buttonLabels();
     expect(labels).not.toContain("Launch an agent");
+  });
+
+  it("defers rather than continues from the install step while nothing picked is usable", async () => {
+    await openAt({});
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[data-testid="agent-card-claude"]')!.click();
+    });
+    await clickButton("Continue"); // agents -> cli (claude is missing)
+
+    // The strongest move on this step must not read as success before anything
+    // installed — the install is the step's primary, the exit a deferral.
+    expect(buttonLabels()).toContain("Set up later");
+    expect(buttonLabels()).not.toContain("Continue");
+  });
+
+  it("says why the agents step is blocked when a system tool is missing", async () => {
+    systemState.fatal = true;
+    await openAt({ claude: "ready" });
+    expect(document.body.textContent).toContain("Install the missing system tools to continue");
   });
 
   it("names the exit for what it does — closing the wizard, not skipping a step", async () => {

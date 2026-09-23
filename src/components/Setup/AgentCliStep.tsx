@@ -21,6 +21,7 @@ import { systemClient } from "@/clients";
 import { useAgentSettingsStore } from "@/store";
 import { DEFAULT_DANGEROUS_ARGS, resolveDangerousMode } from "@shared/types/agentSettings";
 import { CopyableCommand } from "./CopyableCommand";
+import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { AGENT_DESCRIPTIONS } from "@/config/agents";
 import type { CliAvailability } from "@shared/types";
@@ -209,10 +210,18 @@ export function AgentCliStep({
     setExpandedErrors((prev) => ({ ...prev, [agentId]: !prev[agentId] }));
   }, []);
 
-  const hasInstallableAgents = selectedAgentIds.some((id) => {
+  const installableIds = selectedAgentIds.filter((id) => {
     const status = cardStatuses[id];
     return status === "idle" || status === "error";
   });
+  const hasInstallableAgents = installableIds.length > 0;
+  // With one agent to install, the step's primary IS that agent's install — a
+  // row button beside an "Install all" of one would be two names for one act.
+  const singleAgent = selectedAgentIds.length === 1;
+  const installAllLabel =
+    installableIds.length === 1
+      ? `Install ${AGENT_REGISTRY[installableIds[0]!]?.name ?? "agent"}`
+      : "Install selected agents";
 
   const updateAgent = useAgentSettingsStore((s) => s.updateAgent);
   const agentSettings = useAgentSettingsStore((s) => s.settings?.agents);
@@ -308,7 +317,7 @@ export function AgentCliStep({
                       Not installed
                     </span>
                   )}
-                  {canInstall && !isBatchRunning && (
+                  {canInstall && !isBatchRunning && !singleAgent && (
                     <button
                       type="button"
                       onClick={() => handleInstall(agentId)}
@@ -396,25 +405,28 @@ export function AgentCliStep({
         })}
       </div>
 
-      {hasInstallableAgents && (
-        <button
-          type="button"
+      {/* The step's primary: nothing here is usable until something installs,
+          so the footer demotes its forward action to "Set up later" meanwhile. */}
+      {(hasInstallableAgents || isBatchRunning) && (
+        <Button
+          variant="contrast"
           disabled={isBatchRunning}
           onClick={handleInstallAll}
-          className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-[var(--radius-md)] border border-border-strong bg-overlay-subtle text-text-primary text-sm font-medium hover:bg-overlay-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary disabled:opacity-50 disabled:pointer-events-none"
+          className="w-full"
+          data-testid="agent-cli-install-primary"
         >
           {isBatchRunning ? (
             <>
               <Loader2 className="w-4 h-4 animate-spin" />
-              Installing...
+              Installing…
             </>
           ) : (
             <>
               <Download className="w-4 h-4" />
-              Install all
+              {installAllLabel}
             </>
           )}
-        </button>
+        </Button>
       )}
 
       {!isFirstRun && agentsWithDangerousToggle.length > 0 && (

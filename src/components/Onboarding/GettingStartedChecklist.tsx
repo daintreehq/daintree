@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, ChevronUp, Download, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, X } from "lucide-react";
 import { useReducedMotion } from "framer-motion";
 import { DURATION_200 } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
@@ -15,13 +15,13 @@ import { CHECKLIST_ITEMS } from "./checklistItems";
 
 const CHECKLIST_BODY_ID = "getting-started-checklist-body";
 
-// Teaches the shortcut at the moment of highest engagement: the checklist CTA
-// the user is about to click. Reads the live effective binding so rebinds
-// show correctly; renders nothing for unbound actions.
+// Teaches the shortcut at the moment of highest engagement: the next step the
+// user is about to take. Reads the live effective binding so rebinds show
+// correctly; renders nothing for unbound actions.
 function RowShortcut({ actionId }: { actionId: string }) {
   const combo = useEffectiveCombo(actionId);
   if (!combo) return null;
-  return <KbdChord shortcut={combo} className="shrink-0 opacity-60" />;
+  return <KbdChord shortcut={combo} density="compact" className="mt-1" />;
 }
 
 interface CheckBadgeProps {
@@ -40,11 +40,13 @@ function CheckBadge({ done, isPopping, onPopEnd }: CheckBadgeProps) {
       onAnimationEnd={onPopEnd}
       className={cn(
         "h-4 w-4 rounded-full border flex items-center justify-center shrink-0 transition-colors duration-150",
-        done ? "bg-accent-primary border-accent-primary" : "border-daintree-text/30",
+        // Neutral: completion is membership, and the accent is reserved for
+        // the one load-bearing signal in a focus region.
+        done ? "bg-text-secondary border-text-secondary" : "border-text-secondary",
         isPopping && "animate-badge-bump"
       )}
     >
-      {done && <Check className="h-2.5 w-2.5 text-accent-primary-foreground" />}
+      {done && <Check className="h-2.5 w-2.5 text-text-inverse" />}
     </div>
   );
 }
@@ -151,13 +153,18 @@ export function GettingStartedChecklist({
   const counterAnimateKey = allComplete ? "all-set" : String(completedCount);
 
   const panelRef = useRef<HTMLDivElement>(null);
+  const headerToggleRef = useRef<HTMLButtonElement>(null);
   const [isFocusWithin, setIsFocusWithin] = useState(false);
+  const nextIndex = CHECKLIST_ITEMS.findIndex(({ id }) => !items[id]);
 
+  // Escape collapses and never re-expands. Focus moves to the header first,
+  // because the body is about to become inert and would drop it on the body.
   const handleEscape = useCallback(() => {
+    headerToggleRef.current?.focus();
     onToggleCollapse();
   }, [onToggleCollapse]);
 
-  useEscapeStack(isFocusWithin, handleEscape);
+  useEscapeStack(isFocusWithin && !collapsed, handleEscape);
 
   return createPortal(
     <div
@@ -180,19 +187,12 @@ export function GettingStartedChecklist({
         }}
         className={cn(
           "pointer-events-auto relative w-full",
-          "rounded-[var(--radius-sm)] border",
+          "rounded-[var(--radius-sm)] border border-border-default bg-surface-panel",
           "text-sm text-text-primary",
           "shadow-[var(--theme-shadow-floating)]",
-          "transition-[translate,opacity,background-color,border-color] duration-200 ease-out",
+          "transition-[translate,opacity] duration-200 ease-out",
           "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:translate-none",
-          isVisible ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
-          allComplete
-            ? "bg-surface-panel border-border-default"
-            : [
-                "bg-[color-mix(in_oklab,var(--color-accent-primary)_8%,var(--color-surface-canvas))]",
-                "border-[color:color-mix(in_oklab,var(--color-accent-primary)_20%,transparent)]",
-              ],
-          "backdrop-blur-sm"
+          isVisible ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"
         )}
       >
         {/* Header */}
@@ -200,27 +200,25 @@ export function GettingStartedChecklist({
           <Tooltip>
             <TooltipTrigger asChild>
               <button
+                ref={headerToggleRef}
                 type="button"
                 onClick={onToggleCollapse}
                 aria-expanded={!collapsed}
                 aria-controls={CHECKLIST_BODY_ID}
                 className="flex items-center gap-2 text-left flex-1 min-w-0"
               >
-                <h4 className="font-medium leading-tight tracking-tight text-xs font-mono text-accent-primary">
+                <h4 className="font-medium leading-tight text-xs text-text-primary">
                   Getting started
                 </h4>
                 <AnimatedLabel
                   label={counterLabel}
                   animateKey={counterAnimateKey}
-                  textClassName={cn(
-                    "text-3xs font-mono tabular-nums",
-                    allComplete ? "text-accent-primary" : "text-text-secondary"
-                  )}
+                  textClassName="text-3xs font-mono tabular-nums text-text-secondary"
                 />
                 {collapsed ? (
-                  <ChevronUp className="h-3 w-3 text-daintree-text/50 shrink-0" />
+                  <ChevronUp className="h-3 w-3 text-text-secondary shrink-0" />
                 ) : (
-                  <ChevronDown className="h-3 w-3 text-daintree-text/50 shrink-0" />
+                  <ChevronDown className="h-3 w-3 text-text-secondary shrink-0" />
                 )}
               </button>
             </TooltipTrigger>
@@ -235,8 +233,8 @@ export function GettingStartedChecklist({
                 className={cn(
                   "rounded-[var(--radius-xs)]",
                   "h-6 w-6 flex items-center justify-center shrink-0",
-                  "text-daintree-text/60 transition-colors",
-                  "hover:text-daintree-text/90 hover:bg-tint/10",
+                  "text-text-secondary transition-colors",
+                  "hover:text-text-primary hover:bg-overlay-medium",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 )}
               >
@@ -261,48 +259,39 @@ export function GettingStartedChecklist({
         >
           <div className="px-3 pb-3 space-y-1.5">
             {/* Endowed progress: Install Daintree (always complete) */}
-            <div className="flex items-start gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5 opacity-60">
-              <div className="h-4 w-4 rounded-full bg-accent-primary border border-accent-primary flex items-center justify-center shrink-0">
-                <Check className="h-2.5 w-2.5 text-accent-primary-foreground" />
-              </div>
-              <Download className="h-3.5 w-3.5 text-daintree-text/40 shrink-0" />
-              <span className="text-xs leading-snug text-daintree-text/40">Install Daintree</span>
+            <div className="flex items-start gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5">
+              <CheckBadge done isPopping={false} onPopEnd={() => undefined} />
+              <span className="text-xs leading-snug text-text-secondary">
+                <span className="sr-only">Done: </span>
+                Install Daintree
+              </span>
             </div>
             {CHECKLIST_ITEMS.map(
-              ({ id, label, description, icon: Icon, actionId, actionArgs, markOnClick }) => {
+              ({ id, label, description, actionId, actionArgs, markOnClick }, index) => {
                 const done = items[id];
+                const isNext = index === nextIndex;
                 const isPopping = poppingItems.has(id);
+                // Only the next step carries its description and shortcut: done
+                // rows collapse to their label, later rows wait their turn.
                 const content = (
                   <>
                     <CheckBadge done={done} isPopping={isPopping} onPopEnd={() => clearPop(id)} />
-                    <Icon
-                      className={cn(
-                        "h-3.5 w-3.5 shrink-0",
-                        done ? "text-daintree-text/40" : "text-daintree-text/70"
-                      )}
-                    />
-                    <div className="flex flex-col min-w-0 flex-1">
-                      <span className="flex items-center justify-between gap-2 min-w-0">
-                        <span
-                          className={cn(
-                            "text-xs leading-snug",
-                            done ? "line-through text-daintree-text/40" : "text-text-primary"
-                          )}
-                        >
-                          {label}
-                        </span>
-                        {!done && <RowShortcut actionId={actionId} />}
+                    <div className="flex flex-col items-start min-w-0 flex-1">
+                      <span
+                        className={cn(
+                          "text-xs leading-snug",
+                          isNext ? "font-medium text-text-primary" : "text-text-secondary"
+                        )}
+                      >
+                        {done && <span className="sr-only">Done: </span>}
+                        {label}
                       </span>
-                      {description && (
-                        <span
-                          className={cn(
-                            "text-3xs leading-snug",
-                            done ? "text-text-placeholder" : "text-text-secondary"
-                          )}
-                        >
+                      {isNext && description && (
+                        <span className="text-3xs leading-snug text-text-secondary">
                           {description}
                         </span>
                       )}
+                      {isNext && <RowShortcut actionId={actionId} />}
                     </div>
                   </>
                 );
@@ -310,7 +299,7 @@ export function GettingStartedChecklist({
                 const sharedClasses = cn(
                   "flex items-start gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5",
                   "transition-colors duration-150",
-                  done ? "opacity-60" : "opacity-100"
+                  isNext && "bg-overlay-subtle"
                 );
 
                 if (done) {
@@ -326,6 +315,7 @@ export function GettingStartedChecklist({
                     key={id}
                     type="button"
                     data-checklist-item={id}
+                    aria-current={isNext ? "step" : undefined}
                     onClick={() => {
                       void actionService.dispatch(actionId, actionArgs, {
                         source: "user",
@@ -335,7 +325,7 @@ export function GettingStartedChecklist({
                     className={cn(
                       sharedClasses,
                       "w-full text-left cursor-pointer",
-                      "hover:bg-tint/10",
+                      "hover:bg-overlay-medium",
                       "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                     )}
                   >

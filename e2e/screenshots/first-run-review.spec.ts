@@ -150,7 +150,8 @@ async function openWizardFromBanner(page: Page): Promise<void> {
 
 async function clickContinue(page: Page): Promise<string | null> {
   const before = await currentStep(page);
-  const button = page.locator(WIZARD).getByRole("button", { name: /^continue/i });
+  // The install step's forward move is "Set up later" until something installs.
+  const button = page.locator(WIZARD).getByRole("button", { name: /^(continue|set up later)/i });
   await expect(button).toBeEnabled({ timeout: 10_000 });
   await button.click();
   await expect.poll(() => currentStep(page), { timeout: 10_000 }).not.toBe(before);
@@ -159,7 +160,7 @@ async function clickContinue(page: Page): Promise<string | null> {
 }
 
 async function checkFirstAgent(page: Page): Promise<void> {
-  await page.locator(`${WIZARD} input[type="checkbox"]`).first().check({ force: true });
+  await page.locator(`${WIZARD} [role="checkbox"][aria-checked="false"]`).first().click();
   await settle(page, 200);
 }
 

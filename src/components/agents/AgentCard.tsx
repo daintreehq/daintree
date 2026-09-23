@@ -9,6 +9,7 @@ import {
 } from "@shared/utils/agentAvailability";
 import type { AgentAvailabilityState, AgentCliDetail } from "@shared/types";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { RefreshCw, ExternalLink } from "lucide-react";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
@@ -94,11 +95,11 @@ function OnboardingCard({
         compact ? "py-2" : "py-2.5"
       )}
     >
-      <input
-        type="checkbox"
-        className="w-4 h-4 accent-accent-primary shrink-0"
+      {/* The house checkbox: checked paints in the text colour, because a
+          selection is membership and the accent is not spent on it. */}
+      <Checkbox
         checked={isChecked}
-        onChange={(e) => onToggle(agentId, e.target.checked)}
+        onCheckedChange={(checked) => onToggle(agentId, checked === true)}
         disabled={isSaving}
       />
       <AgentIdentityBlock

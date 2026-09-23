@@ -144,6 +144,7 @@ function Canvas() {
       )}
       <OnboardingFlow
         availability={availability}
+        hasWorkspace={currentProject !== null}
         onRefreshSettings={async () => undefined}
         onComplete={gettingStarted.notifyOnboardingComplete}
       />

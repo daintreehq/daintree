@@ -51,6 +51,7 @@ vi.mock("@/store/cliAvailabilityStore", () => ({
 // Hoisted so the auto-select assertion can reach the spy. Inline `vi.fn()`s inside
 // the selector would also hand the component a fresh action identity every render.
 const themeStoreMock = vi.hoisted(() => ({
+  selectedSchemeId: "daintree",
   setSelectedSchemeId: vi.fn(),
   setSelectedSchemeIdSilent: vi.fn(),
 }));
@@ -58,7 +59,7 @@ const themeStoreMock = vi.hoisted(() => ({
 vi.mock("@/store/appThemeStore", () => ({
   useAppThemeStore: (selector: (s: unknown) => unknown) =>
     selector({
-      selectedSchemeId: "daintree",
+      selectedSchemeId: themeStoreMock.selectedSchemeId,
       setSelectedSchemeId: themeStoreMock.setSelectedSchemeId,
       setSelectedSchemeIdSilent: themeStoreMock.setSelectedSchemeIdSilent,
     }),
@@ -77,7 +78,7 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 vi.mock("@/services/KeybindingService", () => ({
-  keybindingService: { getDisplayCombo: () => "" },
+  keybindingService: { getDisplayCombo: () => "", getEffectiveCombo: () => undefined },
 }));
 
 vi.mock("../useAgentSetupPoll", () => ({
@@ -313,6 +314,57 @@ describe("AgentSetupWizard silent-default privacy notify", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it("saves a revised choice after the user goes Back and changes it", async () => {
+    await act(async () => {
+      render(
+        <AgentSetupWizard
+          isOpen
+          onClose={vi.fn()}
+          isFirstRun
+          initialAvailability={{ claude: "ready" }}
+        />
+      );
+    });
+    await clickButton("Continue"); // appearance -> agents
+    await clickButton("Continue"); // agents -> privacy
+    const toggle = () => document.querySelector('button[role="switch"]') as HTMLButtonElement;
+    await act(async () => {
+      toggle().click(); // on
+    });
+    await clickButton("Continue"); // privacy -> permissions
+    await clickButton("Back");
+    await act(async () => {
+      toggle().click(); // off again
+    });
+    await clickButton("Continue");
+
+    expect(setTelemetryLevelMock.mock.calls.map((c) => (c as unknown[])[0])).toEqual([
+      "errors",
+      "off",
+    ]);
+  });
+
+  it("stays on the privacy step when its choice cannot be saved", async () => {
+    await act(async () => {
+      render(
+        <AgentSetupWizard
+          isOpen
+          onClose={vi.fn()}
+          isFirstRun
+          initialAvailability={{ claude: "ready" }}
+        />
+      );
+    });
+    await clickButton("Continue");
+    await clickButton("Continue");
+    setTelemetryLevelMock.mockRejectedValueOnce(new Error("IPC down"));
+    await clickButton("Continue");
+
+    // Still here, with the switch that was not saved, and told why.
+    expect(document.querySelector('button[role="switch"]')).not.toBeNull();
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
+  });
+
   it("does not fire when isFirstRun is false (commit path is bypassed entirely)", async () => {
     const onClose = vi.fn();
     await act(async () => {
@@ -439,6 +491,19 @@ describe("AgentSetupWizard silent-default privacy notify", () => {
 describe("AgentSetupWizard first-run theme auto-select", () => {
   beforeEach(() => {
     themeStoreMock.setSelectedSchemeIdSilent.mockClear();
+    themeStoreMock.selectedSchemeId = "daintree";
+  });
+
+  it("leaves a theme the user already chose alone", async () => {
+    // A light OS would otherwise pull the user off the theme they picked.
+    themeStoreMock.selectedSchemeId = "namib";
+    setOsPrefersLight(true);
+
+    await act(async () => {
+      render(<AgentSetupWizard isOpen onClose={vi.fn()} isFirstRun initialAvailability={{}} />);
+    });
+
+    expect(themeStoreMock.setSelectedSchemeIdSilent).not.toHaveBeenCalled();
   });
 
   function setOsPrefersLight(prefersLight: boolean) {
