@@ -51,3 +51,30 @@ export function getEffectiveStateColor(agentState: AgentState): string {
 export function getEffectiveStateLabel(agentState: AgentState): string {
   return STATE_LABELS[agentState];
 }
+
+export interface SessionStateSummary {
+  visibleStates: { state: AgentState; count: number }[];
+  /** "3 sessions: 2 working, 1 waiting" — also the collapsed indicator's tooltip. */
+  label: string;
+  /** "2 working, 1 waiting", or "" when every session is idle. */
+  breakdown: string;
+}
+
+/**
+ * The one derivation behind every collapsed session summary. Idle is left out
+ * of the breakdown on purpose, so the total is stated separately rather than
+ * left to be added up from the segments — it would come out short.
+ */
+export function summarizeSessionStates(
+  byState: Record<AgentState, number>,
+  total: number
+): SessionStateSummary {
+  const visibleStates = STATE_PRIORITY.filter((s) => s !== "idle" && byState[s] > 0).map((s) => ({
+    state: s,
+    count: byState[s],
+  }));
+  if (total <= 0) return { visibleStates, label: "", breakdown: "" };
+  const breakdown = visibleStates.map((v) => `${v.count} ${STATE_LABELS[v.state]}`).join(", ");
+  const sessions = `${total} session${total !== 1 ? "s" : ""}`;
+  return { visibleStates, label: breakdown ? `${sessions}: ${breakdown}` : sessions, breakdown };
+}

@@ -3,7 +3,7 @@ import type { AgentState, WorktreeState } from "@/types";
 import type { WorktreeMenuActions } from "../WorktreeMenuItems";
 import type { GitStateIndicator } from "./hooks/useWorktreeStatus";
 import { cn } from "@/lib/utils";
-import { STATE_LABELS, STATE_PRIORITY } from "../terminalStateConfig";
+import { summarizeSessionStates } from "../terminalStateConfig";
 import { BranchLabel } from "../BranchLabel";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Sprout, Pin, BellOff, RefreshCw } from "lucide-react";
@@ -283,18 +283,13 @@ export function WorktreeHeader({
     worktree.baseMatchesUpstream,
   ]);
 
-  const { visibleStates, sessionAriaLabel } = useMemo(() => {
-    if (!sessionStates || !sessionTotal || sessionTotal === 0) {
-      return { visibleStates: [] as { state: AgentState; count: number }[], sessionAriaLabel: "" };
-    }
-    const visible = STATE_PRIORITY.filter((s) => s !== "idle" && sessionStates[s] > 0).map((s) => ({
-      state: s,
-      count: sessionStates[s],
-    }));
-    const parts = visible.map((v) => `${v.count} ${STATE_LABELS[v.state]}`);
-    const label = `${sessionTotal} session${sessionTotal !== 1 ? "s" : ""}: ${parts.join(", ")}`;
-    return { visibleStates: visible, sessionAriaLabel: label };
-  }, [sessionStates, sessionTotal]);
+  const { visibleStates, label: sessionAriaLabel } = useMemo(
+    () =>
+      sessionStates && sessionTotal
+        ? summarizeSessionStates(sessionStates, sessionTotal)
+        : { visibleStates: [], label: "" },
+    [sessionStates, sessionTotal]
+  );
 
   return (
     <div>
