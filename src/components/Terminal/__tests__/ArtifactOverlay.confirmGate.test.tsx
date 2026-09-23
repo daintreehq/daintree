@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ReactNode } from "react";
 import type { Artifact } from "@shared/types";
@@ -72,9 +72,19 @@ function renderOverlay() {
   return utils;
 }
 
+function rowFor(filename: string): HTMLElement {
+  const row = screen.getByText(filename).closest<HTMLElement>("[data-artifact-item]");
+  if (!row) throw new Error(`no artifact row holds ${filename}`);
+  return row;
+}
+
 function openSingleApplyDialog(filename: string) {
   fireEvent.click(screen.getByText(filename));
-  fireEvent.click(screen.getByText("Apply Patch"));
+  fireEvent.click(within(rowFor(filename)).getByRole("button", { name: "Apply patch" }));
+}
+
+function confirmDialog(label: string) {
+  fireEvent.click(within(screen.getByRole("dialog")).getByText(label));
 }
 
 beforeEach(() => {
@@ -104,7 +114,7 @@ describe("ArtifactOverlay confirm gate (issue #10020)", () => {
     renderOverlay();
     openSingleApplyDialog("patch-a.diff");
 
-    fireEvent.click(screen.getByText("Cancel"));
+    fireEvent.click(within(screen.getByRole("dialog")).getByText("Cancel"));
 
     expect(applyPatch).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -115,7 +125,7 @@ describe("ArtifactOverlay confirm gate (issue #10020)", () => {
     openSingleApplyDialog("patch-a.diff");
 
     await act(async () => {
-      fireEvent.click(screen.getByText("Apply patch"));
+      confirmDialog("Apply patch");
     });
 
     expect(applyPatch).toHaveBeenCalledTimes(1);
@@ -125,11 +135,10 @@ describe("ArtifactOverlay confirm gate (issue #10020)", () => {
   it("re-requesting apply for another patch supersedes the first pending confirm", async () => {
     renderOverlay();
     openSingleApplyDialog("patch-a.diff");
-    fireEvent.click(screen.getByText("patch-b.diff"));
-    fireEvent.click(screen.getAllByText("Apply Patch")[1]!);
+    openSingleApplyDialog("patch-b.diff");
 
     await act(async () => {
-      fireEvent.click(screen.getByText("Apply patch"));
+      confirmDialog("Apply patch");
     });
 
     expect(applyPatch).toHaveBeenCalledTimes(1);
@@ -138,7 +147,7 @@ describe("ArtifactOverlay confirm gate (issue #10020)", () => {
 
   it("bulk dialog shows actual diff content for every patch, not just counts", () => {
     renderOverlay();
-    fireEvent.click(screen.getByText("Apply All Patches"));
+    fireEvent.click(screen.getByRole("button", { name: /^Apply 2 patches$/ }));
 
     expect(applyAllPatches).not.toHaveBeenCalled();
     const dialog = screen.getByRole("dialog");
@@ -150,14 +159,14 @@ describe("ArtifactOverlay confirm gate (issue #10020)", () => {
 
   it("bulk confirm applies the snapshot taken at request time, not later arrivals", async () => {
     const { rerender } = renderOverlay();
-    fireEvent.click(screen.getByText("Apply All Patches"));
+    fireEvent.click(screen.getByRole("button", { name: /^Apply 2 patches$/ }));
 
     // A third patch arrives while the dialog is open.
     mockArtifacts = [PATCH_A, PATCH_B, PATCH_C];
     rerender(<ArtifactOverlay terminalId="t1" worktreeId="wt1" cwd="/repo" />);
 
     await act(async () => {
-      fireEvent.click(screen.getByText("Apply 2 patches"));
+      confirmDialog("Apply 2 patches");
     });
 
     expect(applyAllPatches).toHaveBeenCalledTimes(1);
@@ -166,7 +175,7 @@ describe("ArtifactOverlay confirm gate (issue #10020)", () => {
 
   it("cancelling the bulk dialog never applies", () => {
     renderOverlay();
-    fireEvent.click(screen.getByText("Apply All Patches"));
+    fireEvent.click(screen.getByRole("button", { name: /^Apply 2 patches$/ }));
 
     fireEvent.click(screen.getByText("Cancel"));
 

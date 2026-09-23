@@ -130,6 +130,11 @@ export function __test_subscribeArtifactStore(
   };
 }
 
+export type SaveArtifactOutcome =
+  | { status: "saved"; filePath: string }
+  | { status: "cancelled" }
+  | { status: "failed"; error: string };
+
 interface BulkProgress {
   action: "copy" | "save" | "apply";
   current: number;
@@ -237,8 +242,10 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
   );
 
   const saveToFile = useCallback(
-    async (artifact: Artifact) => {
-      if (!isElectronAvailable()) return null;
+    async (artifact: Artifact): Promise<SaveArtifactOutcome> => {
+      if (!isElectronAvailable()) {
+        return { status: "failed", error: "Saving needs the desktop app" };
+      }
 
       try {
         setActionInProgress(artifact.id);
@@ -259,7 +266,8 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
         }
         const result = actionResult.result;
 
-        return result;
+        // The save dialog resolves null when the user backs out of it.
+        return result ? { status: "saved", filePath: result.filePath } : { status: "cancelled" };
       } catch (error) {
         logErrorWithContext(error, {
           operation: "save_artifact_to_file",
@@ -272,7 +280,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
             worktreeId,
           },
         });
-        return null;
+        return { status: "failed", error: formatErrorMessage(error, "Failed to save artifact") };
       } finally {
         setActionInProgress(null);
       }

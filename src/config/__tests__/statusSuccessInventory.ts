@@ -542,45 +542,20 @@ export const STATUS_SUCCESS_INVENTORY = {
   ],
   "src/components/Terminal/ArtifactOverlay.tsx": [
     {
-      category: "domain",
-      signature: "text-status-success bg-status-success/10",
-      expectedOccurrences: 2,
-      rationale: "Added line in a unified patch",
-    },
-    {
-      category: "affordance",
-      signature: "bg-status-success",
-      anchor: "onClick={handleApplyPatch}",
-      expectedOccurrences: 1,
-      rationale: "Go-colour on the apply-patch control",
-    },
-    {
-      category: "transient",
+      category: "outcome",
       signature: "text-status-success",
-      anchor: 'feedback.tone === "success"',
+      anchor: 'tone === "success" && "text-status-success"',
       expectedOccurrences: 1,
-      rationale: "Apply feedback; replaced on the next action",
+      rationale:
+        "A row's recorded `git apply` result, beside the files it touched; replaced by the next attempt",
     },
     {
-      category: "affordance",
-      signature: "bg-status-success",
-      anchor: "onClick={handleApplyAllPatches}",
-      expectedOccurrences: 1,
-      rationale: "Go-colour on the apply-all-patches control",
-    },
-    {
-      category: "transient",
+      category: "outcome",
       signature: "text-status-success",
-      anchor: 'bulkResult.tone === "success"',
+      anchor: 'className="size-3.5 shrink-0 text-status-success"',
       expectedOccurrences: 1,
-      rationale: "Bulk apply feedback; replaced on the next action",
-    },
-    {
-      category: "domain",
-      signature: "text-status-success",
-      anchor: 'className="text-status-success"',
-      expectedOccurrences: 1,
-      rationale: "Per-patch insertion count",
+      rationale:
+        "The result of a named bulk copy, save or apply run; copy and save clear on a timer, apply until dismissed or rerun",
     },
   ],
   "src/components/Terminal/GridNotificationBar.tsx": [
@@ -967,5 +942,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 115;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 131;
+export const EXPECTED_STATUS_SUCCESS_SITES = 111;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 126;

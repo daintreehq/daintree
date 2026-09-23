@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { getPatchStats, patchLineClass } from "../ArtifactOverlay";
+import { getPatchFiles, getPatchStats, patchLineClass } from "../ArtifactOverlay";
 
 const PATCH = [
   "diff --git a/src/foo.ts b/src/foo.ts",
@@ -27,27 +27,48 @@ describe("ArtifactOverlay patch preview helpers (issue #10020)", () => {
   });
 
   describe("patchLineClass", () => {
-    it("distinguishes additions, deletions, headers, and context lines", () => {
-      const addition = patchLineClass("+const b = 3;");
-      const deletion = patchLineClass("-const b = 2;");
-      const context = patchLineClass(" const a = 1;");
+    it("gives additions, deletions, hunk headers, file headers and context each their own treatment", () => {
       const classes = [
-        addition,
-        deletion,
-        context,
+        patchLineClass("+const b = 3;"),
+        patchLineClass("-const b = 2;"),
+        patchLineClass(" const a = 1;"),
         patchLineClass("@@ -1,3 +1,4 @@"),
         patchLineClass("+++ b/src/foo.ts"),
       ];
-      // Each category renders distinctly so the preview reads as a diff.
-      expect(new Set(classes).size).toBe(4);
-      expect(addition).not.toBe(deletion);
+      expect(new Set(classes).size).toBe(classes.length);
     });
 
-    it("styles +++/--- file headers as headers, not as change lines", () => {
-      expect(patchLineClass("+++ b/src/foo.ts")).toBe(patchLineClass("@@ -1,3 +1,4 @@"));
-      expect(patchLineClass("--- a/src/foo.ts")).toBe(patchLineClass("@@ -1,3 +1,4 @@"));
-      expect(patchLineClass("+++ b/src/foo.ts")).not.toBe(patchLineClass("+added"));
-      expect(patchLineClass("--- a/src/foo.ts")).not.toBe(patchLineClass("-removed"));
+    it("never styles +++/--- file headers as change lines", () => {
+      const header = [patchLineClass("+++ b/src/foo.ts"), patchLineClass("--- a/src/foo.ts")];
+      const changes = [patchLineClass("+added"), patchLineClass("-removed")];
+      expect(header[0]).toBe(header[1]);
+      for (const change of changes) expect(header).not.toContain(change);
+    });
+  });
+
+  describe("getPatchFiles", () => {
+    it("lists every file a multi-file patch touches, once each, in order", () => {
+      const multi = [
+        PATCH,
+        "diff --git a/src/bar.ts b/src/bar.ts",
+        "--- a/src/bar.ts",
+        "+++ b/src/bar.ts",
+        "@@ -1 +1 @@",
+        "-x",
+        "+y",
+        "diff --git a/src/foo.ts b/src/foo.ts",
+        "--- a/src/foo.ts",
+        "+++ b/src/foo.ts",
+        "@@ -9 +9 @@",
+        "-p",
+        "+q",
+      ].join("\n");
+      expect(getPatchFiles(multi)).toEqual(["src/foo.ts", "src/bar.ts"]);
+    });
+
+    it("names a deleted file by its old path rather than /dev/null", () => {
+      const deletion = ["--- a/src/gone.ts", "+++ /dev/null", "@@ -1 +0,0 @@", "-bye"].join("\n");
+      expect(getPatchFiles(deletion)).toEqual(["src/gone.ts"]);
     });
   });
 });
