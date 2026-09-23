@@ -1,7 +1,7 @@
 {
   "generated": "2026-09-23",
-  "total": 164,
-  "files": 76,
+  "total": 162,
+  "files": 74,
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
@@ -17,21 +17,6 @@
       "decision": "keep",
       "category": "icon-affordance",
       "evidence": "<FolderGit2> is an icon — the colour is an affordance, not prose"
-    },
-    {
-      "file": "plugins/builtin/github/renderer/components/CommitList.tsx",
-      "ordinal": 0,
-      "line": 237,
-      "start": 7692,
-      "end": 7713,
-      "token": "text-daintree-text/40",
-      "variants": "",
-      "step": 40,
-      "group": "plugins/builtin/github/renderer/components/CommitList.tsx#7647",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<Search> is an icon — the colour is an affordance, not prose"
     },
     {
       "file": "src/components/ActionPalette/ActionPalette.tsx",
@@ -842,21 +827,6 @@
       "decision": "keep",
       "category": "prior-ruling-40",
       "evidence": "#12003 ruled on this /40 site; no in-scope partner reopens it"
-    },
-    {
-      "file": "src/components/Layout/LocalCommitsDropdown.tsx",
-      "ordinal": 0,
-      "line": 531,
-      "start": 18104,
-      "end": 18125,
-      "token": "text-daintree-text/40",
-      "variants": "",
-      "step": 40,
-      "group": "src/components/Layout/LocalCommitsDropdown.tsx#18059",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<Search> is an icon — the colour is an affordance, not prose"
     },
     {
       "file": "src/components/Layout/PluginTrayButton.tsx",

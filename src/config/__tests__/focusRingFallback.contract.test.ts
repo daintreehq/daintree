@@ -625,9 +625,9 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
     file: "src/components/Layout/LocalCommitsDropdown.tsx",
     fragment:
-      "flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-muted-foreground focus:outline-hidden",
+      "flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden",
     reason:
-      "Parent shows focus: wrapper at line 437 has `focus-within:border-accent-primary focus-within:ring-1`",
+      "Parent shows focus: the search shell carries full-strength `focus-within:border-accent-primary`, the one accent this region is allowed — same shape as GitHubResourceList.",
   },
 
   // ── Pre-existing focus-ring gaps surfaced by #8940 ───────────────────
@@ -686,12 +686,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     fragment:
       "select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-daintree-accent/65 hover:text-daintree-accent/85 transition-colors cursor-pointer focus-visible:outline-hidden",
     reason: "PRE-EXISTING #8940: command picker trigger button has no focus indicator — follow-up",
-  },
-  {
-    file: "plugins/builtin/github/renderer/components/CommitList.tsx",
-    fragment:
-      "flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-muted-foreground focus:outline-hidden",
-    reason: "PRE-EXISTING #8940: autoFocus commit search input lacks a focus indicator — follow-up",
   },
   {
     file: "plugins/builtin/github/renderer/components/GitHubResourceList.tsx",

@@ -80,22 +80,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Recorded per-item result of the bulk create the user just ran",
     },
   ],
-  "plugins/builtin/github/renderer/components/CommitListItem.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: 'copied && "text-status-success"',
-      expectedOccurrences: 1,
-      rationale: "Copy-hash confirmation on the row; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: "<span>#</span>",
-      expectedOccurrences: 1,
-      rationale: "Copy-hash confirmation glyph; resets when the copy flash times out",
-    },
-  ],
   "plugins/builtin/github/renderer/components/GitHubListItem.tsx": [
     {
       category: "outcome",
@@ -255,14 +239,6 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "transient",
       signature: "text-status-success",
-      anchor: 'copied && "text-status-success"',
-      expectedOccurrences: 1,
-      rationale: "Copy-hash confirmation on the row; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: "<span>#</span>",
       expectedOccurrences: 1,
       rationale: "Copy-hash confirmation glyph; resets when the copy flash times out",
     },
@@ -860,5 +836,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 102;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 116;
+export const EXPECTED_STATUS_SUCCESS_SITES = 99;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 113;
