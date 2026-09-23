@@ -660,12 +660,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         location === "grid" &&
           !isMaximized &&
           "rounded-lg border shadow-[var(--theme-shadow-ambient)] transition-colors duration-150",
-        // The selected chrome is how a grid pane says it has the keyboard. A
-        // non-PTY pane's root takes real DOM focus when it becomes the focused
-        // pane (usePanelRootFocus), and after a keyboard move Chromium rings
-        // it in accent — a second, louder focus language that terminals, whose
-        // focus lives in xterm, never show.
-        showGridAttention && showSelectedChrome && "focus-visible:outline-hidden",
         location === "grid" &&
           !isMaximized &&
           resolveGridPanelChromeClass({
