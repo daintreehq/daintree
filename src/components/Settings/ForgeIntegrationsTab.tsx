@@ -423,7 +423,7 @@ function ProjectRoutingPanel({
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <span
-                          className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium border border-border-default text-text-secondary cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+                          className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium border border-border-default text-text-secondary cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent-primary"
                           tabIndex={0}
                         >
                           Active
