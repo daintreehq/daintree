@@ -1,5 +1,6 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ChevronDown,
   Copy,
   ExternalLink,
   FileText,
@@ -16,9 +17,14 @@ import {
 } from "lucide-react";
 import { CircleCheck, FolderOpen } from "@/components/icons";
 import {
+  DropdownMenu,
   DropdownMenuCheckboxItem,
+  DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { actionService } from "@/services/ActionService";
@@ -28,6 +34,7 @@ import {
   FileViewerToolbar,
   TOOLBAR_ICON_CLASS,
   useFileViewerToolbarCompact,
+  useFileViewerToolbarWidth,
 } from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -356,11 +363,38 @@ export function FileBrowserViewer({
       document.activeElement === document.body
     ) {
       modeToggleRef.current
-        ?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')
+        ?.querySelector<HTMLButtonElement>('button[aria-pressed="true"], button')
         ?.focus({ preventScroll: true });
     }
     previousMode.current = renderMode;
   }, [renderMode]);
+  // Set when the folder listing was driven from the keyboard, so the row that
+  // was just activated — and unmounted by its own activation — hands focus to
+  // what replaced it instead of dropping it on the document body.
+  const focusAfterNavigationRef = useRef(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const handleListingSelect = useCallback(
+    (path: string, _isDirectory: boolean, viaKeyboard?: boolean) => {
+      if (viaKeyboard) focusAfterNavigationRef.current = true;
+      onSelectEntry(path);
+    },
+    [onSelectEntry]
+  );
+  useEffect(() => {
+    if (!focusAfterNavigationRef.current) return;
+    const body = bodyRef.current;
+    if (!body) return;
+    // A folder waits for its rows: the skeleton has nothing to focus, and
+    // focusing the body first would strand the reader above the list.
+    if (folderPath !== null && folderRows == null) return;
+    focusAfterNavigationRef.current = false;
+    // The next listing's first row, or — for a file, or a state with no rows —
+    // the toolbar's path pill, which names what just opened.
+    const target =
+      body.querySelector<HTMLElement>("[data-listing-row]") ??
+      body.parentElement?.querySelector<HTMLElement>("[data-toolbar-path]");
+    target?.focus({ preventScroll: true });
+  }, [filePath, folderPath, folderRows, state.status]);
   const [changeTick, setChangeTick] = useState(0);
   useEffect(() => setChangeTick((value) => value + 1), [revision]);
   // The panel id rides a sentinel because this component is not remounted per
@@ -686,14 +720,10 @@ export function FileBrowserViewer({
         </FileViewerToolbar.IconButton>
         {showModeToggle && (
           <div ref={modeToggleRef} className="contents">
-            {/* Compact density: the toolbar's icon buttons are 26px, and the
-                default 28px segment made every renderable file's row taller
-                than every other file's. */}
-            <SegmentedToggle<FileRenderMode | "edit">
+            <ModeControl
               options={renderOptions}
               value={renderMode}
               onChange={setExplicitRenderMode}
-              density="compact"
             />
           </div>
         )}
@@ -793,7 +823,7 @@ export function FileBrowserViewer({
           closeAriaLabel={externalErrorCopy.dismiss}
         />
       )}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div ref={bodyRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {/* A selected folder outranks the idle body: the changed-files summary
             answers "nothing is selected", and a folder selection is a
             selection (#11620). */}
@@ -895,25 +925,17 @@ export function FileBrowserViewer({
 
     if (folderStatus === "error") {
       return (
-        <div className="flex h-full w-full items-center justify-center p-6">
-          <EmptyState
-            variant="zero-data"
-            scale="canvas"
-            icon={<FolderTree className="h-6 w-6" />}
-            title="Can't show this folder"
-            description="The folder couldn't be read. It may have been moved or deleted."
-            action={
-              <button
-                type="button"
-                onClick={onRefresh}
-                className="text-xs underline underline-offset-2"
-              >
-                Retry
-              </button>
-            }
-            className="w-full"
-          />
-        </div>
+        <UnavailableState
+          icon={FolderTree}
+          title="Can't show this folder"
+          description="It couldn't be read. It may have been moved or deleted."
+          action={
+            <Button variant="subtle" size="sm" onClick={onRefresh}>
+              <RefreshCw />
+              Retry
+            </Button>
+          }
+        />
       );
     }
 
@@ -975,7 +997,7 @@ export function FileBrowserViewer({
       <>
         <FolderListingView
           rows={folderRows}
-          onSelect={onSelectEntry}
+          onSelect={handleListingSelect}
           {...(rowContextMenu ? { rowContextMenu } : {})}
           basePath={basePath}
           label={`Contents of ${folderName}`}
@@ -1498,5 +1520,78 @@ function FileActions({
         <OpenIcon className={TOOLBAR_ICON_CLASS} />
       </FileViewerToolbar.IconButton>
     </>
+  );
+}
+
+/**
+ * Below this row width the mode selector folds from a segmented control into
+ * one menu button naming the current mode — the second step after the file
+ * actions fold, so a renderable file keeps a readable name at the narrowest
+ * widths the viewer reaches.
+ */
+const MODE_MENU_BELOW = 420;
+
+type ViewerMode = FileRenderMode | "edit";
+
+/**
+ * The Source / Rendered (/ Edit) choice. Segmented while it fits, a menu once
+ * the row is tight — the same options in the same order either way, with the
+ * current one named on the trigger so the state is still visible at a glance.
+ */
+function ModeControl({
+  options,
+  value,
+  onChange,
+}: {
+  options: Array<{ value: ViewerMode; label: string }>;
+  value: ViewerMode;
+  onChange: (value: ViewerMode) => void;
+}) {
+  const width = useFileViewerToolbarWidth();
+  const current = options.find((option) => option.value === value) ?? options[0];
+
+  if (width === null || width >= MODE_MENU_BELOW || !current) {
+    return (
+      // Compact density: the toolbar's icon buttons are 26px, and the default
+      // 28px segment made every renderable file's row taller than every other.
+      <SegmentedToggle<ViewerMode>
+        options={options}
+        value={value}
+        onChange={onChange}
+        density="compact"
+      />
+    );
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`View mode: ${current.label}`}
+          data-testid="file-browser-mode-menu"
+          className="toolbar-icon-button flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-text-primary"
+        >
+          {current.label}
+          <ChevronDown className="h-3 w-3 text-text-secondary" aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-[160px]">
+        <DropdownMenuRadioGroup
+          aria-label="View mode"
+          value={value}
+          onValueChange={(next) => {
+            const match = options.find((option) => option.value === next);
+            if (match) onChange(match.value);
+          }}
+        >
+          {options.map((option) => (
+            <DropdownMenuRadioItem key={option.value} value={option.value}>
+              {option.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

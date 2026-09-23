@@ -31,8 +31,8 @@ function measureTextWidth(text: string, font: string): number {
  * of the name's stem and keep its extension, so a clipped pill still says what
  * kind of file it is. End truncation ("useContentPanelKeyboardNavigationAndFo…")
  * throws away exactly the part that distinguishes one file from its siblings.
- * Returns the whole name when nothing shorter than it fits either; CSS
- * truncation is the backstop below that.
+ * Below the shortest readable form it keeps just the tail and extension;
+ * CSS truncation is the backstop below that.
  */
 export function fitFileName(name: string, fits: (text: string) => boolean): string {
   const dot = name.lastIndexOf(".");
@@ -44,10 +44,12 @@ export function fitFileName(name: string, fits: (text: string) => boolean): stri
   const tail = Math.min(4, Math.floor(stem.length / 3));
   const build = (kept: number) =>
     `${stem.slice(0, kept)}…${stem.slice(stem.length - tail)}${extension}`;
-  let lo = 0;
   let hi = Math.max(0, stem.length - tail - 1);
-  if (!fits(build(1))) return name;
-  lo = 1;
+  // Nothing with a readable stem fits: keep the tail and extension alone
+  // rather than handing back the whole name for CSS to end-truncate, which
+  // would cut the extension first.
+  if (!fits(build(1))) return `…${stem.slice(stem.length - tail)}${extension}`;
+  let lo = 1;
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
     if (fits(build(mid))) lo = mid;
@@ -176,6 +178,17 @@ export const TOOLBAR_ICON_CLASS = "h-3.5 w-3.5";
  * means the compiler asks every surface which row this is.
  */
 const CompactContext = createContext(false);
+const WidthContext = createContext<number | null>(null);
+
+/**
+ * The row's measured width, or null before the first measure (or when the
+ * caller set no `compactBelow`). For a control that has its own, tighter
+ * breakpoint than the row's secondary actions — a mode selector that becomes
+ * a menu only once the actions have already folded.
+ */
+export function useFileViewerToolbarWidth(): number | null {
+  return useContext(WidthContext);
+}
 
 /**
  * Whether the toolbar is below its caller's `compactBelow` width — the signal
@@ -203,19 +216,20 @@ function Root({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const onKeyDown = useToolbarRoving(ref);
-  const [compact, setCompact] = useState(false);
+  const [width, setWidth] = useState<number | null>(null);
+  const compact = width !== null && compactBelow !== undefined && width < compactBelow;
 
   useLayoutEffect(() => {
     const element = ref.current;
     if (!element || compactBelow === undefined) {
-      setCompact(false);
+      setWidth(null);
       return;
     }
     const measure = () => {
-      const width = element.getBoundingClientRect().width;
+      const measured = element.getBoundingClientRect().width;
       // Zero means hidden or not laid out yet; keep the last answer rather than
       // flashing the compact layout on every reveal.
-      if (width > 0) setCompact(width < compactBelow);
+      if (measured > 0) setWidth(Math.round(measured));
     };
     measure();
     if (typeof ResizeObserver === "undefined") return;
@@ -236,7 +250,9 @@ function Root({
       onKeyDown={onKeyDown}
       className="flex shrink-0 items-center gap-1.5 border-b border-overlay bg-surface px-2 py-1.5"
     >
-      <CompactContext.Provider value={compact}>{children}</CompactContext.Provider>
+      <CompactContext.Provider value={compact}>
+        <WidthContext.Provider value={width}>{children}</WidthContext.Provider>
+      </CompactContext.Provider>
     </div>
   );
 }
@@ -275,10 +291,11 @@ function Path({
         <button
           type="button"
           onClick={onCopy}
-          aria-label={copyLabel}
-          // The full path rides the description whenever the pill is showing
-          // less than all of it, so the elided part is never out of reach.
-          aria-description={truncated ? path : undefined}
+          data-toolbar-path=""
+          // The subject is part of the name at every width, not only when the
+          // pill had to elide it: the visible text is the path, so a name of
+          // just "Copy file path" would drop what the eye reads (label in name).
+          aria-label={path ? `${copyLabel}: ${path}` : copyLabel}
           className="relative flex items-center min-w-0 flex-1 group/path"
         >
           {copied ? (

@@ -235,7 +235,7 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "transient",
       signature: "text-status-success",
-      anchor: "aria-label={copyLabel}",
+      anchor: "copyLabel}: ${path}",
       expectedOccurrences: 1,
       rationale: "Copy-path confirmation; resets when the copy flash times out",
     },

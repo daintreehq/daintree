@@ -40,6 +40,9 @@ export function zoomForWheel(currentZoom: number, deltaY: number): number {
   return clampZoom(currentZoom * Math.exp(-deltaY * WHEEL_ZOOM_SENSITIVITY));
 }
 
+/** How far one arrow press pans a zoomed image, in CSS px. */
+const KEYBOARD_PAN_STEP = 48;
+
 /** Multiplier one press of the zoom buttons applies. */
 const BUTTON_ZOOM_STEP = 1.25;
 
@@ -138,6 +141,34 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
   };
 
   const isZoomed = zoom !== 1 || offset.x !== 0 || offset.y !== 0;
+
+  // The keyboard's route to everything the wheel and the drag do: arrows pan,
+  // + and - zoom, 0 fits. Panning is the part the footer buttons can't give,
+  // and without it a zoomed image's edges are reachable only by pointer.
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const pan: Record<string, [number, number]> = {
+      ArrowLeft: [KEYBOARD_PAN_STEP, 0],
+      ArrowRight: [-KEYBOARD_PAN_STEP, 0],
+      ArrowUp: [0, KEYBOARD_PAN_STEP],
+      ArrowDown: [0, -KEYBOARD_PAN_STEP],
+    };
+    const delta = pan[event.key];
+    if (delta) {
+      event.preventDefault();
+      setOffset((current) => ({ x: current.x + delta[0], y: current.y + delta[1] }));
+      return;
+    }
+    if (event.key === "+" || event.key === "=") {
+      event.preventDefault();
+      setZoom((current) => clampZoom(current * BUTTON_ZOOM_STEP));
+    } else if (event.key === "-") {
+      event.preventDefault();
+      setZoom((current) => clampZoom(current / BUTTON_ZOOM_STEP));
+    } else if (event.key === "0") {
+      event.preventDefault();
+      resetView();
+    }
+  };
   // What the reader is actually looking at, as a share of the image's own
   // pixels. The transform multiplier alone said "100%" for an image the stage
   // had already shrunk to a third of its size.
@@ -152,11 +183,16 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
         onDoubleClick={resetView}
+        onKeyDown={handleKeyDown}
+        tabIndex={0}
+        role="group"
+        aria-label={`${alt}. Arrow keys pan, plus and minus zoom, 0 fits to screen.`}
         style={TRANSPARENCY_CHECKERBOARD_STYLE}
         className={cn(
           // select-none so drag-panning never starts a text/image selection that
           // would paint the selection highlight over the image (#11325).
           "flex h-full min-h-0 w-full flex-1 select-none items-center justify-center overflow-hidden",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
           isZoomed ? "cursor-grab" : "cursor-default"
         )}
       >

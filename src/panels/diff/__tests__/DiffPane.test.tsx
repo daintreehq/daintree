@@ -511,7 +511,7 @@ describe("DiffPane — content-aware toolbar", () => {
     expect(screen.queryByLabelText("Wrap long lines")).toBeNull();
 
     // Refresh and the path pill act on any file kind, so they stay.
-    expect(screen.getByLabelText("Copy file path")).toBeTruthy();
+    expect(screen.getByLabelText(/^Copy file path/)).toBeTruthy();
     expect(screen.getByLabelText("Refresh")).toBeTruthy();
   });
 

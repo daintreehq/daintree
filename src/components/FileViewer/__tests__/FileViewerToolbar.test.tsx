@@ -93,11 +93,12 @@ describe("FileViewerToolbar.Path", () => {
 
   function renderPath(path: string, { copied = false, onCopy = vi.fn() } = {}) {
     render(<FileViewerToolbar.Path path={path} copied={copied} onCopy={onCopy} />);
-    return screen.getByRole("button", { name: "Copy file path" });
+    return screen.getByRole("button", { name: /^Copy file path/ });
   }
 
   /** The pill's rendered text, which is what useFittedPath computed. */
-  const fittedText = () => screen.getByRole("button", { name: "Copy file path" }).textContent ?? "";
+  const fittedText = () =>
+    screen.getByRole("button", { name: /^Copy file path/ }).textContent ?? "";
 
   it("shows the path untruncated when it fits", () => {
     containerWidth = LONG_PATH.length * CHAR_PX + PAD_X + 20;
@@ -185,14 +186,14 @@ describe("FileViewerToolbar.Path", () => {
     const { rerender } = render(
       <FileViewerToolbar.Path path={LONG_PATH} copied={false} onCopy={vi.fn()} />
     );
-    expect(screen.getByRole("button", { name: "Copy file path" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Copy file path/ })).toBeTruthy();
 
     rerender(<FileViewerToolbar.Path path={LONG_PATH} copied onCopy={vi.fn()} />);
 
     // The feedback rides the tooltip and the icon, never the accessible name —
     // a name that flips to "Copied!" would make the control unfindable exactly
     // when a test or a screen-reader user goes looking for it.
-    expect(screen.getByRole("button", { name: "Copy file path" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Copy file path/ })).toBeTruthy();
   });
 
   it("copies on click", () => {
@@ -490,8 +491,16 @@ describe("fitFileName", () => {
     expect(fitted.length).toBe(24);
   });
 
-  it("hands back the whole name when nothing shorter fits either", () => {
-    expect(fitFileName(NAME, () => false)).toBe(NAME);
+  it("keeps the extension even when no readable stem fits", () => {
+    const fitted = fitFileName(NAME, () => false);
+    expect(fitted.endsWith(".ts")).toBe(true);
+    expect(fitted.length).toBeLessThan(NAME.length);
+  });
+
+  it("names the subject in the accessible name at every width", () => {
+    containerWidth = 2000;
+    render(<FileViewerToolbar.Path path="src/a/b.ts" copied={false} onCopy={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Copy file path: src/a/b.ts" })).toBeTruthy();
   });
 
   it("treats a dotless name as all stem", () => {

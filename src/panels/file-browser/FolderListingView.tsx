@@ -40,7 +40,7 @@ export interface FolderListingViewProps {
    * handler here could never fire. Re-rooting a folder from this surface lives
    * in the row's context menu ("Set as root"), which is reachable.
    */
-  onSelect: (path: string, isDirectory: boolean) => void;
+  onSelect: (path: string, isDirectory: boolean, viaKeyboard?: boolean) => void;
   /** Same callback the tree uses, so both surfaces offer the identical menu. */
   rowContextMenu?: (row: FileEntryLike) => React.ReactNode;
   /**
@@ -126,7 +126,7 @@ export function FolderListingView({
 }
 
 interface ListingContext {
-  onSelect: (path: string, isDirectory: boolean) => void;
+  onSelect: (path: string, isDirectory: boolean, viaKeyboard?: boolean) => void;
   rowContextMenu?: ((row: FileEntryLike) => React.ReactNode) | undefined;
   basePath: string;
 }
@@ -204,7 +204,9 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      handleClick();
+      // Flagged so the host can hand focus to whatever replaces this row —
+      // activating it is what unmounts it.
+      onSelect(row.path, row.isDirectory, true);
       return;
     }
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;

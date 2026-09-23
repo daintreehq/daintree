@@ -260,9 +260,11 @@ describe("FolderListingView keyboard use", () => {
     fireEvent.keyDown(screen.getByLabelText("lib"), { key: "Enter" });
     fireEvent.keyDown(screen.getByLabelText("a.ts"), { key: " " });
 
+    // The trailing flag marks a keyboard activation, so the host can hand
+    // focus on to whatever replaces the row.
     expect(onSelect.mock.calls).toEqual([
-      ["src/lib", true],
-      ["src/a.ts", false],
+      ["src/lib", true, true],
+      ["src/a.ts", false, true],
     ]);
   });
 

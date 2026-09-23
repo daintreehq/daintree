@@ -58,6 +58,7 @@ vi.mock("@/components/Markdown/MarkdownTextSizeControl", () => ({
       onClick={() => props.onValueChange("2xl")}
     />
   ),
+  MarkdownTextSizeMenuItems: () => null,
 }));
 // Both leaves surface the props the branch hands them: which mock renders only
 // proves the routing, and an HTML source branch wired to empty content or the
@@ -1701,7 +1702,7 @@ describe("viewer identity and ways out", () => {
       folderPath: "assets/brand",
       folderRows: [{ path: "assets/brand/logo.svg", name: "logo.svg", isDirectory: false }],
     });
-    const pill = screen.getByRole("button", { name: "Copy folder path" });
+    const pill = screen.getByRole("button", { name: /^Copy folder path/ });
     expect(pill.textContent).toContain("brand");
   });
 
@@ -1717,7 +1718,7 @@ describe("viewer identity and ways out", () => {
     expect(screen.queryByText("Changed files")).toBeNull();
     const unavailable = screen.getByTestId("file-browser-unavailable");
     expect(unavailable.textContent).toContain("notes.md");
-    expect(screen.getByRole("button", { name: "Copy file path" }).textContent).toContain(
+    expect(screen.getByRole("button", { name: /^Copy file path/ }).textContent).toContain(
       "notes.md"
     );
 
@@ -1753,6 +1754,79 @@ describe("viewer identity and ways out", () => {
     expect(screen.queryByRole("button", { name: "Open in editor" })).toBeNull();
     expect(screen.queryByRole("button", { name: revealCopy().label })).toBeNull();
     // The identity is what the fold protects, so it must still be there.
-    expect(screen.getByRole("button", { name: "Copy file path" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Copy file path/ })).toBeTruthy();
+  });
+});
+
+describe("viewer at tight widths and keyboard continuity", () => {
+  function atWidth(width: number) {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, width, 30)
+    );
+  }
+
+  it("folds the mode choice into one menu naming the current mode at the tightest widths", async () => {
+    atWidth(340);
+    readMock.mockResolvedValue({ content: "# Title" });
+    renderViewer("/repo/docs/readme.md");
+
+    const trigger = await screen.findByRole("button", { name: /^View mode: Rendered$/ });
+    expect(trigger).toBeTruthy();
+    // No segmented pair beside it: one control, not both.
+    expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
+  });
+
+  it("keeps the segmented control wherever it fits", async () => {
+    atWidth(700);
+    readMock.mockResolvedValue({ content: "# Title" });
+    renderViewer("/repo/docs/readme.md");
+
+    expect(await screen.findByRole("button", { name: "Source" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^View mode/ })).toBeNull();
+  });
+
+  it("hands focus to the next listing after a keyboard drill-in", () => {
+    const rows = (folder: string, names: string[]): FolderListingRow[] =>
+      names.map((name) => ({ path: `${folder}/${name}`, name, isDirectory: true }));
+    const onSelectEntry = vi.fn();
+    const { rerender } = renderViewer(null, {
+      folderPath: "src",
+      folderRows: rows("src", ["lib"]),
+      onSelectEntry,
+    });
+
+    const lib = screen.getByLabelText("lib");
+    lib.focus();
+    fireEvent.keyDown(lib, { key: "Enter" });
+    expect(onSelectEntry).toHaveBeenCalledWith("src/lib");
+
+    // The real pane passes through a pending listing first, which unmounts the
+    // activated row — the moment focus would otherwise fall to the body.
+    rerender(
+      viewerJsx(null, {
+        folderPath: "src/lib",
+        folderRows: null,
+        folderStatus: "pending",
+        onSelectEntry,
+      })
+    );
+    expect(document.activeElement).not.toBe(screen.queryByLabelText("util"));
+    rerender(
+      viewerJsx(null, {
+        folderPath: "src/lib",
+        folderRows: rows("src/lib", ["util"]),
+        onSelectEntry,
+      })
+    );
+    expect(document.activeElement).toBe(screen.getByLabelText("util"));
+  });
+
+  it("announces a folder that couldn't be read, with Retry", () => {
+    const onRefresh = vi.fn();
+    renderViewer(null, { folderPath: "src", folderStatus: "error", onRefresh });
+    const status = screen.getByTestId("file-browser-unavailable");
+    expect(status.getAttribute("role")).toBe("status");
+    fireEvent.click(within(status).getByRole("button", { name: /retry/i }));
+    expect(onRefresh).toHaveBeenCalled();
   });
 });
