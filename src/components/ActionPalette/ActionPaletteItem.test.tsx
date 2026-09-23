@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { ActionPaletteItem, HIDE_SHORTCUT, PIN_SHORTCUT } from "./ActionPaletteItem";
+import {
+  ActionPaletteItem,
+  HIDE_SHORTCUT,
+  PIN_SHORTCUT,
+  paletteSummary,
+} from "./ActionPaletteItem";
 import { createTooltipWithShortcut } from "@/lib/platform";
 import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
 
@@ -570,5 +575,24 @@ describe("ActionPaletteItem", () => {
         container.querySelector('[role="option"]')?.getAttribute("aria-describedby")
       ).toBeNull();
     });
+  });
+});
+
+describe("paletteSummary", () => {
+  it("shows one sentence, never the implementation note after it", () => {
+    const summary = paletteSummary(
+      "Alias for generating a worktree context bundle. It accepts a subset of the copy-tree capabilities."
+    );
+    expect(summary).toBe("Alias for generating a worktree context bundle");
+    expect(summary).not.toMatch(/[.!?]\s/);
+  });
+
+  it("doesn't split on an abbreviation", () => {
+    expect(paletteSummary("Pick a runtime, e.g. Node. Then run")).toContain("e.g. Node");
+  });
+
+  it("leaves a single clause as it is, minus a trailing period", () => {
+    expect(paletteSummary("Toggle sidebar visibility")).toBe("Toggle sidebar visibility");
+    expect(paletteSummary("Reset the width.")).toBe("Reset the width");
   });
 });

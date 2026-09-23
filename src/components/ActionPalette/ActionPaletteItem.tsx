@@ -22,6 +22,19 @@ import { ACTION_CATEGORY_COLORS, ACTION_CATEGORY_DEFAULT_COLOR } from "@/config/
 export const PIN_SHORTCUT = "Alt+P";
 export const HIDE_SHORTCUT = "Alt+H";
 
+/**
+ * The first sentence of an action's description. Manifest descriptions are
+ * written for the agents that read the MCP tool surface too, so many run on
+ * into implementation notes ("This is a …", "It accepts a subset of …") that
+ * truncate mid-clause in a one-line row. The row shows what the action does;
+ * search still reads the whole description.
+ */
+export function paletteSummary(description: string): string {
+  const match = /^(.+?(?<!\b\w)[.!?])(\s+[A-Z]|$)/.exec(description.trim());
+  const sentence = match ? match[1]! : description.trim();
+  return sentence.replace(/\.$/, "");
+}
+
 const ROW_CONTROL_CLASS =
   "inline-flex items-center justify-center w-6 h-6 rounded-[var(--radius-sm)] bg-transparent border-0 text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors";
 
@@ -127,10 +140,24 @@ function ActionPaletteItemInner({
   // titles are, and never doubled onto a title that already carries one.
   const displayTitle = isConfirmTier && !item.title.endsWith("…") ? `${item.title}…` : item.title;
 
+  const summary = useMemo(() => paletteSummary(item.description), [item.description]);
+
   const match = useMemo(
-    () => (highlightQuery ? getActionMatchRanges(highlightQuery, item) : null),
-    [highlightQuery, item]
+    () =>
+      highlightQuery
+        ? getActionMatchRanges(highlightQuery, {
+            title: item.title,
+            titleLower: item.titleLower,
+            description: summary,
+            descriptionLower: summary.toLowerCase(),
+          })
+        : null,
+    [highlightQuery, item.title, item.titleLower, summary]
   );
+
+  // The chip adds nothing when the title already says it ("Focus terminal 1"
+  // under a "terminal" chip).
+  const categoryInTitle = item.titleLower.includes(item.categoryLower);
 
   const ariaKeyshortcuts = useMemo(
     () => (item.shortcut ? comboToAriaKeyshortcuts(item.shortcut, isMac()) : undefined),
@@ -143,8 +170,7 @@ function ActionPaletteItemInner({
         PALETTE_ROW_CLASS,
         "group w-full flex items-start gap-3 px-3 py-1.5 rounded-[var(--radius-md)]",
         "text-text-secondary",
-        "hover:bg-overlay-subtle",
-        !item.enabled && "opacity-50"
+        "hover:bg-overlay-subtle"
       )}
       id={`action-option-${item.id}`}
       role="option"
@@ -182,13 +208,22 @@ function ActionPaletteItemInner({
             same word on every row. It now follows the title, and only where a
             row can sit beside rows from other categories. */}
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-sm font-medium text-text-primary truncate">
+          {/* Unavailable steps the title down the ramp instead of fading the
+              whole row. Opacity took the selection rail, the reason line and
+              the still-working pin and hide controls down with it, to about
+              2.5:1 — the reason is the one line on the row that has to be read. */}
+          <span
+            className={cn(
+              "text-sm font-medium truncate",
+              item.enabled ? "text-text-primary" : "text-text-secondary"
+            )}
+          >
             <HighlightedText
               text={displayTitle}
               indices={match?.field === "title" ? match.ranges : undefined}
             />
           </span>
-          {showCategory && (
+          {showCategory && !categoryInTitle && (
             <span
               className={cn(
                 "shrink-0 max-w-32 truncate rounded-[var(--radius-sm)] px-1.5 py-px text-3xs font-medium leading-tight",
@@ -199,16 +234,16 @@ function ActionPaletteItemInner({
             </span>
           )}
         </div>
-        {item.description && (
+        {summary && (
           <div className="text-xs leading-snug text-text-secondary truncate">
             <HighlightedText
-              text={item.description}
+              text={summary}
               indices={match?.field === "description" ? match.ranges : undefined}
             />
           </div>
         )}
         {!item.enabled && item.disabledReason && (
-          <div className="text-3xs leading-snug text-text-secondary italic truncate">
+          <div className="text-xs leading-snug text-text-secondary italic truncate">
             {item.disabledReason}
           </div>
         )}

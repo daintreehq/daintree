@@ -143,3 +143,35 @@ describe("SearchablePalette combobox popup relationship", () => {
     expect(document.getElementById(controls!)?.getAttribute("role")).toBe("listbox");
   });
 });
+
+describe("SearchablePalette combobox relationship", () => {
+  it("claims an expanded popup only while its listbox exists", () => {
+    const { rerender } = renderEmpty({ query: "zzz", results: [] });
+    const input = screen.getByRole("combobox");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+    expect(input.getAttribute("aria-controls")).toBeNull();
+
+    rerender(
+      <SearchablePalette<Item>
+        isOpen
+        query="a"
+        results={[{ id: "a", label: "Alpha" }]}
+        selectedIndex={0}
+        onQueryChange={() => {}}
+        onSelectPrevious={() => {}}
+        onSelectNext={() => {}}
+        onConfirm={() => {}}
+        onClose={() => {}}
+        getItemId={(item) => item.id}
+        renderItem={(item) => <div key={item.id}>{item.label}</div>}
+        label="Test"
+        ariaLabel="Test palette"
+        tier="command"
+      />
+    );
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+    const controls = input.getAttribute("aria-controls");
+    expect(controls && document.getElementById(controls)?.getAttribute("role")).toBe("listbox");
+  });
+});

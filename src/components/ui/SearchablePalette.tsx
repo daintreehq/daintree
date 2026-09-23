@@ -357,7 +357,6 @@ export function SearchablePalette<T>({
       : undefined;
 
   const selectedItem = results[selectedIndex] ?? null;
-
   // The listbox is only in the tree while there are rows; an expanded combobox
   // controlling an id that is not rendered points assistive technology at
   // nothing. A `renderBody` consumer draws its own body, so it keeps the claim.

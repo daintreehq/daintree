@@ -488,7 +488,7 @@ function fieldMatchRanges(
   lowerQuery: string,
   field: string,
   lowerField: string,
-  allowAcronym: boolean
+  allowFuzzy: boolean
 ): MatchRange[] | null {
   const qLen = lowerQuery.length;
   if (qLen === 0 || qLen > lowerField.length) return null;
@@ -496,7 +496,9 @@ function fieldMatchRanges(
   const substringIdx = lowerField.indexOf(lowerQuery);
   if (substringIdx >= 0) return [[substringIdx, substringIdx + qLen - 1]];
 
-  if (allowAcronym && qLen >= 2) {
+  if (!allowFuzzy) return null;
+
+  if (qLen >= 2) {
     const initials: MatchRange[] = [];
     let qi = 0;
     for (let i = 0; i < field.length && qi < qLen; i++) {
@@ -520,12 +522,20 @@ function fieldMatchRanges(
     else walk.push([fi, fi]);
     qi++;
   }
-  return qi === qLen ? walk : null;
+  if (qi < qLen) return null;
+  // A lone mid-word letter marks nothing a reader can see as a reason: "wt"
+  // walking "worktree" painted two one-letter slivers that read as smudges.
+  // Keep the walk only when every run is a word start or at least two
+  // characters; otherwise the row shows no emphasis rather than noise.
+  const legible = walk.every(([s, e]) => e > s || isBoundary(field, s));
+  return legible ? walk : null;
 }
 
 /**
  * The evidence to show for a ranked row: the title when the query lands there,
- * otherwise the description. Category and keyword hits have no rendered text
+ * otherwise a whole-query hit in the description. The description never gets a
+ * fuzzy walk — across a sentence it lands on scattered letters ("Stage every
+ * change in the") that read as random bold, not as a reason. Category and keyword hits have no rendered text
  * to mark, so they return null and the row simply shows no emphasis.
  */
 export function getActionMatchRanges(

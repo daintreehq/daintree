@@ -30,6 +30,20 @@ function runtimeLabel(item: QuickSwitcherItemData): string | null {
   return label.toLowerCase() === item.title.trim().toLowerCase() ? null : label;
 }
 
+/**
+ * A worktree path as its last two segments. What tells two worktrees apart is
+ * the tail — the shared home or temp prefix is the same on every row — so an
+ * end-truncated path spent the whole line on the part that never differs.
+ * Start-truncating in CSS kept the tail but right-aligned the line, so the
+ * ellipsis landed at a different x on every row. The full path stays in the
+ * tooltip.
+ */
+export function pathTail(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  if (parts.length <= 2) return path;
+  return `…/${parts.slice(-2).join("/")}`;
+}
+
 export function QuickSwitcherItem({
   item,
   isSelected,
@@ -39,11 +53,8 @@ export function QuickSwitcherItem({
   matches,
 }: QuickSwitcherItemProps) {
   const label = runtimeLabel(item);
-  // A worktree's subtitle is its absolute path, and what tells two worktrees
-  // apart is the tail — the shared temp or home prefix is the same on every
-  // row. So it truncates from the start. The inner span keeps its own LTR run,
-  // so the path's slashes stay where they belong inside the RTL box.
-  const truncateFromStart = item.type === "worktree";
+  const subtitle =
+    item.subtitle && item.type === "worktree" ? pathTail(item.subtitle) : item.subtitle;
 
   return (
     <button
@@ -81,18 +92,15 @@ export function QuickSwitcherItem({
         {item.subtitle && (
           <Tooltip autoDismiss={false}>
             <TooltipTrigger asChild>
-              <div
-                className={cn(
-                  "text-xs text-text-secondary truncate",
-                  truncateFromStart && "[direction:rtl] text-left"
-                )}
-              >
-                <span dir="ltr">
-                  <HighlightedText
-                    text={item.subtitle}
-                    indices={findMatchIndices(matches, "subtitle")}
-                  />
-                </span>
+              <div className="text-xs text-text-secondary truncate">
+                {/* Fuse ranges index the full path, so a shortened line is
+                    only marked when it is the whole subtitle. */}
+                <HighlightedText
+                  text={subtitle ?? ""}
+                  indices={
+                    subtitle === item.subtitle ? findMatchIndices(matches, "subtitle") : undefined
+                  }
+                />
               </div>
             </TooltipTrigger>
             <TooltipContent side="bottom">{item.subtitle}</TooltipContent>

@@ -87,6 +87,13 @@ describe("NewTerminalPalette", () => {
     expect(combobox.hasAttribute("aria-haspopup")).toBe(false);
   });
 
+  it("claims an expanded popup only while its listbox exists", () => {
+    const { getByRole } = renderPalette({ results: [], query: "zzz", selectedIndex: -1 });
+    const combobox = getByRole("combobox");
+    expect(combobox.getAttribute("aria-expanded")).toBe("false");
+    expect(combobox.getAttribute("aria-controls")).toBeNull();
+  });
+
   it("has a live region announcing result count", () => {
     const { getByText } = renderPalette();
     expect(getByText("3 terminal types")).toBeTruthy();

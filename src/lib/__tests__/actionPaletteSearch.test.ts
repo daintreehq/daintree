@@ -303,8 +303,8 @@ describe("getActionMatchRanges", () => {
   const cases: Array<{ title: string; description: string; query: string }> = [
     { title: "Toggle sidebar", description: "Toggle sidebar visibility", query: "side" },
     { title: "Copy worktree context", description: "", query: "cwc" },
-    { title: "Reconcile worktree list", description: "", query: "wt" },
-    { title: "Focus terminal 1", description: "", query: "ftm" },
+    { title: "Open worktree palette", description: "", query: "wopa" },
+    { title: "Focus terminal 1", description: "", query: "fote" },
     {
       title: "Stage all files",
       description: "Stage every change in the worktree",
@@ -331,6 +331,27 @@ describe("getActionMatchRanges", () => {
     for (let i = 1; i < match!.ranges.length; i++) {
       expect(match!.ranges[i]![0]).toBeGreaterThan(match!.ranges[i - 1]![1]);
     }
+  });
+
+  it("marks nothing rather than one-letter slivers inside a word", () => {
+    const match = getActionMatchRanges("wt", {
+      title: "Reconcile worktree list",
+      titleLower: "reconcile worktree list",
+      description: "",
+      descriptionLower: "",
+    });
+    expect(match).toBeNull();
+  });
+
+  it("never walks a description letter by letter", () => {
+    // "ch" + "wo" would be a legible walk ("change", "worktree") in a title.
+    const match = getActionMatchRanges("chwo", {
+      title: "Stage all files",
+      titleLower: "stage all files",
+      description: "Stage every change in the worktree",
+      descriptionLower: "stage every change in the worktree",
+    });
+    expect(match).toBeNull();
   });
 
   it("prefers the title whenever the title carries the evidence", () => {

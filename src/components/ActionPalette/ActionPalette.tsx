@@ -494,21 +494,24 @@ export function ActionPalette({
         }
       }
 
-      // Mode-active footer: name what Enter does in the current scope so the
-      // user can't accidentally fire the wrong primary action.
+      // What Enter does, named for the row it will act on — or nothing, on a
+      // row it won't run. A disabled action is a silent no-op on Enter (#8814),
+      // so offering "↵ to …" there promised a result that never comes; the row's
+      // own reason line says why, and its pin/hide chords still work.
+      const enterHint =
+        selectedItem && selectedItem.enabled
+          ? { keys: ["↵"], label: `to ${toHintPhrase(selectedItem.title)}` }
+          : null;
+
       if (activeMode === "commands") {
-        body = (
-          <PaletteFooterHints
-            primaryHint={
-              activeItem
-                ? { keys: ["↵"], label: "to run command" }
-                : { keys: ["⌫"], label: "exit scope" }
-            }
-            // Backspace keeps its chip: inside a mode it pops the scope rather
-            // than deleting a character, which is the one thing here a user
-            // can't infer from every other list they've used.
-            hints={activeItem ? [{ keys: ["⌫"], label: "exit scope" }, ...rowHints] : []}
-          />
+        // Backspace keeps its chip: inside a mode it pops the scope rather than
+        // deleting a character, which is the one thing here a user can't infer
+        // from every other list they've used.
+        const exitScope = { keys: ["⌫"], label: "exit scope" };
+        body = enterHint ? (
+          <PaletteFooterHints primaryHint={enterHint} hints={[exitScope, ...rowHints]} />
+        ) : (
+          <PaletteFooterHints primaryHint={exitScope} hints={rowHints} />
         );
       } else if (offersProjectSearch) {
         // The query looks like a path or filename and matched no action, so
@@ -516,12 +519,13 @@ export function ActionPalette({
         // used to show a `/` chip, but the prefix only routes from an empty
         // field, so pressing it here typed a slash.
         body = <PaletteFooterHints primaryHint={{ keys: ["↵"], label: "to search projects" }} />;
-      } else if (selectedItem) {
+      } else if (enterHint) {
         // Mirrors SearchablePalette's getActionLabel composition so we keep
         // that affordance while still owning the wrapper id used by
         // aria-describedby.
-        const phrase = `to ${toHintPhrase(selectedItem.title)}`;
-        body = <PaletteFooterHints primaryHint={{ keys: ["↵"], label: phrase }} hints={rowHints} />;
+        body = <PaletteFooterHints primaryHint={enterHint} hints={rowHints} />;
+      } else if (rowHints.length > 0) {
+        body = <PaletteFooterHints primaryHint={rowHints[0]!} hints={rowHints.slice(1)} />;
       }
 
       // Nothing selected and nothing to teach: no band. A "↵ to run action"

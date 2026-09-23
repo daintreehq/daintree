@@ -286,6 +286,25 @@ describe("ActionPalette", () => {
     expect(document.querySelector('[class*="palette-footer"]')).toBeNull();
   });
 
+  it("offers no Enter hint on a row Enter won't run", () => {
+    const disabled = { ...makeItem("d.action", "Delta"), enabled: false };
+    render(<ActionPalette {...baseProps} query="del" results={[disabled]} totalResults={1} />);
+    expect(screen.queryByText(/^to /)).toBeNull();
+  });
+
+  it("names the selected command in commands mode rather than a generic verb", () => {
+    render(
+      <ActionPalette
+        {...baseProps}
+        results={[makeItem("a.action", "Alpha run")]}
+        totalResults={1}
+      />
+    );
+    fireKey(">");
+    expect(screen.getByText("to alpha run")).toBeTruthy();
+    expect(screen.getByText("exit scope")).toBeTruthy();
+  });
+
   it("does not surface the projects hint when results exist", () => {
     render(
       <ActionPalette
