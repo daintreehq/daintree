@@ -59,25 +59,27 @@ export function ToolbarLauncherButton({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              {...launcherHover}
-              variant="ghost"
-              size="icon"
-              data-toolbar-item={dataToolbarItem}
-              onClick={handleClick}
-              className={toolbarIconButtonClass}
-              aria-label={config.label}
-              aria-keyshortcuts={ariaShortcut}
-            >
-              <Icon />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {createTooltipContent(config.tooltipLabel, shortcut)}
-          </TooltipContent>
-        </Tooltip>
+        <span className="inline-flex">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                {...launcherHover}
+                variant="ghost"
+                size="icon"
+                data-toolbar-item={dataToolbarItem}
+                onClick={handleClick}
+                className={toolbarIconButtonClass}
+                aria-label={config.label}
+                aria-keyshortcuts={ariaShortcut}
+              >
+                <Icon />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {createTooltipContent(config.tooltipLabel, shortcut)}
+            </TooltipContent>
+          </Tooltip>
+        </span>
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
         <ToolbarContextMenuItems buttonId={type} side="left" />

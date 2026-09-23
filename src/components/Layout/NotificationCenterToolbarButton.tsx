@@ -275,42 +275,52 @@ export function NotificationCenterToolbarButton({
     <div className="relative">
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                ref={notificationCenterButtonRef}
-                variant="ghost"
-                size="icon"
-                data-toolbar-item={dataToolbarItem}
-                data-dnd-active={isDndActive ? "true" : undefined}
-                onClick={() =>
-                  void actionService.dispatch("notifications.toggle", undefined, {
-                    source: "user",
-                  })
-                }
-                className={toolbarIconButtonClass}
-                aria-label={label}
-                aria-keyshortcuts={ariaShortcut}
-                aria-expanded={notificationCenterOpen}
-                aria-haspopup="dialog"
-              >
-                <span
-                  data-testid="notification-bell-icon"
-                  className={isBellBlipping ? "inline-flex animate-activity-blip" : "inline-flex"}
-                  onAnimationEnd={handleBellAnimationEnd}
-                >
-                  <Icon />
-                </span>
-                <span
-                  data-testid="notification-unread-dot"
-                  data-visible={notificationUnreadCount > 0}
+          <span className="inline-flex">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  ref={notificationCenterButtonRef}
+                  variant="ghost"
+                  size="icon"
+                  data-toolbar-item={dataToolbarItem}
                   data-dnd-active={isDndActive ? "true" : undefined}
-                  className="toolbar-badge absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-daintree-text/50 ring-1 ring-daintree-bg/60"
-                />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{createTooltipContent(label, shortcut)}</TooltipContent>
-          </Tooltip>
+                  onClick={() =>
+                    void actionService.dispatch("notifications.toggle", undefined, {
+                      source: "user",
+                    })
+                  }
+                  className={toolbarIconButtonClass}
+                  aria-label={label}
+                  aria-keyshortcuts={ariaShortcut}
+                  aria-expanded={notificationCenterOpen}
+                  aria-haspopup="dialog"
+                >
+                  {/* Anchored to the glyph, not the button box, with the shared pip
+                    geometry — so the unread dot sits where the agent and
+                    assistant pips sit on their marks. Neutral, never a status
+                    colour: unread is ambient, not something going wrong. */}
+                  <span className="relative inline-flex">
+                    <span
+                      data-testid="notification-bell-icon"
+                      className={
+                        isBellBlipping ? "inline-flex animate-activity-blip" : "inline-flex"
+                      }
+                      onAnimationEnd={handleBellAnimationEnd}
+                    >
+                      <Icon />
+                    </span>
+                    <span
+                      data-testid="notification-unread-dot"
+                      data-visible={notificationUnreadCount > 0}
+                      data-dnd-active={isDndActive ? "true" : undefined}
+                      className="toolbar-pip toolbar-badge bg-text-secondary"
+                    />
+                  </span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{createTooltipContent(label, shortcut)}</TooltipContent>
+            </Tooltip>
+          </span>
         </ContextMenuTrigger>
         <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
           <ToolbarContextMenuItems buttonId="notification-center" side="right" />

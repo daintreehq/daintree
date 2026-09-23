@@ -33,29 +33,31 @@ export function ToolbarCommandPaletteButton({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              onPointerEnter={hover.onPointerEnter}
-              onPointerLeave={hover.onPointerLeave}
-              onPointerDown={hover.onPointerDown}
-              onFocus={hover.onFocus}
-              onBlur={hover.onBlur}
-              variant="ghost"
-              size="icon"
-              data-toolbar-item={dataToolbarItem}
-              onClick={handleClick}
-              className={toolbarIconButtonClass}
-              aria-label={PALETTE_LABEL}
-              aria-keyshortcuts={ariaShortcut}
-            >
-              <SquareMenu />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {createTooltipContent(PALETTE_LABEL, shortcut)}
-          </TooltipContent>
-        </Tooltip>
+        <span className="inline-flex">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                onPointerEnter={hover.onPointerEnter}
+                onPointerLeave={hover.onPointerLeave}
+                onPointerDown={hover.onPointerDown}
+                onFocus={hover.onFocus}
+                onBlur={hover.onBlur}
+                variant="ghost"
+                size="icon"
+                data-toolbar-item={dataToolbarItem}
+                onClick={handleClick}
+                className={toolbarIconButtonClass}
+                aria-label={PALETTE_LABEL}
+                aria-keyshortcuts={ariaShortcut}
+              >
+                <SquareMenu />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {createTooltipContent(PALETTE_LABEL, shortcut)}
+            </TooltipContent>
+          </Tooltip>
+        </span>
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
         <ToolbarContextMenuItems buttonId="command-palette" side="right" />

@@ -399,51 +399,62 @@ describe("Toolbar responsive design — issue #4133", () => {
     });
   });
 
-  describe("agent split-button seam — issue #9823", () => {
-    // The seam is implemented as a custom toolbar.css class (not a Tailwind
-    // utility) because .border-divider resolves to the plain --border-divider
-    // alias and skips the --toolbar-divider override chain. The chevron's
-    // open-state suppression is asserted as a CSS source guard so a future
-    // refactor cannot silently drop the suppression — which would let the
-    // 1px right border stack with the chevron's inset 1px border-strong
-    // armed ring into a 2px smudge on light themes (the same failure mode
-    // the L97-117 comment block above documents).
+  describe("agent split button — one control at rest", () => {
+    // A permanent full-height seam read as a stronger boundary than the real
+    // group dividers either side of it, splitting an agent run in two. The
+    // partition is now drawn only while the split is in use, and never at
+    // rest outside forced colors.
+    const block = (selector: RegExp) => css.match(selector)?.[0];
 
-    it("declares the toolbar-agent-split-seam class", () => {
-      expect(css).toContain(".toolbar-agent-split-seam");
+    it("hides the partition at rest", () => {
+      const partition = block(/\.toolbar-agent-split-toggle::before\s*\{[^}]*\}/);
+      expect(partition).toBeDefined();
+      expect(partition).toMatch(/opacity:\s*0;/);
+      expect(partition).toContain("pointer-events: none");
     });
 
-    it("paints the seam with the --toolbar-divider chain (matches .toolbar-divider)", () => {
-      // Verify the seam rule body uses the same fallback chain as the
-      // existing .toolbar-divider so per-theme --toolbar-divider overrides
-      // apply identically. A regression that hardcodes a color here would
-      // break the theme-tokened contract.
-      const seamBlock = css.match(/\.toolbar-agent-split-seam\s*\{[^}]*\}/)?.[0];
-      expect(seamBlock).toBeDefined();
-      expect(seamBlock).toContain("border-right-color");
-      expect(seamBlock).toContain("var(--toolbar-divider, var(--theme-border-divider))");
+    it("reveals the partition only on a live split under hover or focus", () => {
+      const reveal = block(
+        /\.toolbar-agent-split\[data-split-live="true"\]:is\(:hover, :focus-within\)\s*\.toolbar-agent-split-toggle::before\s*\{[^}]*\}/
+      );
+      expect(reveal).toBeDefined();
+      expect(reveal).toMatch(/opacity:\s*1;/);
     });
 
-    it("suppresses the seam when the chevron is armed via :has() on group/agent-split", () => {
-      // The suppression anchors on .toolbar-agent-button[data-state="open"]
-      // (the same selector the existing armed-state block above uses) so
-      // the trigger path is shared. The :has() sits on .group\/agent-split
-      // to scope the rule to the split-button JSX, not bare toolbar buttons.
-      // (CSS escapes the `/` so the on-disk literal is `\/`.)
-      expect(css).toContain('.group\\/agent-split:has(.toolbar-agent-button[data-state="open"])');
-      expect(css).toContain("border-right-color: transparent");
+    it("paints the partition with the --toolbar-divider chain", () => {
+      const partition = block(/\.toolbar-agent-split-toggle::before\s*\{[^}]*\}/);
+      expect(partition).toContain("var(--toolbar-divider, var(--theme-border-divider))");
     });
 
-    it("provides a forced-colors fallback so the seam survives Windows High Contrast", () => {
-      // Without the ButtonText fallback, Windows High Contrast would force
-      // the seam to Canvas (invisible) and the split-button structure would
-      // read as a single button — losing the discoverability win the issue
-      // asks for.
-      const forcedColorsBlock = css.match(
-        /@media \(forced-colors: active\)\s*\{[\s\S]*?\.toolbar-agent-split-seam[\s\S]*?\}/
-      )?.[0];
-      expect(forcedColorsBlock).toBeDefined();
-      expect(forcedColorsBlock).toContain("border-right-color: ButtonText");
+    it("drops the partition while the chevron is open, where its armed ring draws that edge", () => {
+      const suppressed = block(
+        /\.toolbar-agent-split \.toolbar-agent-split-toggle\[aria-expanded="true"\]::before\s*\{[^}]*\}/
+      );
+      expect(suppressed).toBeDefined();
+      expect(suppressed).toMatch(/opacity:\s*0;/);
+    });
+
+    it("keys the open state on aria-expanded, which the tooltip trigger can't overwrite", () => {
+      // The chevron is a tooltip trigger too, and the tooltip's data-state
+      // ("closed", "delayed-open") lands on the same element, so a
+      // [data-state="open"] selector never matches while the menu is open.
+      expect(css).toContain(
+        '.toolbar-agent-split:has(.toolbar-agent-split-toggle[aria-expanded="true"])'
+      );
+      expect(css).not.toMatch(/\.toolbar-agent-split[^{]*\[data-state="open"\]/);
+    });
+
+    it("keeps the partition drawn at rest in forced colors, where the wash is gone", () => {
+      const forced = block(
+        /@media \(forced-colors: active\)\s*\{\s*\.toolbar-agent-split\[data-split-live="true"\] \.toolbar-agent-split-toggle::before\s*\{[^}]*\}/
+      );
+      expect(forced).toBeDefined();
+      expect(forced).toMatch(/opacity:\s*1;/);
+      expect(forced).toContain("ButtonText");
+    });
+
+    it("no longer declares a persistent seam", () => {
+      expect(css).not.toContain(".toolbar-agent-split-seam");
     });
   });
 });

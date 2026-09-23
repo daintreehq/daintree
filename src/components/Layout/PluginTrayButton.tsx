@@ -99,29 +99,31 @@ export function PluginToolbarButton({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              {...hover}
-              variant="ghost"
-              size="icon"
-              data-toolbar-item={dataToolbarItem}
-              onClick={() => {
-                void actionService.dispatch(
-                  config.actionId as Parameters<typeof actionService.dispatch>[0],
-                  undefined,
-                  { source: "user" }
-                );
-              }}
-              className="toolbar-icon-button text-text-primary relative"
-              aria-label={config.label}
-              aria-keyshortcuts={ariaShortcut}
-            >
-              <Icon />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{config.label}</TooltipContent>
-        </Tooltip>
+        <span className="inline-flex">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                {...hover}
+                variant="ghost"
+                size="icon"
+                data-toolbar-item={dataToolbarItem}
+                onClick={() => {
+                  void actionService.dispatch(
+                    config.actionId as Parameters<typeof actionService.dispatch>[0],
+                    undefined,
+                    { source: "user" }
+                  );
+                }}
+                className="toolbar-icon-button text-text-primary relative"
+                aria-label={config.label}
+                aria-keyshortcuts={ariaShortcut}
+              >
+                <Icon />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{config.label}</TooltipContent>
+          </Tooltip>
+        </span>
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
         {/*
@@ -293,31 +295,33 @@ export function PluginTrayButton({
     <DropdownMenu open={open} onOpenChange={handleOpenChange}>
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <Tooltip
-            open={tooltipOpen}
-            onOpenChange={(next) => {
-              if (next && isRestoringFocusRef.current) return;
-              setTooltipOpen(next);
-            }}
-          >
-            <TooltipTrigger asChild>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item={dataToolbarItem}
-                  className="toolbar-icon-button text-text-primary relative"
-                  aria-label="Plugin tray"
-                  onPointerEnter={() => {
-                    isRestoringFocusRef.current = false;
-                  }}
-                >
-                  <Package />
-                </Button>
-              </DropdownMenuTrigger>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Plugin tray</TooltipContent>
-          </Tooltip>
+          <span className="inline-flex">
+            <Tooltip
+              open={tooltipOpen}
+              onOpenChange={(next) => {
+                if (next && isRestoringFocusRef.current) return;
+                setTooltipOpen(next);
+              }}
+            >
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    data-toolbar-item={dataToolbarItem}
+                    className="toolbar-icon-button text-text-primary relative"
+                    aria-label="Plugin tray"
+                    onPointerEnter={() => {
+                      isRestoringFocusRef.current = false;
+                    }}
+                  >
+                    <Package />
+                  </Button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Plugin tray</TooltipContent>
+            </Tooltip>
+          </span>
         </ContextMenuTrigger>
         <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
           <ToolbarContextMenuItems buttonId="plugin-tray" side="right" />

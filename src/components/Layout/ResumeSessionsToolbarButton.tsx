@@ -33,29 +33,31 @@ export function ResumeSessionsToolbarButton({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              onPointerEnter={hover.onPointerEnter}
-              onPointerLeave={hover.onPointerLeave}
-              onPointerDown={hover.onPointerDown}
-              onFocus={hover.onFocus}
-              onBlur={hover.onBlur}
-              variant="ghost"
-              size="icon"
-              data-toolbar-item={dataToolbarItem}
-              onClick={handleClick}
-              className={toolbarIconButtonClass}
-              aria-label={RESUME_LABEL}
-              aria-keyshortcuts={ariaShortcut}
-            >
-              <History />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {createTooltipContent(RESUME_LABEL, shortcut)}
-          </TooltipContent>
-        </Tooltip>
+        <span className="inline-flex">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                onPointerEnter={hover.onPointerEnter}
+                onPointerLeave={hover.onPointerLeave}
+                onPointerDown={hover.onPointerDown}
+                onFocus={hover.onFocus}
+                onBlur={hover.onBlur}
+                variant="ghost"
+                size="icon"
+                data-toolbar-item={dataToolbarItem}
+                onClick={handleClick}
+                className={toolbarIconButtonClass}
+                aria-label={RESUME_LABEL}
+                aria-keyshortcuts={ariaShortcut}
+              >
+                <History />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {createTooltipContent(RESUME_LABEL, shortcut)}
+            </TooltipContent>
+          </Tooltip>
+        </span>
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
         <ToolbarContextMenuItems buttonId="resume-sessions" side="right" />
