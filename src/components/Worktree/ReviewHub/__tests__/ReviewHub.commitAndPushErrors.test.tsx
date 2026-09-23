@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useGitForcePushStore } from "@/store/gitForcePushStore";
-import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { StagingStatus } from "@shared/types";
 import type { WorktreeState } from "@shared/types";
@@ -268,6 +268,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
 }));
 
 import { ReviewHubContent } from "../ReviewHubContent";
+import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 
@@ -291,14 +292,15 @@ const makeStatus = (overrides?: Partial<StagingStatus>): StagingStatus => ({
 });
 
 /**
- * `pullRebase` now gates on a `ConfirmDialog` showing the divergence preview
- * (#8242). The push-error CTA only opens the dialog; clicking its
- * `Pull and rebase` confirm button is what reaches the IPC.
+ * `pullRebase` gates on the shared pull-rebase confirm (#8242), the same one
+ * the `git.pullRebase` action uses. The push-error CTA only asks for it;
+ * approving the pending request is what reaches the IPC.
  */
 async function confirmPullRebase(): Promise<void> {
-  const dialog = await screen.findByRole("alertdialog");
-  const confirmBtn = within(dialog).getByRole("button", { name: "Pull and rebase" });
-  fireEvent.click(confirmBtn);
+  await waitFor(() =>
+    expect(useGitPullRebaseConfirmStore.getState().pendingConfirm?.cwd).toBe(WORKTREE_PATH)
+  );
+  useGitPullRebaseConfirmStore.getState().resolveConfirmation(true);
 }
 
 describe("ReviewHub", () => {
@@ -741,9 +743,12 @@ describe("ReviewHub", () => {
         await Promise.resolve();
       });
 
-      // Dialog is open but unconfirmed — the rebase IPC must not have fired.
-      await screen.findByRole("alertdialog");
+      // Confirm is pending but unanswered — the rebase IPC must not have fired.
+      await waitFor(() =>
+        expect(useGitPullRebaseConfirmStore.getState().pendingConfirm?.cwd).toBe(WORKTREE_PATH)
+      );
       expect(pullRebaseMock).not.toHaveBeenCalled();
+      useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
     });
 
     it("Pull-and-rebase failure surfaces conflict-unresolved through the banner", async () => {

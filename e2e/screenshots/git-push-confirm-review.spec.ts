@@ -66,6 +66,7 @@ const DIALOG = "[data-app-dialog-surface] > div";
  */
 const TID = {
   noDestination: '[data-testid="git-push-no-destination"]',
+  inSync: '[data-testid="git-push-in-sync"]',
   loading: '[data-testid="git-push-commits-loading"]',
   retry: '[data-testid="git-push-commits-retry"]',
   commitRow: '[data-testid="git-push-commit-row"]',
@@ -143,7 +144,12 @@ const SUBJECTS: Array<[string, string]> = [
  * to it (`resolveUnconfigured`), so the "no unambiguous destination" state is only
  * reachable when there is a genuine ambiguity to be had.
  */
-function createFixtureRepo(): { dir: string; cleanup: () => void } {
+function createFixtureRepo(): {
+  dir: string;
+  midRebaseDir: string;
+  noRemoteDir: string;
+  cleanup: () => void;
+} {
   const root = mkdtempSync(path.join(tmpdir(), "daintree-gitpush-shots-"));
   const dir = path.join(root, "helios-dashboard");
   const originDir = path.join(root, "origin.git");
@@ -212,10 +218,67 @@ function createFixtureRepo(): { dir: string; cleanup: () => void } {
     "Ada Lovelace"
   );
 
+  // diverged: the remote holds a commit this branch does not, and the branch holds
+  // two the remote does not. The push is refused as non-fast-forward, which is the
+  // one outcome the approver can see coming only if the dialog says so.
+  git(["checkout", "-b", "fix/diverged-from-remote", "main~14"], dir);
+  git(["push", "-u", "origin", "fix/diverged-from-remote"], dir);
+  commit(dir, "src/remote-only.ts", "export const r = 1;\n", "fix: land from CI", "Jean Bartik");
+  git(["push", "origin", "HEAD:fix/diverged-from-remote"], dir);
+  git(["reset", "--hard", "HEAD~1"], dir);
+  commit(dir, "src/local-a.ts", "export const a = 1;\n", "feat: local change one", "Ada Lovelace");
+  commit(dir, "src/local-b.ts", "export const b = 2;\n", "feat: local change two", "Ada Lovelace");
+
+  // creates: an upstream is configured for a branch the remote has never had, so the
+  // push publishes the branch rather than updating it.
+  git(["checkout", "-b", "feat/publish-new-branch", "main~14"], dir);
+  git(["config", "branch.feat/publish-new-branch.remote", "origin"], dir);
+  git(
+    ["config", "branch.feat/publish-new-branch.merge", "refs/heads/feat/publish-new-branch"],
+    dir
+  );
+  commit(dir, "src/publish.ts", "export const p = 1;\n", "feat: first cut", "Grace Hopper");
+
+  // unverified: the configured remote cannot be reached, so the range is a local
+  // approximation and must be presented as one.
+  git(["remote", "add", "offline-mirror", path.join(root, "does-not-exist.git")], dir);
+  git(["checkout", "-b", "spike/offline-remote", "main~14"], dir);
+  git(["config", "branch.spike/offline-remote.remote", "offline-mirror"], dir);
+  git(["config", "branch.spike/offline-remote.merge", "refs/heads/spike/offline-remote"], dir);
+  commit(dir, "src/offline.ts", "export const o = 1;\n", "wip: offline work", "Radia Perlman");
+
   git(["checkout", "main"], dir);
+
+  // in-progress: a linked worktree halted mid-rebase on a conflict. HEAD is detached
+  // there, which is what makes "no branch checked out" the tempting wrong diagnosis.
+  const midRebaseDir = path.join(wtRoot, "mid-rebase");
+  git(["worktree", "add", "-b", "fix/mid-rebase", midRebaseDir, "main~14"], dir);
+  commit(midRebaseDir, "README.md", "# Helios Dashboard\nlocal\n", "docs: local", "Ada Lovelace");
+  git(["branch", "rebase-conflict-base", "main~14"], dir);
+  git(["worktree", "add", path.join(wtRoot, "conflict-base"), "rebase-conflict-base"], dir);
+  commit(
+    path.join(wtRoot, "conflict-base"),
+    "README.md",
+    "# Helios Dashboard\nother\n",
+    "docs: other",
+    "Grace Hopper"
+  );
+  try {
+    git(["rebase", "rebase-conflict-base"], midRebaseDir);
+  } catch {
+    // Expected: the rebase halts on the README conflict, which is the state wanted.
+  }
+
+  // no remote at all: a repository nothing has ever been pushed from.
+  const noRemoteDir = path.join(root, "scratch-notes");
+  git(["init", "-b", "main", noRemoteDir], root);
+  git(["config", "commit.gpgsign", "false"], noRemoteDir);
+  commit(noRemoteDir, "notes.md", "# notes\n", "notes: start", "Ada Lovelace");
 
   return {
     dir,
+    midRebaseDir,
+    noRemoteDir,
     cleanup: () => {
       if (existsSync(wtRoot)) rmSync(wtRoot, { recursive: true, force: true });
       rmSync(root, { recursive: true, force: true });
@@ -406,7 +469,7 @@ test("git push confirm review — preview states", async () => {
     //    describes the push range or merely the branch's recent history.
     await step("in-sync", "chore/bump-electron", async () => {
       await openPushConfirm(page, repo.dir);
-      await snap(page, "20-in-sync", { marker: SEL.confirmDialog.confirm, locator: DIALOG });
+      await snap(page, "20-in-sync", { marker: TID.inSync, locator: DIALOG });
     });
 
     // 4. Long everything: branch, remote, subject, author. Where truncation shows up.
@@ -423,6 +486,43 @@ test("git push confirm review — preview states", async () => {
     await step("no-destination", "spike/unconfigured-remote", async () => {
       await openPushConfirm(page, repo.dir);
       await snap(page, "30-no-destination", { marker: TID.noDestination, locator: DIALOG });
+    });
+
+    // 5b. Diverged: the remote moved on, so git will refuse this push.
+    await step("diverged", "fix/diverged-from-remote", async () => {
+      await openPushConfirm(page, repo.dir);
+      await snap(page, "32-diverged", { marker: TID.commitRow, locator: DIALOG });
+    });
+
+    // 5c. The push publishes a branch the remote has never had.
+    await step("creates", "feat/publish-new-branch", async () => {
+      await openPushConfirm(page, repo.dir);
+      await snap(page, "33-creates-branch", { marker: TID.commitRow, locator: DIALOG });
+    });
+
+    // 5d. The remote cannot be reached, so the range is unverified.
+    await step("unverified", "spike/offline-remote", async () => {
+      await openPushConfirm(page, repo.dir);
+      await snap(page, "34-unverified", {
+        marker: TID.commitRow,
+        locator: DIALOG,
+        markerTimeout: 20000,
+      });
+    });
+
+    // 5e. A rebase is halted in this worktree, so HEAD is detached mid-operation.
+    await step("in-progress", null, async () => {
+      await openPushConfirm(page, repo.midRebaseDir);
+      await snap(page, "35-rebase-in-progress", {
+        marker: '[role="alert"]',
+        locator: DIALOG,
+      });
+    });
+
+    // 5f. A repository with no remote at all.
+    await step("no-remote", null, async () => {
+      await openPushConfirm(page, repo.noRemoteDir);
+      await snap(page, "36-no-remote", { marker: '[role="alert"]', locator: DIALOG });
     });
 
     // 6. Preview load failure and its retry, through the real error path.

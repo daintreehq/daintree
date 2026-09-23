@@ -10,11 +10,23 @@
  * surface renders, so the two can't drift apart.
  */
 
-import type { GitPushDestination } from "@shared/types/git";
+import { GIT_REMOTE_COMMIT_PREVIEW_MAX, type GitPushDestination } from "@shared/types/git";
 import { MCP_PREVIEW_CAUTION_PREFIX } from "@/lib/mcpPreviewLines";
+import {
+  OPERATION_LABEL,
+  toRepoOperationState,
+  type RepoOperationState,
+} from "@/components/Git/repoOperationCopy";
 
-/** Max commits fetched and shown before the tail is collapsed. */
-export const PREVIEW_COMMIT_LIMIT = 12;
+/**
+ * Max commits fetched per range: everything the handler will serve. It used to
+ * be 12, which left the dialogs printing "…and 2 more" for commits nothing could
+ * open — a count, on a D2 preview, where a count is not enough.
+ */
+export const PREVIEW_COMMIT_LIMIT = GIT_REMOTE_COMMIT_PREVIEW_MAX;
+
+/** Rows the plain-line MCP surface prints before collapsing the tail. */
+const MCP_PREVIEW_LINE_LIMIT = 12;
 
 /** Which remote ref the previewed operation acts on — they diverge triangularly. */
 export type GitRemoteOperationKind = "push" | "pull-rebase";
@@ -44,6 +56,11 @@ export interface GitPushRangeFacts {
    * an empty `unverified` range is NOT evidence the destination is up to date.
    */
   rangeBasis: "tracked" | "creates" | "unverified";
+  /**
+   * Commits the destination has that the branch lacks. Above zero, git refuses
+   * the push as non-fast-forward. `0` is only meaningful for `tracked`.
+   */
+  behind: number;
 }
 
 /**
@@ -64,11 +81,41 @@ export interface GitRebaseRangeFacts {
   rangeBasis: "tracked" | "unfetched";
   /** Commits the upstream has that the branch does not — what the rebase brings in. */
   behind: number;
+  /** The rows behind `behind`, newest first, as of the last fetch. */
+  incoming: GitPreviewCommit[];
 }
 
 export interface GitRemoteOperationPreview {
-  /** `null` for a detached HEAD — `getStagingStatus` reports no current branch. */
+  /**
+   * `null` for a detached HEAD — `getStagingStatus` reports no current branch.
+   * A rebase in progress detaches HEAD too, so read {@link repoOperation} first.
+   */
   branch: string | null;
+  /**
+   * A merge, rebase, cherry-pick or revert halted in this worktree, or `null`.
+   * Checked before `branch`: a paused rebase is not a plain detached HEAD, and
+   * telling someone mid-rebase to check out a branch is the wrong fix.
+   */
+  repoOperation: RepoOperationState | null;
+  /** Rebase progress when `repoOperation` is `REBASING`, else `null`. */
+  rebaseStep: number | null;
+  rebaseTotalSteps: number | null;
+  /**
+   * Whether the repository has any remote at all. Separates "nothing to push
+   * to" from "git can't tell which remote", which need different fixes.
+   */
+  hasRemote: boolean;
+  /**
+   * Uncommitted changes to tracked files, staged or not. A pull-rebase refuses
+   * over any of them; untracked files don't count, because they don't stop it.
+   */
+  trackedChangeCount: number;
+  /**
+   * Paths still unmerged with no operation halted — what a failed stash pop
+   * leaves. Git refuses a rebase over them, and "commit or stash" can't be done
+   * until they're resolved, so they are carried apart from the tracked count.
+   */
+  conflictCount: number;
   /**
    * The commits the operation would act on.
    *
@@ -135,8 +182,18 @@ export async function buildGitRemoteOperationPreview(
   operation: GitRemoteOperationKind
 ): Promise<GitRemoteOperationPreview> {
   const status = await window.electron.git.getStagingStatus(cwd);
+  const repoOperation = toRepoOperationState(status.repoState);
   const base = {
     branch: status.currentBranch,
+    repoOperation,
+    rebaseStep: repoOperation === "REBASING" ? status.rebaseStep : null,
+    rebaseTotalSteps: repoOperation === "REBASING" ? status.rebaseTotalSteps : null,
+    // A status payload from before the field existed must not read as "no remote".
+    hasRemote: status.hasRemote !== false,
+    trackedChangeCount:
+      (status.staged?.length ?? 0) +
+      (status.unstaged ?? []).filter((entry) => entry.status !== "untracked").length,
+    conflictCount: status.conflicted?.length ?? 0,
     destination: status.pushDestination,
     pullSource: status.pullSource,
   };
@@ -166,14 +223,16 @@ export async function buildGitRemoteOperationPreview(
       pushRange: {
         total: preview.total,
         rangeBasis: preview.rangeBasis,
+        behind: preview.rangeBasis === "tracked" ? (preview.behind ?? 0) : 0,
       },
       rebaseRange: null,
     };
   }
 
   // Same shape as the push branch: no branch or no nameable upstream means there
-  // is no range to measure, and each blocks confirm on its own terms.
-  if (!status.currentBranch || !status.pullSource) {
+  // is no range to measure, and each blocks confirm on its own terms. So does an
+  // operation already halted here — `git pull --rebase` refuses to start over one.
+  if (!status.currentBranch || !status.pullSource || repoOperation !== null) {
     return { ...base, commits: [], pushRange: null, rebaseRange: null };
   }
   const preview = await window.electron.git.listRebaseCommits(
@@ -196,6 +255,11 @@ export async function buildGitRemoteOperationPreview(
       total: preview.total,
       rangeBasis: preview.rangeBasis,
       behind: preview.behind,
+      incoming: (preview.incoming ?? []).map((c) => ({
+        hash: c.hash,
+        message: c.message,
+        author: c.author,
+      })),
     },
   };
 }
@@ -220,12 +284,38 @@ export function formatGitRemoteOperationPreviewLines(
       `${MCP_PREVIEW_CAUTION_PREFIX}Could not verify the branch and local commits — proceed with caution.`,
     ];
   }
+  const isPullRebase = operation === "pull-rebase";
+  // Before the detached-HEAD label: a halted rebase detaches HEAD, and "(detached
+  // HEAD)" would send the approver looking for the wrong problem.
+  if (preview.repoOperation != null && (isPullRebase || preview.branch === null)) {
+    const label = OPERATION_LABEL[preview.repoOperation].toLowerCase();
+    return [
+      `${MCP_PREVIEW_CAUTION_PREFIX}A ${label} is in progress in this worktree — this operation will be refused until it is continued or aborted.`,
+    ];
+  }
   const branchLine = `Branch: ${preview.branch ?? "(detached HEAD)"}`;
+  if (isPullRebase && (preview.conflictCount ?? 0) > 0) {
+    return [
+      `${MCP_PREVIEW_CAUTION_PREFIX}This worktree has unresolved conflicts — the pull will be refused until they are resolved and staged.`,
+      branchLine,
+    ];
+  }
+  if (isPullRebase && (preview.trackedChangeCount ?? 0) > 0) {
+    return [
+      `${MCP_PREVIEW_CAUTION_PREFIX}This worktree has uncommitted changes to tracked files — the pull will be refused until they are committed or stashed.`,
+      branchLine,
+    ];
+  }
+  if (preview.hasRemote === false && preview.branch !== null) {
+    return [
+      `${MCP_PREVIEW_CAUTION_PREFIX}This repository has no remote configured — this operation will be refused.`,
+      branchLine,
+    ];
+  }
   // Named before the commits: which repository this writes to is the fact an
   // approver most needs and could least infer from the args (#11746). A
   // pull-rebase names its UPSTREAM — the ref the handler will actually rebase
   // onto — not the push target it never touches.
-  const isPullRebase = operation === "pull-rebase";
   const remoteRef = isPullRebase ? preview.pullSource : preview.destination;
   const destinationLine = remoteRef
     ? `${isPullRebase ? "Rebases onto" : "Destination"}: ${formatGitPushDestination(remoteRef)}${
@@ -238,20 +328,39 @@ export function formatGitRemoteOperationPreviewLines(
     : isPullRebase
       ? `${MCP_PREVIEW_CAUTION_PREFIX}This branch has no upstream to rebase onto — this operation will be refused.`
       : `${MCP_PREVIEW_CAUTION_PREFIX}No push destination is configured for this branch — this operation will be refused.`;
+  const pushBehind = preview.pushRange?.behind ?? 0;
+  const incoming = preview.rebaseRange?.behind ?? 0;
+  const contextLines = [
+    ...(pushBehind > 0
+      ? [
+          `${MCP_PREVIEW_CAUTION_PREFIX}The destination has ${pushBehind} commit${pushBehind === 1 ? "" : "s"} this branch lacks — git will refuse this push as non-fast-forward.`,
+        ]
+      : []),
+    ...(isPullRebase && incoming > 0 && preview.commits.length > 0
+      ? [
+          `Brings in ${incoming} commit${incoming === 1 ? "" : "s"} from the upstream (as of the last fetch).`,
+        ]
+      : []),
+  ];
   if (preview.commits.length === 0) {
-    return [destinationLine, branchLine, ...emptyLines(preview, emptyNote, operation)];
+    return [
+      destinationLine,
+      branchLine,
+      ...contextLines,
+      ...emptyLines(preview, emptyNote, operation),
+    ];
   }
   // The tail is only stated when a total was actually measured over the same
   // range the rows came from. Deriving it from anything else would let the
   // approver read a count that describes a different set of commits.
   const measuredTotal = preview.pushRange?.total ?? preview.rebaseRange?.total ?? null;
-  const hidden = measuredTotal === null ? 0 : Math.max(0, measuredTotal - preview.commits.length);
+  const shown = preview.commits.slice(0, MCP_PREVIEW_LINE_LIMIT);
+  const hidden = measuredTotal === null ? 0 : Math.max(0, measuredTotal - shown.length);
   return [
     destinationLine,
     branchLine,
-    ...preview.commits.map(
-      (c) => `  ${c.hash.slice(0, SHORT_HASH_LEN)} ${c.message} — ${c.author}`
-    ),
+    ...contextLines,
+    ...shown.map((c) => `  ${c.hash.slice(0, SHORT_HASH_LEN)} ${c.message} — ${c.author}`),
     ...(hidden > 0 ? [`  …and ${hidden} more`] : []),
   ];
 }

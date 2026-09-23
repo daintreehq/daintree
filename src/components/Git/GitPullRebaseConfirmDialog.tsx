@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { Button } from "@/components/ui/button";
-import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { Skeleton } from "@/components/ui/Skeleton";
-import { AlertTriangle, RefreshCw } from "lucide-react";
-import { cn } from "@/lib/utils";
+import {
+  Bone,
+  CommitRows,
+  MissingValue,
+  PreviewFrame,
+  PreviewNote,
+  PreviewNotice,
+  PreviewSectionHeading,
+  PreviewSkeleton,
+  PreviewSummary,
+  RefChip,
+  SummaryRow,
+} from "@/components/Git/GitOperationPreview";
+import { OPERATION_LABEL, buildInProgressDescription } from "@/components/Git/repoOperationCopy";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -15,15 +24,8 @@ import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore"
 import {
   buildGitRemoteOperationPreview,
   formatGitPushDestination,
-  type GitPreviewCommit,
-  type GitRebaseRangeFacts,
+  type GitRemoteOperationPreview,
 } from "@/components/Git/gitRemoteOperationPreview";
-import type { GitPushDestination } from "@shared/types/git";
-
-const SHORT_HASH_LEN = 7;
-
-/** Rows the skeleton draws. Enough to hold the panel's height without claiming a count. */
-const SKELETON_ROWS = 3;
 
 /**
  * D1 confirm for the `git.pullRebase` action dispatched outside the ReviewHub
@@ -61,10 +63,7 @@ function GitPullRebaseConfirmDialogInner() {
 
   const cwd = pendingConfirm?.cwd ?? null;
 
-  const [branch, setBranch] = useState<string | null>(null);
-  const [upstream, setUpstream] = useState<GitPushDestination | null>(null);
-  const [commits, setCommits] = useState<GitPreviewCommit[] | null>(null);
-  const [rebaseRange, setRebaseRange] = useState<GitRebaseRangeFacts | null>(null);
+  const [preview, setPreview] = useState<GitRemoteOperationPreview | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   /**
@@ -86,25 +85,16 @@ function GitPullRebaseConfirmDialogInner() {
     const requestId = ++requestIdRef.current;
     setIsLoading(true);
     setLoadError(null);
-    setBranch(null);
-    setUpstream(null);
-    setCommits(null);
-    setRebaseRange(null);
+    setPreview(null);
     setLoadedFor(null);
 
     safeFireAndForget(
       // Shared with the MCP confirm surface so agent and human approvers see the
       // identical fresh upstream and replay set (#11538).
       buildGitRemoteOperationPreview(cwd, "pull-rebase")
-        .then((preview) => {
+        .then((result) => {
           if (requestIdRef.current !== requestId) return;
-          setBranch(preview.branch);
-          // The UPSTREAM, not the push destination: this dialog confirms a rebase
-          // onto what the branch integrates from, and in a triangular workflow those
-          // are different repositories (#11746).
-          setUpstream(preview.pullSource);
-          setCommits(preview.commits);
-          setRebaseRange(preview.rebaseRange);
+          setPreview(result);
           setLoadedFor(cwd);
         })
         .catch((err: unknown) => {
@@ -131,10 +121,7 @@ function GitPullRebaseConfirmDialogInner() {
       // would otherwise land its `.then` and repopulate state while hidden, ready to
       // be shown to whatever asks next.
       requestIdRef.current++;
-      setBranch(null);
-      setUpstream(null);
-      setCommits(null);
-      setRebaseRange(null);
+      setPreview(null);
       setLoadedFor(null);
       setLoadError(null);
       setIsLoading(false);
@@ -160,33 +147,61 @@ function GitPullRebaseConfirmDialogInner() {
 
   if (!pendingConfirm) return null;
 
+  const branch = preview?.branch ?? null;
+  // The UPSTREAM, not the push destination: this dialog confirms a rebase onto
+  // what the branch integrates from, and in a triangular workflow those are
+  // different repositories (#11746).
+  const upstream = preview?.pullSource ?? null;
+  const commits = preview?.commits ?? null;
+  const rebaseRange = preview?.rebaseRange ?? null;
+  const hasRemote = preview?.hasRemote ?? true;
   const upstreamLabel = upstream ? formatGitPushDestination(upstream) : null;
   // Settled means "this request's own fresh answer is on screen". `isLoading` starts
   // false and the read only begins in an effect, so a check that asked merely whether
   // loading had finished would classify the first painted frame as "no upstream" and
   // flash that error before anything had been read.
   const isSettled = !isLoading && !loadError && loadedFor === cwd;
+  const isPending = !isSettled && !loadError;
+  // First of the blocking states: `git pull --rebase` refuses to start over any
+  // halted operation, and a halted rebase also detaches HEAD — so without this it
+  // read as "no branch checked out", and the fix it offered was the wrong one.
+  const haltedOperation = isSettled ? (preview?.repoOperation ?? null) : null;
   // Checked BEFORE the missing-upstream branch. A detached HEAD also resolves no
   // upstream, but telling someone with no branch checked out to set an upstream for
   // it is both the wrong diagnosis and an unfollowable fix.
-  const isDetached = isSettled && commits !== null && branch === null;
-  const isUpstreamMissing = isSettled && !isDetached && upstream === null;
-  const isLoaded = isSettled && commits !== null;
-  const isUnfetched = rebaseRange?.rangeBasis === "unfetched";
-  const isMeasuredEmpty = isLoaded && commits.length === 0 && upstream !== null && !isUnfetched;
-  // A measured-empty range means the rebase would replay nothing, and the `behind`
-  // count is the only thing that separates a branch already level with its upstream
-  // from one the rebase would move. It does NOT separate "purely behind" from
-  // anything else: the replay set is measured with `--no-merges --cherry-pick
-  // --right-only`, so a branch carrying merge commits, or commits the upstream
-  // already holds as equivalent patches, measures empty here too — and those are
-  // local-only commits the rebase drops rather than fast-forwards past. Neither
-  // line below may claim a fast-forward on the strength of `behind` alone.
-  const isInSync = isMeasuredEmpty && (rebaseRange?.behind ?? 0) === 0;
-  const isBehindWithNothingToReplay = isMeasuredEmpty && (rebaseRange?.behind ?? 0) > 0;
-  const isEmptyUnfetched = isLoaded && upstream !== null && isUnfetched;
+  const isDetached = isSettled && !haltedOperation && branch === null;
+  const isRemoteMissing = isSettled && !haltedOperation && branch !== null && !hasRemote;
+  const isUpstreamMissing =
+    isSettled && !haltedOperation && branch !== null && hasRemote && upstream === null;
+  const isLoaded = isSettled && !haltedOperation && commits !== null && upstream !== null;
+  // Git refuses to rebase over uncommitted changes to tracked files, and the
+  // handler refuses before it touches the network. Said here, before approval,
+  // rather than as a failure after it. The refs and lists still render: what the
+  // pull WOULD do is still worth seeing while deciding whether to commit first.
+  const conflicts = isLoaded ? (preview?.conflictCount ?? 0) : 0;
+  const trackedChanges = isLoaded ? (preview?.trackedChangeCount ?? 0) : 0;
+  // Conflicts first: "commit or stash" can't be followed until they're resolved.
+  const hasConflicts = conflicts > 0;
+  const isDirty = hasConflicts || trackedChanges > 0;
+  const isUnfetched = isLoaded && rebaseRange?.rangeBasis === "unfetched";
+  const isMeasured = isLoaded && !isUnfetched;
   const total = rebaseRange?.total ?? commits?.length ?? 0;
-  const hiddenCount = commits ? Math.max(0, total - commits.length) : 0;
+  const behind = rebaseRange?.behind ?? 0;
+  const incoming = rebaseRange?.incoming ?? [];
+  const hasReplay = isMeasured && commits.length > 0;
+  // Only a moved upstream rewrites anything. With nothing incoming, `git rebase`
+  // finds the branch already on its upstream and leaves every commit — and hash —
+  // where it is, so a "Rewrites" label and a "Commits to replay" list would
+  // promise a rewrite the rebase does not perform. The pull fetches first, so
+  // that can still change; the footnote says so.
+  const rewrites = hasReplay && behind > 0;
+  // A measured-empty replay set does NOT mean "purely behind": it is measured
+  // with `--no-merges --cherry-pick --right-only`, so merge commits and commits
+  // the upstream already holds as equivalent patches measure empty too — and
+  // those are local-only commits the rebase drops rather than fast-forwards
+  // past. Neither note below may claim a fast-forward on the strength of
+  // `behind` alone.
+  const isInSync = isMeasured && commits.length === 0 && behind === 0;
 
   // An upstream nobody can name can't be approved — the handler would refuse the
   // rebase anyway, and guessing `origin` is the bug (#11746). `commits === null` is
@@ -198,37 +213,140 @@ function GitPullRebaseConfirmDialogInner() {
   // surface whose entire job is showing what gets rewritten must not hand out an
   // approval in the one state where it cannot answer that. Fetching is a
   // non-destructive thing the user can go and do; approving past an unknown is not.
-  const confirmDisabled = !isSettled || commits === null || !upstream || !!loadError || isUnfetched;
+  const confirmDisabled = !isLoaded || isUnfetched || isDirty || !!loadError;
 
   // Names the one unmet prerequisite rather than leaving a dead button to be read as
   // arbitrary. Ordered by which the user can act on first.
   const blockedReason = loadError
     ? "Retry the preview to continue"
-    : isDetached
-      ? "Check out a branch to continue"
-      : isUpstreamMissing
-        ? "Set an upstream to continue"
-        : isUnfetched
-          ? "Fetch the upstream to continue"
-          : showPendingHint
-            ? "Checking what would be replayed…"
-            : null;
+    : haltedOperation
+      ? `Finish the ${OPERATION_LABEL[haltedOperation].toLowerCase()} to continue`
+      : isDetached
+        ? "Check out a branch to continue"
+        : isRemoteMissing
+          ? "Add a remote to continue"
+          : isUpstreamMissing
+            ? "Set an upstream to continue"
+            : hasConflicts
+              ? "Resolve the conflicts to continue"
+              : isDirty
+                ? "Commit or stash to continue"
+                : isUnfetched
+                  ? "Fetch the upstream to continue"
+                  : showPendingHint
+                    ? "Checking what would be replayed…"
+                    : null;
+
+  const notice = loadError ? (
+    <PreviewNotice
+      tone="error"
+      title="Couldn't read which commits this would replay"
+      onRetry={loadPreview}
+      retryTestId="git-pull-rebase-commits-retry"
+    >
+      {loadError}
+    </PreviewNotice>
+  ) : haltedOperation ? (
+    <PreviewNotice
+      tone="error"
+      title={`${OPERATION_LABEL[haltedOperation]} in progress`}
+      testId="git-pull-rebase-operation-in-progress"
+    >
+      {buildInProgressDescription(
+        haltedOperation,
+        preview?.rebaseStep ?? null,
+        preview?.rebaseTotalSteps ?? null
+      )}
+    </PreviewNotice>
+  ) : isDetached ? (
+    <PreviewNotice
+      tone="error"
+      title="No branch checked out"
+      testId="git-pull-rebase-detached-head"
+    >
+      This worktree is on a detached HEAD, so there is no branch history to replay. Check one out
+      and try again.
+    </PreviewNotice>
+  ) : isRemoteMissing ? (
+    <PreviewNotice
+      tone="error"
+      title="No remote to pull from"
+      command="git remote add <name> <url>"
+      testId="git-pull-rebase-no-remote"
+    >
+      This repository has no remote configured, so there is nothing to pull. Add one first:
+    </PreviewNotice>
+  ) : isUpstreamMissing ? (
+    <PreviewNotice
+      tone="error"
+      title="No upstream to rebase onto"
+      // Carries its argument, unlike the bare `git branch --set-upstream-to` the
+      // old copy printed: that form takes a required value. Both halves stay
+      // placeholders — the remote branch is the one fact this state does not
+      // have, and substituting the local name for it is a silent fallback
+      // default on a destructive surface (#7880).
+      command="git branch --set-upstream-to=<remote>/<branch>"
+      testId="git-pull-rebase-no-destination"
+    >
+      This branch doesn&apos;t track anything, so there is nothing to replay it onto. Point it at a
+      remote branch:
+    </PreviewNotice>
+  ) : hasConflicts ? (
+    <PreviewNotice
+      tone="error"
+      title={`${conflicts} unresolved conflict${conflicts === 1 ? "" : "s"}`}
+      onRetry={loadPreview}
+      retryTestId="git-pull-rebase-conflicts-retry"
+      testId="git-pull-rebase-conflicts"
+    >
+      Git won&apos;t replay commits while files are still in conflict. Resolve and stage them in
+      Review Hub, then commit or stash and retry.
+    </PreviewNotice>
+  ) : isDirty ? (
+    <PreviewNotice
+      tone="error"
+      title={`${trackedChanges} uncommitted change${trackedChanges === 1 ? "" : "s"}`}
+      onRetry={loadPreview}
+      retryTestId="git-pull-rebase-dirty-retry"
+      testId="git-pull-rebase-dirty"
+    >
+      Git won&apos;t replay commits over uncommitted changes to tracked files. Commit or stash them,
+      then retry.
+    </PreviewNotice>
+  ) : isUnfetched ? (
+    // Blocking, not a quiet note: the one state where the surface cannot answer
+    // the question it exists to answer.
+    <PreviewNotice
+      tone="error"
+      title="Nothing to compare against yet"
+      command={`git fetch ${upstream?.remote ?? "<remote>"}`}
+      onRetry={loadPreview}
+      retryTestId="git-pull-rebase-unfetched-retry"
+      testId="git-pull-rebase-empty-unfetched"
+    >
+      {upstreamLabel} isn&apos;t available locally, so which of your commits would be rewritten
+      can&apos;t be worked out. Fetch it and retry. If it&apos;s still missing after that, check
+      that the upstream branch exists and that the remote&apos;s fetch settings include it.
+    </PreviewNotice>
+  ) : null;
 
   return (
     <ConfirmDialog
       isOpen={true}
       onClose={() => resolveConfirmation(false)}
       title="Pull and rebase local commits?"
-      // Describes what rebasing does rather than asserting what this one will do, so
-      // the same sentence stays true in the states with nothing to point at — no
-      // upstream, nothing to replay, preview failed. It also names the concrete
-      // consequence: "cannot be undone" told the user nothing they could act on,
-      // where "the hashes change" is the fact that actually breaks their branch.
+      // Shown while the read is pending and when the rebase will actually rewrite
+      // something. Everywhere else it described a rewrite the frame directly below
+      // said would not happen — nothing incoming, nothing to replay, or blocked —
+      // and it sat above the one fact that mattered. It names the concrete
+      // consequence: "the hashes change" is what actually breaks a branch.
       description={
-        <span>
-          Rebasing replays your local commits on top of the upstream, so each becomes a new commit
-          with a different hash and anything pointing at the old ones stops matching.
-        </span>
+        isPending || (rewrites && !isDirty) ? (
+          <span>
+            Rebasing replays your local commits on top of the upstream, so each becomes a new commit
+            with a different hash and anything pointing at the old ones stops matching.
+          </span>
+        ) : undefined
       }
       confirmLabel="Pull and rebase"
       cancelLabel="Cancel"
@@ -244,287 +362,114 @@ function GitPullRebaseConfirmDialogInner() {
       hint={blockedReason}
       onConfirm={() => resolveConfirmation(true)}
     >
-      <div className="rounded border border-tint/[0.08] bg-tint/[0.04] text-xs">
-        {/* Rewrites first, then Onto: the pair reads in the order the operation
-            happens — this branch is taken and replayed onto that ref — so the
-            reader does not have to hold the base in mind while working out what
-            it applies to. Same local-then-remote order as the sibling's From/To,
-            with the vocabulary that keeps a rewrite from reading as a transfer. */}
-        <dl className="px-3 py-2 space-y-1.5" data-testid="git-pull-rebase-upstream-summary">
-          {/* "Rewrites" only where a rewrite is actually on the table. With an
-              empty replay set the panel below says nothing would be replayed,
-              and a label asserting a rewrite two rows above is the same
-              contradiction the caution note had. */}
-          <SummaryRow label={isLoaded && commits.length > 0 ? "Rewrites" : "Branch"}>
+      <PreviewFrame>
+        {notice}
+        {/* Branch first, then Onto: the pair reads in the order the operation
+            happens — this branch is taken and replayed onto that ref. Same
+            local-then-remote order as the push's From/To, with the vocabulary
+            that keeps a rewrite from reading as a transfer. "Rewrites" only
+            where a rewrite is actually on the table. */}
+        <PreviewSummary testId="git-pull-rebase-upstream-summary">
+          <SummaryRow label={rewrites ? "Rewrites" : "Branch"}>
             {branch && isSettled ? (
-              <RefChip value={branch} emphasis />
-            ) : !isSettled && !loadError ? (
+              <RefChip value={branch} />
+            ) : isPending ? (
               <Bone className="w-40" />
-            ) : loadError ? (
-              <Unknown />
             ) : (
-              <Unresolved />
+              <MissingValue />
             )}
           </SummaryRow>
-          <SummaryRow label="Onto">
-            {upstreamLabel && isSettled ? (
-              <RefChip value={upstreamLabel} emphasis />
-            ) : !isSettled && !loadError ? (
+          <SummaryRow
+            label="Onto"
+            aside={
+              isMeasured
+                ? behind > 0
+                  ? `${behind} incoming`
+                  : "no incoming commits as of the last fetch"
+                : undefined
+            }
+          >
+            {upstreamLabel && isSettled && !haltedOperation ? (
+              <RefChip value={upstreamLabel} />
+            ) : isPending ? (
               <Bone className="w-48" />
-            ) : loadError ? (
-              <Unknown />
             ) : (
-              <Unresolved />
+              <MissingValue label={isUpstreamMissing ? "Not resolved" : "—"} />
             )}
           </SummaryRow>
-        </dl>
+        </PreviewSummary>
 
-        <div className="px-3 py-2 border-y border-tint/[0.08] flex items-center justify-between gap-2">
-          <span
-            role="heading"
-            aria-level={3}
-            className="text-2xs font-semibold uppercase tracking-wider text-text-secondary"
-          >
-            Commits to replay
-            {isSettled && total > 0 && (
-              <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal">
-                {total}
-              </span>
-            )}
-          </span>
-        </div>
-
-        {!isSettled && !loadError && (
-          // `Skeleton` is what makes this reach a screen reader: the bones alone are
-          // decorative, so a blocked primary with no announced busy state left an AT
-          // user with a dead button and no explanation.
-          <Skeleton
+        {isPending && (
+          <PreviewSkeleton
             label="Checking which commits this would replay"
-            data-testid="git-pull-rebase-commits-loading"
-          >
-            <ul className="px-3 py-2 space-y-1.5">
-              {Array.from({ length: SKELETON_ROWS }).map((_, i) => (
-                <li key={i} className="flex items-baseline gap-2">
-                  <Bone className="w-[3.5rem]" />
-                  <Bone className={i === 1 ? "w-40" : "w-52"} />
-                  <Bone className="w-16 ml-auto" />
-                </li>
-              ))}
-            </ul>
-          </Skeleton>
-        )}
-
-        {!isLoading && loadError && (
-          <div className="px-3 py-3 text-status-error flex items-start gap-2" role="alert">
-            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="font-medium">Couldn&apos;t read which commits this would replay</div>
-              <div className="mt-0.5 text-text-secondary break-words">{loadError}</div>
-              <Button
-                variant="ghost-danger"
-                size="sm"
-                onClick={loadPreview}
-                data-testid="git-pull-rebase-commits-retry"
-                className="mt-1.5 h-6 px-2 text-2xs"
-              >
-                <RefreshCw className="w-3 h-3" />
-                Retry
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {isDetached && (
-          <div className="px-3 py-3 text-status-error flex items-start gap-2" role="alert">
-            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0" data-testid="git-pull-rebase-detached-head">
-              <div className="font-medium">No branch checked out</div>
-              <div className="mt-0.5 text-text-secondary">
-                This worktree is on a detached HEAD, so there is no branch history to replay. Check
-                one out and try again.
-              </div>
-            </div>
-          </div>
-        )}
-
-        {isUpstreamMissing && (
-          <div className="px-3 py-3 text-status-error flex items-start gap-2" role="alert">
-            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0" data-testid="git-pull-rebase-no-destination">
-              <div className="font-medium">No upstream to rebase onto</div>
-              <div className="mt-0.5 text-text-secondary">
-                This branch doesn&apos;t track anything, so there is nothing to replay it onto.
-                Point it at a remote branch:
-                {/* Carries its argument, unlike the bare `git branch --set-upstream-to`
-                    the old copy printed: that form takes a required value, so following
-                    the instruction as written just returned an error and left the user
-                    back on this screen. The trailing branch name is omitted because it
-                    defaults to HEAD, which is the branch this state is about — and
-                    naming it twice was long enough to run off the frame.
-
-                    Wraps rather than scrolls: a ref that decides which repository gets
-                    replayed onto must never be half-shown, and a clipped command reads
-                    as a rendering fault rather than as something scrollable. */}
-                {/* Both halves left as placeholders. The remote branch is the one
-                    fact this state definitionally does not have, and substituting
-                    the local name for it is a silent fallback default on a
-                    destructive surface (#7880) that is simply wrong for every
-                    branch whose upstream is named differently. */}
-                <span className="mt-1 block font-mono text-text-primary break-all">
-                  git branch --set-upstream-to=&lt;remote&gt;/&lt;branch&gt;
-                </span>
-              </div>
-            </div>
-          </div>
+            testId="git-pull-rebase-commits-loading"
+          />
         )}
 
         {isInSync && (
-          <div className="px-3 py-3 text-text-secondary" data-testid="git-pull-rebase-in-sync">
-            Nothing to replay &mdash; {branch} already matches {upstreamLabel}.
-          </div>
+          <PreviewNote testId="git-pull-rebase-in-sync">
+            Nothing incoming and nothing to replay, as of the last fetch.
+          </PreviewNote>
         )}
 
-        {isBehindWithNothingToReplay && (
-          <div
-            className="px-3 py-3 text-text-secondary"
-            data-testid="git-pull-rebase-behind-nothing-to-replay"
-          >
-            Nothing to replay &mdash; {branch} is {rebaseRange?.behind} behind {upstreamLabel} and
-            has no commit the rebase would replay on top of it.
-          </div>
+        {/* What comes in, then what gets replayed on top of it — the order the
+            rebase applies them. Incoming used to be a count in one empty state
+            and invisible everywhere else, so a diverged branch showed two local
+            commits and hid the fourteen it was about to be rebuilt on. */}
+        {isMeasured && behind > 0 && (
+          <>
+            <PreviewSectionHeading
+              label="Incoming from"
+              refName={upstreamLabel ?? undefined}
+              count={behind}
+            />
+            <CommitRows
+              commits={incoming}
+              total={behind}
+              label={`Incoming commits from ${upstreamLabel}`}
+              rowTestId="git-pull-rebase-incoming-row"
+              compact={hasReplay}
+            />
+          </>
         )}
 
-        {isEmptyUnfetched && (
-          // Blocking, not a quiet note: this is the one state where the surface
-          // cannot answer the question it exists to answer, so it gets the same
-          // alert treatment as the other states that refuse the operation.
-          <div className="px-3 py-3 text-status-error flex items-start gap-2" role="alert">
-            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0" data-testid="git-pull-rebase-empty-unfetched">
-              <div className="font-medium">Nothing to compare against yet</div>
-              <div className="mt-0.5 text-text-secondary">
-                {upstreamLabel} isn&apos;t available locally, so which of your commits would be
-                rewritten can&apos;t be worked out. Fetch it and try again:
-                <span className="mt-1 block font-mono text-text-primary break-all">
-                  git fetch {upstream?.remote}
-                </span>
-              </div>
-            </div>
-          </div>
+        {isMeasured && !isInSync && (
+          <PreviewSectionHeading
+            label={rewrites || !hasReplay ? "Commits to replay" : "Local commits"}
+            count={total}
+          />
         )}
 
-        {isLoaded && commits.length > 0 && (
-          // A scrollable region with no focusable children of its own has to be
-          // reachable by keyboard in its own right (WCAG 2.1.1), and the fades are
-          // what say "there is more" — a row clipped by the panel edge was the only
-          // previous cue, and it read as a rendering fault rather than as overflow.
-          <ScrollShadow
-            className="max-h-[180px]"
-            scrollClassName="scroll-py-8"
-            tabIndex={0}
-            role="region"
-            aria-label={`Commits to replay${upstreamLabel ? ` onto ${upstreamLabel}` : ""}`}
-          >
-            <ul className="px-3 py-2 space-y-1.5">
-              {commits.map((commit) => (
-                <li
-                  key={commit.hash}
-                  className="flex items-baseline gap-2"
-                  data-testid="git-pull-rebase-commit-row"
-                >
-                  <span className="font-mono text-2xs text-text-secondary shrink-0 tabular-nums">
-                    {commit.hash.slice(0, SHORT_HASH_LEN)}
-                  </span>
-                  <span className="flex-1 min-w-0 truncate text-text-primary">
-                    {commit.message}
-                  </span>
-                  {/* Bounded, unlike the rest of the row: an author is the least
-                      important column here, and left unbounded a long name took 45%
-                      of the width and truncated the subject to twenty characters. */}
-                  <span className="text-2xs text-text-secondary shrink-0 max-w-[7rem] truncate">
-                    {commit.author}
-                  </span>
-                </li>
-              ))}
-              {hiddenCount > 0 && (
-                <li className="text-2xs text-text-secondary italic pt-0.5">
-                  &hellip;and {hiddenCount} more
-                </li>
-              )}
-            </ul>
-          </ScrollShadow>
+        {isMeasured && commits.length === 0 && behind > 0 && (
+          <PreviewNote testId="git-pull-rebase-behind-nothing-to-replay">
+            None &mdash; {branch} has no commit the rebase would replay on top of these.
+          </PreviewNote>
         )}
-      </div>
-      {/* The quietest tier on the surface, and last: the least specific thing the
-          dialog has to say, but the one question a rebase raises that nothing else
-          here answers.
 
-          Gated on there actually being a replay. It used to render in every state,
-          so a branch with nothing to replay, a branch with no upstream and a failed
-          read all carried a caution about conflicts during a replay the panel
-          directly above had just said would not happen — and it made the empty
-          state taller than the one-commit state. */}
-      {isLoaded && commits.length > 0 && (
+        {hasReplay && (
+          <CommitRows
+            commits={commits}
+            total={total}
+            label={`${rewrites ? "Commits to replay onto" : "Local commits ahead of"} ${upstreamLabel}`}
+            rowTestId="git-pull-rebase-commit-row"
+            capTestId="git-pull-rebase-commit-cap"
+            compact={behind > 0}
+          />
+        )}
+      </PreviewFrame>
+      {/* The quietest tier, and last. Freshness first: the counts above are as of
+          the last fetch, and the pull fetches again before it replays, so this is
+          the one thing about the preview that can change after approval. Then the
+          conflict caution, only where there is a replay for it to be about. */}
+      {isMeasured && !isDirty && (
         <p className="text-2xs text-text-secondary">
-          If a replay hits a conflict, Git stops mid-rebase and leaves the branch there to resolve.
+          The pull fetches first, so anything pushed to the upstream since the last fetch comes in
+          too.
+          {hasReplay &&
+            " If a replay hits a conflict, Git stops mid-rebase and leaves the branch there to resolve."}
         </p>
       )}
     </ConfirmDialog>
-  );
-}
-
-function SummaryRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-baseline gap-2">
-      <dt className="text-3xs uppercase tracking-wider text-text-secondary shrink-0 w-14">
-        {label}
-      </dt>
-      <dd className="flex-1 min-w-0">{children}</dd>
-    </div>
-  );
-}
-
-/**
- * A ref as a value rather than a word in a sentence.
- *
- * `break-words` rather than truncation: the upstream is the one fact on this surface
- * that must never be shortened, and a 90-character fork ref wrapping across three
- * lines is a better outcome than an ellipsis in the middle of the repository name
- * whose history is about to be replayed onto.
- */
-function RefChip({ value, emphasis }: { value: string; emphasis?: boolean }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-baseline px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-2xs font-mono break-words",
-        emphasis ? "text-text-primary" : "text-text-secondary"
-      )}
-    >
-      {value}
-    </span>
-  );
-}
-
-/** Git answered, and the answer was "no upstream anyone can name". */
-function Unresolved() {
-  return <span className="text-status-error text-2xs">Not resolved</span>;
-}
-
-/** Git did not answer at all. The failure is stated once, below, not per row. */
-function Unknown() {
-  return <span className="text-text-secondary text-2xs">&mdash;</span>;
-}
-
-/**
- * Skeleton bone. `animate-pulse-delayed` carries the 400ms Doherty gate in its own
- * `animation-delay`, so a read that returns quickly paints nothing at all.
- */
-function Bone({ className }: { className?: string }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn("inline-block h-3.5 rounded bg-tint/[0.08] animate-pulse-delayed", className)}
-    />
   );
 }
 

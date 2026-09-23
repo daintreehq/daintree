@@ -3,6 +3,7 @@ import {
   PREVIEW_COMMIT_LIMIT,
   buildGitRemoteOperationPreview,
   formatGitRemoteOperationPreviewLines,
+  type GitRemoteOperationPreview,
 } from "../gitRemoteOperationPreview";
 
 function stubGit(overrides: {
@@ -17,6 +18,9 @@ function stubGit(overrides: {
   rebaseTotal?: number;
   rebaseRangeBasis?: "tracked" | "unfetched";
   rebaseBehind?: number;
+  repoState?: string;
+  hasRemote?: boolean;
+  pushBehind?: number;
   reject?: boolean;
   rejectCommits?: boolean;
   rejectPushCommits?: boolean;
@@ -36,7 +40,15 @@ function stubGit(overrides: {
   const getStagingStatus = vi.fn(() =>
     overrides.reject
       ? Promise.reject(new Error("git status failed"))
-      : Promise.resolve({ currentBranch, pushDestination, pullSource })
+      : Promise.resolve({
+          currentBranch,
+          pushDestination,
+          pullSource,
+          repoState: overrides.repoState ?? "CLEAN",
+          rebaseStep: overrides.repoState === "REBASING" ? 2 : null,
+          rebaseTotalSteps: overrides.repoState === "REBASING" ? 5 : null,
+          hasRemote: overrides.hasRemote ?? true,
+        })
   );
   const listCommits = vi.fn(() =>
     overrides.rejectCommits
@@ -52,6 +64,7 @@ function stubGit(overrides: {
           rangeBasis: overrides.rangeBasis ?? "tracked",
           commits: pushCommits,
           total: overrides.pushTotal ?? pushCommits.length,
+          behind: overrides.pushBehind ?? 0,
         })
   );
   const rebaseCommits = overrides.rebaseCommits ?? [];
@@ -117,7 +130,7 @@ describe("buildGitRemoteOperationPreview", () => {
     });
     await expect(buildGitRemoteOperationPreview("/repo", "push")).resolves.toMatchObject({
       commits: [{ hash: "abcdef1234", message: "First", author: "Ada" }],
-      pushRange: { total: 9, rangeBasis: "unverified" as const },
+      pushRange: { total: 9, rangeBasis: "unverified" as const, behind: 0 },
       rebaseRange: null,
     });
   });
@@ -164,6 +177,7 @@ describe("buildGitRemoteOperationPreview", () => {
       rangeBasis: "tracked" as const,
       commits: [],
       total: 0,
+      behind: 0,
     });
     await expect(buildGitRemoteOperationPreview("/repo", "push")).resolves.toMatchObject({
       destination: { remote: "fork", branch: "renamed-topic" },
@@ -183,7 +197,7 @@ describe("buildGitRemoteOperationPreview", () => {
     await expect(buildGitRemoteOperationPreview("/repo", "pull-rebase")).resolves.toMatchObject({
       commits: [{ hash: "abcdef1234", message: "Fix the thing", author: "Ada" }],
       pushRange: null,
-      rebaseRange: { total: 1, rangeBasis: "tracked", behind: 0 },
+      rebaseRange: { total: 1, rangeBasis: "tracked", behind: 0, incoming: [] },
     });
     expect(listRebaseCommits).toHaveBeenCalledWith("/repo", "feature/x", PREVIEW_COMMIT_LIMIT);
     expect(listCommits).not.toHaveBeenCalled();
@@ -300,6 +314,68 @@ describe("buildGitRemoteOperationPreview", () => {
   });
 });
 
+describe("buildGitRemoteOperationPreview — blocking context", () => {
+  it("carries a halted operation through, and reads no rebase range over it", async () => {
+    const { listRebaseCommits } = stubGit({ currentBranch: null, repoState: "REBASING" });
+    await expect(buildGitRemoteOperationPreview("/repo", "pull-rebase")).resolves.toMatchObject({
+      branch: null,
+      repoOperation: "REBASING",
+      rebaseStep: 2,
+      rebaseTotalSteps: 5,
+      rebaseRange: null,
+    });
+    expect(listRebaseCommits).not.toHaveBeenCalled();
+  });
+
+  // `git pull --rebase` refuses over a halted merge too, and the branch is still
+  // checked out then — so the range read has to be skipped on the operation, not
+  // only on a missing branch.
+  it("skips the rebase range read over a halted merge that keeps its branch", async () => {
+    const { listRebaseCommits } = stubGit({ repoState: "MERGING" });
+    await expect(buildGitRemoteOperationPreview("/repo", "pull-rebase")).resolves.toMatchObject({
+      branch: "main",
+      repoOperation: "MERGING",
+    });
+    expect(listRebaseCommits).not.toHaveBeenCalled();
+  });
+
+  it("counts tracked changes and leaves untracked files out", async () => {
+    stubGit({});
+    const status = await window.electron.git.getStagingStatus("/repo");
+    Object.assign(status, {
+      staged: [{ path: "a", status: "modified" }],
+      unstaged: [
+        { path: "b", status: "modified" },
+        { path: "c", status: "untracked" },
+      ],
+    });
+    (window.electron.git.getStagingStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      status
+    );
+    const preview = await buildGitRemoteOperationPreview("/repo", "pull-rebase");
+    expect(preview.trackedChangeCount).toBe(2);
+  });
+
+  it("reports a repository with no remote as such", async () => {
+    stubGit({ hasRemote: false, pushDestination: null });
+    await expect(buildGitRemoteOperationPreview("/repo", "push")).resolves.toMatchObject({
+      hasRemote: false,
+      destination: null,
+    });
+  });
+
+  // `behind` is only a claim about the destination when the range was settled
+  // against its tip. Carried through for `unverified`, it would read as "level".
+  it("carries the destination's lead only for a range settled against its tip", async () => {
+    stubGit({ pushBehind: 3, rangeBasis: "tracked" });
+    const tracked = await buildGitRemoteOperationPreview("/repo", "push");
+    stubGit({ pushBehind: 3, rangeBasis: "unverified" });
+    const unverified = await buildGitRemoteOperationPreview("/repo", "push");
+    expect(tracked.pushRange?.behind).toBe(3);
+    expect(unverified.pushRange?.behind).toBe(0);
+  });
+});
+
 describe("formatGitRemoteOperationPreviewLines", () => {
   it("shows the branch and one short-hash row per commit", () => {
     const lines = formatGitRemoteOperationPreviewLines(
@@ -311,6 +387,12 @@ describe("formatGitRemoteOperationPreviewLines", () => {
           { hash: "abcdef1234567", message: "First", author: "Ada" },
           { hash: "9876543210fed", message: "Second", author: "Bob" },
         ],
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -335,6 +417,12 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: { remote: "fork", branch: "release/topic" },
         pullSource: { remote: "fork", branch: "release/topic" },
         commits: [],
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -353,6 +441,12 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: { remote: "fork", branch: "topic" },
         pullSource: { remote: "origin", branch: "release/topic" },
         commits: [],
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -370,6 +464,12 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: null,
         pullSource: null,
         commits: [],
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -390,6 +490,12 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: { remote: "fork", branch: "topic" },
         pullSource: null,
         commits: [],
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -408,6 +514,12 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: null,
         pullSource: { remote: "origin", branch: "topic" },
         commits: [],
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -424,6 +536,12 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: { remote: "origin", branch: "main" },
         pullSource: { remote: "origin", branch: "main" },
         commits: [],
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -445,6 +563,12 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: { remote: "origin", branch: "main" },
         pullSource: { remote: "origin", branch: "main" },
         commits: [],
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -463,7 +587,13 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: { remote: "origin", branch: "main" },
         pullSource: { remote: "origin", branch: "main" },
         commits: [{ hash: "abcdef1234567", message: "First", author: "Ada" }],
-        pushRange: { total: 4, rangeBasis: "tracked" as const },
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
+        pushRange: { total: 4, rangeBasis: "tracked" as const, behind: 0 },
         rebaseRange: null,
       },
       "none",
@@ -479,7 +609,13 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: { remote: "origin", branch: "main" },
         pullSource: { remote: "origin", branch: "main" },
         commits: [{ hash: "abcdef1234567", message: "First", author: "Ada" }],
-        pushRange: { total: 1, rangeBasis: "tracked" as const },
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
+        pushRange: { total: 1, rangeBasis: "tracked" as const, behind: 0 },
         rebaseRange: null,
       },
       "none",
@@ -497,6 +633,12 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: { remote: "origin", branch: "main" },
         pullSource: { remote: "origin", branch: "main" },
         commits: [{ hash: "abcdef1234567", message: "First", author: "Ada" }],
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -515,7 +657,13 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: { remote: "origin", branch: "spike" },
         pullSource: null,
         commits: [],
-        pushRange: { total: 0, rangeBasis: "creates" as const },
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
+        pushRange: { total: 0, rangeBasis: "creates" as const, behind: 0 },
         rebaseRange: null,
       },
       "none",
@@ -531,7 +679,13 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: { remote: "origin", branch: "spike" },
         pullSource: null,
         commits: [],
-        pushRange: { total: 0, rangeBasis: "unverified" as const },
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
+        pushRange: { total: 0, rangeBasis: "unverified" as const, behind: 0 },
         rebaseRange: null,
       },
       "none",
@@ -551,7 +705,13 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: { remote: "fork", branch: "release/spike" },
         pullSource: null,
         commits: [],
-        pushRange: { total: 0, rangeBasis: "unverified" as const },
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
+        pushRange: { total: 0, rangeBasis: "unverified" as const, behind: 0 },
         rebaseRange: null,
       },
       "Nothing to publish — the destination already has everything on this branch.",
@@ -572,7 +732,13 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: { remote: "origin", branch: "main" },
         pullSource: null,
         commits: [],
-        pushRange: { total: 0, rangeBasis: "tracked" as const },
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
+        pushRange: { total: 0, rangeBasis: "tracked" as const, behind: 0 },
         rebaseRange: null,
       },
       "Nothing to publish — the destination already has everything on this branch.",
@@ -594,6 +760,12 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: null,
         pullSource: null,
         commits: [],
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -611,8 +783,14 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: null,
         pullSource: { remote: "origin", branch: "topic" },
         commits: [],
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
         pushRange: null,
-        rebaseRange: { total: 0, rangeBasis: "tracked", behind: 0 },
+        rebaseRange: { total: 0, rangeBasis: "tracked", behind: 0, incoming: [] },
       },
       "No local commits to replay.",
       "pull-rebase"
@@ -630,8 +808,14 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: null,
         pullSource: { remote: "origin", branch: "topic" },
         commits: [],
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
         pushRange: null,
-        rebaseRange: { total: 0, rangeBasis: "tracked", behind: 4 },
+        rebaseRange: { total: 0, rangeBasis: "tracked", behind: 4, incoming: [] },
       },
       "No local commits to replay.",
       "pull-rebase"
@@ -650,8 +834,14 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: null,
         pullSource: { remote: "origin", branch: "topic" },
         commits: [],
+        repoOperation: null,
+        rebaseStep: null,
+        rebaseTotalSteps: null,
+        hasRemote: true,
+        trackedChangeCount: 0,
+        conflictCount: 0,
         pushRange: null,
-        rebaseRange: { total: 0, rangeBasis: "unfetched", behind: 0 },
+        rebaseRange: { total: 0, rangeBasis: "unfetched", behind: 0, incoming: [] },
       },
       "No local commits to replay.",
       "pull-rebase"
@@ -667,5 +857,82 @@ describe("formatGitRemoteOperationPreviewLines", () => {
     // Must never read as "nothing to push" — that's the whole point of the
     // null sentinel being distinct from an empty commit list.
     expect(lines[0]).not.toContain("Branch:");
+  });
+});
+
+describe("formatGitRemoteOperationPreviewLines — blocking context", () => {
+  const base: GitRemoteOperationPreview = {
+    branch: "main",
+    repoOperation: null,
+    rebaseStep: null,
+    rebaseTotalSteps: null,
+    hasRemote: true,
+    trackedChangeCount: 0,
+    conflictCount: 0,
+    destination: { remote: "origin", branch: "main" },
+    pullSource: { remote: "origin", branch: "main" },
+    commits: [{ hash: "abcdef1234567", message: "First", author: "Ada" }],
+    pushRange: null,
+    rebaseRange: null,
+  };
+
+  it("names unresolved conflicts rather than asking the agent approver to stash them", () => {
+    const lines = formatGitRemoteOperationPreviewLines(
+      { ...base, conflictCount: 1, trackedChangeCount: 1 },
+      "none",
+      "pull-rebase"
+    );
+    expect(lines.join("\n")).toMatch(/conflict/);
+    expect(lines.join("\n")).not.toMatch(/stash/);
+  });
+
+  it("tells the agent approver a pull over tracked changes will be refused, and a push won't", () => {
+    const pull = formatGitRemoteOperationPreviewLines(
+      { ...base, trackedChangeCount: 2 },
+      "none",
+      "pull-rebase"
+    );
+    const push = formatGitRemoteOperationPreviewLines(
+      { ...base, trackedChangeCount: 2 },
+      "none",
+      "push"
+    );
+    expect(pull.join("\n")).toMatch(/uncommitted/);
+    expect(push.join("\n")).not.toMatch(/uncommitted/);
+  });
+
+  it("names a halted rebase instead of labelling the detached HEAD it causes", () => {
+    const lines = formatGitRemoteOperationPreviewLines(
+      { ...base, branch: null, repoOperation: "REBASING", destination: null, commits: [] },
+      "none",
+      "push"
+    );
+    expect(lines.join("\n")).toMatch(/rebase is in progress/);
+    expect(lines.join("\n")).not.toMatch(/detached HEAD/);
+  });
+
+  it("tells the agent approver a diverged destination will refuse the push", () => {
+    const lines = formatGitRemoteOperationPreviewLines(
+      { ...base, pushRange: { total: 1, rangeBasis: "tracked", behind: 2 } },
+      "none",
+      "push"
+    );
+    expect(lines.some((l) => /refuse/.test(l) && l.includes("2"))).toBe(true);
+  });
+
+  it("prints a bounded number of rows however many commits the preview holds", () => {
+    const commits = Array.from({ length: 40 }, (_, i) => ({
+      hash: `${i}`.padStart(12, "0"),
+      message: `Commit ${i}`,
+      author: "Ada",
+    }));
+    const lines = formatGitRemoteOperationPreviewLines(
+      { ...base, commits, pushRange: { total: 40, rangeBasis: "tracked", behind: 0 } },
+      "none",
+      "push"
+    );
+    const rows = lines.filter((l) => l.startsWith("  ") && !l.includes("more"));
+    expect(rows.length).toBeLessThan(commits.length);
+    expect(lines.at(-1)).toContain(`${commits.length - rows.length} more`);
   });
 });

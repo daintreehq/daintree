@@ -1,7 +1,7 @@
 {
   "generated": "2026-09-23",
-  "total": 167,
-  "files": 79,
+  "total": 166,
+  "files": 78,
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
@@ -467,21 +467,6 @@
       "decision": "keep",
       "category": "icon-affordance",
       "evidence": "<button> wraps only icons — the colour paints a glyph through currentColor"
-    },
-    {
-      "file": "src/components/Git/GitForcePushConfirmDialog.tsx",
-      "ordinal": 0,
-      "line": 235,
-      "start": 10740,
-      "end": 10761,
-      "token": "text-daintree-text/40",
-      "variants": "",
-      "step": 40,
-      "group": "src/components/Git/GitForcePushConfirmDialog.tsx#10728",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<Spinner> is an icon — the colour is an affordance, not prose"
     },
     {
       "file": "src/components/HelpPanel/FigureLightbox.tsx",
@@ -2376,13 +2361,13 @@
     {
       "file": "src/components/Worktree/ReviewHub/ReviewHubContent.tsx",
       "ordinal": 0,
-      "line": 1888,
-      "start": 76873,
-      "end": 76894,
+      "line": 1899,
+      "start": 77416,
+      "end": 77437,
       "token": "text-daintree-text/60",
       "variants": "",
       "step": 60,
-      "group": "src/components/Worktree/ReviewHub/ReviewHubContent.tsx#76769",
+      "group": "src/components/Worktree/ReviewHub/ReviewHubContent.tsx#77312",
       "branch": "",
       "decision": "keep",
       "category": "icon-affordance",
@@ -2391,13 +2376,13 @@
     {
       "file": "src/components/Worktree/ReviewHub/ReviewHubContent.tsx",
       "ordinal": 1,
-      "line": 1907,
-      "start": 77655,
-      "end": 77676,
+      "line": 1918,
+      "start": 78198,
+      "end": 78219,
       "token": "text-daintree-text/60",
       "variants": "",
       "step": 60,
-      "group": "src/components/Worktree/ReviewHub/ReviewHubContent.tsx#77551",
+      "group": "src/components/Worktree/ReviewHub/ReviewHubContent.tsx#78094",
       "branch": "",
       "decision": "keep",
       "category": "icon-affordance",

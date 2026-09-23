@@ -419,7 +419,7 @@ describe("GitPullRebaseConfirmDialog", () => {
       void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
     });
 
-    const region = screen.getByRole("region", { name: /commits to replay/i });
+    const region = screen.getByRole("region", { name: /origin\/main/ });
     expect(region.getAttribute("tabindex")).toBe("0");
   });
 
@@ -443,6 +443,164 @@ describe("GitPullRebaseConfirmDialog", () => {
     });
 
     expect(screen.getByText("30")).toBeTruthy();
-    expect(screen.getByText(/and 28 more/)).toBeTruthy();
+    const cap = screen.getByTestId("git-pull-rebase-commit-cap").textContent ?? "";
+    expect(cap).toContain("30");
+    expect(cap).toContain("2");
+  });
+
+  // `git pull --rebase` refuses to start over a halted operation, and a halted
+  // rebase detaches HEAD — the two together used to read as "check out a branch".
+  it("diagnoses a halted rebase as an operation in progress, not a detached HEAD", async () => {
+    mocks.buildPreview.mockResolvedValue(
+      loaded({
+        branch: null,
+        repoOperation: "REBASING",
+        rebaseStep: 1,
+        rebaseTotalSteps: 4,
+        pullSource: null,
+        commits: [],
+        rebaseRange: null,
+      })
+    );
+    render(<GitPullRebaseConfirmDialog />);
+
+    await act(async () => {
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    expect(screen.getByTestId("git-pull-rebase-operation-in-progress")).toBeTruthy();
+    expect(screen.queryByTestId("git-pull-rebase-detached-head")).toBeNull();
+    expect(rebaseButton().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  // A merge in progress keeps its branch checked out, so nothing else on the
+  // surface would stop a pull-rebase git is going to refuse.
+  it("blocks while any operation is halted, even with a branch checked out", async () => {
+    mocks.buildPreview.mockResolvedValue(loaded({ repoOperation: "MERGING" }));
+    render(<GitPullRebaseConfirmDialog />);
+
+    await act(async () => {
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    expect(screen.getByTestId("git-pull-rebase-operation-in-progress")).toBeTruthy();
+    expect(screen.queryAllByTestId("git-pull-rebase-commit-row")).toHaveLength(0);
+    expect(rebaseButton().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("tells a repository with no remote to add one, not to set an upstream", async () => {
+    mocks.buildPreview.mockResolvedValue(
+      loaded({ hasRemote: false, pullSource: null, commits: [], rebaseRange: null })
+    );
+    render(<GitPullRebaseConfirmDialog />);
+
+    await act(async () => {
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    expect(screen.getByTestId("git-pull-rebase-no-remote")).toBeTruthy();
+    expect(screen.queryByTestId("git-pull-rebase-no-destination")).toBeNull();
+  });
+
+  // What comes in is half the operation. Every incoming commit the preview read
+  // is on screen, beside the replay set, rather than a count in one empty state.
+  it("lists the incoming commits alongside the ones it replays", async () => {
+    mocks.buildPreview.mockResolvedValue(
+      loaded({
+        rebaseRange: {
+          total: 1,
+          rangeBasis: "tracked" as const,
+          behind: 2,
+          incoming: [
+            { hash: "1111111aaaa", message: "Upstream one", author: "Grace" },
+            { hash: "2222222bbbb", message: "Upstream two", author: "Grace" },
+          ],
+        },
+      })
+    );
+    render(<GitPullRebaseConfirmDialog />);
+
+    await act(async () => {
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    expect(screen.getAllByTestId("git-pull-rebase-incoming-row")).toHaveLength(2);
+    expect(screen.getAllByTestId("git-pull-rebase-commit-row")).toHaveLength(1);
+  });
+
+  // With nothing incoming, the rebase leaves every local commit where it is, so
+  // the surface may not call them rewritten. The label follows `behind`, and a
+  // moved upstream is what earns it back.
+  it("only calls the branch rewritten when something is coming in to replay onto", async () => {
+    const labelsFor = async (behind: number) => {
+      mocks.buildPreview.mockResolvedValue(
+        loaded({ rebaseRange: { total: 1, rangeBasis: "tracked" as const, behind, incoming: [] } })
+      );
+      const view = render(<GitPullRebaseConfirmDialog />);
+      await act(async () => {
+        void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+      });
+      const text = screen.getByTestId("git-pull-rebase-upstream-summary").textContent ?? "";
+      act(() => useGitPullRebaseConfirmStore.getState().resolveConfirmation(false));
+      view.unmount();
+      return text;
+    };
+
+    expect(await labelsFor(0)).not.toMatch(/rewrites/i);
+    expect(await labelsFor(3)).toMatch(/rewrites/i);
+  });
+
+  // "Each becomes a new commit with a different hash" is only true when the
+  // rebase rewrites something. Above a branch with nothing incoming it
+  // contradicted the frame directly beneath it.
+  it("states the rewrite's consequence only where something is rewritten", async () => {
+    const describes = async (behind: number) => {
+      mocks.buildPreview.mockResolvedValue(
+        loaded({ rebaseRange: { total: 1, rangeBasis: "tracked" as const, behind, incoming: [] } })
+      );
+      const view = render(<GitPullRebaseConfirmDialog />);
+      await act(async () => {
+        void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+      });
+      const id = screen.getByRole("dialog").getAttribute("aria-describedby");
+      const present = id !== null && document.getElementById(id) !== null;
+      act(() => useGitPullRebaseConfirmStore.getState().resolveConfirmation(false));
+      view.unmount();
+      return present;
+    };
+
+    expect(await describes(2)).toBe(true);
+    expect(await describes(0)).toBe(false);
+  });
+
+  // Git refuses to rebase over uncommitted tracked changes, and the handler
+  // refuses before the network. Said before approval, not as a failure after it.
+  it("blocks over uncommitted tracked changes and says what to do first", async () => {
+    mocks.buildPreview.mockResolvedValue(loaded({ trackedChangeCount: 3 }));
+    render(<GitPullRebaseConfirmDialog />);
+
+    await act(async () => {
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    expect(screen.getByTestId("git-pull-rebase-dirty").textContent).toContain("3");
+    expect(rebaseButton().getAttribute("aria-disabled")).toBe("true");
+    // What the pull would do is still on screen while deciding to commit first.
+    expect(screen.getAllByTestId("git-pull-rebase-commit-row")).toHaveLength(1);
+  });
+
+  // A conflict-only index (a failed stash pop) has no halted operation to name,
+  // and "commit or stash" can't be followed until the conflicts are resolved.
+  it("blocks over unresolved conflicts and names them ahead of the dirty-tree advice", async () => {
+    mocks.buildPreview.mockResolvedValue(loaded({ conflictCount: 2, trackedChangeCount: 2 }));
+    render(<GitPullRebaseConfirmDialog />);
+
+    await act(async () => {
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    expect(screen.getByTestId("git-pull-rebase-conflicts")).toBeTruthy();
+    expect(screen.queryByTestId("git-pull-rebase-dirty")).toBeNull();
+    expect(rebaseButton().getAttribute("aria-disabled")).toBe("true");
   });
 });
