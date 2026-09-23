@@ -391,6 +391,17 @@ describe("ProjectPluginsTab", () => {
     expect(pane.textContent).not.toContain("turned off as a folder");
   });
 
+  it("offers a staged plugin's activation in place of a switch that would read as on", async () => {
+    seed([projectPlugin({ state: "staged", muted: false })]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    await select("Acme Dashboard");
+    await screen.findByTestId("project-plugin-detail");
+    expect(screen.queryByTestId("project-plugin-mute-switch")).toBeNull();
+    expect(screen.getByRole("button", { name: "Activate plugin" })).toBeTruthy();
+  });
+
   it("hides Activate for a muted staged plugin, so the switch is the only way back", async () => {
     seed([projectPlugin({ state: "staged", muted: true })]);
     render(<ProjectPluginsTab />);

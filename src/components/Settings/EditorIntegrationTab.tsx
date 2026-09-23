@@ -55,6 +55,7 @@ export function EditorIntegrationTab() {
   // Until the saved preference is read, the selection shown is a placeholder: nothing
   // edits or saves it, and nothing claims it isn't saved yet.
   const [isLoadingConfig, setIsLoadingConfig] = useState(true);
+  const [rescanFailed, setRescanFailed] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [showDetected, setShowDetected] = useState(false);
@@ -118,12 +119,15 @@ export function EditorIntegrationTab() {
 
   const handleRescan = async () => {
     setIsRescanning(true);
+    setRescanFailed(false);
     try {
       const editors = await editorClient.discover();
       if (!isMountedRef.current) return;
       setDiscoveredEditors(editors);
     } catch (err) {
       logError("[EditorIntegrationTab] Rescan failed", err);
+      // The list below is the previous scan; say so rather than let it pass as fresh.
+      if (isMountedRef.current) setRescanFailed(true);
     } finally {
       if (isMountedRef.current) setIsRescanning(false);
     }
@@ -297,7 +301,16 @@ export function EditorIntegrationTab() {
           <>
             <SettingsRow
               label="Detected editors"
-              description={`${foundCount} of ${discoveredEditors.length} found on this machine`}
+              description={
+                rescanFailed ? (
+                  <span className="text-status-error">
+                    Couldn&apos;t re-scan — showing the previous scan. Use the re-scan button to try
+                    again.
+                  </span>
+                ) : (
+                  `${foundCount} of ${discoveredEditors.length} found on this machine`
+                )
+              }
               layout="stacked"
               control={
                 <div className="space-y-1">

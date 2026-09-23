@@ -10,6 +10,7 @@ import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SettingsSelect, type SettingsSelectOption } from "./SettingsSelect";
+import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { useProjectStore } from "@/store";
 import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -77,6 +78,10 @@ export function ForgeIntegrationsTab() {
   const [providers, setProviders] = useState<ForgeProviderEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // The initial read, separate from a failed save: only this one leaves the select
+  // showing a default nobody read, so only this one blocks it and offers Retry.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const writeSeqRef = useRef(0);
 
   const activeProject = useProjectStore((s) => s.currentProject);
@@ -129,10 +134,11 @@ export function ForgeIntegrationsTab() {
         if (cancelled) return;
         setSettings(loadedSettings);
         setProviders(loadedProviders);
+        setLoadFailed(false);
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(formatErrorMessage(err, "Couldn't load forge integrations"));
+        setLoadFailed(true);
         logError("Failed to load forge integration settings", err);
       })
       .finally(() => {
@@ -141,7 +147,7 @@ export function ForgeIntegrationsTab() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadAttempt]);
 
   // Load remotes + per-remote resolution whenever the active project changes.
   // Single effect keyed on [activeProjectId, activeProjectPath] avoids the
@@ -302,11 +308,17 @@ export function ForgeIntegrationsTab() {
         title="Provider routing"
         description="A project uses its own provider setting first, then the default below, then whichever provider recognizes the remote's hostname"
       >
+        {loadFailed && (
+          <SettingsLoadErrorBanner
+            message="Couldn't read the forge providers or the saved default"
+            onRetry={() => setLoadAttempt((n) => n + 1)}
+          />
+        )}
         <SettingsGroup id="forge-default-provider">
           <SettingsSelect
             label="Default provider"
             description={
-              providers.length === 0 && !loading && !error
+              providers.length === 0 && !loading && !loadFailed
                 ? "No forge plugins are installed yet. Install one that contributes a forge provider to choose a default"
                 : "For every project without its own provider setting"
             }
@@ -315,7 +327,8 @@ export function ForgeIntegrationsTab() {
               void handleChange(value);
             }}
             options={options}
-            disabled={loading}
+            disabled={loading || loadFailed}
+            disabledReason={loadFailed ? "Couldn't read the saved default" : undefined}
             isModified={settings.defaultProviderId !== null}
             onReset={() => void handleChange(AUTO_DETECT_VALUE)}
             resetAriaLabel="Reset default provider to auto-detect"
@@ -326,7 +339,7 @@ export function ForgeIntegrationsTab() {
         <ProjectRoutingPanel
           activeProjectName={activeProject?.name}
           activeProjectId={activeProjectId}
-          providersInstalled={error && providers.length === 0 ? null : providers.length}
+          providersInstalled={loadFailed && providers.length === 0 ? null : providers.length}
           providers={providers}
           providersLoading={loading}
           remotes={remotes}
@@ -433,24 +446,39 @@ function ProjectRoutingPanel({
     : null;
   const noProviders = providersInstalled === 0 && !providersLoading;
 
+  const anyFailed = remotes.some((r) => r.failed);
+
   return shell(
-    remotes.map(({ remote, resolved, failed }) => (
-      <SettingsRow
-        key={remote.name}
-        label={remote.name}
-        accessory={
-          remote.name === liveRemoteName ? (
-            <Badge size="xs">{forgeRemote ? "In use" : "In use · auto-detected"}</Badge>
-          ) : undefined
-        }
-        description={
-          <span className="block font-mono truncate" title={remote.fetchUrl}>
-            {remote.fetchUrl}
-          </span>
-        }
-        control={<RoutingResult resolved={resolved} failed={failed} noProviders={noProviders} />}
-      />
-    ))
+    <>
+      {remotes.map(({ remote, resolved, failed }) => (
+        <SettingsRow
+          key={remote.name}
+          label={remote.name}
+          accessory={
+            remote.name === liveRemoteName ? (
+              <Badge size="xs">{forgeRemote ? "In use" : "In use · auto-detected"}</Badge>
+            ) : undefined
+          }
+          description={
+            <span className="block font-mono truncate" title={remote.fetchUrl}>
+              {remote.fetchUrl}
+            </span>
+          }
+          control={<RoutingResult resolved={resolved} failed={failed} noProviders={noProviders} />}
+        />
+      ))}
+      {anyFailed && (
+        <SettingsEmptyRow
+          action={
+            <Button variant="outline" size="sm" onClick={onRetry}>
+              Retry
+            </Button>
+          }
+        >
+          Some remotes couldn&apos;t be resolved
+        </SettingsEmptyRow>
+      )}
+    </>
   );
 }
 

@@ -412,6 +412,8 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [hasCredential, setHasCredential] = useState(false);
   const [credentialKnown, setCredentialKnown] = useState(false);
+  const [statusFailed, setStatusFailed] = useState(false);
+  const [statusAttempt, setStatusAttempt] = useState(0);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   // Synchronous in-flight guard: `isSaving` state updates are batched and the
@@ -444,16 +446,18 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
         if (cancelled) return;
         setHasCredential(status.hasCredential);
         setCredentialKnown(true);
+        setStatusFailed(false);
       })
       .catch((err) => {
         if (cancelled) return;
+        setStatusFailed(true);
         logError("Failed to load forge credential status", err);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [providerId]);
+  }, [providerId, statusAttempt]);
 
   // Only a success fades. An error carries the fix and stays until the input changes.
   useEffect(() => {
@@ -526,6 +530,17 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
         description={`Credentials are validated against ${providerName} before they're saved`}
       >
         <SettingsGroup>
+          {statusFailed && !credentialKnown && (
+            <SettingsRow
+              label="Status"
+              description="Couldn't read whether credentials are saved"
+              control={
+                <Button variant="outline" size="sm" onClick={() => setStatusAttempt((n) => n + 1)}>
+                  Retry
+                </Button>
+              }
+            />
+          )}
           {credentialKnown && (
             <SettingsRow
               label="Status"
@@ -592,7 +607,8 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
             </Button>
           </SettingsActions>
         </SettingsGroup>
-        {hasCredential && (
+        {/* Unknown still offers Clear: a stored credential that can't be read must stay removable. */}
+        {(hasCredential || (statusFailed && !credentialKnown)) && (
           <SettingsGroup>
             <SettingsRow
               label="Stored credentials"

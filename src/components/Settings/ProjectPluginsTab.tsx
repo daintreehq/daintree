@@ -353,6 +353,7 @@ function ProjectPluginPane({
   };
 
   const folderOff = !folderTrusted && plugin.state !== "invalid";
+  const awaitingActivation = plugin.state === "staged" && !plugin.muted && folderTrusted;
   const runStatus = folderOff
     ? undefined
     : plugin.muted
@@ -389,7 +390,25 @@ function ProjectPluginPane({
               }
             />
           )}
-          {canMute ? (
+          {awaitingActivation ? (
+            // Staged and allowed: the one thing left is to start it, so the row is that
+            // step rather than a switch that reads "on" for a plugin that has never run.
+            <SettingsRow
+              label="Run here"
+              accessory={badges}
+              description="New to this project, so it was read but never run. Activating starts it now and on every future open."
+              control={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void activateStaged(plugin.id)}
+                  loading={activating.has(plugin.id)}
+                >
+                  Activate plugin
+                </Button>
+              }
+            />
+          ) : canMute ? (
             <SettingsRow
               label="Run here"
               accessory={badges}
@@ -418,23 +437,6 @@ function ProjectPluginPane({
                     {plugin.error}
                   </span>
                 ) : undefined
-              }
-            />
-          )}
-
-          {plugin.state === "staged" && !plugin.muted && folderTrusted && (
-            <SettingsRow
-              label="Staged"
-              description="New to this project, so it was read but never run. Activating starts it now and on every future open."
-              control={
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void activateStaged(plugin.id)}
-                  loading={activating.has(plugin.id)}
-                >
-                  Activate plugin
-                </Button>
               }
             />
           )}

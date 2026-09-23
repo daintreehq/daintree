@@ -217,6 +217,10 @@ function SettingField({
   // Secret-specific state.
   const [hasStored, setHasStored] = useState(secretIsSet);
   const [revealed, setRevealed] = useState(false);
+  // Whether the secret field holds something the user typed rather than the stored
+  // value fetched by Reveal. Reveal and Hide only change the masking of typed text;
+  // they fetch or drop the stored value only when nothing has been typed.
+  const [secretEdited, setSecretEdited] = useState(false);
   // Set true once a secret is (re)saved — a secret only saves into the keychain
   // — so the tier disclosure clears its "still plaintext" nudge without a form
   // reload.
@@ -241,6 +245,7 @@ function SettingField({
       setHasStored(secretIsSet);
       setRevealed(false);
       setDraft("");
+      setSecretEdited(false);
       setMigratedToKeychain(false);
       return;
     }
@@ -314,6 +319,7 @@ function SettingField({
         setHasStored(false);
         setRevealed(false);
         setDraft("");
+        setSecretEdited(false);
       } else if (type === "boolean") {
         setBoolValue(def.default === true);
       } else {
@@ -416,6 +422,7 @@ function SettingField({
         projectId
       );
       setDraft(value ?? "");
+      setSecretEdited(false);
       setRevealed(true);
       setError(null);
     } catch (err) {
@@ -435,6 +442,7 @@ function SettingField({
     // write succeeds, so a failed save leaves the typed value recoverable next
     // to the inline error instead of silently discarding it.
     if (await writeValue(value)) {
+      setSecretEdited(false);
       setHasStored(true);
       setRevealed(false);
       setDraft("");
@@ -689,7 +697,10 @@ function SettingField({
                   placeholder={hasStored ? "••••••••" : "Not set"}
                   autoComplete="off"
                   className="min-w-0 flex-1"
-                  onChange={(e) => setDraft(e.target.value)}
+                  onChange={(e) => {
+                    setDraft(e.target.value);
+                    setSecretEdited(true);
+                  }}
                   onBlur={() => void commitSecret()}
                 />
                 {hasStored && (
@@ -702,7 +713,9 @@ function SettingField({
                     // Toggle reveal without firing the input's blur-commit.
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
-                      if (revealed) {
+                      if (secretEdited) {
+                        setRevealed((v) => !v);
+                      } else if (revealed) {
                         setRevealed(false);
                         setDraft("");
                       } else {

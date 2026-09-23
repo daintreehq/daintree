@@ -373,6 +373,26 @@ describe("PluginSettingsForm", () => {
     expect(pluginApi.setSettingValue).not.toHaveBeenCalled();
   });
 
+  it("keeps a typed replacement secret through Reveal and Hide", async () => {
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ secretsSet: ["token"] }));
+    pluginApi.revealSecretSetting.mockResolvedValue("old-secret");
+    render(
+      <PluginSettingsForm plugin={makePlugin([{ id: "token", type: "secret", label: "Token" }])} />
+    );
+    const input = (await screen.findByLabelText("Token")) as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.change(input, { target: { value: "new-secret" } });
+
+    // The toggle only changes masking of what was typed; it never swaps in the stored value.
+    fireEvent.click(screen.getByRole("button", { name: "Reveal Token" }));
+    expect(input.type).toBe("text");
+    expect(input.value).toBe("new-secret");
+    fireEvent.click(screen.getByRole("button", { name: "Hide Token" }));
+    expect(input.type).toBe("password");
+    expect(input.value).toBe("new-secret");
+    expect(pluginApi.revealSecretSetting).not.toHaveBeenCalled();
+  });
+
   it("never shows a secret value until revealed, then re-masks on blur", async () => {
     pluginApi.getSettingValues.mockResolvedValue(uiValues({ secretsSet: ["token"] }));
     pluginApi.revealSecretSetting.mockResolvedValue("sekret");
