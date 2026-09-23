@@ -3,7 +3,7 @@ import { InlineStatusBanner, type BannerAction } from "./InlineStatusBanner";
 import { BannerOverflowMenu } from "./BannerOverflowMenu";
 import { sanitizeErrorText } from "@/utils/errorText";
 import { actionService } from "@/services/ActionService";
-import { SPAWN_ERROR_BANNER_COPY } from "./spawnErrorBannerCopy";
+import { SPAWN_ERROR_BANNER_COPY, type SpawnErrorBannerCopy } from "./spawnErrorBannerCopy";
 import { DiagnosticCopyButton } from "./DiagnosticCopyButton";
 import type { SpawnError } from "@/types";
 
@@ -37,7 +37,7 @@ export function SpawnErrorBanner({
 }: SpawnErrorBannerProps) {
   const isCwdError = error.code === "ENOTDIR";
   const isResourceLimit = RESOURCE_LIMIT_CODES.has(error.code);
-  const copy = SPAWN_ERROR_BANNER_COPY[error.code];
+  const copy: SpawnErrorBannerCopy = SPAWN_ERROR_BANNER_COPY[error.code];
 
   const retryAction: BannerAction = {
     id: "retry",
@@ -53,7 +53,7 @@ export function SpawnErrorBanner({
     id: "update-cwd",
     label: "Change directory",
     icon: FolderEdit,
-    variant: "accent",
+    variant: "primary",
     onClick: () => onUpdateCwd(terminalId),
     title: "Change working directory",
     ariaLabel: "Update working directory",
@@ -63,7 +63,7 @@ export function SpawnErrorBanner({
     id: "open-limits",
     label: "Terminal limits",
     icon: Settings2,
-    variant: "accent",
+    variant: "primary",
     onClick: () => {
       void actionService.dispatch(
         "app.settings.openTab",
@@ -102,6 +102,7 @@ export function SpawnErrorBanner({
       title={copy.title}
       description={copy.description(error, cwd)}
       contextLine={cwd ? `Directory: ${sanitizeErrorText(cwd)}` : undefined}
+      contextLineTruncate="middle"
       severity="error"
       action={primaryAction}
       descriptionExtras={

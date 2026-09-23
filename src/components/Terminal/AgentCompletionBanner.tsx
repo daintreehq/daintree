@@ -76,6 +76,9 @@ export function AgentCompletionBanner({
       title={formatBannerCopy(fileCount)}
       severity="neutral"
       role="status"
+      // A finished agent's pane is often a quarter of a laptop screen; its
+      // controls drop beneath the sentence there instead of squeezing it.
+      layout="pane"
       className={className ? `border-t border-divider ${className}` : "border-t border-divider"}
       actions={actions}
       onClose={onDismiss}

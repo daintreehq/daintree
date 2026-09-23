@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Copy } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { sanitizeErrorText } from "@/utils/errorText";
 
 const COPIED_RESET_MS = 2000;
@@ -84,15 +85,16 @@ export function DiagnosticCopyButton({ diagnostics, className }: DiagnosticCopyB
       >
         {payload}
       </span>
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="xs"
         onClick={handleClick}
         aria-label={copied ? "Diagnostics copied" : "Copy diagnostics"}
-        className="flex items-center gap-1 px-1.5 py-0.5 text-3xs font-medium text-text-secondary hover:text-text-primary hover:bg-daintree-border/40 rounded transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary shrink-0"
+        className="shrink-0"
       >
-        <Copy className="w-3 h-3" aria-hidden="true" />
+        <Copy aria-hidden="true" />
         {copied ? "Copied" : "Copy"}
-      </button>
+      </Button>
     </div>
   );
 }

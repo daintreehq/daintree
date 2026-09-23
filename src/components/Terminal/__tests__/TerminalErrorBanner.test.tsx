@@ -14,9 +14,12 @@ vi.mock("@/components/ui/tooltip", () => ({
 vi.mock("@/components/ui/popover", () => ({
   Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   PopoverAnchor: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  PopoverTrigger: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button {...props}>{children}</button>
-  ),
+  PopoverTrigger: ({
+    children,
+    asChild,
+    ...props
+  }: React.ButtonHTMLAttributes<HTMLButtonElement> & { asChild?: boolean }) =>
+    asChild ? <>{children}</> : <button {...props}>{children}</button>,
   PopoverContent: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="overflow-content">{children}</div>
   ),
@@ -114,7 +117,25 @@ describe("TerminalErrorBanner", () => {
       timestamp: 1,
       context: { failedCwd: "/missing/dir" },
     });
-    expect(screen.getByText(/directory:.*\/missing\/dir/i)).toBeTruthy();
+    const line = screen.getByTitle("Directory: /missing/dir");
+    expect(line.textContent).toBe("Directory: /missing/dir");
+  });
+
+  it("keeps the final path segment of a long cwd in its own unclipped span", () => {
+    renderBanner({
+      message: "ENOENT",
+      code: "ENOENT",
+      recoverable: true,
+      timestamp: 1,
+      context: { failedCwd: "/Users/someone/Projects/a/very/deep/tree/packages/runtime" },
+    });
+    const line = screen.getByTitle(/Directory: .*\/runtime$/);
+    // The head gives way first; the tail — the part that names the directory —
+    // is a separate span, so middle truncation never eats it.
+    expect(line.lastElementChild?.textContent).toBe("/runtime");
+    expect(line.textContent).toBe(
+      "Directory: /Users/someone/Projects/a/very/deep/tree/packages/runtime"
+    );
   });
 
   it("invokes onRetry with the terminal id", () => {

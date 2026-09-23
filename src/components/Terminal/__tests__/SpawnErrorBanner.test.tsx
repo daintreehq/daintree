@@ -23,9 +23,12 @@ vi.mock("@/components/ui/tooltip", () => ({
 vi.mock("@/components/ui/popover", () => ({
   Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   PopoverAnchor: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  PopoverTrigger: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button {...props}>{children}</button>
-  ),
+  PopoverTrigger: ({
+    children,
+    asChild,
+    ...props
+  }: React.ButtonHTMLAttributes<HTMLButtonElement> & { asChild?: boolean }) =>
+    asChild ? <>{children}</> : <button {...props}>{children}</button>,
   PopoverContent: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="overflow-content">{children}</div>
   ),
@@ -179,6 +182,24 @@ describe("SpawnErrorBanner", () => {
       expect(
         overflow().contains(screen.getByRole("button", { name: /retry starting terminal/i }))
       ).toBe(true);
+    }
+  );
+
+  it.each(ALL_SPAWN_ERROR_CODES)(
+    "gives the inline fix for %s the same treatment as Retry",
+    (code) => {
+      renderBanner(code);
+      const inline = Array.from(
+        document.querySelectorAll<HTMLButtonElement>("[data-banner-controls] > button")
+      ).filter(
+        (b) =>
+          !overflow().contains(b) &&
+          !/more recovery options/i.test(b.getAttribute("aria-label") ?? "")
+      );
+      // Exactly one contextual fix sits inline, whatever the code — and it
+      // always looks like the primary, never like a link beside it.
+      expect(inline).toHaveLength(1);
+      expect(inline[0]!.getAttribute("data-variant")).toBe("outline");
     }
   );
 

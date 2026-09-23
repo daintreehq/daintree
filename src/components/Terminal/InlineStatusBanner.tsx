@@ -44,6 +44,13 @@ interface BaseInlineStatusBannerProps {
   title: React.ReactNode;
   description?: React.ReactNode;
   contextLine?: string;
+  /**
+   * How `contextLine` gives way when it is wider than the banner. `end` (the
+   * default) clips the tail. `middle` is for a path: it clips the middle and
+   * keeps the final segment, which is the part that says which directory or
+   * file this is. The full value stays in the tooltip either way.
+   */
+  contextLineTruncate?: "end" | "middle";
   animated?: boolean;
   className?: string;
   role?: "alert" | "status";
@@ -70,8 +77,13 @@ interface BaseInlineStatusBannerProps {
    * dismiss last — and drops them beneath the text only when the container
    * is too narrow to hold both. For a banner that lives in a column of
    * strips and has one sentence to say beneath its title.
+   *
+   * `pane` is the strip's behaviour tuned for a banner inside a pane, with or
+   * without a description: controls trail the text while the pane is wider
+   * than 28rem, and drop beneath it, aligned past the glyph, once it is not —
+   * the width a pane gets in a 2x2 grid on a laptop.
    */
-  layout?: "stacked" | "strip";
+  layout?: "stacked" | "strip" | "pane";
   /**
    * Secondary control rendered after the action buttons and before the
    * dismiss (e.g. a Popover trigger, a ghost link). This is the escape hatch
@@ -190,11 +202,33 @@ const BUTTON_VARIANT: Record<ButtonVariant, NonNullable<ButtonProps["variant"]>>
   dangerFilled: "outline",
 };
 
+/**
+ * The mono metadata line. A middle-truncated path splits at its last separator
+ * so the head gives way first and the final segment stays readable.
+ */
+function ContextLine({ text, truncate }: { text: string; truncate: "end" | "middle" }) {
+  const split = truncate === "middle" ? text.replace(/[\\/]+$/, "").search(/[\\/][^\\/]*$/) : -1;
+  if (split <= 0) {
+    return (
+      <p className="text-xs font-mono mt-1 truncate text-text-secondary" title={text}>
+        {text}
+      </p>
+    );
+  }
+  return (
+    <p className="text-xs font-mono mt-1 flex min-w-0 text-text-secondary" title={text}>
+      <span className="truncate">{text.slice(0, split)}</span>
+      <span className="shrink-0 max-w-[75%] truncate">{text.slice(split)}</span>
+    </p>
+  );
+}
+
 export function InlineStatusBanner({
   icon,
   title,
   description,
   contextLine,
+  contextLineTruncate = "end",
   severity = "error",
   animated = true,
   className,
@@ -361,6 +395,8 @@ export function InlineStatusBanner({
   // single-line layout under another name.
   const stacked = !!hasDescription && layout === "stacked";
   const isStrip = !!hasDescription && layout === "strip";
+  const isPane = layout === "pane";
+  const wrapsControls = isStrip || isPane;
 
   const handleClose = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -379,7 +415,8 @@ export function InlineStatusBanner({
         isTitleBarSurface && "app-no-drag",
         // Once the strip's controls drop beneath the text, the × keeps the
         // right edge, in the column every neighbouring strip's × occupies.
-        isStrip && "@max-[52rem]/banner:ml-auto"
+        isStrip && "@max-[52rem]/banner:ml-auto",
+        isPane && "@max-[28rem]/banner:ml-auto"
       )}
     >
       <X aria-hidden="true" />
@@ -406,7 +443,7 @@ export function InlineStatusBanner({
           : "flex items-center justify-between gap-3 px-3 py-2 shrink-0",
         // The strip wraps its controls beneath the text once the container is
         // narrower than a two-line sentence plus three actions can share.
-        isStrip && "@container/banner flex-wrap gap-y-2",
+        wrapsControls && "@container/banner flex-wrap gap-y-2",
         // Scoped, not bare: `transition` carries box-shadow, every colour
         // property and filter along with it, and this banner's entry is an
         // opacity-and-slide. 250ms is BANNER_ENTER_DURATION from the motion
@@ -439,7 +476,7 @@ export function InlineStatusBanner({
       {/* The band's tint and this glyph carry the severity; the text does not.
           Severity-coloured type failed 4.5:1 on most themes, and a title that
           is only legible on some of them is not a title. */}
-      <div className={cn("flex items-start gap-2 min-w-0", isStrip && "flex-1")}>
+      <div className={cn("flex items-start gap-2 min-w-0", wrapsControls && "flex-1")}>
         <IconComponent
           className={cn("w-4 h-4 shrink-0 mt-0.5", isNeutral && "text-text-secondary")}
           style={isNeutral ? undefined : { color: `var(${colorVar})` }}
@@ -454,14 +491,7 @@ export function InlineStatusBanner({
             {description && (
               <p className="text-xs mt-0.5 break-words text-text-secondary">{description}</p>
             )}
-            {contextLine && (
-              <p
-                className="text-xs font-mono mt-1 truncate text-text-secondary"
-                title={contextLine}
-              >
-                {contextLine}
-              </p>
-            )}
+            {contextLine && <ContextLine text={contextLine} truncate={contextLineTruncate} />}
             {isTitleBarSurface && descriptionExtras ? (
               <div className="app-no-drag">{descriptionExtras}</div>
             ) : (
@@ -490,6 +520,8 @@ export function InlineStatusBanner({
             // by a wide sidebar can be narrower than three actions and a ×.
             isStrip &&
               "@max-[52rem]/banner:basis-full @max-[52rem]/banner:pl-6 @max-[52rem]/banner:flex-wrap @max-[52rem]/banner:gap-y-1",
+            isPane &&
+              "@max-[28rem]/banner:basis-full @max-[28rem]/banner:pl-6 @max-[28rem]/banner:flex-wrap @max-[28rem]/banner:gap-y-1",
             // `.app-no-drag *` carries the opt-out down to every control in the
             // row, including nested popover triggers.
             isTitleBarSurface && "app-no-drag"

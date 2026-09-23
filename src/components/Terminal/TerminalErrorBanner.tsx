@@ -40,7 +40,7 @@ export function TerminalErrorBanner({
     id: "update-cwd",
     label: "Change directory",
     icon: FolderEdit,
-    variant: "accent",
+    variant: "primary",
     onClick: () => onUpdateCwd(terminalId),
     title: "Change working directory",
     ariaLabel: "Update working directory",
@@ -76,6 +76,7 @@ export function TerminalErrorBanner({
           ? `Directory: ${sanitizeErrorText(error.context.failedCwd)}`
           : undefined
       }
+      contextLineTruncate="middle"
       severity="error"
       action={primaryAction}
       trailingSlot={
