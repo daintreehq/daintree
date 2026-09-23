@@ -24,6 +24,7 @@ import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { usePilotStore } from "@/store/pilotStore";
+import { useScratchStore } from "@/store/scratchStore";
 import { Toaster } from "./components/ui/toaster";
 import { ShortcutHint } from "./components/ui/ShortcutHint";
 import { ReEntrySummary } from "./components/ui/ReEntrySummary";
@@ -265,6 +266,7 @@ export function ModalHostLayer({
   // registry, a keybinding and the project switcher, none of which has a prop
   // path into this layer.
   const isPilotOpen = usePilotStore((s) => s.isOpen);
+  const hasScratch = useScratchStore((s) => s.currentScratch !== null);
 
   // Both palette activation paths (click and Enter) launch the same way, and
   // through the same seam the dock uses, so a kind can't behave differently
@@ -959,6 +961,7 @@ export function ModalHostLayer({
           <Suspense fallback={null}>
             <LazyOnboardingFlow
               availability={availability}
+              hasWorkspace={currentProject !== null || hasScratch}
               onRefreshSettings={refreshSettings}
               onComplete={gettingStarted.notifyOnboardingComplete}
             />

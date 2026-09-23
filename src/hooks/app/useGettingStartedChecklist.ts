@@ -5,6 +5,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { getOnboardingState } from "@/clients/onboardingClient";
+import { useAgentDiscoveryOnboarding } from "./useAgentDiscoveryOnboarding";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { ChecklistState, ChecklistItemId } from "@shared/types/ipc/maps";
@@ -163,9 +164,14 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
       .then(([onboarding, checklistState]) => {
         setOnboardingCompleted(onboarding.completed);
         setChecklist(checklistState);
+        // The subscriptions below only see transitions, and their mount-time
+        // reconcile ran before this resolved, against a null checklist. A
+        // project that was already open by now would never be credited.
+        checklistRef.current = checklistState;
+        reconcileCurrentState(markItem, () => checklistRef.current);
       })
       .catch((err) => logError("Failed to load checklist state", err));
-  }, [isStateLoaded]);
+  }, [isStateLoaded, markItem]);
 
   // Subscribe to main-process checklist pushes. Every active WebContentsView
   // receives the push via `broadcastToRenderer`, so cached views stay in sync.
@@ -300,8 +306,17 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
     return () => clearTimeout(timer);
   }, [showCelebration, celebrationClearMs]);
 
-  const visible =
-    checklist !== null && (forceShow || (onboardingCompleted && !checklist.dismissed));
+  // Setup is settled once the user finishes the wizard OR declines it from the
+  // welcome banner. Gating on completion alone meant "Not now" on the banner
+  // hid the checklist for good — the one path that most needs a next step.
+  // An open project settles it too: the most direct first move — Open project,
+  // banner untouched — is exactly the user the checklist exists to guide. It
+  // completes nothing and consents to nothing; it only lets progress show.
+  const { setupBannerDismissed } = useAgentDiscoveryOnboarding();
+  const hasProject = useProjectStore((s) => s.currentProject !== null);
+  const setupSettled = onboardingCompleted || setupBannerDismissed || hasProject;
+
+  const visible = checklist !== null && (forceShow || (setupSettled && !checklist.dismissed));
 
   return {
     visible,

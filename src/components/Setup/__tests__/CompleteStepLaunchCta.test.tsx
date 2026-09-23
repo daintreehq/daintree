@@ -13,7 +13,10 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 vi.mock("@/services/KeybindingService", () => ({
-  keybindingService: { getDisplayCombo: getDisplayComboMock },
+  keybindingService: {
+    getDisplayCombo: getDisplayComboMock,
+    getEffectiveCombo: getDisplayComboMock,
+  },
 }));
 
 vi.mock("@/components/icons", () => ({
@@ -126,6 +129,18 @@ describe("CompleteStep summary", () => {
   it("explains the empty case instead of listing nothing", () => {
     render(<CompleteStep installedAgents={[]} />);
     expect(screen.queryByTestId("agent-card-claude")).toBeNull();
-    expect(screen.getByText(/no agents were installed/i)).toBeTruthy();
+    expect(screen.getByText(/no agent is ready yet/i)).toBeTruthy();
+  });
+
+  it("does not celebrate a deferred install, and names one way back", () => {
+    const { container } = render(<CompleteStep installedAgents={[]} />);
+    expect(container.querySelector("svg")).toBeNull();
+    expect(screen.getAllByText(/Settings → Agents/)).toHaveLength(1);
+  });
+
+  it("points at a project when there is nowhere to launch into yet", () => {
+    render(<CompleteStep installedAgents={["claude"]} hasWorkspace={false} />);
+    expect(screen.getByText(/open a project to start one/i)).toBeTruthy();
+    expect(screen.queryByText(/launch them from the toolbar/i)).toBeNull();
   });
 });

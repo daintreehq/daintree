@@ -5,7 +5,9 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 // --- Mocks ---
 
 const onboardingMock = {
-  get: vi.fn(() => Promise.resolve({ completed: true })),
+  get: vi.fn((): Promise<{ completed: boolean; setupBannerDismissed?: boolean }> =>
+    Promise.resolve({ completed: true })
+  ),
   getChecklist: vi.fn(() =>
     Promise.resolve({
       items: {
@@ -73,15 +75,18 @@ let projectState = { currentProject: null as string | null };
 let projectSubscribers: Array<(state: typeof projectState, prev: typeof projectState) => void> = [];
 
 vi.mock("@/store/projectStore", () => ({
-  useProjectStore: {
-    getState: () => projectState,
-    subscribe: (fn: (state: typeof projectState, prev: typeof projectState) => void) => {
-      projectSubscribers.push(fn);
-      return () => {
-        projectSubscribers = projectSubscribers.filter((s) => s !== fn);
-      };
-    },
-  },
+  useProjectStore: Object.assign(
+    <T,>(selector: (state: typeof projectState) => T): T => selector(projectState),
+    {
+      getState: () => projectState,
+      subscribe: (fn: (state: typeof projectState, prev: typeof projectState) => void) => {
+        projectSubscribers.push(fn);
+        return () => {
+          projectSubscribers = projectSubscribers.filter((s) => s !== fn);
+        };
+      },
+    }
+  ),
 }));
 
 let terminalState: {
@@ -125,11 +130,13 @@ vi.mock("@/store/createWorktreeStore", () => ({
 }));
 
 import { useGettingStartedChecklist } from "../useGettingStartedChecklist";
+import { resetAgentDiscoveryStoreForTests } from "../useAgentDiscoveryOnboarding";
 
 describe("useGettingStartedChecklist", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    resetAgentDiscoveryStoreForTests();
     mockReducedMotion = false;
     projectState = { currentProject: null };
     terminalState = { panelsById: {}, panelIds: [], focusedId: null };
@@ -598,6 +605,48 @@ describe("useGettingStartedChecklist", () => {
       // Even with both engagement conditions now true, the explicit show wins.
       fireTerminal({ panelsById: launchedPanel, panelIds: ["t1"], focusedId: "t1" });
       expect(result.current.collapsed).toBe(false);
+    });
+  });
+
+  describe("setup settled", () => {
+    async function mount() {
+      const hook = renderHook(() => useGettingStartedChecklist(true));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      return hook;
+    }
+
+    it("shows the checklist once setup is declined from the welcome banner", async () => {
+      onboardingMock.get.mockResolvedValue({
+        completed: false,
+        setupBannerDismissed: true,
+      });
+      const { result } = await mount();
+      expect(result.current.visible).toBe(true);
+    });
+
+    it("keeps the checklist hidden while setup has been neither finished nor declined", async () => {
+      onboardingMock.get.mockResolvedValue({
+        completed: false,
+        setupBannerDismissed: false,
+      });
+      const { result } = await mount();
+      expect(result.current.visible).toBe(false);
+    });
+
+    it("shows the checklist once a project is open, even with setup untouched", async () => {
+      // Open project straight from the welcome screen, banner never touched.
+      onboardingMock.get.mockResolvedValue({ completed: false, setupBannerDismissed: false });
+      projectState = { currentProject: "/opened/directly" };
+      const { result } = await mount();
+      expect(result.current.visible).toBe(true);
+    });
+
+    it("credits a project that was already open when the checklist hydrated", async () => {
+      projectState = { currentProject: "/already/open" };
+      await mount();
+      expect(onboardingMock.markChecklistItem).toHaveBeenCalledWith("openedProject");
     });
   });
 });

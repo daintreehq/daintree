@@ -349,21 +349,19 @@ code.hljs {
     @apply border-border;
   }
 
-  /* Native checkboxes/radios tint to the theme accent instead of the OS
-     cobalt — the only non-theme hue otherwise rendered in the app. The
-     AccentColor keyword keeps any context without the var on OS behavior.
+  /* Native checkboxes/radios paint their checked state in the text colour,
+     matching the house `Checkbox` primitive — never the OS cobalt, and not the
+     theme accent either. A checked option is membership, and accent restraint
+     allows at most ONE load-bearing accent per focus region; a checkbox group
+     spending it on every tick is precisely what the rule excludes.
 
-     `--checkbox-accent` is an opt-out seam, not a new default: it resolves to
-     the same accent unless an ancestor sets it, so every existing surface is
-     byte-identical. It exists because accent restraint allows at most ONE
-     load-bearing accent per focus region, and a group of option checkboxes is
-     membership — precisely what the rule excludes. A surface with several
-     checked options in one focus trap (the worktree delete dialog) sets this
-     to a neutral token so the accent stays available for the thing that
-     actually needs it. */
+     `--checkbox-accent` stays as a seam for the rare control whose colour
+     carries meaning; a semantic accent-colour utility still wins, since
+     utilities sit in a later layer. The AccentColor keyword keeps any context
+     without the vars on OS behaviour. */
   input[type="checkbox"],
   input[type="radio"] {
-    accent-color: var(--checkbox-accent, var(--theme-accent-primary, AccentColor));
+    accent-color: var(--checkbox-accent, var(--color-text-primary, AccentColor));
   }
 
   /* Neutral option controls: membership, not emphasis. */

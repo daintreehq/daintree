@@ -67,48 +67,60 @@ export function SystemRequirementsSection({
   // Warning state: has any warnings (warn severity tools not meeting version or missing)
   const hasWarning = allDone && warningTools.length > 0;
 
+  const headerSummary = (
+    <>
+      <span className="text-sm font-medium text-text-primary">System requirements</span>
+
+      {isChecking && (
+        <span className="flex items-center gap-1.5 ml-auto text-2xs text-text-secondary">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          Checking...
+        </span>
+      )}
+
+      {allDone && !hasFatalFailure && !hasWarning && !error && (
+        <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-success">
+          <CircleCheck className="w-3.5 h-3.5" />
+          All system tools ready
+        </span>
+      )}
+
+      {allDone && hasFatalFailure && (
+        <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-error">
+          <CircleX className="w-3.5 h-3.5" />
+          Action required: {readyCount} of {totalCount} tools ready
+        </span>
+      )}
+
+      {allDone && !hasFatalFailure && hasWarning && (
+        <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-warning">
+          <AlertTriangle className="w-3.5 h-3.5" />
+          Warning: {readyCount} of {totalCount} tools ready
+        </span>
+      )}
+    </>
+  );
+
   return (
-    <div className="rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30">
-      <button
-        type="button"
-        onClick={() => setUserExpanded((v) => !v)}
-        aria-expanded={isExpanded}
-        aria-controls="system-requirements-panel"
-        className="flex items-center gap-2.5 w-full px-3 py-2.5 text-left"
-      >
-        <ChevronDown
-          className={`w-3.5 h-3.5 text-daintree-text/40 shrink-0 transition-transform ${isExpanded ? "" : "-rotate-90"}`}
-        />
-        <span className="text-sm font-medium text-text-primary">System requirements</span>
-
-        {isChecking && (
-          <span className="flex items-center gap-1.5 ml-auto text-2xs text-text-secondary">
-            <Loader2 className="w-3 h-3 animate-spin" />
-            Checking...
-          </span>
-        )}
-
-        {allDone && !hasFatalFailure && !hasWarning && !error && (
-          <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-success">
-            <CircleCheck className="w-3.5 h-3.5" />
-            All system tools ready
-          </span>
-        )}
-
-        {allDone && hasFatalFailure && (
-          <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-error">
-            <CircleX className="w-3.5 h-3.5" />
-            Action required: {readyCount} of {totalCount} tools ready
-          </span>
-        )}
-
-        {allDone && !hasFatalFailure && hasWarning && (
-          <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-warning">
-            <AlertTriangle className="w-3.5 h-3.5" />
-            Warning: {readyCount} of {totalCount} tools ready
-          </span>
-        )}
-      </button>
+    <div className="rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/30">
+      {/* While a required tool is missing the panel cannot fold, so the row is
+          a heading rather than a disclosure that would do nothing. */}
+      {hasFatalFailure ? (
+        <div className="flex items-center gap-2.5 w-full px-3 py-2.5">{headerSummary}</div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setUserExpanded((v) => !v)}
+          aria-expanded={isExpanded}
+          aria-controls="system-requirements-panel"
+          className="flex items-center gap-2.5 w-full px-3 py-2.5 text-left"
+        >
+          <ChevronDown
+            className={`w-3.5 h-3.5 text-text-secondary shrink-0 transition-transform ${isExpanded ? "" : "-rotate-90"}`}
+          />
+          {headerSummary}
+        </button>
+      )}
 
       <m.div
         id="system-requirements-panel"
@@ -130,7 +142,8 @@ export function SystemRequirementsSection({
           )}
 
           {visibleSpecs.length > 0 && (
-            <div className="grid grid-cols-2 gap-2">
+            // items-start: an expanded card must not stretch its row partner.
+            <div className="grid grid-cols-2 items-start gap-2">
               {visibleSpecs.map((spec) => (
                 <PrerequisiteCard
                   key={spec.tool}
@@ -160,34 +173,58 @@ export function SystemRequirementsSection({
             <div
               role="alert"
               aria-live="assertive"
-              className="px-3 py-2.5 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5 space-y-1.5"
+              className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5"
             >
-              {missingFatalTools.map((spec) => (
-                <p key={spec.tool} className="text-xs text-status-error">
-                  {spec.label} not found
-                </p>
-              ))}
-              {outdatedFatalTools.map((spec) => {
-                const state = checkStates[spec.tool];
-                if (!state || state === "loading") return null;
-                return (
-                  <p key={spec.tool} className="text-xs text-status-error">
-                    {spec.label} v{state.version} installed, needs v{spec.minVersion}+
+              {/* Neutral text: status-coloured text misses 4.5:1 on most themes,
+                  and the tile's own mark already carries the red. This line says
+                  what to do, and the control that finishes it sits beside it
+                  rather than below the fold of the expanded steps. */}
+              <div className="flex-1 min-w-0 space-y-1.5">
+                {missingFatalTools.map((spec) => (
+                  <p key={spec.tool} className="text-xs text-text-primary">
+                    Install {spec.label} using the steps above, then check again.
                   </p>
-                );
-              })}
+                ))}
+                {outdatedFatalTools.map((spec) => {
+                  const state = checkStates[spec.tool];
+                  if (!state || state === "loading") return null;
+                  return (
+                    <p key={spec.tool} className="text-xs text-text-primary">
+                      Update {spec.label} to v{spec.minVersion} or later (you have v{state.version}
+                      ), then check again.
+                    </p>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                onClick={() => void runCheck()}
+                disabled={isChecking}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-sm)] px-2.5 py-1 text-xs text-text-primary ring-1 ring-border-strong bg-surface-panel-elevated transition-colors hover:bg-overlay-medium disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              >
+                <RotateCw
+                  className={`w-3 h-3 ${isChecking ? "animate-spin" : ""}`}
+                  aria-hidden="true"
+                />
+                {isChecking ? "Checking…" : "Check again"}
+              </button>
             </div>
           )}
 
-          <button
-            type="button"
-            onClick={() => void runCheck()}
-            disabled={isChecking}
-            className="inline-flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
-          >
-            <RotateCw className={`w-3 h-3 ${isChecking ? "animate-spin" : ""}`} />
-            {isChecking ? "Checking..." : "Re-check"}
-          </button>
+          {!(allDone && hasFatalFailure) && (
+            <button
+              type="button"
+              onClick={() => void runCheck()}
+              disabled={isChecking}
+              className="inline-flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              <RotateCw
+                className={`w-3 h-3 ${isChecking ? "animate-spin" : ""}`}
+                aria-hidden="true"
+              />
+              {isChecking ? "Checking…" : "Re-check"}
+            </button>
+          )}
         </div>
       </m.div>
     </div>
