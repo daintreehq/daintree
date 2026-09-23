@@ -14,7 +14,7 @@
  * Opt-in only: skips itself unless DAINTREE_SHOT_HOSTMEMORY is set.
  *
  *   DAINTREE_SHOT_HOSTMEMORY=1 DAINTREE_SHOT_DIR=/abs/out \
- *     npx playwright test --project=screenshots host-memory-pause-review
+ *     npx playwright test --project=screenshots host-pause-indicator-review
  *
  * Env knobs:
  *   DAINTREE_SHOT_HOSTMEMORY  required — any truthy value runs the capture
