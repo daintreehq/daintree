@@ -27,6 +27,7 @@ import {
   DOCK_STATUS_PILL_CLASS,
   DOCK_STATUS_PILL_OPEN_CLASS,
   DockStatusPillLabel,
+  useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
@@ -164,6 +165,8 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
     return items;
   }, [terminals, backgroundedTerminals]);
 
+  const focusHandoff = useDockPopoverFocusHandoff();
+
   const handleRestoreSingle = useCallback(
     (terminal: PtyPanelData) => {
       const worktreeId = terminal.worktreeId?.trim();
@@ -174,9 +177,11 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
       restoreBackgroundTerminal(terminal.id);
       activateTerminal(terminal.id);
       pingTerminal(terminal.id);
+      focusHandoff.markHandoff();
       setIsOpen(false);
     },
     [
+      focusHandoff,
       activeWorktreeId,
       trackTerminalFocus,
       selectWorktree,
@@ -200,10 +205,12 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
         }
         activateTerminal(activeId);
         pingTerminal(activeId);
+        focusHandoff.markHandoff();
       }
       setIsOpen(false);
     },
     [
+      focusHandoff,
       activeWorktreeId,
       trackTerminalFocus,
       selectWorktree,
@@ -308,7 +315,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
           align="end"
           sideOffset={8}
           onOpenAutoFocus={(e) => e.preventDefault()}
-          onCloseAutoFocus={(e) => e.preventDefault()}
+          onCloseAutoFocus={focusHandoff.onCloseAutoFocus}
           onPointerDownOutside={(e) => {
             // Keep the popover anchored while the kill confirm dialog is open;
             // AppDialog is a react-dom portal with no Radix marker on its root,
@@ -326,7 +333,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
             <div className="px-3 py-2 border-b border-divider bg-surface-canvas/50 flex justify-between items-center">
               <span className="text-xs font-medium text-text-secondary">Background panels</span>
               {waitingCount > 0 && (
-                <span className="text-3xs font-medium text-state-waiting tabular-nums">
+                <span className="text-3xs font-medium text-text-secondary tabular-nums">
                   {waitingCount} waiting
                 </span>
               )}
@@ -449,8 +456,8 @@ function BackgroundSingleItem({
             <span aria-hidden="true">·</span>
           )}
           {StateIcon && stateLabel && (
-            <span className={cn("inline-flex items-center gap-1 shrink-0", stateColor)}>
-              <StateIcon className="h-2.5 w-2.5" />
+            <span className="inline-flex items-center gap-1 shrink-0">
+              <StateIcon className={cn("h-2.5 w-2.5", stateColor)} />
               <span>{stateLabel}</span>
             </span>
           )}
@@ -583,7 +590,7 @@ function BackgroundGroupItem({
           <div className="text-xs font-medium text-text-secondary group-hover:text-text-primary truncate transition-colors">
             {groupName}
             {groupWaiting > 0 && (
-              <span className="ml-1.5 text-3xs text-state-waiting font-normal tabular-nums">
+              <span className="ml-1.5 text-3xs text-text-secondary font-normal tabular-nums">
                 · {groupWaiting} waiting
               </span>
             )}

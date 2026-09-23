@@ -34,6 +34,7 @@ import {
   DOCK_STATUS_PILL_OPEN_CLASS,
   DockStatusPillLabel,
   dockStatusScopeDescription,
+  useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
 
 interface WaitingContainerProps {
@@ -75,6 +76,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
     }))
   );
   const { worktreeMap } = useWorktrees();
+  const focusHandoff = useDockPopoverFocusHandoff();
 
   const displayItems = useMemo((): WaitingDisplayItem[] => {
     // Triage order, not insertion order: approvals first, then error-blocked,
@@ -179,9 +181,11 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
       }
       activateTerminal(terminal.id);
       pingTerminal(terminal.id);
+      focusHandoff.markHandoff();
       setIsOpen(false);
     },
     [
+      focusHandoff,
       activeWorktreeId,
       trackTerminalFocus,
       selectWorktree,
@@ -246,7 +250,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
                   icon={<WaitingIcon className="text-state-waiting" aria-hidden="true" />}
                   label="Waiting"
                   count={displayCount}
-                  detail={hereCount > 0 ? `${hereCount} here` : undefined}
+                  detail={hereCount > 0 ? `${hereCount} here` : "none here"}
                   compact={compact}
                 />
               </Button>
@@ -266,7 +270,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
           align="end"
           sideOffset={8}
           onOpenAutoFocus={(e) => e.preventDefault()}
-          onCloseAutoFocus={(e) => e.preventDefault()}
+          onCloseAutoFocus={focusHandoff.onCloseAutoFocus}
           onPointerDownOutside={(e) => {
             if (killConfirmId !== null) e.preventDefault();
           }}

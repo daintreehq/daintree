@@ -261,13 +261,13 @@ describe("WaitingContainer", () => {
       expect(trigger.textContent).toContain("1 here");
     });
 
-    it("drops the local qualifier when nothing is waiting here", () => {
+    it("says so when nothing is waiting here", () => {
       mockTerminals = [makeTerminal({ id: "t1", worktreeId: "wt-2" })];
       render(<WaitingContainer />);
       const trigger = screen.getByRole("button", {
         name: "Waiting: 1 agent across all worktrees, none in this one",
       });
-      expect(trigger.textContent).not.toContain("here");
+      expect(trigger.textContent).toContain("none here");
     });
   });
 

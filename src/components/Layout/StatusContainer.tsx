@@ -19,6 +19,7 @@ import {
   DOCK_STATUS_PILL_OPEN_CLASS,
   DockStatusPillLabel,
   dockStatusScopeDescription,
+  useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
 
 function getLocationIcon(location: PanelLocation | undefined) {
@@ -58,6 +59,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
     }))
   );
   const { worktreeMap } = useWorktrees();
+  const focusHandoff = useDockPopoverFocusHandoff();
   const count = terminals.length;
   const hereCount = terminals.filter(
     (t) => (t.worktreeId ?? null) === (activeWorktreeId ?? null)
@@ -95,7 +97,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
                   icon={<Icon className={config.iconColor} aria-hidden="true" />}
                   label={config.buttonLabel}
                   count={displayCount}
-                  detail={hereCount > 0 ? `${hereCount} here` : undefined}
+                  detail={hereCount > 0 ? `${hereCount} here` : "none here"}
                   compact={compact}
                 />
               </Button>
@@ -115,7 +117,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
           align="end"
           sideOffset={8}
           onOpenAutoFocus={(e) => e.preventDefault()}
-          onCloseAutoFocus={(e) => e.preventDefault()}
+          onCloseAutoFocus={focusHandoff.onCloseAutoFocus}
         >
           <div className="flex flex-col">
             <div className="px-3 py-2 border-b border-divider bg-surface-canvas/50 flex justify-between items-center">
@@ -140,6 +142,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
                       }
                       activateTerminal(terminal.id);
                       pingTerminal(terminal.id);
+                      focusHandoff.markHandoff();
                       setIsOpen(false);
                     }}
                     className="flex items-center justify-between gap-2.5 w-full px-2.5 py-1.5 rounded-[var(--radius-sm)] transition-colors group text-left outline-hidden hover:bg-tint/5 focus:bg-tint/5"

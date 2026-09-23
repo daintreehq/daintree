@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useCallback, useRef, type ReactNode } from "react";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { cn } from "@/lib/utils";
 
@@ -54,4 +54,25 @@ export function dockStatusScopeDescription(total: number, here: number): string 
   if (here === 0) return "across all worktrees, none in this one";
   if (here === total) return "across all worktrees, all in this one";
   return `across all worktrees, ${here} in this one`;
+}
+
+/**
+ * Close-time focus for a status popover. Activating a row hands focus to the
+ * panel it opens, so that close must not pull focus back to the pill; every
+ * other close (Escape, click away, a button in the body) is left to the
+ * Popover primitive's shared policy, which restores the way the close asked
+ * for. Suppressing every close, as these popovers used to, stranded a keyboard
+ * user on `document.body` after Escape.
+ */
+export function useDockPopoverFocusHandoff() {
+  const handedOffRef = useRef(false);
+  const markHandoff = useCallback(() => {
+    handedOffRef.current = true;
+  }, []);
+  const onCloseAutoFocus = useCallback((event: Event) => {
+    if (!handedOffRef.current) return;
+    handedOffRef.current = false;
+    event.preventDefault();
+  }, []);
+  return { markHandoff, onCloseAutoFocus };
 }
