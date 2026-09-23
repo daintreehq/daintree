@@ -90,7 +90,9 @@ export function PanelTabList({
                       onAddTab();
                     }}
                     onPointerDown={(e) => e.stopPropagation()}
-                    className="shrink-0"
+                    // 14px glyph in the 24px target, like the window controls
+                    // at the other end of the same bar.
+                    className="shrink-0 [&_svg]:size-3.5"
                     aria-label="Duplicate panel as new tab"
                   >
                     <Plus aria-hidden="true" />

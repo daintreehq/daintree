@@ -814,7 +814,7 @@ function PanelHeaderComponent({
               variant="ghost"
               size="icon-xs"
               onPointerDown={(e) => e.stopPropagation()}
-              className="relative shrink-0"
+              className={cn(CONTROL_ICON, "relative shrink-0")}
               aria-label={hiddenTabsLabel}
               aria-haspopup="menu"
               data-testid="panel-tabs-overflow"
