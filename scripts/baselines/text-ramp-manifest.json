@@ -1,7 +1,7 @@
 {
   "generated": "2026-09-23",
-  "total": 162,
-  "files": 74,
+  "total": 159,
+  "files": 71,
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
@@ -17,21 +17,6 @@
       "decision": "keep",
       "category": "icon-affordance",
       "evidence": "<FolderGit2> is an icon — the colour is an affordance, not prose"
-    },
-    {
-      "file": "src/components/ActionPalette/ActionPalette.tsx",
-      "ordinal": 0,
-      "line": 103,
-      "start": 4728,
-      "end": 4749,
-      "token": "text-daintree-text/40",
-      "variants": "",
-      "step": 40,
-      "group": "src/components/ActionPalette/ActionPalette.tsx#4716",
-      "branch": "",
-      "decision": "keep",
-      "category": "prior-ruling-40",
-      "evidence": "#12003 ruled on this /40 site; no in-scope partner reopens it"
     },
     {
       "file": "src/components/Browser/BrowserPane.tsx",
@@ -1309,21 +1294,6 @@
       "evidence": "<div> wraps only icons — the colour paints a glyph through currentColor"
     },
     {
-      "file": "src/components/QuickSwitcher/QuickSwitcherItem.tsx",
-      "ordinal": 0,
-      "line": 42,
-      "start": 1342,
-      "end": 1363,
-      "token": "text-daintree-text/70",
-      "variants": "",
-      "step": 70,
-      "group": "src/components/QuickSwitcher/QuickSwitcherItem.tsx#1321",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<span> wraps only icons — the colour paints a glyph through currentColor"
-    },
-    {
       "file": "src/components/Settings/DiagnosticsReviewDialog.tsx",
       "ordinal": 0,
       "line": 216,
@@ -1847,21 +1817,6 @@
       "decision": "keep",
       "category": "icon-affordance",
       "evidence": "<button> wraps only icons — the colour paints a glyph through currentColor"
-    },
-    {
-      "file": "src/components/TerminalPalette/launchOptions.tsx",
-      "ordinal": 0,
-      "line": 71,
-      "start": 2682,
-      "end": 2703,
-      "token": "text-daintree-text/50",
-      "variants": "",
-      "step": 50,
-      "group": "src/components/TerminalPalette/launchOptions.tsx#2662",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<Settings> is an icon — the colour is an affordance, not prose"
     },
     {
       "file": "src/components/ui/paletteRowStyles.ts",
