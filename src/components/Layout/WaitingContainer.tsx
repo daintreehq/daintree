@@ -371,7 +371,7 @@ interface WaitingSingleItemProps {
 }
 
 const ROW_SURFACE_CLASS =
-  "rounded-[var(--radius-sm)] transition-colors duration-150 ease-out hover:bg-overlay-subtle";
+  "rounded-[var(--radius-sm)] transition-colors duration-150 ease-out hover:bg-tint/5";
 
 const ROW_TARGET_CLASS =
   "flex w-full min-w-0 items-center gap-2 h-7 px-2 text-left rounded-[var(--radius-sm)] outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2 cursor-pointer select-none";
