@@ -1532,16 +1532,16 @@ body,
 
 /* Terminal Selection State.
    panel-focus-border / panel-focus-shadow / panel-selected-bg are OPTIONAL
-   extension keys. The border fallback is mixed to clear 3:1 against the pane's
-   own body and header and against the grid canvas (WCAG 1.4.11): at the old 92%
-   border-strong it measured under 2:1 on the default theme, and the focused
-   pane only read as focused once you went looking. The high-contrast
+   extension keys. The border fallback is deliberately quiet: the focused pane
+   is also carried by its selected background and header, and a 3:1 edge (a 68%
+   mix, tried in #12641) read as a bright outline and was walked back. Users who
+   need a stronger edge get one from the high-contrast blocks. The high-contrast
    `prefers-contrast: more` and `forced-colors: active` blocks below keep their
    own hardcoded recipes and continue to win. */
 .terminal-selected {
   border-color: var(
     --panel-focus-border,
-    color-mix(in oklab, var(--theme-border-strong) 68%, var(--theme-text-primary))
+    color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
   );
   background-color: var(--panel-selected-bg, var(--color-surface-highlight));
   box-shadow: var(
@@ -1564,7 +1564,7 @@ body,
   outline: 1px solid
     var(
       --panel-focus-border,
-      color-mix(in oklab, var(--theme-border-strong) 68%, var(--theme-text-primary))
+      color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
     );
   outline-offset: -1px;
 }
@@ -1595,12 +1595,12 @@ body,
 .terminal-selected-quiet {
   border-color: var(
     --panel-focus-border,
-    color-mix(in oklab, var(--theme-border-strong) 68%, var(--theme-text-primary))
+    color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
   );
   outline: 1px solid
     var(
       --panel-focus-border,
-      color-mix(in oklab, var(--theme-border-strong) 68%, var(--theme-text-primary))
+      color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
     );
   outline-offset: -1px;
 }
@@ -1614,7 +1614,7 @@ body,
 .assistant-focused {
   border-left-color: var(
     --panel-focus-border,
-    color-mix(in oklab, var(--theme-border-strong) 68%, var(--theme-text-primary))
+    color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
   );
   box-shadow: var(
     --panel-focus-shadow,
@@ -1912,7 +1912,7 @@ label:focus-within .brand-mark,
     background-color: var(--panel-selected-bg, var(--color-surface-highlight));
     border-color: var(
       --panel-focus-border,
-      color-mix(in oklab, var(--theme-border-strong) 68%, var(--theme-text-primary))
+      color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
     );
     box-shadow: var(
       --panel-focus-shadow,
