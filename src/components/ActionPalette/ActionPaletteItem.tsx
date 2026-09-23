@@ -3,6 +3,7 @@ import { Pin, PinOff, EyeOff, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createTooltipWithShortcut } from "@/lib/platform";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { KbdChord } from "@/components/ui/Kbd";
 import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
 import { ACTION_CATEGORY_COLORS, ACTION_CATEGORY_DEFAULT_COLOR } from "@/config/categoryColors";
 
@@ -294,10 +295,21 @@ function ActionPaletteItemInner({
           </span>
         )}
 
-        {item.keybinding && (
-          <span className="text-2xs font-mono text-text-secondary transition-colors group-aria-selected:text-text-primary">
-            {item.keybinding}
-          </span>
+        {item.keybindingCombo ? (
+          // Through the shared key renderer, so a shortcut reads the same here
+          // as in the Cmd+K HUD and every other list: ⌘R on macOS, not ⌘+R.
+          <KbdChord
+            shortcut={item.keybindingCombo}
+            density="bare"
+            aria-label={item.keybinding}
+            className="shrink-0 [&_kbd]:text-2xs group-aria-selected:[&_kbd]:text-text-primary"
+          />
+        ) : (
+          item.keybinding && (
+            <span className="text-2xs font-mono text-text-secondary transition-colors group-aria-selected:text-text-primary">
+              {item.keybinding}
+            </span>
+          )
         )}
 
         {isConfirmTier && (

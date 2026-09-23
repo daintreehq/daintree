@@ -110,6 +110,22 @@ describe("ActionPaletteItem", () => {
     expect(screen.getByText("⌘K")).toBeTruthy();
   });
 
+  it("renders the canonical combo as key glyphs, labelled with its display form", () => {
+    render(
+      <ActionPaletteItem
+        item={makeItem({ keybinding: "⌘+K ⌘+R", keybindingCombo: "Cmd+K Cmd+R" })}
+        index={0}
+        isSelected={false}
+        onSelect={onSelect}
+      />
+    );
+
+    const keys = Array.from(screen.getByRole("option").querySelectorAll("kbd"));
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.some((k) => k.textContent === "+")).toBe(false);
+    expect(screen.getByText("⌘+K ⌘+R")).toBeTruthy();
+  });
+
   it("applies selected styling with aria-selected", () => {
     render(<ActionPaletteItem item={makeItem()} index={0} isSelected={true} onSelect={onSelect} />);
 

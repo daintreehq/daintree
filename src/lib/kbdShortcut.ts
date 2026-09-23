@@ -107,9 +107,18 @@ function splitStepKeys(step: string): string[] {
 export function parseChord(shortcut: string, isMac: boolean): string[][] {
   if (!shortcut || !shortcut.trim()) return [];
 
-  // Collapse whitespace around `+` first so " Cmd + Shift + P " stays a single
-  // chord step. Remaining whitespace is the chord-step separator.
-  const normalized = shortcut.trim().replace(/\s*\+\s*/g, "+");
+  // Collapse whitespace around a JOINING `+` so " Cmd + Shift + P " stays a
+  // single chord step. Remaining whitespace is the chord-step separator.
+  //
+  // Only a `+` between two keys joins. A `+` standing alone as a step
+  // ("Cmd+K +") or doubled as a literal key before a step break ("Cmd++ Cmd+P")
+  // is a key, and the whitespace beside it is a step boundary — collapsing it
+  // there dropped the literal step or merged two steps into one.
+  const normalized = shortcut
+    .trim()
+    .replace(/\s+\+\s+(?=\S)/g, "+")
+    .replace(/(?<=[^\s+])\+\s+(?=\S)/g, "+")
+    .replace(/\s+\+(?=[^\s+])/g, "+");
   const steps = normalized
     .split(/\s+/)
     .map((step) => splitStepKeys(step))

@@ -3,18 +3,29 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { actionService } from "@/services/ActionService";
 import { combosFieldsEqual, keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { COMMAND_HUD_PREFIX, usePendingChord } from "./useGlobalKeybindings";
+import {
+  COMMAND_HUD_BLOCKED_EVENT,
+  COMMAND_HUD_PREFIX,
+  usePendingChord,
+} from "./useGlobalKeybindings";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 
 /** A single entry in the curated Cmd+K power-command layer. */
 export interface CommandHudItem {
   actionId: string;
-  /** Cmd+‹letter› glyphs for the shortcut chip (e.g. "⌘+R"). */
+  /** Canonical second-key combo (e.g. "Cmd+R"), rendered through `KbdChord`. */
+  combo: string;
+  /** Platform-formatted second key (e.g. "⌘+R"), matched by the text filter. */
   displayKey: string;
   /** Human label shown as the row's primary text. */
   description: string;
   category: string;
+  /** Snapshot of the action's `isEnabled` at open, from the action manifest. */
+  enabled: boolean;
+  /** Why it can't run right now, shown on the row when disabled. */
+  disabledReason?: string;
 }
 
 export interface CommandHudGroup {
@@ -43,15 +54,30 @@ function buildLayerItems(): CommandHudItem[] {
   // The HUD shows only the curated Cmd+K chord layer — every completion of the
   // `Cmd+K` prefix. Synthetic sub-prefix rows (`actionId === ""`, deeper 3-part
   // chords) are filtered out; the flat map has none, but guard anyway.
+  //
+  // Enabled state comes from the manifest, like the command palette's rows, so
+  // a command that can't run says why on its row instead of closing the HUD on
+  // a silent no-op. An id with no registered action is left enabled: dispatch
+  // is still the authority, and the row must not claim a reason it doesn't have.
+  const manifest = new Map(
+    actionService.list(undefined, { includeSchemas: false }).map((entry) => [entry.id, entry])
+  );
   return keybindingService
     .getChordCompletions(COMMAND_HUD_PREFIX)
     .filter((entry) => entry.actionId !== "")
-    .map((entry) => ({
-      actionId: entry.actionId,
-      displayKey: entry.displayKey,
-      description: entry.description,
-      category: entry.category,
-    }));
+    .map((entry) => {
+      const action = manifest.get(entry.actionId as Parameters<typeof actionService.get>[0]);
+      const enabled = action?.enabled ?? true;
+      return {
+        actionId: entry.actionId,
+        combo: entry.secondKey,
+        displayKey: entry.displayKey,
+        description: entry.description,
+        category: entry.category,
+        enabled,
+        disabledReason: enabled ? undefined : (action?.disabledReason ?? "Not available right now"),
+      };
+    });
 }
 
 export function useCommandHud(): UseCommandHudReturn {
@@ -61,10 +87,12 @@ export function useCommandHud(): UseCommandHudReturn {
   const [query, setQueryState] = useState("");
   const [selectedIndex, setSelectedIndexState] = useState(0);
 
-  // Build the layer only while open — closed, the HUD holds no rows.
-  const layer = useMemo<CommandHudItem[]>(() => {
-    if (!isOpen) return [];
-    return buildLayerItems();
+  // Snapshot the layer on each open and keep it through the close, so the exit
+  // fade shows the list the user was looking at rather than an emptied panel
+  // reading "No commands match".
+  const [layer, setLayer] = useState<CommandHudItem[]>([]);
+  useEffect(() => {
+    if (isOpen) setLayer(buildLayerItems());
   }, [isOpen]);
 
   const { results, groups } = useMemo<{
@@ -73,12 +101,18 @@ export function useCommandHud(): UseCommandHudReturn {
   }>(() => {
     if (layer.length === 0) return { results: [], groups: [] };
 
+    // Keys are matched without their `+` separators on both sides, so a query
+    // typed the way the row renders it (⌘R) finds the row as well as ⌘+R does.
     const trimmed = query.trim().toLowerCase();
+    const keyQuery = trimmed.replace(/\+/g, "");
     const filtered = trimmed
       ? layer.filter(
           (item) =>
             item.description.toLowerCase().includes(trimmed) ||
-            item.displayKey.toLowerCase().includes(trimmed)
+            // The group headings are on screen, so "git" finds the Git group.
+            item.category.toLowerCase().includes(trimmed) ||
+            (keyQuery.length > 0 &&
+              item.displayKey.toLowerCase().replace(/\+/g, "").includes(keyQuery))
         )
       : layer;
 
@@ -114,6 +148,20 @@ export function useCommandHud(): UseCommandHudReturn {
     setSelectedIndexState(0);
   }, []);
 
+  // A refused direct completion (see useGlobalKeybindings) selects its row, so
+  // the reason printed on it comes into view under the cursor. When the query
+  // has filtered the row out, the spoken reason is the feedback.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onBlocked = (e: Event) => {
+      if (!(e instanceof CustomEvent)) return;
+      const index = results.findIndex((item) => item.actionId === e.detail);
+      if (index >= 0) setSelectedIndexState(index);
+    };
+    window.addEventListener(COMMAND_HUD_BLOCKED_EVENT, onBlocked);
+    return () => window.removeEventListener(COMMAND_HUD_BLOCKED_EVENT, onBlocked);
+  }, [isOpen, results]);
+
   const setSelectedIndex = useCallback((index: number) => {
     setSelectedIndexState(index);
   }, []);
@@ -137,6 +185,12 @@ export function useCommandHud(): UseCommandHudReturn {
   }, []);
 
   const run = useCallback((item: CommandHudItem) => {
+    // A disabled row already shows its reason; running it keeps the HUD open
+    // and says the reason aloud rather than dismissing on a no-op.
+    if (!item.enabled) {
+      useAnnouncerStore.getState().announce(item.disabledReason ?? "Not available", "polite");
+      return;
+    }
     // Close first so the HUD never lingers behind an action that opens a modal
     // or moves focus. The layer is a fixed curated set — no MRU recording.
     keybindingService.clearPendingChord();

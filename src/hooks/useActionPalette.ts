@@ -30,6 +30,8 @@ export interface ActionPaletteItem {
    */
   redirectTo?: string;
   keybinding?: string;
+  /** Canonical effective combo (e.g. "Cmd+K Cmd+R"), rendered through `KbdChord`. */
+  keybindingCombo?: string;
   kind: string;
   /**
    * Set for plugin-contributed actions. Their synthetic definition surfaces its
@@ -151,6 +153,7 @@ export function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteIt
     disabledReason,
     redirectTo,
     keybinding: keybindingService.getDisplayCombo(entry.id),
+    keybindingCombo: keybindingService.getEffectiveCombo(entry.id),
     kind: entry.kind,
     pluginId: entry.pluginId,
     titleLower: title.toLowerCase(),

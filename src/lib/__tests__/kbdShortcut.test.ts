@@ -137,6 +137,18 @@ describe("parseChord — edge cases", () => {
     expect(parseChord(" Cmd + Shift + P ", true)).toEqual([["⌘", "⇧", "P"]]);
   });
 
+  it("keeps a literal plus key as its own chord step", () => {
+    expect(parseChord("Cmd+K +", true)).toEqual([["⌘", "K"], ["+"]]);
+    expect(parseChord("Cmd+K +", false)).toEqual([["Ctrl", "K"], ["+"]]);
+  });
+
+  it("keeps a trailing literal plus from swallowing the next step", () => {
+    expect(parseChord("Cmd++ Cmd+P", true)).toEqual([
+      ["⌘", "+"],
+      ["⌘", "P"],
+    ]);
+  });
+
   it("treats a bare + as a literal + key", () => {
     expect(parseChord("+", false)).toEqual([["+"]]);
   });

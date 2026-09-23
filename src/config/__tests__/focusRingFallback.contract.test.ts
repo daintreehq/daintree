@@ -702,7 +702,7 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     file: "src/components/Layout/ChordIndicator.tsx",
     fragment: "focus:outline-hidden",
     reason:
-      "Command HUD search input is auto-focused for the HUD's entire lifetime (a modal, single-input command surface) — there is no ambiguous focus state to indicate, and the dark-glass panel is the focus surface.",
+      "Command HUD search input holds focus for the whole pending chord: it is focused once the panel mounts, and focus leaving it ends the chord — so there is never a focused-but-unmarked state to indicate, and the glass panel itself is the focus surface.",
   },
 ];
 

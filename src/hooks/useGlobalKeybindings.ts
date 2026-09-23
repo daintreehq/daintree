@@ -12,6 +12,7 @@ import { isTerminalReservedKey } from "@/services/terminalReservedKeys";
 import { buildKeybindingWhenContext } from "@/services/keybindingWhenContext";
 import { usePaletteStore, usePanelStore } from "../store";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
 /**
  * Canonical first-step combo of every chord (they all begin `Cmd+K`). Opening
@@ -19,6 +20,13 @@ import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
  * form (`"Cmd+k"`), so compare with `combosFieldsEqual`, never `===`.
  */
 export const COMMAND_HUD_PREFIX = "Cmd+K";
+
+/**
+ * Fired on `window` with the action id as `detail` when a direct Cmd+K
+ * completion is refused because the command is disabled, so the HUD can move
+ * its selection onto that row and bring its inline reason into view.
+ */
+export const COMMAND_HUD_BLOCKED_EVENT = "daintree:command-hud-blocked";
 
 /**
  * Global keybinding handler that provides:
@@ -127,6 +135,35 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         e.stopPropagation();
         keybindingService.clearPendingChord();
         return;
+      }
+
+      // A direct completion (Cmd+K then Cmd+P) of a command that can't run
+      // right now keeps the HUD open and says why, the same as choosing that
+      // row with Enter — rather than closing it on a dispatch that returns
+      // DISABLED with nothing on screen to explain it.
+      if (hudPending && (e.metaKey || e.ctrlKey)) {
+        const completion = keybindingService
+          .getChordCompletions(COMMAND_HUD_PREFIX)
+          .find(
+            (entry) => entry.actionId !== "" && keybindingService.matchesEvent(e, entry.secondKey)
+          );
+        const action = completion
+          ? actionService.get(completion.actionId as Parameters<typeof actionService.get>[0])
+          : null;
+        if (action && !action.enabled) {
+          e.preventDefault();
+          e.stopPropagation();
+          window.dispatchEvent(
+            new CustomEvent(COMMAND_HUD_BLOCKED_EVENT, { detail: completion!.actionId })
+          );
+          useAnnouncerStore
+            .getState()
+            .announce(
+              action.disabledReason ?? `${completion!.description} isn't available`,
+              "polite"
+            );
+          return;
+        }
       }
 
       if (e.key === "Escape" && pendingChord) {
