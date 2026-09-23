@@ -493,7 +493,10 @@ export function PluginDetailPane({
             // wouldn't show — wrap it in a focusable span trigger.
             <Tooltip>
               <TooltipTrigger asChild>
-                <span tabIndex={0} className="inline-flex">
+                <span
+                  tabIndex={0}
+                  className="inline-flex rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+                >
                   <Button
                     variant="ghost"
                     size="icon-sm"

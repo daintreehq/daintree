@@ -112,7 +112,7 @@ export function WorktreeDetails({
 
   const lastActiveLine = (
     <div
-      className="flex items-center gap-2 text-xs"
+      className="flex items-center gap-2 rounded-[var(--radius-sm)] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
       role="group"
       aria-label="Last activity"
       tabIndex={0}
@@ -365,7 +365,7 @@ export function WorktreeDetails({
         </div>
 
         {showLastActive && (
-          <Tooltip autoDismiss={false}>
+          <Tooltip autoDismiss={false} dismissOnDialogTransition={false}>
             <TooltipTrigger asChild>{lastActiveLine}</TooltipTrigger>
             <TooltipContent side="bottom" className="p-3">
               <CommitInfoTooltip
