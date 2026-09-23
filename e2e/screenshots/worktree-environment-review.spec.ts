@@ -357,9 +357,7 @@ const card = (page: Page, branch: string): Locator =>
 
 /** The environment trigger: the popover button, or the bare tooltip icon when there is nothing to open. */
 const envTrigger = (page: Page, branch: string): Locator =>
-  row(page, branch)
-    .locator('[aria-label$="environment status"], [aria-label$="environment"]')
-    .first();
+  row(page, branch).locator('button[aria-label*=" environment"]').first();
 
 const openPopover = (page: Page): Locator =>
   page.locator('[data-radix-popper-content-wrapper] [role="dialog"]').first();
@@ -544,23 +542,15 @@ test("worktree environment popover review — states and themes", async () => {
       await closePopover(page);
     });
 
-    // 4. The sparse environment: no icon chosen, no status command. There is
-    //    nothing to open, so the icon only carries a tooltip.
+    // 4. The sparse environment: no icon chosen, no status command. It still
+    //    opens, so its name is reachable, and it says what would fill it.
     await step("bare", async () => {
       await closePopover(page);
       const trigger = envTrigger(page, WORKTREES.bare.branch);
       await snapRegion(page, "85-bare-env-trigger", [trigger], { x: 150, y: 16 });
-      // The tooltip is the only way to learn the environment's name here, so
-      // whether a pointer can reach it at all is part of what is under review:
-      // record its absence rather than failing the run on it.
-      await trigger.hover({ force: true });
-      const tip = page.locator('[role="tooltip"]').first();
-      if (await tip.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await snapRegion(page, "86-bare-env-tooltip", [trigger, tip]);
-      } else {
-        console.warn("[env-shots] bare environment icon opened no tooltip on hover");
-      }
-      await page.mouse.move(1600, 1000);
+      const pop = await openByClick(page, WORKTREES.bare.branch, ENV_BARE);
+      await snapRegion(page, "86-bare-env-popover", [trigger, pop]);
+      await closePopover(page);
     });
 
     // 5. Keyboard: Tab to the trigger (a real :focus-visible, not a scripted

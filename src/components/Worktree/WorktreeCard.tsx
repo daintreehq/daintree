@@ -511,13 +511,12 @@ export function WorktreeCard({
     );
   };
 
-  const handleResourceStatus = () => {
-    void actionService.dispatch(
+  const handleResourceStatus = () =>
+    actionService.dispatch(
       "worktree.resource.status",
       { worktreeId: worktree.id },
       { source: "user" }
     );
-  };
 
   const handleCopyContextFull = () => {
     void copyContextWithFeedback(worktree.id, "context-menu", undefined, "worktree-card");

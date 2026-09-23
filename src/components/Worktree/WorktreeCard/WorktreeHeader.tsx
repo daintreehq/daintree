@@ -56,7 +56,7 @@ export interface WorktreeHeaderProps {
   devServerSession?: DevPreviewSessionState;
   lastGitStatusCheckedAt?: number;
   onRevalidateGitStatus?: () => void;
-  onCheckResourceStatus?: () => void;
+  onCheckResourceStatus?: () => void | Promise<unknown>;
   onCleanupWorktree?: () => void;
   badges: {
     onOpenIssue?: () => void;
@@ -453,13 +453,14 @@ export function WorktreeHeader({
                 worktreeMode={worktree.worktreeMode}
                 environmentIcon={environmentIcon}
                 isLifecycleRunning={isLifecycleRunning}
+                lifecycle={worktree.lifecycleStatus}
                 resourceStatusLabel={resourceStatusLabel}
                 resourceStatusColor={resourceStatusColor}
+                reportedStatus={worktree.resourceStatus?.lastStatus}
                 resourceLastOutput={resourceLastOutput}
                 resourceEndpoint={resourceEndpoint}
                 resourceLastCheckedAt={resourceLastCheckedAt}
                 onCheckResourceStatus={onCheckResourceStatus}
-                className="w-3.5 h-3.5 text-text-muted"
               />
             )}
             <DevServerIndicator session={devServerSession} />
