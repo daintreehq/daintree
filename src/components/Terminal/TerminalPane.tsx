@@ -1608,7 +1608,9 @@ function TerminalPaneComponent({
               <TerminalScrollIndicator terminalId={id} />
 
               {isFleetPrimary && (
-                <div className="absolute inset-0 z-30 pointer-events-none flex items-end justify-start pb-1.5 pl-[14px]">
+                // Clipped like the scroll pill's overlay, so the chip's floating
+                // shadow stays off the composer. The popover portals out.
+                <div className="absolute inset-0 z-30 pointer-events-none overflow-hidden flex items-end justify-start pb-1.5 pl-[14px]">
                   <div className="pointer-events-auto">
                     <FleetDraftingPill />
                   </div>
