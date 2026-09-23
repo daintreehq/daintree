@@ -66,12 +66,20 @@ function panelOf(page: Page): Locator {
     .locator('xpath=ancestor::div[contains(@class,"surface-overlay")][1]');
 }
 
-async function openDropdown(page: Page, commits: string, theme: string): Promise<Locator> {
+async function openDropdown(
+  page: Page,
+  commits: string,
+  theme: string,
+  /** `github`: the GitHub plugin's forge-mode commits list over the same data. */
+  forge?: "github"
+): Promise<Locator> {
   await stubViteHmrClient(page);
   await page.mouse.move(0, 0);
   await page.setViewportSize({ width: 600, height: 640 });
   await page.goto(
-    `${baseURL}/forge-stats-preview.html?theme=${theme}&fixture=commits-only&commits=${commits}`
+    forge
+      ? `${baseURL}/forge-stats-preview.html?theme=${theme}&fixture=default&forge=${forge}&commits=${commits}`
+      : `${baseURL}/forge-stats-preview.html?theme=${theme}&fixture=commits-only&commits=${commits}`
   );
   const pill = page.getByTestId("forge-stat-pill-commits");
   await expect(pill, `commits "${commits}" rendered no pill`).toBeVisible();
@@ -240,7 +248,23 @@ test("Local commits dropdown — states and themes", async ({ page }) => {
       });
       written.push(out);
     }
-    expected += 16;
+
+    // The GitHub plugin's commits list — the same surface in forge mode.
+    panel = await openDropdown(page, "few", theme, "github");
+    await settled(panel, NEWEST);
+    await shot(panel, "17-github-few-rest");
+    await page.keyboard.press("ArrowDown");
+    await page.waitForTimeout(250);
+    await shot(panel, "18-github-few-cursor");
+
+    // The footer's widest case: a capped range under the cursor, beside the
+    // forge's own footer action.
+    panel = await openDropdown(page, "capped", theme, "github");
+    await settled(panel, "newest 2 marked");
+    await page.keyboard.press("ArrowDown");
+    await page.waitForTimeout(250);
+    await shot(panel, "19-github-capped-cursor");
+    expected += 19;
   }
 
   for (const theme of rest) {

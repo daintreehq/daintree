@@ -33,6 +33,9 @@ import "@/index.css";
  *   ?fixture=<name>   one of FIXTURE_NAMES below
  *   ?commits=<name>   a history for the commits dropdown (`localCommitsFixtures.ts`);
  *                     without it the dropdown's reads stay inert
+ *   ?forge=github     register the GitHub plugin's real stats-dropdown view, so a
+ *                     provider fixture opens the forge-mode lists instead of the
+ *                     local fallback
  *
  * `window.__forgePreviewPushCounts(issues, prs)` replays a background poll with
  * higher counts, which is the only road to the "new since last view" chips.
@@ -141,6 +144,7 @@ if (!baseFixture) {
   throw new Error(`unknown fixture "${fixtureName}" — one of ${FIXTURE_NAMES.join(", ")}`);
 }
 const commits = commitsFixture(params.get("commits"));
+const forgeView = params.get("forge") === "github";
 const fixture: Fixture =
   commits?.commitCount !== undefined && baseFixture.stats !== "pending"
     ? { ...baseFixture, stats: { ...baseFixture.stats, commitCount: commits.commitCount } }
@@ -180,6 +184,21 @@ function fullStats(partial: Partial<ForgeRepositoryStats>): ForgeRepositoryStats
 let countsListener: ((payload: ForgeRepoCountsUpdatedPayload) => void) | null = null;
 
 installPreviewShims({
+  // A builtin view resolves only for a plugin the runtime mirror knows about.
+  ...(forgeView
+    ? {
+        plugin: answering({
+          list: async () => [
+            {
+              instanceId: "daintree.github",
+              disabled: false,
+              devMode: false,
+              manifest: { name: "daintree.github", displayName: "GitHub" },
+            },
+          ],
+        }),
+      }
+    : {}),
   ...(commits
     ? {
         git: answering({
@@ -198,7 +217,12 @@ installPreviewShims({
         ? {
             entry: {
               pluginId: "daintree.github",
-              contribution: { id: "github", name: "GitHub", matches: ["github.com"] },
+              contribution: {
+                id: "github",
+                name: "GitHub",
+                matches: ["github.com"],
+                ...(forgeView ? { slots: { statsDropdown: "github.statsDropdown" } } : {}),
+              },
             },
             resolvedVia: "hostname",
           }
@@ -282,6 +306,11 @@ function Preview() {
       </span>
     </div>
   );
+}
+
+if (forgeView) {
+  const entries = import.meta.glob("../../../../plugins/builtin/github/renderer/index.tsx");
+  await Promise.all(Object.values(entries).map((load) => load()));
 }
 
 createRoot(document.getElementById("root")!).render(

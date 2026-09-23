@@ -98,7 +98,14 @@ interface CommitsFixture {
   commits: GitCommit[] | "pending" | { error: string };
   /** Overrides the pill's commit count (the dropdown's skeleton row hint). */
   commitCount?: number;
-  push: { basis: GitPushCommitPreview["rangeBasis"]; count: number } | { error: string };
+  push:
+    | {
+        basis: GitPushCommitPreview["rangeBasis"];
+        count: number;
+        /** A range longer than the rows main returns (its read is capped). */
+        total?: number;
+      }
+    | { error: string };
   /** Page 2 onwards fails with this message. */
   loadMoreError?: string;
 }
@@ -130,6 +137,12 @@ export const COMMITS_FIXTURES: Record<string, CommitsFixture> = {
     commits: FEW,
     commitCount: 5,
     push: { basis: "creates", count: 5 },
+  },
+  capped: {
+    what: "a push range longer than the rows the read returns",
+    commits: FEW,
+    commitCount: 5,
+    push: { basis: "tracked", count: 2, total: 140 },
   },
   "no-remote": {
     what: "no remote to push to — push status unknown",
@@ -212,7 +225,7 @@ export function listPushCommitsFrom(fixture: CommitsFixture) {
     return Promise.resolve({
       destination: { remote: "origin", branch: "develop" },
       rangeBasis: push.basis,
-      total: push.count,
+      total: push.total ?? push.count,
       commits: range.map((c) => ({
         hash: c.hash,
         date: c.date,
