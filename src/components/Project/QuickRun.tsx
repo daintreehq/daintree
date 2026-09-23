@@ -995,7 +995,10 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                       is described by it, so a screen reader hears the same. */}
                   <div
                     id={SUMMARY_ID}
-                    className="shrink-0 space-y-0.5 border-t border-border-subtle bg-surface-input px-3 py-1.5 text-2xs text-text-secondary"
+                    // `gap`, not `space-y`: space-y margins every child but the last, so
+                    // the screen-reader line appended when a row lights gave the
+                    // settings row a margin and grew the strip by 2px.
+                    className="flex shrink-0 flex-col gap-0.5 border-t border-border-subtle bg-surface-input px-3 py-1.5 text-2xs text-text-secondary"
                   >
                     {/* Always one line, lit or not: a summary that appeared,
                         or wrapped, as rows lit up changed the popup's height

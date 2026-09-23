@@ -124,9 +124,14 @@ test("QuickRun — open, choose, run, find the task", async ({ page }) => {
       await showList(page);
       await shot(`02-list-${tag}`);
 
-      // 3. Arrowed deep into the list: which row will Enter run?
+      // 3. Arrowed deep into the list: which row will Enter run? The summary
+      // must not change height as a row lights — the popup is bottom-anchored,
+      // so any growth moves every row out from under the pointer.
+      const summary = page.locator("#quick-run-summary");
+      const unlitHeight = (await summary.boundingBox())?.height;
       for (let i = 0; i < 7; i++) await input(page).press("ArrowDown");
       await expect(input(page)).toHaveAttribute("aria-activedescendant", /.+/);
+      expect((await summary.boundingBox())?.height, `summary height at ${tag}`).toBe(unlitHeight);
       await page.waitForTimeout(150);
       await shot(`03-keyboard-${tag}`);
 

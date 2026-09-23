@@ -79,8 +79,15 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+const taskListProps = vi.hoisted(() => ({
+  current: null as null | { onFocusFallback?: (options: FocusOptions) => void },
+}));
+
 vi.mock("@/components/Project/RunningTaskList", () => ({
-  RunningTaskList: () => null,
+  RunningTaskList: (props: { onFocusFallback?: (options: FocusOptions) => void }) => {
+    taskListProps.current = props;
+    return null;
+  },
 }));
 
 import { QuickRun, QuickRunToggle, useQuickRunExpanded } from "../QuickRun";
@@ -549,6 +556,19 @@ describe("QuickRun", () => {
     fireEvent.keyDown(input, { key: "ArrowDown" });
     expect(input.getAttribute("aria-activedescendant")).toBeTruthy();
     expect(lines()).toBe(unlit);
+  });
+
+  it("takes focus back into the field, quietly, when the last task is dismissed", () => {
+    seedHistory("ls -la");
+    render(<Footer projectId="test-project" />);
+    const input = openPanel();
+    input.blur();
+    expect(document.activeElement).not.toBe(input);
+
+    act(() => taskListProps.current!.onFocusFallback!({ preventScroll: true }));
+    expect(document.activeElement).toBe(input);
+    // Landing here after clearing a task must not throw the list over the panel.
+    expect(input.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("brings a lit row back into view when the list reopens", () => {
