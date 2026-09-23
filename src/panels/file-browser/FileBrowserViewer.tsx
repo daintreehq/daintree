@@ -28,6 +28,7 @@ import {
   FileViewerToolbar,
   TOOLBAR_ICON_CLASS,
   useFileViewerToolbarCompact,
+  useMenuCopy,
 } from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -1298,10 +1299,14 @@ function FileActions({
   onOpen: () => void;
 }) {
   const compact = useFileViewerToolbarCompact();
+  const menuCopy = useMenuCopy();
 
   if (compact) {
     return (
-      <FileViewerToolbar.MoreActions data-testid="file-browser-more-actions">
+      <FileViewerToolbar.MoreActions
+        data-testid="file-browser-more-actions"
+        confirmed={menuCopy.copied}
+      >
         {textSize && (
           <>
             <MarkdownTextSizeMenuItems
@@ -1323,11 +1328,7 @@ function FileActions({
           </>
         )}
         {contents !== null && (
-          <DropdownMenuItem
-            onSelect={() => {
-              void navigator.clipboard?.writeText(contents).catch(() => {});
-            }}
-          >
+          <DropdownMenuItem onSelect={() => menuCopy.copy(contents)}>
             <Copy className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
             Copy file contents
           </DropdownMenuItem>

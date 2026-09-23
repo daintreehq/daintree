@@ -9,7 +9,12 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 
-import { FileViewerToolbar, fitFileName, useFileViewerToolbarCompact } from "../FileViewerToolbar";
+import {
+  FileViewerToolbar,
+  fitFileName,
+  useFileViewerToolbarCompact,
+  useMenuCopy,
+} from "../FileViewerToolbar";
 
 // The fit is pure measurement, and jsdom measures nothing: clientWidth is 0 and
 // there is no canvas. Stub both with a monospace model — every glyph CHAR_PX
@@ -542,5 +547,29 @@ describe("FileViewerToolbar compact mode", () => {
 
   it("is never compact for a caller that set no threshold", () => {
     expect(renderAtWidth(10)).toBe("false");
+  });
+});
+
+describe("useMenuCopy", () => {
+  it("confirms a copy for the flash window, then clears", async () => {
+    vi.useFakeTimers();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    let api: ReturnType<typeof useMenuCopy> | null = null;
+    function Probe() {
+      api = useMenuCopy();
+      return <span data-testid="copied">{String(api.copied)}</span>;
+    }
+    render(<Probe />);
+    await act(async () => {
+      api!.copy("hello");
+    });
+    expect(writeText).toHaveBeenCalledWith("hello");
+    expect(screen.getByTestId("copied").textContent).toBe("true");
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.getByTestId("copied").textContent).toBe("false");
+    vi.useRealTimers();
   });
 });

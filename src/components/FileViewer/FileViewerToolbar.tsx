@@ -18,7 +18,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
+import { SegmentedToggle, type SegmentedToggleOption } from "@/components/ui/SegmentedToggle";
 
 let measureContext: CanvasRenderingContext2D | null = null;
 
@@ -394,6 +394,34 @@ function IconButton({
 }
 
 /**
+ * Copy text from a menu row, with the same confirmation window the copy button
+ * keeps. Returns the flag for `MoreActions`' `confirmed` and the handler to
+ * put on the row. Silent on a refused write, like the button.
+ */
+export function useMenuCopy(): { copied: boolean; copy: (text: string) => void } {
+  const [copied, setCopied] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    },
+    []
+  );
+  const copy = useCallback((text: string) => {
+    if (!navigator.clipboard?.writeText) return;
+    void navigator.clipboard.writeText(text).then(
+      () => {
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        setCopied(true);
+        timeoutRef.current = setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
+      },
+      () => {}
+    );
+  }, []);
+  return { copied, copy };
+}
+
+/**
  * How long a copy confirmation stays on screen. One value for the one shared
  * button, rather than a prop: the two panes' own path pills already flash for
  * different durations, and handing this control the same seam is how the next
@@ -485,9 +513,16 @@ function CopyContentsButton({ contents }: { contents: string | null }) {
  */
 function MoreActions({
   children,
+  confirmed = false,
   "data-testid": testId,
 }: {
   children: React.ReactNode;
+  /**
+   * A menu action just succeeded with nothing else left on screen to say so —
+   * Copy, whose own button would have flashed a check. The trigger carries the
+   * check instead, for the same flash, since it is what the menu closed back to.
+   */
+  confirmed?: boolean;
   "data-testid"?: string;
 }) {
   const label = "More actions";
@@ -502,7 +537,14 @@ function MoreActions({
               data-testid={testId}
               className="toolbar-icon-button shrink-0 p-1.5 rounded-lg text-text-secondary"
             >
-              <Ellipsis className={TOOLBAR_ICON_CLASS} aria-hidden="true" />
+              {confirmed ? (
+                <Check
+                  className={cn(TOOLBAR_ICON_CLASS, "text-status-success")}
+                  aria-hidden="true"
+                />
+              ) : (
+                <Ellipsis className={TOOLBAR_ICON_CLASS} aria-hidden="true" />
+              )}
             </button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
@@ -534,7 +576,7 @@ function ModeControl<T extends string>({
   onChange,
   menuBelow = MODE_MENU_BELOW,
 }: {
-  options: Array<{ value: T; label: string; disabled?: boolean }>;
+  options: Array<SegmentedToggleOption<T>>;
   value: T;
   onChange: (value: T) => void;
   /** Row width under which the segments fold into the menu. */
@@ -556,7 +598,8 @@ function ModeControl<T extends string>({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label={`View mode: ${current.label}`}
+          aria-label={`View mode: ${current.ariaLabel ?? current.label}`}
+          title={current.title}
           data-testid="file-browser-mode-menu"
           className="toolbar-icon-button flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-text-primary"
         >
@@ -578,6 +621,8 @@ function ModeControl<T extends string>({
               key={option.value}
               value={option.value}
               disabled={option.disabled}
+              aria-label={option.ariaLabel}
+              title={option.title ?? option.ariaLabel}
             >
               {option.label}
             </DropdownMenuRadioItem>

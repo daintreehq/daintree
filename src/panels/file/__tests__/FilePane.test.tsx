@@ -3463,6 +3463,15 @@ describe("FilePane copy file contents (#12136)", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("the whole file\n"));
   });
 
+  it("keeps an SVG's own read-error cause rather than calling it an image decode", async () => {
+    readMock.mockRejectedValue(new ClientAppError("PERMISSION", "PERMISSION"));
+    await renderPane("/repo/assets/icon.svg");
+
+    const body = await screen.findByTestId("file-pane-unavailable");
+    expect(body.textContent).toContain("No permission to read this file");
+    expect(body.textContent).not.toContain("Couldn't load this image");
+  });
+
   it("folds its actions into one menu when the toolbar is narrow, keeping the path", async () => {
     const rect = vi
       .spyOn(HTMLElement.prototype, "getBoundingClientRect")

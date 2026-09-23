@@ -46,7 +46,11 @@ import {
   FILE_METADATA_RUN_CLASS,
   FILE_METADATA_STRIP_CLASS,
 } from "@/components/FileViewer/fileMetadataStrip";
-import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
+import {
+  FileViewerToolbar,
+  TOOLBAR_ICON_CLASS,
+  useMenuCopy,
+} from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy, type RevealCopy } from "@/components/FileViewer/revealCopy";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
@@ -1143,7 +1147,7 @@ export function FilePane({
     const focusLost = document.activeElement === null || document.activeElement === document.body;
     if (wasEditModeRef.current && viewMode !== "edit" && focusLost) {
       const active = modeToggleRef.current?.querySelector<HTMLButtonElement>(
-        'button[aria-pressed="true"]'
+        'button[aria-pressed="true"], button'
       );
       active?.focus({ preventScroll: true });
     }
@@ -1166,6 +1170,7 @@ export function FilePane({
 
   const showMarkdownWrap = (isMarkdown && viewMode === "source") || viewMode === "edit";
   const copyableContents = loadState === "loaded" ? content : null;
+  const menuCopy = useMenuCopy();
   const toolbar = filePath ? (
     <>
       <FileViewerToolbar.Root
@@ -1275,64 +1280,74 @@ export function FilePane({
               </>
             }
             narrow={
-              <FileViewerToolbar.MoreActions data-testid="file-pane-more-actions">
-                {isMarkdown && viewMode === "rendered" && (
-                  <>
-                    <MarkdownTextSizeMenuItems
-                      value={markdownFontSize}
-                      onValueChange={setMarkdownFontSize}
-                    />
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                {(showMarkdownWrap || viewMode === "diff") && (
-                  <>
-                    <DropdownMenuCheckboxItem
-                      checked={viewMode === "diff" ? effectiveDiffWrapLines : markdownWrapLines}
-                      onCheckedChange={(checked) =>
-                        viewMode === "diff"
-                          ? setDiffWrapLines(checked)
-                          : setMarkdownWrapLines(checked)
-                      }
-                    >
-                      Wrap long lines
-                    </DropdownMenuCheckboxItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                <DropdownMenuItem onSelect={handleToolbarRefresh}>
-                  <RefreshCw className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
-                  Refresh
-                </DropdownMenuItem>
-                {copyableContents !== null && (
-                  <DropdownMenuItem
-                    onSelect={() => {
-                      void navigator.clipboard?.writeText(copyableContents).catch(() => {});
-                    }}
-                  >
-                    <Copy className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
-                    Copy file contents
-                  </DropdownMenuItem>
-                )}
-                {revealWorktreeId && (
-                  <DropdownMenuItem onSelect={() => void handleOpenExternal("file-browser")}>
-                    <FolderTree className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
-                    Show in file browser
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuItem onSelect={() => void handleOpenExternal("reveal")}>
-                  <FolderOpen className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
-                  {reveal.label}
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => void handleOpenExternal(openTarget)}>
-                  {openTarget === "browser" ? (
-                    <Globe className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
-                  ) : (
-                    <ExternalLink className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+              <>
+                {/* Refresh stays out of the fold: its spinner is the only
+                  progress this pane shows, and a closed menu can't spin. */}
+                <FileViewerToolbar.IconButton label="Refresh" onClick={handleToolbarRefresh}>
+                  <SpinningIcon
+                    icon={RefreshCw}
+                    active={refreshingMode !== null}
+                    className={TOOLBAR_ICON_CLASS}
+                  />
+                </FileViewerToolbar.IconButton>
+                <FileViewerToolbar.MoreActions
+                  data-testid="file-pane-more-actions"
+                  confirmed={menuCopy.copied}
+                >
+                  {isMarkdown && viewMode === "rendered" && (
+                    <>
+                      <MarkdownTextSizeMenuItems
+                        value={markdownFontSize}
+                        onValueChange={setMarkdownFontSize}
+                      />
+                      <DropdownMenuSeparator />
+                    </>
                   )}
-                  {openTarget === "browser" ? "Open in browser" : "Open in editor"}
-                </DropdownMenuItem>
-              </FileViewerToolbar.MoreActions>
+                  {(showMarkdownWrap || viewMode === "diff") && (
+                    <>
+                      <DropdownMenuCheckboxItem
+                        checked={viewMode === "diff" ? effectiveDiffWrapLines : markdownWrapLines}
+                        onCheckedChange={(checked) =>
+                          viewMode === "diff"
+                            ? setDiffWrapLines(checked)
+                            : setMarkdownWrapLines(checked)
+                        }
+                      >
+                        Wrap long lines
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuSeparator />
+                    </>
+                  )}
+                  {copyableContents !== null && (
+                    <DropdownMenuItem onSelect={() => menuCopy.copy(copyableContents)}>
+                      <Copy className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                      Copy file contents
+                    </DropdownMenuItem>
+                  )}
+                  {revealWorktreeId && (
+                    <DropdownMenuItem onSelect={() => void handleOpenExternal("file-browser")}>
+                      <FolderTree className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                      Show in file browser
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem onSelect={() => void handleOpenExternal("reveal")}>
+                    <FolderOpen className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                    {reveal.label}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => void handleOpenExternal(openTarget)}>
+                    {openTarget === "browser" ? (
+                      <Globe className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                    ) : (
+                      <ExternalLink
+                        className="mr-2 h-3.5 w-3.5"
+                        aria-hidden="true"
+                        data-menu-icon
+                      />
+                    )}
+                    {openTarget === "browser" ? "Open in browser" : "Open in editor"}
+                  </DropdownMenuItem>
+                </FileViewerToolbar.MoreActions>
+              </>
             }
           />
         </FileViewerToolbar.Actions>
@@ -1700,7 +1715,11 @@ function toUnavailableReason(
   if (isPdfFilePath(filePath)) return "PDF_FAILED";
   if (isVideoFilePath(filePath) || isAudioFilePath(filePath)) return "MEDIA_FAILED";
   if (code === "FILE_TOO_LARGE") return "FILE_TOO_LARGE";
-  if (isSvgFilePath(filePath) && message !== null) return "SVG_REJECTED";
+  // An SVG is read like text, so its read failures keep their own codes; only
+  // a sanitizer rejection (a read that succeeded) is the SVG's own reason.
+  if (isSvgFilePath(filePath)) {
+    return code === "INVALID_PATH" && message !== null ? "SVG_REJECTED" : code;
+  }
   // A raster image never goes through a read; its only failure is a decode.
   if (isImageFilePath(filePath)) return "IMAGE_FAILED";
   return code;
@@ -1747,7 +1766,13 @@ function FilePaneUnavailable({
   onRetry: () => void;
   onExternal: (target: ExternalTarget) => void;
 }) {
-  const copy = unavailableCopy(reason, message);
+  const shared = unavailableCopy(reason, message);
+  // Refreshing this pane can't turn a folder into something it can show; the
+  // file manager can.
+  const copy =
+    reason === "NOT_A_FILE"
+      ? { ...shared, description: "It can't be opened here. Reveal it to see what's inside." }
+      : shared;
   const isPreviewLimit =
     reason === "UNSUPPORTED_MEDIA" ||
     reason === "MEDIA_FAILED" ||
