@@ -201,6 +201,8 @@ async function verify(page: Page, expectation: Expectation): Promise<void> {
 
 const failures: string[] = [];
 const written: string[] = [];
+let zoomed = false;
+let electronApp: ElectronApplication | undefined;
 
 async function capture(
   page: Page,
@@ -211,15 +213,27 @@ async function capture(
   await settle(page, 300);
   await verify(page, expectation);
   const file = `${name}--${theme}.png`;
-  await page
-    .locator(CARD)
-    .first()
-    .screenshot({
-      path: path.join(OUTPUT_DIR, file),
-      type: "png",
-      animations: "disabled",
-      caret: "hide",
-    });
+  const options = {
+    path: path.join(OUTPUT_DIR, file),
+    type: "png" as const,
+    animations: "disabled" as const,
+    caret: "hide" as const,
+  };
+  // Playwright sizes its shots in zoomed CSS pixels but grabs unzoomed ones, so
+  // under the renderer zoom every shot is a top-left crop. Electron's own
+  // capture of that renderer is what is actually painted; zoomed, the dialog
+  // nearly fills it anyway.
+  if (zoomed && electronApp) {
+    const url = page.url();
+    const png = await electronApp.evaluate(async ({ webContents }, target) => {
+      const wc = webContents.getAllWebContents().find((c) => c.getURL() === target);
+      if (!wc) throw new Error(`no renderer at ${target}`);
+      return (await wc.capturePage()).toPNG().toString("base64");
+    }, url);
+    writeFileSync(options.path, Buffer.from(png, "base64"));
+  } else {
+    await page.locator(CARD).first().screenshot(options);
+  }
   written.push(file);
 }
 
@@ -258,6 +272,7 @@ test("shortcut reference review — every state, every theme", async () => {
       extraArgs: ["--disable-gpu", "--in-process-gpu", "--disable-breakpad", "--noerrdialogs"],
     });
     const app = ctx.app;
+    electronApp = app;
     await setWindowSize(app, WIDE);
     const page = await openAndOnboardProject(app, ctx.window, repo.dir, "Helios Dashboard");
 
@@ -270,6 +285,7 @@ test("shortcut reference review — every state, every theme", async () => {
     for (const theme of THEMES) {
       await setWindowSize(app, WIDE);
       await setZoom(app, 1);
+      zoomed = false;
       // setAppTheme reloads the renderer, which is also what loads the overrides.
       await setAppTheme(page, theme);
       await page.addStyleTag({ content: POLISH_CSS });
@@ -337,6 +353,7 @@ test("shortcut reference review — every state, every theme", async () => {
 
       await setWindowSize(app, NARROW);
       await setZoom(app, NARROW_ZOOM);
+      zoomed = true;
       await settle(page, 600);
       const cssWidth = await page.evaluate(() => window.innerWidth);
       if (cssWidth > 520) failures.push(`narrow: page is ${cssWidth} CSS px wide, expected ≤ 520`);
