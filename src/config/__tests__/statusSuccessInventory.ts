@@ -30,18 +30,6 @@ export const STATUS_SUCCESS_CATEGORIES = [
   "outcome",
   /** Notation the app inherited rather than invented: git status letters, diff counts, ahead arrows. */
   "domain",
-  /**
-   * The affirmative half of a control pair — run, apply, stage, resume, save.
-   * Green here means "go", not "good": it is not reporting state at all.
-   *
-   * NOT one of the four categories the #12002 ruling named, and deliberately
-   * separate rather than folded into `domain`, which would have quietly
-   * restated what the ruling meant by it. These controls were never in the
-   * ruling's demote list, so this PR left them alone and named the gap instead
-   * of laundering it. If the maintainer wants them neutral, deleting this
-   * category is the change — and the guard will then list every site to fix.
-   */
-  "affordance",
 ] as const;
 
 export type StatusSuccessCategory = (typeof STATUS_SUCCESS_CATEGORIES)[number];
@@ -595,45 +583,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "CLI-now-available banner; the gate stops rendering once it is seen",
     },
   ],
-  "src/components/Terminal/RecipeRunner/RecipeRunnerEmpty.tsx": [
-    {
-      category: "affordance",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Go-colour on the run-suggestion control",
-    },
-    {
-      category: "affordance",
-      signature: "group-hover:text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Go-colour on the run-suggestion control at hover",
-    },
-  ],
-  "src/components/Terminal/RecipeRunner/RecipeRunnerItem.tsx": [
-    {
-      category: "affordance",
-      signature: "text-status-success",
-      anchor: '!disabled && "group-hover:text-status-success"',
-      expectedOccurrences: 1,
-      rationale: "Go-colour on the run-recipe control in the card",
-    },
-    {
-      category: "affordance",
-      // The collapsed row used to paint this at `/50` and lift to full on
-      // hover, so the same control was two different greens depending on how
-      // many recipes existed. It now matches the card in both modes.
-      signature: "text-status-success",
-      anchor: 'className="h-3.5 w-3.5 text-status-success transition-colors shrink-0"',
-      expectedOccurrences: 1,
-      rationale: "Go-colour on the run-recipe control in the collapsed row",
-    },
-    {
-      category: "affordance",
-      signature: "group-hover:text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Go-colour on the run-recipe control at hover",
-    },
-  ],
   "src/components/Worktree/CrossWorktreeDiff.tsx": [
     {
       category: "domain",
@@ -746,13 +695,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale:
         "One viewed mark per file in the review checklist; the row wash went neutral in #12002",
     },
-    {
-      category: "domain",
-      signature: "text-status-success",
-      anchor: 'className="w-3 h-3 text-status-success"',
-      expectedOccurrences: 1,
-      rationale: "Plus half of the stage/unstage pair, against the red Minus",
-    },
   ],
   "src/components/Worktree/ReviewHub/ReviewHubContent.tsx": [
     {
@@ -816,13 +758,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       expectedOccurrences: 1,
       rationale: "Worktree diff insertion count",
     },
-    {
-      category: "affordance",
-      signature: "text-status-success",
-      anchor: 'aria-label="Resume resource"',
-      expectedOccurrences: 1,
-      rationale: "Go-colour on the resume-resource control",
-    },
   ],
   "src/components/Worktree/WorktreeDetails.tsx": [
     {
@@ -830,15 +765,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Copy-path confirmation; resets when the copy flash times out",
-    },
-  ],
-  "src/components/Worktree/WorktreeMenuItems.tsx": [
-    {
-      category: "affordance",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale:
-        "Go-colour on the resume-resource command — the same control the worktree card paints green, reached from the context menu instead of the card's icon rail",
     },
   ],
   "src/components/ui/ReEntrySummary.tsx": [
@@ -855,14 +781,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       signature: "bg-status-success/10 text-status-success",
       expectedOccurrences: 2,
       rationale: "The success tone of the shared badge primitive, for reporting a result",
-    },
-  ],
-  "src/components/ui/button.tsx": [
-    {
-      category: "affordance",
-      signature: "text-status-success hover:bg-status-success/10",
-      expectedOccurrences: 2,
-      rationale: "Go-colour variant of the shared button primitive",
     },
   ],
   "src/components/ui/toaster.tsx": [
@@ -942,5 +860,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 111;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 126;
+export const EXPECTED_STATUS_SUCCESS_SITES = 102;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 116;
