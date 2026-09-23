@@ -1222,7 +1222,7 @@ function TerminalPaneComponent({
   }, [id]);
 
   const isWorking = agentState === "working";
-  const allowPing = !isMaximized && (location !== "grid" || isMultiPanelGrid);
+  const allowPing = !isMaximized;
 
   const agentHeaderActions = (() => {
     if (!effectiveAgentId) return undefined;
