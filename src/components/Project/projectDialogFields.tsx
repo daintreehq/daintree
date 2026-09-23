@@ -15,28 +15,9 @@ import { FIELD_SURFACE } from "@/components/Worktree/views/WorktreeFormLayout";
  * back, and they drifted apart whenever each hand-copied its own field styling.
  * Import from here rather than re-typing a class string.
  *
- * Clone, create folder and git init sit on the create-worktree form's label
- * rail and use the compound fields below. The stacked `FIELD_*` constants are
- * what move/rename still uses inside its confirm dialog.
+ * All four sit on the create-worktree form's label rail and use the compound
+ * fields below.
  */
-
-export const FIELD_LABEL_CLASS = "text-sm font-medium text-text-primary";
-
-/**
- * The invalid-focused case needs the error ring, not the accent one. Left to the
- * plain `focus:` rule, an invalid field drew a green accent ring concentric with
- * its red error border: two colour signals disagreeing inside 2px, with the
- * louder of the two saying nothing is wrong.
- */
-export const FIELD_INPUT_CLASS =
-  "min-h-9 w-full rounded-md border border-border-default bg-surface-canvas px-3 py-1.5 text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50 aria-invalid:border-status-error aria-invalid:focus:ring-status-error/50";
-
-/** Picker-backed fields: muted fill signals "typing here does nothing". */
-export const FIELD_READONLY_INPUT_CLASS =
-  "min-h-9 flex-1 truncate rounded-md border border-border-default bg-muted/50 px-3 py-1.5 text-sm font-mono text-text-secondary";
-
-/** Sits beside a `FIELD_READONLY_INPUT_CLASS` input, matched to its height. */
-export const FIELD_BROWSE_BUTTON_CLASS = "min-h-9 shrink-0 gap-1.5";
 
 /**
  * One field-shaped box holding an input and an inline slot, on the label rail's

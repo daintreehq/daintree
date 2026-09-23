@@ -1,26 +1,39 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { FolderOpen, AlertTriangle, CheckCircle2, HelpCircle, type LucideIcon } from "lucide-react";
+import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  FolderInput,
+  FolderSearch,
+  HelpCircle,
+  RotateCcw,
+  type LucideIcon,
+} from "lucide-react";
 import { basename, dirname, join, normalize } from "@shared/utils/path";
 import { validateFolderName } from "@shared/utils/folderName";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { AgentContinuitySummary, RelocationPreview } from "@shared/types/projectRelocation";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { Button } from "@/components/ui/button";
+import { AppDialog } from "@/components/ui/AppDialog";
 import { Spinner } from "@/components/ui/Spinner";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import {
+  FIELD_INPUT,
+  FormGrid,
+  FormRow,
+  FormSection,
+} from "@/components/Worktree/views/WorktreeFormLayout";
 import { projectClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
 import { notify } from "@/lib/notify";
+import { cn } from "@/lib/utils";
 import { useDohertyGate } from "@/hooks";
 import {
   useProjectRelocationStore,
   type PendingProjectRelocation,
 } from "@/store/projectRelocationStore";
-import {
-  FIELD_LABEL_CLASS,
-  FIELD_INPUT_CLASS,
-  FIELD_READONLY_INPUT_CLASS,
-  FIELD_BROWSE_BUTTON_CLASS,
-} from "./projectDialogFields";
+import { DirectoryPickerField, PathCaption } from "./projectDialogFields";
+
+/** Typing pause before the preview is requested, so a folder name isn't checked per keystroke. */
+const PREVIEW_DEBOUNCE_MS = 250;
 
 /** NFC + separator normalization for comparing two folder paths for equality. */
 function normPath(value: string): string {
@@ -72,8 +85,33 @@ const CONTINUITY_PRESENTATION: Record<
   },
 };
 
-const INPUT_CLASS = FIELD_INPUT_CLASS;
-const READONLY_INPUT_CLASS = FIELD_READONLY_INPUT_CLASS;
+/**
+ * A full path that wraps only at its separators. `break-all` split folder
+ * names mid-token — "helios-dashboa / rd" — which is exactly the part a user
+ * reads to check the destination. A segment wider than the whole line still
+ * breaks, as a last resort, rather than overflowing the dialog.
+ */
+function WrappingPath({
+  path,
+  className,
+  testId,
+}: {
+  path: string;
+  className?: string;
+  testId?: string;
+}) {
+  const segments = normalize(path).split(/(?<=[/\\])/);
+  return (
+    <p className={cn("text-xs font-mono break-words", className)} title={path} data-testid={testId}>
+      {segments.map((segment, i) => (
+        <Fragment key={i}>
+          {segment}
+          {i < segments.length - 1 && <wbr />}
+        </Fragment>
+      ))}
+    </p>
+  );
+}
 
 function MoveOrRenameProjectDialogInner({
   pending,
@@ -95,19 +133,24 @@ function MoveOrRenameProjectDialogInner({
   const [applyError, setApplyError] = useState<string | null>(null);
   const [isApplying, setIsApplying] = useState(false);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  // Bumped by Retry, so a failed preview can be re-run for the same destination
+  // without the user editing a field to provoke one.
+  const [previewAttempt, setPreviewAttempt] = useState(0);
   // Bumped on every fetch so a superseded response (folder edited again mid-flight)
   // can't replace a newer preview — the #9575 stale-request guard.
   const previewReqId = useRef(0);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const folderErrorId = useId();
 
   const trimmedName = displayName.trim();
   const displayNameChanged = trimmedName !== "" && trimmedName !== pending.name;
 
-  const folderNameError = isReattach || !folderName.trim() ? null : validateFolderName(folderName);
+  const trimmedFolder = folderName.trim();
+  const folderNameError = isReattach || !trimmedFolder ? null : validateFolderName(folderName);
   const destinationPath = isReattach
     ? reattachPath
-    : parentPath && folderName.trim() && !folderNameError
-      ? join(parentPath, folderName.trim())
+    : parentPath && trimmedFolder && !folderNameError
+      ? join(parentPath, trimmedFolder)
       : "";
   // A reattach commits ANY selected folder — even the original path, e.g. a
   // removable volume that reappeared — so it gates on "a target was picked", not
@@ -119,8 +162,11 @@ function MoveOrRenameProjectDialogInner({
   // A pure display-name edit stays a lightweight metadata write — no filesystem
   // op, no preview, no coordinator. Reattach never qualifies (the folder move is
   // mandatory), and a case-only folder rename stays a real move (case-sensitive
-  // comparison after NFC normalization).
-  const isMetadataOnly = !isReattach && !destinationChanged && displayNameChanged;
+  // comparison after NFC normalization). The folder fields must resolve to the
+  // CURRENT location, not merely fail to resolve: an invalid or emptied folder
+  // name would otherwise read as "unchanged" and quietly commit only the rename.
+  const folderUnchanged = !isReattach && destinationPath !== "" && !destinationChanged;
+  const isMetadataOnly = folderUnchanged && displayNameChanged;
 
   const showLoading = useDohertyGate(isPreviewLoading);
 
@@ -158,25 +204,38 @@ function MoveOrRenameProjectDialogInner({
           setLoadError(formatErrorMessage(err, "Couldn't preview the changes"));
           setIsPreviewLoading(false);
         });
-    }, 250);
+    }, PREVIEW_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [destinationChanged, destinationPath, pending.projectId, pending.mode]);
+  }, [destinationChanged, destinationPath, pending.projectId, pending.mode, previewAttempt]);
+
+  // Focus the name rather than the dialog's first tabbable, which is the header
+  // close button: opening a form on its dismissal is backwards.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => nameInputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, []);
 
   const handleBrowseParent = useCallback(async () => {
     try {
       const selected = await projectClient.openDialog();
-      if (selected) setParentPath(selected);
+      if (selected) {
+        setParentPath(selected);
+        setApplyError(null);
+      }
     } catch {
-      setApplyError("Could not open the folder picker");
+      setApplyError("Couldn't open the folder picker");
     }
   }, []);
 
   const handleBrowseReattach = useCallback(async () => {
     try {
       const selected = await projectClient.openDialog();
-      if (selected) setReattachPath(selected);
+      if (selected) {
+        setReattachPath(selected);
+        setApplyError(null);
+      }
     } catch {
-      setApplyError("Could not open the folder picker");
+      setApplyError("Couldn't open the folder picker");
     }
   }, []);
 
@@ -241,16 +300,16 @@ function MoveOrRenameProjectDialogInner({
 
   const hasBlockers = (preview?.blockers.length ?? 0) > 0;
   const nothingToDo = !destinationChanged && !displayNameChanged;
+  // `isApplying` is deliberately absent: the in-flight button is `loading`,
+  // which already blocks activation, and stacking the disabled styling on top
+  // greyed out the one control that says the move is running.
   const confirmDisabled =
-    isApplying ||
     nothingToDo ||
+    Boolean(folderNameError) ||
+    (!isReattach && !trimmedFolder) ||
     (isMetadataOnly
-      ? trimmedName === ""
-      : !destinationChanged ||
-        Boolean(folderNameError) ||
-        preview === null ||
-        Boolean(loadError) ||
-        hasBlockers);
+      ? false
+      : !destinationChanged || preview === null || Boolean(loadError) || hasBlockers);
 
   const title = isReattach ? "Locate moved project" : "Move or rename project";
   const confirmLabel = isMetadataOnly
@@ -258,143 +317,219 @@ function MoveOrRenameProjectDialogInner({
     : isReattach
       ? "Reattach project"
       : "Move project";
+  const failureTitle = isMetadataOnly
+    ? "Rename failed"
+    : isReattach
+      ? "Reattach failed"
+      : "Move failed";
+
+  // One line beside the actions that answers "what will pressing it do?" or,
+  // while it can't be pressed, "why not?". It is also the dialog's polite
+  // status region, so a screen reader hears the check finish, block or fail
+  // without the whole preview being re-announced after every keystroke.
+  const hint: ReactNode = isApplying ? (
+    isMetadataOnly ? (
+      "Renaming the project…"
+    ) : isReattach ? (
+      "Reattaching the project…"
+    ) : (
+      "Moving the project…"
+    )
+  ) : folderNameError ? (
+    "Fix the folder name to continue"
+  ) : !isReattach && !trimmedFolder ? (
+    "Name the folder to continue"
+  ) : nothingToDo ? (
+    isReattach ? (
+      "Choose where the folder is now to continue"
+    ) : (
+      "Change the name or location to continue"
+    )
+  ) : isMetadataOnly ? (
+    "Updates the display name only"
+  ) : loadError ? (
+    "Couldn't check what will change"
+  ) : preview === null ? (
+    "Checking what will change…"
+  ) : hasBlockers ? (
+    isReattach ? (
+      "This folder can't be reattached"
+    ) : (
+      "This move can't go ahead"
+    )
+  ) : (
+    <>
+      <span className="shrink-0">{isReattach ? "Reattaches at" : "Moves to"}</span>
+      <PathCaption path={preview.newPath} className="min-w-0 text-text-primary" />
+    </>
+  );
 
   return (
-    <ConfirmDialog
+    <AppDialog
       isOpen={true}
-      onClose={isApplying ? undefined : onClose}
-      title={title}
-      confirmLabel={confirmLabel}
-      cancelLabel="Cancel"
-      onConfirm={handleConfirm}
-      confirmDisabled={confirmDisabled}
-      isConfirmLoading={isApplying}
-      variant="default"
+      onClose={onClose}
+      size="md"
+      dismissible={!isApplying}
+      initialFocus="none"
       hasPreview={true}
       zIndex="nested"
     >
-      <div className="space-y-4" data-testid="move-or-rename-project-dialog">
-        <div className="space-y-1.5">
-          <label className={FIELD_LABEL_CLASS} htmlFor="relocate-name">
-            Display name
-          </label>
-          <input
-            id="relocate-name"
-            type="text"
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            className={INPUT_CLASS}
-            placeholder="My project"
-            data-testid="relocate-name-input"
-          />
-        </div>
+      <AppDialog.Header className="py-3">
+        {/* Neutral, not accent: the header glyph is decoration, and this focus
+            region's one load-bearing accent is the keyboard focus ring. */}
+        <AppDialog.Title
+          icon={
+            isReattach ? (
+              <FolderSearch className="h-4 w-4 text-text-secondary" />
+            ) : (
+              <FolderInput className="h-4 w-4 text-text-secondary" />
+            )
+          }
+        >
+          {title}
+        </AppDialog.Title>
+        {!isApplying && <AppDialog.CloseButton />}
+      </AppDialog.Header>
 
-        {isReattach ? (
-          <>
-            <div className="space-y-1.5">
-              <span className={FIELD_LABEL_CLASS}>Original location</span>
-              <p
-                className="text-xs font-mono text-text-secondary break-all"
-                title={pending.oldPath}
-              >
-                {pending.oldPath}
-              </p>
-            </div>
-            <div className="space-y-1.5">
-              <label className={FIELD_LABEL_CLASS} htmlFor="relocate-existing">
-                Where is the folder now?
-              </label>
-              <div className="flex gap-2">
-                <input
-                  id="relocate-existing"
-                  type="text"
-                  readOnly
-                  aria-readonly="true"
-                  value={reattachPath}
-                  className={READONLY_INPUT_CLASS}
-                  placeholder="Select the project's folder…"
-                />
-                <Button
-                  variant="outline"
-                  onClick={handleBrowseReattach}
-                  disabled={isApplying}
-                  className={FIELD_BROWSE_BUTTON_CLASS}
-                  data-testid="relocate-browse-existing"
-                >
-                  <FolderOpen className="h-4 w-4" />
-                  Browse
-                </Button>
-              </div>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="space-y-1.5">
-              <label className={FIELD_LABEL_CLASS} htmlFor="relocate-parent">
-                Parent folder
-              </label>
-              <div className="flex gap-2">
-                <input
-                  id="relocate-parent"
-                  type="text"
-                  readOnly
-                  aria-readonly="true"
-                  value={parentPath}
-                  className={READONLY_INPUT_CLASS}
-                  placeholder="Select a parent folder…"
-                />
-                <Button
-                  variant="outline"
-                  onClick={handleBrowseParent}
-                  disabled={isApplying}
-                  className={FIELD_BROWSE_BUTTON_CLASS}
-                  data-testid="relocate-browse-parent"
-                >
-                  <FolderOpen className="h-4 w-4" />
-                  Browse
-                </Button>
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <label className={FIELD_LABEL_CLASS} htmlFor="relocate-folder">
-                Folder name
-              </label>
-              <input
-                id="relocate-folder"
-                type="text"
-                value={folderName}
-                onChange={(e) => setFolderName(e.target.value)}
-                aria-invalid={folderNameError != null}
-                aria-describedby={folderNameError ? folderErrorId : undefined}
-                className={INPUT_CLASS}
-                placeholder="my-project"
-                data-testid="relocate-folder-input"
+      <AppDialog.Body className="space-y-5">
+        <div className="space-y-5" data-testid="move-or-rename-project-dialog">
+          {/* Outcome first, above the fields it is about: a failed commit
+              returns the user to the form with everything intact, and at the
+              foot of a long preview it would scroll out of sight. */}
+          {applyError && (
+            <div data-testid="relocate-apply-error">
+              <InlineStatusBanner
+                severity="error"
+                title={failureTitle}
+                description={applyError}
+                className="rounded-[var(--radius-md)]"
               />
-              {folderNameError && (
-                <p id={folderErrorId} role="alert" className="text-xs text-status-error">
-                  {folderNameError}
-                </p>
-              )}
             </div>
-          </>
-        )}
+          )}
 
-        {destinationChanged && (
-          <RelocationPreviewSection
-            preview={preview}
-            showLoading={showLoading}
-            loadError={loadError}
-            oldPath={pending.oldPath}
-          />
-        )}
+          <FormGrid>
+            <FormRow label="Display name" htmlFor="relocate-name">
+              <input
+                ref={nameInputRef}
+                id="relocate-name"
+                type="text"
+                value={displayName}
+                onChange={(e) => {
+                  setDisplayName(e.target.value);
+                  setApplyError(null);
+                }}
+                // Frozen for the length of the commit: an edit made now would
+                // describe an operation other than the one already running.
+                disabled={isApplying}
+                spellCheck={false}
+                autoComplete="off"
+                className={FIELD_INPUT}
+                // An emptied field keeps the current name; saying so beats a
+                // blank box that silently commits nothing.
+                placeholder={pending.name}
+                data-testid="relocate-name-input"
+              />
+            </FormRow>
 
-        {applyError && (
-          <p role="alert" className="text-xs text-status-error" data-testid="relocate-apply-error">
-            {applyError}
-          </p>
-        )}
-      </div>
-    </ConfirmDialog>
+            {isReattach ? (
+              <>
+                <FormRow label="Last seen at">
+                  <PathCaption path={pending.oldPath} className="min-w-0" />
+                </FormRow>
+                <FormRow label="Now at" htmlFor="relocate-existing">
+                  <DirectoryPickerField
+                    id="relocate-existing"
+                    value={reattachPath}
+                    onBrowse={() => void handleBrowseReattach()}
+                    disabled={isApplying}
+                    placeholder="Choose where the folder is now…"
+                    browseLabel="Browse for the project folder"
+                  />
+                </FormRow>
+              </>
+            ) : (
+              <>
+                <FormRow label="Location" htmlFor="relocate-parent">
+                  <DirectoryPickerField
+                    id="relocate-parent"
+                    value={parentPath}
+                    onBrowse={() => void handleBrowseParent()}
+                    disabled={isApplying}
+                    browseLabel="Browse for a new location"
+                  />
+                </FormRow>
+                <FormRow
+                  label="Folder name"
+                  htmlFor="relocate-folder"
+                  hint={
+                    folderNameError && (
+                      <p
+                        id={folderErrorId}
+                        aria-live="polite"
+                        className="text-xs text-status-error"
+                      >
+                        {folderNameError}
+                      </p>
+                    )
+                  }
+                >
+                  <input
+                    id="relocate-folder"
+                    type="text"
+                    value={folderName}
+                    onChange={(e) => {
+                      setFolderName(e.target.value);
+                      setApplyError(null);
+                    }}
+                    disabled={isApplying}
+                    aria-invalid={folderNameError != null || undefined}
+                    aria-describedby={folderNameError ? folderErrorId : undefined}
+                    spellCheck={false}
+                    autoComplete="off"
+                    className={cn(
+                      FIELD_INPUT,
+                      folderNameError && "border-status-error focus-visible:outline-status-error"
+                    )}
+                    placeholder="my-project"
+                    data-testid="relocate-folder-input"
+                  />
+                </FormRow>
+              </>
+            )}
+
+            {destinationChanged && (
+              <RelocationPreviewSection
+                preview={preview}
+                showLoading={showLoading}
+                loadError={loadError}
+                oldPath={pending.oldPath}
+                onRetry={() => setPreviewAttempt((n) => n + 1)}
+              />
+            )}
+          </FormGrid>
+        </div>
+      </AppDialog.Body>
+
+      <AppDialog.Footer
+        hint={
+          <span
+            role="status"
+            aria-live="polite"
+            className="flex min-w-0 items-center gap-1.5 truncate"
+            data-testid="relocate-status"
+          >
+            {hint}
+          </span>
+        }
+        secondaryAction={{ label: "Cancel", onClick: onClose, disabled: isApplying }}
+        primaryAction={{
+          label: confirmLabel,
+          onClick: () => void handleConfirm(),
+          loading: isApplying,
+          disabled: confirmDisabled,
+        }}
+      />
+    </AppDialog>
   );
 }
 
@@ -403,19 +538,24 @@ function RelocationPreviewSection({
   showLoading,
   loadError,
   oldPath,
+  onRetry,
 }: {
   preview: RelocationPreview | null;
   showLoading: boolean;
   loadError: string | null;
   oldPath: string;
+  onRetry: () => void;
 }) {
   if (loadError) {
     return (
-      <div
-        className="rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/10 px-3 py-2 text-xs text-status-error"
-        data-testid="relocate-preview-error"
-      >
-        {loadError}
+      <div className="col-span-2 mt-4" data-testid="relocate-preview-error">
+        <InlineStatusBanner
+          severity="error"
+          title="Couldn't check what will change"
+          description={loadError}
+          action={{ id: "retry", label: "Retry", icon: RotateCcw, onClick: onRetry }}
+          className="rounded-[var(--radius-md)]"
+        />
       </div>
     );
   }
@@ -423,7 +563,7 @@ function RelocationPreviewSection({
   if (preview === null) {
     return showLoading ? (
       <div
-        className="flex items-center gap-2 text-xs text-text-secondary"
+        className="col-span-2 mt-4 flex items-center gap-2 text-xs text-text-secondary"
         data-testid="relocate-preview-loading"
       >
         <Spinner className="h-3.5 w-3.5" />
@@ -432,45 +572,53 @@ function RelocationPreviewSection({
     ) : null;
   }
 
+  const nothingAffected =
+    preview.runningTerminalCount === 0 &&
+    preview.linkedWorktrees.length === 0 &&
+    preview.affectedPanelCount === 0;
+
   return (
-    <div
-      className="space-y-3 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas px-3 py-3"
-      data-testid="relocate-preview"
-    >
-      <div className="space-y-1">
-        <span className="text-xs font-medium text-text-secondary">Folder</span>
-        <p className="text-xs font-mono text-text-secondary break-all">{oldPath}</p>
-        <p className="text-xs font-mono text-text-primary break-all">→ {preview.newPath}</p>
-      </div>
+    <FormSection title="What changes">
+      <FormRow label="From" labelClassName="self-start">
+        <WrappingPath path={oldPath} className="text-text-secondary" />
+      </FormRow>
+      <FormRow label="To" labelClassName="self-start">
+        <WrappingPath
+          path={preview.newPath}
+          className="text-text-primary"
+          testId="relocate-preview"
+        />
+      </FormRow>
 
       {preview.blockers.length > 0 ? (
-        <div className="space-y-1.5" data-testid="relocate-blockers">
+        <ul className="col-span-2 space-y-2" data-testid="relocate-blockers">
           {preview.blockers.map((blocker, i) => (
-            <div
+            <li
               key={`${blocker.reason}-${i}`}
-              className="flex items-start gap-2 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20 px-2.5 py-2 text-xs text-status-error"
+              className="flex items-start gap-2 text-xs text-status-error"
             >
-              <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" aria-hidden="true" />
+              <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               <span>{blocker.message}</span>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <ul className="space-y-1 text-xs text-text-secondary">
-          {preview.runningTerminalCount > 0 && (
-            <li>
-              <span className="font-medium text-text-primary">
-                {preview.runningTerminalCount === 1
-                  ? "1 terminal will be gracefully stopped"
-                  : `${preview.runningTerminalCount} terminals will be gracefully stopped`}
-              </span>
-              <span className="ml-1 text-text-secondary"> They restart at the new location</span>
             </li>
+          ))}
+        </ul>
+      ) : (
+        <>
+          {preview.runningTerminalCount > 0 && (
+            <FormRow label="Terminals" labelClassName="self-start">
+              <p className="text-xs">
+                <span className="font-medium text-text-primary">
+                  {preview.runningTerminalCount === 1
+                    ? "1 terminal will be gracefully stopped"
+                    : `${preview.runningTerminalCount} terminals will be gracefully stopped`}
+                </span>
+                <span className="text-text-secondary"> They restart at the new location</span>
+              </p>
+            </FormRow>
           )}
           {preview.agentContinuity.length > 0 && (
-            <li data-testid="relocate-continuity">
-              <span className="text-text-secondary">Agent conversations</span>
-              <ul className="mt-1 space-y-1.5 pl-3">
+            <FormRow label="Agents" labelClassName="self-start">
+              <ul className="space-y-2 text-xs" data-testid="relocate-continuity">
                 {preview.agentContinuity.map((agent) => {
                   // Defense in depth: no plugin or user-registry agent can carry
                   // a `continuity` block today, but an unknown tier arriving from
@@ -486,10 +634,10 @@ function RelocationPreviewSection({
                       data-testid={`relocate-continuity-${agent.agentId}`}
                     >
                       <Icon
-                        className={`h-3.5 w-3.5 shrink-0 mt-0.5 ${p.className}`}
+                        className={`mt-px h-3.5 w-3.5 shrink-0 ${p.className}`}
                         aria-hidden="true"
                       />
-                      <div className="space-y-0.5">
+                      <div className="min-w-0 space-y-0.5">
                         <div>
                           <span className="font-medium text-text-primary">
                             {agent.count === 1
@@ -506,41 +654,39 @@ function RelocationPreviewSection({
                   );
                 })}
               </ul>
-            </li>
+            </FormRow>
           )}
           {preview.linkedWorktrees.length > 0 && (
-            <li>
-              <span>
-                {preview.linkedWorktrees.length === 1
-                  ? "1 linked worktree will be repaired:"
-                  : `${preview.linkedWorktrees.length} linked worktrees will be repaired:`}
-              </span>
-              <ul className="mt-1 space-y-0.5 pl-3">
+            <FormRow label="Worktrees" labelClassName="self-start">
+              <div className="space-y-1 text-xs">
+                <p className="text-text-primary">
+                  {preview.linkedWorktrees.length === 1
+                    ? "1 linked worktree will be repaired"
+                    : `${preview.linkedWorktrees.length} linked worktrees will be repaired`}
+                </p>
                 {preview.linkedWorktrees.map((wt) => (
-                  <li key={wt} className="font-mono text-text-secondary break-all">
-                    {wt}
-                  </li>
+                  <WrappingPath key={wt} path={wt} className="text-text-secondary" />
                 ))}
-              </ul>
-            </li>
+              </div>
+            </FormRow>
           )}
           {preview.affectedPanelCount > 0 && (
-            <li>
-              {preview.affectedPanelCount === 1
-                ? "1 panel will have its paths updated"
-                : `${preview.affectedPanelCount} panels will have their paths updated`}
-            </li>
+            <FormRow label="Panels">
+              <p className="text-xs text-text-primary">
+                {preview.affectedPanelCount === 1
+                  ? "1 panel will have its paths updated"
+                  : `${preview.affectedPanelCount} panels will have their paths updated`}
+              </p>
+            </FormRow>
           )}
-          {preview.runningTerminalCount === 0 &&
-            preview.linkedWorktrees.length === 0 &&
-            preview.affectedPanelCount === 0 && (
-              <li className="text-text-secondary">
-                No running terminals, worktrees, or panels affected
-              </li>
-            )}
-        </ul>
+          {nothingAffected && (
+            <p className="col-span-2 text-xs text-text-secondary">
+              No running terminals, worktrees, or panels affected
+            </p>
+          )}
+        </>
       )}
-    </div>
+    </FormSection>
   );
 }
 
