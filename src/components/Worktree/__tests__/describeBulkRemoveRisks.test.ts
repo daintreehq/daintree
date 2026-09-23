@@ -250,7 +250,7 @@ describe("bulkRemoveExclusion", () => {
               entries: [
                 {
                   path: "vendor/lib",
-                  state: "moved",
+                  state: "at-recorded-commit",
                   recordedOid: "0".repeat(40),
                   hasModifiedContent: true,
                   hasUntrackedContent: false,

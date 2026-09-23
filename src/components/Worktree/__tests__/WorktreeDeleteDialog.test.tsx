@@ -1840,9 +1840,12 @@ describe("WorktreeDeleteDialog — submodule entries, rechecks, teardown", () =>
     cleanup();
   });
 
-  const entry = (path: string) => ({
+  const entry = (
+    path: string,
+    state: "moved" | "at-recorded-commit" | "conflicted" = "at-recorded-commit"
+  ) => ({
     path,
-    state: "moved" as const,
+    state,
     recordedOid: "0".repeat(40),
     hasModifiedContent: true,
     hasUntrackedContent: false,
@@ -1895,7 +1898,7 @@ describe("WorktreeDeleteDialog — submodule entries, rechecks, teardown", () =>
     buildPreviewMock.mockResolvedValue(
       makePreview([{ path: "vendor/lib", status: "modified" }], {
         status: "verified",
-        risk: makeRisk({ entries: [entry("vendor/lib")] }),
+        risk: makeRisk({ entries: [entry("vendor/lib", "moved")] }),
       })
     );
     render(
@@ -1917,6 +1920,34 @@ describe("WorktreeDeleteDialog — submodule entries, rechecks, teardown", () =>
     expect(screen.getByTestId("delete-worktree-confirm-input")).toBeDefined();
   });
 
+  it("keeps a moved submodule's row even when its dirty contents are listed too", async () => {
+    // Moved AND dirty: the pointer change is a loss of its own, so folding the
+    // row into the nested list would drop it from the preview.
+    buildPreviewMock.mockResolvedValue(
+      makePreview([{ path: "vendor/lib", status: "modified" }], {
+        status: "verified",
+        risk: makeRisk({
+          entries: [entry("vendor/lib", "moved")],
+          dirtyFiles: ["vendor/lib/a.c"],
+        }),
+      })
+    );
+    render(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
+    );
+    await settlePreview();
+    expect(screen.getByTestId("delete-worktree-file-list").textContent).toContain(
+      "submodule checked out at a different commit"
+    );
+    expect(screen.getByTestId("delete-worktree-submodule-file-list").textContent).toContain(
+      "vendor/lib/a.c"
+    );
+  });
+
   it("gives every submodule holding unpushed commits its own group", async () => {
     // A global cap applied before grouping could fill every row from one
     // module and hide the other, so a push there would leave the delete
@@ -1929,9 +1960,9 @@ describe("WorktreeDeleteDialog — submodule entries, rechecks, teardown", () =>
             ...Array.from({ length: 6 }, (_, i) => ({
               oid: `aaaa${i}00000000`,
               subject: `Codec ${i}`,
-              submodulePath: "vendor/codec",
+              submodulePaths: ["vendor/codec"],
             })),
-            { oid: "bbbb000000000", subject: "Zlib fix", submodulePath: "vendor/zlib" },
+            { oid: "bbbb000000000", subject: "Zlib fix", submodulePaths: ["vendor/zlib"] },
           ],
         }),
       })
@@ -2058,6 +2089,42 @@ describe("WorktreeDeleteDialog — submodule entries, rechecks, teardown", () =>
     expectNoDeleteOffered();
   });
 
+  it("holds a force delete when the submit-time read fails but saw unpushed commits", async () => {
+    // The shared predicate stays narrow for the MCP bridge; this surface can
+    // refuse outright, so observed commits hold the dispatch here too.
+    buildPreviewMock.mockResolvedValue(makePreview([{ path: "a.ts", status: "modified" }]));
+    render(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([{ path: "a.ts", status: "modified" }]), {
+          branch: "feature/x",
+          name: "feature/x",
+        })}
+      />
+    );
+    await settlePreview();
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+    fireEvent.change(screen.getByTestId("delete-worktree-confirm-input"), {
+      target: { value: "feature/x" },
+    });
+    buildPreviewMock.mockRejectedValue(
+      new WorktreeDeletePreviewError(
+        {
+          status: "unverified",
+          risk: makeRisk({
+            incomplete: true,
+            atRiskCommits: [{ oid: "a1b2c3d4e5f6", subject: "Agent fix" }],
+          }),
+        },
+        new Error("timeout")
+      )
+    );
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    await screen.findByTestId("delete-worktree-blocked");
+    expect(startDeleteMock).not.toHaveBeenCalled();
+  });
+
   it("returns focus to Cancel when the submit-time check refuses the delete", async () => {
     // Enter in the typed-name input starts the re-read; a refusal replaces
     // that input with the banner, which would strand focus on nothing.
@@ -2145,7 +2212,7 @@ describe("WorktreeDeleteDialog — submodule entries, rechecks, teardown", () =>
       status: "verified",
       risk: makeRisk({
         atRiskCommits: [
-          { oid: "a1b2c3d4e5f6", subject: "Fix the parser", submodulePath: "vendor/lib" },
+          { oid: "a1b2c3d4e5f6", subject: "Fix the parser", submodulePaths: ["vendor/lib"] },
         ],
       }),
     });

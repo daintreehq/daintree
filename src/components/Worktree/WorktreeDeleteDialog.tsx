@@ -14,6 +14,7 @@ import {
   buildSubmoduleCommitRows,
   buildSubmoduleFileRows,
   groupAtRiskCommits,
+  observedAtRiskCommits,
   splitDisplayChanges,
   submoduleCommitsAreCapped,
   submoduleDeleteBlock,
@@ -158,11 +159,11 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // row here; when nothing is listed (the checkout just points at another
   // commit) the row is the whole change and stays, listed first so the cap
   // can't hide it. Display only — the tier above reads the unsplit list.
-  const { files: fileChanges, pointerOnly: pointerOnlyChanges } = splitDisplayChanges(
-    previewChanges,
-    previewRootPath,
-    submodules
-  );
+  const {
+    files: fileChanges,
+    pointerOnly: pointerOnlyChanges,
+    pointerDescriptions,
+  } = splitDisplayChanges(previewChanges, previewRootPath, submodules);
   const previewChangeRows = buildWorktreeChangeRows(
     [...pointerOnlyChanges, ...fileChanges],
     PREVIEW_FILE_LIMIT,
@@ -183,9 +184,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // checkout; a commit from an unbound module store has no path to name.
   const atRiskCommitPaths = [
     ...new Set(
-      (submodules?.risk?.atRiskCommits ?? [])
-        .map((commit) => commit.submodulePath)
-        .filter((path): path is string => !!path)
+      (submodules?.risk?.atRiskCommits ?? []).flatMap((commit) => commit.submodulePaths ?? [])
     ),
   ];
   const submoduleCommitGroups = groupAtRiskCommits(submodules?.risk ?? null);
@@ -527,7 +526,11 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     //
     // A parent-status failure does not exempt this: the submodule arm may have
     // completed, and a completed inventory is what the host refuses on.
-    if (worktreeDeleteBlockedBy(outcome) !== null) {
+    //
+    // Commits a partial walk observed before a parent failure hold it here as
+    // well. This surface can refuse outright, so it does; the shared predicate
+    // stays narrower because the MCP bridge reads a refusal as "no gate".
+    if (worktreeDeleteBlockedBy(outcome) !== null || observedAtRiskCommits(outcome)) {
       setIsDeleting(false);
       return;
     }
@@ -1078,13 +1081,13 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                       )}
                       <span className="min-w-0 [overflow-wrap:anywhere]">
                         <PathText value={row.label} />
-                        {/* Only a submodule with nothing listed below reaches
-                            this list, so the row is the whole change: its
-                            checkout points at another commit. Labelled so it
-                            isn't read as a file. */}
+                        {/* A submodule row only reaches this list when it is
+                            a change in its own right (moved, conflicted,
+                            removed); labelled with which, so it isn't read as
+                            a file. */}
                         {isSubmoduleRow && (
                           <span aria-hidden="true" className="ml-2 font-sans text-text-secondary">
-                            submodule — checked out at a different commit
+                            {pointerDescriptions.get(row.label) ?? "submodule"}
                           </span>
                         )}
                       </span>

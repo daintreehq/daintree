@@ -2689,6 +2689,26 @@ describe("resolveWorktreeDeleteGate (#12115)", () => {
     expect(resolveWorktreeDeleteGate(target, verified())).toEqual({ state: "none" });
   });
 
+  it("keeps the typed-name gate when the parent read failed and a partial walk saw commits", () => {
+    // Tracked changes are unknown here, so the gate has to hold. A refusal
+    // would read as "no gate" on this surface, and if the commits were pushed
+    // before the host's own check the force delete would run unattested.
+    seedWorktree();
+    expect(
+      resolveWorktreeDeleteGate(target, {
+        state: "failed",
+        submodules: {
+          status: "unverified",
+          risk: {
+            ...emptySubmoduleRisk(),
+            incomplete: true,
+            atRiskCommits: [{ oid: "abc", subject: "s" }],
+          },
+        },
+      })
+    ).toEqual({ state: "required", typedNameTarget: "feature/x" });
+  });
+
   it("does not escalate on untracked files alone (#4927)", () => {
     seedWorktree();
     expect(

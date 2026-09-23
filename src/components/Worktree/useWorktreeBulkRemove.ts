@@ -151,9 +151,7 @@ export function describeBulkRemoveRisks(target: BulkRemoveTarget): string[] {
       risks.push(`${nested} file${nested === 1 ? "" : "s"} inside submodules`);
     }
     if (pointerOnly.length > 0) {
-      risks.push(
-        `${pointerOnly.length} submodule${pointerOnly.length === 1 ? "" : "s"} checked out at a different commit`
-      );
+      risks.push(`${pointerOnly.length} submodule change${pointerOnly.length === 1 ? "" : "s"}`);
     }
   }
   if (aheadCount > 0) {

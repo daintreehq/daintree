@@ -675,7 +675,7 @@ export async function buildSubmoduleDeleteRisk(
     const dirtyFiles: string[] = [];
     const untrackedFiles: string[] = [];
     const atRiskCommits: SubmoduleAtRiskCommit[] = [];
-    const seenAtRiskOids = new Set<string>();
+    const seenAtRiskOids = new Map<string, SubmoduleAtRiskCommit>();
     let collectedFiles = 0;
 
     const collectAtRisk = async (
@@ -697,9 +697,21 @@ export async function buildSubmoduleDeleteRisk(
         markIncomplete(`${label}: more than ${maxAtRiskCommits} at-risk commits`);
       }
       for (const commit of walk.commits) {
-        if (seenAtRiskOids.has(commit.oid)) continue;
-        seenAtRiskOids.add(commit.oid);
-        atRiskCommits.push(submodulePath === undefined ? commit : { ...commit, submodulePath });
+        // One entry per OID, so the list's length stays the count of distinct
+        // commits at risk — but every module it was found in is recorded.
+        const seen = seenAtRiskOids.get(commit.oid);
+        if (seen) {
+          if (submodulePath !== undefined && !seen.submodulePaths?.includes(submodulePath)) {
+            seen.submodulePaths = [...(seen.submodulePaths ?? []), submodulePath];
+          }
+          continue;
+        }
+        const entry: SubmoduleAtRiskCommit =
+          submodulePath === undefined
+            ? { ...commit }
+            : { ...commit, submodulePaths: [submodulePath] };
+        seenAtRiskOids.set(commit.oid, entry);
+        atRiskCommits.push(entry);
       }
     };
 

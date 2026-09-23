@@ -1,6 +1,6 @@
 import { worktreeClient } from "@/clients";
 import type { FileChangeDetail, WorktreeChanges } from "@shared/types/git";
-import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
+import type { SubmoduleDeleteRisk, SubmoduleEntry } from "@shared/types/submodule";
 import type { WorktreeTeardownPreview } from "@shared/types/worktree";
 import { MCP_PREVIEW_CAUTION_PREFIX } from "@/lib/mcpPreviewLines";
 
@@ -351,25 +351,32 @@ export function worktreeDeleteContentRisk(
  * have completed on its own, and a completed inventory is exactly what
  * `WorkspaceService.guardSubmoduleDelete` refuses on. But an inventory that is
  * itself only `unverified` BECAUSE the parent fetch took it down must not read
- * as a refusal — that is how a parent timeout turned into a blocked delete —
- * unless it observed at-risk commits before it stopped.
+ * as a refusal — that is how a parent timeout turned into a blocked delete.
+ *
+ * The MCP bridge reads a refusal here as "no typed-name gate, the host will
+ * refuse", so this must never widen: a failed parent read leaves tracked
+ * changes unknown, and that state has to keep its typed-name gate there. The
+ * local dialog, which can refuse outright, adds {@link observedAtRiskCommits}
+ * on top of this rather than through it.
  */
 export function worktreeDeleteBlockedBy(
   outcome: WorktreeDeletePreviewOutcome
 ): WorktreeSubmoduleDeleteBlock | null {
   const risk = worktreeDeleteContentRisk(outcome, { hasTrackedChanges: false }).submodules;
   if (!risk) return null;
-  // Commits the inventory observed are evidence even from a partial walk, and
-  // the host refuses on them whatever became of the parent read. Only an
-  // inventory that established nothing stays exempt.
-  if (
-    outcome.state === "failed" &&
-    risk.status !== "verified" &&
-    (risk.risk?.atRiskCommits.length ?? 0) === 0
-  ) {
-    return null;
-  }
+  if (outcome.state === "failed" && risk.status !== "verified") return null;
   return submoduleDeleteBlock(risk);
+}
+
+/**
+ * True when a failed-parent outcome still carries at-risk commits the
+ * submodule walk observed before it stopped. Evidence even from a partial
+ * walk, and the host refuses on it — so a surface that can refuse outright
+ * (the local dialog) holds the dispatch on it. Deliberately separate from
+ * {@link worktreeDeleteBlockedBy}; see there.
+ */
+export function observedAtRiskCommits(outcome: WorktreeDeletePreviewOutcome): boolean {
+  return outcome.state === "failed" && (outcome.submodules?.risk?.atRiskCommits.length ?? 0) > 0;
 }
 
 /** Max file rows shown in a compact preview before collapsing the tail. */
@@ -457,12 +464,28 @@ export interface WorktreeDisplayChanges {
   /** Ordinary files, sorted by path so a tree reads the same on every open. */
   files: FileChangeDetail[];
   /**
-   * Submodule rows whose nested content is NOT listed by the inventory: the
-   * checkout points at another commit and that pointer is the whole change.
-   * A submodule with listed nested files or commits is dropped from the parent
-   * list instead of being counted as a file standing for them.
+   * Submodule rows that are a change in their own right — the checkout moved
+   * to another commit, the gitlink is conflicted or removed, or the inventory
+   * listed nothing for it. A row whose only content is the nested work listed
+   * under "Inside submodules" is dropped instead of being counted as a file
+   * standing for it.
    */
   pointerOnly: FileChangeDetail[];
+  /** What each kept submodule row is, keyed by its display path. */
+  pointerDescriptions: Map<string, string>;
+}
+
+/** What a submodule's own parent row means, from the inventory's own state. */
+function describeSubmoduleChange(
+  change: FileChangeDetail,
+  entry: SubmoduleEntry | undefined
+): string {
+  if (change.status === "deleted") return "submodule removed";
+  if (change.status === "conflicted" || entry?.state === "conflicted") {
+    return "submodule in a merge conflict";
+  }
+  if (entry?.state === "moved") return "submodule checked out at a different commit";
+  return "submodule";
 }
 
 export function splitDisplayChanges(
@@ -471,13 +494,15 @@ export function splitDisplayChanges(
   submodules: WorktreeSubmoduleRiskState | null
 ): WorktreeDisplayChanges {
   const risk = submodules?.risk ?? null;
-  const submodulePaths = new Set((risk?.entries ?? []).map((entry) => entry.path));
+  const entries = new Map((risk?.entries ?? []).map((entry) => [entry.path, entry]));
+  const submodulePaths = new Set(entries.keys());
   const nested = [...(risk?.dirtyFiles ?? []), ...(risk?.untrackedFiles ?? [])];
   const hasEvidence = (path: string) =>
     nested.some((file) => file.startsWith(`${path}/`)) ||
-    (risk?.atRiskCommits ?? []).some((commit) => commit.submodulePath === path);
+    (risk?.atRiskCommits ?? []).some((commit) => commit.submodulePaths?.includes(path));
   const files: FileChangeDetail[] = [];
   const pointerOnly: FileChangeDetail[] = [];
+  const pointerDescriptions = new Map<string, string>();
   for (const change of changes) {
     if (!isSubmoduleChange(change, rootPath, submodulePaths)) {
       files.push(change);
@@ -485,10 +510,17 @@ export function splitDisplayChanges(
     }
     if (change.status === "ignored") continue;
     const path = toDisplayPath(change.path, rootPath).replace(/\\/g, "/");
-    if (!hasEvidence(path)) pointerOnly.push(change);
+    const entry = entries.get(path);
+    // Dropped only when the row says nothing the nested list doesn't: the
+    // checkout sits at the recorded commit and its dirt is listed below.
+    const contentOnly =
+      change.status === "modified" && entry?.state === "at-recorded-commit" && hasEvidence(path);
+    if (contentOnly) continue;
+    pointerOnly.push(change);
+    pointerDescriptions.set(path, describeSubmoduleChange(change, entry));
   }
   files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  return { files, pointerOnly };
+  return { files, pointerOnly, pointerDescriptions };
 }
 
 /** The at-risk commits of one submodule, capped for display. */
@@ -513,10 +545,14 @@ export function groupAtRiskCommits(risk: SubmoduleDeleteRisk | null): SubmoduleC
   if (!risk) return [];
   const byPath = new Map<string | null, SubmoduleDeleteRisk["atRiskCommits"]>();
   for (const commit of risk.atRiskCommits) {
-    const path = commit.submodulePath ?? null;
-    const bucket = byPath.get(path);
-    if (bucket) bucket.push(commit);
-    else byPath.set(path, [commit]);
+    // A commit reachable from two module stores belongs under both: pushing
+    // it from one leaves it stranded in the other.
+    const paths = commit.submodulePaths?.length ? commit.submodulePaths : [null];
+    for (const path of paths) {
+      const bucket = byPath.get(path);
+      if (bucket) bucket.push(commit);
+      else byPath.set(path, [commit]);
+    }
   }
   const limit = byPath.size > 1 ? MULTI_MODULE_COMMIT_LIMIT : SUBMODULE_COMMIT_LIMIT;
   return [...byPath].map(([path, commits]) => ({
@@ -802,7 +838,11 @@ export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview 
   const submoduleLines = formatSubmodulePreviewLines(submodules);
   // A submodule's own parent row stands for nested content listed below, so
   // it is neither counted nor listed as a file of its own.
-  const { files, pointerOnly } = splitDisplayChanges(changes, rootPath, submodules);
+  const { files, pointerOnly, pointerDescriptions } = splitDisplayChanges(
+    changes,
+    rootPath,
+    submodules
+  );
   const { trackedChangeCount, untrackedFileCount } = summarizeWorktreeChanges(files);
   if (files.length === 0 && pointerOnly.length === 0) {
     // Only claim a clean tree when nothing nested contradicts it. Saying "No
@@ -822,15 +862,15 @@ export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview 
     parts.push(`${untrackedFileCount} untracked file${untrackedFileCount === 1 ? "" : "s"}`);
   }
   if (pointerOnly.length > 0) {
-    parts.push(
-      `${pointerOnly.length} submodule${pointerOnly.length === 1 ? "" : "s"} checked out at a different commit`
-    );
+    parts.push(`${pointerOnly.length} submodule change${pointerOnly.length === 1 ? "" : "s"}`);
   }
   return [
     `${parts.join(" and ")}:`,
-    ...formatWorktreeChangeRows(pointerOnly, PREVIEW_FILE_LIMIT, rootPath).map(
-      (row) => `${row} (submodule)`
-    ),
+    ...pointerOnly.map((change) => {
+      const path = toDisplayPath(change.path, rootPath).replace(/\\/g, "/");
+      const row = formatWorktreeChangeRows([change], 1, rootPath)[0] ?? `  ${path}`;
+      return `${row} (${pointerDescriptions.get(path) ?? "submodule"})`;
+    }),
     ...formatWorktreeChangeRows(files, PREVIEW_FILE_LIMIT, rootPath),
     ...submoduleLines,
   ];

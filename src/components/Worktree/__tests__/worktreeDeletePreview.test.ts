@@ -33,6 +33,7 @@ import {
   settleWorktreeDeleteOutcome,
   worktreeDeleteBlockedBy,
   worktreeDeleteContentRisk,
+  observedAtRiskCommits,
   WorktreeDeletePreviewError,
   type WorktreeDeletePreview,
   type WorktreeSubmoduleRiskState,
@@ -759,18 +760,23 @@ describe("worktreeDeleteBlockedBy (#12115)", () => {
     ).toBeNull();
   });
 
-  it("still refuses on commits a partial walk observed before the parent failed", () => {
-    // Evidence is evidence: the walk stopped early, but what it saw is on no
-    // remote, and the host refuses on it whatever became of the parent read.
+  it("stays narrow for a partial walk's commits after a parent failure", () => {
+    // The MCP bridge reads a refusal as "no typed-name gate, the host will
+    // refuse". With the parent unread, tracked changes are unknown, so this
+    // state has to keep its gate there; widening here drops it.
+    const partial = {
+      state: "failed",
+      submodules: {
+        status: "unverified",
+        risk: emptyRisk({ incomplete: true, atRiskCommits: [{ oid: "abc", subject: "s" }] }),
+      },
+    } as const;
+    expect(worktreeDeleteBlockedBy(partial)).toBeNull();
+    // The local dialog, which can refuse outright, reads the evidence here.
+    expect(observedAtRiskCommits(partial)).toBe(true);
     expect(
-      worktreeDeleteBlockedBy({
-        state: "failed",
-        submodules: {
-          status: "unverified",
-          risk: emptyRisk({ incomplete: true, atRiskCommits: [{ oid: "abc", subject: "s" }] }),
-        },
-      })
-    ).toBe("at-risk-commits");
+      observedAtRiskCommits({ state: "failed", submodules: { status: "unverified", risk: null } })
+    ).toBe(false);
   });
 
   it("does not refuse on a partial walk that observed nothing when the parent failed", () => {
@@ -788,9 +794,12 @@ describe("worktreeDeleteBlockedBy (#12115)", () => {
 });
 
 describe("delete-preview parity for the MCP confirm", () => {
-  const entry = (path: string) => ({
+  const entry = (
+    path: string,
+    state: "moved" | "at-recorded-commit" | "conflicted" = "at-recorded-commit"
+  ) => ({
     path,
-    state: "moved" as const,
+    state,
     recordedOid: "0".repeat(40),
     hasModifiedContent: true,
     hasUntrackedContent: false,
@@ -821,10 +830,63 @@ describe("delete-preview parity for the MCP confirm", () => {
 
   it("names a submodule whose checkout only moved, rather than calling it a file", () => {
     const lines = formatWorktreeDeletePreviewLines(
+      withSubmodule(
+        [file("vendor/lib", "modified")],
+        emptyRisk({ entries: [entry("vendor/lib", "moved")] })
+      )
+    );
+    expect(lines[0]).toBe("1 submodule change:");
+    expect(lines[1]).toBe("  M vendor/lib (submodule checked out at a different commit)");
+  });
+
+  it("describes a submodule row from its actual state, not a guess", () => {
+    const conflicted = formatWorktreeDeletePreviewLines(
+      withSubmodule(
+        [file("vendor/lib", "conflicted")],
+        emptyRisk({ entries: [entry("vendor/lib", "conflicted")] })
+      )
+    );
+    expect(conflicted[1]).toContain("(submodule in a merge conflict)");
+    const removed = formatWorktreeDeletePreviewLines(
+      withSubmodule([file("vendor/lib", "deleted")], emptyRisk({ entries: [entry("vendor/lib")] }))
+    );
+    expect(removed[1]).toContain("(submodule removed)");
+    // At its recorded commit with nothing listed: a changed row whose cause
+    // isn't known, which must not be dressed up as a moved checkout.
+    const unexplained = formatWorktreeDeletePreviewLines(
       withSubmodule([file("vendor/lib", "modified")], emptyRisk({ entries: [entry("vendor/lib")] }))
     );
-    expect(lines[0]).toBe("1 submodule checked out at a different commit:");
-    expect(lines[1]).toBe("  M vendor/lib (submodule)");
+    expect(unexplained[1]).toBe("  M vendor/lib (submodule)");
+  });
+
+  it("keeps a moved submodule's row when its dirty contents are listed too", () => {
+    const lines = formatWorktreeDeletePreviewLines(
+      withSubmodule(
+        [file("vendor/lib", "modified")],
+        emptyRisk({ entries: [entry("vendor/lib", "moved")], dirtyFiles: ["vendor/lib/a.c"] })
+      )
+    ).join("\n");
+    expect(lines).not.toContain("No uncommitted changes in the worktree itself.");
+    expect(lines).toContain("(submodule checked out at a different commit)");
+  });
+
+  it("lists a commit under every submodule that holds it", () => {
+    const groups = formatWorktreeDeletePreviewLines(
+      withSubmodule(
+        [],
+        emptyRisk({
+          atRiskCommits: [
+            {
+              oid: "c0bcdef0123456789",
+              subject: "Shared fix",
+              submodulePaths: ["vendor/a", "vendor/b"],
+            },
+          ],
+        })
+      )
+    ).join("\n");
+    expect(groups).toContain("  in vendor/a:");
+    expect(groups).toContain("  in vendor/b:");
   });
 
   it("groups unpushed commits under every submodule that holds them", () => {
@@ -836,9 +898,9 @@ describe("delete-preview parity for the MCP confirm", () => {
             ...Array.from({ length: 6 }, (_, i) => ({
               oid: `a${i}bcdef0123456789`,
               subject: `Codec ${i}`,
-              submodulePath: "vendor/codec",
+              submodulePaths: ["vendor/codec"],
             })),
-            { oid: "b0bcdef0123456789", subject: "Zlib fix", submodulePath: "vendor/zlib" },
+            { oid: "b0bcdef0123456789", subject: "Zlib fix", submodulePaths: ["vendor/zlib"] },
           ],
         })
       )
