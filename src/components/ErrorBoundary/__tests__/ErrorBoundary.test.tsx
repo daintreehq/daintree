@@ -567,13 +567,13 @@ describe("ErrorBoundary", () => {
     );
 
     const button = screen.getByTestId("error-fallback-report") as HTMLButtonElement;
-    expect(button.disabled).toBe(false);
+    expect(button.getAttribute("aria-busy")).toBeNull();
 
     fireEvent.click(button);
-    await waitFor(() => expect(button.disabled).toBe(true));
+    await waitFor(() => expect(button.getAttribute("aria-busy")).toBe("true"));
 
     resolveDispatch?.({ ok: true, result: undefined });
-    await waitFor(() => expect(button.disabled).toBe(false));
+    await waitFor(() => expect(button.getAttribute("aria-busy")).toBeNull());
   });
 
   it("clears the in-flight guard on reset so a new report can fire after recovery", async () => {

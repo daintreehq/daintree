@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Check, Copy, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { AccessibilityAnnouncer } from "@/components/Accessibility/Accessibility
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { scrubReportText } from "@shared/utils/reportScrubbers";
 import { resolveBoundaryDisplayName } from "./boundaryDisplayName";
+import { StackLines } from "./StackLines";
 
 export interface ErrorFallbackProps {
   error: Error;
@@ -46,31 +47,6 @@ function buildDetailsText(
     lines.push("", "Component stack:", scrub(errorInfo.componentStack.replace(/^\n+/, "")));
   }
   return lines.join("\n");
-}
-
-/**
- * One block per stack line with a hanging indent, and a break opportunity after
- * every slash: a wrapped frame then breaks between path segments and continues
- * under its own "at", instead of splitting a word and starting flush left
- * where it reads as the next frame. `<wbr>` adds nothing to copied text.
- */
-function StackLines({ text }: { text: string }) {
-  return text.split("\n").map((line, i) => (
-    <span key={i} className="block pl-[6ch] -indent-[6ch]">
-      {line === ""
-        ? "\u00a0"
-        : line.split("/").map((part, j) => (
-            <Fragment key={j}>
-              {j > 0 && (
-                <>
-                  /<wbr />
-                </>
-              )}
-              {part}
-            </Fragment>
-          ))}
-    </span>
-  ));
 }
 
 function reloadWindow() {
@@ -144,7 +120,8 @@ export function ErrorFallback({
         ? "Your terminals and agents are still running. Trying again didn't help, so reload the window."
         : "Your terminals and agents are still running. Try again to rebuild the window.";
   } else if (retryCount > 0) {
-    description = "Still not working? Reload the window. Your terminals and agents keep running.";
+    description =
+      "Your terminals and agents are still running. Trying again didn't help, so reload the window.";
   } else if (isComponent) {
     description = "The rest of Daintree is still running.";
   } else {
@@ -275,7 +252,9 @@ export function ErrorFallback({
                 variant="ghost"
                 size="sm"
                 onClick={onReport}
-                disabled={reportInFlight}
+                // loading, not disabled: a disabled button drops the focus the
+                // user just put on it while enrichment is gathered.
+                loading={reportInFlight}
                 data-testid="error-fallback-report"
               >
                 Report issue

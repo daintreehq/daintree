@@ -57,7 +57,11 @@ function renderFallback(overrides: Partial<PluginViewDiagnosticsFallbackProps> =
   return { props, ...render(<PluginViewDiagnosticsFallback {...props} />) };
 }
 
-const trace = () => screen.getByTestId("plugin-view-diagnostics-trace").textContent ?? "";
+/** The trace as displayed: one block per line, a blank line drawn as a nbsp. */
+const trace = () =>
+  Array.from(screen.getByTestId("plugin-view-diagnostics-trace").children)
+    .map((line) => (line.textContent === "\u00a0" ? "" : (line.textContent ?? "")))
+    .join("\n");
 
 beforeEach(() => {
   dispatchMock.mockClear();

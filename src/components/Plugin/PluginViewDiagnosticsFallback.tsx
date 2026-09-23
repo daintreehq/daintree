@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { TriangleAlert } from "lucide-react";
 import { buildPluginViewDiagnostics } from "@/components/Plugin/buildPluginViewDiagnostics";
 import { Button } from "@/components/ui/button";
+import { StackLines } from "@/components/ErrorBoundary/StackLines";
 import { actionService } from "@/services/ActionService";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -273,9 +274,9 @@ export function PluginViewDiagnosticsFallback({
 
           <pre
             data-testid="plugin-view-diagnostics-trace"
-            className="max-h-80 overflow-y-auto rounded-[var(--radius-md)] border border-divider bg-surface-canvas p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] text-text-secondary select-text"
+            className="max-h-80 overflow-y-auto rounded-[var(--radius-md)] border border-divider bg-surface-canvas p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-text-secondary select-text"
           >
-            {trace}
+            <StackLines text={trace} />
           </pre>
         </div>
       </details>

@@ -276,14 +276,20 @@ describe("ErrorFallback", () => {
       expect(restart.textContent).toBe("Try again");
     });
 
-    it("disables Report issue button while reportInFlight is true", () => {
+    it("keeps Report issue focused but inert while a report is in flight", () => {
       vi.stubEnv("DEV", false);
       const onReport = vi.fn();
       render(
         <ErrorFallback {...baseProps} variant="section" onReport={onReport} reportInFlight={true} />
       );
       const button = screen.getByTestId("error-fallback-report") as HTMLButtonElement;
-      expect(button.disabled).toBe(true);
+      button.focus();
+      // Native disabled would throw focus to <body> mid-report.
+      expect(button.disabled).toBe(false);
+      expect(document.activeElement).toBe(button);
+      expect(button.getAttribute("aria-busy")).toBe("true");
+      fireEvent.click(button);
+      expect(onReport).not.toHaveBeenCalled();
     });
 
     it("enables Report issue button when reportInFlight is false", () => {
@@ -298,7 +304,9 @@ describe("ErrorFallback", () => {
         />
       );
       const button = screen.getByTestId("error-fallback-report") as HTMLButtonElement;
-      expect(button.disabled).toBe(false);
+      expect(button.getAttribute("aria-busy")).toBeNull();
+      fireEvent.click(button);
+      expect(onReport).toHaveBeenCalledOnce();
     });
   });
 
