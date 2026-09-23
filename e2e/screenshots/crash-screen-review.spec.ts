@@ -169,6 +169,13 @@ const STATES: State[] = [
     },
   },
   {
+    // The boot-failure screen: painted when the renderer can't start at all.
+    name: "bootstrap",
+    fixture: "bootstrap",
+    viewport: { width: 1280, height: 800 },
+    marker: "#root h1",
+  },
+  {
     name: "plugin-installed",
     fixture: "plugin-installed",
     viewport: { width: 680, height: 560 },

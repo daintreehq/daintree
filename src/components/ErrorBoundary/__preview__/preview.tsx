@@ -8,6 +8,7 @@ import { ErrorBoundary } from "../ErrorBoundary";
 import type { ErrorFallbackProps } from "../ErrorFallback";
 import { WorktreeCardErrorFallback } from "@/components/Worktree/WorktreeCardErrorFallback";
 import { PluginViewDiagnosticsFallback } from "@/components/Plugin/PluginViewDiagnosticsFallback";
+import { renderBootstrapError } from "@/utils/renderBootstrapError";
 import "@/index.css";
 
 installPreviewShims();
@@ -24,7 +25,7 @@ installPreviewShims();
  *
  * Query parameters:
  *   ?theme=daintree|bondi|…   built-in theme id
- *   ?fixture=fullscreen       see FIXTURES below
+ *   ?fixture=fullscreen       see FIXTURES below, plus `bootstrap` (boot failure)
  *
  * The toolbar, sidebar and panel chrome drawn around the fallbacks are harness
  * decoration, so a reviewer can judge the fallback against the frame it
@@ -284,11 +285,20 @@ const FIXTURES: Record<string, () => ReactNode> = {
   ),
 };
 
-const render = FIXTURES[fixture];
-if (!render) throw new Error(`Unknown crash-screen fixture "${fixture}"`);
+const rootEl = document.getElementById("root")!;
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <TooltipProvider>{render()}</TooltipProvider>
-  </StrictMode>
-);
+if (fixture === "bootstrap") {
+  // The boot-failure screen is plain DOM painted before React ever mounts, so
+  // it is drawn directly rather than through a boundary.
+  renderBootstrapError(rootEl, makeError());
+  rootEl.setAttribute("data-preview-shell", "");
+} else {
+  const render = FIXTURES[fixture];
+  if (!render) throw new Error(`Unknown crash-screen fixture "${fixture}"`);
+
+  createRoot(rootEl).render(
+    <StrictMode>
+      <TooltipProvider>{render()}</TooltipProvider>
+    </StrictMode>
+  );
+}
