@@ -175,7 +175,7 @@ const STATES: ShotState[] = [
     act: async (page) => {
       const row = page.locator("#voice-stt-openai-key");
       await row.locator("input").fill("sk-proj-not-a-real-key-000000");
-      await row.getByRole("button", { name: "Save", exact: true }).click();
+      await row.getByRole("button", { name: "Check and save" }).click();
     },
     expectText: ["Incorrect API key provided"],
     sweep: true,
