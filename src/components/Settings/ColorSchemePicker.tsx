@@ -1,30 +1,56 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Search } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { AlertCircle } from "lucide-react";
 import {
   BUILT_IN_SCHEMES,
   DEFAULT_SCHEME_ID,
-  getMappedTerminalScheme,
   type TerminalColorScheme,
 } from "@/config/terminalColorSchemes";
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
+import { getTerminalThemeFromAppScheme, relativeLuminance, resolveAppTheme } from "@shared/theme";
 import { logError } from "@/utils/logger";
 import { Button } from "@/components/ui/button";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { ThemeSelector } from "./ThemeSelector";
 
-function SchemePreview({ scheme }: { scheme: TerminalColorScheme }) {
+export interface ColorSchemeError {
+  title: string;
+  description: string;
+  retry: () => void;
+}
+
+type Tone = "dark" | "light";
+
+const TONE_OPTIONS: { value: Tone; label: string }[] = [
+  { value: "dark", label: "Dark" },
+  { value: "light", label: "Light" },
+];
+
+export function SchemePreview({
+  scheme,
+  fontFamily = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+  fontSize = "var(--text-4xs)",
+}: {
+  scheme: TerminalColorScheme;
+  fontFamily?: string;
+  fontSize?: string;
+}) {
   const c = scheme.colors;
   const fg = c.foreground ?? "#ccc";
 
   return (
     <div
-      className="rounded-[var(--radius-sm)] overflow-hidden"
+      // The sample's own edge: a terminal background one step off the card (Daintree
+      // on its own settings card) otherwise dissolves into it.
+      className="rounded-[var(--radius-sm)] overflow-hidden border border-border-default"
       style={{
         backgroundColor: c.background ?? "#000",
         padding: "6px 8px",
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-        fontSize: "var(--text-4xs)",
+        fontFamily,
+        fontSize,
         lineHeight: "1.4",
         whiteSpace: "nowrap",
         WebkitFontSmoothing: "antialiased",
@@ -61,24 +87,53 @@ async function persistCustomSchemes() {
   await terminalConfigClient.setCustomSchemes(customSchemes);
 }
 
-async function selectScheme(id: string) {
+/**
+ * Select, persist, and put the selection back on failure. The MRU list rides along but
+ * is invisible here, so only the scheme write itself is worth a banner.
+ */
+async function selectScheme(id: string, onError: (error: ColorSchemeError | null) => void) {
   const store = useTerminalColorSchemeStore.getState();
+  const previous = store.selectedSchemeId;
+  onError(null);
   store.setSelectedSchemeId(id);
   store.setPreviewSchemeId(null);
   try {
     await terminalConfigClient.setColorScheme(id);
+  } catch (error) {
+    logError("Failed to persist color scheme", error);
+    if (useTerminalColorSchemeStore.getState().selectedSchemeId === id) {
+      useTerminalColorSchemeStore.getState().setSelectedSchemeId(previous);
+    }
+    onError({
+      title: "Couldn't save color scheme",
+      description: "The previous scheme was restored, so it won't change on restart.",
+      retry: () => void selectScheme(id, onError),
+    });
+    return;
+  }
+  try {
     await terminalConfigClient.setRecentSchemeIds(
       useTerminalColorSchemeStore.getState().recentSchemeIds
     );
   } catch (error) {
-    logError("Failed to persist color scheme", error);
+    logError("Failed to persist recent color schemes", error);
   }
 }
 
-async function importScheme() {
+async function importScheme(onError: (error: ColorSchemeError | null) => void) {
+  onError(null);
   try {
     const result = await terminalConfigClient.importColorScheme();
-    if (!result.ok) return;
+    if (!result.ok) {
+      if (!result.errors.includes("Import cancelled")) {
+        onError({
+          title: "Couldn't import color scheme",
+          description: result.errors[0] ?? "The file isn't a color scheme Daintree can read.",
+          retry: () => void importScheme(onError),
+        });
+      }
+      return;
+    }
 
     const scheme: TerminalColorScheme = {
       ...result.scheme,
@@ -87,196 +142,163 @@ async function importScheme() {
     };
     useTerminalColorSchemeStore.getState().addCustomScheme(scheme);
     await persistCustomSchemes();
-    await selectScheme(scheme.id);
+    await selectScheme(scheme.id, onError);
   } catch (error) {
     logError("Failed to import color scheme", error);
+    onError({
+      title: "Couldn't import color scheme",
+      description: "Something went wrong reading the file.",
+      retry: () => void importScheme(onError),
+    });
   }
 }
 
 /** The section's action: an imported scheme joins the list below and becomes the selection. */
-export function ImportColorSchemeButton() {
+export function ImportColorSchemeButton({
+  onError,
+}: {
+  onError: (error: ColorSchemeError | null) => void;
+}) {
   return (
-    <Button variant="outline" size="sm" onClick={() => void importScheme()}>
+    <Button variant="outline" size="sm" onClick={() => void importScheme(onError)}>
       Import color scheme…
     </Button>
   );
 }
 
-function resolveSchemeForPreview(
+/**
+ * "Match app theme" draws the current app theme's own terminal palette — the same
+ * derivation the terminals use at runtime — so its card shows what selecting it will do
+ * on this theme rather than the default theme's colors.
+ */
+export function resolveSchemeForPreview(
   scheme: TerminalColorScheme,
-  appThemeId: string
+  appThemeId: string,
+  appCustomSchemes: Parameters<typeof resolveAppTheme>[1] = []
 ): TerminalColorScheme {
   if (scheme.id !== DEFAULT_SCHEME_ID) return scheme;
-  const mapped = getMappedTerminalScheme(appThemeId);
-  if (!mapped) return scheme;
-  return { ...scheme, type: mapped.type, colors: mapped.colors };
+  const appScheme = resolveAppTheme(appThemeId, appCustomSchemes);
+  return { ...scheme, colors: getTerminalThemeFromAppScheme(appScheme) };
 }
 
-export function ColorSchemePicker() {
+/**
+ * Dark or light by what the terminal actually paints, not by the app theme a scheme
+ * came from: Bondi is a light app theme with a deep-water terminal.
+ */
+export function schemeTone(scheme: TerminalColorScheme): Tone {
+  const bg = scheme.colors.background;
+  if (!bg || !/^#[0-9a-f]{6}$/i.test(bg)) return scheme.type === "light" ? "light" : "dark";
+  return relativeLuminance(bg) > 0.2 ? "light" : "dark";
+}
+
+export function ColorSchemePicker({
+  error,
+  onError,
+}: {
+  error: ColorSchemeError | null;
+  onError: (error: ColorSchemeError | null) => void;
+}) {
   const selectedSchemeId = useTerminalColorSchemeStore((s) => s.selectedSchemeId);
   const customSchemes = useTerminalColorSchemeStore((s) => s.customSchemes);
   const setPreviewSchemeId = useTerminalColorSchemeStore((s) => s.setPreviewSchemeId);
   const appThemeId = useAppThemeStore((s) => s.selectedSchemeId);
+  const appCustomSchemes = useAppThemeStore((s) => s.customSchemes);
 
-  const [query, setQuery] = useState("");
   const [previewAnnouncement, setPreviewAnnouncement] = useState("");
-  const [typeFilter, setTypeFilter] = useState<"dark" | "light">(() => {
-    const all = [...BUILT_IN_SCHEMES, ...customSchemes];
-    const selected = all.find((s) => s.id === selectedSchemeId);
-    if (!selected) return "dark";
-    const resolved = resolveSchemeForPreview(selected, appThemeId);
-    return resolved.type === "light" ? "light" : "dark";
-  });
 
-  const revertRafRef = useRef<number | null>(null);
+  const resolvedSchemes = useMemo(
+    () =>
+      [...BUILT_IN_SCHEMES, ...customSchemes].map((s) =>
+        resolveSchemeForPreview(s, appThemeId, appCustomSchemes)
+      ),
+    [customSchemes, appThemeId, appCustomSchemes]
+  );
+  const selectedScheme =
+    resolvedSchemes.find((s) => s.id === selectedSchemeId) ?? resolvedSchemes[0]!;
 
-  const allSchemes = useMemo(() => [...BUILT_IN_SCHEMES, ...customSchemes], [customSchemes]);
+  const [tone, setTone] = useState<Tone>(() => schemeTone(selectedScheme));
+  const visibleSchemes = useMemo(
+    () => resolvedSchemes.filter((s) => schemeTone(s) === tone),
+    [resolvedSchemes, tone]
+  );
 
-  const lowerQuery = query.toLowerCase();
-  const filteredSchemes = useMemo(() => {
-    const byType = allSchemes.filter((s) => {
-      const resolved = resolveSchemeForPreview(s, appThemeId);
-      return typeFilter === "light" ? resolved.type === "light" : resolved.type !== "light";
-    });
-    if (!lowerQuery) return byType;
-    return byType.filter((s) => s.name.toLowerCase().includes(lowerQuery));
-  }, [allSchemes, typeFilter, lowerQuery, appThemeId]);
-
-  const handlePreviewEnter = (id: string) => {
-    if (revertRafRef.current !== null) {
-      cancelAnimationFrame(revertRafRef.current);
-      revertRafRef.current = null;
-    }
-    setPreviewSchemeId(id);
-    const scheme = allSchemes.find((s) => s.id === id);
-    if (scheme) setPreviewAnnouncement(`Previewing: ${scheme.name}`);
-  };
-
-  const handlePreviewLeave = () => {
-    if (revertRafRef.current !== null) {
-      cancelAnimationFrame(revertRafRef.current);
-    }
-    revertRafRef.current = requestAnimationFrame(() => {
-      revertRafRef.current = null;
-      setPreviewSchemeId(null);
-      setPreviewAnnouncement("");
-    });
-  };
-
+  const unmountedRef = useRef(false);
   useEffect(() => {
+    unmountedRef.current = false;
     return () => {
-      if (revertRafRef.current !== null) {
-        cancelAnimationFrame(revertRafRef.current);
-      }
+      unmountedRef.current = true;
       setPreviewSchemeId(null);
     };
   }, [setPreviewSchemeId]);
 
-  const handleSelect = (id: string) => selectScheme(id);
+  const handlePreviewItem = (id: string) => {
+    setPreviewSchemeId(id);
+    const scheme = resolvedSchemes.find((s) => s.id === id);
+    if (scheme) setPreviewAnnouncement(`Previewing: ${scheme.name}`);
+  };
 
-  const isEmpty = filteredSchemes.length === 0;
+  const handlePreviewEnd = () => {
+    if (unmountedRef.current) return;
+    setPreviewSchemeId(null);
+    setPreviewAnnouncement("");
+  };
+
+  const isModified = selectedSchemeId !== DEFAULT_SCHEME_ID;
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-col rounded-[var(--radius-md)] border border-border-default overflow-hidden">
-        <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-border-default shrink-0">
-          <div className="flex items-center gap-1.5 flex-1 min-w-0 focus-within:border-daintree-accent/40">
-            <Search className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none" />
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.stopPropagation();
-                  setQuery("");
-                }
-              }}
-              placeholder="Filter schemes..."
-              aria-label="Filter color schemes"
-              className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden"
-            />
-          </div>
-          <div className="flex rounded-[var(--radius-md)] border border-border-default overflow-hidden shrink-0">
-            <button
-              type="button"
-              onClick={() => setTypeFilter("dark")}
-              className={cn(
-                "rounded-l-md px-2.5 py-0.5 text-2xs font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-                typeFilter === "dark"
-                  ? "bg-overlay-selected text-text-primary"
-                  : "text-text-secondary hover:text-text-primary"
-              )}
-            >
-              Dark
-            </button>
-            <button
-              type="button"
-              onClick={() => setTypeFilter("light")}
-              className={cn(
-                "rounded-r-md px-2.5 py-0.5 text-2xs font-medium transition-colors border-l border-border-default focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-                typeFilter === "light"
-                  ? "bg-overlay-selected text-text-primary"
-                  : "text-text-secondary hover:text-text-primary"
-              )}
-            >
-              Light
-            </button>
-          </div>
+    <SettingsGroup>
+      <SettingsRow
+        id="appearance-color-scheme-list"
+        label="Scheme"
+        description={
+          isModified
+            ? `${selectedScheme.name} · Default: Match app theme`
+            : "Match app theme — follows the app theme's own terminal colors"
+        }
+        layout="stacked"
+        isModified={isModified}
+        onReset={() => void selectScheme(DEFAULT_SCHEME_ID, onError)}
+        resetAriaLabel="Reset terminal color scheme to Match app theme"
+        control={({ labelId }) => (
+          <ThemeSelector
+            items={visibleSchemes}
+            selectedId={selectedSchemeId}
+            onSelect={(id) => void selectScheme(id, onError)}
+            columns={3}
+            getName={(s) => s.name}
+            renderPreview={(s) => <SchemePreview scheme={s} />}
+            onPreviewItem={handlePreviewItem}
+            onPreviewEnd={handlePreviewEnd}
+            previewAnnouncement={previewAnnouncement}
+            listLabelledBy={labelId}
+            searchPlaceholder="Filter schemes..."
+            searchLabel="Filter color schemes"
+            emptyMessage="No schemes match your search."
+            toolbar={
+              <SegmentedRadioGroup
+                aria-label="Scheme tone"
+                options={TONE_OPTIONS}
+                value={tone}
+                onChange={setTone}
+              />
+            }
+          />
+        )}
+      />
+      {error && (
+        <div className="px-4 py-3">
+          <InlineStatusBanner
+            className="rounded-[var(--radius-md)]"
+            severity="error"
+            icon={AlertCircle}
+            title={error.title}
+            description={error.description}
+            action={{ id: "retry", label: "Retry", onClick: error.retry }}
+            onClose={() => onError(null)}
+            closeAriaLabel="Dismiss color scheme error"
+          />
         </div>
-
-        <div
-          className="max-h-[400px] overflow-y-auto p-2"
-          role="listbox"
-          aria-label="Color scheme list"
-        >
-          {isEmpty ? (
-            <p className="text-xs text-text-secondary text-center py-4">
-              No schemes match your search.
-            </p>
-          ) : (
-            <div className="grid grid-cols-2 gap-2">
-              {filteredSchemes.map((scheme) => {
-                const resolved = resolveSchemeForPreview(scheme, appThemeId);
-                const isSelected = scheme.id === selectedSchemeId;
-                return (
-                  <button
-                    key={scheme.id}
-                    type="button"
-                    role="option"
-                    aria-selected={isSelected}
-                    onClick={() => handleSelect(scheme.id)}
-                    onPointerEnter={() => handlePreviewEnter(scheme.id)}
-                    onPointerLeave={handlePreviewLeave}
-                    onFocus={() => handlePreviewEnter(scheme.id)}
-                    onBlur={handlePreviewLeave}
-                    className={cn(
-                      "flex flex-col gap-1.5 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                      "[&>*]:pointer-events-none",
-                      isSelected
-                        ? "border-border-strong bg-overlay-selected"
-                        : "border-border-default bg-surface-canvas hover:border-border-strong"
-                    )}
-                  >
-                    <SchemePreview scheme={resolved} />
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-text-primary truncate flex-1">
-                        {scheme.name}
-                      </span>
-                      {isSelected && <Check className="w-3.5 h-3.5 text-text-primary shrink-0" />}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        <div aria-live="polite" aria-atomic="true" className="sr-only">
-          {previewAnnouncement}
-        </div>
-      </div>
-    </div>
+      )}
+    </SettingsGroup>
   );
 }

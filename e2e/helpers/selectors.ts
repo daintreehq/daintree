@@ -33,7 +33,7 @@ export const SEL = {
     navSidebar: ".settings-sidebar",
     projectPulseToggle: '[aria-label="Project Pulse Toggle"]',
     performanceModeToggle: '[aria-label="Performance Mode Toggle"]',
-    fontFamilySelect: '[aria-label="Terminal font family"]',
+    fontFamilySelect: '[role="radiogroup"][aria-label="Terminal font family"]',
     subtabNav: '[aria-label="Subtab navigation"]',
     searchInput: '[aria-label="Search settings"]',
     searchClear: '[aria-label="Clear search"]',

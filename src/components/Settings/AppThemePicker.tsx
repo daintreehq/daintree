@@ -7,6 +7,13 @@ import {
   type MouseEvent,
 } from "react";
 import { AlertCircle, AlertTriangle, Shuffle } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { injectSchemeToDOM, useAppThemeStore } from "@/store/appThemeStore";
@@ -28,7 +35,12 @@ import type {
   AppThemeWarningKind,
 } from "@shared/types/appTheme";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
-import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import {
+  SETTINGS_CONTROL_WIDTH,
+  SettingsDependents,
+  SettingsGroup,
+  SettingsRow,
+} from "./SettingsGroup";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
 import { useImageError } from "@/hooks/useImageError";
@@ -81,49 +93,67 @@ async function persistCustomSchemes() {
   await appThemeClient.setCustomSchemes(customSchemes);
 }
 
-function PreferredSchemePicker({
+/**
+ * A theme's canvas colour as a chip. The frame is text-secondary so a near-black swatch
+ * on a dark card, or a cream one on a light card, still has an edge at 3:1.
+ */
+function ThemeSwatch({ scheme }: { scheme: AppColorScheme }) {
+  return (
+    <span
+      className="inline-block w-3 h-3 shrink-0 rounded-sm border border-text-secondary"
+      style={{ backgroundColor: scheme.tokens[APP_THEME_PREVIEW_KEYS.background] }}
+      aria-hidden="true"
+    />
+  );
+}
+
+function PreferredSchemeRow({
   label,
   schemes,
   selectedId,
+  defaultId,
   onSelect,
 }: {
   label: string;
   schemes: AppColorScheme[];
   selectedId: string;
+  defaultId: string;
   onSelect: (id: string) => void;
 }) {
+  const defaultName = schemes.find((s) => s.id === defaultId)?.name ?? defaultId;
   return (
     <SettingsRow
       label={label}
-      layout="stacked"
-      control={({ labelId }) => (
-        <div role="group" aria-labelledby={labelId} className="flex flex-wrap gap-1.5">
-          {schemes.map((scheme) => (
-            <button
-              key={scheme.id}
-              type="button"
-              aria-pressed={selectedId === scheme.id}
-              onClick={() => onSelect(scheme.id)}
-              className={cn(
-                "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] border text-xs transition-colors",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                selectedId === scheme.id
-                  ? "border-border-strong bg-overlay-medium text-text-primary"
-                  : "border-border-default text-text-secondary hover:bg-surface-hover"
-              )}
-            >
-              <div
-                className="w-3 h-3 rounded-sm shrink-0"
-                style={{ backgroundColor: scheme.tokens[APP_THEME_PREVIEW_KEYS.background] }}
-              />
-              {scheme.name}
-            </button>
-          ))}
-        </div>
+      description={`Default: ${defaultName}`}
+      isModified={selectedId !== defaultId}
+      onReset={() => onSelect(defaultId)}
+      control={({ labelId, descriptionId, disabled }) => (
+        <Select value={selectedId} onValueChange={onSelect} disabled={disabled}>
+          <SelectTrigger
+            aria-labelledby={labelId}
+            aria-describedby={descriptionId}
+            className={SETTINGS_CONTROL_WIDTH.select}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {schemes.map((scheme) => (
+              <SelectItem key={scheme.id} value={scheme.id}>
+                <span className="flex items-center gap-2">
+                  <ThemeSwatch scheme={scheme} />
+                  {scheme.name}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       )}
     />
   );
 }
+
+const DEFAULT_PREFERRED_DARK = "daintree";
+const DEFAULT_PREFERRED_LIGHT = "bondi";
 
 interface AppThemePickerProps {
   onClose?: () => void;
@@ -504,208 +534,225 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
     window.dispatchEvent(new CustomEvent("daintree:open-theme-browser"));
   };
 
+  const themeDefaultAccent = selectedScheme.tokens["accent-primary"];
+
   return (
-    <div className="space-y-4">
-      {saveError && (
-        <InlineStatusBanner
-          className="rounded-[var(--radius-md)]"
-          severity="error"
-          icon={AlertCircle}
-          title={saveError.title}
-          description={saveError.description}
-          action={{ id: "retry", label: "Retry", onClick: saveError.retry }}
-          onClose={() => setSaveError(null)}
-          closeAriaLabel="Dismiss theme error"
-        />
-      )}
-
-      <div className="flex flex-col rounded-[var(--radius-lg)] border border-border-default overflow-hidden">
-        <div className="relative h-[200px] shrink-0 overflow-hidden">
-          {selectedScheme.heroImage && !heroError ? (
-            <img
-              ref={heroImgRef}
-              src={selectedScheme.heroImage}
-              alt=""
-              onError={onHeroError}
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <div
-              className="w-full h-full flex items-center justify-center"
-              style={{
-                backgroundColor: selectedScheme.tokens[APP_THEME_PREVIEW_KEYS.background],
-              }}
-            >
-              <PaletteStrip scheme={selectedScheme} />
-            </div>
-          )}
-          {/* Media-overlay caption: sits on a guaranteed-dark scrim over the hero
-              image, so the white label text is intentional and stays readable on
-              every theme. `text-inverse` flips dark on dark themes — not usable here. */}
-          <div className="absolute bottom-0 inset-x-0 bg-scrim-strong backdrop-blur-sm px-3 py-1.5 flex items-center justify-between">
-            <span className="text-sm font-medium text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
-              {selectedScheme.name}
-            </span>
-            {selectedScheme.location && (
-              <span className="text-2xs text-white/75 drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
-                {selectedScheme.location}
-              </span>
-            )}
+    <SettingsGroup>
+      {/* The theme's place is the hero of this group rather than a card of its own, so
+          the theme, how it follows the OS, and how it is tuned read as one surface. */}
+      <div className="relative h-[200px] overflow-hidden rounded-t-[var(--radius-lg)]">
+        {selectedScheme.heroImage && !heroError ? (
+          <img
+            ref={heroImgRef}
+            src={selectedScheme.heroImage}
+            alt=""
+            onError={onHeroError}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div
+            className="w-full h-full flex items-center justify-center"
+            style={{
+              backgroundColor: selectedScheme.tokens[APP_THEME_PREVIEW_KEYS.background],
+            }}
+          >
+            <PaletteStrip scheme={selectedScheme} />
           </div>
-        </div>
-
-        <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-border-default bg-surface-canvas">
-          <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">Current theme</span>
-          {allSchemes.length > 1 && (
-            <Button variant="outline" size="sm" onClick={handleShuffle} className="shrink-0">
-              <Shuffle aria-hidden="true" />
-              Random theme
-            </Button>
-          )}
-          {onClose && (
-            <Button variant="contrast" size="sm" onClick={handleChangeTheme} className="shrink-0">
-              Change theme…
-            </Button>
+        )}
+        {/* Media-overlay caption: sits on a guaranteed-dark scrim over the hero
+            image, so the white label text is intentional and stays readable on
+            every theme. `text-inverse` flips dark on dark themes — not usable here. */}
+        <div className="absolute bottom-0 inset-x-0 bg-scrim-strong backdrop-blur-sm px-4 py-1.5 flex items-center justify-between gap-4">
+          <span className="text-sm font-medium text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+            {selectedScheme.name}
+          </span>
+          {selectedScheme.location && (
+            <span className="min-w-0 truncate text-2xs text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+              {selectedScheme.location}
+            </span>
           )}
         </div>
       </div>
 
-      <SettingsGroup>
-        <SettingsSwitchCard
-          title="Match system appearance"
-          subtitle="Switches between a dark and a light theme when your OS appearance changes"
-          isEnabled={followSystem}
-          onChange={() => void handleToggleFollowSystem()}
-        />
-        {followSystem && (
-          <SettingsDependents>
-            <PreferredSchemePicker
-              label="Dark theme"
-              schemes={darkSchemes}
-              selectedId={preferredDarkSchemeId}
-              onSelect={(id) => void handlePreferredDarkChange(id)}
-            />
-            <PreferredSchemePicker
-              label="Light theme"
-              schemes={lightSchemes}
-              selectedId={preferredLightSchemeId}
-              onSelect={(id) => void handlePreferredLightChange(id)}
-            />
-          </SettingsDependents>
-        )}
-        <SettingsRow
-          label="Accent color"
-          isModified={!!accentColorOverride}
-          description={
-            accentColorOverride
-              ? `Overriding the theme's accent with ${effectiveAccent}`
-              : "Uses the theme's accent — click the swatch to override it"
-          }
-          control={
-            <>
-              {accentColorOverride && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleAccentReset}
-                  data-testid="accent-color-override-reset"
-                >
-                  Reset to theme default
-                </Button>
-              )}
-              <label
-                htmlFor="accent-color-override-input"
-                className="relative shrink-0 cursor-pointer"
-                style={{ width: 32, height: 32 }}
-              >
-                <div
-                  className="w-full h-full rounded-[var(--radius-md)] border border-border-default"
-                  style={{ backgroundColor: effectiveAccent }}
-                  aria-hidden="true"
-                />
-                <input
-                  id="accent-color-override-input"
-                  data-testid="accent-color-override-input"
-                  type="color"
-                  value={pickerValue}
-                  onInput={handleAccentInput}
-                  onChange={handleAccentCommit}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                  aria-label="Accent color"
-                />
-              </label>
-            </>
-          }
-        />
-        <SettingsRow
-          label="Theme files"
-          description="Load a theme from a file, or save this one to share it"
-          control={({ disabled }) => (
-            <>
-              <Button variant="outline" size="sm" onClick={handleImport} disabled={disabled}>
-                Import…
+      <SettingsRow
+        label="Theme"
+        description={
+          followSystem
+            ? "Following your OS appearance. Picking a theme turns that off"
+            : `${allSchemes.length} themes to browse, each with a live preview`
+        }
+        control={
+          <>
+            {allSchemes.length > 1 && (
+              <Button variant="outline" size="sm" onClick={handleShuffle}>
+                <Shuffle aria-hidden="true" />
+                Random theme
               </Button>
-              <Button variant="outline" size="sm" onClick={handleExport} disabled={disabled}>
-                Export…
+            )}
+            {onClose && (
+              <Button variant="contrast" size="sm" onClick={handleChangeTheme}>
+                Change theme…
               </Button>
-            </>
-          )}
-        />
-      </SettingsGroup>
+            )}
+          </>
+        }
+      />
 
+      <SettingsSwitchCard
+        title="Match system appearance"
+        subtitle="Switches between a dark and a light theme when your OS appearance changes"
+        isEnabled={followSystem}
+        onChange={() => void handleToggleFollowSystem()}
+        isModified={followSystem}
+        onReset={() => void handleToggleFollowSystem()}
+      />
+      <SettingsDependents
+        disabled={!followSystem}
+        reason="Used while Match system appearance is on"
+      >
+        <PreferredSchemeRow
+          label="Dark theme"
+          schemes={darkSchemes}
+          selectedId={preferredDarkSchemeId}
+          defaultId={DEFAULT_PREFERRED_DARK}
+          onSelect={(id) => void handlePreferredDarkChange(id)}
+        />
+        <PreferredSchemeRow
+          label="Light theme"
+          schemes={lightSchemes}
+          selectedId={preferredLightSchemeId}
+          defaultId={DEFAULT_PREFERRED_LIGHT}
+          onSelect={(id) => void handlePreferredLightChange(id)}
+        />
+      </SettingsDependents>
+
+      <SettingsRow
+        label="Accent color"
+        isModified={!!accentColorOverride}
+        onReset={handleAccentReset}
+        resetAriaLabel="Reset accent color to the theme's"
+        description={
+          accentColorOverride
+            ? `${effectiveAccent} · Theme default: ${themeDefaultAccent}`
+            : `The theme's own, ${themeDefaultAccent}. Pick a color to override it`
+        }
+        control={
+          <label
+            htmlFor="accent-color-override-input"
+            className={cn(
+              "relative block w-8 h-8 shrink-0 cursor-pointer rounded-[var(--radius-md)]",
+              // The input is invisible, so its focus has to show on the well it sits in.
+              "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2",
+              "has-[input:focus-visible]:outline-accent-primary has-[input:focus-visible]:outline-offset-2"
+            )}
+          >
+            {/* A colour well: the text-secondary frame keeps an edge at 3:1 whatever
+                colour fills it, including an override that matches the card. */}
+            <span
+              className="block w-full h-full rounded-[var(--radius-md)] border border-text-secondary"
+              style={{ backgroundColor: effectiveAccent }}
+              aria-hidden="true"
+            />
+            <input
+              id="accent-color-override-input"
+              data-testid="accent-color-override-input"
+              type="color"
+              value={pickerValue}
+              onInput={handleAccentInput}
+              onChange={handleAccentCommit}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+              aria-label="Accent color"
+            />
+          </label>
+        }
+      />
       {accentContrastFail && (
-        <div
-          role="status"
-          className="flex items-start gap-2 rounded-[var(--radius-md)] border border-overlay bg-surface-panel px-3 py-2"
-        >
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-warning" />
-          <p className="min-w-0 text-xs text-text-primary">
-            {accentContrastFail.mode === "foreground"
-              ? `Low contrast: button text scores only ${accentContrastFail.worstRatio.toFixed(2)}:1 on the accent color — pick a lighter or darker accent`
-              : `Low contrast: the accent scores only ${accentContrastFail.worstRatio.toFixed(2)}:1 on ${selectedScheme.name} surfaces — pick a more distinct accent`}
-          </p>
+        <div className="px-4 py-3" data-testid="accent-contrast-warning">
+          <InlineStatusBanner
+            className="rounded-[var(--radius-md)]"
+            severity="warning"
+            role="status"
+            title="Low contrast accent"
+            description={
+              accentContrastFail.mode === "foreground"
+                ? `Button text scores ${accentContrastFail.worstRatio.toFixed(2)}:1 on this accent. Pick a lighter or darker one.`
+                : `The accent scores ${accentContrastFail.worstRatio.toFixed(2)}:1 on ${selectedScheme.name} surfaces. Pick a more distinct one.`
+            }
+          />
         </div>
       )}
 
+      <SettingsRow
+        label="Theme files"
+        description="Load a theme from a file, or save this one to share it"
+        control={({ disabled }) => (
+          <>
+            <Button variant="outline" size="sm" onClick={handleImport} disabled={disabled}>
+              Import…
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleExport} disabled={disabled}>
+              Export…
+            </Button>
+          </>
+        )}
+      />
+
       {importMessage && (
-        <div
-          role="status"
-          className="rounded-[var(--radius-md)] border border-overlay bg-surface-panel px-3 py-2"
-        >
-          <div className="flex items-start gap-2">
-            <AlertTriangle
-              className={cn(
-                "mt-0.5 h-3.5 w-3.5 shrink-0",
-                importWarnings.length > 0 ? "text-status-warning" : "text-status-info"
-              )}
-            />
-            <div className="min-w-0">
-              <p className="text-xs text-text-primary">{importMessage}</p>
-              {importWarnings.length > 0 && (
-                <ul className="mt-1 space-y-1.5">
-                  {groupWarningsByKind(importWarnings).map(({ kind, messages }) => (
-                    <li key={kind} className="text-2xs text-text-secondary">
-                      {WARNING_KIND_COPY[kind] ?? "Some theme values may need attention"}
-                      <details className="mt-0.5">
-                        <summary className="cursor-pointer text-text-secondary transition-colors hover:text-text-primary">
-                          Technical details
-                        </summary>
-                        <ul className="mt-1 space-y-0.5 pl-3">
-                          {messages.map((message, index) => (
-                            <li key={index} className="break-words text-text-secondary">
-                              {message}
-                            </li>
-                          ))}
-                        </ul>
-                      </details>
-                    </li>
-                  ))}
-                </ul>
-              )}
+        <div className="px-4 py-3">
+          <div
+            role="status"
+            className="rounded-[var(--radius-md)] border border-border-default bg-surface-panel px-3 py-2"
+          >
+            <div className="flex items-start gap-2">
+              <AlertTriangle
+                className={cn(
+                  "mt-0.5 h-3.5 w-3.5 shrink-0",
+                  importWarnings.length > 0 ? "text-status-warning" : "text-status-info"
+                )}
+              />
+              <div className="min-w-0">
+                <p className="text-xs text-text-primary">{importMessage}</p>
+                {importWarnings.length > 0 && (
+                  <ul className="mt-1 space-y-1.5">
+                    {groupWarningsByKind(importWarnings).map(({ kind, messages }) => (
+                      <li key={kind} className="text-2xs text-text-secondary">
+                        {WARNING_KIND_COPY[kind] ?? "Some theme values may need attention"}
+                        <details className="mt-0.5">
+                          <summary className="cursor-pointer text-text-secondary transition-colors hover:text-text-primary">
+                            Technical details
+                          </summary>
+                          <ul className="mt-1 space-y-0.5 pl-3">
+                            {messages.map((message, index) => (
+                              <li key={index} className="break-words text-text-secondary">
+                                {message}
+                              </li>
+                            ))}
+                          </ul>
+                        </details>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </div>
           </div>
         </div>
       )}
-    </div>
+
+      {saveError && (
+        <div className="px-4 py-3">
+          <InlineStatusBanner
+            className="rounded-[var(--radius-md)]"
+            severity="error"
+            icon={AlertCircle}
+            title={saveError.title}
+            description={saveError.description}
+            action={{ id: "retry", label: "Retry", onClick: saveError.retry }}
+            onClose={() => setSaveError(null)}
+            closeAriaLabel="Dismiss theme error"
+          />
+        </div>
+      )}
+    </SettingsGroup>
   );
 }

@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
-import React from "react";
 
 // jsdom ships no matchMedia; InlineStatusBanner reads it to honour reduced motion.
 Object.defineProperty(window, "matchMedia", {
@@ -31,40 +30,6 @@ vi.mock("@/theme/applyAppTheme", () => ({
   applyColorVisionMode: vi.fn(),
 }));
 
-// The real Radix Select needs pointer-event plumbing jsdom doesn't provide. This
-// stand-in keeps the same contract — a controlled `value` plus an `onValueChange`
-// per item — so the assertions still read the value the component renders.
-const SelectCtx = React.createContext<((value: string) => void) | null>(null);
-
-vi.mock("@/components/ui/select", () => ({
-  Select: ({
-    value,
-    onValueChange,
-    children,
-  }: {
-    value: string;
-    onValueChange: (value: string) => void;
-    children: React.ReactNode;
-  }) => (
-    <SelectCtx.Provider value={onValueChange}>
-      <div data-testid="mode-select" data-value={value}>
-        {children}
-      </div>
-    </SelectCtx.Provider>
-  ),
-  SelectTrigger: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  SelectValue: () => null,
-  SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  SelectItem: ({ value, children }: { value: string; children: React.ReactNode }) => {
-    const onValueChange = React.useContext(SelectCtx);
-    return (
-      <button type="button" onClick={() => onValueChange?.(value)}>
-        {children}
-      </button>
-    );
-  },
-}));
-
 import { appThemeClient } from "@/clients/appThemeClient";
 import { applyColorVisionMode } from "@/theme/applyAppTheme";
 import { useAppThemeStore } from "@/store/appThemeStore";
@@ -80,7 +45,15 @@ function deferred<T = void>() {
   return { promise, resolve, reject };
 }
 
-const renderedMode = () => screen.getByTestId("mode-select").getAttribute("data-value");
+const MODE_BY_LABEL: Record<string, string> = {
+  Default: "default",
+  "Red-green": "red-green",
+  "Blue-yellow": "blue-yellow",
+};
+const renderedMode = () => {
+  const checked = document.querySelector('[role="radiogroup"] [role="radio"][aria-checked="true"]');
+  return MODE_BY_LABEL[checked?.textContent ?? ""] ?? null;
+};
 const storedMode = () => useAppThemeStore.getState().colorVisionMode;
 const selectMode = (label: string) => act(() => screen.getByText(label).click());
 
