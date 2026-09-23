@@ -111,6 +111,12 @@ export interface GitRemoteOperationPreview {
    */
   trackedChangeCount: number;
   /**
+   * Paths still unmerged with no operation halted — what a failed stash pop
+   * leaves. Git refuses a rebase over them, and "commit or stash" can't be done
+   * until they're resolved, so they are carried apart from the tracked count.
+   */
+  conflictCount: number;
+  /**
    * The commits the operation would act on.
    *
    * Never the branch's recent history: for `"push"` the actual publish range
@@ -187,6 +193,7 @@ export async function buildGitRemoteOperationPreview(
     trackedChangeCount:
       (status.staged?.length ?? 0) +
       (status.unstaged ?? []).filter((entry) => entry.status !== "untracked").length,
+    conflictCount: status.conflicted?.length ?? 0,
     destination: status.pushDestination,
     pullSource: status.pullSource,
   };
@@ -287,6 +294,12 @@ export function formatGitRemoteOperationPreviewLines(
     ];
   }
   const branchLine = `Branch: ${preview.branch ?? "(detached HEAD)"}`;
+  if (isPullRebase && (preview.conflictCount ?? 0) > 0) {
+    return [
+      `${MCP_PREVIEW_CAUTION_PREFIX}This worktree has unresolved conflicts — the pull will be refused until they are resolved and staged.`,
+      branchLine,
+    ];
+  }
   if (isPullRebase && (preview.trackedChangeCount ?? 0) > 0) {
     return [
       `${MCP_PREVIEW_CAUTION_PREFIX}This worktree has uncommitted changes to tracked files — the pull will be refused until they are committed or stashed.`,

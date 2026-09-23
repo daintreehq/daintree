@@ -221,16 +221,17 @@ export function PreviewNotice({
         )}
       />
       <div className="flex-1 min-w-0" data-testid={testId}>
-        <div className={cn("font-medium", isError ? "text-status-error" : "text-status-warning")}>
-          {title}
-        </div>
+        {/* Neutral ink, with the icon carrying the tone. Status colours as text
+            measured ~4.3:1 on the frame's tint in the dark themes, under the
+            4.5:1 floor; the title is the one line here that must be read. */}
+        <div className="font-medium text-text-primary">{title}</div>
         {children && <div className="mt-0.5 text-text-secondary break-words">{children}</div>}
         {command && (
           <code className="mt-1 block font-mono text-text-primary break-all">{command}</code>
         )}
         {onRetry && (
           <Button
-            variant={isError ? "ghost-danger" : "ghost"}
+            variant="ghost"
             size="sm"
             onClick={onRetry}
             data-testid={retryTestId}

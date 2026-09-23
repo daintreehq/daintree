@@ -178,8 +178,11 @@ function GitPullRebaseConfirmDialogInner() {
   // handler refuses before it touches the network. Said here, before approval,
   // rather than as a failure after it. The refs and lists still render: what the
   // pull WOULD do is still worth seeing while deciding whether to commit first.
+  const conflicts = isLoaded ? (preview?.conflictCount ?? 0) : 0;
   const trackedChanges = isLoaded ? (preview?.trackedChangeCount ?? 0) : 0;
-  const isDirty = trackedChanges > 0;
+  // Conflicts first: "commit or stash" can't be followed until they're resolved.
+  const hasConflicts = conflicts > 0;
+  const isDirty = hasConflicts || trackedChanges > 0;
   const isUnfetched = isLoaded && rebaseRange?.rangeBasis === "unfetched";
   const isMeasured = isLoaded && !isUnfetched;
   const total = rebaseRange?.total ?? commits?.length ?? 0;
@@ -224,13 +227,15 @@ function GitPullRebaseConfirmDialogInner() {
           ? "Add a remote to continue"
           : isUpstreamMissing
             ? "Set an upstream to continue"
-            : isDirty
-              ? "Commit or stash to continue"
-              : isUnfetched
-                ? "Fetch the upstream to continue"
-                : showPendingHint
-                  ? "Checking what would be replayed…"
-                  : null;
+            : hasConflicts
+              ? "Resolve the conflicts to continue"
+              : isDirty
+                ? "Commit or stash to continue"
+                : isUnfetched
+                  ? "Fetch the upstream to continue"
+                  : showPendingHint
+                    ? "Checking what would be replayed…"
+                    : null;
 
   const notice = loadError ? (
     <PreviewNotice
@@ -285,6 +290,17 @@ function GitPullRebaseConfirmDialogInner() {
     >
       This branch doesn&apos;t track anything, so there is nothing to replay it onto. Point it at a
       remote branch:
+    </PreviewNotice>
+  ) : hasConflicts ? (
+    <PreviewNotice
+      tone="error"
+      title={`${conflicts} unresolved conflict${conflicts === 1 ? "" : "s"}`}
+      onRetry={loadPreview}
+      retryTestId="git-pull-rebase-conflicts-retry"
+      testId="git-pull-rebase-conflicts"
+    >
+      Git won&apos;t replay commits while files are still in conflict. Resolve and stage them in
+      Review Hub, then commit or stash and retry.
     </PreviewNotice>
   ) : isDirty ? (
     <PreviewNotice

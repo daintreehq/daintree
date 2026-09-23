@@ -588,4 +588,19 @@ describe("GitPullRebaseConfirmDialog", () => {
     // What the pull would do is still on screen while deciding to commit first.
     expect(screen.getAllByTestId("git-pull-rebase-commit-row")).toHaveLength(1);
   });
+
+  // A conflict-only index (a failed stash pop) has no halted operation to name,
+  // and "commit or stash" can't be followed until the conflicts are resolved.
+  it("blocks over unresolved conflicts and names them ahead of the dirty-tree advice", async () => {
+    mocks.buildPreview.mockResolvedValue(loaded({ conflictCount: 2, trackedChangeCount: 2 }));
+    render(<GitPullRebaseConfirmDialog />);
+
+    await act(async () => {
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    expect(screen.getByTestId("git-pull-rebase-conflicts")).toBeTruthy();
+    expect(screen.queryByTestId("git-pull-rebase-dirty")).toBeNull();
+    expect(rebaseButton().getAttribute("aria-disabled")).toBe("true");
+  });
 });
