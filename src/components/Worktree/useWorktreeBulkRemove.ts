@@ -7,13 +7,17 @@ import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   buildWorktreeDeletePreview,
+  fetchWorktreeTeardownPreview,
   settleWorktreeDeleteOutcome,
+  splitDisplayChanges,
   submoduleFileCount,
+  summarizeWorktreeChanges,
   worktreeDeleteBlockedBy,
   type WorktreeDeletePreviewOutcome,
   type WorktreeSubmoduleDeleteBlock,
 } from "./worktreeDeletePreview";
 import type { WorktreeState } from "@/types";
+import type { WorktreeTeardownPreview } from "@shared/types/worktree";
 
 /**
  * What the fresh per-target preview established, plus the `pending` state the
@@ -44,6 +48,12 @@ export interface BulkRemoveTarget {
    */
   aheadCount: number;
   status: BulkRemoveTargetStatus;
+  /**
+   * The teardown this target's delete would run first — read alongside the
+   * preview, because one confirmation covers every operation the batch runs.
+   * `undefined` while unread, `"unreadable"` when the read failed.
+   */
+  teardown?: WorktreeTeardownPreview | null | "unreadable";
 }
 
 /** Why a snapshotted target will not be sent to the host. */
@@ -122,7 +132,11 @@ export function describeBulkRemoveRisks(target: BulkRemoveTarget): string[] {
   const aheadCount =
     status.state === "verified" ? (status.preview.ahead ?? target.aheadCount) : target.aheadCount;
   if (status.state === "verified") {
-    const { trackedChangeCount, untrackedFileCount, submodules } = status.preview;
+    const { changes, rootPath, submodules } = status.preview;
+    // Counted over files only: a submodule's own parent row stands for the
+    // nested files counted below, and counting it too stated one loss twice.
+    const { files, pointerOnly } = splitDisplayChanges(changes, rootPath, submodules);
+    const { trackedChangeCount, untrackedFileCount } = summarizeWorktreeChanges(files);
     if (trackedChangeCount > 0) {
       risks.push(`${trackedChangeCount} uncommitted file${trackedChangeCount === 1 ? "" : "s"}`);
     }
@@ -135,6 +149,9 @@ export function describeBulkRemoveRisks(target: BulkRemoveTarget): string[] {
     const nested = submoduleFileCount(submodules);
     if (nested > 0) {
       risks.push(`${nested} file${nested === 1 ? "" : "s"} inside submodules`);
+    }
+    if (pointerOnly.length > 0) {
+      risks.push(`${pointerOnly.length} submodule change${pointerOnly.length === 1 ? "" : "s"}`);
     }
   }
   if (aheadCount > 0) {
@@ -334,10 +351,13 @@ export function useWorktreeBulkRemove({
         // Cheap re-check before spending the two port requests: a large
         // selection can still be queued long after the user cancelled.
         if (previewSessionRef.current !== session) return;
-        const outcome = await settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(target.id));
+        const [outcome, teardown] = await Promise.all([
+          settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(target.id)),
+          fetchWorktreeTeardownPreview(target.id),
+        ]);
         if (!mountedRef.current || previewSessionRef.current !== session) return;
         const next = targetsRef.current.map((t) =>
-          t.id === target.id ? { ...t, status: outcome } : t
+          t.id === target.id ? { ...t, status: outcome, teardown } : t
         );
         targetsRef.current = next;
         setDisplayTargets(next);

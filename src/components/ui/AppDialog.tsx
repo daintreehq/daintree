@@ -665,6 +665,11 @@ AppDialog.Footer = function AppDialogFooter({
 }: AppDialogFooterProps) {
   const context = useContext(AppDialogContext);
   const dialogVariant = context?.variant ?? "default";
+  const hintId = useId();
+  // The hint is where a dialog says why its primary is unavailable, so an
+  // unavailable primary points at it — otherwise a screen reader lands on a
+  // dimmed button with no reason attached.
+  const primaryDescribedBy = hint && primaryAction?.disabled ? hintId : undefined;
 
   // The standard dialog primary action is the high-contrast neutral button, not the
   // accent fill: its fill is the theme's own body-text colour, so it resolves near-white
@@ -696,6 +701,7 @@ AppDialog.Footer = function AppDialogFooter({
           lets a hint measure its own box and crop to it. */}
       {hint && (
         <div
+          id={hintId}
           className="text-xs leading-[inherit] text-text-secondary flex min-w-0 flex-1 items-center gap-1"
           data-testid="app-dialog-hint"
         >
@@ -738,6 +744,7 @@ AppDialog.Footer = function AppDialogFooter({
                 primaryAction.onClick();
               }}
               aria-disabled={primaryAction.disabled || undefined}
+              aria-describedby={primaryDescribedBy}
               loading={primaryAction.loading}
               className={primaryAction.disabled ? DISABLED_ACTION_CLASSES : undefined}
               data-confirm-role="confirm"

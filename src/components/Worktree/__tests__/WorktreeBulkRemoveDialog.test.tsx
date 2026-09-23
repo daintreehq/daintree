@@ -197,10 +197,34 @@ describe("WorktreeBulkRemoveDialog — the preview is the consent (#12416)", () 
     // relativised against `rootPath` for display, so a substring match would
     // pass on the un-relativised `/repo/a/src/agent.ts` that buries the
     // filename behind the worktree path.
+    // Sorted by path, as every delete confirm now lists them, so the same
+    // tree reads the same way on every open.
     expect(fileRows(list!)).toEqual([
-      { glyph: "M", spoken: "Modified", path: "src/agent.ts" },
       { glyph: "?", spoken: "Untracked", path: "notes.md" },
+      { glyph: "M", spoken: "Modified", path: "src/agent.ts" },
     ]);
+  });
+
+  it("names the teardown each row's removal runs first", () => {
+    renderDialog({
+      targets: [
+        target("a", {
+          teardown: {
+            phases: [{ phase: "teardown", commands: ["docker compose down"], approved: true }],
+          },
+        }),
+      ],
+    });
+    const line = document.querySelector('[data-testid="bulk-remove-teardown"]');
+    expect(line?.textContent).toContain("Project teardown runs first");
+    expect(line?.textContent).toContain("docker compose down");
+  });
+
+  it("says a teardown it couldn't read may still run", () => {
+    renderDialog({ targets: [target("a", { teardown: "unreadable" })] });
+    expect(document.querySelector('[data-testid="bulk-remove-teardown"]')?.textContent).toContain(
+      "may also run"
+    );
   });
 
   it("renders no warning and no file list for an eligible, clean worktree", () => {

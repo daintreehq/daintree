@@ -277,6 +277,12 @@ async function handleWorktreePortRequest(
         break;
       }
 
+      case "get-delete-teardown-preview": {
+        const preview = await workspaceService.getDeleteTeardownPreview(msg.payload.worktreeId);
+        result = { preview };
+        break;
+      }
+
       case "report-switch-status-timing": {
         const { payload } = msg;
         const host = workspaceService.getStatusTimingMarks();

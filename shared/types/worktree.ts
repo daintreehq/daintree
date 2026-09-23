@@ -548,3 +548,23 @@ export interface WorktreeListResult {
   worktrees: WorktreeState[];
   gitBacked: boolean | null;
 }
+
+/**
+ * One phase of the teardown a worktree delete runs before `git worktree
+ * remove`, as the delete-confirm surfaces preview it. Commands are already
+ * variable-substituted, so they read exactly as they will run.
+ */
+export interface WorktreeTeardownPhasePreview {
+  phase: "resource-teardown" | "teardown";
+  commands: string[];
+  /**
+   * `false` when the commands come from a repository config the user has not
+   * approved. The delete skips that phase rather than waiting for an answer.
+   */
+  approved: boolean;
+}
+
+/** Every teardown phase a delete would attempt, in execution order. */
+export interface WorktreeTeardownPreview {
+  phases: WorktreeTeardownPhasePreview[];
+}

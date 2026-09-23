@@ -16,6 +16,9 @@ const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(),
   getContext: vi.fn((): Record<string, unknown> => ({})),
   buildPreview: vi.fn(),
+  // Default for every suite: the delete runs no teardown. `mockClear` keeps
+  // the implementation, so this survives `vi.clearAllMocks()`.
+  teardownPreview: vi.fn(async () => ({ phases: [] }) as unknown),
   buildGitPreview: vi.fn(),
   // The renderer's own worktree records — the ONLY source of the typed-name
   // gate's identity half (#12115). Empty by default so `resolveMcpConfirmSubject`
@@ -42,7 +45,11 @@ vi.mock("@/services/ActionService", () => ({
 vi.mock("@/components/Worktree/worktreeDeletePreview", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/components/Worktree/worktreeDeletePreview")>();
-  return { ...actual, buildWorktreeDeletePreview: mocks.buildPreview };
+  return {
+    ...actual,
+    buildWorktreeDeletePreview: mocks.buildPreview,
+    fetchWorktreeTeardownPreview: mocks.teardownPreview,
+  };
 });
 
 vi.mock("@/store/panelStore", () => ({
@@ -2682,6 +2689,26 @@ describe("resolveWorktreeDeleteGate (#12115)", () => {
     expect(resolveWorktreeDeleteGate(target, verified())).toEqual({ state: "none" });
   });
 
+  it("keeps the typed-name gate when the parent read failed and a partial walk saw commits", () => {
+    // Tracked changes are unknown here, so the gate has to hold. A refusal
+    // would read as "no gate" on this surface, and if the commits were pushed
+    // before the host's own check the force delete would run unattested.
+    seedWorktree();
+    expect(
+      resolveWorktreeDeleteGate(target, {
+        state: "failed",
+        submodules: {
+          status: "unverified",
+          risk: {
+            ...emptySubmoduleRisk(),
+            incomplete: true,
+            atRiskCommits: [{ oid: "abc", subject: "s" }],
+          },
+        },
+      })
+    ).toEqual({ state: "required", typedNameTarget: "feature/x" });
+  });
+
   it("does not escalate on untracked files alone (#4927)", () => {
     seedWorktree();
     expect(
@@ -2859,6 +2886,48 @@ describe("buildMcpConfirmPreview (#11343, #11538)", () => {
     });
     expect(lines[0]).toContain("1 uncommitted tracked file");
     expect(lines).toContain("  M src/app.ts");
+  });
+
+  it("discloses the teardown an agent-requested delete runs, as the local dialog does", async () => {
+    // The delete runs the project's teardown before removing the tree; an
+    // approver shown only the file list consented to less than will happen.
+    mocks.buildPreview.mockResolvedValue({
+      trackedChangeCount: 0,
+      untrackedFileCount: 0,
+      hasTrackedChanges: false,
+      hasUntrackedFiles: false,
+      changes: [],
+      submodules: { status: "verified", risk: emptySubmoduleRisk() },
+    });
+    mocks.teardownPreview.mockResolvedValueOnce({
+      phases: [{ phase: "teardown", commands: ["docker compose down"], approved: true }],
+    });
+    const { lines } = await buildMcpConfirmPreview({
+      kind: "worktreeDelete",
+      worktreeId: "wt-1",
+      force: false,
+    });
+    expect(mocks.teardownPreview).toHaveBeenCalledWith("wt-1");
+    expect(lines).toContain("Project teardown will run first (the delete continues if it fails):");
+    expect(lines).toContain("  docker compose down");
+  });
+
+  it("says an unreadable teardown may still run", async () => {
+    mocks.buildPreview.mockResolvedValue({
+      trackedChangeCount: 0,
+      untrackedFileCount: 0,
+      hasTrackedChanges: false,
+      hasUntrackedFiles: false,
+      changes: [],
+      submodules: { status: "verified", risk: emptySubmoduleRisk() },
+    });
+    mocks.teardownPreview.mockResolvedValueOnce("unreadable");
+    const { lines } = await buildMcpConfirmPreview({
+      kind: "worktreeDelete",
+      worktreeId: "wt-1",
+      force: false,
+    });
+    expect(lines.some((line) => line.includes("Project teardown may also run"))).toBe(true);
   });
 
   it("shows the nested submodule paths and at-risk commits an agent would destroy", async () => {

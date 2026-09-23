@@ -2,15 +2,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { FileChangeDetail, GitStatus, WorktreeChanges } from "@shared/types/git";
 import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
 
-const { getFreshChangesMock, getSubmoduleDeleteRiskMock } = vi.hoisted(() => ({
+const { getFreshChangesMock, getSubmoduleDeleteRiskMock, getTeardownMock } = vi.hoisted(() => ({
   getFreshChangesMock: vi.fn(),
   getSubmoduleDeleteRiskMock: vi.fn(),
+  getTeardownMock: vi.fn(),
 }));
 
 vi.mock("@/clients", () => ({
   worktreeClient: {
     getFreshChanges: getFreshChangesMock,
     getSubmoduleDeleteRisk: getSubmoduleDeleteRiskMock,
+    getDeleteTeardownPreview: getTeardownMock,
   },
 }));
 
@@ -22,6 +24,8 @@ import {
   submoduleDeleteBlock,
   formatWorktreeDeletePreviewLines,
   formatWorktreeChangeRows,
+  formatTeardownPreviewLines,
+  fetchWorktreeTeardownPreview,
   buildWorktreeChangeRows,
   submoduleForceRequired,
   submoduleCommitsAreCapped,
@@ -29,6 +33,7 @@ import {
   settleWorktreeDeleteOutcome,
   worktreeDeleteBlockedBy,
   worktreeDeleteContentRisk,
+  observedAtRiskCommits,
   WorktreeDeletePreviewError,
   type WorktreeDeletePreview,
   type WorktreeSubmoduleRiskState,
@@ -531,6 +536,21 @@ describe("submodule preview rows", () => {
     expect(rows[5]).toEqual({ oid: "", shortOid: "", subject: "…and 2 more", isOverflow: true });
   });
 
+  it("marks the collapsed tail as a floor when the rev walk was capped", () => {
+    // A capped walk stops short, so the retained list — and the "N more" past
+    // the five shown — undercounts. The tail has to say so like the heading.
+    const rows = buildSubmoduleCommitRows(
+      emptyRisk({
+        incomplete: true,
+        atRiskCommits: Array.from({ length: 50 }, (_, i) => ({
+          oid: `${i}abcdef0123456789`,
+          subject: `Commit ${i}`,
+        })),
+      })
+    );
+    expect(rows.at(-1)?.subject).toBe("…and at least 45 more");
+  });
+
   it("returns nothing when there is no inventory to render", () => {
     expect(buildSubmoduleFileRows(null)).toEqual([]);
     expect(buildSubmoduleCommitRows(null)).toEqual([]);
@@ -740,7 +760,176 @@ describe("worktreeDeleteBlockedBy (#12115)", () => {
     ).toBeNull();
   });
 
+  it("stays narrow for a partial walk's commits after a parent failure", () => {
+    // The MCP bridge reads a refusal as "no typed-name gate, the host will
+    // refuse". With the parent unread, tracked changes are unknown, so this
+    // state has to keep its gate there; widening here drops it.
+    const partial = {
+      state: "failed",
+      submodules: {
+        status: "unverified",
+        risk: emptyRisk({ incomplete: true, atRiskCommits: [{ oid: "abc", subject: "s" }] }),
+      },
+    } as const;
+    expect(worktreeDeleteBlockedBy(partial)).toBeNull();
+    // The local dialog, which can refuse outright, reads the evidence here.
+    expect(observedAtRiskCommits(partial)).toBe(true);
+    expect(
+      observedAtRiskCommits({ state: "failed", submodules: { status: "unverified", risk: null } })
+    ).toBe(false);
+  });
+
+  it("does not refuse on a partial walk that observed nothing when the parent failed", () => {
+    expect(
+      worktreeDeleteBlockedBy({
+        state: "failed",
+        submodules: { status: "unverified", risk: emptyRisk({ incomplete: true }) },
+      })
+    ).toBeNull();
+  });
+
   it("has nothing to block on for an already-removed worktree", () => {
     expect(worktreeDeleteBlockedBy({ state: "gone" })).toBeNull();
+  });
+});
+
+describe("delete-preview parity for the MCP confirm", () => {
+  const entry = (
+    path: string,
+    state: "moved" | "at-recorded-commit" | "conflicted" = "at-recorded-commit"
+  ) => ({
+    path,
+    state,
+    recordedOid: "0".repeat(40),
+    hasModifiedContent: true,
+    hasUntrackedContent: false,
+  });
+
+  function withSubmodule(parent: FileChangeDetail[], risk: SubmoduleDeleteRisk) {
+    return {
+      ...summarizeWorktreeChanges(parent),
+      changes: parent,
+      rootPath: ROOT,
+      submodules: { status: "verified", risk } as const,
+    };
+  }
+
+  it("does not count a submodule's own row as a file when its contents are listed", () => {
+    // The approver sees the nested files below; a header reading "1
+    // uncommitted tracked file" for the gitlink stated a loss twice.
+    const lines = formatWorktreeDeletePreviewLines(
+      withSubmodule(
+        [file("vendor/lib", "modified")],
+        emptyRisk({ entries: [entry("vendor/lib")], dirtyFiles: ["vendor/lib/a.c"] })
+      )
+    );
+    expect(lines.join("\n")).not.toContain("uncommitted tracked file");
+    expect(lines[0]).toBe("1 submodule with changes inside, listed below:");
+    expect(lines[1]).toBe("  M vendor/lib (submodule — changes inside are listed below)");
+    expect(lines.join("\n")).toContain("vendor/lib/a.c");
+  });
+
+  it("names a submodule whose checkout only moved, rather than calling it a file", () => {
+    const lines = formatWorktreeDeletePreviewLines(
+      withSubmodule(
+        [file("vendor/lib", "modified")],
+        emptyRisk({ entries: [entry("vendor/lib", "moved")] })
+      )
+    );
+    expect(lines[0]).toBe("1 submodule change:");
+    expect(lines[1]).toBe("  M vendor/lib (submodule checked out at a different commit)");
+  });
+
+  it("describes a submodule row from its actual state, not a guess", () => {
+    const conflicted = formatWorktreeDeletePreviewLines(
+      withSubmodule(
+        [file("vendor/lib", "conflicted")],
+        emptyRisk({ entries: [entry("vendor/lib", "conflicted")] })
+      )
+    );
+    expect(conflicted[1]).toContain("(submodule in a merge conflict)");
+    const removed = formatWorktreeDeletePreviewLines(
+      withSubmodule([file("vendor/lib", "deleted")], emptyRisk({ entries: [entry("vendor/lib")] }))
+    );
+    expect(removed[1]).toContain("(submodule removed)");
+    // At its recorded commit with nothing listed: a changed row whose cause
+    // isn't known, which must not be dressed up as a moved checkout.
+    const unexplained = formatWorktreeDeletePreviewLines(
+      withSubmodule([file("vendor/lib", "modified")], emptyRisk({ entries: [entry("vendor/lib")] }))
+    );
+    expect(unexplained[1]).toBe("  M vendor/lib (submodule)");
+  });
+
+  it("keeps a moved submodule's row when its dirty contents are listed too", () => {
+    const lines = formatWorktreeDeletePreviewLines(
+      withSubmodule(
+        [file("vendor/lib", "modified")],
+        emptyRisk({ entries: [entry("vendor/lib", "moved")], dirtyFiles: ["vendor/lib/a.c"] })
+      )
+    ).join("\n");
+    expect(lines).not.toContain("No uncommitted changes in the worktree itself.");
+    expect(lines).toContain("(submodule checked out at a different commit)");
+  });
+
+  it("lists a commit under every submodule that holds it", () => {
+    const groups = formatWorktreeDeletePreviewLines(
+      withSubmodule(
+        [],
+        emptyRisk({
+          atRiskCommits: [
+            {
+              oid: "c0bcdef0123456789",
+              subject: "Shared fix",
+              submodulePaths: ["vendor/a", "vendor/b"],
+            },
+          ],
+        })
+      )
+    ).join("\n");
+    expect(groups).toContain("  in vendor/a:");
+    expect(groups).toContain("  in vendor/b:");
+  });
+
+  it("groups unpushed commits under every submodule that holds them", () => {
+    const lines = formatWorktreeDeletePreviewLines(
+      withSubmodule(
+        [],
+        emptyRisk({
+          atRiskCommits: [
+            ...Array.from({ length: 6 }, (_, i) => ({
+              oid: `a${i}bcdef0123456789`,
+              subject: `Codec ${i}`,
+              submodulePaths: ["vendor/codec"],
+            })),
+            { oid: "b0bcdef0123456789", subject: "Zlib fix", submodulePaths: ["vendor/zlib"] },
+          ],
+        })
+      )
+    ).join("\n");
+    expect(lines).toContain("  in vendor/codec:");
+    expect(lines).toContain("  in vendor/zlib:");
+    expect(lines).toContain("Zlib fix");
+  });
+
+  it("states the teardown a delete runs, skips, or couldn't read", () => {
+    expect(
+      formatTeardownPreviewLines({
+        phases: [
+          { phase: "resource-teardown", commands: ["devbox destroy"], approved: false },
+          { phase: "teardown", commands: ["docker compose down"], approved: true },
+        ],
+      })
+    ).toEqual([
+      "Resource teardown will be skipped — its commands haven't been approved for this project.",
+      "Project teardown will run first (the delete continues if it fails):",
+      "  docker compose down",
+    ]);
+    expect(formatTeardownPreviewLines("unreadable")[0]).toContain("Project teardown may also run");
+    expect(formatTeardownPreviewLines({ phases: [] })).toEqual([]);
+  });
+
+  it("reads a failed teardown fetch as unreadable, never as none", async () => {
+    getTeardownMock.mockRejectedValueOnce(new Error("port timeout"));
+    await expect(fetchWorktreeTeardownPreview("wt-1")).resolves.toBe("unreadable");
   });
 });
