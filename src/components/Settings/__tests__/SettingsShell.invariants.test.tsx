@@ -1,18 +1,20 @@
 // @vitest-environment jsdom
 import React from "react";
-import { readFileSync } from "fs";
-import { resolve } from "path";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render } from "@testing-library/react";
 import {
   NavItem,
   SearchResults,
+  MODIFIED_TRACKED_IDS,
+  landOnSettingByText,
+  modifiedCoverageSentence,
   modifiedTabsFor,
   resultBreadcrumb,
   scrollAndHighlightSettingsSection,
   useSettingsScrollToSection,
 } from "../SettingsDialog";
 import { SETTINGS_SEARCH_INDEX } from "../settingsSearchIndex";
+import { SETTINGS_REGISTRY, contentScopeForTab, type SettingsTab } from "../settingsTabRegistry";
 import { filterSettings } from "../settingsSearchUtils";
 
 vi.mock("framer-motion", () => ({
@@ -80,13 +82,18 @@ describe("@modified", () => {
   });
 
   it("only tracks setting ids the search index knows", () => {
-    // The dialog names each tracked setting by its search id; a typo there would make
-    // a change silently invisible to both the sidebar dot and `@modified`.
-    const source = readFileSync(resolve(__dirname, "../SettingsDialog.tsx"), "utf8");
-    const tracked = [...source.matchAll(/ids\.add\("([^"]+)"\)/g)].map((m) => m[1]!);
-    expect(tracked.length).toBeGreaterThan(0);
+    // A typo in a tracked id would make that change silently invisible to both the
+    // sidebar dot and `@modified`.
     const known = new Set(SETTINGS_SEARCH_INDEX.map((e) => e.id));
-    for (const id of tracked) expect(known, id).toContain(id);
+    for (const id of MODIFIED_TRACKED_IDS) expect(known, id).toContain(id);
+  });
+
+  it("names the pages it covers instead of claiming nothing changed anywhere", () => {
+    const sentence = modifiedCoverageSentence();
+    const covered = new Set(
+      MODIFIED_TRACKED_IDS.map((id) => SETTINGS_SEARCH_INDEX.find((e) => e.id === id)!.tabLabel)
+    );
+    for (const label of covered) expect(sentence).toContain(label);
   });
 });
 
@@ -132,16 +139,54 @@ describe("landing on a search result", () => {
     expect(document.activeElement).toBe(el.querySelector('[role="switch"]'));
   });
 
-  it("lands a page result on the page's nav tab instead of stranding focus", () => {
+  it("lands a page result on the page's nav tab and reports it did not find a setting", () => {
     const tab = document.createElement("button");
     tab.id = "settings-tab-notifications";
     document.body.appendChild(tab);
+    const handled = vi.fn();
     function Host() {
-      useSettingsScrollToSection(true, "tab-nav-notifications", () => {}, "notifications");
+      useSettingsScrollToSection(true, "tab-nav-notifications", handled, "notifications");
       return null;
     }
     render(<Host />);
     expect(document.activeElement).toBe(tab);
+    expect(handled).toHaveBeenCalledWith("tab-nav-notifications", false);
+  });
+
+  it("finds a setting with no DOM id by the label the page renders for it", () => {
+    const entry = SETTINGS_SEARCH_INDEX.find(
+      (e) => e.kind === "section" && e.scope === "project" && !document.getElementById(e.id)
+    )!;
+    const panel = section(
+      `settings-panel-${entry.tab}`,
+      `<div data-settings-row="inline"><span data-settings-row-label>Something else</span><input aria-label="other" /></div>` +
+        `<div data-settings-row="inline"><span data-settings-row-label>${entry.title}</span><input aria-label="target" /></div>`
+    );
+    panel.querySelectorAll<HTMLElement>("[data-settings-row]").forEach((row) => {
+      row.scrollIntoView = vi.fn();
+    });
+    expect(landOnSettingByText(entry.id, entry.tab as SettingsTab)).toBe(true);
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("target");
+  });
+
+  it("reports a gated setting that is not on the page as not landed", () => {
+    const gated = SETTINGS_SEARCH_INDEX.find((e) => e.requiresEnabled)!;
+    section(`settings-panel-${gated.tab}`, "<div>page without the gated row</div>");
+    expect(landOnSettingByText(gated.id, gated.tab as SettingsTab)).toBe(false);
+  });
+});
+
+describe("scope a result names", () => {
+  it("follows what a tab writes to, not the nav list it is filed under", () => {
+    const divergent = SETTINGS_REGISTRY.filter((t) => contentScopeForTab(t.id) !== t.scope);
+    expect(divergent.length).toBeGreaterThan(0);
+    for (const tab of divergent) {
+      const entries = SETTINGS_SEARCH_INDEX.filter((e) => e.tab === tab.id);
+      expect(entries.length, tab.id).toBeGreaterThan(0);
+      for (const entry of entries) {
+        expect(entry.effectScope ?? entry.scope, entry.id).toBe(contentScopeForTab(tab.id));
+      }
+    }
   });
 });
 
