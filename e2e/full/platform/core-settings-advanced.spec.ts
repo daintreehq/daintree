@@ -56,7 +56,8 @@ async function openShortcutRecorder(
   await editBtn.click();
 
   const editingRow = window.locator(SEL.settings.shortcutRow).filter({ hasText: rowText }).first();
-  const recordPrompt = editingRow.getByRole("button", { name: "Click to record shortcut" });
+  // Edit starts recording straight away; the field is the recorder.
+  const recordPrompt = editingRow.locator(SEL.settings.shortcutRecordPrompt);
   await expect(recordPrompt).toBeVisible({ timeout: T_MEDIUM });
 
   return { row: editingRow, recordPrompt, searchInput };

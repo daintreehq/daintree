@@ -8,6 +8,7 @@ vi.mock("@/services/KeybindingService", () => ({
   CHORD_TIMEOUT_MS: 1000,
   keybindingService: {
     findConflicts: vi.fn(() => []),
+    beginShortcutCapture: vi.fn(() => () => {}),
     formatComboForDisplay: vi.fn((combo: string) => combo),
     getOverride: vi.fn(() => undefined),
     getDefaultCombo: vi.fn(() => undefined),
@@ -63,7 +64,7 @@ describe("AgentShortcutCapture", () => {
     });
 
     expect(screen.queryByTestId("shortcut-capture-validation-error")).toBeNull();
-    const save = screen.getByText("Save") as HTMLButtonElement;
+    const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
     expect(save.disabled).toBe(false);
     fireEvent.click(save);
     expect(onCapture).toHaveBeenCalledWith("Cmd+Alt+k");
@@ -88,7 +89,7 @@ describe("AgentShortcutCapture", () => {
 
     expect(screen.getByTestId("shortcut-capture-validation-error")).toBeTruthy();
     expect(screen.getByText(/Ctrl\+Alt\+letter/)).toBeTruthy();
-    const save = screen.getByText("Save") as HTMLButtonElement;
+    const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
     expect(save.disabled).toBe(true);
     fireEvent.click(save);
     expect(onCapture).not.toHaveBeenCalled();
@@ -114,7 +115,7 @@ describe("AgentShortcutCapture", () => {
     });
 
     expect(screen.getByTestId("shortcut-capture-validation-error")).toBeTruthy();
-    const save = screen.getByText("Save") as HTMLButtonElement;
+    const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
     expect(save.disabled).toBe(true);
   });
 });

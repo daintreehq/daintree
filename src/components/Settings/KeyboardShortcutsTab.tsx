@@ -1,20 +1,40 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { Search, X, RotateCcw, AlertCircle } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { keybindingService, type RegisteredKeybindingConfig } from "@/services/KeybindingService";
-import { formatShortcutForTooltip } from "@/lib/platform";
+import {
+  keybindingService,
+  type KeyScope,
+  type RegisteredKeybindingConfig,
+} from "@/services/KeybindingService";
+import { isMac } from "@/lib/platform";
+import { parseChord } from "@/lib/kbdShortcut";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
+import { KbdChord } from "@/components/ui/Kbd";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { KeybindingProfileActions } from "./KeybindingProfileActions";
-import { SettingsGroup } from "./SettingsGroup";
+import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { SettingsSearchField } from "./SettingsSearchField";
+import { SettingsSection } from "./SettingsSection";
 import { SettingsShortcutCapture } from "@/components/KeyboardShortcuts";
 
 interface ShortcutBinding extends RegisteredKeybindingConfig {
   effectiveCombo: string;
+  effectiveCombos: string[];
+  /** Where it applies, shown only when the same action is registered in more than one scope. */
+  scopeNote?: string;
+  /** Displayed key glyphs, so search matches what the rail shows (⌘, ⌥) as well as the names. */
+  searchKeys: string;
+  /**
+   * The scope to check conflicts in. An override rebinds the action in every
+   * scope it is registered in, so an action registered in more than one scope
+   * (or globally) is checked everywhere.
+   */
+  editScope: KeyScope;
   isOverridden: boolean;
   /**
    * One action can be registered more than once under different scopes (e.g.
@@ -40,6 +60,8 @@ type RowError = Extract<ShortcutError, { rowId: string }>;
 interface ShortcutRowProps {
   binding: ShortcutBinding;
   isEditing: boolean;
+  /** Put focus back on this row's binding once its editor closes. */
+  restoreFocus: boolean;
   error: RowError | null;
   onEdit: () => void;
   onSave: (combo: string) => void;
@@ -47,6 +69,7 @@ interface ShortcutRowProps {
   onReset: () => void;
   onRetry: () => void;
   onDismissError: () => void;
+  onFocusRestored: () => void;
 }
 
 function ShortcutRowError({
@@ -61,7 +84,7 @@ function ShortcutRowError({
   const isSave = error.kind === "save";
   return (
     <InlineStatusBanner
-      className="mt-2 rounded-[var(--radius-md)]"
+      className="rounded-[var(--radius-md)]"
       severity="error"
       icon={AlertCircle}
       title={isSave ? "Couldn't save shortcut" : "Couldn't reset shortcut"}
@@ -80,6 +103,7 @@ function ShortcutRowError({
 function ShortcutRow({
   binding,
   isEditing,
+  restoreFocus,
   error,
   onEdit,
   onSave,
@@ -87,85 +111,181 @@ function ShortcutRow({
   onReset,
   onRetry,
   onDismissError,
+  onFocusRestored,
 }: ShortcutRowProps) {
-  const handleCapture = (combo: string) => {
-    onSave(combo);
-  };
+  const name = binding.description || binding.actionId;
+  const editRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!restoreFocus || isEditing) return;
+    editRef.current?.focus();
+    onFocusRestored();
+  }, [restoreFocus, isEditing, onFocusRestored]);
 
   if (isEditing) {
     return (
-      <div data-testid="shortcut-row" className="px-4 py-2.5">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-sm text-text-primary">
-            {binding.description || binding.actionId}
-          </span>
-        </div>
-        <SettingsShortcutCapture
-          onCapture={handleCapture}
-          onCancel={onCancel}
-          excludeActionId={binding.actionId}
-          scope={binding.scope}
+      <div data-testid="shortcut-row">
+        <SettingsRow
+          label={name}
+          layout="stacked"
+          isModified={binding.isOverridden}
+          control={
+            <div className="grid gap-3">
+              <SettingsShortcutCapture
+                onCapture={onSave}
+                onCancel={onCancel}
+                excludeActionId={binding.actionId}
+                scope={binding.editScope}
+                currentCombo={binding.effectiveCombo}
+                autoStart
+              />
+              {error && (
+                <ShortcutRowError error={error} onRetry={onRetry} onDismissError={onDismissError} />
+              )}
+            </div>
+          }
         />
-        {error && (
-          <ShortcutRowError error={error} onRetry={onRetry} onDismissError={onDismissError} />
-        )}
       </div>
     );
   }
 
   return (
-    <div data-testid="shortcut-row" className="px-4 py-2">
-      {/* The chip sits last so every binding lines up on the row's right edge;
-          the hover actions open to its left rather than pushing it inward. */}
-      <div className="flex items-center justify-between gap-4 group/row">
-        <span className="text-sm text-text-primary">{binding.description || binding.actionId}</span>
-        <div className="flex items-center gap-2 shrink-0">
-          {binding.isOverridden && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={onReset}
-                  className="p-0.5 rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 transition-opacity"
-                  aria-label="Reset to default"
-                >
-                  <RotateCcw className="w-3 h-3" aria-hidden="true" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Reset to default</TooltipContent>
-            </Tooltip>
-          )}
-          <button
-            onClick={onEdit}
-            className="px-2 py-0.5 rounded-[var(--radius-sm)] text-xs text-text-secondary hover:text-text-primary opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 transition-opacity"
-          >
-            Edit
-          </button>
-          {binding.effectiveCombo ? (
-            <span
-              className={cn(
-                "px-2 py-0.5 text-xs font-mono rounded-[var(--radius-sm)]",
-                binding.isOverridden
-                  ? "bg-status-info/15 text-status-info"
-                  : "bg-overlay-soft text-text-primary"
-              )}
-            >
-              {keybindingService.formatComboForDisplay(binding.effectiveCombo)}
-            </span>
-          ) : (
-            <span className="text-xs text-text-secondary">Not set</span>
-          )}
-        </div>
-      </div>
+    <div data-testid="shortcut-row">
+      <SettingsRow
+        className="py-2"
+        label={name}
+        description={binding.scopeNote}
+        isModified={binding.isOverridden}
+        onReset={onReset}
+        onRowClick={onEdit}
+        control={
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                ref={editRef}
+                type="button"
+                onClick={onEdit}
+                className={cn(
+                  "inline-flex items-center h-6 px-2 rounded-[var(--radius-sm)]",
+                  "ring-1 ring-border-strong text-text-secondary",
+                  "hover:bg-overlay-soft hover:text-text-primary",
+                  "transition-colors duration-150 ease-out"
+                )}
+              >
+                {binding.effectiveCombo ? (
+                  <>
+                    <span className="sr-only">Edit shortcut for {name}: </span>
+                    <span className="inline-flex items-center gap-2">
+                      {binding.effectiveCombos.map((combo, index) => (
+                        <span key={combo} className="inline-flex items-center gap-2">
+                          {index > 0 && (
+                            <span className="text-3xs text-text-secondary" aria-hidden="true">
+                              /
+                            </span>
+                          )}
+                          <KbdChord shortcut={combo} density="bare" foreground="primary" />
+                        </span>
+                      ))}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-xs">
+                    Add shortcut<span className="sr-only"> for {name}</span>
+                  </span>
+                )}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {binding.effectiveCombo ? "Change shortcut" : "Add shortcut"}
+            </TooltipContent>
+          </Tooltip>
+        }
+      />
       {error && (
-        <ShortcutRowError error={error} onRetry={onRetry} onDismissError={onDismissError} />
+        <div className="px-4 pb-3">
+          <ShortcutRowError error={error} onRetry={onRetry} onDismissError={onDismissError} />
+        </div>
       )}
     </div>
   );
 }
 
+interface FixedShortcut {
+  label: string;
+  /** Alternative keys, each a combo string `KbdChord` can render. */
+  keys: string[];
+  description: string;
+}
+
+// Worktree-list navigation and drag-handle reordering live outside the keybinding
+// engine (useWorktreeSidebarKeyboard's roving focus, dnd-kit's keyboard sensor), so
+// they are documented as fixed rather than offered as rows that could never fire.
+const FIXED_SHORTCUTS: FixedShortcut[] = [
+  {
+    label: "Move through the worktree list",
+    keys: ["Up", "Down", "J", "K"],
+    description: "PageUp, PageDown, Home and End jump further",
+  },
+  {
+    label: "Open worktree",
+    keys: ["Space"],
+    description: "Enter or Right moves into the row's actions",
+  },
+  {
+    label: "Reorder worktree",
+    keys: ["Alt+Up", "Alt+Down"],
+    description: "With the worktree focused in the sidebar",
+  },
+  {
+    label: "Reorder panel",
+    keys: ["Space"],
+    description:
+      "Focus the panel header, press Space to pick it up, move with the arrow keys, Space to drop, Esc to cancel",
+  },
+  {
+    label: "Reorder tab",
+    keys: ["Space"],
+    description:
+      "Focus the active tab, press Space to pick it up, move with the arrow keys, Space to drop",
+  },
+];
+
+function matchesQuery(query: string, ...fields: (string | undefined)[]): boolean {
+  return fields.some((field) => field?.toLowerCase().includes(query) ?? false);
+}
+
+/** The keys as the rail draws them: "⌘K ⌘R" on macOS, "CtrlK CtrlR" elsewhere. */
+function displayedKeys(combo: string, mac: boolean): string {
+  return parseChord(combo, mac)
+    .map((step) => step.join(""))
+    .join(" ");
+}
+
+// Separators people type between keys ("⌘+K", "Ctrl + K", "⌘K, ⌘R") never appear in
+// the displayed glyph run, so both sides drop them before comparing.
+const KEY_SEPARATORS = /[\s+,]/g;
+
+function matchesKeys(query: string, keys: string): boolean {
+  const q = query.replace(KEY_SEPARATORS, "");
+  return q !== "" && keys.toLowerCase().replace(KEY_SEPARATORS, "").includes(q);
+}
+
+const SCOPE_NOTES: Record<KeyScope, string> = {
+  global: "Across the app",
+  worktreeGrid: "In an expanded worktree card",
+  portal: "In the portal",
+  "dev-preview": "In dev preview",
+};
+
+type FilterMode = "all" | "modified";
+
+const FILTER_MODES: { value: FilterMode; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "modified", label: "Modified" },
+];
+
 export function KeyboardShortcutsTab() {
   const [searchQuery, setSearchQuery] = useState("");
-  const searchInputRef = useRef<HTMLInputElement>(null);
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
   const [bindings, setBindings] = useState<ShortcutBinding[]>([]);
   const [, setUpdateKey] = useState(0);
@@ -177,10 +297,20 @@ export function KeyboardShortcutsTab() {
 
   const loadBindings = useCallback(() => {
     const allBindings = keybindingService.getAllBindingsWithEffectiveCombos();
+    const registrations = new Map<string, number>();
+    const scopes = new Map<string, Set<KeyScope>>();
+    for (const b of allBindings) {
+      registrations.set(b.actionId, (registrations.get(b.actionId) ?? 0) + 1);
+      scopes.set(b.actionId, (scopes.get(b.actionId) ?? new Set()).add(b.scope));
+    }
+    const mac = isMac();
     setBindings(
       allBindings.map((b, index) => ({
         ...b,
         isOverridden: keybindingService.hasOverride(b.actionId),
+        scopeNote: (registrations.get(b.actionId) ?? 0) > 1 ? SCOPE_NOTES[b.scope] : undefined,
+        editScope: (scopes.get(b.actionId)?.size ?? 0) > 1 ? "global" : b.scope,
+        searchKeys: b.effectiveCombos.map((combo) => displayedKeys(combo, mac)).join(" "),
         // `combo` is the DEFAULT binding, so this stays stable when an override
         // changes `effectiveCombo`. The index disambiguates the registry's few
         // legal exact duplicates (a plugin may register the same action, scope
@@ -202,18 +332,39 @@ export function KeyboardShortcutsTab() {
     return unsubscribe;
   }, [loadBindings]);
 
-  const filteredBindings = useMemo(() => {
-    if (!searchQuery.trim()) return bindings;
+  const [filterMode, setFilterMode] = useState<FilterMode>("all");
+  const [focusRowId, setFocusRowId] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const query = searchQuery.trim().toLowerCase();
 
-    const query = searchQuery.toLowerCase();
+  const filteredBindings = useMemo(() => {
     return bindings.filter(
       (b) =>
-        (b.description?.toLowerCase().includes(query) ?? false) ||
-        b.actionId.toLowerCase().includes(query) ||
-        b.effectiveCombo.toLowerCase().includes(query) ||
-        (b.category?.toLowerCase().includes(query) ?? false)
+        (filterMode === "all" || b.isOverridden) &&
+        (!query ||
+          matchesQuery(
+            query,
+            b.description,
+            b.actionId,
+            b.effectiveCombos.join(" "),
+            b.scopeNote,
+            b.category
+          ) ||
+          matchesKeys(query, b.searchKeys))
     );
-  }, [bindings, searchQuery]);
+  }, [bindings, query, filterMode]);
+
+  // Fixed keys have no default to depart from, so the Modified filter hides them.
+  const filteredFixed = useMemo(() => {
+    if (filterMode === "modified") return [];
+    if (!query) return FIXED_SHORTCUTS;
+    const mac = isMac();
+    return FIXED_SHORTCUTS.filter(
+      (f) =>
+        matchesQuery(query, f.label, f.description, f.keys.join(" ")) ||
+        matchesKeys(query, f.keys.map((key) => displayedKeys(key, mac)).join(" "))
+    );
+  }, [query, filterMode]);
 
   const groupedBindings = useMemo(() => {
     const groups = new Map<string, ShortcutBinding[]>();
@@ -234,6 +385,11 @@ export function KeyboardShortcutsTab() {
   // import; operations started before it no longer touch the UI.
   const bindingsEpochRef = useRef(0);
 
+  const closeEditor = (rowId: string) => {
+    setEditingRowId(null);
+    setFocusRowId(rowId);
+  };
+
   const handleSaveShortcut = async (rowId: string, actionId: string, combo: string) => {
     const epoch = bindingsEpochRef.current;
     const result = await actionService.dispatch(
@@ -251,7 +407,7 @@ export function KeyboardShortcutsTab() {
       return;
     }
     setShortcutError(null);
-    setEditingRowId(null);
+    closeEditor(rowId);
     loadBindings();
   };
 
@@ -270,6 +426,10 @@ export function KeyboardShortcutsTab() {
       return;
     }
     setShortcutError(null);
+    // The reset button goes away with the override; keep focus on the row, or on
+    // search when the Modified filter is about to drop the row itself.
+    if (filterMode === "modified") searchRef.current?.focus();
+    else setFocusRowId(rowId);
     loadBindings();
   };
 
@@ -316,11 +476,6 @@ export function KeyboardShortcutsTab() {
     setIsResetDialogOpen(false);
   };
 
-  const handleCancelEdit = () => {
-    setShortcutError(null);
-    setEditingRowId(null);
-  };
-
   const handleRetryRow = (error: RowError) => {
     if (error.kind === "save") {
       void handleSaveShortcut(error.rowId, error.actionId, error.combo);
@@ -329,72 +484,45 @@ export function KeyboardShortcutsTab() {
     void handleResetShortcut(error.rowId, error.actionId);
   };
 
-  const hasOverrides = bindings.some((b) => b.isOverridden);
+  const overrideCount = bindings.filter((b) => b.isOverridden).length;
+  const hasOverrides = overrideCount > 0;
+  const resultCount = filteredBindings.length + filteredFixed.length;
+  const isFiltered = query !== "" || filterMode !== "all";
 
-  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Escape") {
-      if (searchQuery !== "") {
-        e.stopPropagation();
-        setSearchQuery("");
-      } else {
-        searchInputRef.current?.blur();
-      }
-    }
-  };
+  const handleFocusRestored = useCallback(() => setFocusRowId(null), []);
 
-  const handleClearSearch = () => {
-    setSearchQuery("");
-    searchInputRef.current?.focus();
-  };
+  // A save or reset can move the row out of the current search or filter; its
+  // binding button is gone, so search is where the keyboard user carries on.
+  const focusRowVisible =
+    focusRowId === null || filteredBindings.some((b) => b.rowId === focusRowId);
+  useEffect(() => {
+    if (focusRowVisible) return;
+    searchRef.current?.focus();
+    handleFocusRestored();
+  }, [focusRowVisible, handleFocusRestored]);
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center gap-3">
-        <div
-          className={cn(
-            "flex items-center gap-1.5 px-2 py-1.5 flex-1 min-w-0 rounded-[var(--radius-md)]",
-            "bg-surface-canvas border border-border-strong",
-            "focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20"
-          )}
-        >
-          <Search
-            className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none"
-            aria-hidden="true"
-          />
-          <input
-            ref={searchInputRef}
-            type="text"
-            placeholder="Search shortcuts..."
+      <div className="grid gap-6">
+        <div className="flex items-center gap-3">
+          <SettingsSearchField
+            ref={searchRef}
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={handleSearchKeyDown}
-            aria-label="Search shortcuts"
-            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden"
+            onChange={setSearchQuery}
+            label="Search shortcuts"
+            placeholder="Search by action, key or category"
           />
-          {searchQuery && (
-            <button
-              type="button"
-              onClick={handleClearSearch}
-              aria-label="Clear search"
-              className="flex items-center justify-center w-5 h-5 rounded-[var(--radius-sm)] shrink-0 text-text-secondary hover:text-text-primary"
-            >
-              <X className="w-3 h-3" aria-hidden="true" />
-            </button>
-          )}
+          <SegmentedRadioGroup
+            aria-label="Filter shortcuts"
+            options={FILTER_MODES}
+            value={filterMode}
+            onChange={setFilterMode}
+          />
         </div>
-        <KeybindingProfileActions onImportComplete={handleImportComplete} />
-        <Button
-          type="button"
-          variant="outline"
-          onClick={handleOpenResetDialog}
-          disabled={isResetting}
-        >
-          <RotateCcw aria-hidden="true" />
-          Reset all
-        </Button>
-      </div>
+        <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {`${resultCount} ${resultCount === 1 ? "shortcut" : "shortcuts"}${isFiltered ? "" : " in total"}`}
+        </p>
 
-      <div className="space-y-6">
         {Array.from(groupedBindings.entries()).map(([category, categoryBindings]) => (
           <SettingsGroup key={category} label={category}>
             {categoryBindings.map((binding) => {
@@ -409,97 +537,121 @@ export function KeyboardShortcutsTab() {
                   key={binding.rowId}
                   binding={binding}
                   isEditing={editingRowId === binding.rowId}
+                  restoreFocus={focusRowId === binding.rowId}
                   error={rowError}
                   onEdit={() => {
                     setShortcutError(null);
                     setEditingRowId(binding.rowId);
                   }}
                   onSave={(combo) => handleSaveShortcut(binding.rowId, binding.actionId, combo)}
-                  onCancel={handleCancelEdit}
+                  onCancel={() => {
+                    setShortcutError(null);
+                    closeEditor(binding.rowId);
+                  }}
                   onReset={() => handleResetShortcut(binding.rowId, binding.actionId)}
                   onRetry={() => rowError && handleRetryRow(rowError)}
                   onDismissError={() => setShortcutError(null)}
+                  onFocusRestored={handleFocusRestored}
                 />
               );
             })}
           </SettingsGroup>
         ))}
 
-        {filteredBindings.length === 0 && (
-          <div className="text-center py-8 text-sm text-text-secondary">
-            No shortcuts match "{searchQuery.trim()}"
-          </div>
+        {resultCount === 0 && (
+          <SettingsGroup>
+            <SettingsEmptyRow
+              action={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setSearchQuery("");
+                    setFilterMode("all");
+                    searchRef.current?.focus();
+                  }}
+                >
+                  {query ? "Clear search" : "Show all"}
+                </Button>
+              }
+            >
+              {query
+                ? `No shortcuts match "${searchQuery.trim()}"${filterMode === "modified" ? " among modified ones" : ""}`
+                : "No shortcuts are customized yet. Edit one to change its keys"}
+            </SettingsEmptyRow>
+          </SettingsGroup>
         )}
-
-        {/* Worktree-list navigation lives in useWorktreeSidebarKeyboard's
-            roving-focus model, not the keybinding engine — document the keys
-            honestly as fixed instead of advertising rebindable rows that
-            never fire. */}
-        <div data-testid="worktree-list-keys-help" className="grid gap-2">
-          <SettingsGroup label="Worktree list">
-            <div className="flex items-center justify-between gap-4 px-4 py-2">
-              <span className="text-sm text-text-primary shrink-0">Move selection</span>
-              <span className="text-xs text-text-secondary text-right">
-                Arrow keys or j / k; PageUp / PageDown and Home / End jump further
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-4 px-4 py-2">
-              <span className="text-sm text-text-primary shrink-0">Open worktree</span>
-              <span className="text-xs text-text-secondary text-right">
-                Space or Enter; Enter or ArrowRight moves into the row's actions
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-4 px-4 py-2">
-              <span className="text-sm text-text-primary shrink-0">Reorder worktree</span>
-              <span className="text-xs text-text-secondary text-right">Alt+Up / Alt+Down</span>
-            </div>
-          </SettingsGroup>
-          <p className="text-xs text-text-secondary">
-            These shortcuts are fixed and can't be rebound
-          </p>
-        </div>
-
-        {/* Keyboard drag-and-drop is otherwise only discoverable through
-            screen-reader ARIA hints; surface it for sighted keyboard users.
-            Static — dnd-kit sensor interactions, not rebindable actions. */}
-        <div data-testid="list-reordering-help" className="grid gap-2">
-          <SettingsGroup label="List reordering">
-            <div className="flex items-center justify-between gap-4 px-4 py-2">
-              <span className="text-sm text-text-primary shrink-0">Reorder panel</span>
-              <span className="text-xs text-text-secondary text-right">
-                Focus the panel header, then Space to pick up, arrows to move, Space to drop, Esc to
-                cancel
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-4 px-4 py-2">
-              <span className="text-sm text-text-primary shrink-0">Reorder tab</span>
-              <span className="text-xs text-text-secondary text-right">
-                Focus the active tab, then Space to pick up, arrows to move, Space to drop
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-4 px-4 py-2">
-              <span className="text-sm text-text-primary shrink-0">Reorder worktree</span>
-              <span className="text-xs text-text-secondary text-right">
-                {formatShortcutForTooltip("Alt+Up")} / {formatShortcutForTooltip("Alt+Down")} in the
-                sidebar
-              </span>
-            </div>
-          </SettingsGroup>
-          <p className="text-xs text-text-secondary">
-            These shortcuts are fixed and can't be rebound
-          </p>
-        </div>
       </div>
+
+      {filteredFixed.length > 0 && (
+        <SettingsSection
+          title="Fixed shortcuts"
+          description="Built into the worktree list and drag handles, so they can't be rebound"
+        >
+          <SettingsGroup>
+            {filteredFixed.map((fixed) => (
+              <SettingsRow
+                key={fixed.label}
+                className="py-2"
+                label={fixed.label}
+                description={fixed.description}
+                control={
+                  <span className="inline-flex items-center gap-2 px-2">
+                    {fixed.keys.map((key, index) => (
+                      <span key={key} className="inline-flex items-center gap-2">
+                        {index > 0 && (
+                          <span className="text-3xs text-text-secondary" aria-hidden="true">
+                            /
+                          </span>
+                        )}
+                        <KbdChord shortcut={key} density="bare" foreground="primary" />
+                      </span>
+                    ))}
+                  </span>
+                }
+              />
+            ))}
+          </SettingsGroup>
+        </SettingsSection>
+      )}
+
+      <SettingsSection title="Backup and reset">
+        <SettingsGroup>
+          <SettingsRow
+            label="Shortcut profile"
+            description="Save your customized shortcuts to a file, or load one exported on another machine. Importing replaces every customization."
+            control={<KeybindingProfileActions onImportComplete={handleImportComplete} />}
+          />
+        </SettingsGroup>
+        <SettingsGroup>
+          <SettingsRow
+            label="Reset all shortcuts"
+            description={
+              hasOverrides
+                ? `Puts ${overrideCount} customized ${overrideCount === 1 ? "shortcut" : "shortcuts"} back to ${overrideCount === 1 ? "its default" : "their defaults"}`
+                : "Every shortcut is on its default"
+            }
+            control={
+              <Button
+                type="button"
+                variant="ghost-danger"
+                size="sm"
+                onClick={handleOpenResetDialog}
+                disabled={isResetting || !hasOverrides}
+              >
+                Reset all
+              </Button>
+            }
+          />
+        </SettingsGroup>
+      </SettingsSection>
 
       <ConfirmDialog
         isOpen={isResetDialogOpen}
         onClose={isResetting ? undefined : handleCancelReset}
         title="Reset keyboard shortcuts?"
-        description={
-          hasOverrides
-            ? "All keyboard shortcuts will be reset to their default values. Any customized shortcuts will be removed."
-            : "There are no customized shortcuts to reset. All shortcuts are already at their default values."
-        }
+        description={`${overrideCount} customized ${overrideCount === 1 ? "shortcut goes" : "shortcuts go"} back to ${overrideCount === 1 ? "its default" : "their defaults"}. This can't be undone, but you can export a profile first.`}
         confirmLabel="Reset shortcuts"
         cancelLabel="Cancel"
         onConfirm={handleConfirmReset}

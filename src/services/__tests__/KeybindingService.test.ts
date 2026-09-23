@@ -782,6 +782,96 @@ describe("KeybindingService", () => {
     });
   });
 
+  describe("what each registration is bound to", () => {
+    const seedOverride = (service: KeybindingService, actionId: string, combos: string[]) =>
+      (service as unknown as { overrides: Map<string, string[]> }).overrides.set(actionId, combos);
+
+    it("keeps each scoped registration's own default instead of the action's first", () => {
+      const service = new KeybindingService();
+      const all = service.getAllBindingsWithEffectiveCombos();
+      const counts = new Map<string, number>();
+      for (const b of all) counts.set(b.actionId, (counts.get(b.actionId) ?? 0) + 1);
+      const multi = all.filter((b) => (counts.get(b.actionId) ?? 0) > 1);
+
+      expect(multi.length).toBeGreaterThan(1);
+      expect(multi.map((r) => r.effectiveCombo)).toEqual(multi.map((r) => r.combo));
+    });
+
+    it("reports every combo an override holds", () => {
+      const service = new KeybindingService();
+      seedOverride(service, "terminal.close", ["Cmd+Alt+J", "Cmd+Alt+K"]);
+
+      const row = service
+        .getAllBindingsWithEffectiveCombos()
+        .find((b) => b.actionId === "terminal.close");
+
+      expect(row?.effectiveCombos).toEqual(["Cmd+Alt+J", "Cmd+Alt+K"]);
+    });
+
+    it("fires the action from any combo its override holds, not only the first", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      seedOverride(service, "terminal.close", ["Cmd+Alt+J", "Cmd+Alt+K"]);
+
+      const second = createKeyboardEvent({ key: "k", code: "KeyK", metaKey: true, altKey: true });
+
+      expect(service.resolveKeybinding(second).match?.actionId).toBe("terminal.close");
+    });
+
+    it("completes a recorded macOS Control chord", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      seedOverride(service, "terminal.close", ["Ctrl+k Ctrl+r"]);
+
+      const first = service.resolveKeybinding(
+        createKeyboardEvent({ key: "k", code: "KeyK", ctrlKey: true })
+      );
+      const second = service.resolveKeybinding(
+        createKeyboardEvent({ key: "r", code: "KeyR", ctrlKey: true })
+      );
+
+      expect(first.chordPrefix).toBe(true);
+      expect(second.match?.actionId).toBe("terminal.close");
+    });
+
+    it("names the combo that actually clashed, not the conflicting action's default", () => {
+      const service = new KeybindingService();
+      seedOverride(service, "terminal.close", ["Cmd+Alt+Shift+J"]);
+
+      const [conflict] = service
+        .findConflicts("Cmd+Alt+Shift+J")
+        .filter((c) => c.actionId === "terminal.close");
+
+      expect(conflict?.combo).toBe("Cmd+Alt+Shift+J");
+    });
+  });
+
+  describe("shortcut capture ownership", () => {
+    it("holds ownership until every recorder has released it", () => {
+      const service = new KeybindingService();
+      const releaseA = service.beginShortcutCapture();
+      const releaseB = service.beginShortcutCapture();
+
+      releaseA();
+      releaseA();
+      expect(service.isCapturingShortcut()).toBe(true);
+
+      releaseB();
+      expect(service.isCapturingShortcut()).toBe(false);
+    });
+
+    it("drops a half-typed app chord so the recorder starts from a clean slate", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      service.resolveKeybinding(createKeyboardEvent({ key: "k", code: "KeyK", metaKey: true }));
+      expect(service.getPendingChord()).not.toBeNull();
+
+      service.beginShortcutCapture();
+
+      expect(service.getPendingChord()).toBeNull();
+    });
+  });
+
   describe("lastInvalidKey echo — issue #8105", () => {
     function startCmdKChord(service: KeybindingService): void {
       setPlatform("MacIntel");

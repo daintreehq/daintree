@@ -558,13 +558,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   // wrapper's ring is the only focus indication. The scanner can't see the
   // sibling JSX parent, so these get per-occurrence allowlists.
   {
-    file: "src/components/Settings/KeyboardShortcutsTab.tsx",
-    fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
-    reason:
-      "Parent shows focus: wrapper at line 230 has `focus-within:border-accent-primary focus-within:ring-1`",
-  },
-  {
     file: "src/components/Settings/SettingsDialog.tsx",
     fragment:
       "settings-search-input flex-1 min-w-0 text-xs bg-transparent text-text-primary focus:outline-hidden",

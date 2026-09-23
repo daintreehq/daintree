@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { beginSwitchTrace } from "@/utils/switchTrace";
 
 import { switchToLastWorkspace } from "@/lib/projectHistoryNav";
+import { keybindingService } from "@/services/KeybindingService";
 
 export type UseProjectMruSwitcherReturn = void;
 
@@ -39,6 +40,7 @@ export function useProjectMruSwitcher(): UseProjectMruSwitcherReturn {
       if (event.code !== "Equal" && event.code !== "NumpadAdd") return;
 
       if (isEditableTarget(event.target)) return;
+      if (keybindingService.isCapturingShortcut()) return;
 
       consumeEvent(event);
       if (event.repeat) return;

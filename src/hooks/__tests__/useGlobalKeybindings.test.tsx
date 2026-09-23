@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
     >(() => []),
     subscribe: vi.fn(() => () => {}),
     setWhenContextProvider: vi.fn(),
+    isCapturingShortcut: vi.fn<() => boolean>(() => false),
     // matchesEvent is invoked by the focus-region bypass. Lite mock that maps
     // Cmd→metaKey (mac-style) — sufficient for the tests in this file.
     matchesEvent: vi.fn((event: KeyboardEvent, combo: string) => {
@@ -129,8 +130,26 @@ beforeEach(() => {
   _resetForTests();
   vi.clearAllMocks();
   mocks.keybindingService.getPendingChord.mockReturnValue(null);
+  mocks.keybindingService.isCapturingShortcut.mockReturnValue(false);
   mocks.actionService.dispatch.mockResolvedValue({ ok: true, result: undefined });
   vi.mocked(usePaletteStore.getState).mockReturnValue(makePaletteState(null));
+});
+
+describe("useGlobalKeybindings — shortcut recorder owns the keyboard", () => {
+  it("does not run the action a keystroke is bound to while a recorder is capturing it", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "terminal.close" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    mocks.keybindingService.isCapturingShortcut.mockReturnValue(true);
+
+    render(<Host />);
+    pressCmdW();
+
+    expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+    expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+  });
 });
 
 describe("useGlobalKeybindings — Cmd+W escape stack guard", () => {
