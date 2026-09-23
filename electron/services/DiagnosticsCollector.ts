@@ -752,11 +752,18 @@ async function collectWhySlowPty(ptyClient?: PtyClient): Promise<WhySlowPtySumma
     if (!ptyClient) return null;
     const snapshot = await ptyClient.getFlowControlSnapshotAsync();
     let pausedCount = 0;
+    let memoryPausedCount = 0;
     let suspendedCount = 0;
     let maxPausedDurationMs = 0;
     for (const t of snapshot.terminals) {
       if (t.pausedDurationMs !== null) {
         pausedCount++;
+        if (
+          t.heldTokens.length > 0 &&
+          t.heldTokens.every((token) => token === "resource-governor")
+        ) {
+          memoryPausedCount++;
+        }
         if (t.pausedDurationMs > maxPausedDurationMs) maxPausedDurationMs = t.pausedDurationMs;
       }
       if (t.isSuspended) suspendedCount++;
@@ -765,6 +772,7 @@ async function collectWhySlowPty(ptyClient?: PtyClient): Promise<WhySlowPtySumma
       totalPendingBytes: snapshot.totalPendingBytes,
       terminalCount: snapshot.terminals.length,
       pausedCount,
+      memoryPausedCount,
       suspendedCount,
       maxPausedDurationMs,
       eventLoopP99Ms: snapshot.eventLoop?.p99Ms ?? null,

@@ -73,6 +73,7 @@ function makeQuietPty(): NonNullable<WhySlowSnapshot["pty"]> {
     totalPendingBytes: 0,
     terminalCount: 2,
     pausedCount: 0,
+    memoryPausedCount: 0,
     suspendedCount: 0,
     maxPausedDurationMs: 0,
     eventLoopP99Ms: 3,
@@ -522,6 +523,7 @@ describe("WhySlowContent", () => {
         totalPendingBytes: 0,
         terminalCount: 1,
         pausedCount: 0,
+        memoryPausedCount: 0,
         suspendedCount: 0,
         maxPausedDurationMs: 0,
         eventLoopP99Ms: 5,
@@ -642,5 +644,50 @@ describe("WhySlowContent", () => {
     expect(held?.suggestion).toMatch(/catches up/);
     expect(worsening?.suggestion).not.toMatch(/eased/);
     expect(worsening?.suggestion).toMatch(/power-saving/);
+  });
+});
+
+describe("host memory pause findings", () => {
+  const base = () =>
+    makeSnapshot({
+      resource: makeQuietResource(),
+      pty: { ...makeQuietPty(), terminalCount: 6, pausedCount: 6, memoryPausedCount: 6 },
+      worktrees: quietWorktrees,
+    });
+
+  it("never attributes a memory governor's holds to a drawing backlog", () => {
+    const findings = describeSlowdowns(base(), { active: true, paused: true, stalled: false });
+    expect(findings.map((f) => f.id)).not.toContain("pty-backlog");
+    expect(findings.filter((f) => f.id === "host-memory")).toHaveLength(1);
+  });
+
+  it("still reports the terminals held by something other than the memory governor", () => {
+    const snapshot = base();
+    snapshot.pty = { ...snapshot.pty!, pausedCount: 8, totalPendingBytes: 4096 };
+    const backlog = describeSlowdowns(snapshot).find((f) => f.id === "pty-backlog");
+    expect(backlog?.text).toMatch(/^2 terminals are paused/);
+  });
+
+  it("names the memory pause from the collector alone when the episode hasn't synced", () => {
+    expect(describeSlowdowns(base()).map((f) => f.id)).toContain("host-memory");
+  });
+
+  it("tells a live pause from a lifted one", () => {
+    const paused = describeSlowdowns(base(), { active: true, paused: true, stalled: false });
+    const lifted = describeSlowdowns(
+      { ...base(), pty: makeQuietPty() },
+      { active: true, paused: false, stalled: false }
+    );
+    const pausedText = paused.find((f) => f.id === "host-memory")?.text;
+    const liftedText = lifted.find((f) => f.id === "host-memory")?.text;
+    expect(pausedText).toBeTruthy();
+    expect(liftedText).toBeTruthy();
+    expect(pausedText).not.toBe(liftedText);
+  });
+
+  it("is never all clear while the episode the toolbar shows is open", () => {
+    const quiet = { ...base(), pty: makeQuietPty() };
+    expect(isAllClear(quiet)).toBe(true);
+    expect(isAllClear(quiet, { active: true, paused: false, stalled: false })).toBe(false);
   });
 });

@@ -94,6 +94,23 @@ describe("HostMemoryPauseIndicator", () => {
     }
   );
 
+  it("tells a live pause from a lifted one without the tooltip", () => {
+    const pipFor = (paused: boolean) => {
+      useHostMemoryPauseStore.setState({
+        snapshot: { active: true, paused, stalled: false },
+        visible: true,
+      });
+      const { unmount } = render(<HostMemoryPauseIndicator />);
+      const state = screen.getByTestId("host-memory-pause-pip").getAttribute("data-visible");
+      unmount();
+      return state;
+    };
+
+    // The warning pip marks output held right now; a lifted pause drops it.
+    expect(pipFor(true)).toBe("true");
+    expect(pipFor(false)).toBe("false");
+  });
+
   it("opens Why am I slow? when clicked", () => {
     useHostMemoryPauseStore.setState({
       snapshot: { active: true, paused: true, stalled: false },

@@ -7,6 +7,9 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { systemClient } from "@/clients/systemClient";
 import { logError } from "@/utils/logger";
 import type { WhySlowSnapshot } from "@shared/types/whySlow";
+import type { HostMemoryPauseSnapshot } from "@shared/types/pty-host";
+import { HOST_MEMORY_PAUSE_COPY } from "@/lib/hostMemoryPauseCopy";
+import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 import { MetricTile, type MetricTone } from "./MetricTile";
 import { DiagnosticsNotice } from "./DiagnosticsNotice";
 
@@ -68,9 +71,14 @@ const PROFILE_MODE: Record<string, string> = {
  * Turn the snapshot into the observations that explain a slowdown, worst
  * first. Every condition here is one a tile below also flags, so the summary
  * and the readings can never disagree; it states what was measured and never
- * guesses at a cause the snapshot doesn't carry.
+ * guesses at a cause the snapshot doesn't carry. `hostMemory` is the same
+ * episode the toolbar's memory-pause indicator shows, so the dock that
+ * indicator opens always names what it was pointing at.
  */
-export function describeSlowdowns(snapshot: WhySlowSnapshot): SlowdownFinding[] {
+export function describeSlowdowns(
+  snapshot: WhySlowSnapshot,
+  hostMemory: HostMemoryPauseSnapshot | null = null
+): SlowdownFinding[] {
   const findings: SlowdownFinding[] = [];
   const r = snapshot.resource;
   if (r) {
@@ -155,14 +163,28 @@ export function describeSlowdowns(snapshot: WhySlowSnapshot): SlowdownFinding[] 
     });
   }
   const p = snapshot.pty;
+  const memoryPaused = hostMemory?.active ? hostMemory.paused : (p?.memoryPausedCount ?? 0) > 0;
+  if (hostMemory?.active || memoryPaused) {
+    findings.push({
+      id: "host-memory",
+      tone: "warn",
+      text: memoryPaused
+        ? HOST_MEMORY_PAUSE_COPY.whySlow.paused
+        : HOST_MEMORY_PAUSE_COPY.whySlow.monitoring,
+      suggestion: memoryPaused ? HOST_MEMORY_PAUSE_COPY.whySlow.suggestion : undefined,
+    });
+  }
   if (p) {
-    if (p.pausedCount > 0 || p.totalPendingBytes > 0) {
+    // The memory governor's holds have their own finding above; only what's
+    // left is output waiting on the renderer.
+    const backlogPaused = Math.max(0, p.pausedCount - p.memoryPausedCount);
+    if (backlogPaused > 0 || p.totalPendingBytes > 0) {
       findings.push({
         id: "pty-backlog",
         tone: "warn",
         text:
-          p.pausedCount > 0
-            ? `${plural(p.pausedCount, "terminal is", "terminals are")} paused because output arrives faster than it can be drawn (${formatBytes(p.totalPendingBytes)} waiting)`
+          backlogPaused > 0
+            ? `${plural(backlogPaused, "terminal is", "terminals are")} paused because output arrives faster than it can be drawn (${formatBytes(p.totalPendingBytes)} waiting)`
             : `${formatBytes(p.totalPendingBytes)} of terminal output is waiting to be drawn`,
       });
     }
@@ -212,11 +234,14 @@ export function describeSlowdowns(snapshot: WhySlowSnapshot): SlowdownFinding[] 
  * may be null legitimately, so they only veto when present, as do renderer
  * samples (an empty push cache just means no view has reported yet).
  */
-export function isAllClear(snapshot: WhySlowSnapshot): boolean {
+export function isAllClear(
+  snapshot: WhySlowSnapshot,
+  hostMemory: HostMemoryPauseSnapshot | null = null
+): boolean {
   const r = snapshot.resource;
   if (!r || !snapshot.pty) return false;
   if (r.reasons.length > 0) return false;
-  return describeSlowdowns(snapshot).length === 0;
+  return describeSlowdowns(snapshot, hostMemory).length === 0;
 }
 
 /**
@@ -281,6 +306,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
   const [snapshot, setSnapshot] = useState<WhySlowSnapshot | null>(null);
   const [error, setError] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const hostMemory = useHostMemoryPauseStore((s) => s.snapshot);
   const mountedRef = useRef(true);
   const inFlightRef = useRef(false);
   const failStreakRef = useRef(0);
@@ -330,8 +356,8 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
   const resource = snapshot?.resource ?? null;
   const snapshotAgeMs = snapshot ? Math.max(0, Date.now() - snapshot.timestamp) : 0;
   const sortedReasons = resource ? sortReasonsByContribution(resource.reasons) : [];
-  const findings = snapshot ? describeSlowdowns(snapshot) : [];
-  const allClear = snapshot ? isAllClear(snapshot) : false;
+  const findings = snapshot ? describeSlowdowns(snapshot, hostMemory) : [];
+  const allClear = snapshot ? isAllClear(snapshot, hostMemory) : false;
   const memory = snapshot?.memory ?? null;
   // A verdict over readings that didn't arrive has to say so.
   const readingsIncomplete =
