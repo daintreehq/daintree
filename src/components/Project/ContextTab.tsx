@@ -97,11 +97,11 @@ function describeTopExclusions(byReason: Partial<Record<CopyTreeExclusionReason,
 
 const FILE_PREVIEW_COUNT = 10;
 
+/** A whole number above zero, or nothing — "1.5" is an entry to fix, not a 1. */
 function parsePositiveInt(value: string): number | undefined {
   if (!value) return undefined;
   const num = Number(value);
-  if (!Number.isFinite(num) || num <= 0) return undefined;
-  return Math.floor(num);
+  return Number.isInteger(num) && num > 0 ? num : undefined;
 }
 
 const BYTES_PER_MB = 1024 * 1024;
@@ -237,6 +237,9 @@ export function ContextTab({
   };
 
   const invalidateTest = () => setTestConfigResult(null);
+  // A dry run tests what is stored, so it can't honestly run while a limit on
+  // screen differs from it.
+  const hasInvalidLimit = maxContextDraft.invalid || maxFileDraft.invalid || charLimitDraft.invalid;
 
   const setCopyTree = (patch: Partial<CopyTreeSettings>) => {
     onCopyTreeSettingsChange({ ...copyTreeSettings, ...patch });
@@ -278,7 +281,10 @@ export function ContextTab({
             controlWidth="numberWithUnit"
             suffix="MB"
             value={maxContextDraft.value}
-            onChange={maxContextDraft.onChange}
+            onChange={(e) => {
+              invalidateTest();
+              maxContextDraft.onChange(e);
+            }}
             error={maxContextDraft.invalid ? "Enter a size above 0 MB" : undefined}
             isModified={copyTreeSettings.maxContextSize !== undefined}
             onReset={() => {
@@ -296,7 +302,10 @@ export function ContextTab({
             controlWidth="numberWithUnit"
             suffix="MB"
             value={maxFileDraft.value}
-            onChange={maxFileDraft.onChange}
+            onChange={(e) => {
+              invalidateTest();
+              maxFileDraft.onChange(e);
+            }}
             error={maxFileDraft.invalid ? "Enter a size above 0 MB" : undefined}
             isModified={copyTreeSettings.maxFileSize !== undefined}
             onReset={() => {
@@ -314,7 +323,10 @@ export function ContextTab({
             controlWidth="numberWithUnit"
             suffix="chars"
             value={charLimitDraft.value}
-            onChange={charLimitDraft.onChange}
+            onChange={(e) => {
+              invalidateTest();
+              charLimitDraft.onChange(e);
+            }}
             error={charLimitDraft.invalid ? "Enter a whole number above 0" : undefined}
             isModified={copyTreeSettings.charLimit !== undefined}
             onReset={() => {
@@ -364,14 +376,18 @@ export function ContextTab({
         <SettingsGroup>
           <SettingsRow
             label="Test configuration"
-            description="Lists the files these settings would include, without copying anything"
+            description={
+              hasInvalidLimit
+                ? "Fix the limit values above to test"
+                : "Lists the files these settings would include, without copying anything"
+            }
             control={
               <Button
                 variant="outline"
                 size="sm"
                 onClick={handleTestConfig}
                 loading={isTestingConfig}
-                disabled={worktrees.length === 0}
+                disabled={worktrees.length === 0 || hasInvalidLimit}
               >
                 <Play />
                 Test config

@@ -336,7 +336,7 @@ function EnvVarKeyCell({
             <PopoverTrigger asChild>
               <button
                 type="button"
-                aria-label="Show key suggestions"
+                aria-label={`Show name suggestions for variable ${position}`}
                 tabIndex={-1}
                 onMouseDown={(e) => {
                   // Keep focus on the input — without this, clicking the chevron
@@ -345,10 +345,10 @@ function EnvVarKeyCell({
                   e.preventDefault();
                   inputRef.current?.focus();
                 }}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
+                className={cn(ENV_CELL_ACTION, "absolute right-1 top-1/2 -translate-y-1/2")}
                 data-testid="env-editor-key-suggestions-trigger"
               >
-                <ChevronDown size={12} aria-hidden="true" />
+                <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
             </PopoverTrigger>
           )}

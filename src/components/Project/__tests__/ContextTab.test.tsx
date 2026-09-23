@@ -467,3 +467,24 @@ describe("ContextTab — DOM anchors for settings deep-links", () => {
     expect(container.querySelector("#project-copy-tree")).not.toBeNull();
   });
 });
+
+describe("ContextTab limit drafts", () => {
+  const budgetField = () => screen.getByRole("spinbutton", { name: "Character budget" });
+
+  it("keeps a fractional character budget as an entry to fix rather than rounding it", () => {
+    const onCopyTreeSettingsChange = vi.fn();
+    renderTab({ onCopyTreeSettingsChange });
+    fireEvent.change(budgetField(), { target: { value: "1.5" } });
+    expect(onCopyTreeSettingsChange).not.toHaveBeenCalled();
+    expect(budgetField().getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("won't dry-run stored settings while a limit on screen disagrees with them", () => {
+    renderTab();
+    const testButton = screen.getByRole("button", { name: "Test config" });
+    fireEvent.change(budgetField(), { target: { value: "0" } });
+    expect(testButton.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(budgetField(), { target: { value: "5000" } });
+    expect(testButton.hasAttribute("disabled")).toBe(false);
+  });
+});

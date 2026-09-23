@@ -62,6 +62,9 @@ export function RecipesTab({
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportFeedback, setExportFeedback] = useState<string | null>(null);
   const importLabelId = useId();
+  // "Clear default" removes the warning it sits in, so focus goes to the next
+  // thing a user would do: add or pin another recipe.
+  const addRecipeRef = useRef<HTMLButtonElement>(null);
   const importErrorId = useId();
   const exportTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const hasLoadedRecipes = useRef(false);
@@ -204,7 +207,7 @@ export function RecipesTab({
               Import recipe
             </Button>
             {!recipesLoading && recipes.length > 0 && (
-              <Button variant="outline" size="sm" onClick={handleAddRecipe}>
+              <Button variant="outline" size="sm" onClick={handleAddRecipe} ref={addRecipeRef}>
                 <Plus />
                 Add recipe
               </Button>
@@ -232,7 +235,10 @@ export function RecipesTab({
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => onDefaultWorktreeRecipeIdChange(undefined)}
+                    onClick={() => {
+                      onDefaultWorktreeRecipeIdChange(undefined);
+                      addRecipeRef.current?.focus();
+                    }}
                     className="mt-2"
                   >
                     Clear default
@@ -252,7 +258,7 @@ export function RecipesTab({
             <SettingsGroup>
               <SettingsEmptyRow
                 action={
-                  <Button variant="outline" size="sm" onClick={handleAddRecipe}>
+                  <Button variant="outline" size="sm" onClick={handleAddRecipe} ref={addRecipeRef}>
                     <Plus />
                     Add recipe
                   </Button>
