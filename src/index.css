@@ -3361,9 +3361,20 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
   }
 
   /* Reduce Transparency (macOS) / transparency effects off (Windows) asks for
-   * solid chrome; same fallback as prefers-contrast above, kept as its own
-   * at-rule because the two preferences are set independently. */
+   * solid chrome; same fallbacks as prefers-contrast above, kept as their own
+   * at-rule because the two preferences are set independently. The toolbar and
+   * panel chrome carry the same rule in their own sheets. */
   @media (prefers-reduced-transparency: reduce) {
+    .surface-overlay {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      background-color: var(--color-surface-sidebar);
+    }
+
+    .light .surface-overlay {
+      background-color: var(--color-surface-panel-elevated);
+    }
+
     .command-hud-glass {
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
