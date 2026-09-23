@@ -534,7 +534,7 @@ test("move or rename dialog review — both modes, every state", async () => {
       await mockOpenDialog(ctx!.app, longParent);
       await setScript(ctx!.app, {
         ...QUIET_PREVIEW,
-        runningTerminalCount: 1,
+        runningTerminalCount: 2,
         agentContinuity: [EVERY_TIER[4]],
         linkedWorktrees: [
           `${longParent}/${longFolder}-worktrees/feature-realtime-usage-metering-backfill`,
