@@ -59,4 +59,16 @@ describe("pane focus edge", () => {
     // …and the border steps aside while it shows.
     expect(ring).toMatch(/border-color:\s*transparent/);
   });
+
+  it("keeps a focused root's ring inside the pane in forced-colors mode", () => {
+    // The global forced-colors `*:focus-visible` rule offsets every ring outward
+    // with !important; the pane's ring has to win that back or a focused file
+    // browser's edge sits outside the pane while a terminal's sits inside.
+    const start = css.indexOf("@media (forced-colors: active)");
+    expect(start).toBeGreaterThan(-1);
+    const forced = css.slice(start);
+    expect(forced).toMatch(
+      /\.terminal-selected:focus-visible\s*\{[^}]*outline-offset:\s*-2px\s*!important/
+    );
+  });
 });

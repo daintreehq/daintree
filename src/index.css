@@ -2568,6 +2568,13 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     border-color: Highlight;
   }
 
+  /* The global forced-colors ring above pushes every focus outline 2px out
+     with !important; a focused root's ring is its pane edge, so it stays in
+     where a terminal's does. */
+  .terminal-selected:focus-visible {
+    outline-offset: -2px !important;
+  }
+
   .terminal-focused {
     outline: 2px solid Highlight;
     outline-offset: -2px;
