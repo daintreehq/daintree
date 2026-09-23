@@ -70,6 +70,7 @@ const config: KnipConfig = {
     "src/components/Diagnostics/__preview__/preview.tsx",
     "src/components/FileViewer/__preview__/preview.tsx",
     "src/components/HelpPanel/__preview__/preview.tsx",
+    "src/components/HelpPanel/__preview__/footerPreview.tsx",
     "src/components/Layout/__preview__/preview.tsx",
     "src/components/Layout/__preview__/dockPreview.tsx",
     "src/components/Layout/__preview__/forgeStats.tsx",

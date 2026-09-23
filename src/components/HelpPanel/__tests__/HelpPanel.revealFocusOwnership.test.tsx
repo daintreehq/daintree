@@ -91,6 +91,15 @@ let hybridBarVisible = true;
 // the lazy Suspense window where the ref hasn't attached yet.
 let hybridHandleAttached = true;
 
+// Passthrough tooltips: the footer's Radix provider is incidental to these
+// suites, and its unmount timers collide with their stubbed globals.
+vi.mock("@/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: unknown }) => children,
+  Tooltip: ({ children }: { children: unknown }) => children,
+  TooltipTrigger: ({ children }: { children: unknown }) => children,
+  TooltipContent: () => null,
+}));
+
 vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenu: ({ children }: { children?: unknown }) => <div>{children as never}</div>,
   DropdownMenuTrigger: ({ children }: { children?: unknown }) => <>{children as never}</>,

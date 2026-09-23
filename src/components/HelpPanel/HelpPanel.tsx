@@ -36,10 +36,7 @@ import {
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpLaunchingState } from "./HelpLaunchingState";
-import { McpActivityStrip } from "./McpActivityStrip";
-import { TerminalWatchChip } from "@/components/Terminal/TerminalWatchChip";
-import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
-import { TurnOutcomePip } from "./TurnOutcomePip";
+import { HelpPanelFooter } from "./HelpPanelFooter";
 import { FigureRail } from "./FigureRail";
 import {
   useHelpPanelStore,
@@ -339,6 +336,11 @@ export function HelpPanel({
     pinnedContext?.worktreeId != null &&
     focusedWorktreeId !== null &&
     pinnedContext.worktreeId !== focusedWorktreeId;
+  const returnToPinnedWorktree = useCallback(() => {
+    if (pinnedContext?.worktreeId) {
+      selectWorktree(pinnedContext.worktreeId, { source: "user" });
+    }
+  }, [pinnedContext?.worktreeId, selectWorktree]);
 
   const agentConfig = agentId ? getAgentConfig(agentId) : undefined;
   // The model the live session actually launched with, read from its persisted
@@ -1710,108 +1712,20 @@ export function HelpPanel({
         )}
       </div>
 
-      {/* Bottom info bar — a single status row (#9763). Left: the live/recent
-          tool-call activity element (popover trigger). Right: the pinned
-          worktree·branch binding, then the agent identity anchored at the
-          edge. Raw args, the elapsed ticker, and the marketing link live in
-          the popover / hover titles / header docs button now. */}
-      {showTerminal && agentConfig && !isMissingCli && (
-        <div className="flex items-center justify-between gap-3 border-t border-border-default shrink-0 px-3 py-1.5 text-2xs text-text-secondary">
-          <span className="flex items-center gap-2 min-w-0">
-            <McpActivityStrip sessionId={sessionId} activity={session.mcpActivity} />
-            <TurnOutcomePip outcome={session.outcomeAlert} onDismiss={dismissOutcomeAlert} />
-            {/* This lane's terminal watches (#12491): self-gating, and where the
-                user stops Daintree from waking the assistant. */}
-            {terminalId && <TerminalWatchChip terminalId={terminalId} />}
-          </span>
-          <span className="flex items-center gap-2 min-w-0 shrink-0 max-w-[70%]">
-            {pinnedContext &&
-              // A diverged worktree is recoverable in one click — switch focus
-              // back to the worktree the session is pinned to. A pinned terminal
-              // with no live grid target is no longer a failure to shout about:
-              // tool calls re-resolve at dispatch time and the dock-hosted chat
-              // keeps working, so it stays a quiet neutral indicator. The
-              // recovery path is the overflow menu's "Restart conversation"
-              // (#10792).
-              (isPinnedWorktreeDiverged ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (pinnedContext.worktreeId) {
-                      selectWorktree(pinnedContext.worktreeId, { source: "user" });
-                    }
-                  }}
-                  className={cn(
-                    "flex items-center gap-1.5 min-w-0 p-0 bg-transparent border-none text-2xs",
-                    "text-status-warning hover:text-status-warning/80 transition-colors duration-150",
-                    "rounded-[var(--radius-sm)]",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                  )}
-                  title="Switch to the worktree this assistant is pinned to"
-                >
-                  <span
-                    aria-hidden
-                    className="status-mark w-1.5 h-1.5 rounded-full shrink-0 bg-status-warning"
-                  />
-                  <span className="truncate">
-                    {[pinnedContext.worktreeName, pinnedContext.worktreeBranch]
-                      .filter(Boolean)
-                      .join(" · ") || "Pinned session"}
-                  </span>
-                </button>
-              ) : (
-                <span
-                  className="flex items-center gap-1.5 min-w-0"
-                  title="Assistant tool calls are pinned to this worktree and terminal."
-                >
-                  <span
-                    aria-hidden
-                    className="status-mark w-1.5 h-1.5 rounded-full shrink-0 bg-daintree-text/30"
-                  />
-                  <span className="truncate">
-                    {[pinnedContext.worktreeName, pinnedContext.worktreeBranch]
-                      .filter(Boolean)
-                      .join(" · ") || "Pinned session"}
-                  </span>
-                </span>
-              ))}
-            {agentId === "daintree-assistant" ? (
-              // The Daintree Assistant is the workspace's own conductor, so the
-              // brand mark already says "Daintree" — pairing it with just
-              // "assistant" keeps this status row from repeating the word twice
-              // and frees up the tight footer width.
-              <span
-                className="flex items-center gap-1 shrink-0"
-                title={
-                  launchedModelLabel
-                    ? `Assistant agent: ${agentConfig.name} · ${launchedModelLabel}`
-                    : `Assistant agent: ${agentConfig.name}`
-                }
-              >
-                <DaintreeIcon className="w-3.5 h-3.5" />
-                Assistant
-                {launchedModelLabel && (
-                  <span className="text-text-secondary">· {launchedModelLabel}</span>
-                )}
-              </span>
-            ) : (
-              <span
-                className="flex items-center gap-1 shrink-0"
-                title={
-                  launchedModelLabel
-                    ? `Assistant agent: ${agentConfig.name} · ${launchedModelLabel}`
-                    : `Assistant agent: ${agentConfig.name}`
-                }
-              >
-                <agentConfig.icon className="w-3.5 h-3.5" />
-                {agentConfig.name}
-                {launchedModelLabel && (
-                  <span className="text-text-secondary">· {launchedModelLabel}</span>
-                )}
-              </span>
-            )}
-          </span>
-        </div>
+      {showTerminal && agentConfig && agentId && !isMissingCli && (
+        <HelpPanelFooter
+          sessionId={sessionId}
+          activity={session.mcpActivity}
+          outcomeAlert={session.outcomeAlert}
+          onDismissOutcome={dismissOutcomeAlert}
+          terminalId={terminalId ?? null}
+          pinnedContext={pinnedContext}
+          isPinnedWorktreeDiverged={isPinnedWorktreeDiverged}
+          onReturnToPinnedWorktree={returnToPinnedWorktree}
+          agentId={agentId}
+          agentConfig={agentConfig}
+          launchedModelLabel={launchedModelLabel}
+        />
       )}
       <ConfirmDialog
         isOpen={showNewSessionConfirm}

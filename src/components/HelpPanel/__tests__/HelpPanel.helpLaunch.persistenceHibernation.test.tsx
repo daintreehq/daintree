@@ -137,6 +137,15 @@ const {
   mockNotifyUserInput: vi.fn(),
 }));
 
+// Passthrough tooltips: the footer's Radix provider is incidental to these
+// suites, and its unmount timers collide with their stubbed globals.
+vi.mock("@/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: unknown }) => children,
+  Tooltip: ({ children }: { children: unknown }) => children,
+  TooltipTrigger: ({ children }: { children: unknown }) => children,
+  TooltipContent: () => null,
+}));
+
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
 
 vi.mock("@/components/ui/button", () => ({
@@ -637,7 +646,8 @@ beforeEach(() => {
 // reintroducing the old false-alarm danger state (the prior #10431 behavior).
 describe("HelpPanel — pinned-terminal state stays a quiet neutral indicator (#10792)", () => {
   const DANGER_BUTTON_TITLE = "No open terminal to receive tool calls — start a new session";
-  const PINNED_LABEL = "main · main";
+  // A worktree named after its branch reads once, not "main · main".
+  const PINNED_LABEL = "main";
 
   function dockAssistantTerminal() {
     // The assistant runs in the dock; it is never a tool-call target, so it must
@@ -657,7 +667,7 @@ describe("HelpPanel — pinned-terminal state stays a quiet neutral indicator (#
   // tests assert renders. It only appears when the focused worktree matches the
   // session's pinned worktree — otherwise the divergence branch takes over — so
   // setupPinnedSession aligns `focusedWorktreeId` with the pinned `worktreeId`.
-  const NEUTRAL_PINNED_TITLE = "Assistant tool calls are pinned to this worktree and terminal.";
+  const NEUTRAL_PINNED = '[data-footer-binding="neutral"]';
 
   function setupPinnedSession(panels: Record<string, unknown>) {
     projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
@@ -717,7 +727,7 @@ describe("HelpPanel — pinned-terminal state stays a quiet neutral indicator (#
     // The pinned label still renders, but quietly: the neutral non-button span,
     // no danger tint, no footer "Start new session" button (recovery lives on
     // the header).
-    const neutral = container.querySelector(`span[title="${NEUTRAL_PINNED_TITLE}"]`);
+    const neutral = container.querySelector(NEUTRAL_PINNED);
     expect(neutral).not.toBeNull();
     expect(neutral!.tagName).toBe("SPAN");
     expect(neutral!.textContent).toContain(PINNED_LABEL);
@@ -770,7 +780,7 @@ describe("HelpPanel — pinned-terminal state stays a quiet neutral indicator (#
 
     const { container } = await renderResolved();
 
-    const neutral = container.querySelector(`span[title="${NEUTRAL_PINNED_TITLE}"]`);
+    const neutral = container.querySelector(NEUTRAL_PINNED);
     expect(neutral).not.toBeNull();
     expect(neutral!.textContent).toContain(PINNED_LABEL);
     expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
@@ -793,7 +803,7 @@ describe("HelpPanel — pinned-terminal state stays a quiet neutral indicator (#
 
     const { container } = await renderResolved();
 
-    const neutral = container.querySelector(`span[title="${NEUTRAL_PINNED_TITLE}"]`);
+    const neutral = container.querySelector(NEUTRAL_PINNED);
     expect(neutral).not.toBeNull();
     expect(neutral!.textContent).toContain(PINNED_LABEL);
     expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
@@ -810,11 +820,9 @@ describe("HelpPanel — pinned-terminal state stays a quiet neutral indicator (#
 
     const { container } = await renderResolved();
 
-    const button = container.querySelector(
-      'button[title="Switch to the worktree this assistant is pinned to"]'
-    );
+    const button = container.querySelector('button[data-footer-binding="diverged"]');
     expect(button).not.toBeNull();
-    expect(container.querySelector(`span[title="${NEUTRAL_PINNED_TITLE}"]`)).toBeNull();
+    expect(container.querySelector(NEUTRAL_PINNED)).toBeNull();
     fireEvent.click(button!);
     expect(worktreeSelectionState.selectWorktree).toHaveBeenCalledWith("wt-1", { source: "user" });
   });
