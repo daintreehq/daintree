@@ -242,6 +242,9 @@ function ActivityGlyph({
 
 function buildTitle(activity: McpToolActivityState): string {
   const parts: string[] = [activity.toolId];
+  // The footer can truncate this label to "Awaiting…", so the tooltip is where
+  // it reads in full.
+  if (activity.danger && activity.status === "in-flight") parts.unshift("Awaiting confirmation");
   if (activity.callCount > 1) parts.push(`${activity.callCount} calls this turn`);
   if (activity.argsSummary && activity.argsSummary !== "{}") parts.push(activity.argsSummary);
   if (activity.status === "settled" && activity.result) parts.push(activity.result);

@@ -50,6 +50,8 @@ describe("useFooterDensity", () => {
   const STEP_PX = 10;
   const SETTLE_MS = 20;
   let needed = ROW_PX;
+  // A truncated sibling taking up freed space, so the spacer stays at zero.
+  let absorbing = false;
 
   const contentWidth = (row: HTMLElement) => needed - Number(row.dataset.density) * STEP_PX;
   const geometry = {
@@ -60,9 +62,12 @@ describe("useFooterDensity", () => {
       return this.dataset.testid === "row" ? Math.max(ROW_PX, contentWidth(this)) : 0;
     },
     offsetWidth(this: HTMLElement) {
-      return this.dataset.testid === "slack"
-        ? Math.max(0, ROW_PX - contentWidth(this.parentElement!))
-        : 0;
+      const row = this.parentElement!;
+      if (this.dataset.testid === "content") return Math.min(ROW_PX, contentWidth(row));
+      if (this.dataset.testid === "slack") {
+        return absorbing ? 0 : Math.max(0, ROW_PX - contentWidth(row));
+      }
+      return 0;
     },
   };
   const originals = new Map<string, PropertyDescriptor | undefined>();
@@ -81,11 +86,11 @@ describe("useFooterDensity", () => {
   });
 
   function Row({ contentKey, wrapped = false }: { contentKey: string; wrapped?: boolean }) {
-    const { rowRef, slackRef, density } = useFooterDensity(contentKey);
+    const { rowRef, density } = useFooterDensity(contentKey);
     const row = (
       <div ref={rowRef} data-density={density} data-testid="row">
         <span data-testid="content" />
-        <span ref={slackRef} data-testid="slack" />
+        <span data-testid="slack" />
       </div>
     );
     // Stands in for a provider above the row that changes element type once it
@@ -119,6 +124,21 @@ describe("useFooterDensity", () => {
       await Promise.resolve();
     });
     expect(density()).toBe(0);
+  });
+
+  it("gives detail back when the freed space goes to a truncated sibling", async () => {
+    needed = ROW_PX + 3 * STEP_PX;
+    render(<Row contentKey="a" />);
+    expect(density()).toBe(3);
+
+    absorbing = true;
+    needed = ROW_PX;
+    await act(async () => {
+      screen.getByTestId("content").textContent = "changed";
+      await Promise.resolve();
+    });
+    expect(density()).toBe(0);
+    absorbing = false;
   });
 
   it("measures again when the row's node is replaced", () => {

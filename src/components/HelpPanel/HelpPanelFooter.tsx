@@ -55,18 +55,25 @@ export const MAX_FOOTER_DENSITY = 4;
  * from the roomiest layout, so detail comes back as soon as there is room.
  *
  * Telling those outside changes from the row's own compaction is done by
- * measurement, not by flagging commits: once a generation settles, the free
- * space in the spacer is recorded, and a later DOM change only restarts if
- * that free space moved or the row overflows. The row's own steps are already
- * part of the recorded value, so they can never re-trigger a restart.
+ * measurement, not by flagging commits: once a generation settles, the width
+ * of every item in the row is recorded, and a later DOM change only restarts
+ * if one of them moved or the row overflows. Every item, not just the spacer:
+ * space a child gives up is often absorbed by a truncated sibling growing
+ * back, with the spacer still at its minimum. The row's own steps are already
+ * part of the recorded layout, so they can never re-trigger a restart.
  */
+function measureItems(row: HTMLElement): string {
+  return Array.from(row.children, (child) =>
+    child instanceof HTMLElement ? child.offsetWidth : 0
+  ).join(",");
+}
+
 export function useFooterDensity(contentKey: string) {
   // State, not a ref: the row node can be replaced under this hook (the
   // tooltip provider above it swaps in once Radix loads), and a new node has
   // to be observed and measured again.
   const [row, rowRef] = useState<HTMLDivElement | null>(null);
-  const slackRef = useRef<HTMLSpanElement | null>(null);
-  const settledSlack = useRef<number | null>(null);
+  const settledLayout = useRef<string | null>(null);
   const [epoch, setEpoch] = useState(0);
   const generation = `${contentKey}#${epoch}`;
   const [step, setStep] = useState({ generation, density: 0 });
@@ -77,15 +84,16 @@ export function useFooterDensity(contentKey: string) {
       setStep({ generation, density: density + 1 });
       return;
     }
-    settledSlack.current = slackRef.current?.offsetWidth ?? null;
+    settledLayout.current = row ? measureItems(row) : null;
   }, [density, generation, row]);
 
   useLayoutEffect(() => {
     if (!row) return;
     const restart = () => setEpoch((e) => e + 1);
     const mutations = new MutationObserver(() => {
-      const slack = slackRef.current?.offsetWidth ?? null;
-      if (slack !== settledSlack.current || row.scrollWidth > row.clientWidth) restart();
+      if (measureItems(row) !== settledLayout.current || row.scrollWidth > row.clientWidth) {
+        restart();
+      }
     });
     mutations.observe(row, { childList: true, subtree: true, characterData: true });
     let lastWidth = row.clientWidth;
@@ -104,7 +112,7 @@ export function useFooterDensity(contentKey: string) {
     };
   }, [row]);
 
-  return { rowRef, slackRef, density };
+  return { rowRef, density };
 }
 
 /** A focusable status item whose full value shows on hover and on focus. */
@@ -166,7 +174,7 @@ export function HelpPanelFooter({
     : agentConfig.name;
   const binding = pinnedContext ? formatPinnedBinding(pinnedContext) : null;
 
-  const { rowRef, slackRef, density } = useFooterDensity(
+  const { rowRef, density } = useFooterDensity(
     [
       binding,
       isPinnedWorktreeDiverged,
@@ -201,7 +209,7 @@ export function HelpPanelFooter({
         {/* This lane's terminal watches (#12491): self-gating, and where the
             user stops Daintree from waking the assistant. */}
         {terminalId && <TerminalWatchChip terminalId={terminalId} />}
-        <span ref={slackRef} aria-hidden className="flex-1 min-w-2" />
+        <span aria-hidden className="flex-1 min-w-2" />
         {binding !== null &&
           // A diverged worktree is recoverable in one click — switch focus back
           // to the worktree the session is pinned to. A pinned terminal with no
