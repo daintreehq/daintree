@@ -446,6 +446,9 @@ class KeybindingService {
     const mac = isMac();
 
     if (mac && event.metaKey) parts.push("Cmd");
+    // Control is its own modifier on macOS, so a recorded "Ctrl+K Ctrl+R" chord
+    // can complete; elsewhere it is the primary modifier.
+    if (mac && event.ctrlKey) parts.push("Ctrl");
     if (!mac && event.ctrlKey) parts.push("Cmd");
     if (event.shiftKey) parts.push("Shift");
     if (event.altKey) parts.push("Alt");
@@ -482,45 +485,48 @@ class KeybindingService {
         if (!this.scopeAllows(binding.scope)) continue;
         if (binding.when && !evaluateWhenClause(binding.when, resolveWhenCtx())) continue;
 
-        const hasOverride = this.overrides.has(binding.actionId);
-        const effectiveCombo = hasOverride
-          ? this.overrides.get(binding.actionId)?.[0]
-          : binding.combo;
-        if (!effectiveCombo) continue;
+        // Every combo an override holds triggers the action, matching what the
+        // settings list shows and what conflict detection checks.
+        const combos = this.overrides.has(binding.actionId)
+          ? (this.overrides.get(binding.actionId) ?? [])
+          : [binding.combo];
+        for (const effectiveCombo of combos) {
+          if (!effectiveCombo) continue;
 
-        // Check if this is a chord binding
-        const chordParts = effectiveCombo.split(" ");
-        const isChord = chordParts.length > 1;
+          // Check if this is a chord binding
+          const chordParts = effectiveCombo.split(" ");
+          const isChord = chordParts.length > 1;
 
-        if (isChord) {
-          // Match chord parts via parseCombo field equality so user-stored overrides
-          // with non-canonical modifier order (e.g. "Alt+Cmd+T") match the canonical
-          // order produced by eventToCombo. matchesEvent uses parseCombo internally.
-          if (this.pendingChord) {
-            if (
-              combosFieldsEqual(this.pendingChord, chordParts[0]!, mac) &&
-              this.matchesEventInternal(event, chordParts[1]!, mac, eventKey)
-            ) {
-              if (binding.priority > chordCompletionPriority) {
-                chordCompletionMatch = binding;
-                chordCompletionPriority = binding.priority;
+          if (isChord) {
+            // Match chord parts via parseCombo field equality so user-stored overrides
+            // with non-canonical modifier order (e.g. "Alt+Cmd+T") match the canonical
+            // order produced by eventToCombo. matchesEvent uses parseCombo internally.
+            if (this.pendingChord) {
+              if (
+                combosFieldsEqual(this.pendingChord, chordParts[0]!, mac) &&
+                this.matchesEventInternal(event, chordParts[1]!, mac, eventKey)
+              ) {
+                if (binding.priority > chordCompletionPriority) {
+                  chordCompletionMatch = binding;
+                  chordCompletionPriority = binding.priority;
+                }
+              }
+            } else {
+              // Check if this is the start of a chord
+              if (this.matchesEventInternal(event, chordParts[0]!, mac, eventKey)) {
+                foundChordPrefix = true;
               }
             }
           } else {
-            // Check if this is the start of a chord
-            if (this.matchesEventInternal(event, chordParts[0]!, mac, eventKey)) {
-              foundChordPrefix = true;
-            }
-          }
-        } else {
-          // Regular non-chord binding - only consider if no chord is pending
-          if (
-            !this.pendingChord &&
-            this.matchesEventInternal(event, effectiveCombo, mac, eventKey)
-          ) {
-            if (binding.priority > bestPriority) {
-              bestMatch = binding;
-              bestPriority = binding.priority;
+            // Regular non-chord binding - only consider if no chord is pending
+            if (
+              !this.pendingChord &&
+              this.matchesEventInternal(event, effectiveCombo, mac, eventKey)
+            ) {
+              if (binding.priority > bestPriority) {
+                bestMatch = binding;
+                bestPriority = binding.priority;
+              }
             }
           }
         }

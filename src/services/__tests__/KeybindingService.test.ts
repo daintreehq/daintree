@@ -808,6 +808,32 @@ describe("KeybindingService", () => {
       expect(row?.effectiveCombos).toEqual(["Cmd+Alt+J", "Cmd+Alt+K"]);
     });
 
+    it("fires the action from any combo its override holds, not only the first", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      seedOverride(service, "terminal.close", ["Cmd+Alt+J", "Cmd+Alt+K"]);
+
+      const second = createKeyboardEvent({ key: "k", code: "KeyK", metaKey: true, altKey: true });
+
+      expect(service.resolveKeybinding(second).match?.actionId).toBe("terminal.close");
+    });
+
+    it("completes a recorded macOS Control chord", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      seedOverride(service, "terminal.close", ["Ctrl+k Ctrl+r"]);
+
+      const first = service.resolveKeybinding(
+        createKeyboardEvent({ key: "k", code: "KeyK", ctrlKey: true })
+      );
+      const second = service.resolveKeybinding(
+        createKeyboardEvent({ key: "r", code: "KeyR", ctrlKey: true })
+      );
+
+      expect(first.chordPrefix).toBe(true);
+      expect(second.match?.actionId).toBe("terminal.close");
+    });
+
     it("names the combo that actually clashed, not the conflicting action's default", () => {
       const service = new KeybindingService();
       seedOverride(service, "terminal.close", ["Cmd+Alt+Shift+J"]);
