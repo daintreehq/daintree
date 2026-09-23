@@ -9,7 +9,7 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 
-import { FileViewerToolbar } from "../FileViewerToolbar";
+import { FileViewerToolbar, fitFileName, useFileViewerToolbarCompact } from "../FileViewerToolbar";
 
 // The fit is pure measurement, and jsdom measures nothing: clientWidth is 0 and
 // there is no canvas. Stub both with a monospace model — every glyph CHAR_PX
@@ -466,5 +466,67 @@ describe("FileViewerToolbar.CopyContentsButton", () => {
 
     // A surviving setTimeout would fire a setState into an unmounted tree.
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("fitFileName", () => {
+  const NAME = "useContentPanelKeyboardNavigationAndFocusRestoration.ts";
+  const fitsWithin = (chars: number) => (text: string) => text.length <= chars;
+
+  it.each([12, 18, 30, 45])(
+    "keeps the extension and a single middle ellipsis when squeezed to %i chars",
+    (chars) => {
+      const fitted = fitFileName(NAME, fitsWithin(chars));
+      expect(fitted.endsWith(".ts")).toBe(true);
+      expect(fitted.match(/…/g)).toHaveLength(1);
+      expect(fitted.length).toBeLessThanOrEqual(chars);
+      // Starts with the real name, so the reader recognises the file.
+      expect(NAME.startsWith(fitted.slice(0, fitted.indexOf("…")))).toBe(true);
+    }
+  );
+
+  it("spends the whole budget — one more character of the stem would not fit", () => {
+    const fitted = fitFileName(NAME, fitsWithin(24));
+    expect(fitted.length).toBe(24);
+  });
+
+  it("hands back the whole name when nothing shorter fits either", () => {
+    expect(fitFileName(NAME, () => false)).toBe(NAME);
+  });
+
+  it("treats a dotless name as all stem", () => {
+    const fitted = fitFileName("Makefile-for-the-whole-monorepo", fitsWithin(12));
+    expect(fitted.length).toBeLessThanOrEqual(12);
+    expect(fitted.startsWith("Makef")).toBe(true);
+  });
+});
+
+describe("FileViewerToolbar compact mode", () => {
+  function Probe() {
+    return <span data-testid="probe">{String(useFileViewerToolbarCompact())}</span>;
+  }
+
+  function renderAtWidth(width: number, compactBelow?: number) {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, width, 30)
+    );
+    render(
+      <FileViewerToolbar.Root label="Controls" {...(compactBelow ? { compactBelow } : {})}>
+        <Probe />
+      </FileViewerToolbar.Root>
+    );
+    return screen.getByTestId("probe").textContent;
+  }
+
+  it("reports compact only below the caller's threshold", () => {
+    expect(renderAtWidth(300, 400)).toBe("true");
+  });
+
+  it("stays full width at or above the threshold", () => {
+    expect(renderAtWidth(400, 400)).toBe("false");
+  });
+
+  it("is never compact for a caller that set no threshold", () => {
+    expect(renderAtWidth(10)).toBe("false");
   });
 });

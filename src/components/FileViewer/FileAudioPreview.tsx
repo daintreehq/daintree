@@ -106,7 +106,7 @@ export function FileAudioPreview({
     // below ~300px, and a docked pane can be narrower than that. The floor
     // keeps the control whole and lets the wrapper scroll instead — the same
     // floor applies to the skeleton so settling doesn't shift the layout.
-    <div className="flex items-center justify-center overflow-x-auto p-6">
+    <div className="flex items-center justify-center overflow-x-auto px-3 py-6">
       {sourceUrl ? (
         <audio
           // Keyed by the source URL so switching files (or reloading) remounts

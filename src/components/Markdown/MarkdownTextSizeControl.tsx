@@ -4,6 +4,13 @@ import { TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DEFAULT_MARKDOWN_FONT_SIZE,
@@ -180,5 +187,44 @@ export function MarkdownTextSizeControl({
         </Button>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * The same ladder as a submenu, for a toolbar that has folded its secondary
+ * controls into an overflow menu. One radio per rung rather than a stepper:
+ * inside a menu, rows are the widget, and a stepper's minus/plus buttons would
+ * claim a menu semantic they don't have (see the note on the popover above).
+ */
+export function MarkdownTextSizeMenuItems({
+  value,
+  onValueChange,
+}: Pick<MarkdownTextSizeControlProps, "value" | "onValueChange">) {
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <ALargeSmall className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+        Text size
+        <span className="ml-auto pl-3 text-2xs tabular-nums text-text-secondary">
+          {STEP_LABEL[value]} px
+        </span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent>
+        <DropdownMenuRadioGroup
+          aria-label="Text size"
+          value={value}
+          onValueChange={(next) => {
+            const step = MARKDOWN_FONT_SIZE_STEPS.find((candidate) => candidate === next);
+            if (step) onValueChange(step);
+          }}
+        >
+          {MARKDOWN_FONT_SIZE_STEPS.map((step) => (
+            <DropdownMenuRadioItem key={step} value={step}>
+              {STEP_LABEL[step]} px{step === DEFAULT_MARKDOWN_FONT_SIZE ? " (default)" : ""}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }

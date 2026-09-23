@@ -338,6 +338,14 @@ export interface UseFileBrowserTreeResult {
   listingHasHiddenDotfiles: boolean;
   /** The selected folder's own hidden tally, for the viewer's listing chrome. */
   listingHiddenCounts: HiddenRowCounts;
+  /**
+   * The selection names an entry its parent directory no longer holds: the
+   * parent has been listed and the entry is not in it. A positive statement,
+   * not "unknown" — a selection whose parent has never been listed is not
+   * missing, only unresolved. Lets the viewer say the open file was deleted
+   * instead of quietly swapping it for another view.
+   */
+  selectionMissing: boolean;
 }
 
 interface QueueEntry {
@@ -504,6 +512,12 @@ export function useFileBrowserTree({
     () => (selectedPath === null ? undefined : findNodeInListings(listings, selectedPath)),
     [listings, selectedPath]
   );
+
+  const selectionMissing =
+    selectedPath !== null &&
+    selectedNode === undefined &&
+    selectionParent !== null &&
+    listings.has(selectionParent);
 
   // The folder to list: positively a directory, and still reachable under the
   // current filters. A folder the dotfile toggle has just hidden keeps its
@@ -1306,6 +1320,7 @@ export function useFileBrowserTree({
     listingStatus,
     listingHasHiddenDotfiles,
     listingHiddenCounts,
+    selectionMissing,
   };
 }
 

@@ -71,15 +71,19 @@ export function FileBrowserChangeSummary({ changes, onSelect }: FileBrowserChang
                     : undefined
                 }
                 className={cn(
-                  "flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs",
+                  "flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left text-xs",
                   "transition-colors duration-150 ease-out",
                   // Unconditional: a deleted file's row stays in the tab order
                   // (aria-disabled, so the explanation can be read), and a
                   // focusable row without a ring takes the browser's default.
                   PALETTE_ROW_FOCUS_CLASS,
                   isReadable
-                    ? "cursor-pointer text-daintree-text/80 hover:bg-tint/5 hover:text-text-primary"
-                    : "cursor-default text-daintree-text/40"
+                    ? "cursor-pointer text-text-secondary hover:bg-tint/5 hover:text-text-primary"
+                    : // Struck through rather than faded: the row stays readable
+                      // at full strength while still saying there is nothing
+                      // left to open — the convention source-control lists use
+                      // for a deleted path.
+                      "cursor-default text-text-secondary line-through decoration-text-secondary"
                 )}
               >
                 <span
@@ -90,14 +94,16 @@ export function FileBrowserChangeSummary({ changes, onSelect }: FileBrowserChang
                 </span>
                 <span className="flex min-w-0 flex-1 items-center">
                   {dir !== "" && <span className="truncate text-text-secondary">{dir}/</span>}
-                  <span className="truncate font-medium">{base}</span>
+                  <span className={cn("truncate font-medium", isReadable && "text-text-primary")}>
+                    {base}
+                  </span>
                 </span>
                 <span
                   className="flex shrink-0 items-center gap-1.5 text-2xs tabular-nums"
                   aria-hidden="true"
                 >
-                  {insertions > 0 && <span className="text-status-success/80">+{insertions}</span>}
-                  {deletions > 0 && <span className="text-status-error/80">-{deletions}</span>}
+                  {insertions > 0 && <span className="text-status-success">+{insertions}</span>}
+                  {deletions > 0 && <span className="text-status-error">-{deletions}</span>}
                 </span>
               </button>
             </li>

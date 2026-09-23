@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { createContext, forwardRef, useContext, type ReactNode } from "react";
-import { fireEvent, render, act, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, act, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Type-only: erased before the vi.mock factory runs, so it cannot pull the real
 // module in ahead of its own mock.
@@ -202,7 +202,6 @@ import type { GitStatus } from "@shared/types/git";
 import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { NO_HIDDEN_ROWS } from "../fileBrowserTree";
 import { ClientAppError } from "@/utils/clientAppError";
-import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import type {
   FileBrowserSortOrder,
@@ -252,6 +251,8 @@ interface ViewerOpts {
   hiddenCounts?: HiddenRowCounts;
   onCollapseAll?: () => void;
   canCollapseAll?: boolean;
+  missingFilePath?: string | null;
+  onShowFolder?: (path: string) => void;
 }
 
 function change(relativePath: string, status: GitStatus = "modified"): WorkingTreeFileChange {
@@ -305,6 +306,8 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
         hiddenCounts={opts.hiddenCounts ?? NO_HIDDEN_ROWS}
         onCollapseAll={opts.onCollapseAll ?? vi.fn()}
         canCollapseAll={opts.canCollapseAll ?? false}
+        missingFilePath={opts.missingFilePath ?? null}
+        onShowFolder={opts.onShowFolder ?? vi.fn()}
       />
     </TooltipProvider>
   );
@@ -1031,7 +1034,7 @@ describe("FileBrowserViewer PDF preview (#11427)", () => {
     const { container } = renderViewer("/repo/docs/huge.pdf");
 
     // The reason reaches the viewer's error state rather than an empty box.
-    expect(await screen.findByText("Can't show this file")).toBeTruthy();
+    expect(await screen.findByText("Too large to preview")).toBeTruthy();
     expect(pdfProbeMock).toHaveBeenCalledTimes(1);
     expect(container.querySelector("iframe")).toBeNull();
   });
@@ -1079,20 +1082,23 @@ describe("FileBrowserViewer PDF preview (#11427)", () => {
       revision: "0:0",
       surfaceRefreshNonce: 0,
     });
-    await screen.findByText("Can't show this file");
+    await screen.findByTestId("file-browser-unavailable");
 
     rerender(viewerJsx("/repo/docs/spec.pdf", { revision: "0:1", surfaceRefreshNonce: 1 }));
 
     await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
-    expect(screen.queryByText("Can't show this file")).toBeNull();
+    expect(screen.queryByTestId("file-browser-unavailable")).toBeNull();
   });
 
-  it("offers no default-app action when a non-PDF preview fails", async () => {
+  it("never offers the OS default app for a binary, which that handler may execute", async () => {
     readMock.mockRejectedValue(new ClientAppError("BINARY_FILE", "BINARY_FILE"));
     renderViewer("/repo/src/blob.bin");
 
-    expect(await screen.findByText(FILE_READ_ERROR_MESSAGES.BINARY_FILE)).toBeTruthy();
+    expect(await screen.findByText("Binary file")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open in default app" })).toBeNull();
+    // Its way out is the file manager instead — still a way out, not a dead end.
+    const unavailable = screen.getByTestId("file-browser-unavailable");
+    expect(within(unavailable).getByRole("button", { name: revealCopy().label })).toBeTruthy();
   });
 });
 
@@ -1497,7 +1503,7 @@ describe("FileBrowserViewer copy file contents (#12136)", () => {
       readMock.mockRejectedValue(new ClientAppError(code, code));
       renderViewer("/repo/src/blob.bin");
 
-      expect(await screen.findByText(FILE_READ_ERROR_MESSAGES[code])).toBeTruthy();
+      expect(await screen.findByTestId("file-browser-unavailable")).toBeTruthy();
       expect(copyButton()).toBeNull();
     }
   );
@@ -1686,5 +1692,67 @@ describe("plugin-contributed editing in the file browser", () => {
     expect(screen.getByRole("button", { name: "Source" }).getAttribute("aria-pressed")).toBe(
       "true"
     );
+  });
+});
+
+describe("viewer identity and ways out", () => {
+  it("names a listed folder in the toolbar, so the listing is never anonymous", () => {
+    renderViewer(null, {
+      folderPath: "assets/brand",
+      folderRows: [{ path: "assets/brand/logo.svg", name: "logo.svg", isDirectory: false }],
+    });
+    const pill = screen.getByRole("button", { name: "Copy folder path" });
+    expect(pill.textContent).toContain("brand");
+  });
+
+  it("says an open file was deleted, under its own name, instead of swapping views", () => {
+    const onShowFolder = vi.fn();
+    renderViewer(null, {
+      missingFilePath: "docs/architecture/notes.md",
+      changedFiles: [change("docs/architecture/notes.md", "deleted")],
+      onShowFolder,
+    });
+
+    // Not the changed-files summary that used to replace it silently.
+    expect(screen.queryByText("Changed files")).toBeNull();
+    const unavailable = screen.getByTestId("file-browser-unavailable");
+    expect(unavailable.textContent).toContain("notes.md");
+    expect(screen.getByRole("button", { name: "Copy file path" }).textContent).toContain(
+      "notes.md"
+    );
+
+    fireEvent.click(within(unavailable).getByRole("button", { name: /show folder/i }));
+    expect(onShowFolder).toHaveBeenCalledWith("docs/architecture");
+  });
+
+  it("offers a way out from every unavailable read", async () => {
+    for (const code of [
+      "BINARY_FILE",
+      "FILE_TOO_LARGE",
+      "LFS_POINTER",
+      "PERMISSION",
+      "NOT_FOUND",
+    ] as const) {
+      readMock.mockRejectedValueOnce(new ClientAppError(code, code));
+      const { unmount } = renderViewer(`/repo/src/${code.toLowerCase()}.dat`);
+      const unavailable = await screen.findByTestId("file-browser-unavailable");
+      expect(within(unavailable).queryAllByRole("button").length).toBeGreaterThan(0);
+      unmount();
+    }
+  });
+
+  it("folds the file's actions into one menu when the toolbar is compact", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, 320, 30)
+    );
+    readMock.mockResolvedValue({ content: "x" });
+    renderViewer("/repo/src/notes.txt");
+    await screen.findByTestId("code-viewer-mock");
+
+    expect(screen.getByRole("button", { name: "More actions" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open in editor" })).toBeNull();
+    expect(screen.queryByRole("button", { name: revealCopy().label })).toBeNull();
+    // The identity is what the fold protects, so it must still be there.
+    expect(screen.getByRole("button", { name: "Copy file path" })).toBeTruthy();
   });
 });

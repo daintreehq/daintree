@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { buildDaintreeFileUrl } from "./filePreviewKinds";
 import { TRANSPARENCY_CHECKERBOARD_STYLE } from "./transparencyCheckerboard";
 import { cn } from "@/lib/utils";
+import { Minus, Plus } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export interface ZoomableImageProps {
   /** Absolute path of the image. */
@@ -38,6 +40,23 @@ export function zoomForWheel(currentZoom: number, deltaY: number): number {
   return clampZoom(currentZoom * Math.exp(-deltaY * WHEEL_ZOOM_SENSITIVITY));
 }
 
+/** Multiplier one press of the zoom buttons applies. */
+const BUTTON_ZOOM_STEP = 1.25;
+
+/**
+ * How much of its natural size the image is drawn at when it fits the stage:
+ * `max-w-full max-h-full` only ever shrinks, so this is capped at 1. Exported
+ * for tests.
+ */
+export function fitScale(
+  natural: { width: number; height: number } | null,
+  stage: { width: number; height: number } | null
+): number {
+  if (!natural || !stage || natural.width <= 0 || natural.height <= 0) return 1;
+  if (stage.width <= 0 || stage.height <= 0) return 1;
+  return Math.min(1, stage.width / natural.width, stage.height / natural.height);
+}
+
 /**
  * Read-only image surface with a transparency checkerboard, wheel zoom and
  * drag pan.
@@ -52,6 +71,18 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number } | null>(null);
+  const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
+  const [stage, setStage] = useState<{ width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      setStage({ width: element.clientWidth, height: element.clientHeight });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   // Every file gets a fresh view. Without this, opening a second image inherits
   // the previous one's zoom and pan, which reads as a broken image when the two
@@ -59,6 +90,7 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
   useEffect(() => {
     setZoom(1);
     setOffset({ x: 0, y: 0 });
+    setNatural(null);
   }, [filePath]);
 
   const resetView = useCallback(() => {
@@ -106,6 +138,10 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
   };
 
   const isZoomed = zoom !== 1 || offset.x !== 0 || offset.y !== 0;
+  // What the reader is actually looking at, as a share of the image's own
+  // pixels. The transform multiplier alone said "100%" for an image the stage
+  // had already shrunk to a third of its size.
+  const shownPercent = Math.round(fitScale(natural, stage) * zoom * 100);
 
   return (
     <div className="relative flex h-full min-h-0 w-full flex-col">
@@ -136,23 +172,85 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
           alt={alt}
           draggable={false}
           onError={onError}
+          onLoad={(event) =>
+            setNatural({
+              width: event.currentTarget.naturalWidth,
+              height: event.currentTarget.naturalHeight,
+            })
+          }
           style={{
             transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`,
           }}
           className="max-h-full max-w-full object-contain"
         />
       </div>
-      <div className="flex shrink-0 items-center justify-between border-t border-border-default px-3 py-1 text-2xs text-text-secondary">
-        <span>{Math.round(zoom * 100)}%</span>
+      {/* The image's facts on the left — its own size, and how much of it is
+          on screen — and the view controls on the right, reachable without a
+          wheel or a drag. */}
+      <div className="flex shrink-0 items-center gap-2 border-t border-border-default px-3 py-1 text-2xs text-text-secondary">
+        <span className="min-w-0 flex-1 truncate tabular-nums" data-testid="zoomable-image-status">
+          {natural && (
+            <>
+              {natural.width} × {natural.height}
+              <span aria-hidden="true" className="px-1.5">
+                ·
+              </span>
+            </>
+          )}
+          {isZoomed ? `${shownPercent}%` : `Fit, ${shownPercent}%`}
+        </span>
+        <ZoomButton
+          label="Zoom out"
+          disabled={zoom <= MIN_ZOOM}
+          onClick={() => setZoom((current) => clampZoom(current / BUTTON_ZOOM_STEP))}
+        >
+          <Minus className="h-3.5 w-3.5" aria-hidden="true" />
+        </ZoomButton>
+        <ZoomButton
+          label="Zoom in"
+          disabled={zoom >= MAX_ZOOM}
+          onClick={() => setZoom((current) => clampZoom(current * BUTTON_ZOOM_STEP))}
+        >
+          <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+        </ZoomButton>
         <button
           type="button"
           onClick={resetView}
           disabled={!isZoomed}
-          className="rounded px-2 py-0.5 transition-colors duration-150 ease-out hover:bg-overlay-subtle disabled:opacity-40"
+          className="shrink-0 rounded-lg px-2 py-1 text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary disabled:opacity-50"
         >
           Fit to screen
         </button>
       </div>
     </div>
+  );
+}
+
+function ZoomButton({
+  label,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string;
+  disabled: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          disabled={disabled}
+          onClick={onClick}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary disabled:opacity-50"
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top">{label}</TooltipContent>
+    </Tooltip>
   );
 }

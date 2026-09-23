@@ -235,7 +235,7 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "transient",
       signature: "text-status-success",
-      anchor: 'aria-label="Copy file path"',
+      anchor: "aria-label={copyLabel}",
       expectedOccurrences: 1,
       rationale: "Copy-path confirmation; resets when the copy flash times out",
     },
@@ -1003,7 +1003,7 @@ export const STATUS_SUCCESS_INVENTORY = {
   "src/panels/file-browser/FileBrowserChangeSummary.tsx": [
     {
       category: "domain",
-      signature: "text-status-success/80",
+      signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Per-file diff insertion count",
     },
