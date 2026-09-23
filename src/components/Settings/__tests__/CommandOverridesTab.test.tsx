@@ -184,4 +184,14 @@ describe("CommandOverridesTab", () => {
       screen.getByRole("button", { name: "github:create-issue" })
     );
   });
+
+  it("moves focus to search when a reset takes the row out of the Modified list", async () => {
+    renderTab([{ commandId: "git.summary", disabled: true }]);
+    await screen.findByRole("switch", { name: "git.summary" });
+    fireEvent.click(screen.getByRole("radio", { name: "Modified" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset git.summary to default" }));
+
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Search commands" }));
+  });
 });

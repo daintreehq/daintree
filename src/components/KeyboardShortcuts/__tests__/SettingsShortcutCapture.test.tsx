@@ -1298,5 +1298,49 @@ describe("SettingsShortcutCapture", () => {
         { source: "user" }
       );
     });
+
+    it("closes the edit on Escape once a combo is captured, instead of letting it close settings", () => {
+      const outer = vi.fn();
+      render(
+        <div onKeyDown={outer}>
+          <SettingsShortcutCapture
+            onCapture={mockOnCapture}
+            onCancel={mockOnCancel}
+            excludeActionId="test.action"
+            autoStart
+          />
+        </div>
+      );
+      press({ key: "k", code: "KeyK", ctrlKey: true });
+      act(() => {
+        vi.advanceTimersByTime(1100);
+      });
+
+      fireEvent.keyDown(screen.getByRole("button", { name: "Save" }), { key: "Escape" });
+
+      expect(mockOnCancel).toHaveBeenCalledTimes(1);
+      expect(outer).not.toHaveBeenCalled();
+    });
+
+    it("won't save a combo that is already the current shortcut", () => {
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+          currentCombo="Cmd+K"
+          autoStart
+        />
+      );
+      press({ key: "k", code: "KeyK", ctrlKey: true });
+      act(() => {
+        vi.advanceTimersByTime(1100);
+      });
+
+      expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(
+        true
+      );
+      expect(screen.getByText("Already the current shortcut")).toBeTruthy();
+    });
   });
 });

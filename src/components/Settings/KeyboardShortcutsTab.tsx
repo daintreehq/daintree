@@ -29,6 +29,12 @@ interface ShortcutBinding extends RegisteredKeybindingConfig {
   scopeNote?: string;
   /** Displayed key glyphs, so search matches what the rail shows (⌘, ⌥) as well as the names. */
   searchKeys: string;
+  /**
+   * The scope to check conflicts in. An override rebinds the action in every
+   * scope it is registered in, so an action registered in more than one scope
+   * (or globally) is checked everywhere.
+   */
+  editScope: KeyScope;
   isOverridden: boolean;
   /**
    * One action can be registered more than once under different scopes (e.g.
@@ -129,7 +135,7 @@ function ShortcutRow({
                 onCapture={onSave}
                 onCancel={onCancel}
                 excludeActionId={binding.actionId}
-                scope={binding.scope}
+                scope={binding.editScope}
                 currentCombo={binding.effectiveCombo}
                 autoStart
               />
@@ -248,8 +254,24 @@ function matchesQuery(query: string, ...fields: (string | undefined)[]): boolean
   return fields.some((field) => field?.toLowerCase().includes(query) ?? false);
 }
 
+/** The keys as the rail draws them: "⌘K ⌘R" on macOS, "CtrlK CtrlR" elsewhere. */
+function displayedKeys(combo: string, mac: boolean): string {
+  return parseChord(combo, mac)
+    .map((step) => step.join(""))
+    .join(" ");
+}
+
+// Separators people type between keys ("⌘+K", "Ctrl + K", "⌘K, ⌘R") never appear in
+// the displayed glyph run, so both sides drop them before comparing.
+const KEY_SEPARATORS = /[\s+,]/g;
+
+function matchesKeys(query: string, keys: string): boolean {
+  const q = query.replace(KEY_SEPARATORS, "");
+  return q !== "" && keys.toLowerCase().replace(KEY_SEPARATORS, "").includes(q);
+}
+
 const SCOPE_NOTES: Record<KeyScope, string> = {
-  global: "Everywhere else",
+  global: "Across the app",
   worktreeGrid: "In an expanded worktree card",
   portal: "In the portal",
   "dev-preview": "In dev preview",
@@ -276,8 +298,10 @@ export function KeyboardShortcutsTab() {
   const loadBindings = useCallback(() => {
     const allBindings = keybindingService.getAllBindingsWithEffectiveCombos();
     const registrations = new Map<string, number>();
+    const scopes = new Map<string, Set<KeyScope>>();
     for (const b of allBindings) {
       registrations.set(b.actionId, (registrations.get(b.actionId) ?? 0) + 1);
+      scopes.set(b.actionId, (scopes.get(b.actionId) ?? new Set()).add(b.scope));
     }
     const mac = isMac();
     setBindings(
@@ -285,13 +309,8 @@ export function KeyboardShortcutsTab() {
         ...b,
         isOverridden: keybindingService.hasOverride(b.actionId),
         scopeNote: (registrations.get(b.actionId) ?? 0) > 1 ? SCOPE_NOTES[b.scope] : undefined,
-        searchKeys: b.effectiveCombos
-          .map((combo) =>
-            parseChord(combo, mac)
-              .map((step) => step.join(""))
-              .join(" ")
-          )
-          .join(" "),
+        editScope: (scopes.get(b.actionId)?.size ?? 0) > 1 ? "global" : b.scope,
+        searchKeys: b.effectiveCombos.map((combo) => displayedKeys(combo, mac)).join(" "),
         // `combo` is the DEFAULT binding, so this stays stable when an override
         // changes `effectiveCombo`. The index disambiguates the registry's few
         // legal exact duplicates (a plugin may register the same action, scope
@@ -328,10 +347,10 @@ export function KeyboardShortcutsTab() {
             b.description,
             b.actionId,
             b.effectiveCombos.join(" "),
-            b.searchKeys,
             b.scopeNote,
             b.category
-          ))
+          ) ||
+          matchesKeys(query, b.searchKeys))
     );
   }, [bindings, query, filterMode]);
 
@@ -339,8 +358,11 @@ export function KeyboardShortcutsTab() {
   const filteredFixed = useMemo(() => {
     if (filterMode === "modified") return [];
     if (!query) return FIXED_SHORTCUTS;
-    return FIXED_SHORTCUTS.filter((f) =>
-      matchesQuery(query, f.label, f.description, f.keys.join(" "))
+    const mac = isMac();
+    return FIXED_SHORTCUTS.filter(
+      (f) =>
+        matchesQuery(query, f.label, f.description, f.keys.join(" ")) ||
+        matchesKeys(query, f.keys.map((key) => displayedKeys(key, mac)).join(" "))
     );
   }, [query, filterMode]);
 
@@ -468,6 +490,16 @@ export function KeyboardShortcutsTab() {
   const isFiltered = query !== "" || filterMode !== "all";
 
   const handleFocusRestored = useCallback(() => setFocusRowId(null), []);
+
+  // A save or reset can move the row out of the current search or filter; its
+  // binding button is gone, so search is where the keyboard user carries on.
+  const focusRowVisible =
+    focusRowId === null || filteredBindings.some((b) => b.rowId === focusRowId);
+  useEffect(() => {
+    if (focusRowVisible) return;
+    searchRef.current?.focus();
+    handleFocusRestored();
+  }, [focusRowVisible, handleFocusRestored]);
 
   return (
     <div className="space-y-8">

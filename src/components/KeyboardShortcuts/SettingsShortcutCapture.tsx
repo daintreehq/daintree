@@ -57,6 +57,12 @@ export interface SettingsShortcutCaptureProps {
   currentCombo?: string;
 }
 
+function sameChord(a: string, b: string): boolean {
+  const as = a.trim().split(/\s+/);
+  const bs = b.trim().split(/\s+/);
+  return as.length === bs.length && as.every((step, i) => combosFieldsEqual(step, bs[i]!));
+}
+
 export function SettingsShortcutCapture({
   onCapture,
   onCancel,
@@ -396,6 +402,9 @@ export function SettingsShortcutCapture({
   };
 
   const isChord = capturedCombos.length > 1;
+  // Recording the binding that is already in force changes nothing; saving it
+  // would still pin an override and mark the row modified.
+  const isUnchanged = !!capturedCombo && !!currentCombo && sameChord(capturedCombo, currentCombo);
   const hasDraft = !recording && capturedCombo !== null;
   const hasConflicts = !validationError && conflicts.length > 0;
   const describedBy =
@@ -408,7 +417,17 @@ export function SettingsShortcutCapture({
     : "flex-1 min-w-0 h-9 px-3 flex items-center gap-2 text-sm border rounded-[var(--radius-md)]";
 
   return (
-    <div className={compact ? "space-y-2" : "grid gap-3"} data-testid="shortcut-capture">
+    <div
+      className={compact ? "space-y-2" : "grid gap-3"}
+      data-testid="shortcut-capture"
+      onKeyDown={(e) => {
+        // Once a combo is captured the recorder no longer owns keys, so Escape
+        // would otherwise close the whole settings dialog. It closes this edit.
+        if (e.key !== "Escape" || recording || compact) return;
+        e.stopPropagation();
+        handleCancel();
+      }}
+    >
       {!compact && currentCombo !== undefined && (
         <p className="flex items-center gap-2 text-xs text-text-secondary">
           <span>Current</span>
@@ -452,7 +471,11 @@ export function SettingsShortcutCapture({
               className={cn(fieldClass, "border-border-default bg-surface-input text-text-primary")}
             >
               <KbdChord shortcut={capturedCombo} foreground="primary" />
-              {isChord && <span className="text-xs text-text-secondary">Two-step shortcut</span>}
+              {isUnchanged ? (
+                <span className="text-xs text-text-secondary">Already the current shortcut</span>
+              ) : (
+                isChord && <span className="text-xs text-text-secondary">Two-step shortcut</span>
+              )}
             </div>
           ) : (
             <button
@@ -557,7 +580,7 @@ export function SettingsShortcutCapture({
             variant="contrast"
             size={compact ? "xs" : "sm"}
             onClick={handleSave}
-            disabled={Boolean(validationError)}
+            disabled={Boolean(validationError) || isUnchanged}
             aria-describedby={describedBy}
           >
             Save

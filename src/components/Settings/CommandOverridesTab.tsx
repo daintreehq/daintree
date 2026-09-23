@@ -58,6 +58,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -114,6 +115,9 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
     writeOverride(commandId, ({ disabled: _, ...rest }) =>
       enabled ? rest : { ...rest, disabled: true }
     );
+    // Turning a command back on under the Disabled filter takes its row, and the
+    // focused switch, out of the list.
+    if (enabled && filterMode === "disabled") searchRef.current?.focus();
   };
 
   const setDefault = (commandId: string, argName: string, value: string | undefined) => {
@@ -132,8 +136,12 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
     );
   };
 
-  const resetCommand = (commandId: string) => {
+  /** Returns whether the command's row survives the reset under the current filter. */
+  const resetCommand = (commandId: string): boolean => {
     onChange(overrides.filter((o) => o.commandId !== commandId));
+    if (filterMode === "all") return true;
+    searchRef.current?.focus();
+    return false;
   };
 
   const toggleExpanded = (commandId: string) => {
@@ -165,8 +173,6 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
   }, [commands, query, filterMode, getOverride]);
 
   const isFiltered = query !== "" || filterMode !== "all";
-
-  const searchRef = useRef<HTMLInputElement>(null);
 
   const clearFilters = () => {
     setSearchQuery("");
@@ -267,7 +273,8 @@ interface CommandRowProps {
   onEnabledChange: (enabled: boolean) => void;
   onDefaultChange: (argName: string, value: string | undefined) => void;
   onPromptChange: (prompt: string) => void;
-  onReset: () => void;
+  /** Resets the command; returns whether its row is still listed afterwards. */
+  onReset: () => boolean;
 }
 
 function CommandRow({
@@ -288,10 +295,11 @@ function CommandRow({
   const isDisabled = override?.disabled === true;
 
   const handleReset = () => {
-    onReset();
+    const stillListed = onReset();
     setResetRevision((n) => n + 1);
-    // The reset button goes away with the override; keep focus on this command.
-    disclosureRef.current?.focus();
+    // The reset button goes away with the override; keep focus on this command
+    // while its row is still listed (the parent moves focus to search otherwise).
+    if (stillListed) disclosureRef.current?.focus();
   };
   const args = command.args ?? [];
 
@@ -442,7 +450,16 @@ function PromptRow({ commandId, args, value, onChange }: PromptRowProps) {
     setDraft(next);
     const result = next.trim() ? validatePromptTemplate(next, argNames) : null;
     const nowInvalid = !!result && !result.valid;
-    if (nowInvalid && !invalid) setAnnouncement("Custom prompt not saved");
+    if (nowInvalid && !invalid) {
+      setAnnouncement("Custom prompt not saved");
+      // The error renders under a tall field and can land below the fold; bring
+      // it into view without moving the caret.
+      requestAnimationFrame(() =>
+        textareaRef.current
+          ?.closest("[data-settings-row]")
+          ?.scrollIntoView?.({ block: "nearest", behavior: "smooth" })
+      );
+    }
     if (!nowInvalid && invalid) setAnnouncement("Custom prompt saved");
     if (!nowInvalid) {
       setSyncedValue(next);

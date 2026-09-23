@@ -327,6 +327,14 @@ describe("KeyboardShortcutsTab — finding a shortcut", () => {
     expect(screen.getAllByTestId("shortcut-row")).toHaveLength(1);
   });
 
+  it("finds a fixed shortcut by its keys, typed with or without separators", async () => {
+    await renderTab();
+    const reorder = parseChord("Alt+Up", isMac()).flat();
+    await search(reorder.join(" + "));
+
+    expect(screen.getByText("Reorder worktree")).toBeTruthy();
+  });
+
   it("offers one way back when nothing at all matches", async () => {
     await renderTab();
     await search("zzqx");
