@@ -125,6 +125,49 @@ describe("EnvironmentPopover content", () => {
     expect(trigger().getAttribute("aria-label")).not.toMatch(/remote/i);
   });
 
+  it("keeps the status word neutral and gives failing and starting results a shape of their own", () => {
+    const statusWord = (status: string) => {
+      const { unmount } = renderPopover({ reportedStatus: status, resourceStatusLabel: status });
+      const dialog = openPopover();
+      const word = Array.from(dialog.querySelectorAll("span")).find(
+        (el) => el.textContent === status && el.children.length <= 1
+      );
+      const classes = word?.getAttribute("class") ?? "";
+      const glyph = word?.querySelector("svg")?.getAttribute("class") ?? "";
+      unmount();
+      return { classes, glyph };
+    };
+    const failing = statusWord("unhealthy");
+    const starting = statusWord("provisioning");
+    const healthy = statusWord("ready");
+    const paused = statusWord("paused");
+
+    // Status hues miss 4.5:1 as text on some themes; the word never wears one.
+    for (const { classes } of [failing, starting, healthy, paused]) {
+      expect(classes).not.toMatch(/text-status-/);
+    }
+    expect(failing.glyph).not.toBe("");
+    expect(starting.glyph).not.toBe("");
+    const shape = (glyph: string) => glyph.match(/lucide-[a-z-]+/g)?.find((c) => c !== "lucide");
+    expect(shape(failing.glyph)).not.toBe(shape(starting.glyph));
+    expect(healthy.glyph).toBe("");
+    expect(paused.glyph).toBe("");
+  });
+
+  it("leaves no empty band when only the environment's name is known", () => {
+    renderPopover({
+      worktreeMode: undefined,
+      reportedStatus: undefined,
+      resourceStatusLabel: undefined,
+      onCheckResourceStatus: vi.fn(),
+    });
+    const dialog = openPopover();
+    expect(dialog.textContent).toContain("Not checked yet");
+    for (const section of Array.from(dialog.children)) {
+      expect(section.textContent?.trim()).not.toBe("");
+    }
+  });
+
   it("keeps the last check's own status beside its output while another phase runs", () => {
     renderPopover({
       isLifecycleRunning: true,

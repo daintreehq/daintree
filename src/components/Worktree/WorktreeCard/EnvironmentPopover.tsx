@@ -17,6 +17,7 @@ import {
   Terminal as TerminalIcon,
 } from "lucide-react";
 import type { WorktreeLifecycleStatus } from "@shared/types/worktree";
+import { Hourglass, TriangleAlert } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { Button } from "../../ui/button";
@@ -48,12 +49,19 @@ const ENVIRONMENT_ICONS: Record<string, React.ComponentType<{ className?: string
   Layers,
 };
 
-/** Only failures and in-flight states earn colour; healthy stays neutral (#12002). */
-const STATUS_TEXT_CLASS: Record<ResourceStatusColor, string> = {
-  green: "text-text-secondary",
-  yellow: "text-status-warning",
-  red: "text-status-error",
-  neutral: "text-text-secondary",
+/**
+ * Only failures and in-flight states earn colour, and they carry it on a glyph
+ * beside the word: status hues fall short of 4.5:1 as text on some themes, but
+ * clear 3:1 as a shape. Healthy stays neutral (#12002).
+ */
+const STATUS_GLYPHS: Partial<
+  Record<
+    ResourceStatusColor,
+    { icon: React.ComponentType<{ className?: string }>; className: string }
+  >
+> = {
+  yellow: { icon: Hourglass, className: "text-status-warning" },
+  red: { icon: TriangleAlert, className: "text-status-error" },
 };
 
 const RELATIVE_TIME_REFRESH_MS = 30_000;
@@ -134,7 +142,14 @@ export function EnvironmentPopover({
 
   const output = resourceLastOutput?.trim();
   const showOutput = !!output && !isRedundantOutput(output);
-  const reportedColor = reportedStatus ? resourceStatusColorFor(reportedStatus) : undefined;
+  const reportedGlyph = reportedStatus
+    ? STATUS_GLYPHS[resourceStatusColorFor(reportedStatus)]
+    : undefined;
+  const hasBody =
+    (!!activity && showActivity) ||
+    (!onCheckResourceStatus && !reportedStatus && !activity) ||
+    showOutput ||
+    !!resourceEndpoint;
 
   const triggerStatus = activity ?? resourceStatusLabel;
   const triggerLabel = triggerStatus
@@ -219,7 +234,7 @@ export function EnvironmentPopover({
       <PopoverContent
         side="top"
         align="start"
-        className="w-96 max-w-[calc(100vw-2rem)] p-0 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-border-strong"
+        className="w-96 max-w-[calc(100vw-2rem)] p-0 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-text-secondary"
         aria-label={`${environmentName} environment`}
         ref={contentRef}
         onOpenAutoFocus={(event) => {
@@ -231,107 +246,115 @@ export function EnvironmentPopover({
           contentRef.current?.focus({ preventScroll: true });
         }}
       >
-        <div className="flex items-baseline justify-between gap-3 px-3 pt-3">
+        <div
+          className={cn("flex items-baseline justify-between gap-3 px-3 pt-3", !hasBody && "pb-3")}
+        >
           <span className="min-w-0 truncate font-semibold text-text-primary">
             {environmentName}
           </span>
           {reportedStatus && (
-            <span
-              className={cn("shrink-0 font-medium", STATUS_TEXT_CLASS[reportedColor ?? "neutral"])}
-            >
+            <span className="flex shrink-0 items-center gap-1 self-center font-medium text-text-secondary">
+              {reportedGlyph && (
+                <reportedGlyph.icon
+                  className={cn("size-3.5 shrink-0", reportedGlyph.className)}
+                  aria-hidden="true"
+                />
+              )}
               {reportedStatus}
             </span>
           )}
         </div>
 
-        <div className="flex flex-col gap-3 px-3 pt-2 pb-3">
-          {activity && showActivity && (
-            <div className="flex items-center gap-1.5 text-text-secondary">
-              <Spinner size="xs" />
-              <span>{activity}…</span>
-            </div>
-          )}
+        {hasBody && (
+          <div className="flex flex-col gap-3 px-3 pt-2 pb-3">
+            {activity && showActivity && (
+              <div className="flex items-center gap-1.5 text-text-secondary">
+                <Spinner size="xs" />
+                <span>{activity}…</span>
+              </div>
+            )}
 
-          {!onCheckResourceStatus && !reportedStatus && !activity && (
-            <div className="flex flex-col items-start gap-2">
-              <p className="text-text-secondary">
-                Add a status command in Worktree setup to check this environment&apos;s health.
-              </p>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="-ml-3"
-                onClick={() =>
-                  void actionService.dispatch(
-                    "app.settings.openTab",
-                    { tab: "project:automation" },
-                    { source: "user" }
-                  )
-                }
-              >
-                Open worktree setup
-              </Button>
-            </div>
-          )}
-
-          {showOutput && (
-            <div className="flex flex-col gap-1">
-              <span className="text-2xs text-text-secondary">Last check output</span>
-              <pre
-                tabIndex={0}
-                role="region"
-                aria-label="Last check output"
-                className="max-h-[calc(10lh+0.75rem)] overflow-y-auto whitespace-pre-wrap break-words [text-indent:2ch_hanging_each-line] rounded-[var(--radius-md)] border border-border-default bg-surface-canvas px-2 py-1.5 font-mono text-2xs leading-relaxed text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-              >
-                {output}
-              </pre>
-            </div>
-          )}
-
-          {resourceEndpoint && (
-            <div className="flex flex-col gap-1">
-              <span className="text-2xs text-text-secondary">Endpoint</span>
-              {/* The icon buttons' own padding would pull the row's right edge in
-                  from the status and Check status above and below it. */}
-              <div className="-mr-1.5 flex min-w-0 items-center gap-1">
-                <span
-                  className="min-w-0 flex-1 truncate font-mono text-2xs text-text-primary"
-                  title={resourceEndpoint}
+            {!onCheckResourceStatus && !reportedStatus && !activity && (
+              <div className="flex flex-col items-start gap-2">
+                <p className="text-text-secondary">
+                  Add a status command in Worktree setup to check this environment&apos;s health.
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="-ml-3 focus-visible:-outline-offset-2"
+                  onClick={() =>
+                    void actionService.dispatch(
+                      "app.settings.openTab",
+                      { tab: "project:automation" },
+                      { source: "user" }
+                    )
+                  }
                 >
-                  {resourceEndpoint}
-                </span>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label="Copy endpoint"
-                      onClick={() => void copy(resourceEndpoint)}
-                    >
-                      {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">Copy endpoint</TooltipContent>
-                </Tooltip>
-                {isOpenableUrl(resourceEndpoint) && (
+                  Open worktree setup
+                </Button>
+              </div>
+            )}
+
+            {showOutput && (
+              <div className="flex flex-col gap-1">
+                <span className="text-2xs text-text-secondary">Last check output</span>
+                <pre
+                  tabIndex={0}
+                  role="region"
+                  aria-label="Last check output"
+                  className="max-h-[calc(10lh+0.75rem+2px)] overflow-y-auto whitespace-pre-wrap break-words [text-indent:2ch_hanging_each-line] rounded-[var(--radius-md)] border border-border-default bg-surface-canvas px-2 py-1.5 font-mono text-2xs leading-relaxed text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                >
+                  {output}
+                </pre>
+              </div>
+            )}
+
+            {resourceEndpoint && (
+              <div className="flex flex-col gap-1">
+                <span className="text-2xs text-text-secondary">Endpoint</span>
+                {/* The icon buttons' own padding would pull the row's right edge in
+                  from the status and Check status above and below it. */}
+                <div className="-mr-1.5 flex min-w-0 items-center gap-1">
+                  <span
+                    className="min-w-0 flex-1 truncate font-mono text-2xs text-text-primary"
+                    title={resourceEndpoint}
+                  >
+                    {resourceEndpoint}
+                  </span>
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
                         variant="ghost"
                         size="icon-xs"
-                        aria-label="Open endpoint in browser"
-                        onClick={() => void systemClient.openExternal(resourceEndpoint)}
+                        aria-label="Copy endpoint"
+                        onClick={() => void copy(resourceEndpoint)}
                       >
-                        <ExternalLink aria-hidden="true" />
+                        {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent side="top">Open in browser</TooltipContent>
+                    <TooltipContent side="top">Copy endpoint</TooltipContent>
                   </Tooltip>
-                )}
+                  {isOpenableUrl(resourceEndpoint) && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label="Open endpoint in browser"
+                          onClick={() => void systemClient.openExternal(resourceEndpoint)}
+                        >
+                          <ExternalLink aria-hidden="true" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Open in browser</TooltipContent>
+                    </Tooltip>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
         {(checkedAt || onCheckResourceStatus) && (
           <div className="flex items-center justify-between gap-2 border-t border-divider px-3 py-1.5">
@@ -350,7 +373,7 @@ export function EnvironmentPopover({
               <Button
                 variant="ghost"
                 size="sm"
-                className="-mr-3"
+                className="-mr-3 focus-visible:-outline-offset-2"
                 aria-disabled={isCheckRunning || undefined}
                 onClick={() => void handleCheck()}
               >

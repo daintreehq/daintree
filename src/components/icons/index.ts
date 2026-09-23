@@ -40,6 +40,7 @@ export {
   GitBranchPlus, // per-project worktree setup — creating branches, not browsing them
   GitPullRequest, // forge provider / code-host plugin category
   History, // resume closed session / session history
+  Hourglass, // an environment reporting it is still coming up (starting, provisioning) — a shape beside the neutral status word, so the word keeps its contrast
   Joystick, // a terminal the user handed to an orchestrating agent pane, which drives it until taken back
   KeyRound, // forge credentials that stopped working — a key names what has to be fixed, and it shares a silhouette with nothing else here, so it survives forced colors
   Layers, // worktree overview (multiple worktrees, stacked)
@@ -58,6 +59,6 @@ export {
   Radar, // an agent pane watching other terminals, which Daintree may wake when they change — distinct from BellDot, the user's own watch alert
   ServerCog, // a worktree's runtime — dev-server and remote-environment lifecycle
   Sprout, // origin / first step (main worktree, first agent launch)
-  TriangleAlert, // a setting failing validation — a shape, not a hue, so it survives forced colors
+  TriangleAlert, // a setting failing validation, or an environment reporting a failure — a shape, not a hue, so it survives forced colors
   Workflow, // terminal recipe / scripted command sequence
 } from "lucide-react";

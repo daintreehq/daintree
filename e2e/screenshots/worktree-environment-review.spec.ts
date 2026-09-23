@@ -530,9 +530,18 @@ test("worktree environment popover review — states and themes", async () => {
       await closePopover(page);
     });
 
-    // 3. Local mode with a status from the repo's default resource block.
+    // 3. Local mode with a status from the repo's default resource block: first
+    //    before anything has checked it, then with a result.
     await step("local", async () => {
       await closePopover(page);
+      if (!(await card(page, WORKTREES.local.branch).getAttribute("data-resource-status"))) {
+        const unchecked = await openByClick(page, WORKTREES.local.branch, "Not checked yet");
+        await snapRegion(page, "79-local-unchecked-popover", [
+          envTrigger(page, WORKTREES.local.branch),
+          unchecked,
+        ]);
+        await closePopover(page);
+      }
       await checkStatus(page, WORKTREES.local.branch, "ready");
       const pop = await openByClick(page, WORKTREES.local.branch, "ready");
       await snapRegion(page, "80-local-mode-popover", [
@@ -590,6 +599,9 @@ test("worktree environment popover review — states and themes", async () => {
       await page.keyboard.press("Enter");
       await page.waitForTimeout(120);
       await snapRegion(page, "93-popover-after-check", [trigger, pop], { x: 24, y: 20 });
+      // Once the result lands: the settled footer, with its completion cue.
+      await expect(pop).toContainText("paused", { timeout: T_LONG });
+      await snapRegion(page, "94-popover-check-landed", [trigger, pop], { x: 24, y: 20 });
       await page.keyboard.press("Escape");
       await expect(pop).toBeHidden({ timeout: T_LONG });
       await expect(trigger, "Escape did not return focus to the trigger").toBeFocused();
