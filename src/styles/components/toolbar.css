@@ -387,7 +387,7 @@
 .toolbar-project-pill:active .toolbar-project-chip,
 .toolbar-project-pill[aria-expanded="true"] .toolbar-project-chip,
 .toolbar-project-pill[data-state="open"] .toolbar-project-chip {
-  --_fg: var(--toolbar-project-meta-active-fg, var(--theme-text-primary));
+  --_fg: var(--theme-text-primary);
 }
 
 .toolbar-project-meta {
