@@ -3,12 +3,15 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PRTooltipData, IssueTooltipData } from "@shared/types/forge";
 
-const { getPRTooltipMock, getIssueTooltipMock, getCredentialStatusMock } = vi.hoisted(() => ({
-  getPRTooltipMock: vi.fn<(cwd: string, prNumber: number) => Promise<PRTooltipData | null>>(),
-  getIssueTooltipMock:
-    vi.fn<(cwd: string, issueNumber: number) => Promise<IssueTooltipData | null>>(),
-  getCredentialStatusMock: vi.fn<(providerId: string) => Promise<{ hasCredential: boolean }>>(),
-}));
+const { getPRTooltipMock, getIssueTooltipMock, getCredentialStatusMock, provider } = vi.hoisted(
+  () => ({
+    provider: { id: "test.forge.provider" },
+    getPRTooltipMock: vi.fn<(cwd: string, prNumber: number) => Promise<PRTooltipData | null>>(),
+    getIssueTooltipMock:
+      vi.fn<(cwd: string, issueNumber: number) => Promise<IssueTooltipData | null>>(),
+    getCredentialStatusMock: vi.fn<(providerId: string) => Promise<{ hasCredential: boolean }>>(),
+  })
+);
 
 vi.mock("@/clients", () => ({
   forgeClient: {
@@ -25,7 +28,7 @@ vi.mock("@/store/projectStore", () => ({
 vi.mock("@/hooks/useResolvedForgeProvider", () => ({
   useResolvedForgeProvider: () => ({
     entry: { pluginId: "test.forge", contribution: { id: "provider", name: "Test Forge" } },
-    providerId: "test.forge.provider",
+    providerId: provider.id,
     resolvedVia: "hostname",
     loading: false,
     refresh: () => {},
@@ -216,5 +219,37 @@ describe("useIssueTooltip caching", () => {
 
     expect(getIssueTooltipMock).toHaveBeenCalledTimes(2);
     await waitFor(() => expect(result.current.data?.title).toBe("Updated issue"));
+  });
+});
+
+describe("missing credential recovery", () => {
+  it("re-reads a negative credential answer on the next open and fetches once a token exists", async () => {
+    // A provider id of its own, so no earlier test's cached "connected" answer
+    // stands in for this one.
+    provider.id = "test.forge.no-token";
+    try {
+      getCredentialStatusMock.mockResolvedValue({ hasCredential: false });
+      getIssueTooltipMock.mockResolvedValue(makeIssue("Now visible"));
+
+      const { result } = renderHook(() => useIssueTooltip(CWD, 7));
+      await waitFor(() => expect(result.current.missingCredential).toBe(true));
+
+      await act(async () => {
+        await result.current.fetchTooltip();
+      });
+      expect(getIssueTooltipMock).not.toHaveBeenCalled();
+
+      // The user follows the prompt to Settings and saves a token. Well inside
+      // the 30s cache window, the next open must see it.
+      getCredentialStatusMock.mockResolvedValue({ hasCredential: true });
+      await act(async () => {
+        await result.current.fetchTooltip();
+      });
+      expect(result.current.missingCredential).toBe(false);
+      expect(getIssueTooltipMock).toHaveBeenCalledTimes(1);
+      expect(result.current.data?.title).toBe("Now visible");
+    } finally {
+      provider.id = "test.forge.provider";
+    }
   });
 });

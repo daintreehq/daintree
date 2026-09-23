@@ -2689,21 +2689,6 @@
       "evidence": "<FolderGit2> is an icon — the colour is an affordance, not prose"
     },
     {
-      "file": "src/components/Worktree/WorktreeCard/ForgeTooltipContent.tsx",
-      "ordinal": 0,
-      "line": 177,
-      "start": 6328,
-      "end": 6349,
-      "token": "text-daintree-text/50",
-      "variants": "",
-      "step": 50,
-      "group": "src/components/Worktree/WorktreeCard/ForgeTooltipContent.tsx#6295",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<KeyRound> is an icon — the colour is an affordance, not prose"
-    },
-    {
       "file": "src/components/Worktree/WorktreeCard/MainWorktreeSummaryRows.tsx",
       "ordinal": 0,
       "line": 28,

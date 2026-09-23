@@ -3,7 +3,13 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ForgeUser, IssueTooltipData, PRTooltipData } from "@shared/types/forge";
 
-import { IssueTooltipContent, PRTooltipContent } from "../ForgeTooltipContent";
+import {
+  IssueTooltipContent,
+  PRTooltipContent,
+  TooltipFallback,
+  describeIssueTooltip,
+  describePRTooltip,
+} from "../ForgeTooltipContent";
 
 // Avatar wraps in a Radix tooltip when `title` is set (the assignee stack). Stub
 // it so the stacked avatars render without a TooltipProvider in the test tree.
@@ -108,16 +114,19 @@ describe("ForgeTooltipContent avatars", () => {
     expect(container.querySelectorAll("img")).toHaveLength(2);
   });
 
-  it("caps the assignee stack at three avatars with a +N overflow", () => {
+  it("names every assignee in visible text, with at most three avatars beside them", () => {
     const data = {
       ...baseIssue,
       assignees: [user("alice"), user("bob"), user("carol"), user("dave")],
     };
     const { container } = render(<IssueTooltipContent data={data} />);
-    // Author (1) + three stacked assignees (3) = 4 images; the 4th assignee
-    // collapses into the overflow count.
+    // Author (1) + three assignee avatars (3) = 4 images.
     expect(container.querySelectorAll("img")).toHaveLength(4);
-    expect(screen.getByText("+1")).toBeDefined();
+    // Every login is readable without hovering anything: a keyboard user who
+    // opened the card from focus can't reach a native title.
+    const text = container.textContent ?? "";
+    for (const a of data.assignees) expect(text).toContain(a.login);
+    expect(text).not.toMatch(/\+\d/);
   });
 
   it("names every assignee for screen readers even when avatars overflow", () => {
@@ -126,7 +135,8 @@ describe("ForgeTooltipContent avatars", () => {
       assignees: [user("alice"), user("bob"), user("carol"), user("dave")],
     };
     render(<IssueTooltipContent data={data} />);
-    expect(screen.getByText("Assigned to alice, bob, carol, dave")).toBeDefined();
+    expect(screen.getByText("Assigned to")).toBeDefined();
+    expect(screen.getByText(/alice, bob, carol, dave/)).toBeDefined();
   });
 
   it("handles a missing avatar URL without crashing", () => {
@@ -153,7 +163,7 @@ describe("ForgeTooltipContent avatars", () => {
     expect(screen.getByText("octocat")).toBeDefined();
     // Author + two stacked assignees.
     expect(container.querySelectorAll("img")).toHaveLength(3);
-    expect(screen.getByText("Assigned to alice, bob")).toBeDefined();
+    expect(screen.getByText(/alice, bob/)).toBeDefined();
   });
 });
 
@@ -187,7 +197,7 @@ describe("IssueTooltipContent freshness item", () => {
     const { container } = render(<IssueTooltipContent data={issueData} />);
     expect(container.querySelector(".lucide-clock")).toBeNull();
     expect(container.querySelector(".lucide-circle-pause")).toBeNull();
-    expect(screen.queryByText(/rate limited/)).toBeNull();
+    expect(screen.queryByText(/rate limited/i)).toBeNull();
   });
 
   it("renders no freshness item when the cause is undefined", () => {
@@ -203,7 +213,7 @@ describe("IssueTooltipContent freshness item", () => {
       <IssueTooltipContent data={issueData} freshness={{ cause: "rate-limit", now: 1000 }} />
     );
     expect(container.querySelector(".lucide-clock")).toBeTruthy();
-    expect(screen.getByText(/^rate limited$/)).toBeTruthy();
+    expect(screen.getByText(/^Rate limited$/)).toBeTruthy();
   });
 
   it("includes the retry time when a future reset is provided", () => {
@@ -215,7 +225,7 @@ describe("IssueTooltipContent freshness item", () => {
       />
     );
     expect(container.querySelector(".lucide-clock")).toBeTruthy();
-    expect(screen.getByText(/rate limited, retry at /)).toBeTruthy();
+    expect(screen.getByText(/Rate limited, retrying at /)).toBeTruthy();
   });
 
   it.each([
@@ -230,8 +240,8 @@ describe("IssueTooltipContent freshness item", () => {
         freshness={{ cause: "rate-limit", now: 1000, rateLimitResetAt }}
       />
     );
-    expect(screen.getByText("rate limited")).toBeTruthy();
-    expect(screen.queryByText(/retry at/)).toBeNull();
+    expect(screen.getByText("Rate limited")).toBeTruthy();
+    expect(screen.queryByText(/retrying at/)).toBeNull();
   });
 
   it("renders a single freshness item — no duplicate when data is present", () => {
@@ -247,7 +257,7 @@ describe("IssueTooltipContent freshness item", () => {
     );
     expect(container.querySelector(".lucide-circle-pause")).toBeTruthy();
     expect(container.querySelector(".lucide-clock")).toBeNull();
-    expect(screen.getByText(/data may be stale/)).toBeTruthy();
+    expect(screen.getByText(/PR detection paused/)).toBeTruthy();
   });
 });
 
@@ -263,7 +273,7 @@ describe("PRTooltipContent freshness item", () => {
       <PRTooltipContent data={prData} freshness={{ cause: "rate-limit", now: 1000 }} />
     );
     expect(container.querySelector(".lucide-clock")).toBeTruthy();
-    expect(screen.getByText(/^rate limited$/)).toBeTruthy();
+    expect(screen.getByText(/^Rate limited$/)).toBeTruthy();
   });
 
   it("renders a circuit-breaker cause as a PauseCircle", () => {
@@ -271,7 +281,7 @@ describe("PRTooltipContent freshness item", () => {
       <PRTooltipContent data={prData} freshness={{ cause: "circuit-breaker", now: 1000 }} />
     );
     expect(container.querySelector(".lucide-circle-pause")).toBeTruthy();
-    expect(screen.getByText(/data may be stale/)).toBeTruthy();
+    expect(screen.getByText(/PR detection paused/)).toBeTruthy();
   });
 });
 
@@ -341,5 +351,164 @@ describe("ForgeTooltipContent labels", () => {
     // Any resolved colour beats none: an unset `color` used to produce
     // `#undefined20`, which paints nothing.
     expect(badge.getAttribute("style") ?? "").not.toContain("undefined");
+  });
+});
+
+describe("ForgeTooltipContent label legibility", () => {
+  it("never paints a label's name in the provider's colour", () => {
+    // A provider colour is picked against one background, so a name painted in
+    // it is unreadable on either the light or the dark themes. The colour may
+    // ride on a mark beside the name; the name itself stays on theme tokens.
+    const labels = [
+      { name: "pale", color: "fbe1d5" },
+      { name: "dark", color: "5319e7" },
+    ];
+    render(<IssueTooltipContent data={{ ...issueData, labels }} />);
+    for (const label of labels) {
+      let node: HTMLElement | null = screen.getByText(label.name);
+      while (node && node.tagName !== "DIV") {
+        expect(node.style.color).toBe("");
+        node = node.parentElement;
+      }
+    }
+  });
+});
+
+describe("ForgeTooltipContent state", () => {
+  it("names an issue's state in words and shape, not colour alone", () => {
+    const open = render(<IssueTooltipContent data={issueData} />);
+    const openGlyph = open.container.querySelector("svg")?.getAttribute("class");
+    expect(screen.getByText("Open")).toBeTruthy();
+    cleanup();
+
+    const closed = render(<IssueTooltipContent data={{ ...issueData, state: "closed" }} />);
+    const closedGlyph = closed.container.querySelector("svg")?.getAttribute("class");
+    expect(screen.getByText("Closed")).toBeTruthy();
+    expect(closedGlyph).not.toBe(openGlyph);
+  });
+
+  it("gives a draft PR its own word and glyph rather than the open one", () => {
+    const open = render(<PRTooltipContent data={prData} />);
+    const openGlyph = open.container.querySelector("svg")?.getAttribute("class");
+    cleanup();
+
+    const draft = render(<PRTooltipContent data={{ ...prData, isDraft: true }} />);
+    expect(screen.getByText("Draft")).toBeTruthy();
+    expect(draft.container.querySelector("svg")?.getAttribute("class")).not.toBe(openGlyph);
+  });
+
+  it("explains the badge's CI mark on an open PR and drops it once the PR is finished", () => {
+    const ci = {
+      state: "failure" as const,
+      total: 12,
+      passed: 11,
+      failed: 1,
+      pending: 0,
+      rawData: null,
+    };
+    render(<PRTooltipContent data={prData} ciStatus={ci} />);
+    expect(screen.getByText(/CI failing/)).toBeTruthy();
+    expect(screen.getByText(/1 of 12 failed/)).toBeTruthy();
+    cleanup();
+
+    render(<PRTooltipContent data={{ ...prData, state: "merged" }} ciStatus={ci} />);
+    expect(screen.queryByText(/CI failing/)).toBeNull();
+  });
+});
+
+describe("TooltipFallback", () => {
+  it("keeps the identity the badge already had while details load or fail", () => {
+    for (const status of ["loading", "failed", "idle"] as const) {
+      render(
+        <TooltipFallback type="issue" number={42} title="Something is broken" status={status} />
+      );
+      expect(screen.getByText("#42")).toBeTruthy();
+      expect(screen.getByText("Something is broken")).toBeTruthy();
+      cleanup();
+    }
+  });
+
+  it("says why details are missing and how to get them only when the fetch failed", () => {
+    render(<TooltipFallback type="pr" number={7} prState="open" status="failed" />);
+    expect(screen.getByText(/Couldn't load details/)).toBeTruthy();
+    expect(screen.getByText(/open the pull request/)).toBeTruthy();
+    cleanup();
+
+    render(<TooltipFallback type="pr" number={7} prState="open" status="loading" />);
+    expect(screen.queryByText(/Couldn't load details/)).toBeNull();
+  });
+
+  it("lets an actionable freshness cause stand in for the generic failure line", () => {
+    render(
+      <TooltipFallback
+        type="issue"
+        number={42}
+        status="failed"
+        freshness={{ cause: "rate-limit", now: 1000 }}
+      />
+    );
+    expect(screen.getByText(/^Rate limited/)).toBeTruthy();
+    expect(screen.queryByText(/Couldn't load details/)).toBeNull();
+  });
+});
+
+describe("hover card descriptions", () => {
+  it("spells the issue card out as separate sentences without repeating the title", () => {
+    const text = describeIssueTooltip(
+      { ...issueData, assignees: [user("alice")], labels: [{ name: "bug" }] },
+      { cause: "rate-limit", now: 1000 }
+    );
+    expect(text).not.toContain(issueData.title);
+    for (const part of [
+      "Open issue #42",
+      "Created by octocat",
+      "Assigned to alice",
+      "Labels: bug",
+      "Rate limited",
+    ]) {
+      expect(text).toContain(part);
+    }
+    // Every piece is its own sentence, so a screen reader pauses between them.
+    expect(text.split(". ").length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("includes an open PR's CI state in its description", () => {
+    const ci = {
+      state: "success" as const,
+      total: 1,
+      passed: 1,
+      failed: 0,
+      pending: 0,
+      rawData: null,
+    };
+    expect(describePRTooltip(prData, undefined, ci)).toContain("CI passing");
+    expect(describePRTooltip({ ...prData, isDraft: true })).toMatch(/^Draft pull request #7/);
+  });
+});
+
+describe("describe*Tooltip title option", () => {
+  it("speaks the title only when the trigger's own name lacks it", () => {
+    expect(describePRTooltip(prData)).not.toContain(prData.title);
+    expect(describePRTooltip(prData, undefined, undefined, { includeTitle: true })).toContain(
+      prData.title
+    );
+    expect(describeIssueTooltip(issueData, undefined, { includeTitle: true })).toContain(
+      issueData.title
+    );
+  });
+});
+
+describe("TooltipFallback CI", () => {
+  it("keeps an open PR's CI mark while its details load", () => {
+    const ci = {
+      state: "pending" as const,
+      total: 4,
+      passed: 2,
+      failed: 0,
+      pending: 2,
+      rawData: null,
+    };
+    render(<TooltipFallback type="pr" number={7} prState="open" ciStatus={ci} status="loading" />);
+    expect(screen.getByText(/CI pending/)).toBeTruthy();
   });
 });

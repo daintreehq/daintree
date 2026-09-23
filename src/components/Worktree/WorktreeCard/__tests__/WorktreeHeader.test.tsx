@@ -184,7 +184,7 @@ describe("WorktreeHeader PR-originated headline (#8888)", () => {
     });
 
     const prButton = screen.getByRole("button", {
-      name: /Open pull request #314: Fix flaky terminal search/,
+      name: /pull request #314: Fix flaky terminal search/,
     });
     expect(prButton).toBeDefined();
     expect(screen.getByText("Fix flaky terminal search")).toBeDefined();
@@ -1203,11 +1203,12 @@ describe("WorktreeHeader token-missing badge behavior", () => {
       name: /Add a forge access token to see issue details/,
     });
     expect(issueButton).toBeDefined();
-    // Button stays full-opacity for focus-ring contrast; the icon is muted with a
+    // Button stays full-opacity for focus-ring contrast; the icon steps down to a
     // solid token (not its active state color, and not opacity/grayscale dimming).
+    // Not `text-muted`: the badge still acts, and muted has no dark contrast floor.
     expect(issueButton.className).not.toContain("opacity-60");
     const issueIcon = issueButton.querySelector("svg");
-    expect(issueIcon?.className.baseVal).toContain("text-text-muted");
+    expect(issueIcon?.className.baseVal).not.toContain("text-text-muted");
     expect(issueIcon?.className.baseVal).not.toContain("text-pr-open");
     expect(issueIcon?.className.baseVal).not.toContain("grayscale");
     expect(issueIcon?.className.baseVal).not.toContain("opacity-50");

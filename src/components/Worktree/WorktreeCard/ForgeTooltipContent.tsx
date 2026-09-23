@@ -1,9 +1,52 @@
-import type { ForgeLabel, ForgeUser, IssueTooltipData, PRTooltipData } from "@shared/types/forge";
-import { Calendar, KeyRound, PenLine, UserCheck, Clock, CirclePause } from "lucide-react";
+import type {
+  CIStatus,
+  ForgeLabel,
+  ForgeUser,
+  IssueTooltipData,
+  NormalizedIssueState,
+  PRTooltipData,
+} from "@shared/types/forge";
+import {
+  Calendar,
+  CircleCheck,
+  CircleDot,
+  KeyRound,
+  PenLine,
+  UserCheck,
+  Clock,
+  CirclePause,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { BadgeFreshnessCause } from "@/components/Layout/FreshnessUtils";
 import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/ui/Avatar";
+import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
+import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
+
+/**
+ * Spread onto the badges' `TooltipContent`. The card is hoverable, so the
+ * pointer can now press, drag and click inside it — and React bubbles those
+ * through the portal to the badge and the sortable worktree card around it,
+ * where a click would open the item, a drag would pick the card up, and a
+ * right-click would open the card's context menu. `data-no-dnd` is read from
+ * the DOM (`closest()`), which a portal never reaches, so it goes on the
+ * content itself; the handlers stop the synthetic bubbling. Pointer-down is
+ * left alone: Radix's dismissable layer clears its "pressed inside" flag from
+ * a bubbling document listener, so stopping it made the next outside press
+ * fail to close the card — and `data-no-dnd` already refuses the drag.
+ */
+const stop = (event: { stopPropagation: () => void }) => event.stopPropagation();
+export const HOVER_CARD_EVENT_FENCE = {
+  "data-no-dnd": "",
+  onClick: stop,
+  onDoubleClick: stop,
+  onContextMenu: stop,
+} as const;
+
+// Every body renders at the same width, so the card doesn't resize between the
+// skeleton, a short title and a long one as the pointer moves along a column of
+// badges. 280px + the content's p-3 sits inside the primitive's max-w-xs.
+const CARD_WIDTH = "w-[280px]";
 
 function formatDate(epochMs: number): string {
   const date = new Date(epochMs);
@@ -47,46 +90,41 @@ function ForgeAvatar({
 
 // Assignee metadata cell. A `UserCheck` glyph marks the role (vs the author
 // row's `PenLine`) so creator and assignee read apart at a glance. One assignee
-// → glyph + avatar + login. Two or more → an overlapping avatar stack capped at
-// 3 with a `+N` overflow; the stack is aria-hidden (each avatar exposes its
-// login on hover via a native `title`, which survives the app-level
-// `disableHoverableContent` provider) and an sr-only sentence names everyone.
+// → glyph + avatar + login. Two or more → the cell takes a line of its own and
+// names everyone in wrapping text, with up to three avatars as support: a
+// count of faces told a keyboard user nothing, and a hover title can't be
+// reached from focus. The avatars sit apart instead of overlapping: an overlap
+// needs a cut-out ring in the card's own colour, which forced-colors strips and
+// which has no one token to match across the overlay's light and dark planes.
 function AssigneeMeta({ assignees }: { assignees: ForgeUser[] }) {
   if (assignees.length === 1) {
     return (
-      <span className="flex items-center gap-1">
+      <span className="flex items-center gap-1 min-w-0">
         <UserCheck className="w-3 h-3 shrink-0" aria-hidden="true" />
         <ForgeAvatar user={assignees[0]!} sizeClass="w-3.5 h-3.5" urlSize={28} />
         <span className="sr-only">Assigned to </span>
-        {assignees[0]!.login}
+        <span className="truncate">{assignees[0]!.login}</span>
       </span>
     );
   }
 
-  const shown = assignees.slice(0, 3);
-  const overflow = assignees.length - shown.length;
-
   return (
-    <span className="flex items-center gap-1">
-      <UserCheck className="w-3 h-3 shrink-0" aria-hidden="true" />
-      <span className="flex items-center -space-x-1" aria-hidden="true">
-        {shown.map((user, i) => (
-          <span
+    <span className="flex items-start gap-1 min-w-0 basis-full">
+      <UserCheck className="w-3 h-3 mt-px shrink-0" aria-hidden="true" />
+      <span className="flex items-center gap-0.5 mt-px shrink-0" aria-hidden="true">
+        {assignees.slice(0, 3).map((user) => (
+          <Avatar
             key={user.login}
-            title={user.login}
-            className="relative inline-flex rounded-full"
-            style={{ zIndex: shown.length - i }}
-          >
-            <Avatar
-              src={withAvatarSize(user.avatarUrl, 24)}
-              alt=""
-              className="w-3 h-3 shrink-0 rounded-full ring-2 ring-[var(--color-surface-sidebar)]"
-            />
-          </span>
+            src={withAvatarSize(user.avatarUrl, 24)}
+            alt=""
+            className="w-3 h-3 shrink-0"
+          />
         ))}
       </span>
-      {overflow > 0 && <span aria-hidden="true">+{overflow}</span>}
-      <span className="sr-only">Assigned to {assignees.map((u) => u.login).join(", ")}</span>
+      <span className="min-w-0 [overflow-wrap:anywhere]">
+        <span className="sr-only">Assigned to </span>
+        {assignees.map((u) => u.login).join(", ")}
+      </span>
     </span>
   );
 }
@@ -103,19 +141,22 @@ function freshnessItem(
   if (!freshness) return null;
   switch (freshness.cause) {
     case "rate-limit": {
-      let label = "rate limited";
+      let label = "Rate limited";
       const { rateLimitResetAt, now } = freshness;
       if (rateLimitResetAt != null && Number.isFinite(rateLimitResetAt) && rateLimitResetAt > now) {
-        const retryTime = new Intl.DateTimeFormat("en-US", {
+        const retryTime = new Intl.DateTimeFormat(undefined, {
           hour: "numeric",
           minute: "2-digit",
         }).format(new Date(rateLimitResetAt));
-        label += `, retry at ${retryTime}`;
+        label += `, retrying at ${retryTime}`;
       }
       return { Icon: Clock, label };
     }
     case "circuit-breaker":
-      return { Icon: CirclePause, label: "data may be stale — PR detection paused" };
+      return {
+        Icon: CirclePause,
+        label: "PR detection paused, so details may be out of date. Open the pull request to check",
+      };
     default:
       return null;
   }
@@ -125,7 +166,7 @@ function freshnessItem(
  * Freshness status as a metadata-row item: a small Lucide icon + label that
  * matches the author/assignee/date entries. Folds the old `·`-prefixed block
  * line (#9696) onto the metadata row. Rendered standalone with a `className`
- * (e.g. `mt-1`) by the badges when the tooltip body has no data row to host it.
+ * by the fallback body when there is no data row to host it.
  */
 export function FreshnessMetaItem({
   freshness,
@@ -145,64 +186,122 @@ export function FreshnessMetaItem({
   );
 }
 
-export function TooltipLoading() {
-  // Doherty-gated skeleton: `animate-pulse-delayed` keeps the bars invisible
-  // for the first 400ms, so a fast cache-warm response (the common case after
-  // the poll has pre-warmed `prTooltipCache`) shows nothing rather than a
-  // flash. After 400ms the bars fade in and pulse. Layout mirrors PR/issue
-  // tooltip content: title row, body excerpt, metadata row.
-  return (
-    <div className="space-y-2 max-w-[280px]" aria-hidden="true">
-      <div className="flex items-start gap-2">
-        <div className="animate-pulse-delayed h-3 w-10 rounded bg-muted" />
-        <div className="animate-pulse-delayed h-3 flex-1 rounded bg-muted" />
-      </div>
-      <div className="animate-pulse-delayed h-2.5 w-full rounded bg-muted" />
-      <div className="animate-pulse-delayed h-2.5 w-2/3 rounded bg-muted" />
-      <div className="flex items-center gap-3 pt-1">
-        <div className="animate-pulse-delayed h-2 w-16 rounded bg-muted" />
-        <div className="animate-pulse-delayed h-2 w-20 rounded bg-muted" />
-      </div>
-    </div>
-  );
-}
-
 interface TokenMissingTooltipProps {
   type: "issue" | "pr";
 }
 
 export function TokenMissingTooltip({ type }: TokenMissingTooltipProps) {
   return (
-    <div className="flex items-center gap-2 text-text-secondary py-1">
-      <KeyRound className="w-3.5 h-3.5 shrink-0 text-daintree-text/50" aria-hidden="true" />
-      <span className="text-xs">Add a forge access token to see {type} details</span>
+    <div className="flex items-start gap-2 max-w-[280px]">
+      <KeyRound className="w-3.5 h-3.5 mt-px shrink-0 text-text-secondary" aria-hidden="true" />
+      <div className="space-y-0.5">
+        <p className="text-xs text-text-primary">
+          Add a forge access token to see {type === "pr" ? "pull request" : "issue"} details
+        </p>
+        <p className="text-2xs text-text-secondary">Click the badge to open forge settings</p>
+      </div>
     </div>
   );
 }
 
-interface LabelBadgeProps {
-  name: string;
-  color: string;
+interface CardHeaderProps {
+  Glyph: LucideIcon;
+  colorClass: string;
+  stateLabel: string;
+  number: number;
+  title?: string;
+  /** Right-aligned on the status line — the PR's CI rollup. */
+  trailing?: React.ReactNode;
 }
 
-function LabelBadge({ name, color }: LabelBadgeProps) {
+/**
+ * Status line, then the title on its own full-width line.
+ *
+ * State is said three ways at once — glyph shape, colour, and the word — so it
+ * never rests on hue (WCAG SC 1.4.1), and the glyph is the same one the badge
+ * the pointer is resting on draws. The number steps down to secondary beside
+ * the word: it's reference, and the title is what identifies the item. The
+ * title owns its line so a state pill can't squeeze it into a narrow column,
+ * and gets four lines before it clamps: the card is where the title the
+ * sidebar had to truncate is read in full.
+ */
+function CardHeader({ Glyph, colorClass, stateLabel, number, title, trailing }: CardHeaderProps) {
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-1.5 text-2xs">
+        <Glyph className={cn("w-3.5 h-3.5 shrink-0", colorClass)} aria-hidden="true" />
+        <span className={cn("font-medium", colorClass)}>{stateLabel}</span>
+        <span className="text-text-secondary tabular-nums">#{number}</span>
+        {trailing}
+      </div>
+      {title && (
+        <p className="text-xs font-medium text-text-primary line-clamp-4 [overflow-wrap:anywhere]">
+          {title}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function issueStateVisual(state: NormalizedIssueState | undefined) {
+  return state === "closed"
+    ? { Glyph: CircleCheck, colorClass: "text-pr-merged", label: "Closed" }
+    : { Glyph: CircleDot, colorClass: "text-pr-open", label: "Open" };
+}
+
+function prStateLabel(state: string | undefined, isDraft: boolean): string {
+  if (state === "merged") return "Merged";
+  if (state === undefined || state === "open") return isDraft ? "Draft" : "Open";
+  return "Closed";
+}
+
+/** The CI rollup, in words, for the status line of a PR card. */
+function CIStatusItem({ status }: { status: CIStatus }) {
+  const visual = getCIStatusVisual(status);
+  if (!visual) return null;
+  const counted =
+    status.total > 0
+      ? status.state === "failure"
+        ? ` · ${status.failed} of ${status.total} failed`
+        : status.state === "pending"
+          ? ` · ${status.pending} of ${status.total} running`
+          : ""
+      : "";
+  return (
+    <span className="ml-auto flex items-center gap-1 shrink-0 text-text-secondary">
+      <span className="inline-flex items-center justify-center w-3 h-3 shrink-0" aria-hidden="true">
+        {visual.kind === "icon" ? (
+          <visual.Icon className={cn("w-3 h-3", visual.colorClass)} />
+        ) : (
+          <span className={cn("status-mark block w-2 h-2 rounded-full", visual.colorClass)} />
+        )}
+      </span>
+      <span>
+        {visual.shortLabel === "neutral" ? "CI neutral" : `CI ${visual.shortLabel}`}
+        {counted}
+      </span>
+    </span>
+  );
+}
+
+function LabelChip({ name, color }: ForgeLabel) {
   return (
     <span
-      // `inline-block`, not `inline-flex`: `break-words` acts on an element's
-      // own inline content, and a flex container's anonymous text child keeps
-      // its min-content width instead, so one long label used to paint past
-      // the badge and get clipped by the tooltip.
-      // `line-clamp-2` bounds height as well as width: a name is unbounded in
-      // the provider contract, and twenty of them wrapping freely would make the
-      // tooltip arbitrarily tall even under the chip cap.
-      className="inline-block max-w-full break-words [overflow-wrap:anywhere] line-clamp-2 px-1.5 py-0.5 rounded-full text-3xs font-medium"
-      style={{
-        backgroundColor: `#${color}20`,
-        color: `#${color}`,
-        border: `1px solid #${color}40`,
-      }}
+      // Neutral chip, provider colour on a dot. A provider's label colour is an
+      // arbitrary hex chosen against one background, so painting the name in it
+      // guaranteed a label unreadable on either the light or the dark themes.
+      // The dot keeps the colour recognisable; the name carries the meaning.
+      // Same treatment as the forge dropdown's rows.
+      // `inline-flex` + a clamped inner span: `break-words` acts on an element's
+      // own inline content, so the text node gets its own box to wrap in.
+      className="inline-flex items-center gap-1 max-w-full px-1.5 py-0.5 rounded-full border border-divider text-3xs font-medium text-text-secondary"
     >
-      {name}
+      <span
+        className="w-1.5 h-1.5 rounded-full shrink-0"
+        style={{ backgroundColor: `#${color ?? "8b949e"}` }}
+        aria-hidden="true"
+      />
+      <span className="min-w-0 [overflow-wrap:anywhere] line-clamp-2">{name}</span>
     </span>
   );
 }
@@ -224,8 +323,8 @@ const MAX_TOOLTIP_LABELS = 20;
  * The row used to cut off at four and count the rest, which put the tail behind
  * a "+N more" that sits inside a hover tooltip — there is no further surface to
  * open from there, so the count named content the user could not reach
- * (#12001). `LabelBadge` wraps rather than widens, so a single long
- * provider-supplied label can't push the tooltip past its `max-w-[280px]`.
+ * (#12001). `LabelChip` wraps rather than widens, so a single long
+ * provider-supplied label can't push the tooltip past its width.
  *
  * Past `MAX_TOOLTIP_LABELS` the row names the route rather than counting a
  * remainder — a tooltip has no surface of its own to open, but the badge this
@@ -234,9 +333,9 @@ const MAX_TOOLTIP_LABELS = 20;
 function LabelRow({ labels, subject }: { labels: readonly ForgeLabel[]; subject: string }) {
   const shown = labels.slice(0, MAX_TOOLTIP_LABELS);
   return (
-    <div className="flex flex-wrap items-baseline gap-1 pt-1">
+    <div className="flex flex-wrap items-center gap-1 pt-1">
       {shown.map((label) => (
-        <LabelBadge key={label.name} name={label.name} color={label.color ?? "8b949e"} />
+        <LabelChip key={label.name} name={label.name} color={label.color} />
       ))}
       {labels.length > shown.length && (
         <span className="text-3xs text-text-secondary">
@@ -247,44 +346,71 @@ function LabelRow({ labels, subject }: { labels: readonly ForgeLabel[]; subject:
   );
 }
 
+function MetaRow({
+  author,
+  assignees,
+  createdAt,
+  freshness,
+}: {
+  author?: ForgeUser;
+  assignees: ForgeUser[];
+  createdAt: number;
+  freshness?: TooltipFreshness;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-text-secondary">
+      {author && (
+        <span className="flex items-center gap-1 min-w-0">
+          <PenLine className="w-3 h-3 shrink-0" aria-hidden="true" />
+          <ForgeAvatar user={author} sizeClass="w-3.5 h-3.5" urlSize={28} />
+          <span className="sr-only">Created by </span>
+          <span className="truncate">{author.login}</span>
+        </span>
+      )}
+
+      <span className="flex items-center gap-1">
+        <Calendar className="w-3 h-3 shrink-0" aria-hidden="true" />
+        <span className="sr-only">Opened </span>
+        {formatDate(createdAt)}
+      </span>
+
+      {/* After the date: several assignees take a line of their own, and here
+          that line doesn't strand the author alone on the one above it. */}
+      {assignees.length > 0 && <AssigneeMeta assignees={assignees} />}
+
+      <FreshnessMetaItem freshness={freshness} />
+    </div>
+  );
+}
+
 interface IssueTooltipContentProps {
   data: IssueTooltipData;
   freshness?: TooltipFreshness;
 }
 
 export function IssueTooltipContent({ data, freshness }: IssueTooltipContentProps) {
-  const stateColor = data.state === "open" ? "text-pr-open" : "text-pr-merged";
+  const { Glyph, colorClass, label } = issueStateVisual(data.state);
 
   return (
-    <div className="space-y-2 max-w-[280px]">
-      <div className="flex items-start gap-2">
-        <span className={cn("text-xs font-medium shrink-0", stateColor)}>#{data.number}</span>
-        <span className="text-xs text-text-primary line-clamp-2">{data.title}</span>
-      </div>
+    <div className={cn("space-y-2", CARD_WIDTH)}>
+      <CardHeader
+        Glyph={Glyph}
+        colorClass={colorClass}
+        stateLabel={label}
+        number={data.number}
+        title={data.title}
+      />
 
       {data.bodyExcerpt && (
         <p className="text-2xs text-text-secondary line-clamp-3">{data.bodyExcerpt}</p>
       )}
 
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-text-secondary">
-        {data.author && (
-          <span className="flex items-center gap-1">
-            <PenLine className="w-3 h-3 shrink-0" aria-hidden="true" />
-            <ForgeAvatar user={data.author} sizeClass="w-3.5 h-3.5" urlSize={28} />
-            <span className="sr-only">Created by </span>
-            {data.author.login}
-          </span>
-        )}
-
-        {data.assignees.length > 0 && <AssigneeMeta assignees={data.assignees} />}
-
-        <span className="flex items-center gap-1">
-          <Calendar className="w-3 h-3" />
-          {formatDate(data.createdAt)}
-        </span>
-
-        <FreshnessMetaItem freshness={freshness} />
-      </div>
+      <MetaRow
+        author={data.author}
+        assignees={data.assignees}
+        createdAt={data.createdAt}
+        freshness={freshness}
+      />
 
       {data.labels.length > 0 && <LabelRow labels={data.labels} subject="issue" />}
     </div>
@@ -294,62 +420,177 @@ export function IssueTooltipContent({ data, freshness }: IssueTooltipContentProp
 interface PRTooltipContentProps {
   data: PRTooltipData;
   freshness?: TooltipFreshness;
+  /** The badge's CI rollup; the tooltip payload itself carries none. */
+  ciStatus?: CIStatus | null;
 }
 
-export function PRTooltipContent({ data, freshness }: PRTooltipContentProps) {
-  const stateColor =
-    data.state === "merged"
-      ? "text-pr-merged"
-      : data.state === "closed" || data.state === "declined"
-        ? "text-pr-closed"
-        : "text-pr-open";
-
-  const stateLabel = data.isDraft ? "Draft" : data.state;
+export function PRTooltipContent({ data, freshness, ciStatus }: PRTooltipContentProps) {
+  // Merged and closed PRs keep their last CI result on the badge, but a
+  // finished PR's checks don't change what anyone does next.
+  const showCI = ciStatus && (data.state === "open" || data.state === undefined);
 
   return (
-    <div className="space-y-2 max-w-[280px]">
-      <div className="flex items-start gap-2">
-        <span className={cn("text-xs font-medium shrink-0", stateColor)}>#{data.number}</span>
-        <span className="text-xs text-text-primary line-clamp-2">{data.title}</span>
-        <span
-          className={cn(
-            "text-3xs px-1.5 py-0.5 rounded-full shrink-0 capitalize",
-            data.state === "merged"
-              ? "bg-pr-merged/20 text-pr-merged"
-              : data.state === "closed" || data.state === "declined"
-                ? "bg-pr-closed/20 text-pr-closed"
-                : "bg-pr-open/20 text-pr-open"
-          )}
-        >
-          {stateLabel}
-        </span>
-      </div>
+    <div className={cn("space-y-2", CARD_WIDTH)}>
+      <CardHeader
+        Glyph={getPrStateGlyph(data.state, data.isDraft)}
+        colorClass={getPrStateColor(data.state, data.isDraft)}
+        stateLabel={prStateLabel(data.state, data.isDraft)}
+        number={data.number}
+        title={data.title}
+        trailing={showCI ? <CIStatusItem status={ciStatus} /> : undefined}
+      />
 
       {data.bodyExcerpt && (
         <p className="text-2xs text-text-secondary line-clamp-3">{data.bodyExcerpt}</p>
       )}
 
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-text-secondary">
-        {data.author && (
-          <span className="flex items-center gap-1">
-            <PenLine className="w-3 h-3 shrink-0" aria-hidden="true" />
-            <ForgeAvatar user={data.author} sizeClass="w-3.5 h-3.5" urlSize={28} />
-            <span className="sr-only">Created by </span>
-            {data.author.login}
-          </span>
-        )}
-
-        {data.assignees.length > 0 && <AssigneeMeta assignees={data.assignees} />}
-
-        <span className="flex items-center gap-1">
-          <Calendar className="w-3 h-3" />
-          {formatDate(data.createdAt)}
-        </span>
-
-        <FreshnessMetaItem freshness={freshness} />
-      </div>
+      <MetaRow
+        author={data.author}
+        assignees={data.assignees}
+        createdAt={data.createdAt}
+        freshness={freshness}
+      />
 
       {data.labels.length > 0 && <LabelRow labels={data.labels} subject="pull request" />}
     </div>
   );
+}
+
+interface TooltipFallbackProps {
+  type: "issue" | "pr";
+  number: number;
+  /** What the badge already knows — never say less than the badge did. */
+  title?: string;
+  prState?: string;
+  /** The badge's CI rollup, so the fallback keeps the mark the badge shows. */
+  ciStatus?: CIStatus | null;
+  status: "loading" | "failed" | "idle";
+  freshness?: TooltipFreshness;
+}
+
+/**
+ * The body when there are no details yet: the fetch is in flight, failed, or
+ * hasn't been asked. It leads with what the badge under the pointer already
+ * knows — the state the card has, the number, the title — so a slow or
+ * unreachable forge costs the extra detail and nothing else.
+ *
+ * Loading skeletonises only the detail below that header. `animate-pulse-delayed`
+ * is the one 400ms gate: a cache-warm answer lands before the bars ever show,
+ * so the header alone is what a fast hover sees, with nothing flashing past.
+ */
+export function TooltipFallback({
+  type,
+  number,
+  title,
+  prState,
+  ciStatus,
+  status,
+  freshness,
+}: TooltipFallbackProps) {
+  const header =
+    type === "pr"
+      ? {
+          Glyph: getPrStateGlyph(prState),
+          colorClass: getPrStateColor(prState),
+          label: prStateLabel(prState, false),
+        }
+      : // A badge knows an issue's number and title but not whether it's
+        // still open, so the header claims neither.
+        { Glyph: CircleDot, colorClass: "text-text-secondary", label: "Issue" };
+  const hasFreshness = freshnessItem(freshness) !== null;
+  const subject = type === "pr" ? "pull request" : "issue";
+
+  return (
+    <div className={cn("space-y-2", CARD_WIDTH)}>
+      <CardHeader
+        Glyph={header.Glyph}
+        colorClass={header.colorClass}
+        stateLabel={header.label}
+        number={number}
+        title={title}
+        trailing={
+          type === "pr" && ciStatus && (prState === undefined || prState === "open") ? (
+            <CIStatusItem status={ciStatus} />
+          ) : undefined
+        }
+      />
+      {status === "loading" && (
+        <div className="space-y-2" aria-hidden="true">
+          <div className="space-y-1.5">
+            <div className="animate-pulse-delayed h-2.5 w-full rounded-full bg-tint/[0.1]" />
+            <div className="animate-pulse-delayed h-2.5 w-2/3 rounded-full bg-tint/[0.1]" />
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="animate-pulse-delayed h-2.5 w-16 rounded-full bg-tint/[0.1]" />
+            <div className="animate-pulse-delayed h-2.5 w-20 rounded-full bg-tint/[0.1]" />
+          </div>
+        </div>
+      )}
+      {status === "failed" && !hasFreshness && (
+        <p className="text-2xs text-text-secondary">
+          Couldn't load details. Hover again to retry, or click to open the {subject}.
+        </p>
+      )}
+      <FreshnessMetaItem freshness={freshness} className="text-2xs text-text-secondary" />
+    </div>
+  );
+}
+
+function joinList(parts: (string | false | null | undefined)[]): string {
+  return parts.filter(Boolean).join(". ") + ".";
+}
+
+interface DescribeOptions {
+  /** Speak the title too — for a trigger whose own name doesn't carry it. */
+  includeTitle?: boolean;
+}
+
+function describeMeta(
+  data: IssueTooltipData | PRTooltipData,
+  freshness: TooltipFreshness | undefined,
+  { includeTitle = false }: DescribeOptions
+): (string | null)[] {
+  return [
+    includeTitle ? data.title : null,
+    data.bodyExcerpt || null,
+    data.author ? `Created by ${data.author.login}` : null,
+    data.assignees.length > 0
+      ? `Assigned to ${data.assignees.map((u) => u.login).join(", ")}`
+      : null,
+    `Opened ${formatDate(data.createdAt)}`,
+    data.labels.length > 0 ? `Labels: ${data.labels.map((l) => l.name).join(", ")}` : null,
+    freshnessItem(freshness)?.label ?? null,
+  ];
+}
+
+/**
+ * What a screen reader hears for the issue card. The visual layout's rows and
+ * chips carry the boundaries a sighted reader uses; flattened into the
+ * tooltip's description they'd run together, so this spells them out as
+ * sentences. The title is left out by default because it's the trigger's name;
+ * a trigger that shows only the number asks for it with `includeTitle`.
+ */
+export function describeIssueTooltip(
+  data: IssueTooltipData,
+  freshness?: TooltipFreshness,
+  options: DescribeOptions = {}
+): string {
+  return joinList([
+    `${issueStateVisual(data.state).label} issue #${data.number}`,
+    ...describeMeta(data, freshness, options),
+  ]);
+}
+
+export function describePRTooltip(
+  data: PRTooltipData,
+  freshness?: TooltipFreshness,
+  ciStatus?: CIStatus | null,
+  options: DescribeOptions = {}
+): string {
+  const ci = getCIStatusVisual(ciStatus);
+  return joinList([
+    `${prStateLabel(data.state, data.isDraft)} pull request #${data.number}`,
+    ci && (data.state === "open" || data.state === undefined) ? ci.ariaLabel : null,
+    ...describeMeta(data, freshness, options),
+  ]);
 }
