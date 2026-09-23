@@ -2081,8 +2081,8 @@ label:focus-within .brand-mark,
  * Inset and separately rounded rather than an inset box-shadow, which would
  * follow the card's own radius and taper to a crescent at both ends.
  *
- * Not stated in `forced-colors`, where `background-color` is stripped: the
- * system-outline fallback further down already marks the row there.
+ * `forced-colors` strips its `background-color`, so that block re-asserts the
+ * rail in CanvasText beside the system-outline fallback further down.
  */
 .palette-row::before {
   content: "";
@@ -2657,6 +2657,18 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     outline-offset: -2px;
   }
 
+  /* …and the leading rail again, in CanvasText, as a second cue. SelectedItem
+     is whatever the OS theme picks, and several pair it with Canvas at well
+     under 3:1 — Chromium's own default is a pale blue on white at about 1.7:1 —
+     so on those the outline alone was a faint box. CanvasText is the one colour
+     the mode guarantees against Canvas. The rail's fill is a background, which
+     forced colours strip, so it has to be re-asserted with !important, exactly
+     like the inbox unread dot below. */
+  .palette-row[aria-selected="true"]::before,
+  .palette-row[data-selected="true"]::before {
+    background-color: CanvasText !important;
+  }
+
   /* The selected session tab is a raised fill plus a neutral rail, and forced
      colors strips both — `background-color` on the chip and on the rail alike.
      An outline like the palette row's, and for the same reason: the tab carries
@@ -2781,6 +2793,14 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
      in system colours, so the two blocks stay independent (see the rationale
      at the top of each). */
   .tip-action {
+    border: none;
+  }
+
+  /* A list row whose selection target is a button beside a sibling control
+     (the plugin manager's rows: select button + enable switch). The row is the
+     frame and owns the selected outline; the blanket border drew a second box
+     round the text half and left the switch outside it. */
+  .row-select-target {
     border: none;
   }
 
@@ -3166,6 +3186,12 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
      rather than merged: the launcher's teaching link must not be framed into a
      button. Its underline carries the affordance. */
   .tip-action {
+    border-width: 0;
+  }
+
+  /* Same exemption, same reason: the row, not its inner select button, is the
+     click target's frame. */
+  .row-select-target {
     border-width: 0;
   }
 

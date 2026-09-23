@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { ReactNode } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { PluginManagerView } from "../PluginManagerView";
@@ -20,6 +21,28 @@ vi.mock("@/utils/logger", () => ({
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (s: { currentProject: { id: string } | null }) => unknown) =>
     selector({ currentProject: null }),
+}));
+
+// Pass-through dropdown mock: the title bar's Install menu renders its items
+// inline as buttons, so the install flows stay drivable without Radix's
+// pointer-event choreography in jsdom.
+vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  DropdownMenuTrigger: ({ children }: { children?: ReactNode }) => <>{children}</>,
+  DropdownMenuContent: ({ children }: { children?: ReactNode }) => (
+    <div data-testid="install-menu">{children}</div>
+  ),
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+  }: {
+    children?: ReactNode;
+    onSelect?: (e: Event) => void;
+  }) => (
+    <button type="button" onClick={() => onSelect?.(new Event("select"))}>
+      {children}
+    </button>
+  ),
 }));
 
 // ScrollShadow uses ResizeObserver, which jsdom lacks.
@@ -192,9 +215,9 @@ function pluginRow(name: string): HTMLElement {
 }
 
 describe("PluginManagerView", () => {
-  it("renders the section header immediately", async () => {
+  it("renders the search field immediately", async () => {
     renderDialog();
-    expect(screen.getByText("All plugins")).toBeTruthy();
+    expect(screen.getByLabelText("Search plugins")).toBeTruthy();
   });
 
   it("moves focus into the view on open so the keyboard isn't left on the background", async () => {
@@ -519,7 +542,7 @@ describe("PluginManagerView", () => {
     ]);
     renderDialog();
     await waitFor(() => {
-      expect(screen.getByText("Restart required")).toBeTruthy();
+      expect(screen.getAllByText("Restart required").length).toBeGreaterThan(0);
     });
     const toggle = screen.getByRole("switch", { name: "Enable Acme Demo" });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
@@ -1653,7 +1676,11 @@ describe("PluginManagerView", () => {
       const input = await screen.findByLabelText("Search plugins");
       fireEvent.change(input, { target: { value: "zzzznomatch" } });
       await waitFor(() => expect(screen.getByText("No matching plugins")).toBeTruthy());
-      fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+      // The canvas owns the recovery action; the field's own clear button is
+      // the other "Clear search" on screen.
+      const canvas = screen.getByRole("region", { name: "Installed plugins" });
+      await waitFor(() => expect(within(canvas).getByText("Try another search")).toBeTruthy());
+      fireEvent.click(within(canvas).getByRole("button", { name: "Clear search" }));
       await screen.findAllByText("Plugin00");
     });
 
@@ -1670,8 +1697,136 @@ describe("PluginManagerView", () => {
       await waitFor(() => expect(screen.getByRole("button", { name: /uninstall/i })).toBeTruthy());
       const input = screen.getByLabelText("Search plugins");
       fireEvent.change(input, { target: { value: "Notepad" } });
-      // Plugin00 is filtered out, so the detail pane falls back to its empty state.
-      await waitFor(() => expect(screen.getByText("Installed plugins")).toBeTruthy());
+      // Plugin00 is filtered out, so the detail pane falls back to the results.
+      await waitFor(() => expect(screen.getByText("Matching plugins")).toBeTruthy());
+    });
+  });
+
+  describe("row and search design invariants", () => {
+    const manyPlugins = (count: number) =>
+      Array.from({ length: count }, (_, i) => {
+        const name = `Plugin${String(i).padStart(2, "0")}`;
+        return makePlugin({
+          instanceId: `pkg.${name}`,
+          manifest: { ...makePlugin().manifest, name: `pkg.${name}`, displayName: name },
+        });
+      });
+
+    it("gives a plugin's operational signal the row's second line instead of its blurb", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([
+        makePlugin(),
+        makePlugin({
+          instanceId: "acme.broken",
+          manifest: {
+            ...makePlugin().manifest,
+            name: "acme.broken",
+            displayName: "Acme Broken",
+            description: "Broken blurb",
+          },
+          loadError: { message: "boom", at: 1 },
+        }),
+      ]);
+      renderDialog();
+      await findPluginRowButton("Acme Broken");
+      const healthyLine = within(pluginRow("Acme Demo")).getByTestId("plugin-row-badges");
+      const brokenLine = within(pluginRow("Acme Broken")).getByTestId("plugin-row-badges");
+      expect(healthyLine.textContent).toContain("A demo plugin");
+      expect(brokenLine.textContent).toContain("Failed to load");
+      expect(brokenLine.textContent).not.toContain("Broken blurb");
+    });
+
+    it("keeps the version out of the row so the name owns its line", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([
+        makePlugin({ manifest: { ...makePlugin().manifest, version: "9.8.7-rc.1" } }),
+      ]);
+      renderDialog();
+      await findPluginRowButton("Acme Demo");
+      expect(pluginRow("Acme Demo").textContent).not.toContain("9.8.7-rc.1");
+    });
+
+    it("shows the same signal on the catalog card as on the row", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([
+        makePlugin({ loadError: { message: "boom", at: 1 } }),
+      ]);
+      renderDialog();
+      const canvas = await screen.findByRole("region", { name: "Installed plugins" });
+      await waitFor(() => expect(within(canvas).getByText("Failed to load")).toBeTruthy());
+      expect(within(pluginRow("Acme Demo")).getByText("Failed to load")).toBeTruthy();
+    });
+
+    it("announces the result count once typing pauses, without moving focus", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue(manyPlugins(3));
+      renderDialog();
+      const input = await screen.findByLabelText("Search plugins");
+      await findPluginRowButton("Plugin00");
+      input.focus();
+      fireEvent.change(input, { target: { value: "Plugin01" } });
+      const status = screen.getByRole("status", { hidden: true });
+      await waitFor(() => expect(status.textContent).toBe("1 matching plugin"), {
+        timeout: 2000,
+      });
+      expect(document.activeElement).toBe(input);
+      fireEvent.change(input, { target: { value: "zzzz" } });
+      await waitFor(() => expect(status.textContent).toBe("No matching plugins"), {
+        timeout: 2000,
+      });
+    });
+
+    it("leaves focus on a filter chip after toggling it", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+      renderDialog();
+      await findPluginRowButton("Acme Demo");
+      const group = screen.getByRole("group", { name: "Filter plugins" });
+      const chip = within(group).getByRole("button", { name: "Disabled" });
+      chip.focus();
+      fireEvent.click(chip);
+      await waitFor(() => expect(chip.getAttribute("aria-pressed")).toBe("true"));
+      expect(document.activeElement).toBe(chip);
+    });
+
+    it("hands focus to search when a filtered toggle removes the focused row", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin({ disabled: true })]);
+      renderDialog();
+      await findPluginRowButton("Acme Demo");
+      const group = screen.getByRole("group", { name: "Filter plugins" });
+      fireEvent.click(within(group).getByRole("button", { name: "Disabled" }));
+      const toggle = await waitFor(() =>
+        within(pluginRow("Acme Demo")).getByRole("switch", { name: "Enable Acme Demo" })
+      );
+      toggle.focus();
+      fireEvent.click(toggle);
+      // Enabling it removes it from the "@disabled" results, switch and all.
+      await waitFor(() => expect(toggle.isConnected).toBe(false));
+      await waitFor(() =>
+        expect(document.activeElement).toBe(screen.getByLabelText("Search plugins"))
+      );
+    });
+
+    it("retries a failed plugin by reloading it through the enable path", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([
+        makePlugin({ loadError: { message: "boom", at: 1 } }),
+      ]);
+      renderDialog();
+      await selectPlugin();
+      const detail = await screen.findByRole("region", { name: "Details for Acme Demo" });
+      fireEvent.click(within(detail).getByRole("button", { name: "Retry" }));
+      await waitFor(() =>
+        expect(vi.mocked(window.electron.plugin.setEnabled).mock.calls).toEqual([
+          ["acme.demo", false],
+          ["acme.demo", true],
+        ])
+      );
+    });
+
+    it("lets the detail pane switch a plugin back on", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin({ disabled: true })]);
+      renderDialog();
+      await selectPlugin();
+      const detail = await screen.findByRole("region", { name: "Details for Acme Demo" });
+      fireEvent.click(within(detail).getByRole("switch", { name: "Enable Acme Demo" }));
+      await waitFor(() =>
+        expect(window.electron.plugin.setEnabled).toHaveBeenCalledWith("acme.demo", true)
+      );
     });
   });
 

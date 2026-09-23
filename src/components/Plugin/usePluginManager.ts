@@ -423,6 +423,33 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     }
   };
 
+  // Retry for a plugin whose load or activation failed. There is no dedicated
+  // retry IPC, but switching a plugin off unloads it and switching it on runs
+  // the full load + activate path again (`PluginService._applyEnabledToggle`,
+  // serialized per plugin in main), so this is the same retry the user could do
+  // by hand with the switch — in one action, without the intermediate "off"
+  // flashing through the row. The provenance broadcast at the end of each
+  // toggle refreshes the list, which is what clears or restates `loadError`.
+  const retryPlugin = async (plugin: LoadedPluginInfo) => {
+    const id = plugin.manifest.name;
+    if (pending.has(id) || plugin.disabled === true) return;
+    setPending((prev) => new Set(prev).add(id));
+    try {
+      setError(null);
+      await window.electron.plugin.setEnabled(id, false);
+      await window.electron.plugin.setEnabled(id, true);
+    } catch (err) {
+      setError(formatErrorMessage(err, "Failed to retry plugin"));
+      logError("Failed to retry plugin load", err);
+    } finally {
+      setPending((prev) => {
+        const copy = new Set(prev);
+        copy.delete(id);
+        return copy;
+      });
+    }
+  };
+
   const handleInstallResult = (
     result: Awaited<ReturnType<typeof window.electron.plugin.installFromFile>>
   ) => {
@@ -935,6 +962,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     isCheckingAllUpdates,
     hasUpdatablePlugins: plugins.some((p) => !p.isBuiltin && !!p.originalUrl),
     handleToggle,
+    retryPlugin,
     isDragOverFiles,
     handleDragEnter,
     handleDragOver,

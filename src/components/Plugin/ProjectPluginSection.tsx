@@ -5,6 +5,7 @@ import { PluginLogsSection, usePluginLogs } from "@/components/Plugin/PluginLogs
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { cn } from "@/lib/utils";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { PluginGlyphTile } from "@/components/Plugin/pluginIcons";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
   type ProjectPluginInfo,
@@ -69,47 +70,39 @@ function ProjectPluginRow({
         type="button"
         aria-current={selected ? "true" : undefined}
         onClick={onSelect}
-        className="flex items-start gap-2.5 min-w-0 flex-1 py-2.5 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary forced-colors:border-none"
+        title={plugin.version ? `${plugin.displayName} v${plugin.version}` : plugin.displayName}
+        className="row-select-target flex items-center gap-2.5 min-w-0 flex-1 py-2 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary forced-colors:border-none"
       >
-        <Package
-          className={cn(
-            "w-4 h-4 shrink-0 mt-0.5",
-            running ? "text-text-secondary" : "text-text-placeholder"
-          )}
-          aria-hidden="true"
-        />
-        <span className="min-w-0">
+        {/* The same tile and the same two lines as an installed row, so the
+            project section reads as part of one list rather than a second
+            layout grafted on top of it. */}
+        <PluginGlyphTile icon={Package} size="sm" dimmed={!running || failed} />
+        <span className="min-w-0 flex-1">
           <span
-            className={cn(
-              "text-sm font-medium flex items-center gap-1.5 flex-wrap",
-              !running && "text-text-secondary"
-            )}
+            className={cn("block text-sm font-medium truncate", !running && "text-text-secondary")}
           >
-            <span className="truncate">{plugin.displayName}</span>
-            {plugin.version && (
-              <span className="text-2xs font-normal text-text-secondary">v{plugin.version}</span>
+            {plugin.displayName}
+          </span>
+          <span className="mt-0.5 flex items-center gap-1.5 min-w-0 h-[1.125rem]">
+            {failed || plugin.collidesWithGlobal ? (
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1 min-w-0 flex-1 text-2xs font-medium",
+                  failed ? "text-status-danger" : "text-status-warning"
+                )}
+              >
+                <AlertCircle className="w-3 h-3 shrink-0" aria-hidden="true" />
+                <span className="truncate">{failed ? "Error" : "Id clash"}</span>
+              </span>
+            ) : (
+              <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary font-mono">
+                {plugin.id}
+              </span>
             )}
-          </span>
-          <span className="mt-0.5 block text-2xs text-text-secondary truncate font-mono">
-            {plugin.id}
-          </span>
-          <span className="mt-1 flex items-center gap-1 flex-wrap">
-            <span className={BADGE_CLASS}>Project</span>
             {plugin.state !== "active" && (
-              <span className={BADGE_CLASS}>{STATE_BADGE[plugin.state]}</span>
+              <span className={cn(BADGE_CLASS, "shrink-0")}>{STATE_BADGE[plugin.state]}</span>
             )}
-            {failed && (
-              <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide">
-                <AlertCircle className="w-3 h-3" aria-hidden="true" />
-                Error
-              </span>
-            )}
-            {plugin.collidesWithGlobal && (
-              <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-status-warning uppercase tracking-wide">
-                <AlertCircle className="w-3 h-3" aria-hidden="true" />
-                Id clash
-              </span>
-            )}
+            <span className={cn(BADGE_CLASS, "shrink-0")}>Project</span>
           </span>
         </span>
       </button>
@@ -206,24 +199,34 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
 
   return (
     <div className="space-y-6">
-      <div className="space-y-2">
-        <h3 className="text-lg font-medium text-text-primary break-words">{plugin.displayName}</h3>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <span className={BADGE_CLASS}>Project</span>
-          {plugin.state !== "active" && (
-            <span className={BADGE_CLASS}>{STATE_BADGE[plugin.state]}</span>
+      {/* The installed-plugin header's shape — tile, name, version as text —
+          so switching between the two kinds of detail doesn't change the
+          page's anatomy. The version was an uppercase badge here ("V0.1.0"). */}
+      <div className="flex items-start gap-3.5 min-w-0">
+        <PluginGlyphTile icon={Package} size="lg" dimmed={plugin.state !== "active"} />
+        <div className="min-w-0 space-y-1">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <h3 className="text-base font-medium text-text-primary break-words">
+              {plugin.displayName}
+            </h3>
+            {plugin.version && (
+              <span className="text-xs font-normal text-text-secondary">v{plugin.version}</span>
+            )}
+            <span className={BADGE_CLASS}>Project</span>
+            {plugin.state !== "active" && (
+              <span className={BADGE_CLASS}>{STATE_BADGE[plugin.state]}</span>
+            )}
+            {plugin.loadError && (
+              <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide">
+                <AlertCircle className="w-3 h-3" aria-hidden="true" />
+                Error
+              </span>
+            )}
+          </div>
+          {plugin.description && (
+            <p className="text-sm text-text-secondary break-words">{plugin.description}</p>
           )}
-          {plugin.loadError && (
-            <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide">
-              <AlertCircle className="w-3 h-3" aria-hidden="true" />
-              Error
-            </span>
-          )}
-          {plugin.version && <span className={BADGE_CLASS}>v{plugin.version}</span>}
         </div>
-        {plugin.description && (
-          <p className="text-sm text-text-secondary break-words">{plugin.description}</p>
-        )}
       </div>
 
       <div className="space-y-2">
@@ -231,7 +234,10 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
         <p className="font-mono text-2xs text-text-secondary break-all">
           .daintree/plugins/{plugin.dirName}
         </p>
-        <p className="font-mono text-2xs text-text-secondary break-all">{plugin.id}</p>
+        {/* Labelled: two bare mono lines read as one path repeated. */}
+        <p className="text-2xs text-text-secondary break-all">
+          Plugin id <span className="font-mono">{plugin.id}</span>
+        </p>
       </div>
 
       {plugin.state === "invalid" && plugin.error && (
@@ -316,45 +322,56 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
               every future open.
             </p>
           </>
-        ) : enabled ? (
-          <>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void decide("disabled")}
-              loading={deciding === "disabled"}
-            >
-              Turn off project plugins
-            </Button>
-            <p className="text-2xs text-text-secondary leading-relaxed">
-              Unloads every plugin this project ships straight away, not just this one.
-            </p>
-          </>
         ) : (
-          <>
-            <div className="flex items-center gap-2 flex-wrap">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void decide("enabled")}
-                loading={deciding === "enabled"}
-              >
-                Enable for this project
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void decide("session")}
-                loading={deciding === "session"}
-              >
-                Enable for this session
-              </Button>
-            </div>
-            <p className="text-2xs text-text-secondary leading-relaxed">
-              Runs every plugin in this project&apos;s folder with your account. Daintree
-              doesn&apos;t sandbox it.
-            </p>
-          </>
+          // Folder-wide, and headed as such. These sat directly under one
+          // plugin's name, so "Enable for this project" read as enabling this
+          // plugin — the scope lived only in the small print below the buttons.
+          <div className="space-y-2 pt-2">
+            <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
+              All plugins in this project
+            </h4>
+            {enabled ? (
+              <>
+                <p className="text-2xs text-text-secondary leading-relaxed">
+                  Turning them off unloads every plugin this project ships straight away, not just
+                  this one.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void decide("disabled")}
+                  loading={deciding === "disabled"}
+                >
+                  Turn off project plugins
+                </Button>
+              </>
+            ) : (
+              <>
+                <p className="text-2xs text-text-secondary leading-relaxed">
+                  Enabling runs every plugin in this project&apos;s folder with your account.
+                  Daintree doesn&apos;t sandbox them.
+                </p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void decide("enabled")}
+                    loading={deciding === "enabled"}
+                  >
+                    Enable project plugins
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void decide("session")}
+                    loading={deciding === "session"}
+                  >
+                    Enable for this session only
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
         )}
         {error && <p className="text-2xs text-status-danger leading-tight">{error}</p>}
       </div>

@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useProjectStore } from "@/store/projectStore";
+import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import type {
@@ -191,6 +192,12 @@ function SettingField({
   const [migratedToKeychain, setMigratedToKeychain] = useState(false);
   // Path-specific: tracks a `mustExist` path that no longer resolves on disk.
   const [pathMissing, setPathMissing] = useState(false);
+  // Enum-specific: the Select's open state, held here so an open list can sit
+  // on the escape stack. This form also renders inside the plugin manager,
+  // which is a non-modal view: there the global keybinding layer takes Escape
+  // at window capture and pops the stack before Radix sees the key, so without
+  // an entry of its own the list's Escape closed the whole manager.
+  const [enumOpen, setEnumOpen] = useState(false);
 
   // Initialize from stored value (falling back to the declared default) once the
   // scope's values resolve. Runs once per (re)mount when `loaded` flips true.
@@ -292,6 +299,16 @@ function SettingField({
   // The row greys out only while there is nothing to edit yet; a write in flight
   // disables just the control, so the label doesn't flicker on every save.
   const rowDisabled = !loaded || !scopeReady;
+  // The list is only open while there is an enabled enum control to hold it.
+  // A save or reset disabling the field mid-open, or a reload turning the
+  // setting into another type, would otherwise leave the Select forced open on
+  // a disabled control, or leave an invisible escape entry swallowing the next
+  // Escape.
+  const enumListOpen = enumOpen && type === "enum" && !rowDisabled && !saving;
+  useEscapeStack(enumListOpen, () => setEnumOpen(false));
+  useEffect(() => {
+    if (enumOpen && !enumListOpen) setEnumOpen(false);
+  }, [enumOpen, enumListOpen]);
   const fieldId = `plugin-setting-${pluginId}-${def.id}`;
 
   const toggleBool = (next: boolean) => {
@@ -447,6 +464,8 @@ function SettingField({
         {...rowProps}
         control={({ labelId, descriptionId, disabled }) => (
           <Select
+            open={enumListOpen}
+            onOpenChange={setEnumOpen}
             value={draft}
             disabled={disabled || saving}
             onValueChange={(next) => {

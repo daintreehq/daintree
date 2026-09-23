@@ -1013,7 +1013,9 @@ describe("HelpPanel — close hides without tearing down the agent", () => {
     render(<HelpPanel width={380} />);
 
     const escapeMock = vi.mocked(useEscapeStack);
-    const callback = escapeMock.mock.calls.at(-1)?.[1];
+    // The panel's own close is the enabled registration; the header's overflow
+    // menu registers too, disabled until it opens.
+    const callback = escapeMock.mock.calls.filter(([enabled]) => enabled).at(-1)?.[1];
     expect(callback).toBeTypeOf("function");
 
     act(() => {

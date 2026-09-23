@@ -10,6 +10,7 @@ import { PluginMcpServersSection } from "./PluginMcpServersSection";
 import { PluginLogsSection, usePluginLogs } from "./PluginLogsSection";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
 import { Button } from "@/components/ui/button";
+import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import {
   SettingsSubtabBar,
@@ -18,6 +19,7 @@ import {
 } from "@/components/Settings/SettingsSubtabBar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
+import { cn } from "@/lib/utils";
 import {
   usePluginRuntimeStatus,
   usePluginRuntimeStatusStore,
@@ -265,6 +267,12 @@ interface PluginDetailPaneProps {
   plugin: LoadedPluginInfo;
   checkingUpdate: boolean;
   upToDate: boolean;
+  /** The row's enable toggle is in flight. */
+  toggling?: boolean;
+  /** Renders the header's enable switch; omitted, the pane has none. */
+  onToggle?: () => void;
+  /** Renders Retry on the load-failure banner; omitted, the banner has none. */
+  onRetry?: () => void;
   onUninstall: () => void;
   onCheckForUpdate: () => void;
 }
@@ -292,6 +300,9 @@ export function PluginDetailPane({
   plugin,
   checkingUpdate,
   upToDate,
+  toggling = false,
+  onToggle,
+  onRetry,
   onUninstall,
   onCheckForUpdate,
 }: PluginDetailPaneProps) {
@@ -302,7 +313,11 @@ export function PluginDetailPane({
   const runtimeStatus = usePluginRuntimeStatus(plugin.instanceId);
   const devStatus = runtimeStatus?.dev ?? null;
   const sourceLabel = SOURCE_BADGE_LABELS[plugin.source] ?? plugin.source;
-  const categoryLabel = getPluginCategoryMeta(resolvePluginCategory(plugin.manifest)).label;
+  // "Other" is the fallback bucket, not a category anyone chose — a badge
+  // reading OTHER on most third-party plugins told the user nothing.
+  const categoryId = resolvePluginCategory(plugin.manifest);
+  const categoryLabel = categoryId === "other" ? null : getPluginCategoryMeta(categoryId).label;
+  const blocklisted = plugin.blocklisted === true;
   const hasSettings = (plugin.manifest.contributes.settings?.length ?? 0) > 0;
   const mcpServers = plugin.manifest.contributes.mcpServers ?? [];
   const hasMcpServers = mcpServers.length > 0;
@@ -378,11 +393,14 @@ export function PluginDetailPane({
           <PluginIconTile manifest={plugin.manifest} size="lg" dimmed={plugin.disabled === true} />
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 flex-wrap">
-              <h3 className="text-base font-medium truncate">{label}</h3>
+              {/* Wraps rather than truncates: this is the one place the full
+                  name is guaranteed to be readable, and the row and card have
+                  already elided it by the time someone opens the detail. */}
+              <h3 className="text-base font-medium break-words min-w-0">{label}</h3>
               <span className="text-xs font-normal text-text-secondary">
                 v{plugin.manifest.version}
               </span>
-              <span className={BADGE_CLASS}>{categoryLabel}</span>
+              {categoryLabel && <span className={BADGE_CLASS}>{categoryLabel}</span>}
               <span className={BADGE_CLASS}>{sourceLabel}</span>
               {plugin.blocklisted === true && (
                 <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide">
@@ -440,6 +458,21 @@ export function PluginDetailPane({
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
+          {/* The same switch as the row, where the lifecycle actions are. A
+              disabled plugin's detail used to offer no way to turn it back on:
+              the only switch was back in the list, next to a row the user had
+              already moved past. */}
+          {onToggle && (
+            <label className="flex items-center gap-2 mr-2 text-xs text-text-secondary select-none">
+              Enabled
+              <SettingsSwitch
+                checked={plugin.disabled !== true && !blocklisted}
+                onCheckedChange={onToggle}
+                disabled={toggling || blocklisted}
+                aria-label={`Enable ${label}`}
+              />
+            </label>
+          )}
           {canCheckUpdate ? (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -528,7 +561,23 @@ export function PluginDetailPane({
             <p className="text-2xs text-status-danger break-words mt-0.5 select-text">
               {plugin.loadError.message}
             </p>
+            {/* Where to go from the diagnosis. Retry reloads the plugin from
+                disk; an error that comes back unchanged is the plugin's own. */}
+            <p className="text-2xs text-text-secondary mt-1.5">
+              If it fails the same way again, update or reinstall it.
+            </p>
           </div>
+          {onRetry && plugin.disabled !== true && (
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={onRetry}
+              loading={toggling}
+              className="shrink-0 ml-auto"
+            >
+              Retry
+            </Button>
+          )}
         </div>
       )}
 
@@ -544,7 +593,9 @@ export function PluginDetailPane({
         </div>
       )}
 
-      <div className="mt-4">
+      {/* A tab bar with one tab is a control with nothing to switch to — and
+          most plugins without settings or permissions have exactly one. */}
+      <div className={cn("mt-4", tabs.length === 1 && "hidden")}>
         <SettingsSubtabBar
           subtabs={tabs}
           activeId={currentTab}
@@ -556,7 +607,12 @@ export function PluginDetailPane({
         />
       </div>
 
-      <div {...subtabPanelProps("plugin-detail", currentTab)}>
+      <div
+        {...subtabPanelProps("plugin-detail", currentTab)}
+        // With the lone tab bar hidden, its `mt-4` went with it and the
+        // description butted straight up against the header.
+        className={cn(tabs.length === 1 && "mt-4")}
+      >
         {currentTab === "overview" && (
           <div className="space-y-4">
             {plugin.manifest.description ? (

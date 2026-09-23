@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { dispatchEscape, registerEscape } from "@/lib/escapeStack";
 import { createContext, use } from "react";
 import type { ReactNode } from "react";
 import { PluginSettingsForm } from "../PluginSettingsForm";
@@ -35,6 +36,8 @@ vi.mock("@/components/ui/select", () => {
     value: string;
     onValueChange: (v: string) => void;
     disabled?: boolean;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
   }
   const SelectCtx = createContext<Ctx | null>(null);
   return {
@@ -44,7 +47,14 @@ vi.mock("@/components/ui/select", () => {
     SelectTrigger: ({ children, ...props }: { children: ReactNode }) => {
       const ctx = use(SelectCtx)!;
       return (
-        <button type="button" role="combobox" disabled={ctx.disabled} {...props}>
+        <button
+          type="button"
+          role="combobox"
+          disabled={ctx.disabled}
+          aria-expanded={ctx.open === true}
+          onClick={() => ctx.onOpenChange?.(true)}
+          {...props}
+        >
           {children}
         </button>
       );
@@ -218,6 +228,61 @@ describe("PluginSettingsForm", () => {
     await waitFor(() =>
       expect(pluginApi.setSettingValue).toHaveBeenCalledWith("acme.test", "mode", "b", "user", null)
     );
+  });
+
+  it("closes an open enum list, and only the list, on Escape", async () => {
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([{ id: "mode", type: "enum", label: "Mode", options: ["a", "b"] }])}
+      />
+    );
+    const select = (await screen.findByRole("combobox", { name: "Mode" })) as HTMLButtonElement;
+    await waitFor(() => expect(select.disabled).toBe(false));
+    // A surface underneath that also listens for Escape — the plugin manager.
+    const outer = vi.fn();
+    const outerEntry = registerEscape(outer);
+    try {
+      fireEvent.click(select);
+      await waitFor(() => expect(select.getAttribute("aria-expanded")).toBe("true"));
+      act(() => {
+        dispatchEscape();
+      });
+      await waitFor(() => expect(select.getAttribute("aria-expanded")).toBe("false"));
+      expect(outer).not.toHaveBeenCalled();
+    } finally {
+      outerEntry.unregister();
+    }
+  });
+
+  it("drops an open enum list and its Escape claim when the field is disabled", async () => {
+    let resolveWrite: () => void = () => {};
+    vi.mocked(pluginApi.setSettingValue).mockImplementation(
+      () => new Promise<void>((resolve) => (resolveWrite = resolve))
+    );
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([{ id: "mode", type: "enum", label: "Mode", options: ["a", "b"] }])}
+      />
+    );
+    const select = (await screen.findByRole("combobox", { name: "Mode" })) as HTMLButtonElement;
+    await waitFor(() => expect(select.disabled).toBe(false));
+    fireEvent.click(select);
+    await waitFor(() => expect(select.getAttribute("aria-expanded")).toBe("true"));
+    // Picking an option starts a save, which disables the field.
+    fireEvent.click(within(screen.getByRole("listbox")).getByRole("option", { name: "b" }));
+    await waitFor(() => expect(select.disabled).toBe(true));
+    expect(select.getAttribute("aria-expanded")).toBe("false");
+    const outer = vi.fn();
+    const outerEntry = registerEscape(outer);
+    try {
+      act(() => {
+        dispatchEscape();
+      });
+      expect(outer).toHaveBeenCalledTimes(1);
+    } finally {
+      outerEntry.unregister();
+      await act(async () => resolveWrite());
+    }
   });
 
   it("surfaces an inline error for invalid JSON and does not write", async () => {

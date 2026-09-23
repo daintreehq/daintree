@@ -6,16 +6,21 @@ import {
   Download,
   AlertCircle,
   AlertTriangle,
-  ArrowUpCircle,
+  ChevronDown,
   ChevronLeft,
   RefreshCw,
-  RotateCw,
   X,
 } from "lucide-react";
 import { useState, useEffect, useRef, useMemo, useDeferredValue } from "react";
 import { createPortal } from "react-dom";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -37,6 +42,7 @@ import { PluginDetailPane, SOURCE_BADGE_LABELS, pluginLabel } from "./PluginDeta
 import { PluginInstallProgressBanner } from "./PluginInstallProgressBanner";
 import { PluginCatalog } from "./PluginCatalog";
 import { PluginIconTile } from "./pluginIcons";
+import { pluginSignalFor } from "./pluginStatus";
 import { ProjectPluginSection, ProjectPluginDetailPane } from "./ProjectPluginSection";
 import { groupPluginsByCategory } from "./pluginGrouping";
 import { filterPlugins, isQueryActive, parsePluginQuery } from "@/lib/pluginSearch";
@@ -51,45 +57,9 @@ const ROW_BADGE_CLASS =
 const SECTION_HEADER_CLASS =
   "px-3 text-3xs font-medium uppercase tracking-wider text-text-secondary select-none";
 
-/**
- * The row's operational state, in precedence order — only the worst one shows.
- *
- * State and provenance were one undifferentiated pill vocabulary, so "this
- * plugin is switched off" carried exactly the same visual weight as "this
- * archive arrived over a URL". They answer different questions and only one of
- * them is ever urgent, so they now render as two tiers: status leads the line
- * with an icon and a colour, provenance trails it as a quiet pill.
- */
-type RowStatus = {
-  label: string;
-  icon: typeof AlertCircle;
-  /** Tailwind text colour for the whole chip. */
-  tone: string;
-};
-
-function rowStatusFor(plugin: LoadedPluginInfo): RowStatus | null {
-  if (plugin.blocklisted === true) {
-    return { label: "Blocked", icon: AlertCircle, tone: "text-status-danger" };
-  }
-  // A load failure outranks the user's own off switch: "I turned this off" and
-  // "this could not start" have completely different recoveries, and only the
-  // second one is a surprise.
-  if (plugin.loadError) {
-    return { label: "Failed to load", icon: AlertCircle, tone: "text-status-danger" };
-  }
-  // Ahead of `disabled` deliberately: a pending restart means the switch the
-  // user just flipped has NOT taken effect yet. Reporting a plain "Off" for a
-  // plugin that is still loaded is precisely the toggle-that-lies failure.
-  if (plugin.pendingRestart === true) {
-    return { label: "Restart required", icon: RotateCw, tone: "text-status-warning" };
-  }
-  // No chip for a plain "disabled". The switch beside the row already states it,
-  // textually and through `aria-checked`, and a chip that appeared on toggle
-  // grew the row by a line for every built-in — the one layout shift a control
-  // acting on its own row must never cause. Status here is reserved for states
-  // the switch CANNOT express.
-  return null;
-}
+// How long the result count waits for typing to pause before it is announced.
+// Announcing every intermediate count queues a sentence per keystroke.
+const SEARCH_ANNOUNCE_DELAY_MS = 500;
 
 /**
  * Whether a project plugin is broken in the sense the health summary means.
@@ -129,43 +99,36 @@ interface PluginRowProps {
 }
 
 /**
- * One installed-plugin row in the master list (#9555): a compact, selectable
- * entry showing the plugin's icon tile, name, version, tagline, and the enable
- * toggle. Selecting it populates the detail pane on the right — the full
- * metadata, actions, and settings live there now, so the row stays scannable
- * and never shifts layout.
+ * One installed-plugin row in the master list (#9555): icon tile, name, one
+ * line of detail, and the enable toggle. Selecting it populates the detail pane
+ * on the right, so the row stays scannable and never shifts layout.
+ *
+ * Exactly two lines in every state. The name owns the first line outright — the
+ * version used to share it, and on a long name plus a prerelease semver the two
+ * elided each other down to "Enterprise C…" and "v2.4.1-alpha…", so neither
+ * identified anything. The version lives in the detail header. The second line
+ * is the plugin's one operational signal when it has one (failed, blocked,
+ * restart, update) and its blurb otherwise: a failure is the most important
+ * thing the row can say, so it takes the line that was spent on marketing copy,
+ * and it keeps the row the same height as its healthy neighbours. Provenance
+ * trails that line as quiet pills, right-aligned so they read as a column.
  *
  * A disabled plugin stays in its category section, dimmed in place with its
  * switch off — the dominant pattern (VS Code, JetBrains, browsers) and the one
- * that preserves spatial memory; relocation to a quarantine section was the
- * old #9554 behavior. Provenance only earns a badge when it differs from the
- * catalog's default (non-builtin sources: file / URL / catalog).
- *
- * The badge line is ALWAYS rendered, at a fixed minimum height, even when it is
- * empty. Rows used to gain or lose that line as their state changed, so a
- * built-in's row grew by a line the moment its own switch was flipped and shrank
- * again on the way back. Every row is the same height in every state now.
+ * that preserves spatial memory. Provenance only earns a badge when it differs
+ * from the catalog's default (non-builtin sources: file / URL / catalog).
  *
  * The row is an `<li>` in a plain list, NOT an option in a composite listbox.
  * The selection target is a `<button aria-current>` covering the info area and
  * the enable toggle is a sibling control, which a `listbox` may not own: its
  * required owned elements are `option`/`group`, so the switch was an ARIA
- * content-model violation that screen readers prune or skip. A plain list also
- * drops the composite widget's promise of single-tab-stop arrow navigation —
- * a promise this list never kept.
+ * content-model violation that screen readers prune or skip.
  *
  * Selection is `PALETTE_ROW_CLASS` — the app's single definition of "this is the
  * row Enter will act on", which already owns the neutral leading rail, the
- * reduce-motion handling, and the forced-colors outline that a pseudo-element
- * background cannot survive. Hand-rolling those here made this the sixth
- * spelling of a visual that file exists to keep at one, and the accent stripe it
- * replaced also broke accent restraint: selection persists while focus moves, so
- * an accent on one row and an accent focus ring on another put two in the same
- * focus region.
- *
- * A deep-link `open` (#9559) scrolls the row into view via `innerRef` and flags
- * it with a transient neutral `highlighted` outline — distinct from the accent
- * selection stripe so the two signals never collide.
+ * reduce-motion handling, and the forced-colors outline. `row-select-target`
+ * exempts the inner button from the high-contrast blanket button border, which
+ * otherwise framed the text half of every row and left its switch outside.
  */
 function PluginRow({
   plugin,
@@ -186,10 +149,9 @@ function PluginRow({
   const sourceLabel = SOURCE_BADGE_LABELS[plugin.source] ?? plugin.source;
   // Only the two forge built-ins actually set a tagline, so a row keyed solely
   // on it renders a bare name for almost every third-party plugin. `PluginCard`
-  // already falls back to the description; the list now agrees with it.
+  // already falls back to the description; the list agrees with it.
   const blurb = plugin.manifest.tagline ?? plugin.manifest.description;
-  const status = rowStatusFor(plugin);
-  const update = plugin.updateAvailable;
+  const signal = pluginSignalFor(plugin);
 
   return (
     <li
@@ -204,69 +166,38 @@ function PluginRow({
     >
       <button
         type="button"
-        // A plain list of interactive rows, not a composite listbox: the enable
-        // switch is a sibling of this button, and a `listbox` may only own
-        // `option`/`group` (WAI-ARIA required owned elements), which pruned the
-        // switch from the AX tree and promised arrow-key navigation that never
-        // existed. `aria-current` carries selection without that promise.
         aria-current={selected ? "true" : undefined}
         onClick={onSelect}
-        className="flex items-start gap-2.5 min-w-0 flex-1 py-2.5 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary forced-colors:border-none"
+        title={`${label} v${plugin.manifest.version}`}
+        className="row-select-target flex items-center gap-2.5 min-w-0 flex-1 py-2 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary forced-colors:border-none"
       >
         <PluginIconTile manifest={plugin.manifest} size="sm" dimmed={!enabled || !healthy} />
         <span className="min-w-0 flex-1">
-          {/* No `flex-wrap`: a long display name used to push the version onto a
-              line of its own, which made that one row twice the height of its
-              neighbours. The name truncates instead and keeps its full text in
-              the title attribute. */}
           <span
-            className={cn(
-              "text-sm font-medium flex items-baseline gap-1.5",
-              !enabled && "text-text-secondary"
-            )}
+            className={cn("block text-sm font-medium truncate", !enabled && "text-text-secondary")}
           >
-            <span className="truncate" title={label}>
-              {label}
-            </span>
-            {/* Capped rather than `shrink-0`: a prerelease-and-build semver is
-                long enough to claim the whole line and starve the name down to
-                a single letter, which is a worse trade than an elided version. */}
-            <span
-              className="text-2xs font-normal text-text-secondary shrink-0 max-w-[45%] truncate"
-              title={`v${plugin.manifest.version}`}
-            >
-              v{plugin.manifest.version}
-            </span>
+            {label}
           </span>
-          {blurb && (
-            <span className={cn("mt-0.5 block text-2xs truncate", "text-text-secondary")}>
-              {blurb}
-            </span>
-          )}
           <span
             data-testid="plugin-row-badges"
-            className="mt-1 flex items-center gap-1.5 min-w-0 min-h-[1.125rem]"
+            className="mt-0.5 flex items-center gap-1.5 min-w-0 h-[1.125rem]"
           >
-            {status && (
+            {signal ? (
               <span
                 className={cn(
-                  "inline-flex items-center gap-0.5 text-3xs font-medium uppercase tracking-wide shrink-0",
-                  status.tone
+                  "inline-flex items-center gap-1 min-w-0 flex-1 text-2xs font-medium",
+                  signal.tone
                 )}
               >
-                <status.icon className="w-3 h-3" aria-hidden="true" />
-                {status.label}
+                <signal.icon className="w-3 h-3 shrink-0" aria-hidden="true" />
+                <span className="truncate">{signal.label}</span>
               </span>
+            ) : (
+              <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary">{blurb}</span>
             )}
-            {update && (
-              <span className="inline-flex items-center gap-0.5 min-w-0 text-3xs font-medium uppercase tracking-wide text-status-warning">
-                <ArrowUpCircle className="w-3 h-3 shrink-0" aria-hidden="true" />
-                <span className="truncate">{update.version}</span>
-              </span>
-            )}
-            {plugin.devMode && <span className={ROW_BADGE_CLASS}>Dev</span>}
+            {plugin.devMode && <span className={cn(ROW_BADGE_CLASS, "shrink-0")}>Dev</span>}
             {!plugin.isBuiltin && (
-              <span className={cn(ROW_BADGE_CLASS, "truncate")}>{sourceLabel}</span>
+              <span className={cn(ROW_BADGE_CLASS, "shrink-0")}>{sourceLabel}</span>
             )}
           </span>
         </span>
@@ -286,14 +217,14 @@ function PluginRow({
 
 function RowSkeleton() {
   return (
-    <div className="w-full flex items-center gap-2.5 py-2.5 px-3 rounded-[var(--radius-md)]">
+    <div className="w-full flex items-center gap-2.5 py-2 px-3 rounded-[var(--radius-md)]">
       <div className="flex items-center gap-2.5 w-full animate-pulse-delayed">
-        <div className="w-4 h-4 rounded bg-daintree-text/10" />
+        <div className="w-8 h-8 rounded-[var(--radius-md)] bg-overlay-strong" />
         <div className="flex-1 space-y-2">
-          <div className="h-3 w-24 rounded bg-daintree-text/10" />
-          <div className="h-2 w-16 rounded bg-daintree-text/10" />
+          <div className="h-3 w-24 rounded-sm bg-overlay-strong" />
+          <div className="h-2 w-36 rounded-sm bg-overlay-strong" />
         </div>
-        <div className="w-9 h-5 rounded-full bg-daintree-text/10" />
+        <div className="w-9 h-5 rounded-full bg-overlay-strong" />
       </div>
     </div>
   );
@@ -342,6 +273,13 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   // the view is open, and wire Escape-to-close through the shared LIFO stack.
   useOverlayClaim("plugin-manager", isOpen);
   useEscapeStack(isOpen, close);
+  // The global keybinding layer takes Escape at window capture and pops the
+  // escape stack before Radix's menu ever sees the key, so an open Install
+  // menu has to be on the stack itself — otherwise Escape closes the whole
+  // view instead of the menu. Registered after the view's own entry, so LIFO
+  // pops the menu first.
+  const [isInstallMenuOpen, setIsInstallMenuOpen] = useState(false);
+  useEscapeStack(isOpen && isInstallMenuOpen, () => setIsInstallMenuOpen(false));
   const skipMotion = useShouldSkipMotion();
 
   // This view is `fixed inset-0` at z-modal, so it paints over the Toolbar and
@@ -456,7 +394,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   // Chips are toggles: clicking adds the operator token, clicking again
   // removes it (operators are case-insensitive, so match tokens that way too).
   // The active chip is highlighted via aria-pressed + a neutral surface lift —
-  // multi-select state never takes the accent.
+  // multi-select state never takes the accent. Focus stays on the chip: moving
+  // it to the search box made a keyboard user walk back through every chip to
+  // combine a second filter.
   const toggleFilterToken = (token: string) => {
     const lower = token.toLowerCase();
     setQuery((prev) => {
@@ -466,8 +406,33 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
       }
       return prev.length === 0 ? token : `${prev.trim()} ${token}`;
     });
+  };
+
+  const clearSearch = () => {
+    setQuery("");
     searchInputRef.current?.focus();
   };
+
+  // The result count, as a status message (WCAG 4.1.3): a filter that rewrites
+  // both panes was otherwise silent to a screen reader, whose user had to leave
+  // the input to learn whether anything matched. Coalesced until typing pauses
+  // so it speaks once per query rather than once per keystroke.
+  const resultCount = filteredPlugins.length + filteredProjectPlugins.length;
+  const [searchAnnouncement, setSearchAnnouncement] = useState("");
+  useEffect(() => {
+    if (!isSearchActive) {
+      setSearchAnnouncement("");
+      return;
+    }
+    const message =
+      resultCount === 0
+        ? "No matching plugins"
+        : resultCount === 1
+          ? "1 matching plugin"
+          : `${resultCount} matching plugins`;
+    const timer = setTimeout(() => setSearchAnnouncement(message), SEARCH_ANNOUNCE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [isSearchActive, resultCount, deferredQuery]);
 
   // Reset the query when the view closes so a stale filter doesn't hide rows
   // on reopen. Search is a permanent fixture of the catalog (the former
@@ -564,6 +529,22 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     return () => clearTimeout(timer);
   }, [highlightedPluginId]);
 
+  // Hand focus back when the control holding it disappears. Under a filter,
+  // flipping a row's switch can remove that row (enable one under "Disabled"),
+  // and the selection reconciliation above then drops its detail pane too — in
+  // both cases the focused element leaves the DOM and the keyboard lands on
+  // document.body, outside the view. The search field is the one control that
+  // is always present and owns what just happened.
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const last = lastFocusedRef.current;
+    if (!last || last.isConnected) return;
+    lastFocusedRef.current = null;
+    if (document.activeElement === null || document.activeElement === document.body) {
+      searchInputRef.current?.focus();
+    }
+  });
+
   const hasPlugins = pm.plugins.length > 0;
   // The list, the empty state and the detail placeholder all key off "is there
   // anything to show" — a project that ships plugins with none installed globally
@@ -623,6 +604,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
       role="region"
       aria-label="Plugin manager"
       data-testid="plugin-manager-view"
+      onFocus={(e) => {
+        lastFocusedRef.current = e.target instanceof HTMLElement ? e.target : null;
+      }}
       className="fixed inset-0 z-[var(--z-modal)] flex flex-col bg-surface-canvas motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
     >
       <header className="flex items-center justify-between gap-3 px-6 h-12 shrink-0 border-b border-border-default app-drag-region">
@@ -649,7 +633,43 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           <Package className="w-5 h-5 text-text-secondary shrink-0" aria-hidden="true" />
           <h2 className="text-sm font-medium text-text-primary truncate">Plugins</h2>
         </div>
-        <div className="flex items-center gap-3 shrink-0">
+        {/* Install and update are view-level actions, so they live on the
+            view's own title bar rather than stacked full-width above the list.
+            Three full-width buttons there cost a third of the column's height
+            and pushed the installed list — the thing most visits come for —
+            below the fold. */}
+        <div className="flex items-center gap-2 shrink-0">
+          {pm.hasUpdatablePlugins && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void pm.checkAllForUpdates()}
+              loading={pm.isCheckingAllUpdates}
+              className="app-no-drag"
+            >
+              <RefreshCw />
+              Update all
+            </Button>
+          )}
+          <DropdownMenu open={isInstallMenuOpen} onOpenChange={setIsInstallMenuOpen}>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" loading={pm.isInstalling} className="app-no-drag">
+                <Download />
+                Install plugin
+                <ChevronDown className="text-text-secondary" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[180px]">
+              <DropdownMenuItem onSelect={() => void pm.handleInstallFromFile()}>
+                <FilePlus className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                Install from file
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={pm.openUrlDialog}>
+                <Link2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                Install from URL
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button
             ref={closeButtonRef}
             variant="ghost"
@@ -715,44 +735,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           </div>
         )}
 
-        {/* Master: installed-plugin list + install controls. */}
+        {/* Master: find and filter, then the installed list. */}
         <div className="w-80 shrink-0 border-r border-border-default flex flex-col overflow-hidden">
-          <div className="p-4 border-b border-border-default shrink-0 space-y-3">
-            <div>
-              <h3 className="text-sm font-medium text-text-primary">All plugins</h3>
-              {/* One line, not three. The detail of what "off" does belongs on
-                  the plugin you are switching off, not above every list. */}
-              <p className="text-xs text-text-secondary mt-1 select-text">
-                Turn one off to keep its settings without loading it.
-              </p>
-            </div>
-            <div className="flex flex-col gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void pm.handleInstallFromFile()}
-                loading={pm.isInstalling}
-              >
-                <FilePlus />
-                Install from file
-              </Button>
-              <Button variant="outline" size="sm" onClick={pm.openUrlDialog}>
-                <Link2 />
-                Install from URL
-              </Button>
-              {pm.hasUpdatablePlugins && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void pm.checkAllForUpdates()}
-                  loading={pm.isCheckingAllUpdates}
-                >
-                  <RefreshCw />
-                  Update all
-                </Button>
-              )}
-            </div>
-            <div className="space-y-2">
+          <div className="p-3 border-b border-border-default shrink-0 space-y-2">
+            <div className="relative">
               <input
                 ref={searchInputRef}
                 type="search"
@@ -760,37 +746,54 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search plugins"
                 aria-label="Search plugins"
-                className="w-full px-3 py-2 text-sm rounded-[var(--radius-md)] bg-surface-canvas border border-border-interactive text-text-primary placeholder:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                className="w-full pl-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] bg-surface-canvas border border-border-interactive text-text-primary placeholder:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary [&::-webkit-search-cancel-button]:hidden"
               />
-              <div className="flex flex-wrap gap-1">
-                {PLUGIN_FILTER_CHIPS.map(({ token, label }) => {
-                  const active = queryTokens.includes(token.toLowerCase());
-                  return (
-                    <button
-                      key={token}
-                      type="button"
-                      aria-pressed={active}
-                      onClick={() => toggleFilterToken(token)}
-                      className={cn(
-                        // The ring's colour is component-owned, and this
-                        // component did not own it: with no `focus-visible`
-                        // outline declared, the chips fell back to Chromium's
-                        // default blue — a colour that appears nowhere else on
-                        // this surface, while every sibling control declares the
-                        // accent ring.
-                        "px-1.5 py-0.5 rounded-sm text-3xs font-medium border transition-colors",
-                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
-                        active
-                          ? "bg-overlay-strong border-border-default text-text-primary"
-                          : "bg-overlay-subtle border-border-default/50 text-text-secondary hover:text-text-primary hover:border-border-default"
-                      )}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
+              {/* The native cancel glyph is a UA bitmap — heavier and brighter
+                  than every icon around it, and untouched by the theme. */}
+              {query.length > 0 && (
+                <button
+                  type="button"
+                  onClick={clearSearch}
+                  aria-label="Clear search"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded-sm text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                >
+                  <X className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+              )}
             </div>
+            <div role="group" aria-label="Filter plugins" className="flex flex-wrap gap-1">
+              {PLUGIN_FILTER_CHIPS.map(({ token, label }) => {
+                const active = queryTokens.includes(token.toLowerCase());
+                return (
+                  <button
+                    key={token}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => toggleFilterToken(token)}
+                    className={cn(
+                      // The ring's colour is component-owned: with no
+                      // `focus-visible` outline declared, the chips fell back to
+                      // Chromium's default blue.
+                      "px-1.5 py-0.5 rounded-sm text-3xs font-medium border transition-colors",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
+                      // Pressed is the segmented control's selected treatment: a
+                      // text-secondary border clears 3:1 against the fill, where
+                      // a fill step alone read as barely different from rest.
+                      // Forced colours repaint every border alike, so the
+                      // pressed one takes the system highlight there.
+                      active
+                        ? "bg-overlay-medium border-text-secondary text-text-primary forced-colors:border-[Highlight]"
+                        : "bg-overlay-subtle border-border-default/50 text-text-secondary hover:text-text-primary hover:border-border-default"
+                    )}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            <p role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+              {searchAnnouncement}
+            </p>
             {/* The health summary. Deliberately a filter, not a re-sort: the
                 list keeps its category order and its spatial memory, and this
                 is the one control that narrows to the trouble. It disappears
@@ -806,7 +809,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                   // than stranding the keyboard on document.body.
                   searchInputRef.current?.focus();
                 }}
-                className="w-full flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20 text-left transition-colors hover:bg-status-danger/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                // Hover moves the border, not the fill: the danger text only
+                // just clears 4.5:1 on the resting tint, and a deeper hover tint
+                // dropped the screen's most urgent line below it.
+                className="w-full flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20 text-left transition-colors hover:border-status-danger/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
               >
                 <AlertCircle
                   className="w-3.5 h-3.5 text-status-danger shrink-0"
@@ -859,29 +865,15 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           ) : !hasAnyPlugins ? null : isSearchActive &&
             filteredPlugins.length === 0 &&
             filteredProjectPlugins.length === 0 ? (
-            // Filtered to nothing — offer a one-tap escape back to the full list.
-            // Anchored near the top rather than centred in the column: the
-            // search box is what caused this, and floating the message halfway
-            // down leaves it a long way from its own cause. The width floor
-            // stops a three-word phrase stacking onto three lines.
+            // Filtered to nothing. The canvas beside this owns the recovery
+            // action (one CTA when both panes are empty), and the search box
+            // carries its own clear button, so this stays a quiet label.
             <div className="flex-1 min-h-0 flex items-start justify-center pt-8 px-3">
               <EmptyState
                 className="w-full max-w-[16rem]"
                 variant="filtered-empty"
                 scale="sidebar"
                 title="No matching plugins"
-                action={
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setQuery("");
-                      searchInputRef.current?.focus();
-                    }}
-                    className="text-xs text-text-secondary hover:text-text-primary underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded-sm"
-                  >
-                    Clear search
-                  </button>
-                }
               />
             </div>
           ) : (
@@ -1017,6 +1009,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               plugin={selectedPlugin}
               checkingUpdate={pm.checkingUpdate.has(selectedPlugin.manifest.name)}
               upToDate={pm.upToDateId === selectedPlugin.manifest.name}
+              toggling={pm.pending.has(selectedPlugin.manifest.name)}
+              onToggle={() => void pm.handleToggle(selectedPlugin)}
+              onRetry={() => void pm.retryPlugin(selectedPlugin)}
               onUninstall={() => pm.armUninstall(selectedPlugin)}
               onCheckForUpdate={() => void pm.handleCheckForUpdate(selectedPlugin)}
             />
@@ -1027,7 +1022,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             // to the same filtered set as the master list.
             <PluginCatalog
               plugins={isSearchActive ? filteredPlugins : pm.plugins}
+              filtered={isSearchActive}
+              hasOtherMatches={filteredProjectPlugins.length > 0}
               onSelect={setSelectedPluginId}
+              onClearSearch={clearSearch}
             />
           ) : (
             // No plugins at all — a roomy centered prompt rather than an empty

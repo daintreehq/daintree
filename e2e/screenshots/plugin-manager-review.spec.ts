@@ -51,6 +51,7 @@
  *   notagline      an installed plugin with no tagline — the common case.
  *   permissions    the Permissions tab, capability severities and scopes.
  *   settings       the generated settings form.
+ *   selectescape   Escape on an open settings Select keeps the manager open.
  *   disabled       a disabled row and its detail header.
  *   dev            a dev-mode plugin, generation badge and hot-reload state.
  *   failed         a plugin whose load errored while still reading "enabled".
@@ -60,6 +61,7 @@
  *   chip           a category chip filter active.
  *   empty          a query that matches nothing.
  *   project        the project-plugin section and its trust gate.
+ *   installmenu    the Install plugin menu open in the title bar.
  *   urldialog      the Install from URL dialog.
  *   uninstall      the uninstall confirm, with its delete-settings checkbox.
  *   focus          keyboard focus ring on the first row.
@@ -579,6 +581,31 @@ test("plugin manager review — provenance, states, and overflow", async () => {
       await snap(page, "31-settings");
     });
 
+    // 6b. Escape on an open settings Select closes the list and leaves the
+    //     manager open. The manager is non-modal, so the global keybinding
+    //     layer pops the escape stack before Radix sees the key.
+    await step("selectescape", async () => {
+      await select(page, "Markdown Studio");
+      await openTab(page, "Settings");
+      // The trigger is a plain stand-in button until Radix loads, so find it
+      // by its value rather than by role.
+      await page
+        .locator('[aria-label="Details for Markdown Studio"] button', { hasText: "github" })
+        .first()
+        .click();
+      await page
+        .locator('[role="listbox"]')
+        .first()
+        .waitFor({ state: "visible", timeout: T_MEDIUM });
+      await settle(page, 300);
+      await page.keyboard.press("Escape");
+      await settle(page, 300);
+      if (!(await page.locator(MANAGER).isVisible())) {
+        throw new Error("Escape on the settings Select closed the plugin manager");
+      }
+      await snap(page, "32-settings-after-escape");
+    });
+
     // 7. Disabled by the user.
     await step("disabled", async () => {
       await select(page, "Tokyo Night Extras");
@@ -645,8 +672,18 @@ test("plugin manager review — provenance, states, and overflow", async () => {
     });
 
     // 16. Install from URL.
+    await step("installmenu", async () => {
+      await page.locator(`${MANAGER} button`, { hasText: "Install plugin" }).first().click();
+      await settle(page, 400);
+      await snap(page, "79-install-menu");
+      await page.keyboard.press("Escape");
+      await settle(page, 300);
+    });
+
     await step("urldialog", async () => {
-      await page.locator(`${MANAGER} button`, { hasText: "Install from URL" }).first().click();
+      await page.locator(`${MANAGER} button`, { hasText: "Install plugin" }).first().click();
+      await settle(page, 300);
+      await page.locator('[role="menuitem"]', { hasText: "Install from URL" }).first().click();
       await settle(page, 400);
       await snap(page, "80-install-url-dialog");
       await page.keyboard.press("Escape");
