@@ -244,7 +244,7 @@ export function PresetSelector({
           tabIndex={0}
           aria-activedescendant={optionDomId(activeIndex)}
           onKeyDown={handleListKeyDown}
-          // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- focus is shown on the active option (aria-activedescendant), which is always highlighted
+          // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- focus is drawn on the aria-activedescendant option by PALETTE_ROW_CLASS (fill + leading rail)
           className="overflow-y-auto max-h-80 focus:outline-hidden"
         >
           {renderOption(options[0]!, 0, "preset-option-default")}

@@ -137,9 +137,6 @@ const DURABLE_ALLOWLIST = new Set([
   // another put two accents in the same focus region. The accent is the focus
   // anchor alone, and both files came off this list.
 
-  // PresetColorPicker Done CTA (primary commit action) + focus-visible ring
-  "src/components/Settings/PresetColorPicker.tsx",
-
   // Current rebase step indicator in the conflict UI (single primary anchor per active focus region)
   "src/components/Worktree/ReviewHub/ConflictPanel.tsx",
 
@@ -181,7 +178,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Portal/PortalDock.tsx",
     "src/components/Portal/PortalToolbar.tsx",
     "src/components/Recovery/CrashRecoveryDialog.tsx",
-    "src/components/Settings/PresetSelector.tsx",
     "src/components/Settings/SettingsDialog.tsx",
     "src/components/Settings/SettingsSubtabBar.tsx",
     "src/components/Terminal/ContentGridDefault.tsx",
