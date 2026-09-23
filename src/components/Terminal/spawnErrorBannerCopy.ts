@@ -23,10 +23,9 @@ export const SPAWN_ERROR_BANNER_COPY = {
   },
   ENOTDIR: {
     title: "Invalid working directory",
-    description: (_error, cwd) => {
-      const safeCwd = cwd ? boundedErrorText(cwd) : "";
-      return `The working directory isn't valid: ${safeCwd || "(unknown)"}`;
-    },
+    // The banner's directory line already shows the path, so the sentence
+    // says what to do about it rather than repeating it.
+    description: () => "It's missing or isn't a directory. Change it to start the terminal.",
   },
   EIO: {
     title: "Couldn't allocate terminal",

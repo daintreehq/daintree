@@ -1251,3 +1251,79 @@ describe("InlineStatusBanner as the window title-bar surface", () => {
     expect(screen.getByRole("alert").className).not.toContain("app-drag-region");
   });
 });
+
+describe("InlineStatusBanner pane layout", () => {
+  const renderSingleLine = (layout?: "pane") =>
+    render(
+      <InlineStatusBanner
+        icon={FileEdit}
+        title="3 files changed, review when ready"
+        severity="neutral"
+        animated={false}
+        layout={layout}
+        actions={[{ id: "review", label: "Review", onClick: () => {} }]}
+        onClose={() => {}}
+      />
+    );
+
+  it("lets a single-line pane banner drop its controls beneath the text in a narrow pane", () => {
+    const { container } = renderSingleLine("pane");
+    const root = container.querySelector<HTMLElement>(":scope > div")!;
+    const controls = container.querySelector<HTMLElement>("[data-banner-controls]")!;
+    // The container query is what reads the pane's width, not the window's.
+    expect(root.className).toContain("@container/banner");
+    expect(root.className).toContain("flex-wrap");
+    expect(controls.className).toContain("basis-full");
+    // Dropped controls line up with the text, past the glyph, and × keeps the right edge.
+    expect(controls.className).toContain("pl-6");
+    const dismiss = screen.getByRole("button", { name: "Dismiss" });
+    expect(dismiss.className).toContain("ml-auto");
+    expect(controls.lastElementChild).toBe(dismiss);
+  });
+
+  it("leaves the default single-line layout unwrapped for every other consumer", () => {
+    const { container } = renderSingleLine();
+    const root = container.querySelector<HTMLElement>(":scope > div")!;
+    const controls = container.querySelector<HTMLElement>("[data-banner-controls]")!;
+    expect(root.className).not.toContain("@container/banner");
+    expect(root.className).not.toContain("flex-wrap");
+    expect(controls.className).not.toContain("basis-full");
+  });
+});
+
+describe("InlineStatusBanner context line truncation", () => {
+  const renderContext = (contextLine: string, truncate?: "middle") =>
+    render(
+      <InlineStatusBanner
+        title="Terminal restart failed"
+        description="Working directory no longer exists"
+        contextLine={contextLine}
+        contextLineTruncate={truncate}
+        severity="error"
+        animated={false}
+      />
+    );
+
+  it("splits a middle-truncated path so its final segment survives", () => {
+    renderContext("Directory: /a/b/c/project", "middle");
+    const line = screen.getByTitle("Directory: /a/b/c/project");
+    expect(line.children).toHaveLength(2);
+    expect(line.children[0]!.className).toContain("truncate");
+    expect(line.children[1]!.textContent).toBe("/project");
+    expect(line.textContent).toBe("Directory: /a/b/c/project");
+  });
+
+  it("keeps a trailing separator with the final segment rather than splitting on it", () => {
+    renderContext("Directory: /a/b/project/", "middle");
+    expect(screen.getByTitle("Directory: /a/b/project/").children[1]!.textContent).toBe(
+      "/project/"
+    );
+  });
+
+  it("clips the end by default, as a single run of text", () => {
+    renderContext("Directory: /a/b/c/project");
+    const line = screen.getByTitle("Directory: /a/b/c/project");
+    expect(line.children).toHaveLength(0);
+    expect(line.className).toContain("truncate");
+  });
+});

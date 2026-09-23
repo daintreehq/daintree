@@ -1,9 +1,10 @@
 import { XCircle, RotateCcw, FolderEdit, Trash2, Settings2 } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "./InlineStatusBanner";
 import { BannerOverflowMenu } from "./BannerOverflowMenu";
+import { createCopyErrorAction } from "./copyErrorAction";
 import { sanitizeErrorText } from "@/utils/errorText";
 import { actionService } from "@/services/ActionService";
-import { SPAWN_ERROR_BANNER_COPY } from "./spawnErrorBannerCopy";
+import { SPAWN_ERROR_BANNER_COPY, type SpawnErrorBannerCopy } from "./spawnErrorBannerCopy";
 import { DiagnosticCopyButton } from "./DiagnosticCopyButton";
 import type { SpawnError } from "@/types";
 
@@ -37,7 +38,7 @@ export function SpawnErrorBanner({
 }: SpawnErrorBannerProps) {
   const isCwdError = error.code === "ENOTDIR";
   const isResourceLimit = RESOURCE_LIMIT_CODES.has(error.code);
-  const copy = SPAWN_ERROR_BANNER_COPY[error.code];
+  const copy: SpawnErrorBannerCopy = SPAWN_ERROR_BANNER_COPY[error.code];
 
   const retryAction: BannerAction = {
     id: "retry",
@@ -53,17 +54,16 @@ export function SpawnErrorBanner({
     id: "update-cwd",
     label: "Change directory",
     icon: FolderEdit,
-    variant: "accent",
+    variant: "primary",
     onClick: () => onUpdateCwd(terminalId),
     title: "Change working directory",
-    ariaLabel: "Update working directory",
     disabled: isRestarting,
   };
   const limitsAction: BannerAction = {
     id: "open-limits",
     label: "Terminal limits",
     icon: Settings2,
-    variant: "accent",
+    variant: "primary",
     onClick: () => {
       void actionService.dispatch(
         "app.settings.openTab",
@@ -81,7 +81,6 @@ export function SpawnErrorBanner({
     variant: "danger",
     onClick: () => onTrash(terminalId),
     title: "Move to trash",
-    ariaLabel: "Move to trash",
     disabled: isRestarting,
   };
 
@@ -89,12 +88,15 @@ export function SpawnErrorBanner({
   // Everything else moves into the overflow menu so the banner keeps to the
   // one-action rule (CLAUDE.md Title-Message-Action).
   const primaryAction = isCwdError ? changeDirAction : isResourceLimit ? limitsAction : retryAction;
+  const hasDiagnostics = typeof error.errno === "number" || !!error.syscall || !!error.path;
+  // With diagnostics, their Copy carries the full message; without them, the
+  // overflow does.
+  const copyErrorAction = hasDiagnostics ? null : createCopyErrorAction(error.message);
   const overflowActions: BannerAction[] = [
     ...(primaryAction.id === retryAction.id ? [] : [retryAction]),
+    ...(copyErrorAction ? [copyErrorAction] : []),
     trashAction,
   ];
-
-  const hasDiagnostics = typeof error.errno === "number" || !!error.syscall || !!error.path;
 
   return (
     <InlineStatusBanner
@@ -102,6 +104,7 @@ export function SpawnErrorBanner({
       title={copy.title}
       description={copy.description(error, cwd)}
       contextLine={cwd ? `Directory: ${sanitizeErrorText(cwd)}` : undefined}
+      contextLineTruncate="middle"
       severity="error"
       action={primaryAction}
       descriptionExtras={
@@ -112,6 +115,9 @@ export function SpawnErrorBanner({
               syscall: error.syscall,
               path: error.path,
             }}
+            // The description is capped at 200 characters; the copy is where
+            // the whole message goes, so a clipped cause is never lost.
+            message={error.message}
           />
         ) : undefined
       }

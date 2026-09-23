@@ -14,9 +14,12 @@ vi.mock("@/components/ui/tooltip", () => ({
 vi.mock("@/components/ui/popover", () => ({
   Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   PopoverAnchor: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  PopoverTrigger: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button {...props}>{children}</button>
-  ),
+  PopoverTrigger: ({
+    children,
+    asChild,
+    ...props
+  }: React.ButtonHTMLAttributes<HTMLButtonElement> & { asChild?: boolean }) =>
+    asChild ? <>{children}</> : <button {...props}>{children}</button>,
   PopoverContent: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="overflow-content">{children}</div>
   ),
@@ -81,7 +84,7 @@ describe("TerminalErrorBanner", () => {
       recoverable: true,
       timestamp: 1,
     });
-    expect(screen.queryByRole("button", { name: /update working directory/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^change directory$/i })).toBeNull();
   });
 
   it("shows Change directory for ENOENT with failed cwd context", () => {
@@ -92,7 +95,7 @@ describe("TerminalErrorBanner", () => {
       timestamp: 1,
       context: { failedCwd: "/missing/dir" },
     });
-    expect(screen.getByRole("button", { name: /update working directory/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^change directory$/i })).toBeTruthy();
   });
 
   it("hides Change directory when error is non-recoverable", () => {
@@ -103,7 +106,7 @@ describe("TerminalErrorBanner", () => {
       timestamp: 1,
       context: { failedCwd: "/missing/dir" },
     });
-    expect(screen.queryByRole("button", { name: /update working directory/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^change directory$/i })).toBeNull();
   });
 
   it("renders the failed cwd in the context line", () => {
@@ -114,7 +117,25 @@ describe("TerminalErrorBanner", () => {
       timestamp: 1,
       context: { failedCwd: "/missing/dir" },
     });
-    expect(screen.getByText(/directory:.*\/missing\/dir/i)).toBeTruthy();
+    const line = screen.getByTitle("Directory: /missing/dir");
+    expect(line.textContent).toBe("Directory: /missing/dir");
+  });
+
+  it("keeps the final path segment of a long cwd in its own unclipped span", () => {
+    renderBanner({
+      message: "ENOENT",
+      code: "ENOENT",
+      recoverable: true,
+      timestamp: 1,
+      context: { failedCwd: "/Users/someone/Projects/a/very/deep/tree/packages/runtime" },
+    });
+    const line = screen.getByTitle(/Directory: .*\/runtime$/);
+    // The head gives way first; the tail — the part that names the directory —
+    // is a separate span, so middle truncation never eats it.
+    expect(line.lastElementChild?.textContent).toBe("/runtime");
+    expect(line.textContent).toBe(
+      "Directory: /Users/someone/Projects/a/very/deep/tree/packages/runtime"
+    );
   });
 
   it("invokes onRetry with the terminal id", () => {
@@ -141,7 +162,7 @@ describe("TerminalErrorBanner", () => {
       },
       { onTrash }
     );
-    fireEvent.click(screen.getByRole("button", { name: /move to trash/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^remove terminal$/i }));
     expect(onTrash).toHaveBeenCalledWith("t-1");
   });
 
@@ -158,5 +179,35 @@ describe("TerminalErrorBanner", () => {
     // Loading keeps focus on the control (no native disabled) and blocks activation.
     expect(retry.getAttribute("aria-disabled")).toBe("true");
     expect(retry.getAttribute("aria-busy")).toBe("true");
+  });
+
+  it("names every labelled control with the words it shows", () => {
+    renderBanner({
+      message: "gone",
+      code: "ENOENT",
+      recoverable: true,
+      timestamp: 1,
+      context: { failedCwd: "/missing/dir" },
+    });
+    for (const button of document.querySelectorAll<HTMLButtonElement>("button")) {
+      const visible = button.textContent?.trim();
+      const name = button.getAttribute("aria-label");
+      if (visible && name) expect(name.toLowerCase()).toContain(visible.toLowerCase());
+    }
+  });
+
+  it("offers the whole message from the overflow even when the description clips it", () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    const original = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    try {
+      const message = `${"a".repeat(300)} middle cause ${"b".repeat(300)}`;
+      renderBanner({ message, code: "EIO", recoverable: false, timestamp: 1 });
+      expect(screen.queryByText(/middle cause/)).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: /^copy error$/i }));
+      expect(writeText).toHaveBeenCalledWith(message);
+    } finally {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: original });
+    }
   });
 });

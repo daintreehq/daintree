@@ -575,7 +575,9 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       severity="error"
       title="Partial clone not removed"
       description="Close any Git processes using it, then delete the folder manually."
-      {...(strandedPath !== null ? { contextLine: strandedPath } : {})}
+      {...(strandedPath !== null
+        ? { contextLine: strandedPath, contextLineTruncate: "middle" as const }
+        : {})}
       {...(strandedPath !== null
         ? {
             action: {

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { MoreHorizontal } from "lucide-react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
-import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import type { BannerAction } from "./InlineStatusBanner";
 
 interface BannerOverflowMenuProps {
@@ -28,42 +28,41 @@ export function BannerOverflowMenu({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        type="button"
-        aria-label={ariaLabel}
-        title="More options"
-        className="p-1 rounded text-daintree-text/60 hover:text-text-primary hover:bg-daintree-border/50 transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary shrink-0"
-      >
-        <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={ariaLabel}
+          title="More options"
+          className="shrink-0"
+        >
+          <MoreHorizontal aria-hidden="true" />
+        </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" sideOffset={8} className="p-1 min-w-44 text-xs">
+      {/* `start`: the trigger sits at the left of a banner's control row, and
+          an end-aligned menu hangs off the pane's left edge. */}
+      <PopoverContent align="start" sideOffset={4} className="flex flex-col p-1 min-w-44">
         {actions.map((item) => {
           const isDanger = item.variant === "danger" || item.variant === "dangerFilled";
           const isDisabled = item.disabled || item.loading;
           return (
-            <button
+            <Button
               key={item.id}
-              type="button"
+              variant={isDanger ? "ghost-danger" : "ghost"}
+              size="sm"
               disabled={isDisabled}
-              aria-busy={item.loading || undefined}
+              loading={item.loading}
               aria-label={item.ariaLabel}
               onClick={() => {
                 if (isDisabled) return;
                 setOpen(false);
                 item.onClick();
               }}
-              className={cn(
-                "flex items-center gap-2 w-full px-2 py-1.5 rounded text-left transition-colors",
-                "outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent-primary",
-                isDanger
-                  ? "text-status-error hover:bg-status-error/10"
-                  : "text-text-primary hover:bg-daintree-border/50",
-                isDisabled && "cursor-not-allowed opacity-60 hover:bg-transparent"
-              )}
+              className="w-full justify-start"
             >
-              {item.icon && <item.icon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />}
+              {item.icon && <item.icon aria-hidden="true" />}
               {item.label}
-            </button>
+            </Button>
           );
         })}
       </PopoverContent>

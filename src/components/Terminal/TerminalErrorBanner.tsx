@@ -1,6 +1,7 @@
 import { XCircle, RotateCcw, FolderEdit, Trash2 } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "./InlineStatusBanner";
 import { BannerOverflowMenu } from "./BannerOverflowMenu";
+import { createCopyErrorAction } from "./copyErrorAction";
 import { sanitizeErrorText, boundedErrorText } from "@/utils/errorText";
 import type { TerminalRestartError } from "@/types";
 
@@ -40,10 +41,9 @@ export function TerminalErrorBanner({
     id: "update-cwd",
     label: "Change directory",
     icon: FolderEdit,
-    variant: "accent",
+    variant: "primary",
     onClick: () => onUpdateCwd(terminalId),
     title: "Change working directory",
-    ariaLabel: "Update working directory",
     disabled: isRestarting,
   };
   const trashAction: BannerAction = {
@@ -53,9 +53,10 @@ export function TerminalErrorBanner({
     variant: "danger",
     onClick: () => onTrash(terminalId),
     title: "Move to trash",
-    ariaLabel: "Move to trash",
     disabled: isRestarting,
   };
+
+  const copyErrorAction = createCopyErrorAction(error.message);
 
   // Single contextual action: change directory is the specific fix for a
   // missing-cwd restart failure, otherwise retry. The rest move into the
@@ -63,6 +64,7 @@ export function TerminalErrorBanner({
   const primaryAction = canChangeDir ? changeDirAction : retryAction;
   const overflowActions: BannerAction[] = [
     ...(primaryAction.id === retryAction.id ? [] : [retryAction]),
+    ...(copyErrorAction ? [copyErrorAction] : []),
     trashAction,
   ];
 
@@ -76,6 +78,7 @@ export function TerminalErrorBanner({
           ? `Directory: ${sanitizeErrorText(error.context.failedCwd)}`
           : undefined
       }
+      contextLineTruncate="middle"
       severity="error"
       action={primaryAction}
       trailingSlot={

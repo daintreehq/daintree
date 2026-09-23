@@ -23,9 +23,12 @@ vi.mock("@/components/ui/tooltip", () => ({
 vi.mock("@/components/ui/popover", () => ({
   Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   PopoverAnchor: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  PopoverTrigger: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button {...props}>{children}</button>
-  ),
+  PopoverTrigger: ({
+    children,
+    asChild,
+    ...props
+  }: React.ButtonHTMLAttributes<HTMLButtonElement> & { asChild?: boolean }) =>
+    asChild ? <>{children}</> : <button {...props}>{children}</button>,
   PopoverContent: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="overflow-content">{children}</div>
   ),
@@ -161,7 +164,7 @@ describe("SpawnErrorBanner", () => {
     const retry = screen.getByRole("button", { name: /retry starting terminal/i });
     expect(overflow().contains(retry)).toBe(false);
     // Remove terminal is demoted into the overflow menu.
-    const trash = screen.getByRole("button", { name: /move to trash/i });
+    const trash = screen.getByRole("button", { name: /^remove terminal$/i });
     expect(overflow().contains(trash)).toBe(true);
     expect(trash.textContent).toContain("Remove terminal");
     // The overflow trigger keeps its accessible label.
@@ -179,6 +182,37 @@ describe("SpawnErrorBanner", () => {
       expect(
         overflow().contains(screen.getByRole("button", { name: /retry starting terminal/i }))
       ).toBe(true);
+    }
+  );
+
+  it.each(ALL_SPAWN_ERROR_CODES)(
+    "gives the inline fix for %s the same treatment as Retry",
+    (code) => {
+      renderBanner(code);
+      const inline = Array.from(
+        document.querySelectorAll<HTMLButtonElement>("[data-banner-controls] > button")
+      ).filter(
+        (b) =>
+          !overflow().contains(b) &&
+          !/more recovery options/i.test(b.getAttribute("aria-label") ?? "")
+      );
+      // Exactly one contextual fix sits inline, whatever the code — and it
+      // always looks like the primary, never like a link beside it.
+      expect(inline).toHaveLength(1);
+      expect(inline[0]!.getAttribute("data-variant")).toBe("outline");
+    }
+  );
+
+  it.each(ALL_SPAWN_ERROR_CODES)(
+    "names every labelled control for %s with the words it shows",
+    (code) => {
+      renderBanner(code, { errno: 2, path: "/bin/x" });
+      for (const button of document.querySelectorAll<HTMLButtonElement>("button")) {
+        const visible = button.textContent?.trim();
+        const name = button.getAttribute("aria-label");
+        // WCAG 2.5.3: a speech user says what they see.
+        if (visible && name) expect(name.toLowerCase()).toContain(visible.toLowerCase());
+      }
     }
   );
 
@@ -201,7 +235,7 @@ describe("SpawnErrorBanner", () => {
   it("makes Change directory the inline primary action for an invalid working directory", () => {
     const onUpdateCwd = vi.fn();
     renderBanner("ENOTDIR", { onUpdateCwd });
-    const changeDir = screen.getByRole("button", { name: /update working directory/i });
+    const changeDir = screen.getByRole("button", { name: /^change directory$/i });
     expect(overflow().contains(changeDir)).toBe(false);
     fireEvent.click(changeDir);
     expect(onUpdateCwd).toHaveBeenCalledWith("t-1");
@@ -214,7 +248,7 @@ describe("SpawnErrorBanner", () => {
   it("invokes onTrash from the overflow menu", () => {
     const onTrash = vi.fn();
     renderBanner("ENOENT", { onTrash });
-    fireEvent.click(screen.getByRole("button", { name: /move to trash/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^remove terminal$/i }));
     expect(onTrash).toHaveBeenCalledWith("t-1");
   });
 
@@ -247,6 +281,8 @@ describe("SpawnErrorBanner", () => {
     const retry = screen.getByRole("button", { name: /retry starting terminal/i });
     expect(overflow().contains(retry)).toBe(true);
     expect(retry.hasAttribute("disabled")).toBe(true);
+    // Busy, not just unavailable: the retry is in flight.
+    expect(retry.getAttribute("aria-busy")).toBe("true");
     fireEvent.click(retry);
     expect(onRetry).not.toHaveBeenCalled();
   });
@@ -272,6 +308,61 @@ describe("SpawnErrorBanner", () => {
     it("omits absent fields from the payload (path only)", () => {
       renderBanner("ENOENT", { path: "/bin/missing" });
       expect(screen.getByTestId("diagnostic-payload").textContent).toBe("path=/bin/missing");
+    });
+
+    it("copies the whole message beneath the fields, however far the description clips it", async () => {
+      const writeText = vi.fn(() => Promise.resolve());
+      const original = navigator.clipboard;
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+      try {
+        const cause = "the real cause sits in the middle of a very long line";
+        const message = `${"a".repeat(300)} ${cause} ${"b".repeat(300)}`;
+        render(
+          <SpawnErrorBanner
+            terminalId="t-1"
+            error={{ code: "UNKNOWN", message, errno: 127 }}
+            onUpdateCwd={vi.fn()}
+            onRetry={vi.fn()}
+            onTrash={vi.fn()}
+          />
+        );
+        // The visible description is capped, so the cause is not on screen…
+        expect(screen.queryByText(new RegExp(cause))).toBeNull();
+        fireEvent.click(screen.getByRole("button", { name: /copy diagnostics/i }));
+        // …but it is on the clipboard, after the fields it was copied with.
+        expect(writeText).toHaveBeenCalledWith(`errno=127\n${message}`);
+      } finally {
+        Object.defineProperty(navigator, "clipboard", { configurable: true, value: original });
+      }
+    });
+
+    it("offers the whole message from the overflow when there are no fields to copy it with", () => {
+      const writeText = vi.fn(() => Promise.resolve());
+      const original = navigator.clipboard;
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+      try {
+        const message = `${"a".repeat(300)} middle cause ${"b".repeat(300)}`;
+        const { unmount } = render(
+          <SpawnErrorBanner
+            terminalId="t-1"
+            error={{ code: "UNKNOWN", message }}
+            onUpdateCwd={vi.fn()}
+            onRetry={vi.fn()}
+            onTrash={vi.fn()}
+          />
+        );
+        expect(screen.queryByTestId("diagnostic-payload")).toBeNull();
+        expect(screen.queryByText(/middle cause/)).toBeNull();
+        fireEvent.click(screen.getByRole("button", { name: /^copy error$/i }));
+        expect(writeText).toHaveBeenCalledWith(message);
+        unmount();
+
+        // With fields present their Copy already carries the message — one way to copy, not two.
+        renderBanner("UNKNOWN", { errno: 1 });
+        expect(screen.queryByRole("button", { name: /^copy error$/i })).toBeNull();
+      } finally {
+        Object.defineProperty(navigator, "clipboard", { configurable: true, value: original });
+      }
     });
 
     it("still renders the copy button when clipboard is unavailable, but clicking is a no-op", () => {
