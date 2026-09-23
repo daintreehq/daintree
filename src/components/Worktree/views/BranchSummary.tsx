@@ -3,7 +3,7 @@ import { ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
-const ELLIPSIS = "...";
+const ELLIPSIS = "…";
 /** Subpixel slack, so the browser never adds a second ellipsis on top of ours. */
 const FIT_SLACK = 2;
 

@@ -472,7 +472,7 @@ test.describe.serial("Full: New Worktree Dialog", () => {
     expect(shown).toHaveLength(2);
     for (const name of shown) {
       expect(name.overflowing).toBe(false);
-      expect(name.visible.replace(/\.\.\./g, "").length).toBeGreaterThan(4);
+      expect(name.visible.replace(/…|\.\.\./g, "").length).toBeGreaterThan(4);
     }
   });
 });

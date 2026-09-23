@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { cn } from "../../lib/utils";
-import { middleTruncate } from "../../utils/textParsing";
+import { truncateBranchName } from "../../utils/textParsing";
 import { BRANCH_PREFIX_MAP, DEFAULT_BRANCH_TYPE } from "@shared/config/branchPrefixes";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -54,7 +54,7 @@ export function BranchLabel({
   const { displayName, typeId, rest } = useMemo(() => {
     const parts = label.split("/");
     if (parts.length <= 1) {
-      return { displayName: null, typeId: null, rest: middleTruncate(label, 40) };
+      return { displayName: null, typeId: null, rest: truncateBranchName(label, 40) };
     }
 
     const [prefix, ...tail] = parts;
@@ -64,7 +64,7 @@ export function BranchLabel({
       return {
         displayName: config.displayName,
         typeId: config.id,
-        rest: middleTruncate(tail.join("/"), 36),
+        rest: truncateBranchName(tail.join("/"), 36),
       };
     } else {
       return {
@@ -73,7 +73,7 @@ export function BranchLabel({
             ? prefix!.toUpperCase()
             : prefix!.charAt(0).toUpperCase() + prefix!.slice(1).toLowerCase(),
         typeId: DEFAULT_BRANCH_TYPE.id,
-        rest: middleTruncate(tail.join("/"), 36),
+        rest: truncateBranchName(tail.join("/"), 36),
       };
     }
   }, [label]);

@@ -376,6 +376,18 @@
   border-color: var(--_border);
   color: var(--_fg);
   font-size: var(--_size);
+  transition: color 150ms ease;
+}
+
+/* The hover, armed and pressed overlays brighten the fill under the chip's own
+ * translucent wash, and on several dark themes secondary text falls under 4.5:1
+ * against that composite. The branch steps up the text ramp while the pill is
+ * lifted, which also reads as the whole pill answering the pointer. */
+.toolbar-project-pill:hover .toolbar-project-chip,
+.toolbar-project-pill:active .toolbar-project-chip,
+.toolbar-project-pill[aria-expanded="true"] .toolbar-project-chip,
+.toolbar-project-pill[data-state="open"] .toolbar-project-chip {
+  --_fg: var(--theme-text-primary);
 }
 
 .toolbar-project-meta {

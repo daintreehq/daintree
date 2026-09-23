@@ -142,7 +142,7 @@ describe("boundedErrorText", () => {
     const long = "a".repeat(250);
     const result = boundedErrorText(long, 200);
     expect(result.length).toBeLessThanOrEqual(200);
-    expect(result).toContain("...");
+    expect(result).toContain("…");
     expect(result.startsWith("a")).toBe(true);
     expect(result.endsWith("a")).toBe(true);
   });
@@ -153,7 +153,7 @@ describe("boundedErrorText", () => {
     expect(result.length).toBeLessThanOrEqual(200);
     expect(result.startsWith("PREFIX_")).toBe(true);
     expect(result.endsWith("_SUFFIX")).toBe(true);
-    expect(result).toContain("...");
+    expect(result).toContain("…");
   });
 
   it("uses default limit of 200", () => {
@@ -174,7 +174,7 @@ describe("boundedErrorText", () => {
     const long = "abcdefghij".repeat(20); // 200 chars
     const result = boundedErrorText(long, 50);
     expect(result.length).toBeLessThanOrEqual(50);
-    expect(result).toContain("...");
+    expect(result).toContain("…");
   });
 
   it("returns empty string for empty input", () => {

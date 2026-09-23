@@ -3,12 +3,16 @@ import fs from "fs/promises";
 import path from "path";
 
 const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
+// The pill's markup lives in its own component; the toolbar and the pill are read as one surface.
+const PILL_PATH = path.resolve(__dirname, "../ToolbarProjectPill.tsx");
+const readToolbarSource = async () =>
+  (await fs.readFile(TOOLBAR_PATH, "utf-8")) + (await fs.readFile(PILL_PATH, "utf-8"));
 
 describe("Toolbar layout — issue #2584 project switcher collision", () => {
   let source: string;
 
   beforeEach(async () => {
-    source = await fs.readFile(TOOLBAR_PATH, "utf-8");
+    source = await readToolbarSource();
   });
 
   describe("Header container", () => {
@@ -195,7 +199,7 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     it("can drop the branch chip out of the layout entirely — issue #11084", () => {
       // A scratch workspace has no branch, and a merely-faded chip still reserves
       // blank width beside the name. So the chip must be conditionally mounted, not
-      // unconditionally rendered and hidden. Which of the three states applies to a
+      // unconditionally rendered and hidden. Which of the four states applies to a
       // given workspace is `branchChipState`'s contract, unit-tested in
       // src/lib/__tests__/workspaceIdentity.test.ts — here we only prove the pill is
       // wired to it and can still reserve width without showing a branch.
@@ -204,8 +208,8 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
       const beforeChip = source.slice(Math.max(0, chipIndex - 300), chipIndex);
       expect(beforeChip).toMatch(/chipState !== "hidden"\s*&&\s*\(/);
 
-      const chipBlock = source.slice(chipIndex, chipIndex + 800);
-      expect(chipBlock).toMatch(/chipState === "reserved"\s*&&\s*"opacity-0"/);
+      // What the reserved chip looks like — a placeholder bone, not a transparent
+      // box — is asserted by rendering it, in ToolbarProjectPill.test.tsx.
       // The chip must never mount straight off the branch: that collapses the pill
       // for a branchless project too, which is the titlebar shift 88e295a07 fixed.
       expect(source).not.toMatch(

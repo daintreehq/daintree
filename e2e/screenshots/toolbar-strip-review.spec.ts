@@ -728,11 +728,11 @@ test("toolbar strip review — every state of the strip", async () => {
           return result.ok ? "ok" : (result.error?.message ?? "failed");
         }, LONG_BRANCH);
         if (selected !== "ok") throw new Error(`worktree.select: ${selected}`);
-        // `middleTruncate` spells its ellipsis as three dots.
+        // The pill's branch truncation spells its ellipsis as a single "…".
         let last = "";
         for (let i = 0; i < 40; i++) {
           const pill = await page.locator(SEL.toolbar.projectSwitcherTrigger).textContent();
-          if (pill?.includes("...")) break;
+          if (pill?.includes("…")) break;
           const cards = await page
             .locator("[data-worktree-branch]")
             .evaluateAll((els) => els.map((el) => el.getAttribute("data-worktree-branch")));
