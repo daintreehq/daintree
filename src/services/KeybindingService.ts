@@ -645,10 +645,15 @@ class KeybindingService {
   getAllBindingsWithEffectiveCombos(): Array<
     RegisteredKeybindingConfig & { effectiveCombo: string }
   > {
+    // Resolved per binding, the way the matcher resolves it: an action can be
+    // registered twice (`terminal.close` on ⌘W and ⌃F4), and resolving by action
+    // ID would report the first binding's combo on every one of its rows.
     return Array.from(this.bindings.values())
       .flat()
       .map((binding) => {
-        const effectiveCombo = this.getEffectiveCombo(binding.actionId);
+        const effectiveCombo = this.overrides.has(binding.actionId)
+          ? this.overrides.get(binding.actionId)?.[0]
+          : binding.combo;
         return {
           ...binding,
           effectiveCombo: effectiveCombo ?? "",
@@ -690,7 +695,12 @@ class KeybindingService {
       isPrefix: boolean;
     }> = [];
 
-    const allBindings = this.getAllBindingsWithEffectiveCombos();
+    // Only bindings live in the current scope: an action's second binding in
+    // another scope (a portal-only chord) would otherwise be offered where it
+    // can't fire.
+    const allBindings = this.getAllBindingsWithEffectiveCombos().filter((binding) =>
+      this.scopeAllows(binding.scope)
+    );
 
     // Track which second keys lead to deeper chords (3+ part combos)
     const deeperPrefixes = new Map<string, { key: string; category: string }>();

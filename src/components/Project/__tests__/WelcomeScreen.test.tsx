@@ -718,7 +718,8 @@ describe("WelcomeScreen", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(null)} />);
 
     expect(screen.getByText("Keyboard shortcuts")).toBeTruthy();
-    expect(screen.getByText("New panel").parentElement?.textContent).toContain("Cmd+N");
+    // The visible chips, as this (non-mac) test platform prints them.
+    expect(screen.getByText("New panel").parentElement?.textContent).toContain("Ctrl+N");
     expect(screen.queryByText("Quick switcher")).toBeNull();
   });
 
@@ -841,7 +842,7 @@ describe("WelcomeScreen", () => {
 
     expect(screen.getAllByText("Keyboard shortcuts").length).toBeGreaterThanOrEqual(1);
     expect(container.querySelectorAll("kbd").length).toBeGreaterThanOrEqual(6);
-    expect(screen.getByText("Command palette").parentElement?.textContent).toContain("Cmd+K");
+    expect(screen.getByText("Command palette").parentElement?.textContent).toContain("Ctrl+K");
   });
 
   it("keeps the shortcut list off the screen while the checklist is teaching", () => {

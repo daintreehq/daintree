@@ -132,7 +132,7 @@ function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; age
                 {displayCombo}
               </span>
             ) : (
-              <span className="text-xs text-text-secondary">Unbound</span>
+              <span className="text-xs text-text-secondary">Not set</span>
             )}
             <Button
               size="sm"

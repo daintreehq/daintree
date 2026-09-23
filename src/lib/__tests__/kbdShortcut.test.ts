@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  describeChord,
   parseChord,
   MODIFIER_SEARCH_MAP,
   VALID_KEY_PATTERN,
@@ -7,6 +8,7 @@ import {
   normalizeQuery,
   comboToAriaKeyshortcuts,
 } from "../kbdShortcut";
+import { buildDefaultKeybindings } from "@shared/config/defaultKeybindings";
 
 describe("parseChord — macOS glyphs", () => {
   it("maps Cmd/Option/Shift/Ctrl to glyphs", () => {
@@ -433,5 +435,51 @@ describe("parseChord — pre-glyphed input (formatComboForDisplay → KbdChord p
 
   it("preserves unknown glyphed tokens as-is", () => {
     expect(parseChord("⌘+X", true)).toEqual([["⌘", "X"]]);
+  });
+});
+
+describe("describeChord", () => {
+  const combos = buildDefaultKeybindings(false)
+    .map((binding) => binding.combo)
+    .filter((combo) => combo.length > 0);
+
+  it("never speaks a glyph for any shipped binding, on either platform", () => {
+    for (const combo of combos) {
+      for (const mac of [true, false]) {
+        const spoken = describeChord(combo, mac);
+        expect(spoken, combo).not.toMatch(/[⌘⌥⇧⌃⏎⎋⇥⌫⌦↑↓←→]/);
+        expect(spoken.trim().length, combo).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("says 'then' once between each pair of chord steps", () => {
+    for (const combo of combos) {
+      const steps = parseChord(combo, true).length;
+      expect(describeChord(combo, true).split(", then ").length, combo).toBe(steps);
+    }
+  });
+
+  it("names every key of a step, in order", () => {
+    for (const combo of combos) {
+      const stepKeys = parseChord(combo, false).map((keys) => keys.length);
+      const spokenKeys = describeChord(combo, false)
+        .split(", then ")
+        .map((step) => step.split(" ").filter((word) => /^[A-Z0-9]/.test(word)).length);
+      stepKeys.forEach((count, i) => expect(spokenKeys[i], combo).toBeGreaterThanOrEqual(count));
+    }
+  });
+
+  it("uses each platform's own modifier names", () => {
+    expect(describeChord("Cmd+Alt+T", true)).not.toBe(describeChord("Cmd+Alt+T", false));
+    expect(describeChord("Cmd+Alt+T", false)).not.toMatch(/Command|Option/);
+  });
+
+  it("reads a key range as a range", () => {
+    expect(describeChord("Cmd+Alt+1–9", true)).toMatch(/1 through 9$/);
+  });
+
+  it("returns an empty string for an empty shortcut", () => {
+    expect(describeChord("", true)).toBe("");
   });
 });

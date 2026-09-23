@@ -19,7 +19,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+P",
     scope: "global",
     priority: 0,
-    description: "Open Quick Switcher",
+    description: "Open quick switcher",
     category: "Navigation",
   },
   {
@@ -176,7 +176,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "layout.redo",
-    combo: "Cmd+Alt+Shift+Z",
+    combo: "Cmd+Shift+Alt+Z",
     scope: "global",
     priority: 0,
     description: "Redo last layout change",
@@ -192,7 +192,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "terminal.toggleDockAll",
-    combo: "Cmd+Alt+Shift+M",
+    combo: "Cmd+Shift+Alt+M",
     scope: "global",
     priority: 0,
     description: "Toggle all terminals dock state",
@@ -300,7 +300,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Open quick switcher",
-    category: "Agents",
+    category: "Navigation",
   },
   {
     actionId: "agent.claude",
@@ -734,7 +734,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     scope: "dev-preview",
     priority: 20,
     description: "Reload dev preview",
-    category: "Dev Preview",
+    category: "Dev preview",
   },
   {
     actionId: "nav.toggleSidebar",
@@ -1123,7 +1123,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Dock all sessions in active worktree",
-    category: "Worktree Sessions",
+    category: "Worktree sessions",
   },
   {
     actionId: "worktree.sessions.maximizeAll",
@@ -1131,7 +1131,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Move all sessions to grid in active worktree",
-    category: "Worktree Sessions",
+    category: "Worktree sessions",
   },
   {
     actionId: "worktree.sessions.resetRenderers",
@@ -1139,7 +1139,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Reset renderers for all sessions in active worktree",
-    category: "Worktree Sessions",
+    category: "Worktree sessions",
   },
 ];
 
@@ -1178,3 +1178,31 @@ export const KEYBINDING_PRIORITY = {
   ELEVATED: 5,
   OVERRIDE: 10,
 } as const;
+
+/**
+ * Browse order for the keybinding categories, shared by the shortcut reference
+ * and the generated docs so the two never list them differently. Sequenced by
+ * how often each area is reached for, not alphabetically: getting around first,
+ * then the work surfaces, then the occasional ones. A category missing from the
+ * list (a plugin's own) is still shown, after these, alphabetically.
+ */
+export const KEYBINDING_CATEGORY_ORDER: readonly string[] = [
+  "Navigation",
+  "Terminal",
+  "Agents",
+  "Fleet",
+  "Worktrees",
+  "Worktree sessions",
+  "Panels",
+  "Layout",
+  "Search",
+  "Project",
+  "Git",
+  "Portal",
+  "Dev preview",
+  "View",
+  "Voice",
+  "App",
+  "Help",
+  "System",
+];

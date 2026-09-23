@@ -296,3 +296,100 @@ export function normalizeQuery(query: string): string {
     .map((token) => MODIFIER_SEARCH_MAP[token] ?? token)
     .join("+");
 }
+
+// ── Spoken form ───────────────────────────────────────────────────────────
+// The visible chips are glyphs, and screen readers read ⌘ ⌥ ⇧ ⌃ as "place of
+// interest sign", "option key", "upwards white arrow" and "up arrowhead" —
+// or skip them. This is the text a listener needs instead: key names in the
+// platform's own words, "then" between chord steps.
+
+const SPOKEN_MAC_NAMES: Record<string, string> = {
+  cmd: "Command",
+  command: "Command",
+  meta: "Command",
+  ctrl: "Control",
+  control: "Control",
+  alt: "Option",
+  option: "Option",
+  shift: "Shift",
+  return: "Return",
+  enter: "Return",
+  escape: "Escape",
+  esc: "Escape",
+  backspace: "Delete",
+  delete: "Forward Delete",
+  del: "Forward Delete",
+};
+
+const SPOKEN_WIN_NAMES: Record<string, string> = {
+  cmd: "Ctrl",
+  command: "Ctrl",
+  meta: "Ctrl",
+  ctrl: "Ctrl",
+  control: "Ctrl",
+  alt: "Alt",
+  option: "Alt",
+  shift: "Shift",
+  return: "Enter",
+  enter: "Enter",
+  escape: "Escape",
+  esc: "Escape",
+  backspace: "Backspace",
+  delete: "Delete",
+  del: "Delete",
+};
+
+const SPOKEN_KEY_NAMES: Record<string, string> = {
+  tab: "Tab",
+  space: "Space",
+  up: "Up Arrow",
+  arrowup: "Up Arrow",
+  down: "Down Arrow",
+  arrowdown: "Down Arrow",
+  left: "Left Arrow",
+  arrowleft: "Left Arrow",
+  right: "Right Arrow",
+  arrowright: "Right Arrow",
+  pageup: "Page Up",
+  pagedown: "Page Down",
+  contextmenu: "Menu",
+  "/": "Slash",
+  "\\": "Backslash",
+  ".": "Period",
+  ",": "Comma",
+  "`": "Backtick",
+  "=": "Equals",
+  "-": "Minus",
+  "+": "Plus",
+  "[": "Left Bracket",
+  "]": "Right Bracket",
+  ";": "Semicolon",
+  "'": "Quote",
+};
+
+function spokenToken(rawToken: string, isMac: boolean): string {
+  const lower = rawToken.toLowerCase();
+  const named = (isMac ? SPOKEN_MAC_NAMES : SPOKEN_WIN_NAMES)[lower] ?? SPOKEN_KEY_NAMES[lower];
+  if (named) return named;
+  // A key range such as "1–9" (a collapsed numbered family) reads as a range.
+  const range = /^(\w)[–-](\w)$/.exec(rawToken);
+  if (range) return `${range[1]!.toUpperCase()} through ${range[2]!.toUpperCase()}`;
+  if (rawToken.length === 1) return rawToken.toUpperCase();
+  return rawToken;
+}
+
+/**
+ * The shortcut as it should be read aloud: `"Cmd+K Cmd+S"` →
+ * `"Command K, then Command S"` on macOS, `"Ctrl K, then Ctrl S"` elsewhere.
+ * Returns `""` for an empty shortcut.
+ */
+export function describeChord(shortcut: string, isMac: boolean): string {
+  if (!shortcut || !shortcut.trim()) return "";
+  const normalized = shortcut.trim().replace(/\s*\+\s*/g, "+");
+  return normalized
+    .split(/\s+/)
+    .map((step) => splitStepKeys(step))
+    .filter((tokens) => tokens.length > 0)
+    .map((tokens) => tokens.map((token) => spokenToken(token, isMac)).join(" "))
+    .join(", then ");
+}

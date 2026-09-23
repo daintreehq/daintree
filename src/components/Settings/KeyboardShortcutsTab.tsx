@@ -152,7 +152,7 @@ function ShortcutRow({
               {keybindingService.formatComboForDisplay(binding.effectiveCombo)}
             </span>
           ) : (
-            <span className="text-xs text-text-secondary italic">unbound</span>
+            <span className="text-xs text-text-secondary">Not set</span>
           )}
         </div>
       </div>
@@ -427,7 +427,7 @@ export function KeyboardShortcutsTab() {
 
         {filteredBindings.length === 0 && (
           <div className="text-center py-8 text-sm text-text-secondary">
-            No shortcuts found matching "{searchQuery}"
+            No shortcuts match "{searchQuery.trim()}"
           </div>
         )}
 
