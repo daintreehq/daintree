@@ -207,9 +207,12 @@ async function captureFrame(
 }
 
 async function openSettingsAt(page: Page, tab: string): Promise<void> {
-  await page.evaluate((detail) => {
-    window.dispatchEvent(new CustomEvent("daintree:open-settings-tab", { detail }));
-  }, { tab });
+  await page.evaluate(
+    (detail) => {
+      window.dispatchEvent(new CustomEvent("daintree:open-settings-tab", { detail }));
+    },
+    { tab }
+  );
   await page.locator(DIALOG).waitFor({ state: "visible", timeout: 20_000 });
   await settle(page, 700);
 }
