@@ -57,6 +57,21 @@ import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 
 const EMPTY_WORKTREES = new Map<string, WorktreeSnapshot>();
 
+/**
+ * How much of the inventory the dialog is showing right now — the scroll box's
+ * height less its padding, capped by the content. Holding the full content
+ * height instead would keep an unfiltered list's scroll range around as blank
+ * space under a two-row result.
+ */
+function visibleInventoryHeight(el: HTMLElement | null): number | null {
+  const scroller = el?.parentElement;
+  if (!el || !scroller) return null;
+  const style = getComputedStyle(scroller);
+  const inner =
+    scroller.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+  return Math.min(el.offsetHeight, inner);
+}
+
 interface RecipeManagerProps {
   isOpen: boolean;
   onClose: () => void;
@@ -90,7 +105,7 @@ export function RecipeManager({
   const [filterMinHeight, setFilterMinHeight] = useState<number | null>(null);
   const inventoryRef = useRef<HTMLDivElement>(null);
   const handleFilterChange = (next: string) => {
-    if (!filter && next) setFilterMinHeight(inventoryRef.current?.offsetHeight ?? null);
+    if (!filter && next) setFilterMinHeight(visibleInventoryHeight(inventoryRef.current));
     if (!next) setFilterMinHeight(null);
     setFilter(next);
   };
@@ -521,7 +536,10 @@ export function RecipeManager({
           <AppDialog.CloseButton />
         </AppDialog.Header>
 
-        <AppDialog.Body>
+        {/* Each query starts its results from the top: filtering from the
+            bottom of a long list would otherwise leave the matches scrolled
+            out of view above the sticky field. */}
+        <AppDialog.Body resetScrollKey={filter}>
           {totalCount === 0 ? (
             <EmptyState
               variant="zero-data"

@@ -212,6 +212,18 @@ test("recipes review", async ({ page }) => {
     await snap(page, DIALOG, "04-manager-filter.png");
   });
 
+  // Filtering from the bottom of a long list: the matches must land in view,
+  // not above the sticky field with blank space under it.
+  await step("manager-filter-from-bottom", async () => {
+    await open(page, { view: "manager", fixture: "crowded" });
+    await page
+      .locator(`${DIALOG} section`)
+      .last()
+      .evaluate((el) => el.scrollIntoView({ block: "end" }));
+    await page.getByRole("searchbox", { name: "Filter recipes" }).fill("work");
+    await snap(page, DIALOG, "04-manager-filter-from-bottom.png");
+  });
+
   await step("manager-keyboard", async () => {
     await open(page, { view: "manager" });
     // Walk the tab order until focus lands inside a recipe row's actions.
