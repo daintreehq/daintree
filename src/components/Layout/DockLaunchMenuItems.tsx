@@ -1,5 +1,4 @@
 import type * as React from "react";
-import { Fragment } from "react";
 import { SquareTerminal } from "lucide-react";
 import { BrandMark, Workflow } from "@/components/icons";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
@@ -38,11 +37,9 @@ interface DockLaunchMenuItemsProps {
   onLaunchAgent: (agentId: string) => void;
   /**
    * Number of leading `agents` entries that are pinned to the toolbar (as
-   * produced by `sortAgentsByToolbarPin`). When defined and a strict subset of
-   * `agents`, the list renders as two labelled groups ("Pinned" / "Other")
-   * split by a separator. Otherwise the list renders flat under a single
-   * "Launch agent" label, preserving the original behavior for callers that
-   * don't pass it.
+   * produced by `sortAgentsByToolbarPin`). The menu lists every agent under one
+   * "Agents" heading in that order, matching the `+` launcher; the count still
+   * feeds the shared model.
    */
   pinnedCount?: number;
   // The surface attribution to attach to everything this launcher dispatches —
@@ -85,12 +82,12 @@ export function DockLaunchMenuItems({
       source,
     });
 
-  const renderAgentItem = (agent: DockLaunchAgent, keyPrefix?: string) => {
+  const renderAgentItem = (agent: DockLaunchAgent, isRecent = false) => {
     const Icon = agent.icon;
     const isLaunchable = isAgentLaunchable(agent.availability);
     return (
       <C.Item
-        key={keyPrefix ? `${keyPrefix}-${agent.id}` : agent.id}
+        key={agent.id}
         className={!isLaunchable ? "opacity-70" : undefined}
         title={!isLaunchable ? unavailableAgentHint(agent.name, agent.availability) : undefined}
         onSelect={() =>
@@ -110,7 +107,12 @@ export function DockLaunchMenuItems({
         ) : (
           <SquareTerminal className="w-3.5 h-3.5 mr-2" />
         )}
-        {agent.name}
+        <span className="truncate">{agent.name}</span>
+        {/* The same trailing mark the launcher's row carries, so a recently
+            launched agent is listed once rather than twice. */}
+        {isRecent && (
+          <span className="ml-auto pl-2 text-2xs text-text-secondary shrink-0">Recent</span>
+        )}
       </C.Item>
     );
   };
@@ -156,36 +158,19 @@ export function DockLaunchMenuItems({
     </C.Item>
   );
 
-  const isSplitByDestination = model.dockPanels.length > 0 && model.gridPanels.length > 0;
+  const recentIds = new Set(model.recentAgents.map((agent) => agent.id));
 
   return (
     <>
-      {model.recentAgents.length > 0 && (
-        <>
-          <C.Label>Recently launched</C.Label>
-          {model.recentAgents.map((agent) => (
-            <Fragment key={`recent-${agent.id}`}>{renderAgentItem(agent, "recent")}</Fragment>
-          ))}
-          <C.Separator />
-        </>
-      )}
-
+      {/* One agent group, recent first and each agent once — the grouping the
+          `+` launcher uses. Pinned state lives on the toolbar button itself. */}
       {agents.length > 0 && (
         <>
-          {model.showAgentGroups ? (
-            <>
-              <C.Label>Pinned</C.Label>
-              {agents.slice(0, pinnedCount).map((agent) => renderAgentItem(agent))}
-              <C.Separator />
-              <C.Label>Other</C.Label>
-              {agents.slice(pinnedCount).map((agent) => renderAgentItem(agent))}
-            </>
-          ) : (
-            <>
-              <C.Label>Launch agent</C.Label>
-              {agents.map((agent) => renderAgentItem(agent))}
-            </>
-          )}
+          <C.Label>Agents</C.Label>
+          {model.recentAgents.map((agent) => renderAgentItem(agent, true))}
+          {agents
+            .filter((agent) => !recentIds.has(agent.id))
+            .map((agent) => renderAgentItem(agent))}
           <C.Separator />
         </>
       )}
@@ -195,25 +180,23 @@ export function DockLaunchMenuItems({
           hiding those kinds, the headings state where each group lands. Both
           lists derive from `panelKindIsDockable`, the same predicate the store
           guards use, so a dockability flip moves an item between sections
-          instead of letting a heading lie about it. When every panel shares one
-          destination (the grid context menu, where nothing docks) the split
-          would be noise, so a single neutral heading is used instead. */}
-      {isSplitByDestination ? (
+          instead of letting a heading lie about it. The heading always names
+          the destination, even when there is only one. */}
+      {model.dockPanels.length > 0 && (
         <>
           <C.Label>Open in dock</C.Label>
           {model.dockPanels.map(renderPanelItem)}
+        </>
+      )}
+      {model.gridPanels.length > 0 && (
+        <>
           <C.Label>Open in grid</C.Label>
           {model.gridPanels.map(renderPanelItem)}
-        </>
-      ) : (
-        <>
-          <C.Label>Launch panel</C.Label>
-          {[...model.dockPanels, ...model.gridPanels].map(renderPanelItem)}
         </>
       )}
 
       <C.Separator />
-      <C.Label>Launch recipe</C.Label>
+      <C.Label>Recipes</C.Label>
       {model.recipes.length > 0 ? model.recipes.map(renderRecipeItem) : renderCreateRecipeCue()}
     </>
   );
