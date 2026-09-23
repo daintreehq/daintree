@@ -50,6 +50,7 @@ import {
   type ToolbarButtonPlacementState,
 } from "@/lib/toolbarVisibilityDispatch";
 import { cn } from "@/lib/utils";
+import { formatCountExact } from "@/lib/formatCount";
 import { isMac, isLinux, isWindows } from "@/lib/platform";
 import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
@@ -397,7 +398,10 @@ function OverflowMenu({
                   <DropdownMenuLabel>Git</DropdownMenuLabel>
                   <DropdownMenuItem key="forge-commits" disabled>
                     <GitCommit className="mr-2 h-3.5 w-3.5" />
-                    Commits {repoStats?.commitCount != null ? `(${repoStats.commitCount})` : ""}
+                    Commits{" "}
+                    {repoStats?.commitCount != null
+                      ? `(${formatCountExact(repoStats.commitCount)})`
+                      : ""}
                   </DropdownMenuItem>
                 </DropdownMenuGroup>,
                 ...(isLast ? [] : [<DropdownMenuSeparator key="forge-sep" />]),
@@ -411,18 +415,25 @@ function OverflowMenu({
                   onClick={() => forgeStatsRef.current?.openIssues()}
                 >
                   <CircleDot className="mr-2 h-3.5 w-3.5 text-pr-open" />
-                  Issues {repoStats?.issueCount != null ? `(${repoStats.issueCount})` : ""}
+                  Issues{" "}
+                  {repoStats?.issueCount != null
+                    ? `(${formatCountExact(repoStats.issueCount)})`
+                    : ""}
                 </DropdownMenuItem>
                 <DropdownMenuItem key="forge-prs" onClick={() => forgeStatsRef.current?.openPrs()}>
                   <GitPullRequest className="mr-2 h-3.5 w-3.5 text-pr-merged" />
-                  Pull Requests {repoStats?.prCount != null ? `(${repoStats.prCount})` : ""}
+                  Pull Requests{" "}
+                  {repoStats?.prCount != null ? `(${formatCountExact(repoStats.prCount)})` : ""}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   key="forge-commits"
                   onClick={() => forgeStatsRef.current?.openCommits()}
                 >
                   <GitCommit className="mr-2 h-3.5 w-3.5" />
-                  Commits {repoStats?.commitCount != null ? `(${repoStats.commitCount})` : ""}
+                  Commits{" "}
+                  {repoStats?.commitCount != null
+                    ? `(${formatCountExact(repoStats.commitCount)})`
+                    : ""}
                 </DropdownMenuItem>
               </DropdownMenuGroup>,
               ...(isLast ? [] : [<DropdownMenuSeparator key="forge-sep" />]),

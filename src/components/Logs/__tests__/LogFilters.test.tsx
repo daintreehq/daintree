@@ -109,11 +109,13 @@ describe("LogFilters accessibility", () => {
     expect(preloadCount?.textContent).toBe("0");
   });
 
-  it("dims zero-count source rows with opacity-50", () => {
+  it("steps zero-count source rows down to secondary text, never whole-row opacity", () => {
+    // Opacity dimmed the row's focus ring and hover with it.
     render(<LogFilters {...baseProps} />);
     fireEvent.click(screen.getByText(/Sources/).closest("button")!);
     const preloadBtn = screen.getByText(/^\*?preload/).closest("button")!;
-    expect(preloadBtn.classList.contains("opacity-50")).toBe(true);
+    expect(preloadBtn.classList.contains("text-text-secondary")).toBe(true);
+    expect([...preloadBtn.classList].some((c) => /^opacity-\d+$/.test(c))).toBe(false);
   });
 
   it("keeps zero-count source rows clickable", () => {
@@ -136,13 +138,13 @@ describe("LogFilters accessibility", () => {
     fireEvent.click(screen.getByText(/Sources/).closest("button")!);
     const preloadBtn = screen.getByText(/\* preload/).closest("button")!;
     expect(preloadBtn.getAttribute("aria-pressed")).toBe("true");
-    expect(preloadBtn.classList.contains("opacity-50")).toBe(false);
+    expect(preloadBtn.classList.contains("text-text-secondary")).toBe(false);
   });
 
   it("does not dim non-zero source rows", () => {
     render(<LogFilters {...baseProps} />);
     fireEvent.click(screen.getByText(/Sources/).closest("button")!);
     const rendererBtn = screen.getByText(/^\*?renderer/).closest("button")!;
-    expect(rendererBtn.classList.contains("opacity-50")).toBe(false);
+    expect(rendererBtn.classList.contains("text-text-secondary")).toBe(false);
   });
 });

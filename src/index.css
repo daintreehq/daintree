@@ -2488,6 +2488,14 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     outline-offset: 2px !important;
   }
 
+  /* Rings drawn inset on purpose — inside an overflow-hidden group or an
+     unpadded scroller, where an outward ring is clipped — must stay inset
+     here, or forced colors pushes them back out to be clipped. */
+  [class*="focus-visible:-outline-offset-"]:focus-visible,
+  [class*="focus-visible:outline-offset-[-"]:focus-visible {
+    outline-offset: -2px !important;
+  }
+
   /* The working glyph is nothing but a masked background, which the forced
      canvas colour would erase. */
   .spinner-circle {

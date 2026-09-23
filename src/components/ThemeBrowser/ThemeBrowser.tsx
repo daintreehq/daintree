@@ -605,7 +605,7 @@ export function ThemeBrowser() {
               setTypeFilter("dark");
             }}
             className={cn(
-              "px-2.5 py-0.5 text-2xs font-medium transition-colors",
+              "rounded-l-md px-2.5 py-0.5 text-2xs font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
               typeFilter === "dark"
                 ? "bg-overlay-selected text-text-primary"
                 : "text-text-secondary hover:text-text-primary"
@@ -622,7 +622,7 @@ export function ThemeBrowser() {
               setTypeFilter("light");
             }}
             className={cn(
-              "px-2.5 py-0.5 text-2xs font-medium transition-colors border-l border-border-default",
+              "rounded-r-md px-2.5 py-0.5 text-2xs font-medium transition-colors border-l border-border-default focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
               typeFilter === "light"
                 ? "bg-overlay-selected text-text-primary"
                 : "text-text-secondary hover:text-text-primary"
