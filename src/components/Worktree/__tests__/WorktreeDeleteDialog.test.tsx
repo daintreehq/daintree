@@ -25,7 +25,10 @@ const {
   terminalsMock,
   devPreviewGetByWorktreeMock,
   buildPreviewMock,
+  teardownPreviewMock,
 } = vi.hoisted(() => ({
+  // Default for every suite: the delete runs no teardown.
+  teardownPreviewMock: vi.fn(async () => ({ phases: [] }) as unknown),
   startDeleteMock: vi.fn(),
   terminalCountsMock: { total: 0 },
   terminalsMock: [] as Array<{ running?: boolean }>,
@@ -38,6 +41,14 @@ const {
 vi.mock("@/components/Worktree/worktreeDeletePreview", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../worktreeDeletePreview")>();
   return { ...actual, buildWorktreeDeletePreview: buildPreviewMock };
+});
+
+vi.mock("@/clients", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/clients")>();
+  return {
+    ...actual,
+    worktreeClient: { ...actual.worktreeClient, getDeleteTeardownPreview: teardownPreviewMock },
+  };
 });
 
 (globalThis as Record<string, unknown>).window = globalThis.window ?? {};
@@ -164,6 +175,20 @@ vi.mock("@/components/ui/button", () => ({
 }));
 
 import { WorktreeDeleteDialog } from "../WorktreeDeleteDialog";
+
+/**
+ * A refused delete offers no delete at all — not a disabled one. The footer's
+ * primary is the recheck, it is not marked destructive, and the dialog drops
+ * its destructive variant so nothing on screen reads as a delete awaiting
+ * permission.
+ */
+function expectNoDeleteOffered(): void {
+  const primary = screen.getByTestId("delete-worktree-confirm");
+  expect(primary.textContent).toBe("Retry");
+  expect(primary.getAttribute("data-intent")).not.toBe("destructive");
+  expect(screen.getByTestId("delete-worktree-dialog").getAttribute("data-variant")).toBe("default");
+  expect(screen.queryByText(/^(Force )?delete worktree$/i)).toBeNull();
+}
 
 function makeWorktree(
   worktreeChanges: WorktreeChanges | null = null,
@@ -1522,9 +1547,7 @@ describe("WorktreeDeleteDialog — submodules", () => {
     expect(list.textContent).toContain("Fix the vendored parser");
     expect(list.textContent).toContain("a1b2c3d");
 
-    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
-      true
-    );
+    expectNoDeleteOffered();
     // Not a tier: no typed-name gate, and no force checkbox offering a way
     // through that does not exist.
     expect(screen.queryByTestId("delete-worktree-confirm-input")).toBeNull();
@@ -1548,13 +1571,15 @@ describe("WorktreeDeleteDialog — submodules", () => {
     const banner = await screen.findByTestId("delete-worktree-blocked");
     expect(banner.textContent).toContain("Push the submodule commits first");
     expect(banner.textContent).toContain("from inside the submodule");
+    // The recovery is the footer's primary now; the banner carries no button.
     // Scoped to what the inventory can prove: it measures reachability from
     // this module repo's own remote-tracking refs, never global existence.
     expect(banner.textContent).toContain("on no remote this clone knows about");
     expect(banner.textContent).not.toContain("nowhere else");
     // The commits are listed below; a banner repeating them says it twice.
     expect(banner.textContent).not.toContain("Fix the vendored parser");
-    expect(within(banner).getByRole("button").textContent).toBe("Recheck");
+    expect(within(banner).queryByRole("button")).toBeNull();
+    expect(screen.getByTestId("delete-worktree-confirm").textContent).toBe("Retry");
     expect(screen.getByTestId("delete-worktree-hint").textContent).toContain("Delete unavailable");
   });
 
@@ -1618,16 +1643,16 @@ describe("WorktreeDeleteDialog — submodules", () => {
 
     const banner = await screen.findByTestId("delete-worktree-blocked");
     expect(banner.textContent).toContain("Couldn't finish checking this worktree's submodules");
-    expect(banner.textContent).toContain("isn't available until the check finishes");
-    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
-      true
-    );
+    expect(banner.textContent).toContain("can't be deleted until the check completes");
+    expectNoDeleteOffered();
     // The parent status read fine, so the parent banner must stay away.
     expect(screen.queryByText(/Couldn't check this worktree for uncommitted work/)).toBeNull();
 
     // Retry re-runs the same fetch, and a completed inventory clears the block.
+    // It never dispatches: it only re-reads.
     buildPreviewMock.mockResolvedValue(makePreview([]));
-    fireEvent.click(within(banner).getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    expect(startDeleteMock).not.toHaveBeenCalled();
 
     await waitFor(() => {
       expect(screen.queryByTestId("delete-worktree-blocked")).toBeNull();
@@ -1660,9 +1685,7 @@ describe("WorktreeDeleteDialog — submodules", () => {
 
     const banner = await screen.findByTestId("delete-worktree-blocked");
     expect(banner.textContent).toContain("Push the submodule commits first");
-    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
-      true
-    );
+    expectNoDeleteOffered();
     // The commit itself is still previewed, not just counted.
     expect(screen.getByTestId("delete-worktree-submodule-commit-list").textContent).toContain(
       "Patch the parser"
@@ -1774,5 +1797,158 @@ describe("WorktreeDeleteDialog — submodules", () => {
 
     await screen.findByTestId("delete-worktree-blocked");
     expect(startDeleteMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("WorktreeDeleteDialog — submodule entries, rechecks, teardown", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
+    devPreviewGetByWorktreeMock.mockResolvedValue(null);
+    teardownPreviewMock.mockResolvedValue({ phases: [] });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  const entry = (path: string) => ({
+    path,
+    state: "moved" as const,
+    recordedOid: "0".repeat(40),
+    hasModifiedContent: true,
+    hasUntrackedContent: false,
+  });
+
+  it("never counts a submodule's own status row as a file", async () => {
+    // The parent reports a submodule with work in it as one ` M vendor/lib`
+    // row. Counting it as "1 uncommitted file" beside the three nested files
+    // it stands for stated four losses where there are three.
+    buildPreviewMock.mockResolvedValue(
+      makePreview([{ path: "vendor/lib", status: "modified" }], {
+        status: "verified",
+        risk: makeRisk({
+          entries: [entry("vendor/lib")],
+          dirtyFiles: ["vendor/lib/a.c", "vendor/lib/b.c"],
+          untrackedFiles: ["vendor/lib/c.h"],
+        }),
+      })
+    );
+    render(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
+    );
+    await settlePreview();
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+
+    const consequences = screen.getByTestId("delete-worktree-consequences").textContent ?? "";
+    expect(consequences).toContain("3 files inside submodules will be permanently lost");
+    expect(consequences).not.toMatch(/\d+ uncommitted file/);
+    expect(screen.getByTestId("delete-worktree-file-list").textContent).toContain("submodule");
+    // Display only: the row is still a tracked change to the tier, so the
+    // typed-name gate stays up exactly as before.
+    expect(screen.getByTestId("delete-worktree-confirm-input")).toBeDefined();
+  });
+
+  it("keeps the refusal on screen while a recheck runs, then says what it found", async () => {
+    const blocked = makePreview([], {
+      status: "verified",
+      risk: makeRisk({
+        atRiskCommits: [
+          { oid: "a1b2c3d4e5f6", subject: "Fix the parser", submodulePath: "vendor/lib" },
+        ],
+      }),
+    });
+    buildPreviewMock.mockResolvedValue(blocked);
+    render(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
+    );
+    const banner = await screen.findByTestId("delete-worktree-blocked");
+    // The remedy names where the push has to run from.
+    expect(banner.textContent).toContain("vendor/lib");
+
+    let resolveRecheck: (value: unknown) => void = () => {};
+    buildPreviewMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveRecheck = resolve;
+      })
+    );
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    // Still refused, still showing its evidence, and the recheck can't be
+    // stacked while it runs.
+    expect(screen.getByTestId("delete-worktree-blocked")).toBeDefined();
+    expect(screen.getByTestId("delete-worktree-submodule-commit-list").textContent).toContain(
+      "Fix the parser"
+    );
+    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
+      true
+    );
+
+    await act(async () => {
+      resolveRecheck(blocked);
+    });
+    expect(screen.getByRole("status").textContent).toContain("still blocked");
+    expect(startDeleteMock).not.toHaveBeenCalled();
+  });
+
+  it("moves focus to Cancel when a recheck turns Retry back into the delete", async () => {
+    buildPreviewMock.mockResolvedValue(makePreview([], { status: "unverified", risk: null }));
+    render(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
+    );
+    await screen.findByTestId("delete-worktree-blocked");
+    const primary = screen.getByTestId("delete-worktree-confirm");
+    primary.focus();
+
+    buildPreviewMock.mockResolvedValue(makePreview([]));
+    fireEvent.click(primary);
+    await waitFor(() => {
+      expect(screen.queryByTestId("delete-worktree-blocked")).toBeNull();
+    });
+    // The same button now reads "Delete worktree" and is live. Focus must not
+    // be left sitting on it from a click that meant "check again".
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toContain("can be deleted");
+    });
+    expect(screen.getByTestId("delete-worktree-confirm").textContent).toBe("Delete worktree");
+    expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+  });
+
+  it("names the teardown a delete runs, and the teardown it will skip", async () => {
+    buildPreviewMock.mockResolvedValue(makePreview([]));
+    teardownPreviewMock.mockResolvedValue({
+      phases: [
+        { phase: "resource-teardown", commands: ["devbox destroy helios"], approved: false },
+        { phase: "teardown", commands: ["docker compose down", "rm -rf .cache"], approved: true },
+      ],
+    });
+    render(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
+    );
+    await settlePreview();
+
+    const consequences = screen.getByTestId("delete-worktree-consequences").textContent ?? "";
+    expect(consequences).toContain("Project teardown will run first");
+    expect(consequences).toContain("docker compose down");
+    expect(consequences).toContain("The delete continues if it fails");
+    // Skipped, so its commands are not presented as something that will run.
+    expect(consequences).toContain("Resource teardown will be skipped");
+    expect(consequences).not.toContain("devbox destroy helios");
   });
 });

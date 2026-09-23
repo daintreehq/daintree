@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { Fragment, useState, useEffect, useRef } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { TypedNameConfirmInput } from "@/components/ui/TypedNameConfirmInput";
 import { TitleEntity } from "@/components/ui/TitleEntity";
@@ -7,11 +7,13 @@ import { FolderGit2 } from "@/components/icons";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { collectRunningAgentTerminals } from "@/utils/destructiveSessionConfirm";
 import { deriveEffectiveTier } from "@/services/actions/deriveEffectiveTier";
+import { worktreeClient } from "@/clients";
 import {
   buildWorktreeDeletePreview,
   buildWorktreeChangeRows,
   buildSubmoduleCommitRows,
   buildSubmoduleFileRows,
+  isSubmoduleChange,
   submoduleCommitsAreCapped,
   submoduleDeleteBlock,
   submoduleFileCount,
@@ -22,6 +24,7 @@ import {
   worktreeDeleteBlockedBy,
   worktreeDeleteContentRisk,
   PREVIEW_FILE_LIMIT,
+  type SubmoduleCommitRow,
   type WorktreeDeletePreview,
   type WorktreeSubmoduleRiskState,
 } from "@/components/Worktree/worktreeDeletePreview";
@@ -29,6 +32,7 @@ import { Button } from "@/components/ui/button";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import type { WorktreeState } from "@/types";
+import type { WorktreeTeardownPreview } from "@shared/types/worktree";
 import { cn } from "@/lib/utils";
 import { isProtectedBranch as isProtectedBranchName } from "@shared/utils/gitConstants";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
@@ -67,6 +71,17 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // fetch. The whole preview rides one call, so a retry re-reads the parent
   // status too — which is right: the two failures share a cause often enough.
   const [retryToken, setRetryToken] = useState(0);
+  // What the last user-requested recheck found, for the polite live region. A
+  // recheck that changes nothing on screen still has to say it ran.
+  const [recheckStatus, setRecheckStatus] = useState("");
+  // Set by a recheck, consumed once it settles: a recheck that clears the
+  // state it was called from unmounts or relabels the control that has focus.
+  const refocusAfterRecheckRef = useRef(false);
+  // The worktree the open-time fetch last ran for. A second run for the same
+  // one is a recheck, which keeps the evidence on screen while it runs.
+  const fetchedForRef = useRef<string | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [teardown, setTeardown] = useState<WorktreeTeardownPreview | null>(null);
   // Monotonic session token bumped on every open/close/worktree change (in the
   // open effect below). An in-flight submit revalidation captures the token and
   // aborts if it changed while awaiting — so a close→reopen (or worktree swap)
@@ -98,8 +113,6 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // (or unverifiable) state.
   const seedSummary = summarizeWorktreeChanges(worktree.worktreeChanges?.changes);
   const effectiveSummary = freshPreview ?? seedSummary;
-  const trackedChangeCount = effectiveSummary.trackedChangeCount;
-  const untrackedFileCount = effectiveSummary.untrackedFileCount;
   const hasTrackedChanges = verifyFailed || effectiveSummary.hasTrackedChanges;
   const hasUntrackedFiles = effectiveSummary.hasUntrackedFiles;
   const hasChanges = hasTrackedChanges || hasUntrackedFiles;
@@ -111,11 +124,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // from the producer, so the root is passed to render them worktree-relative:
   // repeating the full path on every row buries the filename past the wrap,
   // which is the one part of a row that distinguishes it (#11977).
-  const previewChangeRows = buildWorktreeChangeRows(
-    freshPreview?.changes ?? worktree.worktreeChanges?.changes ?? [],
-    PREVIEW_FILE_LIMIT,
-    freshPreview?.rootPath ?? worktree.worktreeChanges?.rootPath ?? worktree.path
-  );
+  const previewChanges = freshPreview?.changes ?? worktree.worktreeChanges?.changes ?? [];
+  const previewRootPath =
+    freshPreview?.rootPath ?? worktree.worktreeChanges?.rootPath ?? worktree.path;
 
   /**
    * What the delete would destroy INSIDE this worktree's submodules.
@@ -133,6 +144,24 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // Real nested paths and real commit subjects. The parent's own status shows
   // every one of these files as a single ` M vendor/lib` row — precise-looking
   // and wrong by an unbounded factor — and shows the commits as nothing at all.
+  const submodulePathSet = new Set((submodules?.risk?.entries ?? []).map((entry) => entry.path));
+  // A submodule's own row in the parent status (` M vendor/codec`) is not a
+  // file, and its content is listed under "Inside submodules". Listed first so
+  // the cap can't hide it, and kept out of every file count — the counts below
+  // are display only, and the tier above still reads the unsplit list.
+  const submoduleEntryChanges = previewChanges.filter((c) =>
+    isSubmoduleChange(c, previewRootPath, submodulePathSet)
+  );
+  const fileChanges = previewChanges.filter(
+    (c) => !isSubmoduleChange(c, previewRootPath, submodulePathSet)
+  );
+  const previewChangeRows = buildWorktreeChangeRows(
+    [...submoduleEntryChanges, ...fileChanges],
+    PREVIEW_FILE_LIMIT,
+    previewRootPath
+  );
+  const fileSummary = summarizeWorktreeChanges(fileChanges);
+  const submoduleEntryCount = submoduleEntryChanges.filter((c) => c.status !== "ignored").length;
   const submoduleFileRows = buildSubmoduleFileRows(submodules?.risk ?? null);
   const submoduleCommitRows = buildSubmoduleCommitRows(submodules?.risk ?? null);
   const nestedFileCount = submodules ? submoduleFileCount(submodules) : 0;
@@ -142,6 +171,18 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const atRiskCommitsCapped = submodules ? submoduleCommitsAreCapped(submodules) : false;
   const atRiskCommitsPlural = atRiskCommitCount !== 1 || atRiskCommitsCapped;
   const atRiskCommitLabel = `${atRiskCommitsCapped ? "At least " : ""}${atRiskCommitCount} commit${atRiskCommitCount === 1 ? "" : "s"} ${atRiskCommitsPlural ? "are" : "is"}`;
+  // Where the push has to run from. Only paths the inventory bound to a
+  // checkout; a commit from an unbound module store has no path to name.
+  const atRiskCommitPaths = [
+    ...new Set(
+      (submodules?.risk?.atRiskCommits ?? [])
+        .map((commit) => commit.submodulePath)
+        .filter((path): path is string => !!path)
+    ),
+  ];
+  const submoduleCommitGroups = groupCommitRows(submoduleCommitRows, submodules?.risk ?? null);
+  const singleCommitGroupPath =
+    submoduleCommitGroups.length === 1 ? (submoduleCommitGroups[0]?.path ?? null) : null;
   /**
    * The delete the host will refuse outright, whatever the user consents to.
    *
@@ -175,12 +216,20 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
 
   const confirmTarget = worktree.branch || worktree.name;
   // Names the reason the gate is actually up.
+  // A failed status fetch forces `hasTrackedChanges` for the tier; the words
+  // must not turn that assumption into an observed fact.
   const highTierPreamble =
-    isProtectedBranch || worktree.isMainWorktree === true
-      ? "Force-deleting this protected worktree is irreversible."
-      : hasTrackedChanges
-        ? "Force-deleting this worktree discards uncommitted tracked changes — this is irreversible."
-        : "Force-deleting this worktree discards modified and untracked files inside its submodules — this is irreversible.";
+    worktree.isMainWorktree === true
+      ? "This is the main worktree — force-deleting it is irreversible."
+      : isProtectedBranch
+        ? "This worktree is on a protected branch — force-deleting it is irreversible."
+        : verifyFailed
+          ? "This worktree's uncommitted work couldn't be checked — force-deleting it may permanently discard that work."
+          : fileSummary.hasTrackedChanges
+            ? "Force-deleting this worktree discards uncommitted tracked changes — this is irreversible."
+            : nestedFileCount > 0
+              ? "Force-deleting this worktree discards modified and untracked files inside its submodules — this is irreversible."
+              : "Force-deleting this worktree discards an uncommitted submodule change — this is irreversible.";
   // Never gate a delete that cannot proceed. A typed-name input on a blocked
   // state asks for the most emphatic consent the app has and then refuses
   // anyway; blocked is a different thing from D3, and this is where they part.
@@ -237,18 +286,32 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     // Bump the session on every open/close/worktree change so an in-flight
     // submit revalidation can detect it's stale (see `revalidateThenDelete`).
     sessionRef.current += 1;
-    if (!isOpen) return;
+    if (!isOpen) {
+      fetchedForRef.current = null;
+      return;
+    }
     let cancelled = false;
-    setFreshPreview(null);
-    setVerifyFailed(false);
-    setFailedSubmodules(null);
+    // A recheck keeps the last answer on screen until the new one lands, so
+    // the refusal and its evidence don't blink out and back. Safe to hold:
+    // `previewPending` disables every submit path until it settles.
+    if (fetchedForRef.current !== worktree.id) {
+      setFreshPreview(null);
+      setVerifyFailed(false);
+      setFailedSubmodules(null);
+      setRecheckStatus("");
+    }
+    fetchedForRef.current = worktree.id;
     setPreviewPending(true);
     buildWorktreeDeletePreview(worktree.id)
       .then((preview) => {
-        if (!cancelled) setFreshPreview(preview);
+        if (cancelled) return;
+        setFreshPreview(preview);
+        setVerifyFailed(false);
+        setFailedSubmodules(null);
       })
       .catch((error: unknown) => {
         if (cancelled) return;
+        setFreshPreview(null);
         setVerifyFailed(true);
         setFailedSubmodules(submodulesFromPreviewError(error));
       })
@@ -280,6 +343,59 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       cancelled = true;
     };
   }, [isOpen, worktree.id]);
+
+  // The delete runs the project's teardown before removing the directory, so
+  // the confirm has to name it (bundled operations are disclosed up front).
+  // Informational like the dev-server row: a failed read leaves it unlisted
+  // rather than blocking the dialog.
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    setTeardown(null);
+    worktreeClient
+      .getDeleteTeardownPreview(worktree.id)
+      .then((preview) => {
+        if (!cancelled) setTeardown(preview);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, worktree.id]);
+
+  // Once a recheck settles: say what it found, and if the control that had
+  // focus went away with the state it answered (the refusal's Retry turning
+  // back into the delete, a banner's Retry unmounting), put focus on Cancel —
+  // never leave it on a delete the user didn't reach for.
+  useEffect(() => {
+    if (previewPending || !refocusAfterRecheckRef.current) return;
+    refocusAfterRecheckRef.current = false;
+    setRecheckStatus(
+      isBlocked
+        ? "Checked again — still blocked"
+        : verifyFailed
+          ? "Checked again — still couldn't check this worktree"
+          : "Checked again — the worktree can be deleted"
+    );
+    const root = bodyRef.current?.closest<HTMLElement>('[data-testid="delete-worktree-dialog"]');
+    const active = document.activeElement;
+    const lostFocus =
+      !active || active === document.body || !active.isConnected || !root?.contains(active);
+    const onPrimary = active instanceof HTMLElement && active.dataset.confirmRole === "confirm";
+    if (!isBlocked && (lostFocus || onPrimary)) {
+      root?.querySelector<HTMLElement>('[data-confirm-role="cancel"]')?.focus();
+    }
+  }, [previewPending, isBlocked, verifyFailed]);
+
+  const recheck = () => {
+    if (previewPending || isDeleting) return;
+    refocusAfterRecheckRef.current = true;
+    // In this render, not the fetch effect's: the settle effect below reads
+    // `previewPending` and would otherwise consume the recheck before it ran.
+    setPreviewPending(true);
+    setRecheckStatus("Checking again");
+    setRetryToken((token) => token + 1);
+  };
 
   useEffect(() => {
     if (!force) {
@@ -399,8 +515,13 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // typed-name gate both already name the target.
   const deleteButtonLabel = force ? "Force delete worktree" : "Delete worktree";
 
+  // Counted over files only: a submodule's own row in the parent status is
+  // not a file, and what it stands for is counted under "Inside submodules".
+  const trackedChangeCount = fileSummary.trackedChangeCount;
+  const untrackedFileCount = fileSummary.untrackedFileCount;
   const trackedLabel = `${trackedChangeCount} uncommitted file${trackedChangeCount === 1 ? "" : "s"}`;
   const untrackedLabel = `${untrackedFileCount} untracked file${untrackedFileCount === 1 ? "" : "s"}`;
+  const submoduleEntryLabel = `${submoduleEntryCount} submodule${submoduleEntryCount === 1 ? "" : "s"}`;
   /**
    * Never state a count we could not verify.
    *
@@ -411,13 +532,23 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
    * the dialog knows least, which reads as false precision at the worst
    * possible moment. When unverified, say so instead of inventing a number.
    */
-  const changeSummaryLabel = verifyFailed
+  const fileChangeLabel = verifyFailed
     ? "unverified uncommitted work"
-    : hasTrackedChanges && hasUntrackedFiles
+    : fileSummary.hasTrackedChanges && fileSummary.hasUntrackedFiles
       ? `${trackedLabel} and ${untrackedLabel}`
-      : hasTrackedChanges
+      : fileSummary.hasTrackedChanges
         ? trackedLabel
-        : untrackedLabel;
+        : fileSummary.hasUntrackedFiles
+          ? untrackedLabel
+          : null;
+  const hasFileChanges = fileChangeLabel !== null;
+  const nestedFileLabel = `${nestedFileCount} file${nestedFileCount === 1 ? "" : "s"}`;
+  /** What is at stake in a force delete, in the fewest words that stay true. */
+  const atStakeLabel = hasFileChanges
+    ? `${fileChangeLabel} present`
+    : nestedFileCount > 0
+      ? `${nestedFileLabel} inside submodules will be discarded`
+      : `uncommitted changes to ${submoduleEntryLabel} present`;
 
   /**
    * The consequences that will ACTUALLY occur under the current options.
@@ -467,7 +598,33 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   if (hasDevPreview) {
     consequences.push({ key: "dev", tone: "neutral", content: "Dev server will be stopped" });
   }
-  if (force && hasChanges) {
+  // Teardown runs before the directory goes, in this order, and a failure
+  // never stops the delete — so the row names the commands and says that. An
+  // unapproved phase is skipped, which is a consequence too: whatever it was
+  // meant to clean up (a remote environment, say) is left running.
+  for (const phase of teardown?.phases ?? []) {
+    const noun = phase.phase === "resource-teardown" ? "Resource teardown" : "Project teardown";
+    consequences.push({
+      key: phase.phase,
+      tone: "neutral",
+      content: phase.approved ? (
+        <>
+          <span className="font-medium">{noun} will run first</span>
+          <span className="ml-1 text-text-secondary"> The delete continues if it fails</span>
+          <TeardownCommandList commands={phase.commands} />
+        </>
+      ) : (
+        <>
+          <span className="font-medium">{noun} will be skipped</span>
+          <span className="ml-1 text-text-secondary">
+            {" "}
+            Its commands haven&apos;t been approved for this project
+          </span>
+        </>
+      ),
+    });
+  }
+  if (force && hasFileChanges) {
     // The one irreversible outcome, stated once and specifically. This row
     // replaces the old generic "Uncommitted changes will be lost" line, the
     // separate red banner that repeated the same counts, and the standalone
@@ -479,18 +636,26 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       // dialog knows least about, and the banner above already says the loss
       // is possible rather than certain. Where the changes ARE listed, the
       // outcome is stated flatly.
-      content: `${changeSummaryLabel} ${verifyFailed ? "may be" : "will be"} permanently lost`,
+      content: `${fileChangeLabel} ${verifyFailed ? "may be" : "will be"} permanently lost`,
     });
   }
   if (force && nestedFileCount > 0) {
     // Stated separately from the parent row above because the parent CANNOT
     // state it: `git status` collapses every one of these files into a single
-    // ` M vendor/lib` entry, so the count above is short by however many files
-    // are really in there.
+    // ` M vendor/lib` entry, which is why that entry is left out of the count
+    // above rather than reported as a file of its own.
     consequences.push({
       key: "submodule-files",
       tone: "danger",
-      content: `${nestedFileCount} file${nestedFileCount === 1 ? "" : "s"} inside submodules will be permanently lost`,
+      content: `${nestedFileLabel} inside submodules will be permanently lost`,
+    });
+  } else if (force && !hasFileChanges && submoduleEntryCount > 0) {
+    // A submodule moved to another commit with nothing dirty inside it: the
+    // only thing lost is the parent's uncommitted pointer change.
+    consequences.push({
+      key: "submodule-entries",
+      tone: "danger",
+      content: `Uncommitted changes to ${submoduleEntryLabel} will be permanently lost`,
     });
   }
   // No row for at-risk submodule commits: the host refuses that delete outright,
@@ -530,32 +695,50 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // Fail-closed disclosure only. The option-driven consequences live in the
   // list above and announce through a polite live region instead: `role="alert"`
   // is assertive and would re-interrupt the user on every checkbox toggle.
+  //
+  // Retry lives here rather than in the footer: after a failed check the plain
+  // delete is still the right first move and keeps the primary slot.
   const verifyFailedBanner = verifyFailed ? (
     <div
       role="alert"
       className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] text-status-error text-xs"
     >
-      <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" />
-      <p>
+      <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" aria-hidden="true" />
+      <p className="flex-1 min-w-0">
         Couldn't check this worktree for uncommitted work. Force delete may discard changes that
         aren't listed here.
       </p>
+      <Button
+        variant="subtle"
+        size="xs"
+        className="shrink-0"
+        aria-disabled={previewPending || isDeleting || undefined}
+        onClick={recheck}
+      >
+        Retry
+      </Button>
     </div>
   ) : null;
 
+  const atRiskCommitLocation =
+    atRiskCommitPaths.length === 1 ? (
+      <code className="font-mono">{atRiskCommitPaths[0]}</code>
+    ) : (
+      "the submodule"
+    );
+
   /**
-   * The delete is refused, not merely dangerous — so the banner states the one
-   * thing the user can do about it, and the primary action stays disabled.
+   * The delete is refused, not merely dangerous — so the banner leads the body,
+   * states the one thing the user can do about it, and the footer offers that
+   * (Retry) in place of a delete that cannot happen.
    *
    * Separate from `verifyFailedBanner`: that one fires when the PARENT status
    * could not be read at all, and it stays a warning because the host re-reads
    * for itself and may still proceed. Collapsing them would tell a user whose
    * file list is right in front of them that we could not read it.
    *
-   * One action apiece, and both do something real: after pushing from inside
-   * the submodule, or once whatever broke the inventory is fixed, re-running
-   * the same fetch is exactly what clears the block. The commits themselves are
-   * listed below — repeating them here would say the same thing twice.
+   * The commits themselves are listed below it; repeating them here would say
+   * the same thing twice.
    */
   const submoduleBlockBanner = submoduleBlock ? (
     <div
@@ -571,28 +754,25 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
             : "Couldn't finish checking this worktree's submodules"}
         </p>
         <p className="mt-0.5">
-          {submoduleBlock === "at-risk-commits"
-            ? // "On no remote this clone knows about" and not "exists nowhere
-              // else": the inventory can only prove a commit is unreachable
-              // from this module repository's own remote-tracking refs, so a
-              // fetch is a real remedy alongside a push.
-              `${atRiskCommitLabel} on no remote this clone knows about, so deleting this worktree isn't available. Push ${atRiskCommitsPlural ? "them" : "it"} from inside the submodule — or fetch, if ${atRiskCommitsPlural ? "they are" : "it is"} already on the remote — then delete the worktree.`
-            : "Deleting it could destroy nested work that isn't listed here, so deletion isn't available until the check finishes."}
+          {submoduleBlock === "at-risk-commits" ? (
+            // "On no remote this clone knows about" and not "exists nowhere
+            // else": the inventory can only prove a commit is unreachable
+            // from this module repository's own remote-tracking refs, so a
+            // fetch is a real remedy alongside a push.
+            <>
+              {atRiskCommitLabel} on no remote this clone knows about, so this worktree can&apos;t
+              be deleted. Push {atRiskCommitsPlural ? "them" : "it"} from inside the submodule
+              {atRiskCommitPaths.length === 1 && <> {atRiskCommitLocation}</>} — or fetch, if{" "}
+              {atRiskCommitsPlural ? "they are" : "it is"} already on the remote — then retry.
+            </>
+          ) : (
+            "Deleting it could destroy nested work that isn't listed here, so it can't be deleted until the check completes."
+          )}
         </p>
       </div>
-      <Button
-        variant="subtle"
-        size="xs"
-        className="shrink-0"
-        disabled={previewPending}
-        onClick={() => setRetryToken((token) => token + 1)}
-      >
-        {submoduleBlock === "at-risk-commits" ? "Recheck" : "Retry"}
-      </Button>
     </div>
   ) : null;
 
-  const nestedFileLabel = `${nestedFileCount} file${nestedFileCount === 1 ? "" : "s"}`;
   // Standard (non-force) deletion is rejected by the backend when the tree is
   // dirty, so the primary action would fail. Say so where the decision is made
   // rather than letting the user find out from a toast. A blocked delete comes
@@ -601,32 +781,49 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // comes LAST — it also disables the primary, but it is the least specific
   // thing we can say, and the seed snapshot often already has a better one.
   const blockedHint = isBlocked
-    ? submoduleBlock === "at-risk-commits"
-      ? // What the check actually measures, so the hint promises exactly what
-        // clears it: a push, or a fetch that proves the remote already has it.
-        "Delete unavailable until the submodule commits are on a remote"
-      : "Delete unavailable until the submodule check finishes"
+    ? previewPending
+      ? "Checking again"
+      : submoduleBlock === "at-risk-commits"
+        ? // What the check actually measures, so the hint promises exactly what
+          // clears it: a push, or a fetch that proves the remote already has it.
+          "Delete unavailable until the submodule commits are on a remote"
+        : "Delete unavailable until the submodule check completes"
     : force || (!hasChanges && !forceRequiredBySubmodules)
       ? previewPending
         ? "Checking this worktree for uncommitted work"
         : null
       : verifyFailed
         ? "Couldn't verify this worktree — standard delete may fail"
-        : hasChanges
-          ? `Select Force delete to continue — ${changeSummaryLabel} present`
-          : `Select Force delete to continue — ${nestedFileLabel} inside submodules will be discarded`;
+        : `Select Force delete to continue — ${atStakeLabel}`;
 
   const changesHeadingId = "worktree-delete-changes-heading";
   const consequencesHeadingId = "worktree-delete-consequences-heading";
   const submodulesHeadingId = "worktree-delete-submodules-heading";
   const submoduleCommitsHeadingId = "worktree-delete-submodule-commits-heading";
 
+  const changeCountLabel = [fileChangeLabel, submoduleEntryCount > 0 ? submoduleEntryLabel : null]
+    .filter(Boolean)
+    .join(", ");
+  const nestedCountLabel = [
+    nestedFileCount > 0 ? nestedFileLabel : null,
+    atRiskCommitCount > 0
+      ? `${atRiskCommitsCapped ? "at least " : ""}${atRiskCommitCount} unpushed commit${atRiskCommitsPlural ? "s" : ""}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+
   return (
     <AppDialog
       isOpen={isOpen}
       onClose={onClose}
       size="md"
-      variant="destructive"
+      // A refused delete has nothing destructive left to confirm, so its
+      // primary is a neutral Retry rather than a red button labelled with an
+      // action that cannot run. Initial focus is pinned to Cancel so the swap
+      // never moves it.
+      variant={isBlocked ? "default" : "destructive"}
+      initialFocus="cancel"
       // The body lists what will happen and, when the worktree is dirty, the
       // files that will be lost — structured evidence, so a dialog rather than
       // an alertdialog, which APG reserves for a brief message read out whole.
@@ -649,28 +846,33 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           Deletes this worktree's directory from disk. The options below can also close its
           terminals, discard uncommitted work, and delete its branch.
         </AppDialog.Description>
+        <span className="sr-only" role="status" aria-live="polite">
+          {recheckStatus}
+        </span>
 
-        <div className="space-y-5">
+        <div ref={bodyRef} className="space-y-5">
+          {/* 0. THE VERDICT — a refusal or an unverifiable tree changes what
+              every section below means, so it is read before any of them. */}
+          {submoduleBlockBanner}
+          {verifyFailedBanner}
+
           {/* 1. WHAT — the entity, named once, concretely. */}
           <dl className="rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-3 py-2.5 text-xs">
             {worktree.branch && (
               <div className="flex gap-2">
                 <dt className="w-14 shrink-0 text-text-secondary">Branch</dt>
                 <dd className="font-mono text-text-primary [overflow-wrap:anywhere]">
-                  {worktree.branch}
+                  <PathText value={worktree.branch} />
                 </dd>
               </div>
             )}
             <div className={cn("flex gap-2", worktree.branch && "mt-1.5")}>
               <dt className="w-14 shrink-0 text-text-secondary">Path</dt>
               <dd className="font-mono text-text-secondary [overflow-wrap:anywhere]">
-                {worktree.path}
+                <PathText value={worktree.path} />
               </dd>
             </div>
           </dl>
-
-          {verifyFailedBanner}
-          {submoduleBlockBanner}
 
           {/* 2. WHAT'S IN THERE — the actual content, shown whenever the tree
               is dirty, not only once force is on. A D2 confirm owes a preview
@@ -688,7 +890,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   Uncommitted work
                 </span>
                 <span className="text-2xs tabular-nums text-text-secondary">
-                  {changeSummaryLabel}
+                  {changeCountLabel}
                 </span>
               </div>
               {/* Rows, not a wrapping <pre> of joined strings. A path longer
@@ -703,26 +905,42 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 tabIndex={0}
                 className="mt-2 max-h-32 overflow-auto text-xs text-text-secondary bg-surface-canvas p-3 rounded-[var(--radius-md)] border border-border-strong font-mono space-y-0.5"
               >
-                {previewChangeRows.map((row) => (
-                  <li
-                    key={row.isOverflow ? "__overflow" : `${row.glyph}:${row.label}`}
-                    className={cn("flex gap-2", row.isOverflow && "text-text-secondary italic")}
-                  >
-                    {!row.isOverflow && (
-                      <>
-                        <span aria-hidden="true" className="w-3 shrink-0 text-text-secondary">
-                          {row.glyph}
-                        </span>
-                        {/* The glyph column is right for scanning and useless
-                            to a screen reader, which would otherwise hear a
-                            list of paths with no way to tell a deletion from
-                            an addition. */}
-                        <span className="sr-only">{row.statusLabel}: </span>
-                      </>
-                    )}
-                    <span className="[overflow-wrap:anywhere]">{row.label}</span>
-                  </li>
-                ))}
+                {previewChangeRows.map((row) => {
+                  const isSubmoduleRow = !row.isOverflow && submodulePathSet.has(row.label);
+                  return (
+                    <li
+                      key={row.isOverflow ? "__overflow" : `${row.glyph}:${row.label}`}
+                      className={cn("flex gap-2", row.isOverflow && "text-text-secondary italic")}
+                    >
+                      {!row.isOverflow && (
+                        <>
+                          <span aria-hidden="true" className="w-3 shrink-0 text-text-secondary">
+                            {row.glyph}
+                          </span>
+                          {/* The glyph column is right for scanning and useless
+                              to a screen reader, which would otherwise hear a
+                              list of paths with no way to tell a deletion from
+                              an addition. */}
+                          <span className="sr-only">
+                            {isSubmoduleRow ? `${row.statusLabel} submodule` : row.statusLabel}
+                            :{" "}
+                          </span>
+                        </>
+                      )}
+                      <span className="min-w-0 [overflow-wrap:anywhere]">
+                        <PathText value={row.label} />
+                        {/* The parent sees a submodule with work in it as one
+                            changed path. Labelled so it isn't read as a file,
+                            and pointed at the section that says what's in it. */}
+                        {isSubmoduleRow && (
+                          <span aria-hidden="true" className="ml-2 font-sans text-text-secondary">
+                            submodule — contents below
+                          </span>
+                        )}
+                      </span>
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}
@@ -742,9 +960,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 >
                   Inside submodules
                 </span>
-                {nestedFileCount > 0 && (
+                {nestedCountLabel && (
                   <span className="text-2xs tabular-nums text-text-secondary">
-                    {nestedFileLabel}
+                    {nestedCountLabel}
                   </span>
                 )}
               </div>
@@ -769,7 +987,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                           <span className="sr-only">{row.statusLabel}: </span>
                         </>
                       )}
-                      <span className="[overflow-wrap:anywhere]">{row.label}</span>
+                      <span className="min-w-0 [overflow-wrap:anywhere]">
+                        <PathText value={row.label} />
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -777,33 +997,45 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
 
               {submoduleCommitRows.length > 0 && (
                 <>
-                  {/* Glyph AND weight AND colour, the same three the
-                      irreversible consequence row carries — under
-                      `forced-colors: active` the colour is the one that goes. */}
-                  <p className="mt-2 flex items-start gap-1.5 text-xs font-medium text-status-error">
-                    <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" aria-hidden="true" />
-                    <span id={submoduleCommitsHeadingId}>
-                      {atRiskCommitLabel} on no remote this clone knows about
-                    </span>
+                  {/* Named by where they live rather than by the refusal: the
+                      banner above already states the refusal, and a second
+                      red sentence here read as a second problem. The list is
+                      capped, so it never scrolls and never slices a row. */}
+                  <p id={submoduleCommitsHeadingId} className="mt-3 text-xs text-text-secondary">
+                    Unpushed commits
+                    {singleCommitGroupPath && (
+                      <>
+                        {" in "}
+                        <code className="font-mono text-text-primary">{singleCommitGroupPath}</code>
+                      </>
+                    )}
                   </p>
                   <ul
                     data-testid="delete-worktree-submodule-commit-list"
                     aria-labelledby={submoduleCommitsHeadingId}
-                    tabIndex={0}
-                    className="mt-1.5 max-h-24 overflow-auto text-xs text-text-secondary bg-surface-canvas p-3 rounded-[var(--radius-md)] border border-border-strong font-mono space-y-0.5"
+                    className="mt-1.5 text-xs text-text-secondary bg-surface-canvas p-3 rounded-[var(--radius-md)] border border-border-strong font-mono space-y-0.5"
                   >
-                    {submoduleCommitRows.map((row) => (
-                      <li
-                        key={row.isOverflow ? "__overflow" : row.oid}
-                        className={cn("flex gap-2", row.isOverflow && "italic")}
-                      >
-                        {!row.isOverflow && (
-                          <span className="shrink-0 text-text-secondary">{row.shortOid}</span>
+                    {submoduleCommitGroups.map((group) => (
+                      <Fragment key={group.path ?? "__unbound"}>
+                        {submoduleCommitGroups.length > 1 && (
+                          <li className="pt-1 first:pt-0 font-sans text-text-secondary">
+                            {group.path ?? "Unnamed module store"}
+                          </li>
                         )}
-                        <span className="text-text-primary [overflow-wrap:anywhere]">
-                          {row.subject}
-                        </span>
-                      </li>
+                        {group.rows.map((row) => (
+                          <li
+                            key={row.isOverflow ? "__overflow" : row.oid}
+                            className={cn("flex gap-2", row.isOverflow && "italic")}
+                          >
+                            {!row.isOverflow && (
+                              <span className="shrink-0 text-text-secondary">{row.shortOid}</span>
+                            )}
+                            <span className="min-w-0 text-text-primary [overflow-wrap:anywhere]">
+                              {row.subject}
+                            </span>
+                          </li>
+                        ))}
+                      </Fragment>
                     ))}
                   </ul>
                 </>
@@ -837,7 +1069,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   checked={force}
                   onChange={(e) => setForce(e.target.checked)}
                   disabled={isDeleting}
-                  className="checkbox-neutral mt-0.5 rounded border-border-strong bg-surface-canvas disabled:opacity-50"
+                  className={CHECKBOX_CLASSES}
                 />
                 <span className="text-sm text-text-primary">
                   {/* Constant by rule — a toggle label never changes with state
@@ -850,11 +1082,12 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   Force delete
                   {(hasChanges || forceRequiredBySubmodules) && (
                     <span className="block text-xs text-text-secondary mt-0.5">
+                      {/* After a failed check the plain delete stays on offer,
+                          so force is not "required" — only possibly needed,
+                          at the price of work nobody could list. */}
                       {verifyFailed
-                        ? "Required because this worktree's status couldn't be verified"
-                        : hasChanges
-                          ? `Required to delete this worktree — ${changeSummaryLabel} present`
-                          : `Required to delete this worktree — ${nestedFileLabel} inside submodules will be discarded`}
+                        ? "May be needed — but it would also discard any work the failed check couldn't list"
+                        : `Required to delete this worktree — ${atStakeLabel}`}
                     </span>
                   )}
                 </span>
@@ -867,7 +1100,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                     checked={closeTerminals}
                     onChange={(e) => setCloseTerminals(e.target.checked)}
                     disabled={isDeleting}
-                    className="checkbox-neutral mt-0.5 rounded border-border-strong bg-surface-canvas disabled:opacity-50"
+                    className={CHECKBOX_CLASSES}
                   />
                   <span className="text-sm text-text-primary">
                     Close all terminals
@@ -885,7 +1118,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                     checked={deleteBranch}
                     onChange={(e) => setDeleteBranch(e.target.checked)}
                     disabled={isDeleting}
-                    className="checkbox-neutral mt-0.5 rounded border-border-strong bg-surface-canvas disabled:opacity-50"
+                    className={CHECKBOX_CLASSES}
                   />
                   <span className="flex items-center gap-1.5 text-sm text-text-primary">
                     <FolderGit2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
@@ -945,7 +1178,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                         <span className="sr-only">Irreversible: </span>
                       </>
                     )}
-                    <span>{row.content}</span>
+                    <span className="min-w-0">{row.content}</span>
                   </li>
                 ))}
               </ul>
@@ -953,7 +1186,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           )}
 
           {isHighTier && (
-            <div ref={gateRef}>
+            // Scroll margin so bringing the gate into view clears the body's
+            // bottom fade instead of parking its last edge underneath it.
+            <div ref={gateRef} className="scroll-mb-8">
               <TypedNameConfirmInput
                 target={confirmTarget}
                 value={confirmInput}
@@ -979,13 +1214,101 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
             : (blockedHint ?? undefined)
         }
         secondaryAction={{ label: "Cancel", onClick: onClose }}
-        primaryAction={{
-          label: deleteButtonLabel,
-          onClick: handleDelete,
-          disabled: !canSubmit,
-          intent: "destructive",
-        }}
+        primaryAction={
+          isBlocked
+            ? {
+                // The only way forward from a refusal, after a push or fetch
+                // elsewhere. It re-reads; it never pushes or deletes.
+                label: "Retry",
+                onClick: recheck,
+                disabled: previewPending,
+              }
+            : {
+                label: deleteButtonLabel,
+                onClick: handleDelete,
+                disabled: !canSubmit,
+                intent: "destructive",
+              }
+        }
       />
     </AppDialog>
   );
+}
+
+const CHECKBOX_CLASSES =
+  "checkbox-neutral mt-0.5 rounded-[var(--radius-xs)] border-border-strong bg-surface-canvas disabled:opacity-50";
+
+/**
+ * A path or branch with a line-break opportunity after every separator, so a
+ * long one wraps at a directory boundary instead of mid-name. The wrapper's
+ * `overflow-wrap: anywhere` still catches a single segment wider than the box.
+ */
+function PathText({ value }: { value: string }) {
+  const parts = value.split(/(?<=[/\\])/);
+  return (
+    <>
+      {parts.map((part, index) => (
+        <Fragment key={index}>
+          {part}
+          {index < parts.length - 1 && <wbr />}
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
+const TEARDOWN_COMMAND_LIMIT = 4;
+
+/** The commands a teardown phase will run, capped, in the order it runs them. */
+function TeardownCommandList({ commands }: { commands: string[] }) {
+  const shown = commands.slice(0, TEARDOWN_COMMAND_LIMIT);
+  return (
+    <ul className="mt-1 space-y-0.5 font-mono text-xs text-text-secondary">
+      {shown.map((command, index) => (
+        <li key={index} className="[overflow-wrap:anywhere]">
+          {command}
+        </li>
+      ))}
+      {commands.length > shown.length && (
+        <li className="font-sans italic">…and {commands.length - shown.length} more</li>
+      )}
+    </ul>
+  );
+}
+
+interface SubmoduleCommitGroup {
+  path: string | null;
+  rows: SubmoduleCommitRow[];
+}
+
+/**
+ * The capped commit rows, grouped by the submodule they were found in, in the
+ * order the inventory reported them. The overflow tail stays last on its own.
+ */
+function groupCommitRows(
+  rows: SubmoduleCommitRow[],
+  risk: { atRiskCommits: { oid: string; submodulePath?: string }[] } | null
+): SubmoduleCommitGroup[] {
+  const pathByOid = new Map((risk?.atRiskCommits ?? []).map((c) => [c.oid, c.submodulePath]));
+  const groups: SubmoduleCommitGroup[] = [];
+  const overflow: SubmoduleCommitRow[] = [];
+  for (const row of rows) {
+    if (row.isOverflow) {
+      overflow.push(row);
+      continue;
+    }
+    const path = pathByOid.get(row.oid) ?? null;
+    let group = groups.find((g) => g.path === path);
+    if (!group) {
+      group = { path, rows: [] };
+      groups.push(group);
+    }
+    group.rows.push(row);
+  }
+  if (overflow.length > 0) {
+    const last = groups.at(-1) ?? { path: null, rows: [] };
+    if (groups.length === 0) groups.push(last);
+    last.rows.push(...overflow);
+  }
+  return groups;
 }

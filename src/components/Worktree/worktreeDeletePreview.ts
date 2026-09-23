@@ -415,6 +415,28 @@ function toDisplayPath(filePath: string, rootPath: string | undefined): string {
 }
 
 /**
+ * The parent change rows that are submodule entries rather than files.
+ *
+ * The parent's `git status` reports a submodule holding nested work as a single
+ * ` M vendor/lib` row. That row is not a file — its content is what the
+ * submodule inventory lists — so counting it as "1 uncommitted file" beside
+ * "3 files inside submodules" states four losses where there are three.
+ *
+ * Display only. The tier keeps reading the unsplit list, where that row is a
+ * tracked change and escalates like one; an inventory that failed leaves
+ * `submodulePaths` empty and every row counted as a file, the conservative
+ * reading.
+ */
+export function isSubmoduleChange(
+  change: FileChangeDetail,
+  rootPath: string | undefined,
+  submodulePaths: ReadonlySet<string>
+): boolean {
+  if (submodulePaths.size === 0) return false;
+  return submodulePaths.has(toDisplayPath(change.path, rootPath).replace(/\\/g, "/"));
+}
+
+/**
  * Render a change set as capped, glyph-prefixed file rows (`  M src/app.ts`),
  * shared by the local delete dialog and the MCP preview so both show the same
  * actual content (the D2 "a count is insufficient" rule). Ignored files are
