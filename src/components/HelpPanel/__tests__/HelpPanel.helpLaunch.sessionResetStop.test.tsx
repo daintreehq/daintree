@@ -140,6 +140,15 @@ const {
   mockNotifyUserInput: vi.fn(),
 }));
 
+// Passthrough tooltips: the footer's Radix provider is incidental to these
+// suites, and its unmount timers collide with their stubbed globals.
+vi.mock("@/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: unknown }) => children,
+  Tooltip: ({ children }: { children: unknown }) => children,
+  TooltipTrigger: ({ children }: { children: unknown }) => children,
+  TooltipContent: () => null,
+}));
+
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
 
 vi.mock("@/components/ui/button", () => ({

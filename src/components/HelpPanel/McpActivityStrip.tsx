@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { Check, CircleSlash, Loader2, TriangleAlert, X } from "lucide-react";
 import { Activity } from "@/components/icons";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { logWarn } from "@/utils/logger";
 import type { McpAuditRecord } from "@shared/types";
 import type { McpToolActivityState } from "@/controllers/HelpSessionController";
 import { RecentCallsPopover } from "./RecentCallsPopover";
+import { FOOTER_ITEM_CLASS } from "./footerItem";
 
 // Deliberately small — the popover is a quick glance at what the assistant
 // just did, not a full audit surface.
@@ -15,7 +17,7 @@ const MAX_RECENT_CALLS = 5;
 
 /**
  * How long a settled success row stays visible before decaying back to the
- * resting "Recent activity" label. Errors do not decay — a failed call is the
+ * resting glyph. Errors do not decay — a failed call is the
  * one ambient signal worth keeping until the next call supersedes it.
  */
 const SETTLED_DECAY_MS = 5000;
@@ -25,14 +27,16 @@ interface McpActivityStripProps {
   sessionId: string | null;
   /** Live tool-call state pushed from the controller (#9759). */
   activity: McpToolActivityState | null;
+  /** A crowded footer: the live row keeps its glyph and drops the tool id. */
+  compact?: boolean;
 }
 
 /**
  * The footer's single activity element: live tool-call status and the
  * recent-calls history share one always-mounted popover trigger. At rest it
- * reads "Recent activity"; while a call runs it shows a spinner + tool id
+ * is the Activity glyph alone; while a call runs it shows a spinner + tool id
  * (coalescing same-turn bursts as "2 calls · tool"); a settled call shows its
- * glyph + duration, then successes decay back to the resting label.
+ * glyph + duration, then successes decay back to the resting glyph.
  *
  * The button's accessible name is pinned to "Recent tool calls" — morphing
  * text inside a focused control is unreliable across screen readers, so the
@@ -40,10 +44,10 @@ interface McpActivityStripProps {
  *
  * Doherty gate: the in-flight row is withheld for the first 400ms so a
  * sub-400ms call settles first and renders its settled state directly —
- * during the gate the previous content (resting label or last settled call)
+ * during the gate the previous content (resting glyph or last settled call)
  * stays put instead of flickering a spinner.
  */
-export function McpActivityStrip({ sessionId, activity }: McpActivityStripProps) {
+export function McpActivityStrip({ sessionId, activity, compact = false }: McpActivityStripProps) {
   const [open, setOpen] = useState(false);
   const [records, setRecords] = useState<McpAuditRecord[]>([]);
   const [loading, setLoading] = useState(false);
@@ -99,7 +103,7 @@ export function McpActivityStrip({ sessionId, activity }: McpActivityStripProps)
     if (rowKey === null || shownKey === rowKey) return;
     // A settled row renders immediately, which means its key is now on
     // screen — mark it shown so a same-turn follow-up call doesn't re-arm
-    // the gate and flash back to the resting label mid-burst.
+    // the gate and flash back to the resting glyph mid-burst.
     if (activity?.status === "settled") {
       setShownKey(rowKey);
       return;
@@ -110,7 +114,7 @@ export function McpActivityStrip({ sessionId, activity }: McpActivityStripProps)
   }, [activity?.status, inFlight, rowKey, shownKey]);
 
   // Success decay: after a quiet period the settled row yields back to the
-  // resting label. Errors persist until the next call replaces them.
+  // resting glyph. Errors persist until the next call replaces them.
   const [decayed, setDecayed] = useState(false);
   useEffect(() => {
     setDecayed(false);
@@ -123,38 +127,50 @@ export function McpActivityStrip({ sessionId, activity }: McpActivityStripProps)
 
   // Settled rows always render (a sub-400ms call settles before its gate
   // fires, matching the old "never flicker the spinner" behavior); in-flight
-  // rows wait out the gate showing the resting label instead of a flash.
+  // rows wait out the gate showing the resting glyph instead of a flash.
   const showLive = Boolean(
     activity && (activity.status === "settled" ? !decayed : shownKey === rowKey)
   );
 
+  const tooltip = activity && showLive ? buildTitle(activity) : "Recent tool calls";
+  const awaiting = Boolean(showLive && inFlight && activity?.danger);
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-label="Recent tool calls"
-          title={activity && showLive ? buildTitle(activity) : "Recent tool calls"}
-          className={cn(
-            "flex items-center gap-1.5 min-w-0 transition-colors duration-150 ease-out",
-            "hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-            showLive && activity?.isError
-              ? "text-status-danger"
-              : showLive && inFlight
-                ? "text-text-secondary"
-                : undefined
-          )}
-        >
-          {activity && showLive ? (
-            <LiveContent activity={activity} inFlight={inFlight} />
-          ) : (
-            <span aria-hidden className="flex items-center gap-1 min-w-0">
-              <Activity className="w-3.5 h-3.5 shrink-0" />
-              Recent activity
-            </span>
-          )}
-        </button>
-      </PopoverTrigger>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label="Recent tool calls"
+              className={cn(
+                FOOTER_ITEM_CLASS,
+                "hover:text-text-primary",
+                // Room for the glyph and a few characters of text; below that
+                // the footer compacts the row instead of squeezing this. A
+                // confirmation keeps its words even then, because it is the
+                // one live state waiting on the user.
+                showLive && (!compact || awaiting) ? "min-w-[5.5rem]" : "min-w-0",
+                showLive && activity?.isError
+                  ? "text-status-danger hover:text-status-danger"
+                  : showLive && inFlight
+                    ? "text-text-secondary"
+                    : undefined
+              )}
+            >
+              {activity && showLive ? (
+                <LiveContent activity={activity} inFlight={inFlight} compact={compact} />
+              ) : (
+                // At rest this is only the way into the history, so it is a
+                // glyph: a permanent caption here competed with every signal
+                // that shares the row and wrapped the row at default width.
+                <Activity aria-hidden className="w-3.5 h-3.5 shrink-0" />
+              )}
+            </button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="top">{tooltip}</TooltipContent>
+      </Tooltip>
       <PopoverContent
         side="top"
         align="start"
@@ -179,17 +195,21 @@ export function McpActivityStrip({ sessionId, activity }: McpActivityStripProps)
 function LiveContent({
   activity,
   inFlight,
+  compact,
 }: {
   activity: McpToolActivityState;
   inFlight: boolean;
+  compact: boolean;
 }) {
   const coalesced = activity.callCount > 1;
   const label = coalesced ? `${activity.callCount} calls · ${activity.toolId}` : activity.toolId;
+  // A call waiting on the user outranks its own tool id: the id moves to the
+  // tooltip and the words stay, truncating rather than disappearing.
+  const text = activity.danger && inFlight ? "Awaiting confirmation" : compact ? null : label;
   return (
     <span aria-hidden className="flex items-center gap-1.5 min-w-0">
       <ActivityGlyph activity={activity} inFlight={inFlight} />
-      <span className="font-medium truncate">{label}</span>
-      {activity.danger && inFlight && <span className="shrink-0">awaiting confirmation</span>}
+      {text && <span className="font-medium truncate min-w-0">{text}</span>}
     </span>
   );
 }

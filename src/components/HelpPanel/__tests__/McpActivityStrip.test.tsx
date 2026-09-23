@@ -34,6 +34,14 @@ vi.mock("@/components/ui/popover", async () => {
   };
 });
 
+// Passthrough tooltip: the footer mounts the provider, which a unit render of
+// this component alone does not have.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: unknown }) => children,
+  TooltipTrigger: ({ children }: { children: unknown }) => children,
+  TooltipContent: () => null,
+}));
+
 import { McpActivityStrip } from "../McpActivityStrip";
 import { groupCallsByTurn } from "../RecentCallsPopover";
 import type { McpToolActivityState } from "@/controllers/HelpSessionController";
@@ -339,6 +347,11 @@ describe("McpActivityStrip", () => {
   });
 });
 
+/** The trigger's visible text: empty at rest, where only the glyph shows. */
+function liveText(): string {
+  return screen.getByRole("button", { name: /recent tool calls/i }).textContent ?? "";
+}
+
 describe("McpActivityStrip live activity", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -350,14 +363,14 @@ describe("McpActivityStrip live activity", () => {
 
   it("withholds the in-flight row during the Doherty gate, then shows it", () => {
     render(<McpActivityStrip sessionId="session-a" activity={makeActivity({ turnId: "t1" })} />);
-    // Inside the gate the resting label holds — no spinner flash.
-    expect(screen.getByText("Recent activity")).toBeTruthy();
+    // Inside the gate the resting glyph holds — no spinner flash.
+    expect(liveText()).toBe("");
     expect(screen.queryByText("terminal.getStatus")).toBeNull();
     act(() => {
       vi.advanceTimersByTime(400);
     });
     expect(screen.getByText("terminal.getStatus")).toBeTruthy();
-    expect(screen.queryByText("Recent activity")).toBeNull();
+    expect(liveText()).not.toBe("");
   });
 
   it("labels a coalesced same-turn burst with its call count", () => {
@@ -391,7 +404,7 @@ describe("McpActivityStrip live activity", () => {
     act(() => {
       vi.advanceTimersByTime(5000);
     });
-    expect(screen.getByText("Recent activity")).toBeTruthy();
+    expect(liveText()).toBe("");
     expect(screen.queryByText("terminal.getStatus")).toBeNull();
   });
 
@@ -413,7 +426,7 @@ describe("McpActivityStrip live activity", () => {
       vi.advanceTimersByTime(60_000);
     });
     expect(screen.getByText("terminal.getStatus")).toBeTruthy();
-    expect(screen.queryByText("Recent activity")).toBeNull();
+    expect(liveText()).not.toBe("");
   });
 
   it("keeps the button's accessible name stable while the live row morphs", () => {
@@ -444,7 +457,7 @@ describe("McpActivityStrip live activity", () => {
     );
     expect(screen.getByText("terminal.getStatus")).toBeTruthy();
     // Call 2 starts in the same turn — the live row must appear immediately,
-    // not flash back to "Recent activity" for another 400ms.
+    // not flash back to the resting glyph for another 400ms.
     rerender(
       <McpActivityStrip
         sessionId="session-a"
@@ -452,6 +465,6 @@ describe("McpActivityStrip live activity", () => {
       />
     );
     expect(screen.getByText("2 calls · terminal.sendText")).toBeTruthy();
-    expect(screen.queryByText("Recent activity")).toBeNull();
+    expect(liveText()).not.toBe("");
   });
 });
