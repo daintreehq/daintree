@@ -99,7 +99,7 @@ export function FallbackChainEditor({
     <>
       <SettingsRow
         label="Fallback presets"
-        description="Tried in order if this preset's provider is unreachable. No retry for rate limits or prompt errors"
+        description="Tried in order if this preset's provider is unreachable. No retry for rate limits or prompt errors."
         control={({ labelId, descriptionId, disabled }) =>
           canAdd ? (
             // Controlled at "" so the trigger shows its placeholder again after each

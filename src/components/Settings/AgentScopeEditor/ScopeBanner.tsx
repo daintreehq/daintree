@@ -31,9 +31,9 @@ export function ScopeBadge({ scopeKind }: { scopeKind: ScopeKind }) {
 export function describeScope(scopeKind: ScopeKind, agentName: string): string {
   switch (scopeKind) {
     case "default":
-      return `New ${agentName} sessions launch with the agent's own settings, below. A worktree can still pick a preset of its own`;
+      return `New ${agentName} sessions launch with the agent's own settings, below. A worktree can still pick a preset of its own.`;
     case "custom":
-      return `New ${agentName} sessions launch with this preset. The settings below edit it; anything left on Default follows the agent's own settings`;
+      return `New ${agentName} sessions launch with this preset. The settings below edit it; anything left on Default follows the agent's own settings.`;
     case "project":
       return `New ${agentName} sessions launch with this preset, which this project shares with everyone who opens it`;
     case "ccr":

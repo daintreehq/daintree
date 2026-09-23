@@ -77,7 +77,7 @@ export function EnvBlock({
       <SettingsRow
         id="agents-global-env"
         label="Environment variables"
-        description={`Set for every ${agentName} launch. A preset's own variables take precedence`}
+        description={`Set for every ${agentName} launch. A preset's own variables take precedence.`}
         layout="stacked"
         control={
           <div className="grid gap-2">

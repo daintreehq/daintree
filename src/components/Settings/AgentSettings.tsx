@@ -130,7 +130,7 @@ function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; age
             )}
             <Button
               size="sm"
-              variant="subtle"
+              variant="outline"
               onClick={() => setIsEditing(true)}
               data-testid={`agent-shortcut-edit-${agentId}`}
             >
@@ -488,7 +488,7 @@ export function AgentSettings({
             <SettingsSwitchCard
               id="agents-skip-permissions"
               title="Skip permission prompts"
-              subtitle="Agents run commands and edit files without asking — faster, but you won't get a chance to review first. Applies to every agent that supports it; Assistant sessions aren't affected"
+              subtitle="Agents run commands and edit files without asking — faster, but you won't get a chance to review first. Applies to every agent that supports it; Assistant sessions aren't affected."
               isEnabled={settings?.globalSkipPermissions ?? false}
               onChange={() => {
                 void (async () => {
@@ -512,7 +512,7 @@ export function AgentSettings({
             <SettingsSwitchCard
               id="agents-alt-screen"
               title="Use alt-screen mode"
-              subtitle="Render supported agents on the full-screen alternate buffer instead of inline. Inline is smoother (WebGL scrollback, clean resize); alt-screen matches the CLI's native full-screen TUI"
+              subtitle="Render supported agents on the full-screen alternate buffer instead of inline. Inline is smoother (WebGL scrollback, clean resize); alt-screen matches the CLI's native full-screen TUI."
               isEnabled={settings?.globalUseAltScreen ?? false}
               onChange={() => {
                 void (async () => {

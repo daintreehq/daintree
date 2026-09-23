@@ -118,7 +118,7 @@ export function BehavioralControls({
         description={
           <>
             Auto-approve all file, command and network actions. Off overrides the global setting for
-            this scope
+            this scope.
             {dangerousMode === "inherit" && (
               <span className="block mt-1">Inherited from {inheritOriginLabel}</span>
             )}
@@ -154,7 +154,7 @@ export function BehavioralControls({
             <>
               Alt screen uses the CLI&apos;s full-screen TUI; inline keeps output in Daintree&apos;s
               scrollback with cleaner resizing. Choosing Inline or Alt screen overrides the
-              inherited setting for this scope
+              inherited setting for this scope.
               {inlineMode === "inherit" && (
                 <span className="block mt-1">Inherited from {inlineInheritOriginLabel}</span>
               )}
