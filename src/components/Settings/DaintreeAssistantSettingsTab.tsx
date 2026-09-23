@@ -1,13 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import {
-  AlertCircle,
-  AlertTriangle,
-  Check,
-  ChevronRight,
-  Copy,
-  FolderOpen,
-} from "lucide-react";
+import { AlertCircle, AlertTriangle, Check, ChevronRight, Copy, FolderOpen } from "lucide-react";
 import * as semver from "semver";
 import { cn } from "@/lib/utils";
 import { useDeferredLoading, useHelpSessionLiveStatus } from "@/hooks";
