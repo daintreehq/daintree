@@ -21,14 +21,7 @@ import {
   KeyRound,
   Shield,
 } from "lucide-react";
-import {
-  DaintreeIcon,
-  FolderGit2,
-  PanelTop,
-  Plug,
-  McpServerIcon,
-  Workflow,
-} from "@/components/icons";
+import { DaintreeIcon, FolderGit2, Plug, McpServerIcon, Workflow } from "@/components/icons";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { GeneralTab } from "./GeneralTab";
