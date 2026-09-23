@@ -523,12 +523,13 @@ test("collapsed session indicators review — placements, states and themes", as
     // 8. All three segments: working, waiting, directing. Directing lasts ten
     //    seconds after the last keystroke, so these shots are taken together.
     await step("three-states", async () => {
-      await inBusy(async () => {
-        await driveWaiting(page, agents[1]!);
-        await driveDirecting(page, agents[1]!);
-      });
+      await inBusy(() => driveWaiting(page, agents[1]!));
       const three = /^3 sessions: 1 working, 1 directing, 1 waiting$/;
+      // Re-typed before each shot: under load, two captures can outlast the
+      // ten-second window a single burst of typing buys.
+      await inBusy(() => driveDirecting(page, agents[1]!));
       await snap(page, "70-header-three-states", card(busy), { expectLabel: three });
+      await inBusy(() => driveDirecting(page, agents[1]!));
       await snap(page, "71-header-three-states-zoom", busy.locator(INDICATORS).first(), {
         scope: busy,
         expectLabel: three,
