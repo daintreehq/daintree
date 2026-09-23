@@ -231,112 +231,114 @@ export function VoiceRecordingToolbarButton({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              {...hover}
-              variant="ghost"
-              size="icon"
-              data-toolbar-item={dataToolbarItem}
-              onClick={() => {
-                void voiceRecordingService.focusActiveTarget();
-              }}
-              className={cn(
-                "toolbar-icon-button relative mr-0.5 text-text-primary",
-                "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
-              )}
-              aria-label={tooltipTitle}
-              aria-keyshortcuts={ariaShortcut}
-            >
-              <Mic className="h-4 w-4" />
-              {/* Arming ring — static accent border painted during the
+        <span className="inline-flex">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                {...hover}
+                variant="ghost"
+                size="icon"
+                data-toolbar-item={dataToolbarItem}
+                onClick={() => {
+                  void voiceRecordingService.focusActiveTarget();
+                }}
+                className={cn(
+                  "toolbar-icon-button relative mr-0.5 text-text-primary",
+                  "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
+                )}
+                aria-label={tooltipTitle}
+                aria-keyshortcuts={ariaShortcut}
+              >
+                <Mic className="h-4 w-4" />
+                {/* Arming ring — static accent border painted during the
                   pre-audio confirmation window. Replaces the orbit until
                   audio is hot, so the user sees an immediate confirmation
                   that the hotkey was registered. */}
-              {showArming && (
-                <span
-                  aria-hidden="true"
-                  className="absolute inset-1 rounded-full pointer-events-none"
-                  style={{
-                    background: `var(--theme-accent-primary)`,
-                    opacity: 0.55,
-                    mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-                    WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-                    maskComposite: "exclude",
-                    WebkitMaskComposite: "xor",
-                    padding: `${BASE_THICKNESS}px`,
-                  }}
-                />
-              )}
-              {/* Orbit overlay — absolute inset on the relative Button. No
-                  contain:strict at this scale: the toolbar button is a flex
-                  child and clipping the orbit would crop the ring. */}
-              {showOrbit && (
-                <>
+                {showArming && (
                   <span
-                    ref={trackRef}
                     aria-hidden="true"
                     className="absolute inset-1 rounded-full pointer-events-none"
                     style={{
-                      opacity: 0.08,
                       background: `var(--theme-accent-primary)`,
+                      opacity: 0.55,
                       mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
                       WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
                       maskComposite: "exclude",
                       WebkitMaskComposite: "xor",
                       padding: `${BASE_THICKNESS}px`,
-                      transition: "opacity 80ms ease-out",
                     }}
                   />
-                  <div
-                    ref={wrapperRef}
-                    aria-hidden="true"
-                    className="absolute inset-1 pointer-events-none"
-                    style={{ willChange: "transform" }}
-                  >
+                )}
+                {/* Orbit overlay — absolute inset on the relative Button. No
+                  contain:strict at this scale: the toolbar button is a flex
+                  child and clipping the orbit would crop the ring. */}
+                {showOrbit && (
+                  <>
                     <span
-                      ref={ringRef}
-                      className="absolute inset-0 rounded-full"
+                      ref={trackRef}
+                      aria-hidden="true"
+                      className="absolute inset-1 rounded-full pointer-events-none"
                       style={{
-                        padding: `${BASE_THICKNESS}px`,
+                        opacity: 0.08,
+                        background: `var(--theme-accent-primary)`,
                         mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
                         WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
                         maskComposite: "exclude",
                         WebkitMaskComposite: "xor",
+                        padding: `${BASE_THICKNESS}px`,
+                        transition: "opacity 80ms ease-out",
                       }}
                     />
-                    <span
-                      ref={dotHaloRef}
-                      className="absolute rounded-full bg-daintree-accent/30"
-                      style={{
-                        width: "6px",
-                        height: "6px",
-                        top: 0,
-                        left: "50%",
-                        transform: "translate(-50%, -35%)",
-                      }}
-                    />
-                    <span
-                      ref={dotCoreRef}
-                      className="absolute rounded-full bg-accent-primary"
-                      style={{
-                        width: "3.5px",
-                        height: "3.5px",
-                        top: 0,
-                        left: "50%",
-                        transform: "translate(-50%, -15%)",
-                      }}
-                    />
-                  </div>
-                </>
-              )}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="text-center">
-            <div className="font-medium">{tooltipTitle}</div>
-            {tooltipExtra && <div className="text-2xs text-text-secondary">{tooltipExtra}</div>}
-          </TooltipContent>
-        </Tooltip>
+                    <div
+                      ref={wrapperRef}
+                      aria-hidden="true"
+                      className="absolute inset-1 pointer-events-none"
+                      style={{ willChange: "transform" }}
+                    >
+                      <span
+                        ref={ringRef}
+                        className="absolute inset-0 rounded-full"
+                        style={{
+                          padding: `${BASE_THICKNESS}px`,
+                          mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+                          WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+                          maskComposite: "exclude",
+                          WebkitMaskComposite: "xor",
+                        }}
+                      />
+                      <span
+                        ref={dotHaloRef}
+                        className="absolute rounded-full bg-daintree-accent/30"
+                        style={{
+                          width: "6px",
+                          height: "6px",
+                          top: 0,
+                          left: "50%",
+                          transform: "translate(-50%, -35%)",
+                        }}
+                      />
+                      <span
+                        ref={dotCoreRef}
+                        className="absolute rounded-full bg-accent-primary"
+                        style={{
+                          width: "3.5px",
+                          height: "3.5px",
+                          top: 0,
+                          left: "50%",
+                          transform: "translate(-50%, -15%)",
+                        }}
+                      />
+                    </div>
+                  </>
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-center">
+              <div className="font-medium">{tooltipTitle}</div>
+              {tooltipExtra && <div className="text-2xs text-text-secondary">{tooltipExtra}</div>}
+            </TooltipContent>
+          </Tooltip>
+        </span>
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
         <ToolbarContextMenuItems buttonId="voice-recording" side="right" />

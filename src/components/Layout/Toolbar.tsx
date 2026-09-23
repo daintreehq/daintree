@@ -1282,31 +1282,33 @@ export function Toolbar({
         render: () => (
           <ContextMenu>
             <ContextMenuTrigger asChild>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    {...(hasWorkspace ? fileBrowserHintHover : {})}
-                    variant="ghost"
-                    size="icon"
-                    data-toolbar-item=""
-                    onClick={hasWorkspace ? openFileBrowser : undefined}
-                    aria-disabled={!hasWorkspace || undefined}
-                    className={cn(
-                      toolbarIconButtonClass,
-                      "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                    )}
-                    aria-label="Browse files"
-                    aria-keyshortcuts={fileBrowserAriaShortcut}
-                  >
-                    <FolderTree />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {hasWorkspace
-                    ? createTooltipContent("Browse files", fileBrowserShortcut)
-                    : "Open a project or scratch to browse files"}
-                </TooltipContent>
-              </Tooltip>
+              <span className="inline-flex">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      {...(hasWorkspace ? fileBrowserHintHover : {})}
+                      variant="ghost"
+                      size="icon"
+                      data-toolbar-item=""
+                      onClick={hasWorkspace ? openFileBrowser : undefined}
+                      aria-disabled={!hasWorkspace || undefined}
+                      className={cn(
+                        toolbarIconButtonClass,
+                        "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                      )}
+                      aria-label="Browse files"
+                      aria-keyshortcuts={fileBrowserAriaShortcut}
+                    >
+                      <FolderTree />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {hasWorkspace
+                      ? createTooltipContent("Browse files", fileBrowserShortcut)
+                      : "Open a project or scratch to browse files"}
+                  </TooltipContent>
+                </Tooltip>
+              </span>
             </ContextMenuTrigger>
             <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
               <ToolbarContextMenuItems buttonId="file-browser" side="left" />
@@ -1320,26 +1322,28 @@ export function Toolbar({
           currentProject ? (
             <ContextMenu>
               <ContextMenuTrigger asChild>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      {...devServerHintHover}
-                      variant="ghost"
-                      size="icon"
-                      data-toolbar-item=""
-                      onClick={() =>
-                        actionService.dispatch("devServer.start", undefined, { source: "user" })
-                      }
-                      className={toolbarIconButtonClass}
-                      aria-label="Open dev preview"
-                    >
-                      <MonitorPlay />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {createTooltipContent("Open dev preview", devServerShortcut)}
-                  </TooltipContent>
-                </Tooltip>
+                <span className="inline-flex">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        {...devServerHintHover}
+                        variant="ghost"
+                        size="icon"
+                        data-toolbar-item=""
+                        onClick={() =>
+                          actionService.dispatch("devServer.start", undefined, { source: "user" })
+                        }
+                        className={toolbarIconButtonClass}
+                        aria-label="Open dev preview"
+                      >
+                        <MonitorPlay />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {createTooltipContent("Open dev preview", devServerShortcut)}
+                    </TooltipContent>
+                  </Tooltip>
+                </span>
               </ContextMenuTrigger>
               <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
                 <ToolbarContextMenuItems buttonId="dev-server" side="left" />

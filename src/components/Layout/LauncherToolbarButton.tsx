@@ -72,28 +72,30 @@ export function LauncherToolbarButton({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              data-toolbar-item={dataToolbarItem}
-              // A row whose precondition is unmet stays reachable and stays
-              // labelled with why, matching the launcher: the pin is a placement
-              // the user made, and removing the button when a project closes
-              // would rearrange the toolbar under them.
-              disabled={disabledReason !== undefined}
-              onClick={() => activateDockLaunchItem(item, activationContext)}
-              className="toolbar-icon-button text-text-primary relative"
-              aria-label={disabledReason ? `${label} (${disabledReason})` : label}
-            >
-              <LauncherItemIcon item={item} />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {disabledReason ? `${label} — ${disabledReason}` : label}
-          </TooltipContent>
-        </Tooltip>
+        <span className="inline-flex">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                data-toolbar-item={dataToolbarItem}
+                // A row whose precondition is unmet stays reachable and stays
+                // labelled with why, matching the launcher: the pin is a placement
+                // the user made, and removing the button when a project closes
+                // would rearrange the toolbar under them.
+                disabled={disabledReason !== undefined}
+                onClick={() => activateDockLaunchItem(item, activationContext)}
+                className="toolbar-icon-button text-text-primary relative"
+                aria-label={disabledReason ? `${label} (${disabledReason})` : label}
+              >
+                <LauncherItemIcon item={item} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {disabledReason ? `${label} — ${disabledReason}` : label}
+            </TooltipContent>
+          </Tooltip>
+        </span>
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
         {/*
