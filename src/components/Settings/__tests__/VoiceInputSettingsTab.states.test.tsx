@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { VoiceInputSettingsTab, dictationBlockers, maskApiKey } from "../VoiceInputSettingsTab";
+import {
+  VoiceInputSettingsTab,
+  dictationBlockers,
+  maskApiKey,
+  recordingModeDescription,
+} from "../VoiceInputSettingsTab";
 
 vi.mock("@/lib/voiceInputSettingsEvents", () => ({
   dispatchVoiceInputSettingsChanged: vi.fn(),
@@ -201,12 +206,49 @@ describe("VoiceInputSettingsTab correction prerequisites", () => {
 describe("VoiceInputSettingsTab paragraph breaks", () => {
   it("shows the mode that will actually apply for a language without spoken commands", async () => {
     install({ language: "de", paragraphingStrategy: "spoken-command" });
-    render(<VoiceInputSettingsTab />);
+    const { container } = render(<VoiceInputSettingsTab />);
 
-    const group = await screen.findByRole("radiogroup", { name: "Paragraph breaks" });
     await waitFor(() => {
-      const checked = group.querySelector('[aria-checked="true"]');
-      expect(checked?.textContent).toBe("Enter only");
+      const row = container.querySelector("#voice-paragraph-breaks");
+      expect(row?.textContent).toContain("Enter only");
     });
+    // Nothing on the row offers the spoken mode the language can't use.
+    expect(screen.queryByRole("radiogroup", { name: "Paragraph breaks" })).toBeNull();
+  });
+});
+
+describe("recordingModeDescription", () => {
+  it("names the real binding, and says so when there is none", () => {
+    for (const mode of ["toggle", "push-to-talk"] as const) {
+      expect(recordingModeDescription(mode, "⌘⇧D")).toContain("⌘⇧D");
+      expect(recordingModeDescription(mode, "")).toMatch(/No shortcut is assigned/);
+      expect(recordingModeDescription(mode, "")).not.toMatch(/\.\./);
+    }
+  });
+});
+
+describe("VoiceInputSettingsTab provider switch", () => {
+  it("never carries one provider's key result into the other's row", async () => {
+    install(
+      {},
+      { validateApiKey: vi.fn().mockResolvedValue({ valid: false, error: "Incorrect API key" }) }
+    );
+    const { container } = render(<VoiceInputSettingsTab />);
+
+    const input = await waitFor(() => {
+      const el = container.querySelector<HTMLInputElement>("#voice-stt-openai-key input");
+      if (!el) throw new Error("no key input yet");
+      return el;
+    });
+    fireEvent.change(input, { target: { value: "sk-proj-wrong" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(container.textContent).toContain("Incorrect API key"));
+
+    fireEvent.click(screen.getByRole("radio", { name: "Deepgram" }));
+
+    await waitFor(() => expect(container.textContent).toContain("Deepgram API key"));
+    expect(container.textContent).not.toContain("Incorrect API key");
+    const deepgramInput = container.querySelector<HTMLInputElement>('input[type="password"]');
+    expect(deepgramInput?.value).toBe("");
   });
 });

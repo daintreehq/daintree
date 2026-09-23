@@ -16,6 +16,7 @@ import { dispatchVoiceInputSettingsChanged } from "@/lib/voiceInputSettingsEvent
 import { logWarn } from "@/utils/logger";
 import { useAudioDevices, SYSTEM_DEFAULT_VALUE } from "@/hooks/useAudioDevices";
 import { useTabLoad } from "@/hooks";
+import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { CORE_CORRECTION_PROMPT, VOICE_DICTATION_AI_MODEL } from "@shared/config/voiceCorrection";
 import type {
@@ -80,9 +81,13 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
   learnFromCorrections: true,
 };
 
-type SaveGroup = "setup" | "behavior" | "dictionary" | "correction";
+type SaveGroup = "setup" | "microphone" | "credentials" | "behavior" | "dictionary" | "correction";
 
+// Keys report their own save outcome in the key row, so they never raise a section banner.
 const SAVE_GROUP_BY_KEY: Partial<Record<keyof VoiceInputSettings, SaveGroup>> = {
+  openaiApiKey: "credentials",
+  deepgramApiKey: "credentials",
+  deviceId: "microphone",
   language: "behavior",
   paragraphingStrategy: "behavior",
   recordingMode: "behavior",
@@ -135,6 +140,23 @@ function copySetting<K extends keyof VoiceInputSettings>(
   target[key] = source[key];
 }
 
+const SETTING_LABEL: Partial<Record<keyof VoiceInputSettings, string>> = {
+  enabled: "Dictation",
+  transcriptionProvider: "Transcription provider",
+  organizationId: "Organization ID",
+  projectId: "Project ID",
+  deviceId: "Input device",
+  language: "Language",
+  paragraphingStrategy: "Paragraph breaks",
+  recordingMode: "Recording mode",
+  customDictionary: "The dictionary",
+  suggestedDictionary: "The suggestions",
+  learnFromCorrections: "Learn words from corrections",
+  correctionEnabled: "Clean up transcriptions",
+  correctionCustomInstructions: "Custom instructions",
+  resolveFileLinks: "Resolve file references",
+};
+
 interface SaveFailure {
   group: SaveGroup;
   patch: Partial<VoiceInputSettings>;
@@ -170,7 +192,7 @@ export function dictationBlockers(
   const blockers: string[] = [];
   const key =
     settings.transcriptionProvider === "deepgram" ? settings.deepgramApiKey : settings.openaiApiKey;
-  if (!key) blockers.push(`add a ${PROVIDER_NAME[settings.transcriptionProvider]} API key`);
+  if (!key) blockers.push(`add your ${PROVIDER_NAME[settings.transcriptionProvider]} API key`);
   if (micPermission === "denied" || micPermission === "restricted") {
     blockers.push("allow microphone access");
   }
@@ -271,7 +293,11 @@ export function VoiceInputSettingsTab() {
     saveFailure?.group === group ? (
       <SettingsLoadErrorBanner
         title="Couldn't save that change"
-        message="The setting is back to its previous value."
+        message={`${
+          patchedKeys(saveFailure.patch)
+            .map((key) => SETTING_LABEL[key])
+            .find(Boolean) ?? "The setting"
+        } is back to its previous value.`}
         onRetry={() => void update(saveFailure.patch)}
       />
     ) : null;
@@ -388,9 +414,11 @@ export function VoiceInputSettingsTab() {
     ? paragraphing
     : "manual";
   const recordingMode = settings.recordingMode ?? "toggle";
+  const dictationShortcut = useKeybindingDisplay("voiceInput.toggle");
 
   const openAiKeyRow = (
     <ApiKeyRow
+      key="openai"
       id="voice-stt-openai-key"
       label="OpenAI API key"
       value={settings.openaiApiKey}
@@ -458,6 +486,7 @@ export function VoiceInputSettingsTab() {
 
               {provider === "deepgram" ? (
                 <ApiKeyRow
+                  key="deepgram"
                   label="Deepgram API key"
                   value={settings.deepgramApiKey}
                   placeholder="Paste a Deepgram API key"
@@ -482,6 +511,8 @@ export function VoiceInputSettingsTab() {
                     onChange={(e) => void update({ organizationId: e.target.value })}
                     onBlur={(e) => void update({ organizationId: e.target.value.trim() })}
                     placeholder="org-..."
+                    layout="inline"
+                    controlWidth="wide"
                     className="font-mono"
                     autoComplete="off"
                     spellCheck={false}
@@ -493,6 +524,8 @@ export function VoiceInputSettingsTab() {
                     onChange={(e) => void update({ projectId: e.target.value })}
                     onBlur={(e) => void update({ projectId: e.target.value.trim() })}
                     placeholder="proj_..."
+                    layout="inline"
+                    controlWidth="wide"
                     className="font-mono"
                     autoComplete="off"
                     spellCheck={false}
@@ -503,6 +536,7 @@ export function VoiceInputSettingsTab() {
           )}
         </SettingsGroup>
 
+        {settings.enabled && saveError("microphone")}
         {settings.enabled && (
           <SettingsGroup label="Microphone">
             <MicPermissionRow
@@ -557,37 +591,35 @@ export function VoiceInputSettingsTab() {
               onReset={() => void update({ language: DEFAULT_SETTINGS.language })}
             />
 
-            <SettingsPresetGroup
-              id="voice-paragraph-breaks"
-              label="Paragraph breaks"
-              description={
-                !spokenCommandsAvailable
-                  ? "Spoken commands need English, so press Enter to start a new paragraph"
-                  : effectiveParagraphing === "spoken-command"
+            {!spokenCommandsAvailable ? (
+              <SettingsRow
+                id="voice-paragraph-breaks"
+                label="Paragraph breaks"
+                description="Enter only. Spoken commands need English, so press Enter to start a new paragraph."
+              />
+            ) : (
+              <SettingsPresetGroup
+                id="voice-paragraph-breaks"
+                label="Paragraph breaks"
+                description={
+                  effectiveParagraphing === "spoken-command"
                     ? 'Say "new paragraph", or press Enter to commit the current one'
                     : "Press Enter to start a new paragraph. Spoken formatting commands are off."
-              }
-              options={[
-                {
-                  value: "spoken-command" as const,
-                  label: "Spoken commands",
-                  disabled: !spokenCommandsAvailable,
-                },
-                { value: "manual" as const, label: "Enter only" },
-              ]}
-              value={effectiveParagraphing}
-              onChange={(v) => void update({ paragraphingStrategy: v })}
-              isModified={spokenCommandsAvailable && paragraphing !== "spoken-command"}
-              onReset={() => void update({ paragraphingStrategy: "spoken-command" })}
-            />
+                }
+                options={[
+                  { value: "spoken-command" as const, label: "Spoken commands" },
+                  { value: "manual" as const, label: "Enter only" },
+                ]}
+                value={effectiveParagraphing}
+                onChange={(v) => void update({ paragraphingStrategy: v })}
+                isModified={paragraphing !== "spoken-command"}
+                onReset={() => void update({ paragraphingStrategy: "spoken-command" })}
+              />
+            )}
 
             <SettingsPresetGroup
               label="Recording mode"
-              description={
-                recordingMode === "toggle"
-                  ? "Press the dictation shortcut to start, and again to stop"
-                  : "Hold the dictation shortcut to record. Releasing it stops without submitting."
-              }
+              description={recordingModeDescription(recordingMode, dictationShortcut)}
               options={[
                 { value: "toggle" as const, label: "Toggle" },
                 { value: "push-to-talk" as const, label: "Push to talk" },
@@ -679,6 +711,16 @@ export function VoiceInputSettingsTab() {
       )}
     </div>
   );
+}
+
+/** Names the real binding, so a user who just finished setup knows what to press. */
+export function recordingModeDescription(mode: VoiceRecordingMode, shortcut: string): string {
+  const key = shortcut || "the dictation shortcut";
+  const how =
+    mode === "toggle"
+      ? `Press ${key} to start, and again to stop.`
+      : `Hold ${key} to record. Releasing it stops without submitting.`;
+  return shortcut ? how : `${how} No shortcut is assigned yet; set one under Keyboard.`;
 }
 
 // ── API key row ──
@@ -968,11 +1010,13 @@ function MicPermissionRow({
     }
   })();
 
+  const denied = status === "denied" || status === "restricted";
   return (
     <SettingsRow
       label="Access"
+      layout={denied ? "stacked" : "inline"}
       description={
-        <span className="flex items-start gap-2">
+        <span role="status" className="flex items-start gap-2">
           <span
             className={cn("status-mark mt-1 w-2 h-2 rounded-full shrink-0", statusDisplay.dot)}
             aria-hidden="true"
@@ -980,7 +1024,13 @@ function MicPermissionRow({
           <span>{statusDisplay.text}</span>
         </span>
       }
-      control={statusDisplay.actions}
+      control={
+        denied ? (
+          <div className="flex flex-wrap items-center gap-2">{statusDisplay.actions}</div>
+        ) : (
+          statusDisplay.actions
+        )
+      }
     />
   );
 }

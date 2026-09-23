@@ -1003,17 +1003,22 @@ describe("DaintreeAssistantSettingsTab", () => {
   // Until the saved values arrive the switches show defaults; a click then would
   // overwrite a real setting with one the user never saw. Retry has to recover.
   it("keeps settings inert after a failed load, and Retry brings them back", async () => {
+    let resolveRetry: (() => void) | undefined;
+    const retryGate = new Promise<void>((r) => {
+      resolveRetry = r;
+    });
+    const loaded = {
+      docSearch: false,
+      daintreeControl: true,
+      tier: "action" as const,
+      bypassPermissions: false,
+      auditRetention: 7,
+      customArgs: "",
+    };
     const getSettings = vi
       .fn()
       .mockRejectedValueOnce(new Error("EACCES: permission denied"))
-      .mockResolvedValue({
-        docSearch: false,
-        daintreeControl: true,
-        tier: "action" as const,
-        bypassPermissions: false,
-        auditRetention: 7,
-        customArgs: "",
-      });
+      .mockImplementation(() => retryGate.then(() => loaded));
     installApi({ getSettings });
 
     const { container } = render(
@@ -1027,6 +1032,10 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(toggle.hasAttribute("disabled")).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    // While the retry is in flight the defaults are still on screen, so they stay inert.
+    await waitFor(() => expect(getSettings).toHaveBeenCalledTimes(2));
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+    resolveRetry?.();
 
     await waitFor(() => {
       expect(toggle.hasAttribute("disabled")).toBe(false);

@@ -60,15 +60,15 @@ import {
 const COPY_RESET_DELAY_MS = 2000;
 const CUSTOM_ARGS_DEBOUNCE_MS = 500;
 
-type SaveGroup = "launch" | "behavior" | "hibernation" | "security" | "privacy";
+type SaveGroup = "agent" | "launch" | "behavior" | "security" | "privacy";
 
 const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
-  modelId: "launch",
+  modelId: "agent",
   customArgs: "launch",
   debugLogging: "launch",
   docSearch: "behavior",
   daintreeControl: "behavior",
-  idleHibernateMinutes: "hibernation",
+  idleHibernateMinutes: "launch",
   tier: "security",
   bypassPermissions: "security",
   auditRetention: "privacy",
@@ -92,7 +92,7 @@ function patchedKeys(patch: Partial<HelpAssistantSettings>): (keyof HelpAssistan
 
 function saveGroupOf(patch: Partial<HelpAssistantSettings>): SaveGroup {
   const [first] = patchedKeys(patch);
-  return first ? SAVE_GROUP_BY_KEY[first] : "launch";
+  return first ? SAVE_GROUP_BY_KEY[first] : "agent";
 }
 
 function copySetting<K extends keyof HelpAssistantSettings>(
@@ -313,6 +313,8 @@ export function DaintreeAssistantSettingsTab() {
   // Failures of one-off actions stay on the section they belong to, not at the page foot.
   const [privacyError, setPrivacyError] = useState<string | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  // A failed read must not pass for an empty history.
+  const [auditReadFailed, setAuditReadFailed] = useState(false);
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const [copied, setCopied] = useState(false);
   const [showRotateConfirm, setShowRotateConfirm] = useState(false);
@@ -503,7 +505,9 @@ export function DaintreeAssistantSettingsTab() {
     ]);
     if (recordsResult.status === "fulfilled") {
       setAuditRecords(recordsResult.value);
+      setAuditReadFailed(false);
     } else {
+      setAuditReadFailed(true);
       logError("Failed to load MCP audit records for assistant tab", recordsResult.reason);
     }
     if (statsResult.status === "fulfilled") {
@@ -533,6 +537,7 @@ export function DaintreeAssistantSettingsTab() {
           if (recordsResult.status === "fulfilled") {
             setAuditRecords(recordsResult.value);
           } else {
+            setAuditReadFailed(true);
             logError("Failed initial audit load for assistant tab", recordsResult.reason);
           }
           if (statsResult.status === "fulfilled") {
@@ -881,15 +886,20 @@ export function DaintreeAssistantSettingsTab() {
     }
   };
 
+  // Controls stay inert for the whole retry and only unlock once real values land.
   const retryLoadSettings = () => {
-    setLoadError(null);
+    setLoading(true);
     window.electron.helpAssistant
       .getSettings()
-      .then((s) => setSettings(s))
+      .then((s) => {
+        setSettings(s);
+        setLoadError(null);
+      })
       .catch((err) => {
         setLoadError(formatErrorMessage(err, "Couldn't load assistant settings"));
         logError("Failed to reload Daintree Assistant settings", err);
-      });
+      })
+      .finally(() => setLoading(false));
   };
 
   // Until the saved values arrive, the controls show defaults. They stay inert so a
@@ -941,8 +951,8 @@ export function DaintreeAssistantSettingsTab() {
         />
       )}
 
-      <SettingsSection title="Launch" description="Changes apply to new assistant sessions.">
-        {saveError("launch")}
+      <SettingsSection title="Agent" description="Changes apply to new assistant sessions.">
+        {saveError("agent")}
         <SettingsGroup>
           <SettingsSelect
             label="Agent"
@@ -967,42 +977,6 @@ export function DaintreeAssistantSettingsTab() {
               options={modelOptions}
               controlWidth="wide"
               disabled={settingsUnavailable}
-            />
-          )}
-          <SettingsInput
-            label="Custom CLI args"
-            description="Whitespace-separated flags appended to the launch command"
-            type="text"
-            spellCheck={false}
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-            placeholder="e.g. --verbose"
-            className="font-mono"
-            value={displayedCustomArgs}
-            onChange={handleCustomArgsChange}
-            disabled={settingsUnavailable}
-          />
-          <SettingsSelect
-            label="Hibernate after"
-            description="How long the panel stays hidden before the assistant shuts down. Reopening resumes the same conversation."
-            value={String(settings.idleHibernateMinutes)}
-            onValueChange={setHibernateMinutes}
-            options={HIBERNATE_OPTIONS}
-            disabled={settingsUnavailable}
-            isModified={settings.idleHibernateMinutes !== DEFAULT_SETTINGS.idleHibernateMinutes}
-            onReset={() => setHibernateMinutes(String(DEFAULT_SETTINGS.idleHibernateMinutes))}
-          />
-          {preferredAgentId === "daintree-assistant" && (
-            <SettingsSwitchCard
-              title="Debug logging"
-              subtitle="Write a full-fidelity per-session trace to ~/.daintree/logs"
-              isEnabled={settings.debugLogging}
-              onChange={toggleDebugLogging}
-              ariaLabel="Enable Daintree Assistant debug logging"
-              disabled={settingsUnavailable}
-              isModified={settings.debugLogging !== DEFAULT_SETTINGS.debugLogging}
-              onReset={() => void persist({ debugLogging: DEFAULT_SETTINGS.debugLogging })}
             />
           )}
         </SettingsGroup>
@@ -1086,12 +1060,6 @@ export function DaintreeAssistantSettingsTab() {
             onReset={() => setTier(DEFAULT_SETTINGS.tier)}
           />
 
-          <BlastRadiusPreview
-            tier={settings.tier}
-            isOpen={showBlastRadius}
-            onToggle={() => setShowBlastRadius((v) => !v)}
-          />
-
           {/* The stored preference is agent-agnostic but its effect is not, so the
               row only renders once an agent with a real bypass mechanism is
               selected — mirroring the agent-gated Debug logging switch above. */}
@@ -1120,6 +1088,14 @@ export function DaintreeAssistantSettingsTab() {
               <div className="text-xs text-text-secondary select-text">{bypassCopy.warning}</div>
             </div>
           )}
+
+          {/* The inventory comes last so opening it never pushes the bypass switch away
+              from the tier it works with. */}
+          <BlastRadiusPreview
+            tier={settings.tier}
+            isOpen={showBlastRadius}
+            onToggle={() => setShowBlastRadius((v) => !v)}
+          />
         </SettingsGroup>
 
         <SessionLiveStatusCard configuredTier={settings.tier} />
@@ -1131,6 +1107,11 @@ export function DaintreeAssistantSettingsTab() {
       >
         {saveError("privacy")}
         {privacyError && <InlineError>{privacyError}</InlineError>}
+        {auditReadFailed && (
+          <InlineError onRetry={() => void refreshAuditRecords()}>
+            Couldn&apos;t read the audit log, so the diagnostics below may be incomplete.
+          </InlineError>
+        )}
         <SettingsGroup>
           <SettingsSwitchCard
             title="Capture audit log"
@@ -1212,6 +1193,51 @@ export function DaintreeAssistantSettingsTab() {
               </div>
             )}
           </div>
+        </SettingsGroup>
+      </SettingsSection>
+
+      <SettingsSection
+        title="Launch options"
+        description="Changes apply to new assistant sessions."
+      >
+        {saveError("launch")}
+        <SettingsGroup>
+          <SettingsInput
+            label="Custom CLI args"
+            description="Whitespace-separated flags appended to the launch command"
+            type="text"
+            spellCheck={false}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            placeholder="e.g. --verbose"
+            className="font-mono"
+            value={displayedCustomArgs}
+            onChange={handleCustomArgsChange}
+            disabled={settingsUnavailable}
+          />
+          <SettingsSelect
+            label="Hibernate after"
+            description="How long the panel stays hidden before the assistant shuts down. Reopening resumes the same conversation."
+            value={String(settings.idleHibernateMinutes)}
+            onValueChange={setHibernateMinutes}
+            options={HIBERNATE_OPTIONS}
+            disabled={settingsUnavailable}
+            isModified={settings.idleHibernateMinutes !== DEFAULT_SETTINGS.idleHibernateMinutes}
+            onReset={() => setHibernateMinutes(String(DEFAULT_SETTINGS.idleHibernateMinutes))}
+          />
+          {preferredAgentId === "daintree-assistant" && (
+            <SettingsSwitchCard
+              title="Debug logging"
+              subtitle="Write a full-fidelity per-session trace to ~/.daintree/logs"
+              isEnabled={settings.debugLogging}
+              onChange={toggleDebugLogging}
+              ariaLabel="Enable Daintree Assistant debug logging"
+              disabled={settingsUnavailable}
+              isModified={settings.debugLogging !== DEFAULT_SETTINGS.debugLogging}
+              onReset={() => void persist({ debugLogging: DEFAULT_SETTINGS.debugLogging })}
+            />
+          )}
         </SettingsGroup>
       </SettingsSection>
 
@@ -1347,12 +1373,17 @@ function StatusLine({ tone, children }: { tone: "ok" | "idle" | "error"; childre
   );
 }
 
-function InlineError({ children }: { children: ReactNode }) {
+function InlineError({ children, onRetry }: { children: ReactNode; onRetry?: () => void }) {
   return (
-    <p role="alert" className="flex items-start gap-1.5 text-xs text-text-primary select-text">
+    <div role="alert" className="flex items-start gap-1.5 text-xs text-text-primary select-text">
       <AlertCircle className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
-      <span>{children}</span>
-    </p>
+      <span className="min-w-0 flex-1">{children}</span>
+      {onRetry && (
+        <Button variant="ghost" size="xs" onClick={onRetry} className="-my-1 shrink-0">
+          Retry
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -1390,6 +1421,8 @@ interface BlastRadiusPreviewProps {
   onToggle: () => void;
 }
 
+const HIGH_BLAST_RADIUS_GROUP = "high blast radius";
+
 function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps) {
   const totalCount = HELP_TIER_CUMULATIVE[tier].length;
   const newAtTier = HELP_TIER_INCREMENTAL[tier].length;
@@ -1405,7 +1438,7 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
     const pinned = new Set(pinnedList);
     const rest = cumulative.filter((tool) => !pinned.has(tool));
     return [
-      ["⚠ high blast radius", pinnedList] as [string, string[]],
+      [HIGH_BLAST_RADIUS_GROUP, pinnedList] as [string, string[]],
       ...groupToolsByNamespace(rest),
     ];
   }, [tier]);
@@ -1441,7 +1474,10 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
           <p className="text-xs text-text-secondary select-text">{TIER_DETAILS[tier]}</p>
           {groups.map(([ns, tools]) => (
             <div key={ns} className="space-y-1">
-              <div className="text-xs text-text-secondary font-mono">
+              <div className="flex items-center gap-1 text-xs text-text-secondary font-mono">
+                {ns === HIGH_BLAST_RADIUS_GROUP && (
+                  <AlertTriangle className="w-3 h-3 text-status-warning" aria-hidden="true" />
+                )}
                 {ns}
                 <span className="ml-1 text-text-placeholder">({tools.length})</span>
               </div>
@@ -1533,11 +1569,13 @@ function NativeGrantsSection({
   }, [helpSessionId, toolsInput, usesInput]);
 
   const revoke = useCallback((grantId: string) => {
+    setIssueError(null);
     safeFireAndForget(
       window.electron.mcpServer
         .revokeNativeGrant({ grantId })
         .then(() => undefined)
         .catch((err: unknown) => {
+          setIssueError(formatErrorMessage(err, "Couldn't revoke grant"));
           logError("DaintreeAssistant: revokeNativeGrant failed", err);
         }),
       { context: "DaintreeAssistant:revokeNativeGrant" }
@@ -1587,6 +1625,7 @@ function NativeGrantsSection({
           value={toolsInput}
           onChange={(e) => setToolsInput(e.target.value)}
           placeholder="git.commit terminal.new"
+          aria-label="Tools to approve"
           className="flex-1 min-w-0 rounded-[var(--radius-sm)] border border-border-default bg-surface-canvas px-2 py-1 text-2xs font-mono text-text-primary placeholder:text-text-placeholder focus-visible:outline-2 focus-visible:outline-accent-primary"
         />
         <input
@@ -1607,7 +1646,7 @@ function NativeGrantsSection({
           Approve grant
         </button>
       </div>
-      {issueError && <div className="text-3xs text-status-danger">{issueError}</div>}
+      {issueError && <InlineError>{issueError}</InlineError>}
     </div>
   );
 }
