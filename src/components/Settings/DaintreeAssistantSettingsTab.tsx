@@ -7,7 +7,6 @@ import {
   ChevronRight,
   Copy,
   FolderOpen,
-  RefreshCw,
 } from "lucide-react";
 import * as semver from "semver";
 import { cn } from "@/lib/utils";
@@ -1390,38 +1389,43 @@ export function DaintreeAssistantSettingsTab() {
             />
           </SettingsGroup>
         ) : (
-          <SettingsGroup>
-            <SettingsRow
-              label="Client config"
-              description={`Paste into an external MCP client to connect it to port ${runtimeSnapshot.port ?? mcpStatus.port ?? "—"}`}
-              control={
-                <Button variant="outline" size="sm" onClick={handleCopyConfig}>
-                  {copied ? <Check /> : <Copy />}
-                  {copied ? "Copied" : "Copy MCP config"}
-                </Button>
-              }
-            />
-            <SettingsRow
-              label="API key"
-              description={
-                apiKeySuffix
-                  ? `Ends in ${apiKeySuffix}. Rotating it disconnects every client using the old key.`
-                  : "Rotating the key disconnects every client using the old one."
-              }
-              control={
-                <Button
-                  variant="ghost-danger"
-                  size="sm"
-                  onClick={() => setShowRotateConfirm(true)}
-                  disabled={!apiKeySuffix}
-                  title={apiKeySuffix ? undefined : "Waiting for the MCP key to load…"}
-                >
-                  <RefreshCw />
-                  Rotate MCP key
-                </Button>
-              }
-            />
-          </SettingsGroup>
+          <>
+            <SettingsGroup>
+              <SettingsRow
+                label="Client config"
+                description={`Paste into an external MCP client to connect it to port ${runtimeSnapshot.port ?? mcpStatus.port ?? "—"}`}
+                control={
+                  <Button variant="outline" size="sm" onClick={handleCopyConfig}>
+                    {copied ? <Check /> : <Copy />}
+                    {copied ? "Copied" : "Copy MCP config"}
+                  </Button>
+                }
+              />
+            </SettingsGroup>
+            {/* Rotating cuts off every client holding the key, so it sits in its own
+            group rather than beside the everyday copy action. */}
+            <SettingsGroup>
+              <SettingsRow
+                label="API key"
+                description={
+                  apiKeySuffix
+                    ? `Ends in ${apiKeySuffix}. Rotating it disconnects every client using the old key.`
+                    : "Rotating the key disconnects every client using the old one."
+                }
+                control={
+                  <Button
+                    variant="ghost-danger"
+                    size="sm"
+                    onClick={() => setShowRotateConfirm(true)}
+                    disabled={!apiKeySuffix}
+                    title={apiKeySuffix ? undefined : "Waiting for the MCP key to load…"}
+                  >
+                    Rotate MCP key…
+                  </Button>
+                }
+              />
+            </SettingsGroup>
+          </>
         )}
       </SettingsSection>
 
@@ -1430,7 +1434,7 @@ export function DaintreeAssistantSettingsTab() {
         onClose={isClearingAudit ? undefined : handleCancelClearAudit}
         title="Clear audit log?"
         description="All recorded tool dispatches will be permanently deleted — including those from external MCP clients."
-        confirmLabel={clearAuditError ? "Try again" : "Clear log"}
+        confirmLabel={clearAuditError ? "Try again" : "Clear audit log"}
         cancelLabel="Cancel"
         onConfirm={confirmClearAuditLog}
         isConfirmLoading={isClearingAudit}
