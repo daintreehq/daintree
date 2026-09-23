@@ -20,12 +20,19 @@ const mockAddTerminal = vi.fn();
 let addTerminalResolver: (() => void) | null = null;
 let addTerminalRejecter: ((err: Error) => void) | null = null;
 
+const settingsMock = vi.hoisted(() => ({
+  promoteToSaved: vi.fn(),
+  removeFromSaved: vi.fn(),
+  allDetectedRunners: [] as Array<{ id: string; name: string; command: string }>,
+  runCommands: [] as Array<{ id: string; name: string; command: string }>,
+}));
+
 vi.mock("@/hooks/useProjectSettings", () => ({
   useProjectSettings: () => ({
-    allDetectedRunners: [],
-    settings: { runCommands: [] },
-    promoteToSaved: vi.fn(),
-    removeFromSaved: vi.fn(),
+    allDetectedRunners: settingsMock.allDetectedRunners,
+    settings: { runCommands: settingsMock.runCommands },
+    promoteToSaved: settingsMock.promoteToSaved,
+    removeFromSaved: settingsMock.removeFromSaved,
   }),
 }));
 
@@ -313,6 +320,115 @@ describe("QuickRun", () => {
     } finally {
       Element.prototype.scrollIntoView = original;
     }
+  });
+
+  function seedHistory(...commands: string[]) {
+    localStorage.setItem(
+      "daintree_cmd_history_test-project",
+      JSON.stringify(commands.map((command, i) => ({ command, timestamp: commands.length - i })))
+    );
+  }
+
+  it("puts nothing interactive inside an option", () => {
+    // An option's children are presentational to assistive technology, so a
+    // pin button nested in one is unreachable there — and a button inside the
+    // button the option used to be was invalid HTML besides.
+    settingsMock.allDetectedRunners = [{ id: "r", name: "test", command: "npm test" }];
+    settingsMock.runCommands = [{ id: "s", name: "Dev", command: "npm run dev" }];
+    seedHistory("ls -la");
+    try {
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      const options = screen.getAllByRole("option");
+      expect(options.length).toBe(3);
+      for (const option of options) {
+        expect(option.querySelector("button, a[href], input, [tabindex]")).toBeNull();
+      }
+    } finally {
+      settingsMock.allDetectedRunners = [];
+      settingsMock.runCommands = [];
+    }
+  });
+
+  it("files every suggestion under a labelled band", () => {
+    settingsMock.allDetectedRunners = [{ id: "r", name: "test", command: "npm test" }];
+    settingsMock.runCommands = [{ id: "s", name: "Dev", command: "npm run dev" }];
+    seedHistory("ls -la");
+    try {
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      const labels = new Set<string>();
+      for (const option of screen.getAllByRole("option")) {
+        const group = option.closest('[role="group"]');
+        expect(group).not.toBeNull();
+        const label = document.getElementById(group!.getAttribute("aria-labelledby")!);
+        expect(label?.textContent?.trim()).toBeTruthy();
+        // The band label is never itself a row the arrows can land on.
+        expect(label?.getAttribute("role")).not.toBe("option");
+        labels.add(label!.textContent!);
+      }
+      expect(labels.size).toBe(3);
+    } finally {
+      settingsMock.allDetectedRunners = [];
+      settingsMock.runCommands = [];
+    }
+  });
+
+  it("shows the typed command as the row Enter runs, and runs it literally", () => {
+    seedHistory("npm test", "npm run lint");
+    mockAddTerminal.mockResolvedValue(undefined);
+    render(<Footer projectId="test-project" />);
+    const input = openPanel();
+    fireEvent.change(input, { target: { value: "npm t" } });
+
+    const active = document.getElementById(input.getAttribute("aria-activedescendant")!);
+    expect(active?.textContent).toContain("npm t");
+    expect(active).toBe(screen.getAllByRole("option")[0]);
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(mockAddTerminal).toHaveBeenCalledWith(expect.objectContaining({ command: "npm t" }));
+  });
+
+  it("runs the same command from the arrow as from Enter", () => {
+    seedHistory("npm test", "npm run lint");
+    mockAddTerminal.mockResolvedValue(undefined);
+    render(<Footer projectId="test-project" />);
+    const input = openPanel();
+    fireEvent.change(input, { target: { value: "npm" } });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    const active = document.getElementById(input.getAttribute("aria-activedescendant")!);
+    const expected = active!.getAttribute("title")!;
+    expect(expected).not.toBe("npm");
+
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    expect(mockAddTerminal).toHaveBeenCalledWith(expect.objectContaining({ command: expected }));
+  });
+
+  it("gives the command back when it fails to start", async () => {
+    mockAddTerminal.mockRejectedValue(new Error("spawn failed"));
+    render(<Footer projectId="test-project" />);
+    const input = openPanel();
+    fireEvent.change(input, { target: { value: "cargo run" } });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(screen.getByDisplayValue("cargo run")).toBe(input);
+    expect(screen.getByRole("alert").textContent).toContain("cargo run");
+  });
+
+  it("pins the highlighted row from the keyboard without leaving the field", () => {
+    seedHistory("docker compose up");
+    render(<Footer projectId="test-project" />);
+    const input = openPanel();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "π", code: "KeyP", altKey: true });
+    expect(settingsMock.promoteToSaved).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "docker compose up" })
+    );
+    expect(document.activeElement).toBe(input);
   });
 
   it("renders all main buttons with type='button'", () => {

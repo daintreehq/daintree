@@ -149,11 +149,25 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
 
   if (visibleTasks.length === 0) return null;
 
-  const displayTasks = visibleTasks.slice(0, MAX_VISIBLE);
-  const overflowTasks = visibleTasks.slice(MAX_VISIBLE);
+  // The newest launches keep the visible slots and the oldest spill into the
+  // overflow. Taking the first five in panel order put the task a user had
+  // just started behind "N more" — the one row they had come to find. Launch
+  // order stays top to bottom, so the newest sits nearest the field it came from.
+  const overflowTasks = visibleTasks.slice(0, Math.max(0, visibleTasks.length - MAX_VISIBLE));
+  const displayTasks = visibleTasks.slice(overflowTasks.length);
 
   return (
     <div className="-mx-2 mb-2 space-y-0.5">
+      {overflowTasks.length > 0 && (
+        <TaskOverflow
+          tasks={overflowTasks}
+          now={now}
+          onStop={handleStop}
+          onFocus={handleFocus}
+          onRestart={handleRestart}
+          onDismiss={handleDismiss}
+        />
+      )}
       {displayTasks.map((t) => {
         const status = deriveTaskStatus(t);
         return (
@@ -169,22 +183,12 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
           />
         );
       })}
-      {overflowTasks.length > 0 && (
-        <TaskOverflow
-          tasks={overflowTasks}
-          now={now}
-          onStop={handleStop}
-          onFocus={handleFocus}
-          onRestart={handleRestart}
-          onDismiss={handleDismiss}
-        />
-      )}
     </div>
   );
 }
 
 /**
- * The tasks past the visible cap.
+ * The older tasks past the visible cap, above the rows they preceded.
  *
  * This used to be "+N more" as static text, which named running processes the
  * user could then neither watch, stop, nor restart — every handler the rows
@@ -218,20 +222,20 @@ function TaskOverflow({
         // command is an arbitrary-length string, and concatenating several
         // makes focusing this button read a paragraph before its state. The
         // popover is labelled and exposes the rows themselves once opened.
-        aria-label={`Show ${tasks.length} more running ${tasks.length === 1 ? "task" : "tasks"}`}
+        aria-label={`Show ${tasks.length} earlier ${tasks.length === 1 ? "task" : "tasks"}`}
         className={cn(
           "flex w-full min-h-6 items-center gap-0.5 px-2 rounded-[var(--radius-sm)] text-3xs font-sans transition-colors",
           "text-text-secondary hover:text-text-primary hover:bg-tint/[0.04]",
           "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         )}
       >
-        {tasks.length} more
+        {tasks.length} earlier
         <ChevronDown className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
       </PopoverTrigger>
       <PopoverContent
         align="start"
         sideOffset={6}
-        aria-label="More running tasks"
+        aria-label="Earlier tasks"
         className="p-1 min-w-64 max-w-sm max-h-[var(--radix-popover-content-available-height)] overflow-y-auto"
       >
         <ul className="flex flex-col gap-0.5">
@@ -286,8 +290,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
       data-task-row={terminal.id}
       className={cn(
         "flex items-center gap-1.5 px-2 rounded-[var(--radius-sm)] text-2xs font-mono group",
-        "hover:bg-tint/[0.04] transition-colors",
-        status === "success" && "opacity-60"
+        "hover:bg-tint/[0.04] transition-colors"
       )}
     >
       {/* Status indicator */}
@@ -308,7 +311,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
           hover or focus. The actions used to sit at opacity 0 and keep their
           width, which pushed the time into the middle of the row and cut the
           command to a letter at the 200px floor. */}
-      {isActive && (
+      {status === "running" && (
         <span className="text-3xs text-text-secondary tabular-nums shrink-0 group-hover:hidden group-focus-within:hidden">
           {formatElapsed(elapsed)}
         </span>
@@ -316,9 +319,13 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
       {/* Failure in words, where the elapsed time sat while it ran. A red dot
           alone leaves it to colour, and the left border that used to mark the
           row curved with the row's radius into a stray "(". */}
-      {status === "failed" && (
+      {/* Restarting and finished say so in words too. Restarting used to show
+          only an elapsed time beside an amber dot, reading as one more running
+          row, and a finished row faded as a whole, taking its command below the
+          text contrast floor. */}
+      {(status === "failed" || status === "success" || status === "restarting") && (
         <span className="text-3xs text-text-secondary shrink-0 group-hover:hidden group-focus-within:hidden">
-          Failed
+          {TASK_STATUS_LABEL[status]}
         </span>
       )}
 

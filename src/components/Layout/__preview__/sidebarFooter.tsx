@@ -461,7 +461,12 @@ export const FIXTURES: Record<string, Fixture> = {
           description: "typecheck + 12 codegen/guard checks + lint ratchet + format:check",
         },
         { id: "r-build", name: "build", command: "npm run build", description: "production build" },
-        { id: "r-fix", name: "fix", command: "npm run fix", description: "prettier + eslint --fix" },
+        {
+          id: "r-fix",
+          name: "fix",
+          command: "npm run fix",
+          description: "prettier + eslint --fix",
+        },
         { id: "r-rebuild", name: "rebuild", command: "npm run rebuild" },
         { id: "r-typecheck", name: "typecheck", command: "npm run typecheck" },
         { id: "r-lint", name: "lint", command: "npm run lint" },
