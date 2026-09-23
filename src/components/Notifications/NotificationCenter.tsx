@@ -52,6 +52,8 @@ import {
   KIND_SHORT_LABEL,
 } from "@/lib/notificationEffectiveState";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
+import { useProjectStore } from "@/store/projectStore";
+import { formatNotificationSource, worktreeNameFromId } from "@/lib/notificationSourceLabel";
 
 const NEEDS_ATTENTION_CAP = 5;
 const CONTEXT_NONE_KEY = "__none__";
@@ -63,6 +65,11 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
 
 function isUnreadGroup(group: ThreadGroup): boolean {
   return group.entries.some((e) => !e.seenAsToast);
+}
+
+/** An agent asking for input outranks anything that has merely gone wrong. */
+function isAskingGroup(group: ThreadGroup): boolean {
+  return group.entries.some((e) => !e.seenAsToast && e.context?.eventKind === "waiting");
 }
 
 function getGroupContextKey(group: ThreadGroup): string {
@@ -334,13 +341,28 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           setShowJumpPill(entry.boundingClientRect.top > rootBounds.bottom);
         }
       },
-      // Pull the bottom edge in by the height of the scroll fade (h-8 in
-      // ScrollShadow): a divider still under the gradient is washed out, so it
-      // doesn't count as reached and the pill stays up.
-      { root: scrollContainer, rootMargin: "0px 0px -32px 0px", threshold: 0 }
+      // No inset. It used to pull the bottom edge in by the fade's 32px, so a
+      // divider sitting in that band counted as unreached — and the pill,
+      // anchored to the same band, was drawn straight over the divider it
+      // pointed at. A divider showing at all under the fade is found.
+      { root: scrollContainer, threshold: 0 }
     );
     observer.observe(dividerEl);
-    return () => observer.disconnect();
+    // An observer only reports crossings, and a jump from below the viewport
+    // to above it (End, the scrollbar, a fast wheel) never crosses — it goes
+    // from not-intersecting to not-intersecting, so the pill stayed up at the
+    // bottom of the list pointing at something already passed. A scroll can
+    // only ever retire it here; showing it stays the observer's job.
+    const handleScroll = () => {
+      const divider = dividerEl.getBoundingClientRect();
+      const port = scrollContainer.getBoundingClientRect();
+      if (divider.top <= port.bottom) setShowJumpPill(false);
+    };
+    scrollContainer.addEventListener("scroll", handleScroll, { passive: true });
+    return () => {
+      observer.disconnect();
+      scrollContainer.removeEventListener("scroll", handleScroll);
+    };
   }, [dividerEl]);
 
   useEffect(() => {
@@ -408,6 +430,13 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 return sev === "error" || sev === "warning";
               })
               .sort((a, b) => {
+                // Asking first. The brief's first question is "is anything
+                // asking me for something", and a waiting agent is stalled
+                // until answered, where a failure has already happened. Sorting
+                // on severity alone put a 44-minute-old migration failure
+                // ahead of an agent that had been waiting six.
+                const askDiff = Number(isAskingGroup(b)) - Number(isAskingGroup(a));
+                if (askDiff !== 0) return askDiff;
                 const sevDiff =
                   SEVERITY_WEIGHTS[getWorstSeverity(b.entries)] -
                   SEVERITY_WEIGHTS[getWorstSeverity(a.entries)];
@@ -422,7 +451,11 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
         : [{ key: "all", groups: chronoGroups }];
 
       let divider: string | null = null;
-      if (lastClosedAt > 0 && filter !== "archived" && filter !== "snoozed") {
+      // Ungrouped only. Grouped, the new rows are spread across sections, and
+      // one divider in whichever section held the newest row labelled that
+      // section alone while its action reset the watermark for all of them.
+      // Each section marks its own boundary instead (see ChronoSection).
+      if (!groupByContext && lastClosedAt > 0 && filter !== "archived" && filter !== "snoozed") {
         for (const g of chronoGroups) {
           if (g.latestTimestamp > lastClosedAt) {
             divider = g.correlationId ?? g.entries[0]?.id ?? null;
@@ -515,9 +548,12 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
 
   const rowCount = flatRows.length;
   const [focusedIndex, setFocusedIndex] = useState(0);
+  // Whether a row has held focus during this opening. Recovery below only runs
+  // for a user who was already in the list; it must never pull focus off the
+  // bell (or anywhere else) when the panel opens or when rows arrive.
+  const rowHadFocusRef = useRef(false);
   const rowRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const dropdownOpenCountRef = useRef(0);
-  const prevRowCountRef = useRef(rowCount);
 
   const setRowRef = useCallback((index: number, el: HTMLDivElement | null) => {
     if (el) {
@@ -531,34 +567,39 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     dropdownOpenCountRef.current = Math.max(0, dropdownOpenCountRef.current + (open ? 1 : -1));
   }, []);
 
-  // After any row count change, clamp focusedIndex; reset the dropdown
-  // counter (a row removed mid-menu may never fire onOpenChange(false)); and
-  // when row count *decreases* with focus dropped to <body> (the focused row
-  // just unmounted), snap focus back to the surviving slot at the prior
-  // index. Only on decrease — never on mount or addition — to avoid
-  // hijacking focus from the toolbar bell button when the panel opens.
+  const handleRowFocus = useCallback((index: number) => {
+    rowHadFocusRef.current = true;
+    setFocusedIndex(index);
+  }, []);
+
   useEffect(() => {
-    const prevRowCount = prevRowCountRef.current;
-    prevRowCountRef.current = rowCount;
+    if (!open) rowHadFocusRef.current = false;
+  }, [open]);
 
+  // After the rows change, clamp focusedIndex; reset the dropdown counter (a
+  // row removed mid-menu may never fire onOpenChange(false)); and if focus has
+  // dropped to <body> because the focused row just unmounted, put it on the
+  // row now in that slot — or on the panel when nothing is left.
+  //
+  // Keyed on the rows, not their count. Marking a pinned row read with `u`
+  // takes it out of the rail and promotes the next severe thread into the
+  // same slot, so the count never moves while the focused element is replaced
+  // — and the old count gate left focus on <body>, where j/k do nothing.
+  useEffect(() => {
     dropdownOpenCountRef.current = 0;
+    const clamped = rowCount === 0 ? 0 : Math.min(focusedIndex, rowCount - 1);
+    if (clamped !== focusedIndex) setFocusedIndex(clamped);
 
-    if (rowCount === 0) {
-      if (focusedIndex !== 0) setFocusedIndex(0);
-      return;
-    }
-
-    const clamped = Math.min(focusedIndex, rowCount - 1);
-    if (clamped !== focusedIndex) {
-      setFocusedIndex(clamped);
-    }
-
-    if (rowCount >= prevRowCount) return;
+    if (!rowHadFocusRef.current) return;
     if (typeof document === "undefined") return;
     const active = document.activeElement;
     if (active && active !== document.body) return;
+    if (rowCount === 0) {
+      dialogRef.current?.focus({ preventScroll: true });
+      return;
+    }
     rowRefs.current.get(clamped)?.focus();
-  }, [rowCount, focusedIndex]);
+  }, [flatRows, rowCount, focusedIndex]);
 
   const dispatchPrimaryAction = useCallback((row: FlatRow) => {
     const action = row.primaryAction;
@@ -999,7 +1040,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 aria-pressed={groupByContext}
                 title="Group by project or worktree"
                 onClick={() => setGroupByContext(!groupByContext)}
-                className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-daintree-text/70"
+                className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-text-secondary"
               >
                 <Layers className="w-3 h-3" aria-hidden="true" />
               </button>
@@ -1020,7 +1061,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                   type="button"
                   aria-label="Pause notifications"
                   title="Pause notifications"
-                  className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-daintree-text/70"
+                  className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-text-secondary"
                 >
                   <Moon className="w-3 h-3" aria-hidden="true" />
                 </button>
@@ -1047,7 +1088,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 <DropdownMenuTrigger asChild>
                   <button
                     type="button"
-                    className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-daintree-text/70"
+                    className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-text-secondary"
                     aria-label="More notification actions"
                     title="More notification actions"
                   >
@@ -1153,7 +1194,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               // `forced-colors: active`, where the UA supplies the border this
               // was missing — which is the tell that it was missing. Matches the
               // secondary row action, so the panel has one button shape.
-              className="inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-daintree-text/20 px-1.5 py-0.5 text-2xs font-medium text-text-secondary hover:bg-overlay-medium hover:text-text-primary transition-colors"
+              className="inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-border-strong px-1.5 py-0.5 text-2xs font-medium text-text-secondary hover:bg-overlay-medium hover:text-text-primary transition-colors"
             >
               Resume
             </button>
@@ -1246,7 +1287,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                     indexOffset={0}
                     focusedIndex={focusedIndex}
                     setRowRef={setRowRef}
-                    onRowFocus={setFocusedIndex}
+                    onRowFocus={handleRowFocus}
                     onDropdownOpenChange={handleDropdownOpenChange}
                     onDismiss={dismissEntry}
                     onDismissThread={dismissByCorrelationId}
@@ -1267,13 +1308,14 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                     }
                     focusedIndex={focusedIndex}
                     setRowRef={setRowRef}
-                    onRowFocus={setFocusedIndex}
+                    onRowFocus={handleRowFocus}
                     onDropdownOpenChange={handleDropdownOpenChange}
                     groupByContext={groupByContext}
                     hasPinnedAbove={needsAttentionGroups.length > 0}
                     dividerGroupId={dividerGroupId}
                     dividerRef={setDividerEl}
-                    lastClosedAt={lastClosedAt}
+                    // No boundary in the tabs that aren't about arrival order.
+                    lastClosedAt={filter === "archived" || filter === "snoozed" ? 0 : lastClosedAt}
                     onDismiss={dismissEntry}
                     onDismissThread={dismissByCorrelationId}
                     onMarkIdsRead={markIdsReadWithUndo}
@@ -1298,14 +1340,23 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
             tabIndex={showJumpPill ? 0 : -1}
             onClick={() => {
               dividerEl?.scrollIntoView({ block: "start", behavior: "instant" });
-              dividerEl?.focus();
+              // Land on the first new ROW, not the divider: the list's keys
+              // only move between rows, so focus parked on the label left
+              // j/k/arrows doing nothing. The rail's copies come first in
+              // flat order, so search past them.
+              const pinned = needsAttentionGroups.length;
+              const index = flatRows.findIndex(
+                (row, i) => i >= pinned && row.key === dividerGroupId
+              );
+              if (index >= 0) moveFocusTo(index);
+              else dividerEl?.focus();
             }}
             className={cn(
               "absolute bottom-2 left-1/2 -translate-x-1/2 z-10",
               "inline-flex items-center gap-1.5 px-3 py-1 rounded-full",
               "bg-overlay-raised border border-border-strong",
               "shadow-[var(--theme-shadow-floating)]",
-              "text-2xs font-medium text-daintree-text/80",
+              "text-2xs font-medium text-text-secondary",
               "hover:text-text-primary hover:bg-overlay-raised",
               "transition-[translate,opacity] motion-reduce:transition-none",
               showJumpPill
@@ -1439,6 +1490,8 @@ function NeedsAttentionSection({
               setRowRef,
               onRowFocus,
               onDropdownOpenChange,
+              compact: true,
+              showSource: true,
             },
             buildSnoozeProps(
               group,
@@ -1519,9 +1572,27 @@ function ChronoSection({
     .filter((g) => g.latestTimestamp > lastClosedAt)
     .flatMap((g) => g.entries.filter((e) => !e.seenAsToast).map((e) => e.id));
   const sectionLabel = groupByContext ? "Notifications for this context" : "All notifications";
+  // Where "new" ends: the first group at or before the watermark, marked only
+  // when something newer sits above it in this same section — a section that
+  // is all new or all old has no boundary to draw. The divider at the top
+  // says where new begins; without this nothing said where it stopped.
+  const firstKey = section.groups[0]
+    ? (section.groups[0].correlationId ?? section.groups[0].entries[0]!.id)
+    : null;
+  const opensWithNew =
+    lastClosedAt > 0 && !!section.groups[0] && section.groups[0].latestTimestamp > lastClosedAt;
+  const earlierGroup = opensWithNew
+    ? section.groups.find((g) => g.latestTimestamp <= lastClosedAt)
+    : undefined;
+  const earlierKey = earlierGroup
+    ? (earlierGroup.correlationId ?? earlierGroup.entries[0]!.id)
+    : null;
+  // The divider already says what this list is, so it stands in for the
+  // "All notifications" label rather than stacking a second one on it.
+  const dividerLeads = dividerGroupId !== null && dividerGroupId === firstKey;
   return (
     <div data-testid="chrono-section">
-      {!groupByContext && hasPinnedAbove && (
+      {!groupByContext && hasPinnedAbove && !dividerLeads && (
         <div className="pl-4 pr-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-text-secondary">
           {sectionLabel}
         </div>
@@ -1564,6 +1635,14 @@ function ChronoSection({
                   onMarkRead={() => onMarkIdsRead(newSinceUnreadIds, { resetLastClosed: true })}
                 />
               )}
+              {groupKey === earlierKey && (
+                <div
+                  data-testid="notification-earlier-boundary"
+                  className="pl-4 pr-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-text-secondary"
+                >
+                  Earlier
+                </div>
+              )}
               {renderGroup(
                 group,
                 onDismiss,
@@ -1574,6 +1653,9 @@ function ChronoSection({
                   setRowRef,
                   onRowFocus,
                   onDropdownOpenChange,
+                  compact: false,
+                  // The section header names the place; the row needn't.
+                  showSource: !groupByContext,
                 },
                 buildSnoozeProps(
                   group,
@@ -1602,6 +1684,8 @@ interface RowRovingProps {
   setRowRef: (index: number, el: HTMLDivElement | null) => void;
   onRowFocus: (index: number) => void;
   onDropdownOpenChange: (open: boolean) => void;
+  compact: boolean;
+  showSource: boolean;
 }
 
 interface SnoozeRowProps {
@@ -1641,6 +1725,8 @@ function renderGroup(
         onConsumeSnoozePending={snooze.onConsumeSnoozePending}
         onSnooze={snooze.onSnooze}
         onUnsnooze={snooze.onUnsnooze}
+        compact={roving.compact}
+        showSource={roving.showSource}
       />
     );
   }
@@ -1662,6 +1748,8 @@ function renderGroup(
       onConsumeSnoozePending={snooze.onConsumeSnoozePending}
       onSnooze={snooze.onSnooze}
       onUnsnooze={snooze.onUnsnooze}
+      compact={roving.compact}
+      showSource={roving.showSource}
     />
   );
 }
@@ -1708,31 +1796,49 @@ function ContextSectionHeader({
   const worktreeName = useWorktreeStore((s) =>
     worktreeId ? s.worktrees.get(worktreeId)?.name : undefined
   );
-  const label = worktreeName ?? worktreeId ?? projectId ?? "Other";
+  const projectName = useProjectStore((s) =>
+    projectId ? s.projects.find((p) => p.id === projectId)?.name : undefined
+  );
+  // Names, never ids. A project id is a sha256 and a worktree id is a path, so
+  // the old `worktreeName ?? worktreeId ?? projectId` fallback printed a
+  // 64-character hash as the heading of any section from a project this view
+  // hasn't loaded — the normal case in a multi-project fleet.
+  const label =
+    formatNotificationSource(
+      projectName,
+      worktreeId ? worktreeName?.trim() || worktreeNameFromId(worktreeId) : undefined
+    ) ?? (projectId ? "Another project" : "Other");
   const hasUnread = unreadIds.length > 0;
   return (
     <div
       data-testid="context-section-header"
-      className="group/section flex items-center justify-between pl-4 pr-3 py-1 bg-overlay-raised text-3xs font-medium uppercase tracking-wide text-text-secondary"
+      // Sentence case, not the uppercase eyebrow the other labels use: this
+      // one is a name. Branch names are case-sensitive and uppercasing
+      // "feature/refine-inbox" misstates the thing it identifies.
+      className="flex items-center justify-between gap-2 pl-4 pr-3 py-1 bg-overlay-raised text-2xs font-medium text-text-secondary"
     >
-      <span className="truncate">{label}</span>
-      <div className="ml-2 shrink-0 flex items-center gap-2">
-        {hasUnread && (
-          <button
-            type="button"
-            onClick={onMarkRead}
-            className={cn(
-              "inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 normal-case tracking-normal text-text-secondary hover:text-text-primary hover:bg-overlay-raised transition-colors",
-              PALETTE_ROW_FOCUS_CLASS
-            )}
-          >
-            Mark read
-          </button>
-        )}
-        <span aria-hidden="true" className="text-daintree-text/40 tabular-nums">
+      <span className="flex min-w-0 items-baseline gap-1.5">
+        <span className="truncate text-text-primary" title={label}>
+          {label}
+        </span>
+        {/* Beside the name it counts, not beside the button — at the far end
+            it read as part of "Mark read". */}
+        <span className="shrink-0 tabular-nums" aria-label={`${count} notifications`}>
           {count}
         </span>
-      </div>
+      </span>
+      {hasUnread && (
+        <button
+          type="button"
+          onClick={onMarkRead}
+          className={cn(
+            "shrink-0 inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 text-text-secondary hover:text-text-primary hover:bg-overlay-medium transition-colors",
+            PALETTE_ROW_FOCUS_CLASS
+          )}
+        >
+          Mark read
+        </button>
+      )}
     </div>
   );
 }
@@ -1758,7 +1864,13 @@ function NewSinceLastLookedDivider({
         <button
           type="button"
           onClick={onMarkRead}
-          className="inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 normal-case tracking-normal text-text-secondary hover:bg-overlay-raised hover:text-text-primary transition-colors"
+          // Bordered like Resume and the secondary row action — the panel's one
+          // small-button shape. Bare, it was the same grey and size as the
+          // label beside it and read as more of the label.
+          className={cn(
+            "ml-auto inline-flex items-center rounded-[var(--radius-sm)] border border-border-strong px-1.5 py-0.5 normal-case tracking-normal font-medium text-text-secondary hover:bg-overlay-medium hover:text-text-primary transition-colors",
+            PALETTE_ROW_FOCUS_CLASS
+          )}
         >
           {unreadCount === 1 ? "Mark this read" : `Mark these ${unreadCount} read`}
         </button>
@@ -1780,8 +1892,12 @@ function NotificationThread({
   onConsumeSnoozePending,
   onSnooze,
   onUnsnooze,
+  compact = false,
+  showSource = true,
 }: {
   group: ThreadGroup;
+  compact?: boolean;
+  showSource?: boolean;
   onDismiss: () => void;
   rowRef?: (el: HTMLDivElement | null) => void;
   tabIndex?: number;
@@ -1853,6 +1969,8 @@ function NotificationThread({
         onConsumeSnoozePending={onConsumeSnoozePending}
         onSnooze={onSnooze}
         onUnsnooze={onUnsnooze}
+        compact={compact}
+        showSource={showSource}
       />
     </div>
   );

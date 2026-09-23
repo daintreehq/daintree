@@ -3,7 +3,7 @@ import { render, screen, act, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
-import { NotificationCenterEntry } from "../NotificationCenterEntry";
+import { NotificationCenterEntry, formatSnoozeWake } from "../NotificationCenterEntry";
 
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 const getMock = vi.hoisted(() => vi.fn());
@@ -55,18 +55,18 @@ beforeEach(() => {
 describe("NotificationCenterEntry overflow menu", () => {
   it("does not render overflow menu when context has no projectId", () => {
     render(<NotificationCenterEntry entry={makeEntry()} />);
-    expect(screen.queryByLabelText("Notification options")).toBeNull();
+    expect(screen.queryByLabelText(/^Options for /)).toBeNull();
   });
 
   it("renders overflow menu when context.projectId is present", () => {
     render(<NotificationCenterEntry entry={makeEntry({ context: { projectId: "p1" } })} />);
-    expect(screen.getByLabelText("Notification options")).toBeTruthy();
+    expect(screen.getByLabelText(/^Options for /)).toBeTruthy();
   });
 
   it("dispatches project.muteNotifications when Mute is selected", async () => {
     render(<NotificationCenterEntry entry={makeEntry({ context: { projectId: "p1" } })} />);
 
-    const trigger = screen.getByLabelText("Notification options");
+    const trigger = screen.getByLabelText(/^Options for /);
     await act(async () => {
       fireEvent.pointerDown(trigger, { button: 0 });
       fireEvent.pointerUp(trigger, { button: 0 });
@@ -92,8 +92,8 @@ describe("NotificationCenterEntry overflow menu", () => {
       />
     );
 
-    expect(screen.getByLabelText("Dismiss notification")).toBeTruthy();
-    expect(screen.getByLabelText("Notification options")).toBeTruthy();
+    expect(screen.getByLabelText(/^Dismiss /)).toBeTruthy();
+    expect(screen.getByLabelText(/^Options for /)).toBeTruthy();
   });
 });
 
@@ -575,7 +575,7 @@ describe("NotificationCenterEntry roving focus props", () => {
     }
   });
 
-  it("keeps the snooze indicator rendered alongside the timestamp, not behind it", () => {
+  it("shows the snooze wake time as visible text on the row, not behind a tooltip", () => {
     const { container } = render(
       <NotificationCenterEntry
         entry={makeEntry()}
@@ -588,10 +588,12 @@ describe("NotificationCenterEntry roving focus props", () => {
     const indicator = screen.getByTestId("notification-snoozed-indicator");
     const timestamp = screen.getByTestId("notification-timestamp");
     expect(row.contains(indicator)).toBe(true);
-    // Siblings in one rail — if either ends up in a separately-revealed layer
-    // they stop sharing a parent, which is how the snooze state used to vanish
-    // on the one tab that exists to show it.
-    expect(indicator.parentElement).toBe(timestamp.parentElement);
+    expect(row.contains(timestamp)).toBe(true);
+    // The wake time is visible text, not a tooltip on a bare clock — the
+    // Snoozed tab exists to answer "when does this come back", and a title
+    // attribute only answers it for a pointer resting on the glyph.
+    expect(indicator.textContent).toMatch(/^Snoozed until \S/);
+    expect(indicator.getAttribute("title")).toBeNull();
   });
 
   it("keeps the management controls operable without hover", () => {
@@ -606,7 +608,7 @@ describe("NotificationCenterEntry roving focus props", () => {
       />
     );
     const row = container.firstElementChild as HTMLElement;
-    for (const label of ["Dismiss notification", "Notification options"]) {
+    for (const label of [/^Dismiss /, /^Options for /]) {
       const control = screen.getByLabelText(label);
       for (let el: HTMLElement | null = control; el && el !== row; el = el.parentElement) {
         expect(el.className).not.toMatch(/pointer-events-none/);
@@ -626,14 +628,14 @@ describe("NotificationCenterEntry roving focus props", () => {
         onDismiss={vi.fn()}
       />
     );
-    const boxOf = (label: string) =>
+    const boxOf = (label: RegExp) =>
       screen
         .getByLabelText(label)
         .className.split(/\s+/)
         .filter((c) => /^h-\d|^w-\d/.test(c))
         .sort();
-    expect(boxOf("Dismiss notification")).toEqual(boxOf("Notification options"));
-    expect(boxOf("Dismiss notification")).toEqual(["h-6", "w-6"]);
+    expect(boxOf(/^Dismiss /)).toEqual(boxOf(/^Options for /));
+    expect(boxOf(/^Dismiss /)).toEqual(["h-6", "w-6"]);
   });
 
   it("carries the forced-colors repaint handle on the unread dot", () => {
@@ -691,7 +693,7 @@ describe("NotificationCenterEntry roving focus props", () => {
         onDropdownOpenChange={onDropdownOpenChange}
       />
     );
-    const trigger = screen.getByLabelText("Notification options");
+    const trigger = screen.getByLabelText(/^Options for /);
 
     await act(async () => {
       fireEvent.pointerDown(trigger, { button: 0 });
@@ -739,7 +741,7 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
   });
 
   async function openMenu() {
-    const trigger = screen.getByLabelText("Notification options");
+    const trigger = screen.getByLabelText(/^Options for /);
     await act(async () => {
       fireEvent.pointerDown(trigger, { button: 0 });
       fireEvent.pointerUp(trigger, { button: 0 });
@@ -911,5 +913,19 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
       fireEvent.click(item);
     });
     expect(openExternal).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("formatSnoozeWake", () => {
+  it("names the day only when the wake time isn't today", () => {
+    const now = new Date(2026, 8, 23, 7, 0, 0);
+    const laterToday = new Date(2026, 8, 23, 8, 0, 0).getTime();
+    const tomorrow = new Date(2026, 8, 24, 8, 0, 0).getTime();
+    const today = formatSnoozeWake(laterToday, now);
+    const nextDay = formatSnoozeWake(tomorrow, now);
+    // Same clock time, so the next-day label is the same-day label plus a day:
+    // "8:00 AM" alone doesn't say which morning "Until tomorrow" means.
+    expect(nextDay).not.toBe(today);
+    expect(nextDay).toContain(today);
   });
 });

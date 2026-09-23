@@ -39,6 +39,8 @@ const worktreeStoreMock = vi.hoisted(() => ({
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: <T,>(selector: (state: typeof worktreeStoreMock) => T) =>
     selector(worktreeStoreMock),
+  useWorktreeStoreOptional: <T,>(selector: (state: typeof worktreeStoreMock) => T) =>
+    selector(worktreeStoreMock),
 }));
 
 // The inbox list renders ScrollShadow, which constructs a ResizeObserver; jsdom
@@ -768,7 +770,7 @@ describe("NotificationThread — dismiss removes entire thread", () => {
     });
 
     const thread = screen.getByTestId("notification-thread");
-    const dismissButton = within(thread).getByLabelText("Dismiss notification");
+    const dismissButton = within(thread).getByLabelText(/^Dismiss /);
     await act(async () => {
       fireEvent.click(dismissButton);
     });
@@ -814,7 +816,7 @@ describe("NotificationThread — dismiss removes entire thread", () => {
     });
 
     const thread = screen.getByTestId("notification-thread");
-    const dismissButton = within(thread).getByLabelText("Dismiss notification");
+    const dismissButton = within(thread).getByLabelText(/^Dismiss /);
     await act(async () => {
       fireEvent.click(dismissButton);
     });
@@ -855,7 +857,7 @@ describe("NotificationThread — dismiss removes entire thread", () => {
     });
 
     const thread = screen.getByTestId("notification-thread");
-    const dismissButton = within(thread).getByLabelText("Dismiss notification");
+    const dismissButton = within(thread).getByLabelText(/^Dismiss /);
     await act(async () => {
       fireEvent.click(dismissButton);
     });
@@ -1356,10 +1358,11 @@ describe("NotificationCenter — Group by context toggle", () => {
     expect(headers.map((h) => h.textContent)).toEqual(
       expect.arrayContaining([expect.stringContaining("feature/billing")])
     );
-    // Falls back to projectId when worktreeId is absent.
-    expect(headers.map((h) => h.textContent)).toEqual(
-      expect.arrayContaining([expect.stringContaining("proj-x")])
-    );
+    // A project this view can't name is called that, never by its id — real
+    // project ids are sha256 hashes, and one printed as a heading is noise.
+    const labels = headers.map((h) => h.textContent ?? "");
+    expect(labels.some((l) => l.includes("proj-x"))).toBe(false);
+    expect(labels).toEqual(expect.arrayContaining([expect.stringContaining("Another project")]));
   });
 
   it("falls back to raw worktreeId when no name is registered", () => {
@@ -1851,6 +1854,34 @@ describe("NotificationCenter — Jump to new pill", () => {
     expect(screen.getByTestId("jump-to-new-pill").className).toMatch(/opacity-0/);
   });
 
+  it("retires the pill on a scroll that jumps straight past the divider", () => {
+    const closedAt = Date.now() - 5000;
+    useUIStore.setState({ lastNotificationCenterClosedAt: closedAt });
+    setEntries([makeEntry({ message: "Newer", timestamp: closedAt + 4000 })]);
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    act(() => {
+      fireObserver({ top: 0, bottom: 400, left: 0, right: 360 }, 500, false);
+    });
+    expect(screen.getByTestId("jump-to-new-pill").className).toMatch(/opacity-100/);
+
+    // End / a scrollbar drag: the divider goes from below the viewport to above
+    // it without ever intersecting, so the observer reports nothing. The scroll
+    // itself has to be enough to retire the pill.
+    const scroller = screen.getByRole("list", { name: "Notifications" });
+    const divider = screen.getByTestId("new-since-last-looked");
+    vi.spyOn(divider, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 0, y: -200, width: 360, height: 16 })
+    );
+    vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 0, y: 0, width: 360, height: 400 })
+    );
+    act(() => {
+      fireEvent.scroll(scroller);
+    });
+    expect(screen.getByTestId("jump-to-new-pill").className).toMatch(/opacity-0/);
+  });
+
   it("announces 'New notifications below' when pill becomes visible", () => {
     const closedAt = Date.now() - 5000;
     useUIStore.setState({ lastNotificationCenterClosedAt: closedAt });
@@ -1867,10 +1898,21 @@ describe("NotificationCenter — Jump to new pill", () => {
     expect(useAnnouncerStore.getState().polite?.msg).toBe("New notifications below");
   });
 
-  it("clicking the pill calls scrollIntoView and focus on the divider", () => {
+  it("clicking the pill scrolls to the divider and lands focus on the first new row in the list", () => {
     const closedAt = Date.now() - 5000;
     useUIStore.setState({ lastNotificationCenterClosedAt: closedAt });
-    setEntries([makeEntry({ message: "Newer", timestamp: closedAt + 4000 })]);
+    // Unread and severe, so a copy of it is pinned in the rail above too —
+    // focus has to land on the list's row, the one under the divider.
+    setEntries([
+      makeEntry({
+        id: "new-err",
+        type: "error",
+        message: "Newer",
+        timestamp: closedAt + 4000,
+        seenAsToast: false,
+      }),
+      makeEntry({ id: "old", message: "Older", timestamp: closedAt - 60_000 }),
+    ]);
 
     const proto = HTMLElement.prototype as unknown as {
       scrollIntoView?: (...args: unknown[]) => void;
@@ -1882,9 +1924,6 @@ describe("NotificationCenter — Jump to new pill", () => {
     try {
       render(<NotificationCenter open onClose={vi.fn()} />);
 
-      const divider = screen.getByTestId("new-since-last-looked");
-      const focusSpy = vi.spyOn(divider, "focus").mockImplementation(() => undefined);
-
       act(() => {
         fireObserver({ top: 0, bottom: 400, left: 0, right: 360 }, 500, false);
       });
@@ -1892,7 +1931,11 @@ describe("NotificationCenter — Jump to new pill", () => {
       fireEvent.click(screen.getByTestId("jump-to-new-pill"));
 
       expect(scrollSpy).toHaveBeenCalledWith({ block: "start", behavior: "instant" });
-      expect(focusSpy).toHaveBeenCalled();
+      // A row, not the divider: the list's keys only move between rows.
+      const active = document.activeElement;
+      expect(active?.getAttribute("role")).toBe("listitem");
+      expect(active?.textContent).toContain("Newer");
+      expect(screen.getByTestId("chrono-section").contains(active)).toBe(true);
     } finally {
       proto.scrollIntoView = originalScroll;
     }
@@ -2373,7 +2416,7 @@ describe("NotificationCenter — keyboard navigation", () => {
     });
 
     // Open the kebab menu on the first row — emulates Radix DropdownMenu open.
-    const trigger = within(rows[0]!).getByLabelText("Notification options");
+    const trigger = within(rows[0]!).getByLabelText(/^Options for /);
     act(() => {
       fireEvent.pointerDown(trigger, { button: 0 });
       fireEvent.pointerUp(trigger, { button: 0 });
@@ -2440,7 +2483,7 @@ describe("NotificationCenter — keyboard navigation", () => {
       rows[0]?.focus();
     });
 
-    const trigger = within(rows[0]!).getByLabelText("Notification options");
+    const trigger = within(rows[0]!).getByLabelText(/^Options for /);
     await act(async () => {
       fireEvent.pointerDown(trigger, { button: 0 });
       fireEvent.pointerUp(trigger, { button: 0 });
@@ -2474,7 +2517,7 @@ describe("NotificationCenter — keyboard navigation", () => {
       rows[0]?.focus();
     });
 
-    const trigger = within(rows[0]!).getByLabelText("Notification options");
+    const trigger = within(rows[0]!).getByLabelText(/^Options for /);
     await act(async () => {
       fireEvent.pointerDown(trigger, { button: 0 });
       fireEvent.pointerUp(trigger, { button: 0 });
@@ -2894,5 +2937,165 @@ describe("NotificationCenter — scroll shadows", () => {
     flushFrames();
 
     expect(readCues(scroller)).toEqual([false, true]);
+  });
+});
+
+describe("NotificationCenter — fleet-volume triage", () => {
+  const HASH = "3e31f96c37be90df805ad2ea7e10d4f0ae8f1c2b9d6a4e7f0c1b2a3d4e5f6a7b8";
+
+  it("never prints an id as a place: rows and grouped headers name by path segment, not hash or path", () => {
+    const wtPath = "/Users/dev/Projects/atlas-api-worktrees/feature-rate-limits";
+    setEntries([
+      makeEntry({
+        id: "a",
+        title: "Agent exited",
+        message: "Codex exited with code 137.",
+        context: { projectId: HASH, worktreeId: wtPath },
+      }),
+      makeEntry({
+        id: "b",
+        title: "Idle",
+        message: "Terminals idle.",
+        context: { projectId: HASH },
+      }),
+    ]);
+    const { unmount } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const sources = screen.getAllByTestId("notification-source").map((s) => s.textContent ?? "");
+    expect(sources).toEqual(["feature-rate-limits"]);
+    unmount();
+
+    useNotificationSettingsStore.setState({ groupByContext: true });
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    for (const header of screen.getAllByTestId("context-section-header")) {
+      const text = header.textContent ?? "";
+      expect(text).not.toMatch(/[0-9a-f]{16}/i);
+      expect(text).not.toContain("/Users/");
+    }
+    // Grouped, the header names the place and the rows don't repeat it.
+    expect(screen.queryAllByTestId("notification-source")).toHaveLength(0);
+  });
+
+  it("marks where new ends: an 'Earlier' boundary sits before the first row older than the watermark", () => {
+    const closedAt = Date.now() - 60_000;
+    useUIStore.setState({ lastNotificationCenterClosedAt: closedAt });
+    setEntries([
+      makeEntry({ id: "n1", message: "New one", timestamp: closedAt + 30_000 }),
+      makeEntry({ id: "o1", message: "Old one", timestamp: closedAt - 30_000 }),
+      makeEntry({ id: "o2", message: "Older one", timestamp: closedAt - 90_000 }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    const boundaries = screen.getAllByTestId("notification-earlier-boundary");
+    expect(boundaries).toHaveLength(1);
+    const rows = screen.getAllByRole("listitem");
+    const firstOld = rows.find((r) => r.textContent?.includes("Old one"))!;
+    const newRow = rows.find((r) => r.textContent?.includes("New one"))!;
+    const follows = (a: Node, b: Node) =>
+      !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(newRow, boundaries[0]!)).toBe(true);
+    expect(follows(boundaries[0]!, firstOld)).toBe(true);
+  });
+
+  it("draws no boundary when everything is new or everything is old", () => {
+    const closedAt = Date.now() - 60_000;
+    useUIStore.setState({ lastNotificationCenterClosedAt: closedAt });
+    setEntries([
+      makeEntry({ message: "Old one", timestamp: closedAt - 30_000 }),
+      makeEntry({ message: "Older one", timestamp: closedAt - 90_000 }),
+    ]);
+    const { unmount } = render(<NotificationCenter open onClose={vi.fn()} />);
+    expect(screen.queryByTestId("notification-earlier-boundary")).toBeNull();
+    unmount();
+    setEntries([
+      makeEntry({ message: "New one", timestamp: closedAt + 10_000 }),
+      makeEntry({ message: "Newer one", timestamp: closedAt + 20_000 }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    expect(screen.queryByTestId("notification-earlier-boundary")).toBeNull();
+  });
+
+  it("pins an agent asking for input ahead of failures, however much newer the failures are", () => {
+    const now = Date.now();
+    setEntries([
+      makeEntry({
+        id: "err",
+        type: "error",
+        title: "Tests failed",
+        message: "12 failed.",
+        timestamp: now - 1_000,
+        seenAsToast: false,
+      }),
+      makeEntry({
+        id: "ask",
+        type: "warning",
+        title: "Claude is waiting for input",
+        message: "Asked a question.",
+        timestamp: now - 600_000,
+        seenAsToast: false,
+        context: { eventKind: "waiting" },
+      }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    const pinnedRows = within(screen.getByTestId("needs-attention-section")).getAllByRole(
+      "listitem"
+    );
+    expect(pinnedRows[0]!.textContent).toContain("waiting for input");
+  });
+
+  it("previews pinned rows without their body; the list's copy keeps it", () => {
+    setEntries([
+      makeEntry({
+        type: "error",
+        title: "Push rejected",
+        message: "The remote has commits your branch doesn't.",
+        seenAsToast: false,
+      }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    const pinned = screen.getByTestId("needs-attention-section");
+    const chrono = screen.getByTestId("chrono-section");
+    expect(within(pinned).getByText("Push rejected")).toBeTruthy();
+    expect(within(pinned).queryByText(/remote has commits/)).toBeNull();
+    expect(within(chrono).getByText(/remote has commits/)).toBeTruthy();
+  });
+
+  it("keeps focus in the list when marking a pinned row read promotes another into its slot", () => {
+    const now = Date.now();
+    setEntries(
+      Array.from({ length: 7 }, (_, i) =>
+        makeEntry({
+          id: `sev-${i}`,
+          type: "error",
+          title: `Failure ${i}`,
+          message: "Broke.",
+          timestamp: now - i * 1_000,
+          seenAsToast: false,
+        })
+      )
+    );
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    const firstPinned = within(screen.getByTestId("needs-attention-section")).getAllByRole(
+      "listitem"
+    )[0]!;
+    act(() => firstPinned.focus());
+    act(() => {
+      fireEvent.keyDown(firstPinned, { key: "u" });
+    });
+    // The pinned count stays at five, so nothing about the row COUNT changed —
+    // and yet the focused element was replaced.
+    const active = document.activeElement;
+    expect(active).not.toBe(document.body);
+    expect(active?.getAttribute("role")).toBe("listitem");
+  });
+
+  it("gives every row's controls a name that says which row they act on", () => {
+    setEntries([
+      makeEntry({ id: "a", title: "Push rejected", message: "m", context: { projectId: "p" } }),
+      makeEntry({ id: "b", title: "Tests failed", message: "m", context: { projectId: "p" } }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    for (const pattern of [/^Dismiss /, /^Options for /]) {
+      const names = screen.getAllByLabelText(pattern).map((b) => b.getAttribute("aria-label"));
+      expect(new Set(names).size).toBe(names.length);
+    }
   });
 });

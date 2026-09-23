@@ -37,8 +37,10 @@ import {
 import {
   SNOOZE_DURATION_OPTIONS,
   SNOOZE_LABEL,
+  resolveSnoozeDuration,
   type SnoozeDurationOption,
 } from "@shared/utils/snoozeTimestamps";
+import { useNotificationSource } from "./notificationSource";
 
 const snoozedUntilFormatter = new Intl.DateTimeFormat(undefined, {
   weekday: "short",
@@ -46,9 +48,33 @@ const snoozedUntilFormatter = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 
+const wakeTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+});
+
 function formatSnoozedUntil(snoozedUntil: number): string {
   const target = new Date(snoozedUntil);
   return snoozedUntilFormatter.format(target);
+}
+
+/**
+ * When a snooze would end, as the picker previews it. A same-day wake is just
+ * the time; anything later names the day, because "8:00 AM" alone doesn't say
+ * which morning "Until tomorrow" means.
+ */
+export function formatSnoozeWake(wakeAt: number, now: Date = new Date()): string {
+  const target = new Date(wakeAt);
+  return target.toDateString() === now.toDateString()
+    ? wakeTimeFormatter.format(target)
+    : snoozedUntilFormatter.format(target);
+}
+
+/** The row's own words, for control names that have to say which row they act on. */
+function rowLabel(entry: NotificationHistoryEntry): string {
+  if (entry.title) return entry.title;
+  const message = typeof entry.message === "string" ? entry.message : "";
+  return message.length > 60 ? `${message.slice(0, 57)}…` : message || "notification";
 }
 
 /**
@@ -60,7 +86,7 @@ function formatSnoozedUntil(snoozedUntil: number): string {
  */
 const ROW_CONTROL_CLASS = cn(
   "h-6 w-6 shrink-0 flex items-center justify-center rounded-[var(--radius-sm)]",
-  "text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-primary",
+  "text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary",
   "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2",
   "focus-visible:outline-accent-primary focus-visible:text-text-primary"
 );
@@ -143,6 +169,18 @@ interface NotificationCenterEntryProps {
   onConsumeSnoozePending?: () => void;
   onSnooze?: (option: SnoozeDurationOption) => void;
   onUnsnooze?: () => void;
+  /**
+   * False where something above the row already names its project and
+   * worktree — a grouped section header — so the row doesn't say it twice.
+   */
+  showSource?: boolean;
+  /**
+   * The pinned rail's preview: the title (or, untitled, the message on one
+   * line), the source, the recovery actions and the controls, but not the
+   * body. The full row sits in the list below, so the rail's job is to name
+   * what needs you, not to repeat it at length.
+   */
+  compact?: boolean;
 }
 
 export function NotificationCenterEntry({
@@ -162,9 +200,16 @@ export function NotificationCenterEntry({
   onConsumeSnoozePending,
   onSnooze,
   onUnsnooze,
+  showSource = true,
+  compact = false,
 }: NotificationCenterEntryProps) {
   const config = TYPE_CONFIG[displayType ?? entry.type];
   const Icon = config.icon;
+  const source = useNotificationSource(entry.context);
+  const label = rowLabel(entry);
+  const showSnoozeLine = isSnoozed && snoozedUntil !== undefined;
+  const metaSource = showSource ? source : null;
+  const showMessage = !compact || !entry.title;
 
   const showChip =
     typeof threadCount === "number" && Number.isFinite(threadCount) && threadCount > 1;
@@ -298,14 +343,47 @@ export function NotificationCenterEntry({
             this popover actually uses: the rail is about 100px for a relative
             stamp, and a message long enough to wrap at 210px was already
             wrapping at 312px. */}
-        <p
-          className={cn(
-            "text-xs text-text-secondary leading-snug break-words",
-            entry.title ? "col-span-2 row-start-2" : "col-start-1 row-start-1 min-w-0"
-          )}
-        >
-          {entry.message}
-        </p>
+        {showMessage && (
+          <p
+            className={cn(
+              "text-xs text-text-secondary leading-snug",
+              compact ? "truncate" : "break-words",
+              entry.title ? "col-span-2 row-start-2" : "col-start-1 row-start-1 min-w-0"
+            )}
+          >
+            {entry.message}
+          </p>
+        )}
+        {/* Where it came from, and — on a snoozed row — when it comes back.
+            One quiet line under the message rather than more weight on the
+            title line: at fleet volume "Tests failed" is only half a fact
+            until it says which worktree, but it's the half you scan for. */}
+        {(metaSource || showSnoozeLine) && (
+          <p
+            data-testid="notification-meta"
+            className="col-span-2 row-start-3 mt-0.5 flex min-w-0 items-center gap-1.5 text-2xs text-text-secondary"
+          >
+            {showSnoozeLine && (
+              <span
+                data-testid="notification-snoozed-indicator"
+                className="inline-flex shrink-0 items-center gap-1"
+              >
+                <Clock className="h-3 w-3" aria-hidden="true" />
+                Snoozed until {formatSnoozedUntil(snoozedUntil)}
+              </span>
+            )}
+            {showSnoozeLine && metaSource && <span aria-hidden="true">·</span>}
+            {metaSource && (
+              <span
+                data-testid="notification-source"
+                className="min-w-0 truncate"
+                title={metaSource}
+              >
+                {metaSource}
+              </span>
+            )}
+          </p>
+        )}
         {showChip && !entry.title && (
           <span
             key={bumpKey}
@@ -355,7 +433,7 @@ export function NotificationCenterEntry({
                     "h-6 rounded-[var(--radius-sm)] px-2 text-2xs font-medium transition-colors",
                     isAvailable
                       ? action.variant === "secondary"
-                        ? "border border-daintree-text/20 text-text-secondary hover:bg-overlay-medium"
+                        ? "border border-border-strong text-text-secondary hover:bg-overlay-medium"
                         : // The primary used to ink its label from `status-info`,
                           // which `shared/theme/contrast.ts` only gates at 3:1 —
                           // no body-text guarantee. It measured 4.46:1 against
@@ -367,7 +445,7 @@ export function NotificationCenterEntry({
                           // marks it primary) and take the label from the gated
                           // text ramp.
                           "border border-status-info/30 bg-status-info/15 text-text-primary hover:bg-status-info/20"
-                      : "border border-daintree-text/10 text-text-muted cursor-not-allowed"
+                      : "border border-border-subtle text-text-muted cursor-not-allowed"
                   )}
                 >
                   {action.label}
@@ -405,25 +483,15 @@ export function NotificationCenterEntry({
             rail on it: the icon opposite is centred against that height, and an
             untitled row whose message wraps must not drag the controls down to
             the middle of the block they act on. */}
-        <div className="col-start-2 row-start-1 flex min-h-6 items-center self-start gap-1.5">
-          {isSnoozed && snoozedUntil !== undefined && (
-            <>
-              <span
-                data-testid="notification-snoozed-indicator"
-                title={`Snoozed until ${formatSnoozedUntil(snoozedUntil)}`}
-                aria-label={`Snoozed until ${formatSnoozedUntil(snoozedUntil)}`}
-                className="inline-flex h-4 w-4 items-center justify-center text-text-secondary"
-              >
-                <Clock className="h-3 w-3" aria-hidden="true" />
-              </span>
-              {/* The clock means "snoozed until later"; the stamp beside it means
-                  "arrived at". Abutting they read as one fact, so they get a
-                  separator. */}
-              <span aria-hidden="true" className="text-3xs leading-none text-daintree-text/40">
-                ·
-              </span>
-            </>
+        <div
+          className={cn(
+            "col-start-2 row-start-1 flex min-h-6 items-center self-start gap-1.5",
+            // An untitled row's first line is its message, 16.5px of text-xs
+            // against this 24px rail. Pulling the rail up and down by 4px puts
+            // its centre on that line instead of 4px below it.
+            !entry.title && "-my-1"
           )}
+        >
           {(() => {
             const ts = formatNotificationTimestamp(entry.timestamp);
             return (
@@ -443,6 +511,7 @@ export function NotificationCenterEntry({
           })()}
           <RowOptionsMenu
             entry={entry}
+            rowLabel={label}
             onDropdownOpenChange={onDropdownOpenChange}
             isSnoozePending={isSnoozePending}
             isSnoozed={isSnoozed}
@@ -454,7 +523,7 @@ export function NotificationCenterEntry({
           {onDismiss && (
             <button
               type="button"
-              aria-label="Dismiss notification"
+              aria-label={`Dismiss ${label}`}
               onClick={(e) => {
                 e.stopPropagation();
                 onDismiss();
@@ -573,6 +642,7 @@ async function reportNotificationOnGitHub(
 
 interface RowOptionsMenuProps {
   entry: NotificationHistoryEntry;
+  rowLabel: string;
   onDropdownOpenChange?: (open: boolean) => void;
   isSnoozePending: boolean;
   isSnoozed: boolean;
@@ -584,6 +654,7 @@ interface RowOptionsMenuProps {
 
 function RowOptionsMenu({
   entry,
+  rowLabel,
   onDropdownOpenChange,
   isSnoozePending,
   isSnoozed,
@@ -607,6 +678,9 @@ function RowOptionsMenu({
     supportsCopyCorrelationId || supportsReportOnGitHub || supportsGoToSource;
   const hasActions = hasContextActions || supportsSnooze || hasDiagnosticsActions;
   const [open, setOpen] = useState(false);
+  // `h` asks for the snooze choices, not the whole menu, so it opens both and
+  // lands in the submenu.
+  const [snoozeSubOpen, setSnoozeSubOpen] = useState(false);
   const { copy: copyCorrelationId } = useCopyWithFeedback({
     announcement: "Correlation ID copied",
   });
@@ -622,13 +696,15 @@ function RowOptionsMenu({
       return;
     }
     setOpen(true);
+    if (!isSnoozed) setSnoozeSubOpen(true);
     onConsumeSnoozePending?.();
-  }, [isSnoozePending, supportsSnooze, onConsumeSnoozePending]);
+  }, [isSnoozePending, supportsSnooze, isSnoozed, onConsumeSnoozePending]);
 
   if (!hasActions) return null;
 
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
+    if (!next) setSnoozeSubOpen(false);
     onDropdownOpenChange?.(next);
   };
 
@@ -661,7 +737,7 @@ function RowOptionsMenu({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label="Notification options"
+          aria-label={`Options for ${rowLabel}`}
           onClick={(e) => e.stopPropagation()}
           // `data-[state=open]` so the trigger reads as pressed while its menu
           // is up — the repo's standard open-row cue. Without it nothing said
@@ -689,7 +765,7 @@ function RowOptionsMenu({
                 : "Unsnooze"}
             </DropdownMenuItem>
           ) : (
-            <DropdownMenuSub>
+            <DropdownMenuSub open={snoozeSubOpen} onOpenChange={setSnoozeSubOpen}>
               <DropdownMenuSubTrigger>
                 <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Snooze
@@ -703,6 +779,11 @@ function RowOptionsMenu({
                     }}
                   >
                     {SNOOZE_LABEL[option]}
+                    {/* The commitment, before it's made: "Until tomorrow"
+                        is 8:00 AM, and "Until next week" is Monday. */}
+                    <span className="ml-auto pl-6 text-text-secondary tabular-nums">
+                      {formatSnoozeWake(resolveSnoozeDuration(option))}
+                    </span>
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuSubContent>
