@@ -271,15 +271,7 @@ export function ChordIndicator() {
           className="border-t border-[var(--border-overlay)] px-2 py-2 max-h-[22rem] overflow-y-auto"
         >
           {results.length === 0 ? (
-            <AppPaletteDialog.Empty
-              query={query}
-              emptyMessage="No commands available"
-              noMatchContent={
-                <span className="text-xs text-text-secondary">
-                  Edit the search, or press Esc to close
-                </span>
-              }
-            />
+            <AppPaletteDialog.Empty query={query} emptyMessage="No commands available" />
           ) : (
             groups.map((group, groupIdx) => {
               const groupId = `${GROUP_ID_PREFIX}-${groupIdx}`;
