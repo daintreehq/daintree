@@ -27,6 +27,8 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { systemClient } from "@/clients/systemClient";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
+import { actionService } from "@/services/ActionService";
 import {
   LIFECYCLE_PHASE_LABELS,
   resourceStatusColorFor,
@@ -110,8 +112,10 @@ export function EnvironmentPopover({
 }: EnvironmentPopoverProps) {
   const [open, setOpen] = useState(false);
   const [checkRequested, setCheckRequested] = useState(false);
+  const [checkLanded, setCheckLanded] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const pendingAnnounceRef = useRef<number | undefined>(undefined);
+  const contentRef = useRef<HTMLDivElement>(null);
   const { copied, copy } = useCopyWithFeedback({ announcement: "Endpoint copied" });
 
   const EnvironmentIcon = (environmentIcon && ENVIRONMENT_ICONS[environmentIcon]) || Server;
@@ -121,7 +125,10 @@ export function EnvironmentPopover({
     isLifecycleRunning && lifecycle
       ? (LIFECYCLE_PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase)
       : undefined;
-  const isCheckRunning = checkRequested || lifecycle?.phase === "resource-status";
+  // The host keeps the `resource-status` phase after the check settles, so only
+  // its running state means a check is in flight.
+  const isCheckRunning =
+    checkRequested || (lifecycle?.phase === "resource-status" && lifecycle.state === "running");
   // A fast phase never flashes a spinner; the trigger's pulse already covers it.
   const showActivity = useDohertyGate(!!activity);
 
@@ -162,14 +169,24 @@ export function EnvironmentPopover({
       return;
     }
     pendingAnnounceRef.current = undefined;
+    // A visible cue that does not depend on the spin, which reduced motion removes,
+    // or on the timestamp, which reads "just now" before and after a quick repeat.
+    setCheckLanded(true);
     useAnnouncerStore
       .getState()
       .announce(`${environmentName} checked: ${reportedStatus ?? "no status"}`, "polite");
   }, [resourceLastCheckedAt, environmentName, reportedStatus]);
 
+  useEffect(() => {
+    if (!checkLanded) return;
+    const id = setTimeout(() => setCheckLanded(false), UI_ACTION_SUCCESS_DWELL_MS);
+    return () => clearTimeout(id);
+  }, [checkLanded]);
+
   const handleCheck = async () => {
     if (!onCheckResourceStatus || isCheckRunning) return;
     pendingAnnounceRef.current = resourceLastCheckedAt ?? 0;
+    setCheckLanded(false);
     setCheckRequested(true);
     try {
       await onCheckResourceStatus();
@@ -188,7 +205,7 @@ export function EnvironmentPopover({
             <button
               type="button"
               data-no-dnd
-              className="shrink-0 rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+              className="-m-[5px] inline-flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
               aria-label={triggerLabel}
             >
               <EnvironmentIcon className={iconClass} aria-hidden="true" />
@@ -202,8 +219,17 @@ export function EnvironmentPopover({
       <PopoverContent
         side="top"
         align="start"
-        className="w-96 max-w-[calc(100vw-2rem)] p-0 text-xs"
+        className="w-96 max-w-[calc(100vw-2rem)] p-0 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-border-strong"
         aria-label={`${environmentName} environment`}
+        ref={contentRef}
+        onOpenAutoFocus={(event) => {
+          // Land on the popover itself rather than its first control: focusing
+          // the copy button would pop its tooltip over the endpoint on every
+          // open and spend the first Escape closing that instead. Tab still
+          // reaches every control in order.
+          event.preventDefault();
+          contentRef.current?.focus({ preventScroll: true });
+        }}
       >
         <div className="flex items-baseline justify-between gap-3 px-3 pt-3">
           <span className="min-w-0 truncate font-semibold text-text-primary">
@@ -227,10 +253,25 @@ export function EnvironmentPopover({
           )}
 
           {!onCheckResourceStatus && !reportedStatus && !activity && (
-            <p className="text-text-secondary">
-              No status command for this environment. Add one in project settings to check its
-              health here.
-            </p>
+            <div className="flex flex-col items-start gap-2">
+              <p className="text-text-secondary">
+                Add a status command in Worktree setup to check this environment&apos;s health.
+              </p>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="-ml-3"
+                onClick={() =>
+                  void actionService.dispatch(
+                    "app.settings.openTab",
+                    { tab: "project:automation" },
+                    { source: "user" }
+                  )
+                }
+              >
+                Open worktree setup
+              </Button>
+            </div>
           )}
 
           {showOutput && (
@@ -240,7 +281,7 @@ export function EnvironmentPopover({
                 tabIndex={0}
                 role="region"
                 aria-label="Last check output"
-                className="max-h-[calc(10lh+0.75rem)] overflow-y-auto whitespace-pre-wrap break-words rounded-[var(--radius-md)] border border-border-default bg-surface-canvas px-2 py-1.5 font-mono text-2xs leading-relaxed text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                className="max-h-[calc(10lh+0.75rem)] overflow-y-auto whitespace-pre-wrap break-words [text-indent:2ch_hanging_each-line] rounded-[var(--radius-md)] border border-border-default bg-surface-canvas px-2 py-1.5 font-mono text-2xs leading-relaxed text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
               >
                 {output}
               </pre>
@@ -250,7 +291,9 @@ export function EnvironmentPopover({
           {resourceEndpoint && (
             <div className="flex flex-col gap-1">
               <span className="text-2xs text-text-secondary">Endpoint</span>
-              <div className="flex min-w-0 items-center gap-1">
+              {/* The icon buttons' own padding would pull the row's right edge in
+                  from the status and Check status above and below it. */}
+              <div className="-mr-1.5 flex min-w-0 items-center gap-1">
                 <span
                   className="min-w-0 flex-1 truncate font-mono text-2xs text-text-primary"
                   title={resourceEndpoint}
@@ -307,11 +350,15 @@ export function EnvironmentPopover({
               <Button
                 variant="ghost"
                 size="sm"
-                className="-mr-2"
+                className="-mr-3"
                 aria-disabled={isCheckRunning || undefined}
                 onClick={() => void handleCheck()}
               >
-                <SpinningIcon icon={RefreshCw} active={isCheckRunning} aria-hidden="true" />
+                {checkLanded && !isCheckRunning ? (
+                  <Check aria-hidden="true" />
+                ) : (
+                  <SpinningIcon icon={RefreshCw} active={isCheckRunning} aria-hidden="true" />
+                )}
                 Check status
               </Button>
             )}

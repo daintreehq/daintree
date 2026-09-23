@@ -525,7 +525,7 @@ test("worktree environment popover review — states and themes", async () => {
         x: 150,
         y: 16,
       });
-      const pop = await openByClick(page, gpu, /provisioning|starting/);
+      const pop = await openByClick(page, gpu, /Provisioning|Resuming/);
       await snapRegion(page, "71-lifecycle-running-popover", [envTrigger(page, gpu), pop]);
       await closePopover(page);
     });

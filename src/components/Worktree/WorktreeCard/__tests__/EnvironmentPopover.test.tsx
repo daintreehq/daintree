@@ -184,6 +184,38 @@ describe("EnvironmentPopover content", () => {
     expect(onCheck).toHaveBeenCalledTimes(2);
   });
 
+  it("lands focus on the popover itself, not on a control whose tooltip would cover it", () => {
+    renderPopover({ resourceEndpoint: "https://gpu.staging.dev", onCheckResourceStatus: vi.fn() });
+    const dialog = openPopover();
+    expect(document.activeElement).toBe(dialog);
+  });
+
+  it("frees Check status once the host reports the check settled", () => {
+    const onCheck = vi.fn();
+    for (const state of ["success", "failed", "timed-out"] as const) {
+      const { unmount } = renderPopover({
+        onCheckResourceStatus: onCheck,
+        resourceLastCheckedAt: Date.now(),
+        lifecycle: { phase: "resource-status", state, startedAt: Date.now() },
+      });
+      openPopover();
+      fireEvent.click(screen.getByRole("button", { name: /check status/i }));
+      unmount();
+    }
+    expect(onCheck).toHaveBeenCalledTimes(3);
+  });
+
+  it("points an environment without a status command at the setting that would add one", () => {
+    renderPopover({
+      worktreeMode: "edge-lab",
+      resourceStatusLabel: undefined,
+      resourceStatusColor: undefined,
+      reportedStatus: undefined,
+    });
+    openPopover();
+    expect(screen.getByRole("button", { name: /worktree setup/i })).toBeTruthy();
+  });
+
   it("says how long ago the check ran rather than a bare clock time", () => {
     renderPopover({ resourceLastCheckedAt: Date.now() - 5 * 60_000 });
     const dialog = openPopover();

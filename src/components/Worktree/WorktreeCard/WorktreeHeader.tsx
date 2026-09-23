@@ -394,6 +394,7 @@ export function WorktreeHeader({
           (worktree.worktreeMode && worktree.worktreeMode !== "local") ||
           resourceStatusLabel ||
           isLifecycleRunning ||
+          onCheckResourceStatus ||
           hasDevServerSignal ||
           hasFreshnessPill) && (
           <div className="flex items-center gap-2 shrink-0">
@@ -448,7 +449,8 @@ export function WorktreeHeader({
             />
             {((worktree.worktreeMode && worktree.worktreeMode !== "local") ||
               resourceStatusLabel ||
-              isLifecycleRunning) && (
+              isLifecycleRunning ||
+              onCheckResourceStatus) && (
               <EnvironmentPopover
                 worktreeMode={worktree.worktreeMode}
                 environmentIcon={environmentIcon}
