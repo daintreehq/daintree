@@ -520,7 +520,7 @@ export function CommitPanel({
               data-testid="commit-panel-push-confirm-dont-ask"
               checked={dontAskChecked}
               onChange={(e) => setDontAskChecked(e.target.checked)}
-              className="accent-accent-primary"
+              className="shrink-0"
             />
             Don't ask again for this worktree
           </label>
