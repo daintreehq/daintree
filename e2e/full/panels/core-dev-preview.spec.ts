@@ -97,43 +97,50 @@ test.describe.serial("Core: Dev Preview", () => {
       });
     });
 
+    // Zoom lives in the More menu at 100% and in the address bar's zoom chip once
+    // it has changed; the chip is the only on-toolbar sign of a non-default zoom.
     test("zoom in increases zoom level", async () => {
       const { window } = ctx;
 
-      const zoomIn = window.locator(SEL.browser.zoomIn);
-      const zoomReset = window.locator(SEL.browser.zoomReset);
-
-      await zoomIn.click();
-      await expect(zoomReset).toContainText("125%", { timeout: T_MEDIUM });
+      await window.locator(SEL.browser.moreActions).click();
+      await window.getByRole("menuitem", { name: "Zoom in" }).click();
+      await window.keyboard.press("Escape");
+      await expect(window.locator(SEL.browser.zoomIndicator)).toContainText("125%", {
+        timeout: T_MEDIUM,
+      });
     });
 
     test("zoom in again steps to 150%", async () => {
       const { window } = ctx;
 
-      const zoomIn = window.locator(SEL.browser.zoomIn);
-      const zoomReset = window.locator(SEL.browser.zoomReset);
-
-      await zoomIn.click();
-      await expect(zoomReset).toContainText("150%", { timeout: T_MEDIUM });
+      await window.locator(SEL.browser.zoomIndicator).click();
+      await window.locator(SEL.browser.zoomIn).click();
+      await window.keyboard.press("Escape");
+      await expect(window.locator(SEL.browser.zoomIndicator)).toContainText("150%", {
+        timeout: T_MEDIUM,
+      });
     });
 
     test("zoom out steps back toward 100%", async () => {
       const { window } = ctx;
 
-      const zoomOut = window.locator(SEL.browser.zoomOut);
-      const zoomReset = window.locator(SEL.browser.zoomReset);
-
-      await zoomOut.click();
-      await expect(zoomReset).toContainText("125%", { timeout: T_MEDIUM });
+      await window.locator(SEL.browser.zoomIndicator).click();
+      await window.locator(SEL.browser.zoomOut).click();
+      await window.keyboard.press("Escape");
+      await expect(window.locator(SEL.browser.zoomIndicator)).toContainText("125%", {
+        timeout: T_MEDIUM,
+      });
     });
 
     test("zoom reset returns to 100%", async () => {
       const { window } = ctx;
 
-      const zoomReset = window.locator(SEL.browser.zoomReset);
-      await zoomReset.click();
+      await window.locator(SEL.browser.zoomIndicator).click();
+      await window.locator(SEL.browser.zoomReset).click();
 
-      await expect(zoomReset).toContainText("100%", { timeout: T_MEDIUM });
+      await expect(window.locator(SEL.browser.zoomIndicator)).toHaveCount(0, {
+        timeout: T_MEDIUM,
+      });
     });
 
     test("console drawer toggle is absent until a dev server starts", async () => {

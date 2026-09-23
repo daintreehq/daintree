@@ -121,7 +121,8 @@ test.describe.serial("Core: Dev preview promote to portal", () => {
       })
     );
 
-    // 3. Promote to portal via the toolbar button (the real user path).
+    // 3. Promote to portal from the toolbar's More menu (the real user path).
+    await window.locator(SEL.browser.moreActions).click();
     const promoteBtn = window.locator(SEL.browser.promoteToPortal);
     await expect(promoteBtn).toBeVisible({ timeout: T_MEDIUM });
     await promoteBtn.click();

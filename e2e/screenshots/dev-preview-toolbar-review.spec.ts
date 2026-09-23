@@ -87,6 +87,9 @@ test.afterAll(async () => {
 async function open(page: Page, fixture: FixtureName, theme: string): Promise<Locator> {
   await page.setViewportSize({ width: FIXTURES[fixture].width + 80, height: 560 });
   await stubViteHmrClient(page);
+  // The pointer survives navigation: a hover drive would otherwise leave every
+  // later capture showing a hover state nobody asked for.
+  await page.mouse.move(0, 0);
   page.removeAllListeners("pageerror");
   page.on("pageerror", (error) => console.warn(`[dev-preview-shots] pageerror: ${error.message}`));
   const url = `${server!.baseURL}/dev-preview-toolbar-preview.html?theme=${theme}&fixture=${fixture}`;
@@ -148,6 +151,21 @@ async function drive(page: Page, fixture: FixtureName): Promise<void> {
       const copy = page.getByRole("button", { name: /copy url/i }).first();
       await copy.hover();
       await expect(page.getByRole("tooltip").first()).toBeVisible();
+      break;
+    }
+    case "more-menu": {
+      await page.getByRole("button", { name: "More page actions" }).click();
+      await expect(page.getByRole("menu")).toBeVisible();
+      break;
+    }
+    case "zoom-popover": {
+      await page.getByTestId("browser-zoom-indicator").click();
+      await expect(page.getByRole("button", { name: "Reset zoom" })).toBeVisible();
+      break;
+    }
+    case "device-menu": {
+      await page.getByRole("button", { name: /^Device:/ }).click();
+      await expect(page.getByRole("menu")).toBeVisible();
       break;
     }
     default:

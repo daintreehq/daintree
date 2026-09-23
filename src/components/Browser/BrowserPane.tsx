@@ -878,6 +878,7 @@ export function BrowserPane({
       onReload={() =>
         void actionService.dispatch("browser.reload", { terminalId: id }, { source: "user" })
       }
+      onStop={handleCancelLoad}
       onHardReload={() =>
         void actionService.dispatch("browser.hardReload", { terminalId: id }, { source: "user" })
       }

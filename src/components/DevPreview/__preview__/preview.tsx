@@ -13,7 +13,9 @@ import { useUrlHistoryStore } from "@/store/urlHistoryStore";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { BrowserToolbar } from "@/components/Browser/BrowserToolbar";
 import { SiteBuilderButton } from "../../../../plugins/builtin/sveltekit-builder/renderer/SiteBuilderButton";
+import { toDevServerAddress } from "../urlSync";
 import {
+  DEV_SERVER_URL,
   FIXTURES,
   PANEL_ID,
   PROJECT_ID,
@@ -178,7 +180,9 @@ function Pane() {
             onNavigate={noop}
             onBack={noop}
             onForward={noop}
+            toAddress={(target) => toDevServerAddress(target, PROXY_ORIGIN, DEV_SERVER_URL)}
             onReload={noop}
+            onStop={noop}
             onHardReload={noop}
             onOpenExternal={noop}
             onPromoteToPortal={noop}

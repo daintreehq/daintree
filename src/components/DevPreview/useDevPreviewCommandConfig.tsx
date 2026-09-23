@@ -160,15 +160,17 @@ export function useDevPreviewCommandConfig({
               <button
                 type="button"
                 onPointerDown={(e) => e.stopPropagation()}
-                className="flex h-6 items-center gap-1 px-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 text-text-secondary hover:text-text-primary transition-colors min-w-0 max-w-[180px]"
-                aria-label="Switch dev script"
+                className="flex h-6 items-center gap-1 px-1.5 rounded-sm hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 text-text-secondary hover:text-text-primary transition-colors min-w-0 max-w-[180px]"
+                aria-label={`Dev script: ${headerLabel}`}
               >
                 <span className="min-w-0 text-xs truncate">{headerLabel}</span>
                 <ChevronDown className="h-3 w-3 shrink-0" />
               </button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Switch dev script</TooltipContent>
+          <TooltipContent side="bottom">
+            Switch dev script <span className="font-mono text-text-secondary">{devCommand}</span>
+          </TooltipContent>
         </Tooltip>
         <DropdownMenuContent align="end" sideOffset={4} className="w-72 p-1">
           {candidates.map((c) => {

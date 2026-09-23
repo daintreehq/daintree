@@ -35,7 +35,14 @@ export interface DevPreviewChromeFixture {
   /** The pane frame's focus state. */
   isFocused?: boolean;
   /** A pointer or keyboard drive the spec performs after load. */
-  drive?: "address-history" | "address-error" | "keyboard-focus" | "hover-action";
+  drive?:
+    | "address-history"
+    | "address-error"
+    | "keyboard-focus"
+    | "hover-action"
+    | "more-menu"
+    | "zoom-popover"
+    | "device-menu";
 }
 
 export const FIXTURES = {
@@ -119,6 +126,33 @@ export const FIXTURES = {
     canGoBack: true,
     isFocused: true,
     drive: "hover-action",
+  },
+  "more-menu": { width: 900, route: "/", canGoBack: true, isFocused: true, drive: "more-menu" },
+  "zoom-popover": {
+    width: 900,
+    route: "/",
+    canGoBack: true,
+    zoomFactor: 0.75,
+    isFocused: true,
+    drive: "zoom-popover",
+  },
+  "device-menu": {
+    width: 560,
+    route: "/",
+    canGoBack: true,
+    viewportPreset: "pixel",
+    viewportDpr: 3,
+    isFocused: true,
+    drive: "device-menu",
+  },
+  "viewport-narrow": {
+    width: 480,
+    route: "/checkout/shipping",
+    canGoBack: true,
+    viewportPreset: "ipad",
+    viewportDpr: 2,
+    viewportFit: true,
+    isFocused: true,
   },
 } satisfies Record<string, DevPreviewChromeFixture>;
 
