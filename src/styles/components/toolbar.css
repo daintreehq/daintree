@@ -63,8 +63,8 @@
    * the snap to 150ms and override the cva's intent. Same for box-shadow: the armed-state
    * inset ring is the result of an intentional click or keypress and should snap too. */
   transition:
-    color 150ms ease,
-    background-color 150ms ease;
+    color 150ms ease-out,
+    background-color 150ms ease-out;
 }
 
 .toolbar-icon-button:hover {
@@ -201,8 +201,10 @@
   transition: background-color 150ms ease-out;
 }
 
+/* aria-expanded, not data-state: the chevron is also a tooltip trigger, and
+ * the tooltip's own data-state lands on the same element. */
 .toolbar-agent-split[data-split-live="true"]:is(:hover, :focus-within),
-.toolbar-agent-split:has(.toolbar-agent-button[data-state="open"]) {
+.toolbar-agent-split:has(.toolbar-agent-split-toggle[aria-expanded="true"]) {
   background: var(--theme-overlay-hover);
 }
 
@@ -226,7 +228,7 @@
 
 /* The open chevron's armed ring already draws that edge; a partition on top
  * doubles it into a 2px smudge on light themes. */
-.toolbar-agent-split .toolbar-agent-split-toggle[data-state="open"]::before {
+.toolbar-agent-split .toolbar-agent-split-toggle[aria-expanded="true"]::before {
   opacity: 0;
 }
 
@@ -336,12 +338,12 @@
    * on light themes) rather than replacing it. Replacing erased the capsule fill
    * on hover; layering preserves it. Press-scale is owned by the base Button cva,
    * so transform stays out of the transition. */
-  transition: color 150ms ease;
+  transition: color 150ms ease-out;
 }
 
 /* Surface-lift overlay. Sits above the pill's background fill but below its
  * content — direct children are lifted to z-index 1 so the tint never washes out
- * the label. Fading opacity keeps the Tier 1 150ms ease without animating the
+ * the label. Fading opacity keeps the Tier 1 150ms ease-out without animating the
  * background-image layer (gradients can't be transitioned). Hover paints the
  * elevated overlay; armed/active escalate to emphasis (raised on light). */
 .toolbar-project-pill::before {
@@ -353,7 +355,7 @@
   pointer-events: none;
   opacity: 0;
   background: var(--toolbar-control-hover-bg, var(--theme-overlay-elevated));
-  transition: opacity 150ms ease;
+  transition: opacity 150ms ease-out;
 }
 
 .toolbar-project-pill > * {
@@ -568,8 +570,8 @@
   transition:
     display 120ms allow-discrete,
     opacity 120ms ease,
-    color 150ms ease,
-    background-color 150ms ease;
+    color 150ms ease-out,
+    background-color 150ms ease-out;
 }
 
 [data-toolbar-overflow-trigger][data-visible="true"] {
@@ -578,8 +580,8 @@
   transition:
     display 200ms allow-discrete,
     opacity 200ms ease,
-    color 150ms ease,
-    background-color 150ms ease;
+    color 150ms ease-out,
+    background-color 150ms ease-out;
 
   @starting-style {
     opacity: 0;
@@ -593,7 +595,7 @@
 .toolbar-overflow-badge {
   background-color: var(--overflow-badge-color);
   transition:
-    --overflow-badge-color 150ms ease,
+    --overflow-badge-color 150ms ease-out,
     display 120ms allow-discrete,
     opacity 120ms ease,
     transform 120ms ease;
@@ -632,7 +634,7 @@
 .toolbar-problems-badge {
   background-color: var(--problems-dot-color);
   transition:
-    --problems-dot-color 150ms ease,
+    --problems-dot-color 150ms ease-out,
     display 120ms allow-discrete,
     opacity 120ms ease,
     transform 120ms ease;
@@ -683,8 +685,8 @@
     transition:
       display 0s,
       opacity 200ms ease,
-      color 150ms ease,
-      background-color 150ms ease;
+      color 150ms ease-out,
+      background-color 150ms ease-out;
   }
 }
 

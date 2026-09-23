@@ -659,7 +659,7 @@ export function AgentButton({
                     data-toolbar-item={dataToolbarItem}
                     onPointerEnter={clearFocusRestoreSuppression}
                     className={cn(
-                      "toolbar-agent-button toolbar-agent-split-toggle text-text-secondary rounded-l-none",
+                      "toolbar-agent-button toolbar-agent-split-toggle text-text-secondary aria-expanded:text-text-primary rounded-l-none",
                       // 24px keeps the target at the WCAG 2.5.8 minimum; the
                       // glyph sits at its leading edge so it reads as part of
                       // the mark beside it rather than centred between agents.

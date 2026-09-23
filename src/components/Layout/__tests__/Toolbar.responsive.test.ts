@@ -428,10 +428,20 @@ describe("Toolbar responsive design — issue #4133", () => {
 
     it("drops the partition while the chevron is open, where its armed ring draws that edge", () => {
       const suppressed = block(
-        /\.toolbar-agent-split \.toolbar-agent-split-toggle\[data-state="open"\]::before\s*\{[^}]*\}/
+        /\.toolbar-agent-split \.toolbar-agent-split-toggle\[aria-expanded="true"\]::before\s*\{[^}]*\}/
       );
       expect(suppressed).toBeDefined();
       expect(suppressed).toMatch(/opacity:\s*0;/);
+    });
+
+    it("keys the open state on aria-expanded, which the tooltip trigger can't overwrite", () => {
+      // The chevron is a tooltip trigger too, and the tooltip's data-state
+      // ("closed", "delayed-open") lands on the same element, so a
+      // [data-state="open"] selector never matches while the menu is open.
+      expect(css).toContain(
+        '.toolbar-agent-split:has(.toolbar-agent-split-toggle[aria-expanded="true"])'
+      );
+      expect(css).not.toMatch(/\.toolbar-agent-split[^{]*\[data-state="open"\]/);
     });
 
     it("keeps the partition drawn at rest in forced colors, where the wash is gone", () => {
