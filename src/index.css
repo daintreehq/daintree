@@ -2054,8 +2054,8 @@ label:focus-within .brand-mark,
  * Inset and separately rounded rather than an inset box-shadow, which would
  * follow the card's own radius and taper to a crescent at both ends.
  *
- * Not stated in `forced-colors`, where `background-color` is stripped: the
- * system-outline fallback further down already marks the row there.
+ * `forced-colors` strips its `background-color`, so that block re-asserts the
+ * rail in CanvasText beside the system-outline fallback further down.
  */
 .palette-row::before {
   content: "";
@@ -2628,6 +2628,18 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
   .palette-row[data-selected="true"] {
     outline: 2px solid SelectedItem;
     outline-offset: -2px;
+  }
+
+  /* …and the leading rail again, in CanvasText, as a second cue. SelectedItem
+     is whatever the OS theme picks, and several pair it with Canvas at well
+     under 3:1 — Chromium's own default is a pale blue on white at about 1.7:1 —
+     so on those the outline alone was a faint box. CanvasText is the one colour
+     the mode guarantees against Canvas. The rail's fill is a background, which
+     forced colours strip, so it has to be re-asserted with !important, exactly
+     like the inbox unread dot below. */
+  .palette-row[aria-selected="true"]::before,
+  .palette-row[data-selected="true"]::before {
+    background-color: CanvasText !important;
   }
 
   /* The selected session tab is a raised fill plus a neutral rail, and forced
