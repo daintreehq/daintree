@@ -371,6 +371,18 @@ const STATES: AgentState[] = [
     capture: "page",
   },
   {
+    slug: "01b-general-inventory-expanded",
+    target: { tab: "agents", subtab: "general" },
+    expectText: ["need attention"],
+    arrange: async (page) => {
+      for (const name of [/ready agents?$/, /installed$/]) {
+        await page.locator(PANEL).getByRole("button", { name }).first().click();
+      }
+      await expect(page.locator(PANEL).getByText("Hide ready agents")).toBeVisible();
+    },
+    capture: "page",
+  },
+  {
     slug: "02-selector-open",
     target: { tab: "agents", subtab: "general" },
     expectText: ["Default agent"],
@@ -383,7 +395,7 @@ const STATES: AgentState[] = [
   {
     slug: "03-claude-ready-default",
     target: { tab: "agents", subtab: "claude" },
-    expectText: ["Claude", "Runtime settings"],
+    expectText: ["Claude", "Launch preset"],
     capture: "page",
   },
   {
@@ -402,7 +414,7 @@ const STATES: AgentState[] = [
   {
     slug: "05-preset-selector-open",
     target: { tab: "agents", subtab: "claude" },
-    expectText: ["Runtime settings"],
+    expectText: ["Launch preset"],
     arrange: async (page) => {
       await scrollIntoView(page, "#agents-presets");
       await page.locator(`${PANEL} [data-testid="preset-selector-trigger"]`).click();
@@ -415,7 +427,7 @@ const STATES: AgentState[] = [
   {
     slug: "06-claude-custom-preset",
     target: { tab: "agents", subtab: "claude" },
-    expectText: ["Runtime settings"],
+    expectText: ["Launch preset"],
     arrange: async (page) => {
       await selectPreset(page, "preset-option-user-bedrock");
       await expect(page.locator(PANEL).getByText("Fallback presets")).toBeVisible();
@@ -423,9 +435,25 @@ const STATES: AgentState[] = [
     capture: "page",
   },
   {
+    slug: "06b-delete-preset-confirm",
+    target: { tab: "agents", subtab: "claude" },
+    expectText: ["Launch preset"],
+    arrange: async (page) => {
+      await page
+        .locator(PANEL)
+        .getByRole("button", { name: /^Delete / })
+        .first()
+        .click();
+      await expect(page.getByRole("button", { name: "Delete preset", exact: true })).toBeVisible({
+        timeout: 10_000,
+      });
+    },
+    capture: "frame",
+  },
+  {
     slug: "07-add-preset-dialog",
     target: { tab: "agents", subtab: "claude" },
-    expectText: ["Runtime settings"],
+    expectText: ["Launch preset"],
     arrange: async (page) => {
       await page.locator(`${PANEL} [data-testid="preset-add-button"]`).click();
       await page
@@ -438,7 +466,7 @@ const STATES: AgentState[] = [
   {
     slug: "08-claude-project-preset",
     target: { tab: "agents", subtab: "claude" },
-    expectText: ["Runtime settings"],
+    expectText: ["Launch preset"],
     arrange: async (page) => {
       await selectPreset(page, "preset-option-project-team-review");
       await expect(
@@ -451,7 +479,7 @@ const STATES: AgentState[] = [
   {
     slug: "09-claude-ccr-preset",
     target: { tab: "agents", subtab: "claude" },
-    expectText: ["Runtime settings"],
+    expectText: ["Launch preset"],
     arrange: async (page) => {
       await selectPreset(page, "preset-option-ccr-openrouter-sonnet");
       await expect(
@@ -471,13 +499,13 @@ const STATES: AgentState[] = [
   {
     slug: "11-crush-blocked",
     target: { tab: "agents", subtab: "crush" },
-    expectText: ["Blocked"],
+    expectText: ["couldn't run"],
     capture: "page",
   },
   {
     slug: "12-copilot-missing",
     target: { tab: "agents", subtab: "copilot" },
-    expectText: ["not found"],
+    expectText: ["Not installed"],
     capture: "page",
   },
   {
