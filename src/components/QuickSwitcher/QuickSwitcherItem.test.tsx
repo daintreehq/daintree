@@ -98,3 +98,22 @@ describe("pathTail", () => {
     expect(pathTail("/repo")).toBe("/repo");
   });
 });
+
+describe("QuickSwitcherItem path evidence", () => {
+  it("keeps a match in the shortened path marked, on the same characters", () => {
+    const path = "/Users/me/Projects/app-worktrees/feature-login";
+    const start = path.indexOf("login");
+    const { container } = render(
+      <QuickSwitcherItem
+        item={makeWorktreeItem({ title: "feature/login", subtitle: path })}
+        isSelected={false}
+        onSelect={() => {}}
+        matches={[{ key: "subtitle", indices: [[start, start + 4]], value: path }]}
+      />
+    );
+    const marked = Array.from(container.querySelectorAll("span"))
+      .filter((el) => el.children.length === 0 && el.className.includes("bg-overlay-medium"))
+      .map((el) => el.textContent);
+    expect(marked).toEqual(["login"]);
+  });
+});

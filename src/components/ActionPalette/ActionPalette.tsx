@@ -506,13 +506,16 @@ export function ActionPalette({
       if (activeMode === "commands") {
         // Backspace keeps its chip: inside a mode it pops the scope rather than
         // deleting a character, which is the one thing here a user can't infer
-        // from every other list they've used.
-        const exitScope = { keys: ["⌫"], label: "exit scope" };
-        body = enterHint ? (
-          <PaletteFooterHints primaryHint={enterHint} hints={[exitScope, ...rowHints]} />
-        ) : (
-          <PaletteFooterHints primaryHint={exitScope} hints={rowHints} />
-        );
+        // from every other list they've used. Only while the field is empty,
+        // though: with text in it Backspace pops the scope only from the very
+        // start, so after typing it deletes a character like anywhere else.
+        const scopeHints = query === "" ? [{ keys: ["⌫"], label: "exit scope" }] : [];
+        const secondary = [...scopeHints, ...rowHints];
+        if (enterHint) {
+          body = <PaletteFooterHints primaryHint={enterHint} hints={secondary} />;
+        } else if (secondary.length > 0) {
+          body = <PaletteFooterHints primaryHint={secondary[0]!} hints={secondary.slice(1)} />;
+        }
       } else if (offersProjectSearch) {
         // The query looks like a path or filename and matched no action, so
         // Enter hands it to the project switcher (see `handleKeyDown`). This
@@ -541,6 +544,7 @@ export function ActionPalette({
     },
     [
       activeMode,
+      query,
       offersProjectSearch,
       footerHintId,
       showPrefixHints,

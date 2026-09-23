@@ -39,9 +39,45 @@ function runtimeLabel(item: QuickSwitcherItemData): string | null {
  * tooltip.
  */
 export function pathTail(path: string): string {
-  const parts = path.split(/[\\/]/).filter(Boolean);
-  if (parts.length <= 2) return path;
-  return `…/${parts.slice(-2).join("/")}`;
+  return shortenPath(path).text;
+}
+
+const TAIL_PREFIX = "…/";
+
+/**
+ * `pathTail` plus where the kept text starts in the original, so match ranges
+ * Fuse computed against the full path can be moved onto the shortened line.
+ * The kept tail is a verbatim slice, which is what makes the remap exact.
+ */
+function shortenPath(path: string): { text: string; start: number } {
+  let seen = 0;
+  for (let i = path.length - 1; i > 0; i--) {
+    const ch = path[i];
+    if ((ch === "/" || ch === "\\") && i < path.length - 1) {
+      seen++;
+      if (seen === 2) {
+        const rest = path.slice(0, i);
+        // Nothing worth dropping ahead of the tail: show the path as-is.
+        if (!/[^/\\]/.test(rest)) break;
+        return { text: `${TAIL_PREFIX}${path.slice(i + 1)}`, start: i + 1 };
+      }
+    }
+  }
+  return { text: path, start: 0 };
+}
+
+function remapRanges(
+  ranges: readonly (readonly [number, number])[] | undefined,
+  start: number,
+  shift: number
+): [number, number][] | undefined {
+  if (!ranges) return undefined;
+  const moved: [number, number][] = [];
+  for (const [s, e] of ranges) {
+    if (e < start) continue;
+    moved.push([Math.max(s, start) - start + shift, e - start + shift]);
+  }
+  return moved.length > 0 ? moved : undefined;
 }
 
 export function QuickSwitcherItem({
@@ -53,8 +89,15 @@ export function QuickSwitcherItem({
   matches,
 }: QuickSwitcherItemProps) {
   const label = runtimeLabel(item);
-  const subtitle =
-    item.subtitle && item.type === "worktree" ? pathTail(item.subtitle) : item.subtitle;
+  const shortened = item.subtitle && item.type === "worktree" ? shortenPath(item.subtitle) : null;
+  const subtitle = shortened?.text ?? item.subtitle;
+  const subtitleIndices = shortened
+    ? remapRanges(
+        findMatchIndices(matches, "subtitle"),
+        shortened.start,
+        shortened.start > 0 ? TAIL_PREFIX.length : 0
+      )
+    : findMatchIndices(matches, "subtitle");
 
   return (
     <button
@@ -93,14 +136,7 @@ export function QuickSwitcherItem({
           <Tooltip autoDismiss={false}>
             <TooltipTrigger asChild>
               <div className="text-xs text-text-secondary truncate">
-                {/* Fuse ranges index the full path, so a shortened line is
-                    only marked when it is the whole subtitle. */}
-                <HighlightedText
-                  text={subtitle ?? ""}
-                  indices={
-                    subtitle === item.subtitle ? findMatchIndices(matches, "subtitle") : undefined
-                  }
-                />
+                <HighlightedText text={subtitle ?? ""} indices={subtitleIndices} />
               </div>
             </TooltipTrigger>
             <TooltipContent side="bottom">{item.subtitle}</TooltipContent>

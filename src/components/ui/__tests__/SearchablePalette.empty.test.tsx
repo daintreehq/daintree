@@ -175,3 +175,14 @@ describe("SearchablePalette combobox relationship", () => {
     expect(controls && document.getElementById(controls)?.getAttribute("role")).toBe("listbox");
   });
 });
+
+describe("SearchablePalette pointer focus", () => {
+  it("keeps a press on the list's empty space from taking focus off the field", () => {
+    renderEmpty({ query: "a", results: [{ id: "a", label: "Alpha" }] });
+    const region = screen.getByRole("group", { name: "Test" });
+    const notPrevented = region.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
+    );
+    expect(notPrevented).toBe(false);
+  });
+});

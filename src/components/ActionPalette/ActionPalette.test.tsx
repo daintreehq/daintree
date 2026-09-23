@@ -305,6 +305,27 @@ describe("ActionPalette", () => {
     expect(screen.getByText("exit scope")).toBeTruthy();
   });
 
+  it("offers Backspace to exit the scope only while Backspace would do that", () => {
+    const { rerender } = render(
+      <ActionPalette
+        {...baseProps}
+        results={[makeItem("a.action", "Alpha run")]}
+        totalResults={1}
+      />
+    );
+    fireKey(">");
+    expect(screen.getByText("exit scope")).toBeTruthy();
+    rerender(
+      <ActionPalette
+        {...baseProps}
+        query="git"
+        results={[makeItem("a.action", "Alpha run")]}
+        totalResults={1}
+      />
+    );
+    expect(screen.queryByText("exit scope")).toBeNull();
+  });
+
   it("does not surface the projects hint when results exist", () => {
     render(
       <ActionPalette

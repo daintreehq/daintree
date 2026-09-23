@@ -436,6 +436,7 @@ export function SearchablePalette<T>({
         ariaLabel={label}
         activeDescendant={activeDescendant}
         onNavigationKeyDown={handleNavigationKeyDown}
+        keepPointerFocusOnInput
       >
         {renderBody ? (
           renderBody()

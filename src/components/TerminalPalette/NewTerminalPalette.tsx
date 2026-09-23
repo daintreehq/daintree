@@ -171,6 +171,7 @@ export function NewTerminalPalette({
         ariaLabel="Terminal types"
         activeDescendant={activeDescendant}
         onNavigationKeyDown={handleKeyDown}
+        keepPointerFocusOnInput
       >
         <div role="status" aria-live="polite" className="sr-only">
           {results.length} terminal types

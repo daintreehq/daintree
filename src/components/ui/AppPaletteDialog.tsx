@@ -556,6 +556,17 @@ interface AppPaletteBodyProps {
    * arrow and Enter navigation stop working after Tab (#11431).
    */
   onNavigationKeyDown: React.KeyboardEventHandler<HTMLDivElement>;
+  /**
+   * Keep a pointer press on the list's non-interactive space from moving focus
+   * off the search field. For palettes whose rows are driven entirely from the
+   * input (aria-activedescendant): a click in the gap under a short result
+   * list otherwise parked focus on this region, where typing went nowhere and
+   * the input's own chords (the action palette's Alt+P / Alt+H) stopped
+   * working, while the footer went on advertising them. Presses on anything
+   * tabbable inside the body, and on the scrollbar, are left alone; keyboard
+   * Tab still reaches the region (see `tabIndex` below).
+   */
+  keepPointerFocusOnInput?: boolean;
 }
 
 AppPaletteDialog.Body = function AppPaletteBody({
@@ -571,7 +582,22 @@ AppPaletteDialog.Body = function AppPaletteBody({
   focusIndicator = "region",
   onNavigationKeyDown,
   scrollClassName = "p-2 space-y-1",
+  keepPointerFocusOnInput = false,
 }: AppPaletteBodyProps) {
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!keepPointerFocusOnInput) return;
+      const scroller = e.currentTarget;
+      // A press in the scrollbar gutter lands on the scroller itself, past its
+      // client width; leave native scrollbar dragging alone.
+      if (e.target === scroller && e.nativeEvent.offsetX > scroller.clientWidth) return;
+      const tabbable = e.target instanceof Element ? e.target.closest(TABBABLE_SELECTOR) : null;
+      if (tabbable && tabbable !== scroller) return;
+      e.preventDefault();
+    },
+    [keepPointerFocusOnInput]
+  );
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       // Only when the scroller itself owns focus. Palette bodies also host
@@ -594,6 +620,7 @@ AppPaletteDialog.Body = function AppPaletteBody({
       aria-label={ariaLabel}
       aria-activedescendant={activeDescendant}
       onKeyDown={handleKeyDown}
+      onPointerDown={handlePointerDown}
       className={cn(
         maxHeight,
         // Floor sized off the row rhythm, not a round number: `p-2` (16) + a
