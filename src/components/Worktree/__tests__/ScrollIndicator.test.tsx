@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render as rtlRender, screen, fireEvent } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
 
 const { mockUseAnimatedPresence } = vi.hoisted(() => ({
   mockUseAnimatedPresence: vi.fn(),
@@ -69,15 +73,26 @@ describe("ScrollIndicator", () => {
     expect(onClick).toHaveBeenCalledOnce();
   });
 
-  it("has correct aria-label for below direction", () => {
-    render(<ScrollIndicator direction="below" count={3} onClick={onClick} />);
-    expect(screen.getByLabelText("Scroll down, 3 more below")).toBeTruthy();
-  });
-
-  it("has correct aria-label for above direction", () => {
-    render(<ScrollIndicator direction="above" count={5} onClick={onClick} />);
-    expect(screen.getByLabelText("Scroll up, 5 more above")).toBeTruthy();
-  });
+  // The number is bare on screen; the name is where the noun lives.
+  it.each([
+    ["below", 3, 0, "3 more worktrees below. Click to show the next page"],
+    ["above", 1, 0, "1 more worktree above. Click to show the next page"],
+    ["below", 7, 1, "7 more worktrees below, 1 needs attention. Click to show it"],
+    ["above", 7, 2, "7 more worktrees above, 2 need attention. Click to show the nearest"],
+  ] as const)(
+    "names %s with %i hidden, %i needing attention",
+    (direction, count, attentionCount, name) => {
+      render(
+        <ScrollIndicator
+          direction={direction}
+          count={count}
+          attentionCount={attentionCount}
+          onClick={onClick}
+        />
+      );
+      expect(screen.getByRole("button").getAttribute("aria-label")).toBe(name);
+    }
+  );
 
   it("uses translate-y-0 when visible (below)", () => {
     render(<ScrollIndicator direction="below" count={1} onClick={onClick} />);
@@ -121,7 +136,38 @@ describe("ScrollIndicator", () => {
     rerender(<ScrollIndicator direction="below" count={0} onClick={onClick} />);
     expect(screen.getByText("4")).toBeTruthy();
     expect(screen.queryByText("0")).toBeNull();
-    expect(screen.getByLabelText("Scroll down, 4 more below")).toBeTruthy();
+    expect(screen.getByRole("button").getAttribute("aria-label")).toMatch(
+      /^4 more worktrees below\./
+    );
+  });
+
+  const attentionMark = () => screen.queryByTestId("scroll-indicator-attention-mark");
+
+  it("shows the attention mark only while something past this edge needs it", () => {
+    const { rerender } = render(<ScrollIndicator direction="below" count={6} onClick={onClick} />);
+    expect(attentionMark()).toBeNull();
+    rerender(<ScrollIndicator direction="below" count={6} attentionCount={1} onClick={onClick} />);
+    expect(attentionMark()).not.toBeNull();
+    // A live pill never keeps a mark for a worktree that no longer needs attention.
+    rerender(<ScrollIndicator direction="below" count={6} attentionCount={0} onClick={onClick} />);
+    expect(attentionMark()).toBeNull();
+  });
+
+  it("latches the attention mark together with the count through the fade-out", () => {
+    mockUseAnimatedPresence.mockReturnValue({ isVisible: false, shouldRender: true });
+    const { rerender } = render(
+      <ScrollIndicator direction="above" count={3} attentionCount={1} onClick={onClick} />
+    );
+    rerender(<ScrollIndicator direction="above" count={0} attentionCount={0} onClick={onClick} />);
+    expect(screen.getByText("3")).toBeTruthy();
+    expect(attentionMark()).not.toBeNull();
+  });
+
+  it("does not take focus on a pointer press", () => {
+    render(<ScrollIndicator direction="below" count={2} onClick={onClick} />);
+    const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    screen.getByRole("button").dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it("uses scoped transition-[opacity,translate] instead of bare transition", () => {
