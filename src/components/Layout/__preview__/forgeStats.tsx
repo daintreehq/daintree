@@ -14,6 +14,7 @@ import { ForgeStatsToolbarButton } from "../ForgeStatsToolbarButton";
 import type { Project } from "@shared/types";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import type { ForgeRepositoryStats, ForgeRepoCountsUpdatedPayload } from "@shared/types/ipc/forge";
+import { commitsFixture, listCommitsFrom, listPushCommitsFrom } from "./localCommitsFixtures";
 import "@/index.css";
 
 /**
@@ -30,6 +31,8 @@ import "@/index.css";
  * Query parameters:
  *   ?theme=<built-in theme id>
  *   ?fixture=<name>   one of FIXTURE_NAMES below
+ *   ?commits=<name>   a history for the commits dropdown (`localCommitsFixtures.ts`);
+ *                     without it the dropdown's reads stay inert
  *
  * `window.__forgePreviewPushCounts(issues, prs)` replays a background poll with
  * higher counts, which is the only road to the "new since last view" chips.
@@ -133,10 +136,15 @@ export const FIXTURE_NAMES = Object.keys(FIXTURES);
 const params = new URLSearchParams(window.location.search);
 const themeId = params.get("theme") ?? "daintree";
 const fixtureName = params.get("fixture") ?? "default";
-const fixture = FIXTURES[fixtureName];
-if (!fixture) {
+const baseFixture = FIXTURES[fixtureName];
+if (!baseFixture) {
   throw new Error(`unknown fixture "${fixtureName}" — one of ${FIXTURE_NAMES.join(", ")}`);
 }
+const commits = commitsFixture(params.get("commits"));
+const fixture: Fixture =
+  commits?.commitCount !== undefined && baseFixture.stats !== "pending"
+    ? { ...baseFixture, stats: { ...baseFixture.stats, commitCount: commits.commitCount } }
+    : baseFixture;
 
 function inert(): unknown {
   const settled = Promise.resolve(undefined);
@@ -172,6 +180,14 @@ function fullStats(partial: Partial<ForgeRepositoryStats>): ForgeRepositoryStats
 let countsListener: ((payload: ForgeRepoCountsUpdatedPayload) => void) | null = null;
 
 installPreviewShims({
+  ...(commits
+    ? {
+        git: answering({
+          listCommits: listCommitsFrom(commits),
+          listPushCommits: listPushCommitsFrom(commits),
+        }),
+      }
+    : {}),
   project: answering({
     getCurrent: async () => PROJECT,
     onStatsUpdated: () => () => undefined,
