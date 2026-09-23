@@ -951,10 +951,46 @@ test("sidebar worktree card review — states and themes", async () => {
         await page.mouse.move(1600, 980);
         await page.waitForTimeout(250);
         await trigger.hover();
-        if (await card.isVisible({ timeout: 2500 }).catch(() => false)) return card;
+        // `isVisible` never waits, whatever its timeout says; under load the
+        // card opens after the check and the loop would move away from it.
+        const opened = await card
+          .waitFor({ state: "visible", timeout: 5000 })
+          .then(() => true)
+          .catch(() => false);
+        if (opened) return card;
         await page.waitForTimeout(1500);
       }
       throw new Error(`hover card never showed "${text}"`);
+    }
+
+    /**
+     * Open the card and shoot it, then prove it was still open when the shot
+     * landed. A status poll can re-render the row and close the card between
+     * the visibility check and the capture, which leaves a PNG of the card's
+     * empty surroundings — so a card gone afterwards means reshoot, and three
+     * misses in a row is a failure, never a written lie.
+     */
+    async function shootHoverCard(slug: string, trigger: Locator, text: string): Promise<void> {
+      for (let attempt = 0; attempt < 6; attempt++) {
+        // The first open proves the new commit reached the card; the polls
+        // that follow a commit keep re-rendering the row for a few seconds, so
+        // let them land before the shot that counts.
+        await openHoverCard(trigger, text);
+        await page.mouse.move(1600, 980);
+        await page.waitForTimeout(1500 + attempt * 1500);
+        const card = await openHoverCard(trigger, text);
+        await snapUnion(page, slug, [card, trigger]);
+        if (await card.isVisible()) return;
+        if (process.env.DAINTREE_SHOT_DEBUG) {
+          const dump = await page
+            .locator("[data-radix-popper-content-wrapper]")
+            .evaluateAll((els) => els.map((e) => (e.textContent ?? "").slice(0, 60)));
+          console.log(`[card-shots] ${slug} attempt ${attempt}: wrappers=${JSON.stringify(dump)}`);
+        }
+        written.delete(`${slug}${TAG}.png`);
+        rmSync(path.join(OUTPUT_DIR, `${slug}${TAG}.png`), { force: true });
+      }
+      throw new Error(`"${slug}": hover card kept closing before the capture landed`);
     }
 
     const quietCard = quiet.locator(".sidebar-worktree-card").first();
@@ -972,8 +1008,7 @@ test("sidebar worktree card review — states and themes", async () => {
       for (const variant of COMMIT_VARIANTS) {
         commitVariant(quietDir, variant);
         const chip = activityTriggers(quiet).first();
-        const card = await openHoverCard(chip, needle(variant));
-        await snapUnion(page, `300-commit-${variant.slug}`, [card, chip]);
+        await shootHoverCard(`300-commit-${variant.slug}`, chip, needle(variant));
       }
       const last = COMMIT_VARIANTS[COMMIT_VARIANTS.length - 1]!;
 
@@ -986,8 +1021,7 @@ test("sidebar worktree card review — states and themes", async () => {
       await expect(footer, "details footer trigger missing").toContainText("Last active", {
         timeout: T_LONG,
       });
-      const footerCard = await openHoverCard(footer, needle(last));
-      await snapUnion(page, "310-commit-details-footer", [footerCard, footer]);
+      await shootHoverCard("310-commit-details-footer", footer, needle(last));
       await page.mouse.move(1600, 980);
       await setSection(quiet, "details", false);
 
@@ -996,9 +1030,7 @@ test("sidebar worktree card review — states and themes", async () => {
         ["321-commit-forced-colors", { forcedColors: "active" as const }],
       ] as const) {
         await page.emulateMedia(media);
-        const chip = activityTriggers(quiet).first();
-        const card = await openHoverCard(chip, needle(last));
-        await snapUnion(page, slug, [card, chip]);
+        await shootHoverCard(slug, activityTriggers(quiet).first(), needle(last));
       }
       await page.emulateMedia({ contrast: "no-preference", forcedColors: "none" });
       await page.mouse.move(1600, 980);
@@ -1006,6 +1038,12 @@ test("sidebar worktree card review — states and themes", async () => {
 
     await step("commit-tooltip-themes", async () => {
       const last = COMMIT_VARIANTS[COMMIT_VARIANTS.length - 1]!;
+      // Runnable on its own (`DAINTREE_SHOT_ONLY=commit-tooltip-themes`): put
+      // the richest commit at HEAD unless the previous step already did.
+      if (!(await hoverCard(needle(last)).count())) {
+        const head = execSync("git log -1 --format=%s", { cwd: quietDir }).toString().trim();
+        if (head !== last.subject) commitVariant(quietDir, last);
+      }
       const themes = SWEEP_THEMES.length > 0 ? SWEEP_THEMES : ALL_THEMES;
       for (const theme of themes) {
         await page.mouse.move(1600, 980);
@@ -1013,9 +1051,11 @@ test("sidebar worktree card review — states and themes", async () => {
         await page.addStyleTag({ content: POLISH_CSS }).catch(() => {});
         await dismissBlockingPalette(page);
         const themedQuiet = row(page, WORKTREES.quiet.branch);
-        const chip = activityTriggers(themedQuiet).first();
-        const card = await openHoverCard(chip, needle(last));
-        await snapUnion(page, `400-commit-theme-${theme}`, [card, chip]);
+        await shootHoverCard(
+          `400-commit-theme-${theme}`,
+          activityTriggers(themedQuiet).first(),
+          needle(last)
+        );
       }
     });
   } finally {
