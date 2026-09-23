@@ -562,7 +562,7 @@ const STATES: ScopeState[] = [
       await page.locator(SEARCH).fill("transcription");
       await page.waitForTimeout(500);
     },
-    expectText: ["Needs"],
+    expectText: ["Only when"],
     restore: async (page) => {
       await page.locator(SEARCH).fill("");
     },
@@ -573,7 +573,11 @@ const STATES: ScopeState[] = [
     arrange: async (page) => {
       await page.locator(SEARCH).fill("transcription");
       await page.waitForTimeout(500);
-      await page.locator(`${DIALOG} [role="option"]`).filter({ hasText: "Needs" }).first().click();
+      await page
+        .locator(`${DIALOG} [role="option"]`)
+        .filter({ hasText: /only when/i })
+        .first()
+        .click();
       await page.waitForTimeout(600);
     },
     expectText: ["only appears when"],
