@@ -87,6 +87,8 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // Distinct from "no teardown": a read that failed can't be allowed to look
   // like a project with nothing configured.
   const [teardownUnreadable, setTeardownUnreadable] = useState(false);
+  const [teardownPending, setTeardownPending] = useState(true);
+  const [devPreviewUnreadable, setDevPreviewUnreadable] = useState(false);
   // Monotonic session token bumped on every open/close/worktree change (in the
   // open effect below). An in-flight submit revalidation captures the token and
   // aborts if it changed while awaiting — so a close→reopen (or worktree swap)
@@ -255,7 +257,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
         : verifyFailed
           ? "This worktree's uncommitted work couldn't be checked — force-deleting it may permanently discard that work."
           : fileSummary.hasTrackedChanges
-            ? "Force-deleting this worktree discards uncommitted tracked changes — this is irreversible."
+            ? "Force-deleting this worktree permanently discards the uncommitted work listed above."
             : nestedFileCount > 0
               ? "Force-deleting this worktree discards modified and untracked files inside its submodules — this is irreversible."
               : "Force-deleting this worktree discards an uncommitted submodule change — this is irreversible.";
@@ -358,6 +360,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
+    setDevPreviewUnreadable(false);
     window.electron.devPreview
       .getByWorktree({ worktreeId: worktree.id })
       .then((state) => {
@@ -365,8 +368,10 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
         setHasDevPreview(state !== null && state.status !== "stopped");
       })
       .catch(() => {
-        // Disclosure is informational; failing to fetch should not block
-        // the dialog. The actual stop attempt happens in runDeleteAsync.
+        // Disclosure is informational, so a failed read doesn't block the
+        // dialog — but it is said, since the delete still stops whatever is
+        // running.
+        if (!cancelled) setDevPreviewUnreadable(true);
       });
     return () => {
       cancelled = true;
@@ -382,6 +387,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     let cancelled = false;
     setTeardown(null);
     setTeardownUnreadable(false);
+    setTeardownPending(true);
     worktreeClient
       .getDeleteTeardownPreview(worktree.id)
       .then((preview) => {
@@ -389,6 +395,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       })
       .catch(() => {
         if (!cancelled) setTeardownUnreadable(true);
+      })
+      .finally(() => {
+        if (!cancelled) setTeardownPending(false);
       });
     return () => {
       cancelled = true;
@@ -557,7 +566,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // not a file, and what it stands for is counted under "Inside submodules".
   const trackedChangeCount = fileSummary.trackedChangeCount;
   const untrackedFileCount = fileSummary.untrackedFileCount;
-  const trackedLabel = `${trackedChangeCount} uncommitted file${trackedChangeCount === 1 ? "" : "s"}`;
+  // "Changes to" rather than "N uncommitted files": what a force delete loses
+  // from a tracked file is its uncommitted change, not the file's history.
+  const trackedLabel = `uncommitted changes to ${trackedChangeCount} tracked file${trackedChangeCount === 1 ? "" : "s"}`;
   const untrackedLabel = `${untrackedFileCount} untracked file${untrackedFileCount === 1 ? "" : "s"}`;
   const submoduleEntryLabel = `${submoduleEntryCount} submodule${submoduleEntryCount === 1 ? "" : "s"}`;
   /**
@@ -583,7 +594,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const nestedFileLabel = `${nestedFileCount} file${nestedFileCount === 1 ? "" : "s"}`;
   /** What is at stake in a force delete, in the fewest words that stay true. */
   const atStakeLabel = hasFileChanges
-    ? `${fileChangeLabel} present`
+    ? nestedFileCount > 0
+      ? `${fileChangeLabel} present, and ${nestedFileLabel} inside submodules`
+      : `${fileChangeLabel} present`
     : nestedFileCount > 0
       ? `${nestedFileLabel} inside submodules will be discarded`
       : `uncommitted changes to ${submoduleEntryLabel} present`;
@@ -662,6 +675,36 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       ),
     });
   }
+  // Pending only once the delete is on offer: before that nothing can be
+  // confirmed, and a "still reading" row on every open would be noise. After
+  // it, a fast click must not confirm a delete whose teardown was never named.
+  if (teardownPending && canSubmit) {
+    consequences.push({
+      key: "teardown-pending",
+      tone: "neutral",
+      content: (
+        <>
+          <span className="font-medium">Project teardown may also run</span>
+          <span className="ml-1 text-text-secondary"> Still reading its commands</span>
+        </>
+      ),
+    });
+  }
+  if (devPreviewUnreadable) {
+    consequences.push({
+      key: "dev-unknown",
+      tone: "neutral",
+      content: (
+        <>
+          <span className="font-medium">A running dev server will be stopped</span>
+          <span className="ml-1 text-text-secondary">
+            {" "}
+            Its state couldn&apos;t be read, so it isn&apos;t known whether one is running
+          </span>
+        </>
+      ),
+    });
+  }
   if (teardownUnreadable) {
     consequences.push({
       key: "teardown-unknown",
@@ -689,7 +732,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       // dialog knows least about, and the banner above already says the loss
       // is possible rather than certain. Where the changes ARE listed, the
       // outcome is stated flatly.
-      content: `${fileChangeLabel} ${verifyFailed ? "may be" : "will be"} permanently lost`,
+      content: capitalize(
+        `${fileChangeLabel} ${verifyFailed ? "may be" : "will be"} permanently lost`
+      ),
     });
   }
   if (force && nestedFileCount > 0) {
@@ -776,7 +821,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
 
   const atRiskCommitLocation =
     atRiskCommitPaths.length === 1 ? (
-      <code className="font-mono">{atRiskCommitPaths[0]}</code>
+      <code className="font-mono [overflow-wrap:anywhere]">
+        <PathText value={atRiskCommitPaths[0] ?? ""} />
+      </code>
     ) : (
       "the submodule"
     );
@@ -1071,7 +1118,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                     {singleCommitGroupPath && (
                       <>
                         {" in "}
-                        <code className="font-mono text-text-primary">{singleCommitGroupPath}</code>
+                        <code className="font-mono text-text-primary [overflow-wrap:anywhere]">
+                          <PathText value={singleCommitGroupPath} />
+                        </code>
                       </>
                     )}
                   </p>
@@ -1390,4 +1439,8 @@ function groupAtRiskCommits(risk: SubmoduleDeleteRisk | null): SubmoduleCommitGr
     path,
     rows: buildSubmoduleCommitRows({ ...risk, atRiskCommits: commits }, limit),
   }));
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
