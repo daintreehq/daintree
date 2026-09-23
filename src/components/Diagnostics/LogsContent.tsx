@@ -413,7 +413,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
             size="sm"
             className="absolute bottom-3 left-1/2 -translate-x-1/2 shadow-[var(--theme-shadow-floating)] tabular-nums"
             onClick={scrollToBottom}
-            aria-label={newCount > 0 ? `Resume tail, ${newCount} new` : "Scroll to bottom"}
+            aria-label={newCount > 0 ? `${newCount} new, resume tail` : undefined}
           >
             <ArrowDown />
             {newCount > 0 ? `${newCount} new` : "Jump to latest"}

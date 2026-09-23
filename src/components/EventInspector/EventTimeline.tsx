@@ -212,7 +212,7 @@ export function EventTimeline({
           size="sm"
           className="absolute bottom-3 left-1/2 -translate-x-1/2 tabular-nums shadow-[var(--theme-shadow-floating)]"
           onClick={scrollToBottom}
-          aria-label={newCount > 0 ? `Resume tail, ${newCount} new` : "Scroll to bottom"}
+          aria-label={newCount > 0 ? `${newCount} new, resume tail` : undefined}
         >
           <ArrowDown />
           {newCount > 0 ? `${newCount} new` : "Jump to latest"}
