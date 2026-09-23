@@ -44,7 +44,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Stash current input | `⌘+⇧+S` | `Ctrl+Shift+S` |
 | Restore stashed input | `⌘+⇧+X` | `Ctrl+Shift+X` |
 | Toggle focused terminal dock state | `⌘+⌥+M` | `Ctrl+Alt+M` |
-| Toggle all terminals dock state | `⌘+⌥+⇧+M` | `Ctrl+Alt+Shift+M` |
+| Toggle all terminals dock state | `⌘+⇧+⌥+M` | `Ctrl+Shift+Alt+M` |
 | Focus next terminal | `⌃+Tab` | `Ctrl+Tab` |
 | Focus previous terminal | `⌃+⇧+Tab` | `Ctrl+Shift+Tab` |
 | Toggle focus between current and previously focused panel | `` ⌘+⌥+` `` | `` Ctrl+Alt+` `` |
@@ -127,7 +127,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Open changes for focused worktree | `⌘+⇧+D` | `Ctrl+Shift+D` |
 | Open file browser panel for focused worktree | `⌘+⌥+F` | `Ctrl+Alt+F` |
 
-## Worktree Sessions
+## Worktree sessions
 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
@@ -148,21 +148,18 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Open focused panel context menu | `⇧+F10` | `Shift+F10` |
 | Open focused panel context menu | `ContextMenu` | `ContextMenu` |
 
-## Portal
+## Layout
 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
-| Close active portal tab | `⌘+W` | `Ctrl+W` |
-| Next portal tab | `⌃+Tab` | `Ctrl+Tab` |
-| Previous portal tab | `⌃+⇧+Tab` | `Ctrl+Shift+Tab` |
-| New portal tab | `⌘+T` | `Ctrl+T` |
-| Close active portal tab | — | `Ctrl+F4` (Windows only) |
+| Undo last layout change | `⌘+⌥+Z` | `Ctrl+Alt+Z` |
+| Redo last layout change | `⌘+⇧+⌥+Z` | `Ctrl+Shift+Alt+Z` |
 
-## Dev Preview
+## Search
 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
-| Reload dev preview | `⌘+R` | `Ctrl+R` |
+| Find in focused panel | `⌘+F` | `Ctrl+F` |
 
 ## Project
 
@@ -181,11 +178,21 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Commit staged changes | `⌘+K ⌘+C` | `Ctrl+K Ctrl+C` |
 | Push to remote | `⌘+K ⌘+P` | `Ctrl+K Ctrl+P` |
 
-## Search
+## Portal
 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
-| Find in focused panel | `⌘+F` | `Ctrl+F` |
+| Close active portal tab | `⌘+W` | `Ctrl+W` |
+| Next portal tab | `⌃+Tab` | `Ctrl+Tab` |
+| Previous portal tab | `⌃+⇧+Tab` | `Ctrl+Shift+Tab` |
+| New portal tab | `⌘+T` | `Ctrl+T` |
+| Close active portal tab | — | `Ctrl+F4` (Windows only) |
+
+## Dev preview
+
+| Action | macOS | Windows/Linux |
+| --- | --- | --- |
+| Reload dev preview | `⌘+R` | `Ctrl+R` |
 
 ## View
 
@@ -196,13 +203,6 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Zoom out | `⌘+-` | `Ctrl+-` |
 | Reset zoom | `⌘+0` | `Ctrl+0` |
 
-## Layout
-
-| Action | macOS | Windows/Linux |
-| --- | --- | --- |
-| Undo last layout change | `⌘+⌥+Z` | `Ctrl+Alt+Z` |
-| Redo last layout change | `⌘+⌥+⇧+Z` | `Ctrl+Alt+Shift+Z` |
-
 ## Voice
 
 | Action | macOS | Windows/Linux |
@@ -210,6 +210,12 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Toggle voice dictation | `⌘+⇧+V` | `Ctrl+Shift+V` |
 | Toggle voice dictation in Daintree Assistant | `⌘+⇧+⌥+V` | `Ctrl+Shift+Alt+V` |
 | Pause or resume voice dictation | `⌃+⇧+Space` | `Ctrl+Shift+Space` |
+
+## App
+
+| Action | macOS | Windows/Linux |
+| --- | --- | --- |
+| Open theme palette | `⌘+K ⌘+T` | `Ctrl+K Ctrl+T` |
 
 ## Help
 
@@ -219,12 +225,6 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Open keyboard shortcuts reference | `⌘+/` | `Ctrl+/` |
 | Launch help agent | `⌘+⇧+H` | `Ctrl+Shift+H` |
 | Toggle Daintree Assistant panel | `⌘+L` | `Ctrl+L` |
-
-## App
-
-| Action | macOS | Windows/Linux |
-| --- | --- | --- |
-| Open theme palette | `⌘+K ⌘+T` | `Ctrl+K Ctrl+T` |
 
 ## System
 
