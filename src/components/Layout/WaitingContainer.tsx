@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useId } from "react";
 import { ChevronDown, ChevronRight, OctagonX } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -392,6 +392,7 @@ function WaitingSingleItem({
   // an unlabeled row so the list doesn't overclaim.
   const reason = actionableWaitingReason(terminal.waitingReason);
   const context = [worktreeName, task].filter(Boolean).join(" · ");
+  const ageId = useId();
 
   return (
     // The activation target and the kill button are siblings, never nested:
@@ -404,7 +405,8 @@ function WaitingSingleItem({
         data-waiting-reason={terminal.waitingReason ?? "unknown"}
         onClick={() => onActivate(terminal, groupId)}
         className={ROW_TARGET_CLASS}
-        aria-label={`Focus ${title}${task ? `: ${task}` : ""}${worktreeName ? ` in ${worktreeName}` : ""}${reason ? ` — ${waitingHeadline(reason).toLowerCase()}` : ""}`}
+        aria-label={`Focus ${title}${task ? `: ${task}` : ""}${worktreeName ? ` in ${worktreeName}` : ""}${reason ? ` — ${waitingHeadline(reason).toLowerCase()}` : ""}${terminal.activityHeadline ? ` — ${terminal.activityHeadline}` : ""}`}
+        aria-describedby={terminal.lastStateChange != null ? ageId : undefined}
       >
         <TerminalIcon
           kind={terminal.kind}
@@ -413,7 +415,9 @@ function WaitingSingleItem({
         />
 
         <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-          <span className="shrink-0 truncate text-xs font-medium text-text-primary">{title}</span>
+          <span className="min-w-0 max-w-[65%] shrink-0 truncate text-xs font-medium text-text-primary">
+            {title}
+          </span>
           {(context || terminal.activityHeadline) && (
             <span className="min-w-0 truncate text-2xs text-text-secondary">
               {context}
@@ -441,7 +445,10 @@ function WaitingSingleItem({
 
         {/* The age holds the trailing slot at rest and yields it to the kill
             button on hover/focus, so no row reserves an empty action column. */}
-        <span className="min-w-6 shrink-0 text-right text-3xs leading-none transition-opacity duration-150 ease-out motion-reduce:transition-none group-hover/row:opacity-0 group-focus-within/row:opacity-0">
+        <span
+          id={ageId}
+          className="min-w-6 shrink-0 text-right text-3xs leading-none transition-opacity duration-150 ease-out motion-reduce:transition-none group-hover/row:opacity-0 group-focus-within/row:opacity-0"
+        >
           {terminal.lastStateChange != null && (
             <LiveTimeAgo
               timestamp={terminal.lastStateChange}
@@ -458,6 +465,7 @@ function WaitingSingleItem({
             <Button
               variant="ghost-danger"
               size="icon-xs"
+              className="transition-colors"
               onClick={() => onKill(terminal.id)}
               aria-label={`Kill ${title}${task ? `: ${task}` : ""}`}
               data-testid="waiting-kill-button"

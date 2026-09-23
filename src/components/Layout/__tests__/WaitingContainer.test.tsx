@@ -336,6 +336,16 @@ describe("WaitingContainer", () => {
       expect(echo!.textContent).not.toContain("Claude Code");
     });
 
+    it("describes the row by its age without folding the ticking age into its name", () => {
+      mockTerminals = [makeTerminal({ id: "t1", lastStateChange: 1700000000123 })];
+      render(<WaitingContainer />);
+      const row = screen.getByTestId("waiting-single-item");
+      const describedBy = row.getAttribute("aria-describedby");
+      expect(describedBy).toBeTruthy();
+      const age = within(row).getByTestId("live-time-ago");
+      expect(document.getElementById(describedBy!)?.contains(age)).toBe(true);
+    });
+
     it("does not render the redundant per-row state chip (state is surfaced once in the header)", () => {
       mockTerminals = [makeTerminal({ id: "t1", title: "Fix auth bug" })];
       render(<WaitingContainer />);

@@ -287,7 +287,13 @@ const FIXTURES: Record<string, Fixture> = {
         })
       ),
       fromAgent(
-        agent("e-3", "claude", { ...waiting(72), worktreeId: "wt-main", location: "grid" })
+        agent("e-3", "claude", {
+          ...waiting(72),
+          worktreeId: "wt-main",
+          location: "grid",
+          title: "Refactor the worktree dashboard's stale-branch sort order",
+          titleMode: "user",
+        })
       ),
     ],
   },
