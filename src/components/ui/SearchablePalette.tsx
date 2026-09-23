@@ -329,6 +329,11 @@ export function SearchablePalette<T>({
 
   const selectedItem = results[selectedIndex] ?? null;
 
+  // The listbox is only in the tree while there are rows; an expanded combobox
+  // controlling an id that is not rendered points assistive technology at
+  // nothing. A `renderBody` consumer draws its own body, so it keeps the claim.
+  const listRendered = renderBody ? isOpen : isOpen && results.length > 0;
+
   // Derive the action label as a primitive so the footer JSX can be memoized
   // by its string content rather than the (changing) selectedItem reference.
   // Without this, arrow-key navigation rebuilds <PaletteFooterHints/> on every
@@ -385,11 +390,11 @@ export function SearchablePalette<T>({
           onKeyDown={handleKeyDown}
           placeholder={searchPlaceholder}
           role="combobox"
-          aria-expanded={isOpen}
+          aria-expanded={listRendered}
           aria-haspopup="listbox"
           aria-autocomplete="list"
           aria-label={searchAriaLabel ?? searchPlaceholder.replace("...", "")}
-          aria-controls={listId}
+          aria-controls={listRendered ? listId : undefined}
           aria-activedescendant={activeDescendant}
         />
       </AppPaletteDialog.Header>
