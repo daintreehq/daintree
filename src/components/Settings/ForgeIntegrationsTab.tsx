@@ -423,7 +423,7 @@ function ProjectRoutingPanel({
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <span
-                          className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium border border-border-default text-text-secondary cursor-default"
+                          className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium border border-border-default text-text-secondary cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
                           tabIndex={0}
                         >
                           Active
@@ -459,7 +459,7 @@ function RoutingBadge({ resolved }: { resolved: ResolvedForgeProvider }) {
       <Tooltip>
         <TooltipTrigger asChild>
           <span
-            className="inline-flex items-center px-2 py-0.5 rounded-sm text-3xs font-medium border border-border-default text-text-secondary cursor-default"
+            className="inline-flex items-center px-2 py-0.5 rounded-sm text-3xs font-medium border border-border-default text-text-secondary cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
             tabIndex={0}
           >
             No match
@@ -478,7 +478,7 @@ function RoutingBadge({ resolved }: { resolved: ResolvedForgeProvider }) {
     <Tooltip>
       <TooltipTrigger asChild>
         <span
-          className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm text-3xs font-medium border border-border-default bg-status-info/10 text-text-primary cursor-default"
+          className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm text-3xs font-medium border border-border-default bg-status-info/10 text-text-primary cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
           tabIndex={0}
         >
           <span>{providerName}</span>
