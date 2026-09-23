@@ -24,12 +24,15 @@ import "@/index.css";
  *   ?theme=<id>        built-in theme id
  *   ?fixture=list|matrix
  *   ?width=320         card width in CSS px
+ *   ?reveal=<row id>   that row's select button has keyboard focus, which is
+ *                      what opens its alarm tooltip without a hover
  */
 
 const params = new URLSearchParams(window.location.search);
 const themeId = params.get("theme") ?? "daintree";
 const fixtureName = params.get("fixture") ?? "list";
 const width = Number(params.get("width") ?? "320");
+const revealRow = params.get("reveal");
 
 applyAppThemeToRoot(document.documentElement, resolveAppTheme(themeId));
 document.body.style.background = "var(--color-surface-sidebar)";
@@ -174,6 +177,7 @@ function Row({ row }: { row: RowFixture }) {
             isMainWorktree={false}
             isPinned={false}
             isCollapsed
+            isKeyboardFocused={row.id === revealRow}
             canCollapse
             onToggleCollapse={noop}
             contentId={`worktree-body-${worktree.id}`}

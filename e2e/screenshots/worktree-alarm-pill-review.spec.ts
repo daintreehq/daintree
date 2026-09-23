@@ -95,12 +95,13 @@ async function open(
   page: Page,
   fixture: "list" | "matrix",
   theme: string,
-  opts: { width?: number } = {}
+  opts: { width?: number; reveal?: string } = {}
 ) {
   await stubViteHmrClient(page);
   await page.setViewportSize({ width: 520, height: 420 });
   const q = new URLSearchParams({ theme, fixture });
   if (opts.width) q.set("width", String(opts.width));
+  if (opts.reveal) q.set("reveal", opts.reveal);
   // The pointer survives navigation; park it so a previous hover does not ride in.
   await page.mouse.move(0, 0);
   await page.goto(`${baseURL}/worktree-alarm-pill-preview.html?${q}`);
@@ -216,6 +217,21 @@ test("Collapsed worktree row alarm pill — kinds, tones, modes and themes", asy
       await expect(tip, `${row}: tooltip never opened`).toContainText(text);
       await page.waitForTimeout(150);
       const file = `tooltip-${row}-${theme}.png`;
+      await page.screenshot({ path: path.join(OUT_DIR, file) });
+      written.push(file);
+    }
+
+    // Keyboard reveal: the row's select button has focus-visible, so the
+    // tooltip opens with the pointer nowhere near the mark. The pointer is
+    // parked at the origin by `open()`, so an open tooltip here can only have
+    // come from the reveal.
+    for (const { row, text } of TOOLTIP_ROWS) {
+      await open(page, "list", theme, { reveal: row });
+      await expect(page.getByRole("tooltip"), `${row}: keyboard reveal never opened`).toContainText(
+        text
+      );
+      await page.waitForTimeout(150);
+      const file = `reveal-${row}-${theme}.png`;
       await page.screenshot({ path: path.join(OUT_DIR, file) });
       written.push(file);
     }
