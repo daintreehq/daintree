@@ -402,7 +402,7 @@ function GitWorktreeOperationConfirmDialogInner() {
           </PreviewNote>
         )}
 
-        {isLoaded && commits !== null && commits.length > 0 && (
+        {isLoaded && !isNothingToDo && commits !== null && commits.length > 0 && (
           <CommitRows
             commits={commits}
             total={total}

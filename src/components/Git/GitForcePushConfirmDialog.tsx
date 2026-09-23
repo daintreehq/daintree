@@ -14,6 +14,8 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { GIT_REMOTE_COMMIT_PREVIEW_MAX, type GitRemoteCommitPreview } from "@shared/types/git";
 import { formatGitPushDestination } from "@/components/Git/gitRemoteOperationPreview";
 import { useGitForcePushStore } from "@/store/gitForcePushStore";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 
 /**
  * Ask for everything the handler will serve. It used to ask for 20 and print
@@ -139,6 +141,9 @@ function GitForcePushConfirmDialogInner() {
     : null;
 
   const isBlocked = isLoading || !!loadError || preview === null || isPreviewStale;
+  // Gated like the siblings' hint, so a read that lands inside the Doherty
+  // window never flashes a "checking" line the skeleton itself didn't show.
+  const showPendingHint = useDeferredLoading(isLoading, UI_DOHERTY_THRESHOLD);
 
   // Resolve false on teardown so the action's awaited Promise cannot leak — the
   // guarantee `GitPushConfirmDialog` gives, scoped to this request and deferred
@@ -204,6 +209,15 @@ function GitForcePushConfirmDialogInner() {
       variant="destructive"
       hasPreview={true}
       confirmDisabled={isBlocked}
+      // Names why the primary is unavailable, the same way the push and
+      // pull-rebase confirms do.
+      hint={
+        !isLoading && blockingMessage
+          ? "Retry the preview to continue"
+          : showPendingHint
+            ? "Checking what this would discard…"
+            : null
+      }
     >
       <div className="space-y-3 text-xs text-text-primary">
         <p>
