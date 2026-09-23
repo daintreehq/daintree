@@ -24,6 +24,7 @@ import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import { useAppThemeStore } from "@/store/appThemeStore";
 import { useProjectSwitcherPalette } from "@/hooks/useProjectSwitcherPalette";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { Toolbar } from "../Toolbar";
@@ -158,6 +159,9 @@ let agentSettings: AgentSettings = { agents: {} };
  */
 function seedStores(): void {
   initBuiltInPanelKinds();
+  // Brand marks resolve their inks from this store, not from the tokens on the
+  // root — without it every theme's marks are measured against the default dark.
+  useAppThemeStore.setState({ selectedSchemeId: themeId });
 
   worktreeStore = createWorktreeStore();
   worktreeStore.setState({ worktrees: new Map(WORKTREES.map((w) => [w.id, w])) });
