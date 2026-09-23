@@ -15,11 +15,8 @@ import {
   CircleDot,
   PanelLeftOpen,
   PanelLeftClose,
-  ChevronsUpDown,
   MonitorPlay,
   Ellipsis,
-  GitBranch,
-  FileText,
   Pencil,
   Pin,
   PinOff,
@@ -133,6 +130,7 @@ import { isPanelLimitError } from "@/services/actions/definitions/panelLimitErro
 import { LazyProjectSwitcherPalette } from "@/lazyPanels";
 import { ProjectIdentityEditor } from "@/components/Project/ProjectIdentityEditor";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
+import { ToolbarProjectPill } from "./ToolbarProjectPill";
 import { useUIStore } from "@/store/uiStore";
 import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
@@ -2261,56 +2259,16 @@ export function Toolbar({
   const projectSwitcherTrigger = (
     <ContextMenuTrigger asChild>
       <TooltipTrigger asChild>
-        <button
-          data-toolbar-item=""
-          className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-          data-testid="project-switcher-trigger"
-          aria-label={workspaceIdentity.ariaLabel}
-          role={workspaceIdentity.kind !== "none" ? "combobox" : undefined}
-          aria-haspopup={workspaceIdentity.kind !== "none" ? "listbox" : undefined}
-          aria-expanded={workspaceIdentity.kind !== "none" ? isDropdownOpen : undefined}
+        <ToolbarProjectPill
+          workspaceIdentity={workspaceIdentity}
+          emoji={currentProject ? (currentProject.emoji ?? "•") : undefined}
+          chipState={chipState}
+          branchName={branchName}
+          truncatedBranchName={truncatedBranchName}
+          isDropdownOpen={isDropdownOpen}
           onClick={() => projectSwitcher.open("dropdown")}
           onPointerEnter={clearPillTooltipFocusSuppression}
-        >
-          {workspaceIdentity.kind === "scratch" ? (
-            <FileText
-              className="h-4 w-4 leading-none shrink-0 text-text-secondary"
-              aria-hidden="true"
-            />
-          ) : (
-            <span
-              className={cn("text-base leading-none shrink-0", !currentProject && "opacity-0")}
-              aria-label={currentProject ? "Project emoji" : undefined}
-              aria-hidden={currentProject ? undefined : true}
-            >
-              {currentProject?.emoji ?? "•"}
-            </span>
-          )}
-          <span
-            className={cn(
-              "min-w-0 truncate text-xs tracking-wide text-text-primary",
-              workspaceIdentity.kind !== "none" ? "font-semibold" : "font-medium"
-            )}
-          >
-            {workspaceIdentity.name}
-          </span>
-          {chipState !== "hidden" && (
-            <span
-              className={cn(
-                "toolbar-project-chip shrink-0 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono tabular-nums",
-                chipState === "reserved" && "opacity-0"
-              )}
-              aria-label={chipState === "visible" ? `Current branch ${branchName}` : undefined}
-              aria-hidden={chipState === "visible" ? undefined : true}
-            >
-              <GitBranch className="toolbar-project-chip-icon h-3 w-3 shrink-0" />
-              <span className="toolbar-project-chip-label">
-                {chipState === "visible" ? truncatedBranchName : "main"}
-              </span>
-            </span>
-          )}
-          <ChevronsUpDown className="toolbar-project-meta h-3 w-3 shrink-0" />
-        </button>
+        />
       </TooltipTrigger>
     </ContextMenuTrigger>
   );

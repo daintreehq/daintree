@@ -3,6 +3,10 @@ import fs from "fs/promises";
 import path from "path";
 
 const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
+// The pill's markup lives in its own component; the toolbar and the pill are read as one surface.
+const PILL_PATH = path.resolve(__dirname, "../ToolbarProjectPill.tsx");
+const readToolbarSource = async () =>
+  (await fs.readFile(TOOLBAR_PATH, "utf-8")) + (await fs.readFile(PILL_PATH, "utf-8"));
 const TOOLBAR_CSS_PATH = path.resolve(__dirname, "../../../styles/components/toolbar.css");
 const BUTTON_PATH = path.resolve(__dirname, "../../ui/button.tsx");
 
@@ -17,7 +21,7 @@ describe("Toolbar strip — composition invariants", () => {
 
   beforeEach(async () => {
     [source, css, button] = await Promise.all([
-      fs.readFile(TOOLBAR_PATH, "utf-8"),
+      readToolbarSource(),
       fs.readFile(TOOLBAR_CSS_PATH, "utf-8"),
       fs.readFile(BUTTON_PATH, "utf-8"),
     ]);
