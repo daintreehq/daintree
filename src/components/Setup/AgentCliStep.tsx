@@ -263,7 +263,7 @@ export function AgentCliStep({
                     ? "bg-overlay-soft border-border-strong"
                     : isError
                       ? "bg-status-error/5 border-status-error/20"
-                      : "bg-daintree-bg/30 border-border-default"
+                      : "bg-surface-canvas/30 border-border-default"
                 }`}
               >
                 {/* The box only aligns the row; the mark carries its own colour and
@@ -285,7 +285,7 @@ export function AgentCliStep({
                       <TooltipTrigger asChild>
                         <button
                           type="button"
-                          className="text-daintree-text/30 hover:text-text-primary transition-colors p-0.5 cursor-pointer"
+                          className="text-text-secondary hover:text-text-primary transition-colors p-0.5 cursor-pointer"
                           onClick={() => systemClient.openExternal(config.install!.docsUrl!)}
                           aria-label="Open documentation"
                         >
@@ -383,7 +383,7 @@ export function AgentCliStep({
                       <pre
                         id={`error-log-${agentId}`}
                         hidden={!isErrorExpanded}
-                        className="text-3xs text-status-error/80 bg-surface-canvas border border-border-default rounded-[var(--radius-sm)] p-2 max-h-[120px] overflow-y-auto whitespace-pre-wrap font-mono"
+                        className="text-3xs text-text-secondary bg-surface-canvas border border-border-default rounded-[var(--radius-sm)] p-2 max-h-[120px] overflow-y-auto whitespace-pre-wrap font-mono"
                       >
                         {errorLog}
                       </pre>
@@ -446,7 +446,7 @@ export function AgentCliStep({
               return (
                 <label
                   key={agentId}
-                  className="flex items-center gap-3 px-3 py-1.5 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30 cursor-pointer hover:bg-daintree-bg/60 transition-colors"
+                  className="flex items-center gap-3 px-3 py-1.5 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/30 cursor-pointer hover:bg-surface-canvas/60 transition-colors"
                 >
                   <input
                     type="checkbox"

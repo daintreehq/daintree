@@ -1124,7 +1124,7 @@ function AppearanceStep({
                 "has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent-primary",
                 isSelected
                   ? "border-border-strong bg-overlay-selected"
-                  : "border-border-default bg-surface-canvas hover:border-daintree-text/30"
+                  : "border-border-default bg-surface-canvas hover:border-text-secondary"
               )}
             >
               <input
@@ -1139,9 +1139,9 @@ function AppearanceStep({
               <div className="flex items-center justify-between px-0.5">
                 <div className="flex items-center gap-1.5">
                   {isDark ? (
-                    <Moon className="w-3 h-3 text-daintree-text/50" />
+                    <Moon className="w-3 h-3 text-text-secondary" />
                   ) : (
-                    <Sun className="w-3 h-3 text-daintree-text/50" />
+                    <Sun className="w-3 h-3 text-text-secondary" />
                   )}
                   <span className="text-sm font-medium text-text-primary">{scheme.name}</span>
                   <span className="text-xs text-text-secondary">{isDark ? "Dark" : "Light"}</span>
@@ -1200,7 +1200,7 @@ function AgentsStep({
             {Array.from({ length: 5 }).map((_, i) => (
               <div
                 key={i}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30"
+                className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/30"
               >
                 <SkeletonBone className="w-4 h-4 shrink-0" />
                 <SkeletonBone className="w-8 h-8 rounded-[var(--radius-sm)] shrink-0" />

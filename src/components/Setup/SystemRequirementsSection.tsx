@@ -5,7 +5,6 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { UI_ENTER_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import { useSystemHealthCheck } from "./useSystemHealthCheck";
 import { PrerequisiteCard } from "./SystemToolsStep";
-import { cn } from "@/lib/utils";
 
 interface SystemRequirementsSectionProps {
   onFatalFailureChange: (hasFatal: boolean) => void;
@@ -69,7 +68,7 @@ export function SystemRequirementsSection({
   const hasWarning = allDone && warningTools.length > 0;
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30">
+    <div className="rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/30">
       <button
         type="button"
         onClick={() => setUserExpanded((v) => !v)}
@@ -78,7 +77,7 @@ export function SystemRequirementsSection({
         className="flex items-center gap-2.5 w-full px-3 py-2.5 text-left"
       >
         <ChevronDown
-          className={`w-3.5 h-3.5 text-daintree-text/40 shrink-0 transition-transform ${isExpanded ? "" : "-rotate-90"}`}
+          className={`w-3.5 h-3.5 text-text-secondary shrink-0 transition-transform ${isExpanded ? "" : "-rotate-90"}`}
         />
         <span className="text-sm font-medium text-text-primary">System requirements</span>
 
@@ -162,48 +161,58 @@ export function SystemRequirementsSection({
             <div
               role="alert"
               aria-live="assertive"
-              className="px-3 py-2.5 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5 space-y-1.5"
+              className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5"
             >
               {/* Neutral text: status-coloured text misses 4.5:1 on most themes,
                   and the tile's own mark already carries the red. This line says
-                  what to do, not what is wrong a third time. */}
-              {missingFatalTools.map((spec) => (
-                <p key={spec.tool} className="text-xs text-text-primary">
-                  Install {spec.label} using the steps above, then check again.
-                </p>
-              ))}
-              {outdatedFatalTools.map((spec) => {
-                const state = checkStates[spec.tool];
-                if (!state || state === "loading") return null;
-                return (
+                  what to do, and the control that finishes it sits beside it
+                  rather than below the fold of the expanded steps. */}
+              <div className="flex-1 min-w-0 space-y-1.5">
+                {missingFatalTools.map((spec) => (
                   <p key={spec.tool} className="text-xs text-text-primary">
-                    Update {spec.label} to v{spec.minVersion} or later (you have v{state.version}),
-                    then check again.
+                    Install {spec.label} using the steps above, then check again.
                   </p>
-                );
-              })}
+                ))}
+                {outdatedFatalTools.map((spec) => {
+                  const state = checkStates[spec.tool];
+                  if (!state || state === "loading") return null;
+                  return (
+                    <p key={spec.tool} className="text-xs text-text-primary">
+                      Update {spec.label} to v{spec.minVersion} or later (you have v{state.version}
+                      ), then check again.
+                    </p>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                onClick={() => void runCheck()}
+                disabled={isChecking}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-sm)] px-2.5 py-1 text-xs text-text-primary ring-1 ring-border-strong bg-surface-panel-elevated transition-colors hover:bg-overlay-medium disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              >
+                <RotateCw
+                  className={`w-3 h-3 ${isChecking ? "animate-spin" : ""}`}
+                  aria-hidden="true"
+                />
+                {isChecking ? "Checking…" : "Check again"}
+              </button>
             </div>
           )}
 
-          <button
-            type="button"
-            onClick={() => void runCheck()}
-            disabled={isChecking}
-            className={cn(
-              "inline-flex items-center gap-1.5 text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none",
-              // When a required tool is missing, re-checking is how the user
-              // gets past this step, so it reads as a control rather than a link.
-              hasFatalFailure && allDone
-                ? "rounded-[var(--radius-sm)] px-2.5 py-1 ring-1 ring-border-strong bg-surface-panel-elevated text-text-primary hover:bg-overlay-medium"
-                : "text-text-secondary hover:text-text-primary"
-            )}
-          >
-            <RotateCw
-              className={`w-3 h-3 ${isChecking ? "animate-spin" : ""}`}
-              aria-hidden="true"
-            />
-            {isChecking ? "Checking…" : hasFatalFailure && allDone ? "Check again" : "Re-check"}
-          </button>
+          {!(allDone && hasFatalFailure) && (
+            <button
+              type="button"
+              onClick={() => void runCheck()}
+              disabled={isChecking}
+              className="inline-flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              <RotateCw
+                className={`w-3 h-3 ${isChecking ? "animate-spin" : ""}`}
+                aria-hidden="true"
+              />
+              {isChecking ? "Checking…" : "Re-check"}
+            </button>
+          )}
         </div>
       </m.div>
     </div>

@@ -40,7 +40,7 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
     check?.available && !check.meetsMinVersion && check.minVersion && check.version;
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30">
+    <div className="rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/30">
       <div className="flex items-center gap-3 px-3 py-2.5">
         <StatusIcon check={check} loading={loading} />
         <div className="flex-1 min-w-0">
@@ -110,7 +110,7 @@ export function StatusIcon({
   loading: boolean;
 }) {
   if (loading) {
-    return <Loader2 className="w-4 h-4 text-daintree-text/30 animate-spin shrink-0" />;
+    return <Loader2 className="w-4 h-4 text-text-secondary animate-spin shrink-0" />;
   }
   if (check?.available && check.meetsMinVersion) {
     return <CircleCheck className="w-4 h-4 text-status-success shrink-0" />;

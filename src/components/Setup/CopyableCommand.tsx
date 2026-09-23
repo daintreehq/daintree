@@ -17,7 +17,7 @@ export function CopyableCommand({ command, inspectUrl }: { command: string; insp
             <button
               type="button"
               onClick={() => void systemClient.openExternal(inspectUrl)}
-              className="shrink-0 p-0.5 rounded hover:bg-overlay transition-colors duration-150 text-daintree-text/60 hover:text-daintree-text/80"
+              className="shrink-0 p-0.5 rounded hover:bg-overlay transition-colors duration-150 text-text-secondary hover:text-text-primary"
               aria-label="Inspect install script in browser"
             >
               <ExternalLink className="w-3.5 h-3.5" />
@@ -31,7 +31,7 @@ export function CopyableCommand({ command, inspectUrl }: { command: string; insp
           <button
             type="button"
             onClick={() => void copy(sanitizeForClipboard(command))}
-            className="shrink-0 p-0.5 rounded hover:bg-overlay transition-colors duration-150 text-daintree-text/60 hover:text-daintree-text/80"
+            className="shrink-0 p-0.5 rounded hover:bg-overlay transition-colors duration-150 text-text-secondary hover:text-text-primary"
             aria-label="Copy command to clipboard"
           >
             {copied ? (
