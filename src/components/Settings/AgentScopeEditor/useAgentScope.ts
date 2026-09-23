@@ -212,6 +212,16 @@ export function useAgentScope({
           presetId: id,
         } as Partial<AgentSettingsEntry>);
         onSettingsChange?.();
+        // Selecting the copy re-keys the editor, removing the Duplicate button that had
+        // focus. Hand it to the preset picker, which now names the copy.
+        requestAnimationFrame(() => {
+          const active = document.activeElement;
+          if (!active || active === document.body) {
+            document
+              .querySelector<HTMLElement>('#agents-presets [data-testid="preset-selector-trigger"]')
+              ?.focus();
+          }
+        });
       } catch (error) {
         logError("Failed to duplicate preset", error);
         notify({

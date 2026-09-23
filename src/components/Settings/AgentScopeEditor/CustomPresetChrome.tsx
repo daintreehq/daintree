@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { Pencil } from "lucide-react";
+import { Pencil, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -108,8 +108,18 @@ export function CustomPresetChrome({
         description="The colour marks this preset on its launch button and panel tab"
         error={
           isEditing && renameError ? (
-            <span id={errorId} role="alert">
-              {renameError}
+            // Local neutral text with a glyph: the row's own error colour is
+            // status-coloured body text, which fails contrast on most themes.
+            <span
+              id={errorId}
+              role="alert"
+              className="flex items-start gap-1.5 text-text-secondary"
+            >
+              <TriangleAlert
+                className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
+                aria-hidden="true"
+              />
+              <span>{renameError}</span>
             </span>
           ) : undefined
         }

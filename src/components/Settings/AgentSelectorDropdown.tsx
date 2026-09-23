@@ -54,9 +54,15 @@ export function AgentSelectorDropdown({
     setActiveIndex(q && items.length > 1 ? 1 : 0);
   }, [filterQuery]); // eslint-disable-line react-hooks/exhaustive-deps -- items derived from filterQuery
 
+  // On every opening too, not only when the cursor moves: reopening on the same
+  // late-list agent would otherwise leave its row, and the rail marking it, off-screen.
   useEffect(() => {
-    activeItemRef.current?.scrollIntoView({ block: "nearest" });
-  }, [activeIndex]);
+    if (!open) return;
+    const frame = requestAnimationFrame(() =>
+      activeItemRef.current?.scrollIntoView({ block: "nearest" })
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [activeIndex, open]);
 
   useEffect(() => {
     if (!open) setFilterQuery("");

@@ -232,6 +232,8 @@ export function PresetSelector({
         onOpenAutoFocus={(e) => {
           e.preventDefault();
           listboxRef.current?.focus();
+          // Bring the current preset's row, and its rail, into view on opening.
+          document.getElementById(optionDomId(activeIndex))?.scrollIntoView?.({ block: "nearest" });
         }}
       >
         <div

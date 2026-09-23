@@ -81,6 +81,10 @@ export function FallbackChainEditor({
   const addFallback = (id: string) => {
     if (!id || chain.includes(id) || chain.length >= FALLBACK_CHAIN_MAX) return;
     setChain([...chain, id]);
+    // The last possible addition replaces the select with a status line, taking its
+    // focus with it; land on the row that was just added instead.
+    const addsRemain = chain.length + 1 < FALLBACK_CHAIN_MAX && candidates.length > 1;
+    if (!addsRemain) focusAfterRender([action(id, "remove")]);
   };
 
   const canAdd = chain.length < FALLBACK_CHAIN_MAX && candidates.length > 0;
