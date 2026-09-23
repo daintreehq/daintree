@@ -923,3 +923,78 @@ describe("ErrorBoundary retry escalation", () => {
     );
   });
 });
+
+describe("ErrorBoundary retry episodes", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const fault = { on: true };
+  function Flaky(): React.ReactNode {
+    if (fault.on) throw new Error("flaky");
+    return <div>recovered</div>;
+  }
+
+  it("forgets failed attempts once the child renders again", () => {
+    fault.on = true;
+    const { rerender } = render(
+      <ErrorBoundary variant="section" componentName="Sidebar">
+        <Flaky />
+      </ErrorBoundary>
+    );
+    fireEvent.click(screen.getByTestId("error-fallback-restart"));
+    expect(screen.getByTestId("error-fallback-reload-window")).toBeTruthy();
+
+    fault.on = false;
+    fireEvent.click(screen.getByTestId("error-fallback-restart"));
+    expect(screen.getByText("recovered")).toBeTruthy();
+
+    // A later, unrelated crash is a new episode: nobody has tried again yet.
+    fault.on = true;
+    rerender(
+      <ErrorBoundary variant="section" componentName="Sidebar">
+        <Flaky key="again" />
+      </ErrorBoundary>
+    );
+    expect(screen.getByTestId("error-fallback-restart")).toBeTruthy();
+    expect(screen.queryByTestId("error-fallback-reload-window")).toBeNull();
+  });
+
+  it("does not count a resetKeys change as a failed attempt", () => {
+    fault.on = true;
+    const { rerender } = render(
+      <ErrorBoundary variant="section" componentName="Sidebar" resetKeys={["a"]}>
+        <Flaky />
+      </ErrorBoundary>
+    );
+    rerender(
+      <ErrorBoundary variant="section" componentName="Sidebar" resetKeys={["b"]}>
+        <Flaky />
+      </ErrorBoundary>
+    );
+    expect(screen.getByTestId("error-fallback-restart")).toBeTruthy();
+    expect(screen.queryByTestId("error-fallback-reload-window")).toBeNull();
+  });
+
+  it("leads with the window reload, focused, once Try again has failed full-screen", () => {
+    fault.on = true;
+    render(
+      <ErrorBoundary variant="fullscreen" componentName="App">
+        <Flaky />
+      </ErrorBoundary>
+    );
+    // First failure: Try again leads and holds focus.
+    expect(document.activeElement).toBe(screen.getByTestId("error-fallback-restart"));
+
+    fireEvent.click(screen.getByTestId("error-fallback-restart"));
+    const reload = screen.getByTestId("error-fallback-reload-window");
+    const retry = screen.getByTestId("error-fallback-restart");
+    expect(document.activeElement).toBe(reload);
+    expect(reload.compareDocumentPosition(retry) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});

@@ -72,10 +72,12 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   // state drives the visible `disabled` prop on the button.
   private reportInFlight = false;
 
-  // Counts resets across fallback remounts, so a fallback that is back after a
-  // "Try again" can say so and offer the bigger hammer — a window reload —
-  // instead of the same button that just failed.
-  private retryCount = 0;
+  // Consecutive "Try again" clicks in the current failure episode, so a
+  // fallback that is back straight after one can say so and lead with the
+  // bigger hammer — a window reload — instead of the button that just failed.
+  // Only the user's clicks count: a resetKeys change is a new context, not a
+  // failed attempt, and a successful commit ends the episode.
+  private userRetries = 0;
 
   constructor(props: ErrorBoundaryProps) {
     super(props);
@@ -156,6 +158,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     const { resetKeys } = this.props;
     const { hasError } = this.state;
 
+    if (!hasError) this.userRetries = 0;
+
     if (hasError && resetKeys) {
       const prevResetKeys = prevProps.resetKeys || [];
       const hasResetKeyChanged =
@@ -163,6 +167,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         resetKeys.some((key, index) => key !== prevResetKeys[index]);
 
       if (hasResetKeyChanged) {
+        this.userRetries = 0;
         this.resetError();
       }
     }
@@ -179,8 +184,6 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       }
     }
 
-    this.retryCount += 1;
-
     // Reset the synchronous class-field guard alongside state so a hung
     // report from the previous error session doesn't permanently disable
     // the Report issue button after recovery.
@@ -192,6 +195,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       incidentId: null,
       reportInFlight: false,
     });
+  };
+
+  handleTryAgain = (): void => {
+    this.userRetries += 1;
+    this.resetError();
   };
 
   handleReport = async (): Promise<void> => {
@@ -296,14 +304,14 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         <Fallback
           error={error}
           errorInfo={errorInfo || undefined}
-          resetError={this.resetError}
+          resetError={this.handleTryAgain}
           variant={variant}
           componentName={componentName}
           displayName={displayName}
           incidentId={incidentId}
           onReport={variant !== "component" ? this.handleReport : undefined}
           reportInFlight={reportInFlight}
-          retryCount={this.retryCount}
+          retryCount={this.userRetries}
         />
       );
     }

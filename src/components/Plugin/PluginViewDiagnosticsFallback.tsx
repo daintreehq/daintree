@@ -116,6 +116,10 @@ export function PluginViewDiagnosticsFallback({
     void copy(report);
   }, [copy, report]);
 
+  const handleReloadWindow = useCallback(() => {
+    void actionService.dispatch("plugin.reloadWindow", undefined, { source: "user" });
+  }, []);
+
   const handleOpenLogs = useCallback(() => {
     void actionService.dispatch("logs.openFile", undefined, { source: "user" });
   }, []);
@@ -142,70 +146,85 @@ export function PluginViewDiagnosticsFallback({
             {panelName} stopped working
           </h2>
           <p className="text-xs break-words text-text-secondary">
-            {devMode
-              ? `${diagnostics.pluginDisplayName} threw while rendering this panel. The full trace is below.`
-              : `${diagnostics.pluginDisplayName} hit an error while rendering this panel. The rest of Daintree is still running.`}
+            {needsDocumentReload
+              ? `${diagnostics.pluginDisplayName} needs this window to reload before its panels can run again.`
+              : devMode
+                ? `${diagnostics.pluginDisplayName} threw while rendering this panel. The full trace is below.`
+                : `${diagnostics.pluginDisplayName} hit an error while rendering this panel. The rest of Daintree is still running.`}
           </p>
-        </div>
-      </div>
 
-      <div className="flex flex-wrap gap-2">
-        {!needsDocumentReload && (
-          <Button
-            type="button"
-            variant="contrast"
-            size="sm"
-            onClick={resetError}
-            data-testid="plugin-view-diagnostics-retry"
-          >
-            Try again
-          </Button>
-        )}
-        {onRequestClose && (
-          // No confirmation: the grid/dock close trashes the panel, which the
-          // trash bin restores — a D0 reversible action, same as the header's
-          // own close control. Neutral styling keeps "Try again" the single
-          // emphasized action in this region.
-          <Button
-            type="button"
-            variant="subtle"
-            size="sm"
-            // Wrapped, not passed through: `onRequestClose` is declared
-            // `() => void`, and handing it straight to onClick would call it
-            // with the MouseEvent. The grid host absorbs that today only
-            // because it wraps too — a host that forwarded a handler taking an
-            // optional first argument (ContentPanel's `onClose(force?)`) would
-            // silently receive a truthy one.
-            onClick={() => onRequestClose()}
-            data-testid="plugin-view-diagnostics-close"
-          >
-            Close panel
-          </Button>
-        )}
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={handleCopy}
-          aria-label="Copy diagnostics"
-          data-testid="plugin-view-diagnostics-copy"
-        >
-          {copied ? "Copied" : "Copy diagnostics"}
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={handleOpenLogs}
-          data-testid="plugin-view-diagnostics-logs"
-        >
-          View logs
-        </Button>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {needsDocumentReload && (
+              // A remount can't clear a refusal the document runtime issued, so the
+              // recovery here is the plugin reload, with its own save-first confirm.
+              <Button
+                type="button"
+                variant="contrast"
+                size="sm"
+                onClick={handleReloadWindow}
+                data-testid="plugin-view-diagnostics-reload-window"
+              >
+                Reload window
+              </Button>
+            )}
+            {!needsDocumentReload && (
+              <Button
+                type="button"
+                variant="contrast"
+                size="sm"
+                onClick={resetError}
+                data-testid="plugin-view-diagnostics-retry"
+              >
+                Try again
+              </Button>
+            )}
+            {onRequestClose && (
+              // No confirmation: the grid/dock close trashes the panel, which the
+              // trash bin restores — a D0 reversible action, same as the header's
+              // own close control. Neutral styling keeps "Try again" the single
+              // emphasized action in this region.
+              <Button
+                type="button"
+                variant="subtle"
+                size="sm"
+                // Wrapped, not passed through: `onRequestClose` is declared
+                // `() => void`, and handing it straight to onClick would call it
+                // with the MouseEvent. The grid host absorbs that today only
+                // because it wraps too — a host that forwarded a handler taking an
+                // optional first argument (ContentPanel's `onClose(force?)`) would
+                // silently receive a truthy one.
+                onClick={() => onRequestClose()}
+                data-testid="plugin-view-diagnostics-close"
+              >
+                Close panel
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={handleCopy}
+              aria-label="Copy diagnostics"
+              data-testid="plugin-view-diagnostics-copy"
+            >
+              {copied ? "Copied" : "Copy diagnostics"}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={handleOpenLogs}
+              data-testid="plugin-view-diagnostics-logs"
+            >
+              View logs
+            </Button>
+          </div>
+        </div>
       </div>
 
       {/* Open by default for the plugin's own author, closed for someone who
           installed it and mostly wants their panel back. */}
-      <details open={devMode} className="min-w-0">
+      <details open={devMode} className="min-w-0 pl-11">
         <summary className="w-fit cursor-pointer rounded-[var(--radius-sm)] text-xs text-text-secondary hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary">
           Technical details
         </summary>

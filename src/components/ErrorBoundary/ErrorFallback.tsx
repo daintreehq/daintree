@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef } from "react";
 import { Check, Copy, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -46,6 +46,31 @@ function buildDetailsText(
     lines.push("", "Component stack:", scrub(errorInfo.componentStack.replace(/^\n+/, "")));
   }
   return lines.join("\n");
+}
+
+/**
+ * One block per stack line with a hanging indent, and a break opportunity after
+ * every slash: a wrapped frame then breaks between path segments and continues
+ * under its own "at", instead of splitting a word and starting flush left
+ * where it reads as the next frame. `<wbr>` adds nothing to copied text.
+ */
+function StackLines({ text }: { text: string }) {
+  return text.split("\n").map((line, i) => (
+    <span key={i} className="block pl-[6ch] -indent-[6ch]">
+      {line === ""
+        ? "\u00a0"
+        : line.split("/").map((part, j) => (
+            <Fragment key={j}>
+              {j > 0 && (
+                <>
+                  /<wbr />
+                </>
+              )}
+              {part}
+            </Fragment>
+          ))}
+    </span>
+  ));
 }
 
 function reloadWindow() {
@@ -101,7 +126,10 @@ export function ErrorFallback({
       .announce(`${name} stopped working`, variant === "section" ? "assertive" : "polite");
   }, [isFullscreen, name, variant]);
 
-  const escalated = isFullscreen || retryCount > 0;
+  // Once Try again has failed, the reload leads: offering the button that just
+  // failed as the primary action is how a crash screen turns into a loop.
+  const retried = retryCount > 0;
+  const showReload = isFullscreen || retried;
   const showIncidentId = !import.meta.env.DEV && !!incidentId;
   const hasDetails = !!(error.stack || errorInfo?.componentStack);
 
@@ -118,7 +146,7 @@ export function ErrorFallback({
   } else if (retryCount > 0) {
     description = "Still not working? Reload the window. Your terminals and agents keep running.";
   } else if (isComponent) {
-    description = "Try again to reload it.";
+    description = "The rest of Daintree is still running.";
   } else {
     description = "Your terminals and agents are still running. Try again to reload this area.";
   }
@@ -152,14 +180,14 @@ export function ErrorFallback({
           "m-auto flex w-full min-w-0 flex-col items-center text-center",
           isFullscreen && "max-w-xl gap-5",
           variant === "section" && "max-w-lg gap-4",
-          isComponent && "max-w-md gap-3"
+          isComponent && "max-w-md gap-2 @xs:gap-3"
         )}
       >
         <div
           aria-hidden="true"
           className={cn(
             "flex shrink-0 items-center justify-center rounded-[var(--radius-lg)] bg-overlay-subtle",
-            isFullscreen ? "size-12" : isComponent ? "size-8" : "size-10"
+            isFullscreen ? "size-12" : isComponent ? "hidden size-8 @xs:flex" : "size-10"
           )}
         >
           <TriangleAlert
@@ -183,8 +211,8 @@ export function ErrorFallback({
           </h2>
           <p
             className={cn(
-              "text-text-secondary text-pretty break-words",
-              isFullscreen ? "text-sm" : "text-xs @sm:text-sm"
+              "text-text-secondary text-balance break-words",
+              isFullscreen ? "text-sm" : isComponent ? "text-xs" : "text-xs @sm:text-sm"
             )}
             {...(isFullscreen ? { id: DESCRIPTION_ID } : {})}
           >
@@ -192,18 +220,30 @@ export function ErrorFallback({
           </p>
         </div>
 
-        <div className="flex w-full flex-col items-stretch gap-2 @xs:w-auto @xs:flex-row @xs:flex-wrap @xs:items-center @xs:justify-center">
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {retried && (
+            <Button
+              type="button"
+              variant="contrast"
+              size={isFullscreen ? "lg" : "sm"}
+              onClick={reloadWindow}
+              data-testid="error-fallback-reload-window"
+              autoFocus={isFullscreen}
+            >
+              Reload window
+            </Button>
+          )}
           <Button
             type="button"
-            variant="contrast"
+            variant={retried ? "subtle" : "contrast"}
             size={isFullscreen ? "lg" : "sm"}
             onClick={resetError}
             data-testid="error-fallback-restart"
-            autoFocus={isFullscreen}
+            autoFocus={isFullscreen && !retried}
           >
             Try again
           </Button>
-          {escalated && (
+          {showReload && !retried && (
             <Button
               type="button"
               variant="subtle"
@@ -212,6 +252,17 @@ export function ErrorFallback({
               data-testid="error-fallback-reload-window"
             >
               Reload window
+            </Button>
+          )}
+          {isComponent && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={handleCopyDetails}
+              data-testid="error-fallback-copy-details"
+            >
+              {detailsCopied ? "Copied" : "Copy details"}
             </Button>
           )}
         </div>
@@ -243,40 +294,31 @@ export function ErrorFallback({
         )}
 
         {showIncidentId && !isComponent && (
-          <div className="flex max-w-full flex-wrap items-center justify-center gap-x-1.5 text-xs text-text-secondary">
-            <span>Error ID</span>
+          // Inline text rather than flex items, so a long ID wraps as one
+          // centred run at its hyphens. The "Copied" confirmation hangs outside
+          // the flow: reserving room for it would push the ID off-centre.
+          <p className="max-w-full text-center text-xs text-text-secondary">
+            Error ID{" "}
             <button
               type="button"
               onClick={() => void copyId(incidentId!)}
               aria-label="Copy error ID"
               data-testid="error-fallback-copy-id"
-              className="group inline-flex min-w-0 max-w-full cursor-copy items-center gap-1.5 rounded-[var(--radius-sm)] px-1 py-0.5 text-left font-mono break-words hover:bg-overlay-soft hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+              className="relative inline cursor-copy rounded-[var(--radius-sm)] px-1 py-0.5 font-mono break-words hover:bg-overlay-soft hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
             >
-              <span className="min-w-0 break-words">{incidentId}</span>
-              <span className="inline-flex w-16 shrink-0 items-center gap-1 font-sans">
-                {idCopied ? (
-                  <>
-                    <Check className="size-3.5 shrink-0" aria-hidden="true" />
-                    Copied
-                  </>
-                ) : (
-                  <Copy className="size-3.5 shrink-0" aria-hidden="true" />
-                )}
-              </span>
+              {incidentId}
+              {idCopied ? (
+                <Check className="ml-1.5 inline size-3.5 align-[-2px]" aria-hidden="true" />
+              ) : (
+                <Copy className="ml-1.5 inline size-3.5 align-[-2px]" aria-hidden="true" />
+              )}
+              {idCopied && (
+                <span className="absolute top-1/2 left-full ml-1 -translate-y-1/2 font-sans whitespace-nowrap text-text-primary">
+                  Copied
+                </span>
+              )}
             </button>
-          </div>
-        )}
-
-        {isComponent && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            onClick={handleCopyDetails}
-            data-testid="error-fallback-copy-details"
-          >
-            {detailsCopied ? "Copied" : "Copy details"}
-          </Button>
+          </p>
         )}
 
         {hasDetails && !isComponent && (
@@ -292,7 +334,7 @@ export function ErrorFallback({
                 <Button
                   type="button"
                   variant="ghost"
-                  size="xs"
+                  size="sm"
                   onClick={handleCopyDetails}
                   data-testid="error-fallback-copy-details"
                 >
@@ -301,17 +343,22 @@ export function ErrorFallback({
               </div>
               {/* Production stacks are scrubbed before display so crash reporters
                   never expose user paths or secrets; dev keeps the raw stack. */}
-              <pre className="max-h-64 min-w-0 overflow-y-auto font-mono text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] text-text-secondary select-text">
-                {import.meta.env.DEV
-                  ? error.stack || "No stack trace available"
-                  : scrubReportText(error.stack || "No stack trace available")}
+              <pre className="max-h-64 min-w-0 overflow-y-auto font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-text-secondary select-text">
+                <StackLines
+                  text={
+                    import.meta.env.DEV
+                      ? error.stack || "No stack trace available"
+                      : scrubReportText(error.stack || "No stack trace available")
+                  }
+                />
                 {errorInfo?.componentStack && (
-                  <>
-                    {"\n\nComponent stack:"}
-                    {import.meta.env.DEV
-                      ? errorInfo.componentStack
-                      : scrubReportText(errorInfo.componentStack)}
-                  </>
+                  <StackLines
+                    text={`\nComponent stack:${
+                      import.meta.env.DEV
+                        ? errorInfo.componentStack
+                        : scrubReportText(errorInfo.componentStack)
+                    }`}
+                  />
                 )}
               </pre>
             </div>

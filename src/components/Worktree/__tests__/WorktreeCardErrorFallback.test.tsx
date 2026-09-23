@@ -108,4 +108,22 @@ describe("WorktreeCardErrorFallback", () => {
     expect(announceMock).toHaveBeenCalledTimes(1);
     expect(announceMock.mock.calls[0]![0]).toContain("feature/login");
   });
+
+  it("swaps Try again for a window reload once a retry has failed", () => {
+    vi.stubEnv("DEV", false);
+    const resetError = vi.fn();
+    render(
+      wrap(
+        <WorktreeCardErrorFallback
+          error={new Error("Card broke")}
+          resetError={resetError}
+          displayName="feature/login"
+          retryCount={1}
+        />
+      )
+    );
+    expect(screen.queryByText("Try again")).toBeNull();
+    fireEvent.click(screen.getByText("Reload window"));
+    expect(resetError).not.toHaveBeenCalled();
+  });
 });

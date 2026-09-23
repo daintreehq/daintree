@@ -79,7 +79,7 @@ describe("ErrorFallback", () => {
 
     it("renders the stack trace inside the details block", () => {
       render(<ErrorFallback {...baseProps} variant="section" />);
-      expect(screen.getByText(/at TestComponent/)).toBeTruthy();
+      expect(document.querySelector("details pre")?.textContent).toContain("at TestComponent");
     });
 
     it("keeps the details block collapsed by default (no open attribute)", () => {
@@ -148,7 +148,7 @@ describe("ErrorFallback", () => {
     it("renders technical details for the fullscreen variant too", () => {
       render(<ErrorFallback {...baseProps} variant="fullscreen" />);
       expect(screen.getByText("Technical details")).toBeTruthy();
-      expect(screen.getByText(/at TestComponent/)).toBeTruthy();
+      expect(document.querySelector("details pre")?.textContent).toContain("at TestComponent");
     });
 
     it("scrubs the component stack when error.stack is absent", () => {
@@ -200,7 +200,7 @@ describe("ErrorFallback", () => {
 
     it("renders stack trace in details", () => {
       render(<ErrorFallback {...baseProps} variant="section" />);
-      expect(screen.getByText(/at TestComponent/)).toBeTruthy();
+      expect(document.querySelector("details pre")?.textContent).toContain("at TestComponent");
     });
   });
 

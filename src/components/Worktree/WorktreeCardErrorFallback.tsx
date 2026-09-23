@@ -4,15 +4,35 @@ import type { ErrorFallbackProps } from "@/components/ErrorBoundary/ErrorFallbac
 import { Button } from "@/components/ui/button";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { actionService } from "@/services/ActionService";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 /**
  * One sidebar row's worth of the shared fallback: same neutral surface, same
  * single red glyph, same `Try again` — compact enough that the list keeps its
  * rhythm around it.
  */
-export function WorktreeCardErrorFallback({ error, resetError, displayName }: ErrorFallbackProps) {
+function reloadWindow() {
+  safeFireAndForget(actionService.dispatch("window.reload", undefined, { source: "user" }), {
+    context: "WorktreeCardErrorFallback reload window",
+  });
+}
+
+export function WorktreeCardErrorFallback({
+  error,
+  resetError,
+  displayName,
+  retryCount = 0,
+}: ErrorFallbackProps) {
   const subject = displayName?.trim() || "this worktree";
-  const message = import.meta.env.DEV ? error.message : `Couldn't show ${subject}`;
+  // Past one failed Try again the row swaps its button for the window reload
+  // rather than growing a second one — it has to stay a single list row.
+  const retried = retryCount > 0;
+  const message = import.meta.env.DEV
+    ? error.message
+    : retried
+      ? `Still can't show ${subject}`
+      : `Couldn't show ${subject}`;
 
   // Replaces the shared fallback, so it owns the announcement that one would
   // have made — a row that silently turns into an error is invisible to AT.
@@ -29,8 +49,14 @@ export function WorktreeCardErrorFallback({ error, resetError, displayName }: Er
       <TruncatedTooltip content={message}>
         <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">{message}</span>
       </TruncatedTooltip>
-      <Button type="button" variant="subtle" size="xs" onClick={resetError} className="shrink-0">
-        Try again
+      <Button
+        type="button"
+        variant="subtle"
+        size="xs"
+        onClick={retried ? reloadWindow : resetError}
+        className="shrink-0"
+      >
+        {retried ? "Reload window" : "Try again"}
       </Button>
     </div>
   );

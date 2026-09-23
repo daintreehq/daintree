@@ -326,3 +326,30 @@ describe("recovery before diagnostics", () => {
     for (const secret of CAROL_SENSITIVE) expect(region.textContent).not.toContain(secret);
   });
 });
+
+describe("document-reload refusals", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("offers the plugin window reload in place of a Try again that cannot work", async () => {
+    const { pluginDocumentRuntime } = await import("@/services/plugin/pluginDocumentRuntime");
+    vi.spyOn(pluginDocumentRuntime, "errorSource").mockReturnValue({
+      pluginId: "acme",
+      generation: null,
+      url: "plugin://acme/dashboard.js",
+    });
+    renderFallback();
+    expect(screen.queryByTestId("plugin-view-diagnostics-retry")).toBeNull();
+    fireEvent.click(screen.getByTestId("plugin-view-diagnostics-reload-window"));
+    expect(dispatchMock).toHaveBeenCalledWith("plugin.reloadWindow", undefined, {
+      source: "user",
+    });
+  });
+
+  it("keeps Try again and no reload for an ordinary render failure", () => {
+    renderFallback();
+    expect(screen.getByTestId("plugin-view-diagnostics-retry")).toBeTruthy();
+    expect(screen.queryByTestId("plugin-view-diagnostics-reload-window")).toBeNull();
+  });
+});
