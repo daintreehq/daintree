@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useAllDevSessions } from "@/store/allDevSessionsStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { worktreeLabels } from "@/lib/worktreeLabels";
 
 // Status dot colors reuse the dev-server semantic tokens (--color-server-*),
 // the same ones DevPreview's ConsoleDrawer uses — NOT the panel-state-* border
@@ -134,6 +135,21 @@ export function DevServerDashboard() {
     () => allSessions.filter((s) => !HIDDEN_STATUSES.has(s.status)),
     [allSessions]
   );
+  // A worktree this view can't name (another project's, or one still loading)
+  // is named from its id, which is its path — by the shortest trailing part
+  // that no other unnamed row shares, so two "main" checkouts don't read, and
+  // announce, as the same row. Never the whole path as a title.
+  const fallbackNames = useMemo(
+    () =>
+      worktreeLabels([
+        ...new Set(
+          visibleSessions
+            .map((s) => s.worktreeId)
+            .filter((id): id is string => !!id && worktreeNames[id] === undefined)
+        ),
+      ]),
+    [visibleSessions, worktreeNames]
+  );
 
   return (
     <section
@@ -155,7 +171,9 @@ export function DevServerDashboard() {
               session={session}
               worktreeName={
                 session.worktreeId
-                  ? (worktreeNames[session.worktreeId] ?? session.worktreeId)
+                  ? (worktreeNames[session.worktreeId] ??
+                    fallbackNames.get(session.worktreeId) ??
+                    session.worktreeId)
                   : session.panelId
               }
             />

@@ -116,13 +116,28 @@ describe("DevServerDashboard", () => {
     expect(container.textContent).not.toContain(":");
   });
 
-  it("falls back to the worktreeId when no name is known", () => {
+  it("falls back to the worktree folder's name, not its full path, when no name is known", () => {
     useWorktreeStore.mockImplementation((selector: (s: unknown) => unknown) =>
       selector({ worktrees: new Map() })
     );
-    mockSessions([session({ worktreeId: "wt-unknown" })]);
+    mockSessions([session({ worktreeId: "/Users/dev/Projects/atlas-worktrees/wt-unknown" })]);
     render(<DevServerDashboard />);
     expect(screen.getByText("wt-unknown")).toBeTruthy();
+  });
+
+  it("tells apart two unnamed worktrees that share a folder name", () => {
+    useWorktreeStore.mockImplementation((selector: (s: unknown) => unknown) =>
+      selector({ worktrees: new Map() })
+    );
+    mockSessions([
+      session({ panelId: "a", worktreeId: "/repos/alpha-worktrees/main" }),
+      session({ panelId: "b", worktreeId: "/repos/beta-worktrees/main" }),
+    ]);
+    render(<DevServerDashboard />);
+    const restart = screen.getAllByRole("button", { name: /^Restart dev server for / });
+    const names = restart.map((b) => b.getAttribute("aria-label"));
+    expect(new Set(names).size).toBe(2);
+    for (const name of names) expect(name).not.toContain("/repos/");
   });
 
   it("restarts the worktree dev server on click", () => {

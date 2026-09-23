@@ -5,6 +5,7 @@ import {
 } from "@/store/slices/notificationHistorySlice";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { SEVERITY_WEIGHTS } from "@/lib/notificationSeverity";
+import { worktreeNameFromId } from "@/lib/notificationSourceLabel";
 
 const MIN_BLUR_MS = 3000;
 
@@ -53,7 +54,7 @@ function buildWorktreeRows(entries: NotificationHistoryEntry[]): WorktreeRow[] {
       }
     }
 
-    const worktreeName = worktrees.get(worktreeId)?.name?.trim() || worktreeId.slice(0, 12);
+    const worktreeName = worktrees.get(worktreeId)?.name?.trim() || worktreeNameFromId(worktreeId);
 
     rows.push({
       worktreeId,

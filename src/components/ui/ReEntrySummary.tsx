@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Bell, AlertTriangle, AlertCircle, CheckCircle2, Pin } from "lucide-react";
+import { X, Info, AlertTriangle, XCircle, CheckCircle2, Pin } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/uiStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -18,10 +18,12 @@ import type { NotificationHistoryEntry } from "@/store/slices/notificationHistor
 
 export const AUTO_DISMISS_MS = 8000;
 
-const SEVERITY_ICON: Record<NotificationHistoryEntry["type"], typeof AlertCircle> = {
-  error: AlertCircle,
+// The toaster's and the inbox's vocabulary, so an entry keeps its glyph as it
+// moves between the three surfaces that show it.
+const SEVERITY_ICON: Record<NotificationHistoryEntry["type"], typeof XCircle> = {
+  error: XCircle,
   warning: AlertTriangle,
-  info: Bell,
+  info: Info,
   success: CheckCircle2,
 };
 
