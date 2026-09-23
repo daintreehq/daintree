@@ -217,14 +217,14 @@ function PluginRow({
 
 function RowSkeleton() {
   return (
-    <div className="w-full flex items-center gap-2.5 py-2.5 px-3 rounded-[var(--radius-md)]">
+    <div className="w-full flex items-center gap-2.5 py-2 px-3 rounded-[var(--radius-md)]">
       <div className="flex items-center gap-2.5 w-full animate-pulse-delayed">
-        <div className="w-4 h-4 rounded bg-daintree-text/10" />
+        <div className="w-8 h-8 rounded-[var(--radius-md)] bg-overlay-strong" />
         <div className="flex-1 space-y-2">
-          <div className="h-3 w-24 rounded bg-daintree-text/10" />
-          <div className="h-2 w-16 rounded bg-daintree-text/10" />
+          <div className="h-3 w-24 rounded-sm bg-overlay-strong" />
+          <div className="h-2 w-36 rounded-sm bg-overlay-strong" />
         </div>
-        <div className="w-9 h-5 rounded-full bg-daintree-text/10" />
+        <div className="w-9 h-5 rounded-full bg-overlay-strong" />
       </div>
     </div>
   );
@@ -529,6 +529,22 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     return () => clearTimeout(timer);
   }, [highlightedPluginId]);
 
+  // Hand focus back when the control holding it disappears. Under a filter,
+  // flipping a row's switch can remove that row (enable one under "Disabled"),
+  // and the selection reconciliation above then drops its detail pane too — in
+  // both cases the focused element leaves the DOM and the keyboard lands on
+  // document.body, outside the view. The search field is the one control that
+  // is always present and owns what just happened.
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const last = lastFocusedRef.current;
+    if (!last || last.isConnected) return;
+    lastFocusedRef.current = null;
+    if (document.activeElement === null || document.activeElement === document.body) {
+      searchInputRef.current?.focus();
+    }
+  });
+
   const hasPlugins = pm.plugins.length > 0;
   // The list, the empty state and the detail placeholder all key off "is there
   // anything to show" — a project that ships plugins with none installed globally
@@ -588,6 +604,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
       role="region"
       aria-label="Plugin manager"
       data-testid="plugin-manager-view"
+      onFocus={(e) => {
+        lastFocusedRef.current = e.target instanceof HTMLElement ? e.target : null;
+      }}
       className="fixed inset-0 z-[var(--z-modal)] flex flex-col bg-surface-canvas motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
     >
       <header className="flex items-center justify-between gap-3 px-6 h-12 shrink-0 border-b border-border-default app-drag-region">
@@ -757,10 +776,13 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                       // Chromium's default blue.
                       "px-1.5 py-0.5 rounded-sm text-3xs font-medium border transition-colors",
                       "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
-                      // Pressed takes the strong border as well as the lift: the
-                      // fill step alone was too close to rest to read as "on".
+                      // Pressed is the segmented control's selected treatment: a
+                      // text-secondary border clears 3:1 against the fill, where
+                      // a fill step alone read as barely different from rest.
+                      // Forced colours repaint every border alike, so the
+                      // pressed one takes the system highlight there.
                       active
-                        ? "bg-overlay-strong border-border-strong text-text-primary"
+                        ? "bg-overlay-medium border-text-secondary text-text-primary forced-colors:border-[Highlight]"
                         : "bg-overlay-subtle border-border-default/50 text-text-secondary hover:text-text-primary hover:border-border-default"
                     )}
                   >
@@ -986,6 +1008,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               upToDate={pm.upToDateId === selectedPlugin.manifest.name}
               toggling={pm.pending.has(selectedPlugin.manifest.name)}
               onToggle={() => void pm.handleToggle(selectedPlugin)}
+              onRetry={() => void pm.retryPlugin(selectedPlugin)}
               onUninstall={() => pm.armUninstall(selectedPlugin)}
               onCheckForUpdate={() => void pm.handleCheckForUpdate(selectedPlugin)}
             />

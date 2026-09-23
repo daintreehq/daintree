@@ -271,6 +271,8 @@ interface PluginDetailPaneProps {
   toggling?: boolean;
   /** Renders the header's enable switch; omitted, the pane has none. */
   onToggle?: () => void;
+  /** Renders Retry on the load-failure banner; omitted, the banner has none. */
+  onRetry?: () => void;
   onUninstall: () => void;
   onCheckForUpdate: () => void;
 }
@@ -300,6 +302,7 @@ export function PluginDetailPane({
   upToDate,
   toggling = false,
   onToggle,
+  onRetry,
   onUninstall,
   onCheckForUpdate,
 }: PluginDetailPaneProps) {
@@ -390,7 +393,10 @@ export function PluginDetailPane({
           <PluginIconTile manifest={plugin.manifest} size="lg" dimmed={plugin.disabled === true} />
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 flex-wrap">
-              <h3 className="text-base font-medium truncate">{label}</h3>
+              {/* Wraps rather than truncates: this is the one place the full
+                  name is guaranteed to be readable, and the row and card have
+                  already elided it by the time someone opens the detail. */}
+              <h3 className="text-base font-medium break-words min-w-0">{label}</h3>
               <span className="text-xs font-normal text-text-secondary">
                 v{plugin.manifest.version}
               </span>
@@ -555,13 +561,23 @@ export function PluginDetailPane({
             <p className="text-2xs text-status-danger break-words mt-0.5 select-text">
               {plugin.loadError.message}
             </p>
-            {/* Where to go from the diagnosis. Switching it off and on reloads
-                the plugin from disk, so that is the retry; an error that comes
-                back unchanged is the plugin's own bug. */}
+            {/* Where to go from the diagnosis. Retry reloads the plugin from
+                disk; an error that comes back unchanged is the plugin's own. */}
             <p className="text-2xs text-text-secondary mt-1.5">
-              Turn it off and on again to retry. If it fails the same way, update or reinstall it.
+              If it fails the same way again, update or reinstall it.
             </p>
           </div>
+          {onRetry && plugin.disabled !== true && (
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={onRetry}
+              loading={toggling}
+              className="shrink-0 ml-auto"
+            >
+              Retry
+            </Button>
+          )}
         </div>
       )}
 
@@ -591,7 +607,12 @@ export function PluginDetailPane({
         />
       </div>
 
-      <div {...subtabPanelProps("plugin-detail", currentTab)}>
+      <div
+        {...subtabPanelProps("plugin-detail", currentTab)}
+        // With the lone tab bar hidden, its `mt-4` went with it and the
+        // description butted straight up against the header.
+        className={cn(tabs.length === 1 && "mt-4")}
+      >
         {currentTab === "overview" && (
           <div className="space-y-4">
             {plugin.manifest.description ? (

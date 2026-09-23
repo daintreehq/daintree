@@ -1679,9 +1679,7 @@ describe("PluginManagerView", () => {
       // The canvas owns the recovery action; the field's own clear button is
       // the other "Clear search" on screen.
       const canvas = screen.getByRole("region", { name: "Installed plugins" });
-      await waitFor(() =>
-        expect(within(canvas).getByText("No plugins match your search")).toBeTruthy()
-      );
+      await waitFor(() => expect(within(canvas).getByText("Try another search")).toBeTruthy());
       fireEvent.click(within(canvas).getByRole("button", { name: "Clear search" }));
       await screen.findAllByText("Plugin00");
     });
@@ -1784,6 +1782,40 @@ describe("PluginManagerView", () => {
       fireEvent.click(chip);
       await waitFor(() => expect(chip.getAttribute("aria-pressed")).toBe("true"));
       expect(document.activeElement).toBe(chip);
+    });
+
+    it("hands focus to search when a filtered toggle removes the focused row", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin({ disabled: true })]);
+      renderDialog();
+      await findPluginRowButton("Acme Demo");
+      const group = screen.getByRole("group", { name: "Filter plugins" });
+      fireEvent.click(within(group).getByRole("button", { name: "Disabled" }));
+      const toggle = await waitFor(() =>
+        within(pluginRow("Acme Demo")).getByRole("switch", { name: "Enable Acme Demo" })
+      );
+      toggle.focus();
+      fireEvent.click(toggle);
+      // Enabling it removes it from the "@disabled" results, switch and all.
+      await waitFor(() => expect(toggle.isConnected).toBe(false));
+      await waitFor(() =>
+        expect(document.activeElement).toBe(screen.getByLabelText("Search plugins"))
+      );
+    });
+
+    it("retries a failed plugin by reloading it through the enable path", async () => {
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([
+        makePlugin({ loadError: { message: "boom", at: 1 } }),
+      ]);
+      renderDialog();
+      await selectPlugin();
+      const detail = await screen.findByRole("region", { name: "Details for Acme Demo" });
+      fireEvent.click(within(detail).getByRole("button", { name: "Retry" }));
+      await waitFor(() =>
+        expect(vi.mocked(window.electron.plugin.setEnabled).mock.calls).toEqual([
+          ["acme.demo", false],
+          ["acme.demo", true],
+        ])
+      );
     });
 
     it("lets the detail pane switch a plugin back on", async () => {

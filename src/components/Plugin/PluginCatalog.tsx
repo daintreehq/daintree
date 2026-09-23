@@ -36,20 +36,19 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
         dimmed={disabled || plugin.loadError != null || plugin.blocklisted === true}
       />
       <span className="min-w-0 flex-1">
-        {/* One line, no wrap: the Disabled badge used to wrap onto a line of
-            its own and made that card taller than its row neighbours. */}
-        <span className="flex items-center gap-1.5 min-w-0">
-          <span
-            className={cn(
-              "text-sm font-medium truncate",
-              disabled ? "text-text-secondary" : "text-text-primary"
-            )}
-          >
-            {pluginLabel(plugin)}
-          </span>
-          <span className="text-2xs font-normal text-text-secondary shrink-0">
-            v{plugin.manifest.version}
-          </span>
+        {/* The name gets a line to itself. Version and the Disabled badge
+            shared it, and a prerelease-and-build semver cut "Enterprise
+            Compliance…" down to "Ent…" beside its own full version string. */}
+        <span
+          className={cn(
+            "block text-sm font-medium truncate",
+            disabled ? "text-text-secondary" : "text-text-primary"
+          )}
+        >
+          {pluginLabel(plugin)}
+        </span>
+        <span className="mt-0.5 flex items-center gap-1.5 min-w-0 text-2xs text-text-secondary">
+          <span className="truncate">v{plugin.manifest.version}</span>
           {disabled && <span className={cn(CARD_BADGE_CLASS, "shrink-0")}>Disabled</span>}
         </span>
         {signal ? (
@@ -58,9 +57,7 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
             <span className="truncate">{signal.label}</span>
           </span>
         ) : (
-          blurb && (
-            <span className="mt-1 text-xs line-clamp-2 text-text-secondary">{blurb}</span>
-          )
+          blurb && <span className="mt-1 text-xs line-clamp-2 text-text-secondary">{blurb}</span>
         )}
       </span>
     </button>
@@ -104,8 +101,8 @@ export function PluginCatalog({
           <EmptyState
             variant="filtered-empty"
             scale="canvas"
-            title="No plugins match your search"
-            description="Try a different name, or clear the search to see everything installed."
+            title="Try another search"
+            description="Nothing installed matches. Clear the search to see every plugin."
             action={
               onClearSearch && (
                 <Button variant="outline" size="sm" onClick={onClearSearch}>
