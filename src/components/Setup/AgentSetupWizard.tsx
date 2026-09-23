@@ -688,7 +688,12 @@ export function AgentSetupWizard({
   const flow = useMemo(() => visibleFlowSteps(state), [state]);
   const totalSteps = flow.length;
   const stepNumber = Math.max(0, flow.indexOf(state.step.type));
-  const stepMeta = STEP_META[state.step.type];
+  // "Complete" is only true when something is ready; a deferred install saves
+  // the user's choices and says so rather than claiming success.
+  const stepMeta =
+    state.step.type === "complete" && installedAgents.length === 0
+      ? { ...STEP_META.complete, title: "Setup saved" }
+      : STEP_META[state.step.type];
 
   const handleAppearanceContinue = useCallback(() => {
     directionRef.current = 1;
@@ -1088,13 +1093,25 @@ function AppearanceStep({
   selectedSchemeId?: string;
   onThemeSelect: (id: string) => void;
 }) {
-  const schemes = [daintreeScheme, bondiScheme] as const;
+  // A user who already picked another theme sees it offered first and
+  // selected, rather than a choice of two with neither marked.
+  const current = BUILT_IN_APP_SCHEMES.find(
+    (scheme) =>
+      scheme.id === selectedSchemeId &&
+      scheme.id !== daintreeScheme.id &&
+      scheme.id !== bondiScheme.id
+  );
+  const schemes = current ? [current, daintreeScheme, bondiScheme] : [daintreeScheme, bondiScheme];
 
   return (
     <section>
-      {/* Native radios: one choice of two, so arrow keys move the selection
-          and Tab enters the group once, with nothing hand-rolled. */}
-      <div className="grid grid-cols-2 gap-4" role="radiogroup" aria-label="Theme">
+      {/* Native radios: one choice among a few, so arrow keys move the
+          selection and Tab enters the group once, with nothing hand-rolled. */}
+      <div
+        className={cn("grid gap-4", schemes.length === 3 ? "grid-cols-3" : "grid-cols-2")}
+        role="radiogroup"
+        aria-label="Theme"
+      >
         {schemes.map((scheme) => {
           const isSelected = selectedSchemeId === scheme.id;
           const isDark = scheme.type === "dark";

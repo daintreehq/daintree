@@ -5,9 +5,8 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 // --- Mocks ---
 
 const onboardingMock = {
-  get: vi.fn(
-    (): Promise<{ completed: boolean; setupBannerDismissed?: boolean }> =>
-      Promise.resolve({ completed: true })
+  get: vi.fn((): Promise<{ completed: boolean; setupBannerDismissed?: boolean }> =>
+    Promise.resolve({ completed: true })
   ),
   getChecklist: vi.fn(() =>
     Promise.resolve({
@@ -76,15 +75,18 @@ let projectState = { currentProject: null as string | null };
 let projectSubscribers: Array<(state: typeof projectState, prev: typeof projectState) => void> = [];
 
 vi.mock("@/store/projectStore", () => ({
-  useProjectStore: {
-    getState: () => projectState,
-    subscribe: (fn: (state: typeof projectState, prev: typeof projectState) => void) => {
-      projectSubscribers.push(fn);
-      return () => {
-        projectSubscribers = projectSubscribers.filter((s) => s !== fn);
-      };
-    },
-  },
+  useProjectStore: Object.assign(
+    <T,>(selector: (state: typeof projectState) => T): T => selector(projectState),
+    {
+      getState: () => projectState,
+      subscribe: (fn: (state: typeof projectState, prev: typeof projectState) => void) => {
+        projectSubscribers.push(fn);
+        return () => {
+          projectSubscribers = projectSubscribers.filter((s) => s !== fn);
+        };
+      },
+    }
+  ),
 }));
 
 let terminalState: {
@@ -631,6 +633,14 @@ describe("useGettingStartedChecklist", () => {
       });
       const { result } = await mount();
       expect(result.current.visible).toBe(false);
+    });
+
+    it("shows the checklist once a project is open, even with setup untouched", async () => {
+      // Open project straight from the welcome screen, banner never touched.
+      onboardingMock.get.mockResolvedValue({ completed: false, setupBannerDismissed: false });
+      projectState = { currentProject: "/opened/directly" };
+      const { result } = await mount();
+      expect(result.current.visible).toBe(true);
     });
 
     it("credits a project that was already open when the checklist hydrated", async () => {

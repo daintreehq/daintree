@@ -25,7 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { AGENT_DESCRIPTIONS } from "@/config/agents";
 import type { CliAvailability } from "@shared/types";
-import { isAgentInstalled } from "@shared/utils/agentAvailability";
+import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 const AGENT_ORDER = LAUNCHABLE_AGENT_IDS;
@@ -216,8 +216,11 @@ export function AgentCliStep({
   });
   const hasInstallableAgents = installableIds.length > 0;
   // With one agent to install, the step's primary IS that agent's install — a
-  // row button beside an "Install all" of one would be two names for one act.
-  const singleAgent = selectedAgentIds.length === 1;
+  // row button beside an "Install {agent}" would be two names for one act.
+  const singleAgent = installableIds.length === 1;
+  // Once a picked agent already works, the footer's Continue leads and more
+  // installs are optional — two contrast buttons would be two primaries.
+  const hasUsableSelection = selectedAgentIds.some((id) => isAgentLaunchable(availability[id]));
   const installAllLabel =
     installableIds.length === 1
       ? `Install ${AGENT_REGISTRY[installableIds[0]!]?.name ?? "agent"}`
@@ -312,8 +315,8 @@ export function AgentCliStep({
                       Manual
                     </span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 text-2xs text-text-muted">
-                      <CircleDashed className="w-3 h-3" />
+                    <span className="inline-flex items-center gap-1 text-2xs text-text-secondary">
+                      <CircleDashed className="w-3 h-3" aria-hidden="true" />
                       Not installed
                     </span>
                   )}
@@ -340,7 +343,7 @@ export function AgentCliStep({
                       disabled={isInstalling || isBatchRunning}
                       onClick={() => handleMethodChange(agentId, idx)}
                       data-selected={idx === currentMethodIdx || undefined}
-                      className="px-1.5 py-0.5 rounded text-3xs text-daintree-text/50 transition-colors hover:text-daintree-text/80 data-[selected]:bg-tint/[0.12] data-[selected]:text-text-primary disabled:opacity-50 disabled:pointer-events-none"
+                      className="px-1.5 py-0.5 rounded-[var(--radius-xs)] text-3xs text-text-secondary transition-colors hover:text-text-primary data-[selected]:bg-overlay-medium data-[selected]:text-text-primary disabled:opacity-50 disabled:pointer-events-none"
                     >
                       {block.label ?? `Method ${idx + 1}`}
                     </button>
@@ -409,7 +412,7 @@ export function AgentCliStep({
           so the footer demotes its forward action to "Set up later" meanwhile. */}
       {(hasInstallableAgents || isBatchRunning) && (
         <Button
-          variant="contrast"
+          variant={hasUsableSelection ? "outline" : "contrast"}
           disabled={isBatchRunning}
           onClick={handleInstallAll}
           className="w-full"

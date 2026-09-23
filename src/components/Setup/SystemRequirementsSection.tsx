@@ -5,6 +5,7 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { UI_ENTER_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import { useSystemHealthCheck } from "./useSystemHealthCheck";
 import { PrerequisiteCard } from "./SystemToolsStep";
+import { cn } from "@/lib/utils";
 
 interface SystemRequirementsSectionProps {
   onFatalFailureChange: (hasFatal: boolean) => void;
@@ -130,7 +131,8 @@ export function SystemRequirementsSection({
           )}
 
           {visibleSpecs.length > 0 && (
-            <div className="grid grid-cols-2 gap-2">
+            // items-start: an expanded card must not stretch its row partner.
+            <div className="grid grid-cols-2 items-start gap-2">
               {visibleSpecs.map((spec) => (
                 <PrerequisiteCard
                   key={spec.tool}
@@ -162,17 +164,21 @@ export function SystemRequirementsSection({
               aria-live="assertive"
               className="px-3 py-2.5 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5 space-y-1.5"
             >
+              {/* Neutral text: status-coloured text misses 4.5:1 on most themes,
+                  and the tile's own mark already carries the red. This line says
+                  what to do, not what is wrong a third time. */}
               {missingFatalTools.map((spec) => (
-                <p key={spec.tool} className="text-xs text-status-error">
-                  {spec.label} not found
+                <p key={spec.tool} className="text-xs text-text-primary">
+                  Install {spec.label} using the steps above, then check again.
                 </p>
               ))}
               {outdatedFatalTools.map((spec) => {
                 const state = checkStates[spec.tool];
                 if (!state || state === "loading") return null;
                 return (
-                  <p key={spec.tool} className="text-xs text-status-error">
-                    {spec.label} v{state.version} installed, needs v{spec.minVersion}+
+                  <p key={spec.tool} className="text-xs text-text-primary">
+                    Update {spec.label} to v{spec.minVersion} or later (you have v{state.version}),
+                    then check again.
                   </p>
                 );
               })}
@@ -183,10 +189,20 @@ export function SystemRequirementsSection({
             type="button"
             onClick={() => void runCheck()}
             disabled={isChecking}
-            className="inline-flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
+            className={cn(
+              "inline-flex items-center gap-1.5 text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none",
+              // When a required tool is missing, re-checking is how the user
+              // gets past this step, so it reads as a control rather than a link.
+              hasFatalFailure && allDone
+                ? "rounded-[var(--radius-sm)] px-2.5 py-1 ring-1 ring-border-strong bg-surface-panel-elevated text-text-primary hover:bg-overlay-medium"
+                : "text-text-secondary hover:text-text-primary"
+            )}
           >
-            <RotateCw className={`w-3 h-3 ${isChecking ? "animate-spin" : ""}`} />
-            {isChecking ? "Checking..." : "Re-check"}
+            <RotateCw
+              className={`w-3 h-3 ${isChecking ? "animate-spin" : ""}`}
+              aria-hidden="true"
+            />
+            {isChecking ? "Checking…" : hasFatalFailure && allDone ? "Check again" : "Re-check"}
           </button>
         </div>
       </m.div>

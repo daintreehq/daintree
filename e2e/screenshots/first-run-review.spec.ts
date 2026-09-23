@@ -333,6 +333,21 @@ const STATES: State[] = [
     expectText: "Git",
   },
 
+  {
+    name: "34-mixed-install",
+    query: `${FRESH}&agents=ready`,
+    run: async (page) => {
+      await openWizardFromBanner(page);
+      await waitForStep(page, "appearance");
+      await clickContinue(page);
+      await waitForStep(page, "agents");
+      await checkFirstAgent(page); // Gemini, alongside the installed Claude and Codex
+      await clickContinue(page); // agents -> privacy
+      await clickContinue(page); // privacy -> cli
+      await waitForStep(page, "cli");
+    },
+  },
+
   // ── After setup, before a project ────────────────────────────────────
   {
     name: "40-setup-done-no-project",
@@ -352,7 +367,8 @@ const STATES: State[] = [
   },
   {
     name: "52-returning-skipped-setup",
-    query: "projects=3&onboarding=skipped&agents=none",
+    // A returning user's opened projects were credited when they opened them.
+    query: "projects=3&onboarding=skipped&agents=none&checklist=opened",
     expectText: "Helios Dashboard",
   },
 
@@ -366,6 +382,18 @@ const STATES: State[] = [
       );
       await settle(page, 900);
     },
+  },
+  {
+    // Open project straight from a fresh welcome screen, banner untouched.
+    name: "63-project-opened-without-setup",
+    query: "projects=1&onboarding=fresh&agents=ready",
+    run: async (page) => {
+      await page.evaluate(() =>
+        (Reflect.get(window, "__firstRun") as { openProject: () => void }).openProject()
+      );
+      await settle(page, 900);
+    },
+    expectText: "Getting started",
   },
   {
     name: "61-project-agent-launched",
@@ -410,6 +438,10 @@ test("first-run journey preview — every state, every theme", async ({ context 
               state.expectAbsent
             );
           }
+          // Park the pointer: a button the harness just clicked would
+          // otherwise be photographed in its hover state.
+          await page.mouse.move(1, 1);
+          await settle(page, 200);
           return snap(page.locator("[data-preview-shell]"), `${state.name}-${theme}.png`);
         })
       );

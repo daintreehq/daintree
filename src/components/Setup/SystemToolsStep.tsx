@@ -30,8 +30,12 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
   const check: PrerequisiteCheckResult | null = loading ? null : state;
   const needsInstall = check && (!check.available || !check.meetsMinVersion);
   const installBlocks = needsInstall ? getInstallBlocksForOS(check) : null;
-  const [expanded, setExpanded] = useState(false);
   const label = spec.label || spec.tool;
+  // A missing required tool opens on its install steps: the remedy is the
+  // point of the card, not something to discover behind a disclosure.
+  const [expanded, setExpanded] = useState(false);
+  const blocking = !!needsInstall && spec.severity === "fatal";
+  const showSteps = expanded || blocking;
   const versionMismatch =
     check?.available && !check.meetsMinVersion && check.minVersion && check.version;
 
@@ -54,12 +58,12 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
             {installBlocks && (
               <button
                 type="button"
-                onClick={() => setExpanded((v) => !v)}
-                aria-expanded={expanded}
+                onClick={() => setExpanded(!showSteps)}
+                aria-expanded={showSteps}
                 aria-controls={`install-panel-${spec.tool}`}
                 className="inline-flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline shrink-0"
               >
-                {expanded ? (
+                {showSteps ? (
                   <ChevronDown className="w-3 h-3" />
                 ) : (
                   <ChevronRight className="w-3 h-3" />
@@ -70,7 +74,8 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
             {check.installUrl && (
               <a
                 href={check.installUrl}
-                className="inline-flex items-center gap-1 text-2xs text-daintree-text/40 hover:text-text-primary shrink-0"
+                aria-label={`Open the ${label} download page`}
+                className="inline-flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary shrink-0"
                 onClick={(e) => {
                   e.preventDefault();
                   void systemClient.openExternal(check.installUrl!);
@@ -87,7 +92,7 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
         ) : null}
       </div>
       {installBlocks && (
-        <div id={`install-panel-${spec.tool}`} hidden={!expanded} className="px-3 pb-3 space-y-2">
+        <div id={`install-panel-${spec.tool}`} hidden={!showSteps} className="px-3 pb-3 space-y-2">
           {installBlocks.map((block, i) => (
             <InstallBlock key={i} block={block} />
           ))}
