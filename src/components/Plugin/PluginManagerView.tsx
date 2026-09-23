@@ -273,6 +273,13 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   // the view is open, and wire Escape-to-close through the shared LIFO stack.
   useOverlayClaim("plugin-manager", isOpen);
   useEscapeStack(isOpen, close);
+  // The global keybinding layer takes Escape at window capture and pops the
+  // escape stack before Radix's menu ever sees the key, so an open Install
+  // menu has to be on the stack itself — otherwise Escape closes the whole
+  // view instead of the menu. Registered after the view's own entry, so LIFO
+  // pops the menu first.
+  const [isInstallMenuOpen, setIsInstallMenuOpen] = useState(false);
+  useEscapeStack(isOpen && isInstallMenuOpen, () => setIsInstallMenuOpen(false));
   const skipMotion = useShouldSkipMotion();
 
   // This view is `fixed inset-0` at z-modal, so it paints over the Toolbar and
@@ -625,7 +632,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               Update all
             </Button>
           )}
-          <DropdownMenu>
+          <DropdownMenu open={isInstallMenuOpen} onOpenChange={setIsInstallMenuOpen}>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm" loading={pm.isInstalling} className="app-no-drag">
                 <Download />

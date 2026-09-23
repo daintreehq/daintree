@@ -59,7 +59,7 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
           </span>
         ) : (
           blurb && (
-            <span className="mt-1 block text-xs line-clamp-2 text-text-secondary">{blurb}</span>
+            <span className="mt-1 text-xs line-clamp-2 text-text-secondary">{blurb}</span>
           )
         )}
       </span>
