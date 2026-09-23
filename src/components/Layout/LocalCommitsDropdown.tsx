@@ -541,9 +541,11 @@ export function LocalCommitsDropdown({
             autoFocus
             role="combobox"
             aria-autocomplete="list"
-            aria-expanded={true}
+            // The listbox only exists once commits have loaded; the skeleton,
+            // empty and error states render none.
+            aria-expanded={data.length > 0}
             aria-haspopup="listbox"
-            aria-controls={listId}
+            aria-controls={data.length > 0 ? listId : undefined}
             aria-activedescendant={activeCommitId}
             aria-label="Search commits"
             className="flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-muted-foreground focus:outline-hidden"

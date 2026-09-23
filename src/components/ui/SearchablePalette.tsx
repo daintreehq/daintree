@@ -68,6 +68,12 @@ export interface SearchablePaletteProps<T> {
   searchPlaceholder?: string;
   /** ARIA label for the search input */
   searchAriaLabel?: string;
+  /**
+   * Id of an element that describes the search input — for a palette control
+   * the user reaches by a chord from the field rather than by Tab, which moves
+   * the list selection here.
+   */
+  searchAriaDescribedBy?: string;
   /** ID for the listbox container */
   listId?: string;
   /** Prefix for item IDs used in aria-activedescendant */
@@ -129,9 +135,10 @@ export interface SearchablePaletteProps<T> {
    * chip and lowercases the label for mid-sentence rendering. Ignored when
    * `footer` or `getFooter` is also set — those win, in that order. Use a
    * stable reference (module-level fn or `useCallback`) to avoid recomputing
-   * the footer node every render.
+   * the footer node every render. Called only while a row is selected; with
+   * nothing selected the footer carries no hint.
    */
-  getActionLabel?: (selectedItem: T | null) => string;
+  getActionLabel?: (selectedItem: T) => string;
   /** Additional className for AppPaletteDialog.Body */
   bodyClassName?: string;
   /** Custom content before the list */
@@ -182,6 +189,7 @@ export function SearchablePalette<T>({
   tier,
   searchPlaceholder = "Search",
   searchAriaLabel,
+  searchAriaDescribedBy,
   listId = "searchable-palette-list",
   itemIdPrefix = "palette-option",
   emptyMessage = "No items available",
@@ -304,6 +312,18 @@ export function SearchablePalette<T>({
         if (e.defaultPrevented) return;
       }
 
+      // A query clears before the palette closes. The escape-stack entry below
+      // says the same thing, but it never gets the chance: the dialog's
+      // document-level Escape backstop runs first, closes the palette and marks
+      // the key consumed. Stopping the event here keeps it from reaching that
+      // backstop; an empty field lets Escape through to close as before.
+      if (e.key === "Escape" && query !== "") {
+        e.preventDefault();
+        e.stopPropagation();
+        onQueryChange("");
+        return;
+      }
+
       // Tab stays input-only: on the results region it must keep its native
       // traversal so controls rendered after the list stay reachable.
       if (e.key === "Tab") {
@@ -319,7 +339,7 @@ export function SearchablePalette<T>({
 
       handleNavigationKeyDown(e);
     },
-    [onKeyDown, onSelectPrevious, onSelectNext, handleNavigationKeyDown]
+    [onKeyDown, onSelectPrevious, onSelectNext, handleNavigationKeyDown, query, onQueryChange]
   );
 
   const activeDescendant =
@@ -328,6 +348,11 @@ export function SearchablePalette<T>({
       : undefined;
 
   const selectedItem = results[selectedIndex] ?? null;
+
+  // The listbox is only in the tree while there are rows; an expanded combobox
+  // controlling an id that is not rendered points assistive technology at
+  // nothing. A `renderBody` consumer draws its own body, so it keeps the claim.
+  const listRendered = renderBody ? isOpen : isOpen && results.length > 0;
 
   // Derive the action label as a primitive so the footer JSX can be memoized
   // by its string content rather than the (changing) selectedItem reference.
@@ -339,7 +364,10 @@ export function SearchablePalette<T>({
   // supplied, so consumers aren't surprised by getActionLabel side-effects
   // when its output would be discarded anyway.
   const actionLabelActive = !getFooter && footer === undefined && getActionLabel != null;
-  const rawActionLabel = actionLabelActive ? getActionLabel!(selectedItem) : null;
+  // No selection, no hint: with nothing on screen for Enter to act on, a verb
+  // in the footer promises an action the key will not take.
+  const rawActionLabel =
+    actionLabelActive && selectedItem != null ? getActionLabel!(selectedItem) : null;
   const actionLabelFooter = useMemo(() => {
     if (rawActionLabel == null) return null;
     const actionLabel = rawActionLabel.trim() || "Select";
@@ -385,11 +413,12 @@ export function SearchablePalette<T>({
           onKeyDown={handleKeyDown}
           placeholder={searchPlaceholder}
           role="combobox"
-          aria-expanded={isOpen}
+          aria-expanded={listRendered}
           aria-haspopup="listbox"
           aria-autocomplete="list"
           aria-label={searchAriaLabel ?? searchPlaceholder.replace("...", "")}
-          aria-controls={listId}
+          aria-describedby={searchAriaDescribedBy}
+          aria-controls={listRendered ? listId : undefined}
           aria-activedescendant={activeDescendant}
         />
       </AppPaletteDialog.Header>

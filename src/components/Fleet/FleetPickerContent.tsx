@@ -111,9 +111,18 @@ export function FleetPickerContent({
       if (e.key === "Enter") {
         e.preventDefault();
         handleConfirm();
+        return;
+      }
+      // Inside a palette dialog the escape-stack entry above never sees the
+      // press — the dialog's document-level backstop closes first — so the
+      // field clears its own query. An empty field lets Escape close.
+      if (e.key === "Escape" && query !== "") {
+        e.preventDefault();
+        e.stopPropagation();
+        clearSearch();
       }
     },
-    [focusFirstNode, handleConfirm]
+    [focusFirstNode, handleConfirm, query, clearSearch]
   );
 
   const handleGroupHeaderToggle = useCallback(

@@ -1,37 +1,51 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo } from "react";
+import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
+import { KbdChord } from "@/components/ui/Kbd";
+import { SegmentedToggle, type SegmentedToggleOption } from "@/components/ui/SegmentedToggle";
+import { HighlightedText } from "@/components/ui/HighlightedText";
+import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
 import {
   usePromptHistoryPalette,
+  type HistoryScope,
+  type PromptHistoryItem,
   type UsePromptHistoryPaletteOptions,
 } from "@/hooks/usePromptHistoryPalette";
-import type { PromptHistoryEntry } from "@/store/commandHistoryStore";
+import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
+import { excerptPreview, findPreviewMatches } from "@/utils/promptHistoryPreview";
+import { formatTimeAgo } from "@/utils/timeAgo";
 import { cn } from "@/lib/utils";
+import { useProjectStore } from "@/store/projectStore";
+import { isMac } from "@/lib/platform";
 
-function formatRelativeTime(timestamp: number): string {
-  const diff = Date.now() - timestamp;
-  const minutes = Math.floor(diff / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(timestamp).toLocaleDateString();
-}
+/**
+ * The composer opens this palette with Mod+R (`inputEditorExtensions/base.ts`),
+ * a CodeMirror binding rather than a registry one, so the chord is literal.
+ * Pressing it again while the palette is open switches scope — the chord in the
+ * header is then the key for the control in the footer.
+ */
+const SHORTCUT = "Cmd+R";
 
-function truncatePrompt(text: string, maxLen = 80): string {
-  const firstLine = text.split("\n")[0] ?? "";
-  if (firstLine.length <= maxLen) return firstLine;
-  return firstLine.slice(0, maxLen) + "…";
-}
+const SCOPE_HINT_ID = "prompt-history-scope-hint";
+
+const SCOPE_TITLE = `Switch scope (${isMac() ? "⌘R" : "Ctrl+R"})`;
+
+const SCOPE_OPTIONS: SegmentedToggleOption<HistoryScope>[] = [
+  { value: "project", label: "This project", title: SCOPE_TITLE },
+  { value: "global", label: "All projects", title: SCOPE_TITLE },
+];
 
 interface PromptHistoryRowProps {
-  item: PromptHistoryEntry;
+  item: PromptHistoryItem;
   index: number;
   isSelected: boolean;
-  onSelect: (item: PromptHistoryEntry) => void;
+  query: string;
+  matches: readonly FuseResultMatch[] | undefined;
+  /** Set only in the all-projects scope, where it is what tells two lists' prompts apart. */
+  projectName?: string | null;
+  onSelect: (item: PromptHistoryItem) => void;
   onHoverIndex: (index: number) => void;
 }
 
@@ -39,9 +53,27 @@ export function PromptHistoryRow({
   item,
   index,
   isSelected,
+  query,
+  matches,
+  projectName,
   onSelect,
   onHoverIndex,
 }: PromptHistoryRowProps) {
+  const fuzzyRanges = matches?.find((m) => m.key === "preview")?.indices;
+  const excerpt = excerptPreview(
+    item.preview,
+    query.trim() ? findPreviewMatches(item.preview, query, fuzzyRanges) : undefined
+  );
+  const agentConfig = item.agentId ? getEffectiveAgentConfig(item.agentId) : undefined;
+  const agentName = item.agentId ? (agentConfig?.name ?? item.agentId) : null;
+  const targets = item.armedIds?.length ?? 0;
+  // What the history recorded about the send, never what recalling it will do:
+  // recall puts the text in this composer and nothing else.
+  const counts = [
+    item.lineCount > 1 ? `${item.lineCount} lines` : null,
+    targets > 1 ? `${targets} panes` : null,
+  ].filter(Boolean);
+
   return (
     <button
       type="button"
@@ -53,22 +85,33 @@ export function PromptHistoryRow({
       aria-selected={isSelected}
       className={cn(
         PALETTE_ROW_CLASS,
-        "group w-full flex items-center justify-between gap-2 px-3 py-2 rounded-[var(--radius-md)] text-sm text-left",
-        "text-daintree-text/80 hover:bg-overlay-subtle hover:text-text-primary"
+        "w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
+        "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
       )}
       onClick={() => onSelect(item)}
     >
-      <span className="truncate font-mono text-xs">{truncatePrompt(item.prompt)}</span>
-      <div className="flex items-center gap-2 shrink-0">
-        {item.agentId && (
-          <span className="text-3xs px-1.5 py-0.5 rounded bg-border-default text-text-secondary">
-            {item.agentId}
-          </span>
-        )}
-        <span className="text-3xs text-text-secondary transition-colors group-aria-selected:text-text-primary">
-          {formatRelativeTime(item.addedAt)}
+      {/* The terminal glyph for a prompt whose agent was never recorded: it was
+          sent to a pane, and that is all the history knows. */}
+      <PanelKindIcon
+        iconId={agentConfig?.iconId ?? item.agentId ?? "terminal"}
+        color={agentConfig?.color}
+        size={16}
+      />
+      <span className="flex-1 min-w-0 truncate text-sm font-medium text-text-primary">
+        <HighlightedText text={excerpt.text} indices={excerpt.indices} />
+      </span>
+      {/* After the prompt, so the option's name starts with the text on screen. */}
+      {agentName && <span className="sr-only">, sent to {agentName}</span>}
+      {(projectName || counts.length > 0) && (
+        <span className="flex shrink-0 items-center gap-1 text-xs text-text-secondary tabular-nums">
+          {projectName && <span className="max-w-32 truncate">{projectName}</span>}
+          {projectName && counts.length > 0 && <span aria-hidden="true">·</span>}
+          {counts.length > 0 && <span>{counts.join(" · ")}</span>}
         </span>
-      </div>
+      )}
+      <span className="shrink-0 min-w-14 text-right text-xs text-text-secondary tabular-nums">
+        {formatTimeAgo(item.addedAt)}
+      </span>
     </button>
   );
 }
@@ -84,6 +127,8 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
     results,
     totalResults,
     selectedIndex,
+    matchesById,
+    isStale,
     setQuery,
     setSelectedIndex,
     selectPrevious,
@@ -92,6 +137,7 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
     close,
     open,
     scope,
+    setScope,
     toggleScope,
     selectEntry,
   } = usePromptHistoryPalette(props);
@@ -104,68 +150,116 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
     };
   }, [onOpenRef, open]);
 
-  const getItemId = useCallback((item: PromptHistoryEntry) => item.id, []);
+  const projects = useProjectStore((s) => s.projects);
+  const projectNames = useMemo(
+    () => (scope === "global" ? new Map(projects.map((p) => [p.id, p.name])) : null),
+    [scope, projects]
+  );
+
+  const getItemId = useCallback((item: PromptHistoryItem) => item.id, []);
 
   const renderItem = useCallback(
     (
-      item: PromptHistoryEntry,
+      item: PromptHistoryItem,
       index: number,
       isSelected: boolean,
-      onHoverIndex: (index: number) => void
+      onHoverIndex: (index: number) => void,
+      matches: readonly FuseResultMatch[] | undefined
     ) => (
       <PromptHistoryRow
         key={item.id}
         item={item}
         index={index}
         isSelected={isSelected}
+        query={query}
+        matches={matches}
+        projectName={projectNames?.get(item.projectId)}
         onSelect={selectEntry}
         onHoverIndex={onHoverIndex}
       />
     ),
-    [selectEntry]
+    [selectEntry, query, projectNames]
   );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "r") {
+        e.preventDefault();
+        toggleScope();
+      }
+    },
+    [toggleScope]
+  );
+
+  const hasSelection = selectedIndex >= 0 && selectedIndex < results.length;
 
   const footer = (
     <div className="flex items-center gap-3 w-full">
       <div className="flex-1 min-w-0">
-        <PaletteFooterHints primaryHint={{ keys: ["↵"], label: "to recall" }} />
+        {/* Only while Enter would recall something. */}
+        {hasSelection && <PaletteFooterHints primaryHint={{ keys: ["↵"], label: "to recall" }} />}
       </div>
-      <button
-        type="button"
-        onClick={toggleScope}
-        className="shrink-0 text-2xs px-2 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border/50 hover:bg-border-default text-text-secondary hover:text-text-primary transition-colors"
+      {/* Pointer-down is held so a click switches scope without taking focus
+          out of the search field — the list keys live there. */}
+      <div
+        className="flex shrink-0 items-center gap-2"
+        onPointerDownCapture={(e) => e.preventDefault()}
       >
-        {scope === "project" ? "This project" : "All projects"}
-      </button>
+        {/* The chord that opened the palette, named here as the key for this
+            control — Tab moves the list selection, so this is the keyboard
+            route to it. */}
+        <KbdChord shortcut={SHORTCUT} aria-label={SCOPE_TITLE} />
+        <span id={SCOPE_HINT_ID} className="sr-only">
+          {scope === "project"
+            ? "Showing this project's prompts."
+            : "Showing every project's prompts."}{" "}
+          {SCOPE_TITLE}.
+        </span>
+        <SegmentedToggle
+          options={SCOPE_OPTIONS}
+          value={scope}
+          onChange={setScope}
+          density="compact"
+          ariaLabel="History scope"
+        />
+      </div>
     </div>
   );
 
   return (
-    <SearchablePalette<PromptHistoryEntry>
+    <SearchablePalette<PromptHistoryItem>
       tier="command"
       isOpen={isOpen}
       query={query}
       results={results}
       totalResults={totalResults}
       selectedIndex={selectedIndex}
+      matchesById={matchesById}
+      isFiltering={isStale}
       onQueryChange={setQuery}
       onSelectPrevious={selectPrevious}
       onSelectNext={selectNext}
       onConfirm={confirmSelection}
       onClose={close}
       onHoverIndex={setSelectedIndex}
+      onKeyDown={handleKeyDown}
       getItemId={getItemId}
       renderItem={renderItem}
-      label="Prompt History"
-      shortcut="Cmd+R"
+      label="Prompt history"
+      shortcut={SHORTCUT}
       ariaLabel="Prompt history search"
-      searchPlaceholder="Search prompt history"
+      searchPlaceholder="Search sent prompts…"
+      searchAriaLabel="Search prompt history"
+      searchAriaDescribedBy={SCOPE_HINT_ID}
       listId="prompt-history-list"
       itemIdPrefix="prompt-history-option"
-      emptyMessage="No history yet"
+      emptyMessage={
+        scope === "project" ? "No prompts sent in this project yet" : "No prompts sent yet"
+      }
       emptyContent={
         <p className="mt-2 text-xs text-text-secondary">
-          History appears here as you send prompts to agents.
+          Send a prompt to an agent and it appears here, ready to reuse.
         </p>
       }
       footer={footer}

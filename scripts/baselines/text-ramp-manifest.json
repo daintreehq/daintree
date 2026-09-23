@@ -2044,21 +2044,6 @@
       "evidence": "<Terminal> is an icon — the colour is an affordance, not prose"
     },
     {
-      "file": "src/components/Terminal/PromptHistoryPalette.tsx",
-      "ordinal": 0,
-      "line": 57,
-      "start": 1880,
-      "end": 1901,
-      "token": "text-daintree-text/80",
-      "variants": "",
-      "step": 80,
-      "group": "src/components/Terminal/PromptHistoryPalette.tsx#1703",
-      "branch": "",
-      "decision": "keep",
-      "category": "semantic-state-pair",
-      "evidence": "hover: already paints text-text-primary here; the band role would erase the difference"
-    },
-    {
       "file": "src/components/Terminal/SendToAgentPalette.tsx",
       "ordinal": 0,
       "line": 62,
