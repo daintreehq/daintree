@@ -746,7 +746,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search plugins"
                 aria-label="Search plugins"
-                className="w-full pl-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] bg-surface-canvas border border-border-interactive text-text-primary placeholder:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary [&::-webkit-search-cancel-button]:appearance-none"
+                className="w-full pl-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] bg-surface-canvas border border-border-interactive text-text-primary placeholder:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary [&::-webkit-search-cancel-button]:hidden"
               />
               {/* The native cancel glyph is a UA bitmap — heavier and brighter
                   than every icon around it, and untouched by the theme. */}
