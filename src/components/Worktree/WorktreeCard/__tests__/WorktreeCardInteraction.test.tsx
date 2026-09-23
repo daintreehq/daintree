@@ -154,20 +154,45 @@ describe("WorktreeCard row affordances polish (issue #8099)", () => {
     expect(toolbarSource).toContain("group-has-[[data-state=open]]/card:delay-0");
   });
 
-  it("terminal sub-row drag handle stays visible-but-dimmed (no opacity-0 at rest)", () => {
-    // Dimmed by stepping DOWN the text hierarchy, not by fading a brighter
-    // token: Tailwind v4 bakes slash-alpha into `color-mix()` on the `color`
-    // property itself, so the contrast it loses cannot be recovered anywhere
-    // downstream. The rule is "solid token at rest, solid token on hover, and
-    // the hover one is the brighter of the two".
+  it("session-row grip reveals the way the card's own grip does", () => {
+    // #8099 kept this grip visible-but-dimmed because the card's grip was;
+    // the card's grip has since moved to absent-at-rest with a hover and
+    // keyboard-focus reveal, and the session grip follows it rather than
+    // being the one permanent handle column in the card.
+    const rules = [...sidebarCss.matchAll(/([^{}]*)\{([^{}]*)\}/g)]
+      .map(([, selector, body]) => ({
+        selectors: selector!
+          .replace(/\/\*[\s\S]*?\*\//g, "")
+          .split(",")
+          .map((part) => part.trim().replace(/\s+/g, " ")),
+        body: body!,
+      }))
+      .filter((rule) => rule.selectors.some((sel) => sel.includes("[data-session-grip]")));
+
+    const rest = rules.filter((rule) => rule.selectors.includes("[data-session-grip]"));
+    expect(rest.map((rule) => rule.body).join(";")).toMatch(/opacity:\s*0\s*;/);
+    expect(rest.map((rule) => rule.body).join(";")).toMatch(/pointer-events:\s*none/);
+
+    const reveals = rules.filter((rule) => /opacity:\s*1\s*;/.test(rule.body));
+    const revealSelectors = reveals.flatMap((rule) => rule.selectors);
+    // Hover alone and keyboard focus alone each reveal it, as separate
+    // alternatives rather than one selector that needs both.
+    expect(revealSelectors).toContain("[data-session-row]:hover [data-session-grip]");
+    expect(revealSelectors).toContain("[data-session-row]:has(:focus-visible) [data-session-grip]");
+    for (const rule of reveals) expect(rule.body).toMatch(/pointer-events:\s*auto/);
+    // Mouse focus from clicking a row must not strand a visible grip on it.
+    for (const rule of rules) {
+      expect(rule.selectors.join(",")).not.toContain(":focus-within");
+    }
+
+    // Solid tokens at rest and on hover, the hover one the brighter.
     const handle = terminalSectionSource.slice(
-      terminalSectionSource.indexOf("cursor-grab"),
-      terminalSectionSource.indexOf("cursor-grab") + 400
+      terminalSectionSource.indexOf("data-session-grip"),
+      terminalSectionSource.indexOf("data-session-grip") + 400
     );
-    expect(handle).toMatch(/(^|\s)text-text-(muted|secondary)\b/);
-    expect(handle).toMatch(/group-hover\/termrow:text-text-(secondary|primary)\b/);
+    expect(handle).toMatch(/(^|\s)text-text-secondary\b/);
+    expect(handle).toMatch(/(^|\s)hover:text-text-primary\b/);
     expect(handle).not.toMatch(/text-text-\w+\/\d/);
-    expect(terminalSectionSource).not.toMatch(/data-drag-handle[\s\S]{0,400}opacity-0/);
   });
 
   it("resource action buttons use outline (not ring-2) for forced-colors survival", () => {

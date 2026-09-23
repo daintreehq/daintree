@@ -146,6 +146,12 @@ export interface CardDensity {
   row: string;
   /** The card's one closed contour. */
   well: string;
+  /**
+   * Vertical padding of a session row's button. With the row's 1px border and
+   * a 16px line it matches `rowBox`, so a session is exactly as tall as the
+   * disclosure row it sits under.
+   */
+  sessionRowY: string;
 }
 
 const GRID_ROW_BOX = "rounded-[var(--radius-lg)] border border-transparent py-1.5 pl-1.5 pr-2.5";
@@ -155,11 +161,13 @@ export const CARD_DENSITY: Record<"sidebar" | "grid", CardDensity> = {
     rowBox: SECTION_ROW_BOX,
     row: SECTION_ROW,
     well: DISCLOSURE_WELL,
+    sessionRowY: "py-1",
   },
   grid: {
     rowBox: GRID_ROW_BOX,
     row: `worktree-section-button flex w-full items-center text-left ${GRID_ROW_BOX}`,
     well: GRID_DISCLOSURE_WELL,
+    sessionRowY: "py-1.5",
   },
 };
 
