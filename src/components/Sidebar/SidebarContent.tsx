@@ -34,7 +34,11 @@ import {
   useKeepMounted,
 } from "@/hooks";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
-import { WorktreeSidebarSearchBar, QuickStateFilterBar } from "@/components/Worktree";
+import {
+  WorktreeSidebarSearchBar,
+  QuickStateFilterBar,
+  QuickStateArmButton,
+} from "@/components/Worktree";
 import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import type { ForgeBulkCreateWorktreeDialogProps } from "@/types/forgeSlotProps";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
@@ -1748,27 +1752,17 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         ? "All matching agents are armed"
         : "All agents are armed";
   const armMatchingButton = (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-disabled={!canArmMatching || undefined}
-          onClick={() => {
-            if (!canArmMatching) return;
-            actionService.dispatch(
-              "fleet.armMatchingFilter",
-              { worktreeIds: filteredWorktrees.map((w) => w.id) },
-              { source: "user" }
-            );
-          }}
-          className="inline-flex items-center justify-center self-stretch px-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.06] aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-daintree-text/60"
-          aria-label={armMatchingLabel}
-        >
-          <Zap className="w-3 h-3" aria-hidden="true" />
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">{armMatchingLabel}</TooltipContent>
-    </Tooltip>
+    <QuickStateArmButton
+      label={armMatchingLabel}
+      disabled={!canArmMatching}
+      onArm={() =>
+        actionService.dispatch(
+          "fleet.armMatchingFilter",
+          { worktreeIds: filteredWorktrees.map((w) => w.id) },
+          { source: "user" }
+        )
+      }
+    />
   );
   return (
     <div className="flex flex-col h-full">

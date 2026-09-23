@@ -6,6 +6,7 @@ import { CheckCircle2 } from "lucide-react";
 import { HollowCircle, SpinnerCircle } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { STATE_COLORS } from "./terminalStateConfig";
+import { EMPTY_BUCKET_GLYPH_CLASS } from "./quickStateGlyph";
 
 /**
  * "Attention", not "Waiting", for the bucket that filters on a waiting agent.
@@ -33,21 +34,11 @@ const FILTER_OPTIONS: { value: QuickStateFilter; label: string }[] = [
 
 const FILTER_VISUALS: Record<
   Exclude<QuickStateFilter, "all">,
-  { Icon: React.ComponentType<{ className?: string }>; color: string; colorFaded: string }
+  { Icon: React.ComponentType<{ className?: string }>; color: string }
 > = {
-  // colorFaded must stay a complete class literal — Tailwind's scanner can't
-  // see dynamically assembled `${color}/40` strings.
-  working: {
-    Icon: SpinnerCircle,
-    color: STATE_COLORS.working,
-    colorFaded: "text-state-working/40",
-  },
-  waiting: { Icon: HollowCircle, color: STATE_COLORS.waiting, colorFaded: "text-state-waiting/40" },
-  finished: {
-    Icon: CheckCircle2,
-    color: "text-category-blue",
-    colorFaded: "text-category-blue/40",
-  },
+  working: { Icon: SpinnerCircle, color: STATE_COLORS.working },
+  waiting: { Icon: HollowCircle, color: STATE_COLORS.waiting },
+  finished: { Icon: CheckCircle2, color: "text-category-blue" },
 };
 
 interface QuickStateFilterBarProps {
@@ -102,16 +93,18 @@ export function QuickStateFilterBar({
             <TooltipTrigger asChild>
               <button
                 type="button"
+                data-quick-state-segment
                 aria-pressed={isActive}
                 aria-label={accessibleName}
                 onClick={() => onChange(isActive ? "all" : option.value)}
                 className={cn(
                   "inline-flex items-center justify-center gap-1 min-w-0 px-2 py-1.5 transition-colors",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-                  // "All" is the only labelled segment and always carries the
-                  // total — give it the lion's share; the icon-only status
-                  // segments split the rest equally.
-                  option.value === "all" ? "flex-[2]" : "flex-1",
+                  // "All" is the only labelled segment, so it gets a little
+                  // more room — but only a little. At double width it left the
+                  // three counts that answer the bar's real question pinched
+                  // against their dividers at the 200px sidebar floor.
+                  option.value === "all" ? "flex-[1.25]" : "flex-1",
                   idx > 0 && "border-l border-border-default",
                   isActive
                     ? // Fallback keeps themes without the var byte-identical.
@@ -122,8 +115,9 @@ export function QuickStateFilterBar({
                 {Icon && visual ? (
                   <Icon
                     className={cn(
-                      "w-3 h-3 shrink-0 transition-colors",
-                      shouldFadeIcon ? visual.colorFaded : visual.color,
+                      "w-3 h-3 shrink-0 transition-[color,opacity]",
+                      visual.color,
+                      shouldFadeIcon && EMPTY_BUCKET_GLYPH_CLASS,
                       isSpinningWorking && "animate-spin-slow motion-reduce:animate-none"
                     )}
                   />
