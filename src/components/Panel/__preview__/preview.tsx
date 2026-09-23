@@ -138,10 +138,7 @@ function splitTitle(title: string): { identity: string; task?: string } {
 
 function paneRow(id: string, fixture: SeedablePane): PtyPanelData {
   const { identity, task } = splitTitle(fixture.title);
-  return ptyRow(id, {
-    // A grid scene seeds non-PTY kinds too; the row's kind is what the header's
-    // Duplicate and dock checks read.
-    ...({ kind: fixture.kind } as Partial<PtyPanelData>),
+  const row = ptyRow(id, {
     title: identity,
     lastObservedTitle: task,
     // The composer only treats the observed title as a task once the agent
@@ -154,6 +151,9 @@ function paneRow(id: string, fixture: SeedablePane): PtyPanelData {
     worktreeId: fixture.branch ? WORKTREE_ID : undefined,
     ...fixture.panel,
   });
+  // A grid scene seeds non-PTY kinds too; the row's kind is what the header's
+  // Duplicate and dock checks read.
+  return Object.assign(row, { kind: fixture.kind });
 }
 
 type SeedablePane = Omit<PanelHeaderFixture, "what" | "body">;
