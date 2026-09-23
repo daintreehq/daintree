@@ -56,18 +56,23 @@ export function ChordIndicator() {
   // Capture the pre-HUD focus target on open, and hand focus back the moment
   // the chord ends — not after the exit fade, so a key pressed right after
   // Escape lands where the user was working instead of on a retiring input.
+  //
+  // The capture is a layout effect declared ahead of the focus effect below, so
+  // it reads the invoker before the input takes focus — including a reopen
+  // inside the exit fade, when the panel is already mounted and the focus
+  // effect would otherwise run first and leave nothing to return to.
   const wasOpenRef = useRef(false);
-  useEffect(() => {
-    if (isOpen) {
-      wasOpenRef.current = true;
-      skipRestoreRef.current = false;
-      const active = document.activeElement;
-      if (active instanceof HTMLElement && rootRef.current?.contains(active) !== true) {
-        previousFocusRef.current = active;
-      }
-      return;
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    wasOpenRef.current = true;
+    skipRestoreRef.current = false;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && rootRef.current?.contains(active) !== true) {
+      previousFocusRef.current = active;
     }
-    if (!wasOpenRef.current) return;
+  }, [isOpen]);
+  useEffect(() => {
+    if (isOpen || !wasOpenRef.current) return;
     wasOpenRef.current = false;
     const skip = skipRestoreRef.current;
     skipRestoreRef.current = false;
@@ -139,6 +144,31 @@ export function ChordIndicator() {
 
   const runItem = useCallback((item: CommandHudItem) => run(item), [run]);
 
+  // Focus leaving the input ends the chord. Without this, Tab (or any script
+  // focus) left the chord pending with nothing on screen owning the keyboard,
+  // and the open-gap guard in useGlobalKeybindings swallowed every printable
+  // key from then on. The destination keeps its focus; a blur to nowhere
+  // (focus falling to body, or the window losing focus — which
+  // useGlobalKeybindings also treats as a cancel) restores the invoker like
+  // Escape does.
+  const handleBlur = useCallback(
+    (e: React.FocusEvent<HTMLInputElement>) => {
+      if (!isOpen) return;
+      const next = e.relatedTarget;
+      if (next instanceof Node && rootRef.current?.contains(next) === true) return;
+      if (next) skipRestoreRef.current = true;
+      close();
+    },
+    [isOpen, close]
+  );
+
+  // Pressing the panel's own chrome (a heading, the footer, the gap between
+  // rows) would otherwise move focus to body and end the chord through the
+  // blur above. Rows still run on click; only the focus move is prevented.
+  const keepInputFocus = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target !== inputRef.current) e.preventDefault();
+  }, []);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
@@ -185,6 +215,7 @@ export function ChordIndicator() {
       )}
     >
       <div
+        onMouseDown={keepInputFocus}
         className={cn(
           // Frosted "spotlight" panel floating over the terminals so the Cmd+K
           // layer reads as its own command mode rather than a standard overlay.
@@ -204,7 +235,7 @@ export function ChordIndicator() {
             {`${prefixLabel} pressed. Press the next key, or search.`}
           </span>
           <span aria-hidden="true" className="shrink-0" data-command-hud-prefix="">
-            <KbdChord shortcut={COMMAND_HUD_PREFIX} density="compact" />
+            <KbdChord shortcut={COMMAND_HUD_PREFIX} />
           </span>
           <input
             ref={inputRef}
@@ -216,10 +247,11 @@ export function ChordIndicator() {
             aria-label="Search commands"
             aria-describedby={PREFIX_DESCRIPTION_ID}
             aria-activedescendant={activeDescendant}
-            placeholder="Search commands…"
+            placeholder="Next key, or search commands…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
+            onBlur={handleBlur}
             className={cn(
               "min-w-0 flex-1 bg-transparent text-sm",
               "text-text-primary placeholder:text-text-placeholder",
@@ -236,7 +268,15 @@ export function ChordIndicator() {
           className="border-t border-[var(--border-overlay)] px-2 py-2 max-h-[22rem] overflow-y-auto"
         >
           {results.length === 0 ? (
-            <AppPaletteDialog.Empty query={query} emptyMessage="No commands available" />
+            <AppPaletteDialog.Empty
+              query={query}
+              emptyMessage="No commands available"
+              noMatchContent={
+                <span className="text-xs text-text-secondary">
+                  Edit the search, or press Esc to close
+                </span>
+              }
+            />
           ) : (
             groups.map((group, groupIdx) => {
               const groupId = `${GROUP_ID_PREFIX}-${groupIdx}`;

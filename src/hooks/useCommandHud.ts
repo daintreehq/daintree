@@ -78,12 +78,16 @@ export function useCommandHud(): UseCommandHudReturn {
   }>(() => {
     if (layer.length === 0) return { results: [], groups: [] };
 
+    // Keys are matched without their `+` separators on both sides, so a query
+    // typed the way the row renders it (⌘R) finds the row as well as ⌘+R does.
     const trimmed = query.trim().toLowerCase();
+    const keyQuery = trimmed.replace(/\+/g, "");
     const filtered = trimmed
       ? layer.filter(
           (item) =>
             item.description.toLowerCase().includes(trimmed) ||
-            item.displayKey.toLowerCase().includes(trimmed)
+            (keyQuery.length > 0 &&
+              item.displayKey.toLowerCase().replace(/\+/g, "").includes(keyQuery))
         )
       : layer;
 

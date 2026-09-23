@@ -138,4 +138,46 @@ describe("ChordIndicator (Cmd+K command HUD)", () => {
     expect(selected).toHaveLength(1);
     expect(input()!.getAttribute("aria-activedescendant")).toBe(selected[0]!.id);
   });
+
+  it("ends the chord when focus moves out of the input, leaving focus at the destination", async () => {
+    const next = document.createElement("button");
+    document.body.appendChild(next);
+    render(<ChordIndicator />);
+    pressCmdK();
+    await flushFrames();
+
+    act(() => next.focus());
+    await flushFrames();
+
+    expect(keybindingService.getPendingChord()).toBeNull();
+    expect(document.activeElement).toBe(next);
+    next.remove();
+  });
+
+  it("returns focus to the invoker after a reopen inside the exit fade", async () => {
+    render(<ChordIndicator />);
+    pressCmdK();
+    await flushFrames();
+    act(() => keybindingService.clearPendingChord());
+    // Reopen before the exit completes: the panel is still mounted.
+    pressCmdK();
+    await flushFrames();
+    expect(document.activeElement).toBe(input());
+
+    act(() => keybindingService.clearPendingChord());
+
+    expect(document.activeElement).toBe(terminal);
+  });
+
+  it("finds a row by its key typed without separators", async () => {
+    render(<ChordIndicator />);
+    pressCmdK();
+    await flushFrames();
+    const first = options()[0]!;
+    const keyText = first.querySelector(".sr-only")!.textContent!;
+
+    fireEvent.change(input()!, { target: { value: keyText.replace(/\+/g, "") } });
+
+    expect(options().map((o) => o.id)).toContain(first.id);
+  });
 });
