@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import { ArrowDown, ArrowUp, X as XIcon } from "lucide-react";
 import { FALLBACK_CHAIN_MAX } from "../../../../shared/config/agentRegistry";
 import type { AgentPreset } from "@/config/agents";
@@ -41,6 +41,43 @@ export function FallbackChainEditor({
 
   const setChain = (fallbacks: string[]) => onUpdatePreset(selectedPreset.id, { fallbacks });
 
+  // Moving or removing a fallback can take away the button that had focus — the
+  // row goes, or its arrow disables at the end of the list. Once the chain has
+  // re-rendered, put focus on the nearest control that still means something.
+  const scopeId = useId();
+  const focusAfterRender = (selectors: string[]) => {
+    requestAnimationFrame(() => {
+      for (const selector of selectors) {
+        const el = document.querySelector<HTMLElement>(
+          `[data-fallback-scope="${scopeId}"]${selector}`
+        );
+        if (el && !el.matches(":disabled")) {
+          el.focus();
+          return;
+        }
+      }
+    });
+  };
+  const action = (id: string, kind: "up" | "down" | "remove") =>
+    `[data-fallback-action="${id}:${kind}"]`;
+
+  const move = (id: string, from: number, to: number) => {
+    setChain(moveFallback(chain, from, to));
+    const dir = to < from ? "up" : "down";
+    const other = dir === "up" ? "down" : "up";
+    focusAfterRender([action(id, dir), action(id, other)]);
+  };
+
+  const remove = (id: string, idx: number) => {
+    const next = chain.filter((f) => f !== id);
+    setChain(next);
+    const neighbour = next[idx] ?? next[idx - 1];
+    focusAfterRender([
+      ...(neighbour ? [action(neighbour, "remove")] : []),
+      '[data-fallback-add=""]',
+    ]);
+  };
+
   const addFallback = (id: string) => {
     if (!id || chain.includes(id) || chain.length >= FALLBACK_CHAIN_MAX) return;
     setChain([...chain, id]);
@@ -61,9 +98,12 @@ export function FallbackChainEditor({
         description="Tried in order if this preset's provider is unreachable. No retry for rate limits or prompt errors"
         control={({ labelId, descriptionId, disabled }) =>
           canAdd ? (
-            // Keyed on length so the trigger returns to its placeholder after each pick.
-            <Select key={chain.length} onValueChange={addFallback} disabled={disabled}>
+            // Controlled at "" so the trigger shows its placeholder again after each
+            // pick without remounting — a remount would drop keyboard focus.
+            <Select value="" onValueChange={addFallback} disabled={disabled}>
               <SelectTrigger
+                data-fallback-scope={scopeId}
+                data-fallback-add=""
                 aria-labelledby={labelId}
                 aria-describedby={descriptionId}
                 className={SETTINGS_CONTROL_WIDTH.select}
@@ -112,7 +152,9 @@ export function FallbackChainEditor({
                           variant="ghost"
                           size="icon-sm"
                           disabled={disabled || idx === 0}
-                          onClick={() => setChain(moveFallback(chain, idx, idx - 1))}
+                          data-fallback-scope={scopeId}
+                          data-fallback-action={`${id}:up`}
+                          onClick={() => move(id, idx, idx - 1)}
                           aria-label={`Move ${name} up`}
                           title="Move up"
                         >
@@ -122,7 +164,9 @@ export function FallbackChainEditor({
                           variant="ghost"
                           size="icon-sm"
                           disabled={disabled || idx === chain.length - 1}
-                          onClick={() => setChain(moveFallback(chain, idx, idx + 1))}
+                          data-fallback-scope={scopeId}
+                          data-fallback-action={`${id}:down`}
+                          onClick={() => move(id, idx, idx + 1)}
                           aria-label={`Move ${name} down`}
                           title="Move down"
                         >
@@ -134,7 +178,9 @@ export function FallbackChainEditor({
                       variant="ghost"
                       size="icon-sm"
                       disabled={disabled}
-                      onClick={() => setChain(chain.filter((f) => f !== id))}
+                      data-fallback-scope={scopeId}
+                      data-fallback-action={`${id}:remove`}
+                      onClick={() => remove(id, idx)}
                       aria-label={`Remove ${name} from fallback chain`}
                       title="Remove"
                     >

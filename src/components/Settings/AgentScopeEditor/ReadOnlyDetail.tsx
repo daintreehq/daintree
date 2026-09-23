@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { SETTINGS_CONTROL_WIDTH, SettingsRow } from "../SettingsGroup";
+import { SettingsRow } from "../SettingsGroup";
 import { stripCcrPrefix } from "./scopeUtils";
 import type { AgentPreset } from "@/config/agents";
 import { resolveDangerousMode, resolveInlineMode } from "@shared/types";
@@ -47,17 +47,7 @@ export function ReadOnlyDetail({
   const presetSetsSkip = resolveDangerousMode(selectedPreset) !== "inherit";
   const presetSetsInline = resolveInlineMode(selectedPreset) !== "inherit";
 
-  const value = (text: string, mono = false) => (
-    <span
-      className={
-        mono
-          ? `${SETTINGS_CONTROL_WIDTH.wide} truncate text-right font-mono text-xs text-text-primary select-text`
-          : "text-sm text-text-primary"
-      }
-    >
-      {text}
-    </span>
-  );
+  const value = (text: string) => <span className="text-sm text-text-primary">{text}</span>;
 
   return (
     <>
@@ -88,18 +78,33 @@ export function ReadOnlyDetail({
               {env.map(([k, v]) => (
                 <div key={k} className="contents">
                   <dt className="text-text-primary">{k}</dt>
-                  <dd className="truncate text-text-secondary">{v}</dd>
+                  {/* Wrapped, never truncated: an endpoint or model id is exactly what
+                      someone opens this to read. */}
+                  <dd className="break-all text-text-secondary">{v}</dd>
                 </div>
               ))}
             </dl>
           }
         />
       )}
-      <SettingsRow
-        label="Custom arguments"
-        description={presetSetsArgs ? fromPreset : fromAgent}
-        control={value(args ? args : "None", !!args)}
-      />
+      {args ? (
+        <SettingsRow
+          label="Custom arguments"
+          description={presetSetsArgs ? fromPreset : fromAgent}
+          layout="stacked"
+          control={
+            <code className="block whitespace-pre-wrap break-all font-mono text-xs text-text-primary select-text">
+              {args}
+            </code>
+          }
+        />
+      ) : (
+        <SettingsRow
+          label="Custom arguments"
+          description={presetSetsArgs ? fromPreset : fromAgent}
+          control={value("None")}
+        />
+      )}
       <SettingsRow
         label="Skip permissions"
         description={presetSetsSkip ? fromPreset : fromAgent}

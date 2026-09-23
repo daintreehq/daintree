@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,8 +13,10 @@ interface CustomPresetChromeProps {
   isEditing: boolean;
   editName: string;
   onEditNameChange: (value: string) => void;
-  onCommitEdit: () => void;
+  /** Returns false when the name was refused and editing continues. */
+  onCommitEdit: () => boolean;
   onCancelEdit: () => void;
+  renameError: string | null;
   onStartEdit: (preset: AgentPreset) => void;
   onColorChange: (color: string | undefined) => void;
   onDisplayTitleChange: (value: string) => void;
@@ -30,11 +32,25 @@ export function CustomPresetChrome({
   onEditNameChange,
   onCommitEdit,
   onCancelEdit,
+  renameError,
   onStartEdit,
   onColorChange,
   onDisplayTitleChange,
   onDuplicate,
 }: CustomPresetChromeProps) {
+  const renameButtonRef = useRef<HTMLButtonElement>(null);
+  // Enter and Escape unmount the input that has focus. Hand focus back to the
+  // rename button then — but not after an ordinary blur, where the user already
+  // put focus somewhere else on purpose.
+  const restoreFocusRef = useRef(false);
+  const errorId = useId();
+  useEffect(() => {
+    if (!isEditing && restoreFocusRef.current) {
+      restoreFocusRef.current = false;
+      renameButtonRef.current?.focus();
+    }
+  }, [isEditing]);
+
   return (
     <>
       <SettingsRow
@@ -52,25 +68,30 @@ export function CustomPresetChrome({
                 className="flex-1 text-sm font-medium bg-surface-canvas border border-border-strong rounded-[var(--radius-sm)] px-2 py-0.5 focus:outline-hidden focus-visible:border-accent-primary"
                 value={editName}
                 onChange={(e) => onEditNameChange(e.target.value)}
-                onBlur={onCommitEdit}
+                onBlur={() => void onCommitEdit()}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
-                    onCommitEdit();
+                    restoreFocusRef.current = true;
+                    if (!onCommitEdit()) restoreFocusRef.current = false;
                   }
                   if (e.key === "Escape") {
                     e.preventDefault();
                     e.stopPropagation();
+                    restoreFocusRef.current = true;
                     onCancelEdit();
                   }
                 }}
                 autoFocus
                 aria-label="Preset name"
+                aria-invalid={renameError ? true : undefined}
+                aria-describedby={renameError ? errorId : undefined}
                 data-testid="preset-edit-input"
                 placeholder="Preset name"
               />
             ) : (
               <button
+                ref={renameButtonRef}
                 type="button"
                 className="flex items-center gap-1.5 text-sm font-medium text-text-primary hover:underline underline-offset-2 text-left"
                 onClick={() => onStartEdit(selectedPreset)}
@@ -85,6 +106,13 @@ export function CustomPresetChrome({
         }
         labelText={selectedPreset.name}
         description="The colour marks this preset on its launch button and panel tab"
+        error={
+          isEditing && renameError ? (
+            <span id={errorId} role="alert">
+              {renameError}
+            </span>
+          ) : undefined
+        }
         control={
           <Button
             size="sm"

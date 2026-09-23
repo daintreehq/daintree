@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { DEFAULT_AGENT_SETTINGS, type AgentSettingsEntry } from "@shared/types";
 import { setUserRegistry, type AgentConfig } from "@shared/config/agentRegistry";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -160,4 +160,50 @@ describe("useAgentScope — screen-mode control gating (#11423)", () => {
     expect(supports("alt-only")).toBe(true);
     expect(supports("neither-mode")).toBe(false);
   });
+});
+
+describe("useAgentScope — rename follows the preset sanitizer's rules", () => {
+  const preset = { id: "user-a", name: "Old name" };
+
+  function renameTo(name: string) {
+    const updates: Partial<AgentSettingsEntry>[] = [];
+    let editing: string | null = "user-a";
+    const props = {
+      ...makeProps("claude", { customPresets: [preset], presetId: "user-a" }),
+      editingPresetId: "user-a",
+      editName: name,
+      setEditingPresetId: (id: string | null) => {
+        editing = id;
+      },
+      updateAgent: async (_id: string, patch: Partial<AgentSettingsEntry>) => {
+        updates.push(patch);
+      },
+    };
+    const { result } = renderHook(() => useAgentScope(props));
+    let committed = false;
+    act(() => {
+      committed = result.current.handleCommitEdit();
+    });
+    return { committed, editing, updates, error: result.current.renameError };
+  }
+
+  // Everything `sanitizePreset` keeps must be renameable; everything it would drop
+  // must be refused here, or the preset silently vanishes on the next load.
+  it.each(["Greg's Bedrock", 'The "fast" one', "R&D preset"])("accepts %s", (name) => {
+    const { committed, editing, updates } = renameTo(name);
+    expect(committed).toBe(true);
+    expect(editing).toBeNull();
+    expect(updates).toHaveLength(1);
+  });
+
+  it.each(["<script>", "  ", "x".repeat(201)])(
+    "refuses %s and keeps editing with a reason",
+    (name) => {
+      const { committed, editing, updates, error } = renameTo(name);
+      expect(committed).toBe(false);
+      expect(editing).toBe("user-a");
+      expect(updates).toHaveLength(0);
+      expect(error).toBeTruthy();
+    }
+  );
 });

@@ -425,6 +425,23 @@ const STATES: AgentState[] = [
     capture: "frame",
   },
   {
+    slug: "05b-preset-selector-keyboard",
+    target: { tab: "agents", subtab: "claude" },
+    expectText: ["Launch preset"],
+    arrange: async (page) => {
+      await scrollIntoView(page, "#agents-presets");
+      const trigger = page.locator(`${PANEL} [data-testid="preset-selector-trigger"]`);
+      await trigger.focus();
+      await page.keyboard.press("Enter");
+      await page
+        .locator('[data-testid="preset-selector-listbox"]')
+        .waitFor({ state: "visible", timeout: 10_000 });
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("ArrowDown");
+    },
+    capture: "frame",
+  },
+  {
     slug: "06-claude-custom-preset",
     target: { tab: "agents", subtab: "claude" },
     expectText: ["Launch preset"],

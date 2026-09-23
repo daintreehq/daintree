@@ -39,6 +39,14 @@ export function AgentSelectorDropdown({
   // The highlight fill alone is too faint to find by keyboard, so arrow-key movement
   // also rings the active option. A pointer only fills it.
   const [keyboardNav, setKeyboardNav] = useState(false);
+  // Opened with the keyboard, the ring shows from the first frame; opened with a
+  // pointer, it waits for an arrow key.
+  const openedByPointerRef = useRef(false);
+  const handleOpenChange = (next: boolean) => {
+    if (next) setKeyboardNav(!openedByPointerRef.current);
+    openedByPointerRef.current = false;
+    setOpen(next);
+  };
   const activeItemRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -97,13 +105,16 @@ export function AgentSelectorDropdown({
     activeSubtab !== GENERAL_ID ? agentOptions.find((a) => a.id === activeSubtab) : null;
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <button
           type="button"
           aria-expanded={open}
           aria-haspopup="listbox"
           data-testid="agent-selector-trigger"
+          onPointerDown={() => {
+            openedByPointerRef.current = true;
+          }}
           className={cn(
             "flex items-center gap-2 w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
             "border border-border-strong bg-surface-canvas text-text-primary transition-colors",

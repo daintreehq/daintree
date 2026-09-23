@@ -31,7 +31,11 @@ import { AgentHelpOutput } from "./AgentHelpOutput";
 import { AgentInstallSection } from "@/components/agents/AgentCard";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AgentInventorySection } from "./AgentInventorySection";
-import { isAgentLaunchable, isAgentReady } from "../../../shared/utils/agentAvailability";
+import {
+  isAgentInstalled,
+  isAgentLaunchable,
+  isAgentReady,
+} from "../../../shared/utils/agentAvailability";
 import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
@@ -567,6 +571,22 @@ export function AgentSettings({
                   );
                   void (async () => {
                     await setAgentPinned(activeAgent.id, !current);
+                    onSettingsChange?.();
+                  })();
+                }}
+                // Modified only against the automatic default — shown when installed —
+                // not against whether a pin happens to be stored: initial pins are
+                // written explicitly, so "stored" would light almost every agent.
+                isModified={
+                  isAgentToolbarVisible(activeEntry, cliAvailability?.[activeAgent.id]) !==
+                  isAgentInstalled(cliAvailability?.[activeAgent.id])
+                }
+                onReset={() => {
+                  void (async () => {
+                    await setAgentPinned(
+                      activeAgent.id,
+                      isAgentInstalled(cliAvailability?.[activeAgent.id])
+                    );
                     onSettingsChange?.();
                   })();
                 }}

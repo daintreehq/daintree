@@ -102,6 +102,7 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
               onEditNameChange={props.setEditName}
               onCommitEdit={scope.handleCommitEdit}
               onCancelEdit={scope.handleCancelEdit}
+              renameError={scope.renameError}
               onStartEdit={scope.handleStartEdit}
               onColorChange={(color) =>
                 scope.handleUpdatePreset(scope.selectedPreset!.id, { color })

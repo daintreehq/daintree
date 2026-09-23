@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { getAgentConfig, getMergedPresets, type AgentPreset } from "@/config/agents";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
@@ -47,6 +47,8 @@ export function useAgentScope({
   updateAgent,
   onSettingsChange,
 }: UseAgentScopeProps) {
+  const [renameError, setRenameError] = useState<string | null>(null);
+
   // ── derived values ──────────────────────────────────────────────────────
   const customPresets = activeEntry.customPresets;
   const allPresets = useMemo(
@@ -250,32 +252,44 @@ export function useAgentScope({
   };
 
   const handleStartEdit = (preset: AgentPreset) => {
-    if (!preset.name || preset.name.length > 200) {
-      console.warn("Invalid preset name length");
-      return;
-    }
-    if (/[<>'"&]/.test(preset.name)) {
-      console.warn("Preset name contains dangerous characters");
-      return;
-    }
+    setRenameError(null);
     setEditingPresetId(preset.id);
     setEditName(preset.name);
   };
 
-  const handleCommitEdit = () => {
+  /**
+   * Commits the rename, or keeps the draft and says why. The rules are the preset
+   * sanitizer's own (`sanitizePreset` in config/agents): a name it would reject is
+   * one that would make the preset vanish on the next load, so it is refused here
+   * instead — and ordinary punctuation like an apostrophe is not.
+   */
+  const handleCommitEdit = (): boolean => {
+    if (!editingPresetId) return true;
     const trimmed = editName.trim();
-    if (editingPresetId && trimmed && trimmed.length <= 200 && !/[<>'"&]/.test(trimmed)) {
-      // Stamp lastEditTimeRef so external rate-limit consumers can detect
-      // a recent edit. Double-commit between Enter+blur is already prevented
-      // by the `editingPresetId &&` guard above (the second call sees null).
-      lastEditTimeRef.current = Date.now();
-      handleUpdatePreset(editingPresetId, { name: trimmed });
+    const problem = !trimmed
+      ? "Give the preset a name"
+      : trimmed.length > 200
+        ? "Keep the name under 200 characters"
+        : /[<>]/.test(trimmed)
+          ? "Names can't contain < or >"
+          : null;
+    if (problem) {
+      setRenameError(problem);
+      return false;
     }
+    // Stamp lastEditTimeRef so external rate-limit consumers can detect a recent
+    // edit. Double-commit between Enter+blur is prevented by the `editingPresetId`
+    // guard above (the second call sees null).
+    lastEditTimeRef.current = Date.now();
+    handleUpdatePreset(editingPresetId, { name: trimmed });
+    setRenameError(null);
     setEditingPresetId(null);
     setEditName("");
+    return true;
   };
 
   const handleCancelEdit = () => {
+    setRenameError(null);
     setEditingPresetId(null);
     setEditName("");
   };
@@ -372,6 +386,7 @@ export function useAgentScope({
     handleStartEdit,
     handleCommitEdit,
     handleCancelEdit,
+    renameError,
     handleDangerousModeChange,
     handleInlineModeChange,
     handleCustomFlagsChange,

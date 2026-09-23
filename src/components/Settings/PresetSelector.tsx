@@ -125,6 +125,9 @@ export function PresetSelector({
   // The highlight fill alone is too faint to find by keyboard, so arrow-key movement
   // also rings the active option. A pointer only fills it.
   const [keyboardNav, setKeyboardNav] = useState(false);
+  // Opened with the keyboard, the ring shows from the first frame; opened with a
+  // pointer, it waits for an arrow key.
+  const openedByPointerRef = useRef(false);
 
   const optionDomId = (index: number) => `${listboxId}-option-${index}`;
 
@@ -136,8 +139,9 @@ export function PresetSelector({
   const handleOpenChange = (next: boolean) => {
     if (next) {
       setActiveIndex(selectedIndex);
-      setKeyboardNav(false);
+      setKeyboardNav(!openedByPointerRef.current);
     }
+    openedByPointerRef.current = false;
     setOpen(next);
   };
 
@@ -215,6 +219,9 @@ export function PresetSelector({
             "focus:outline-hidden focus-visible:border-accent-primary"
           )}
           data-testid="preset-selector-trigger"
+          onPointerDown={() => {
+            openedByPointerRef.current = true;
+          }}
         >
           <span
             className="w-2.5 h-2.5 rounded-full shrink-0 border border-border-default"
