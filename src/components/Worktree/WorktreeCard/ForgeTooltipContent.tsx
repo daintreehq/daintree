@@ -133,7 +133,10 @@ function freshnessItem(
       return { Icon: Clock, label };
     }
     case "circuit-breaker":
-      return { Icon: CirclePause, label: "PR detection paused, so this may be out of date" };
+      return {
+        Icon: CirclePause,
+        label: "PR detection paused, so details may be out of date. Open the pull request to check",
+      };
     default:
       return null;
   }
