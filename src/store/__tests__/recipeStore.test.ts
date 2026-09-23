@@ -1691,7 +1691,9 @@ describe("recipeStore", () => {
             hostApprovedRecipeRun: approvalFor(recipe),
           });
 
-        expect(requestConfirmationSpy).toHaveBeenCalledWith(28, null);
+        expect(requestConfirmationSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ currentCount: 18, allowedCount: 10, sourceName: recipe.name })
+        );
       } finally {
         usePanelLimitStore.setState({ requestConfirmation: previousRequestConfirmation });
       }
@@ -1754,7 +1756,9 @@ describe("recipeStore", () => {
           });
 
         // The cap trimmed the batch to three, and the prompt fired anyway.
-        expect(requestConfirmationSpy).toHaveBeenCalledWith(21, null);
+        expect(requestConfirmationSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ currentCount: 18, allowedCount: 3 })
+        );
         expect(results.spawned).toHaveLength(3);
       } finally {
         usePanelLimitStore.setState({ requestConfirmation: previousRequestConfirmation });

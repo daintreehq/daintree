@@ -10,19 +10,39 @@ export interface PanelLimitFixture {
   requestedCount: number;
   confirmationLimit: number;
   hardLimit: number;
+  /** Recipe name, when the batch is a named recipe run. */
+  sourceName?: string;
 }
 
 export const PANEL_LIMIT_FIXTURES = {
   /** The common case: a four-terminal recipe pushes 18 open panels past 20. */
-  batch: { currentCount: 18, requestedCount: 4, confirmationLimit: 20, hardLimit: 32 },
-  /** One panel over: a single-terminal worktree spin-up at the threshold. */
+  batch: {
+    currentCount: 18,
+    requestedCount: 4,
+    confirmationLimit: 20,
+    hardLimit: 32,
+    sourceName: "Claude + Codex pair",
+  },
+  /** One panel over: a cloned one-terminal layout at the threshold, so no recipe name. */
   single: { currentCount: 20, requestedCount: 1, confirmationLimit: 20, hardLimit: 32 },
   /** The hard limit trims the batch: six asked for, three fit. */
-  trimmed: { currentCount: 29, requestedCount: 6, confirmationLimit: 20, hardLimit: 32 },
+  trimmed: {
+    currentCount: 29,
+    requestedCount: 6,
+    confirmationLimit: 20,
+    hardLimit: 32,
+    sourceName: "Review fleet",
+  },
   /** Trimmed to a single panel. */
   "trimmed-one": { currentCount: 31, requestedCount: 5, confirmationLimit: 20, hardLimit: 32 },
   /** A 64 GB machine's hardware defaults with a big recipe — three-digit counts. */
-  large: { currentCount: 60, requestedCount: 12, confirmationLimit: 64, hardLimit: 100 },
+  large: {
+    currentCount: 60,
+    requestedCount: 12,
+    confirmationLimit: 64,
+    hardLimit: 100,
+    sourceName: "Full-stack sweep: frontend, backend, e2e and docs agents",
+  },
 } satisfies Record<string, PanelLimitFixture>;
 
 export type PanelLimitFixtureName = keyof typeof PANEL_LIMIT_FIXTURES;

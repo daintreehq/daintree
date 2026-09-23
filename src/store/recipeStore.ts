@@ -1115,7 +1115,9 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // same stale count and under-enforce the ceiling; gate the whole burst once
     // here and pass `bypassLimits` on each individual call. (#9165)
     const currentCount = countPanelsTowardLimit(terminalStore.panelsById, terminalStore.panelIds);
-    const { allowed } = await preflightSpawnBatchLimit(currentCount, validIndices.length);
+    const { allowed } = await preflightSpawnBatchLimit(currentCount, validIndices.length, {
+      sourceName: recipe.name,
+    });
     const spawnIndices = validIndices.slice(0, allowed);
     for (const index of validIndices.slice(allowed)) {
       results.failed.push({ index, error: "Panel limit reached" });

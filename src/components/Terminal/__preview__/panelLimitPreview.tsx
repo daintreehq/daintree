@@ -80,7 +80,9 @@ const BATCH_DELAY_MS = 50;
 function StartBatch() {
   useEffect(() => {
     const timer = setTimeout(() => {
-      void preflightSpawnBatchLimit(fixture.currentCount, fixture.requestedCount).then((result) => {
+      void preflightSpawnBatchLimit(fixture.currentCount, fixture.requestedCount, {
+        sourceName: fixture.sourceName,
+      }).then((result) => {
         document.documentElement.dataset.preflightAllowed = String(result.allowed);
       });
     }, BATCH_DELAY_MS);
