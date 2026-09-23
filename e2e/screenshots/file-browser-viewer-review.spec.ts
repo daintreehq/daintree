@@ -558,13 +558,58 @@ test("file browser review — viewer formats and states", async () => {
           await collapseAll();
         });
 
+        /**
+         * Pick a view mode through whichever control the row is showing: the
+         * segmented pair where it fits, or the mode menu the tightest widths
+         * fold it into. Menus are closed by picking an item, never Escape.
+         */
+        const setMode = async (label: "Source" | "Rendered"): Promise<void> => {
+          const segment = panel.getByRole("button", { name: label, exact: true });
+          if ((await segment.count()) > 0) {
+            await segment.click();
+          } else {
+            await panel.getByRole("button", { name: /^View mode:/ }).click();
+            await settle(page, 300);
+            await page.getByRole("menuitemradio", { name: label }).click();
+          }
+          await settle(page, 400);
+        };
+
         await state("markdown", async () => {
           await openPath("docs/architecture/state-management.md");
           await snap("05-markdown-rendered", 1200);
-          await panel.getByRole("button", { name: "Source", exact: true }).click();
+          await setMode("Source");
           await snap("06-markdown-source");
-          await panel.getByRole("button", { name: "Rendered", exact: true }).click();
-          await settle(page, 300);
+          await setMode("Rendered");
+          await collapseAll();
+        });
+
+        await state("menus", async () => {
+          // The two menus narrow widths fold controls into, open. Whole window
+          // rather than the panel: Radix portals menus to the body. Escape is
+          // safe for a dropdown; it is context menus that black-screen.
+          await openPath("docs/architecture/state-management.md");
+          await settle(page, 800);
+          const more = panel.getByRole("button", { name: "More actions" });
+          if ((await more.count()) > 0) {
+            await more.click();
+            await settle(page, 400);
+            await page.screenshot({
+              path: path.join(OUTPUT_DIR, `${prefix}19-more-actions-open.png`),
+            });
+            await page.keyboard.press("Escape");
+            await settle(page, 300);
+          }
+          const modeMenu = panel.getByRole("button", { name: /^View mode:/ });
+          if ((await modeMenu.count()) > 0) {
+            await modeMenu.click();
+            await settle(page, 400);
+            await page.screenshot({
+              path: path.join(OUTPUT_DIR, `${prefix}20-mode-menu-open.png`),
+            });
+            await page.getByRole("menuitemradio", { name: "Rendered" }).click();
+            await settle(page, 300);
+          }
           await collapseAll();
         });
 
