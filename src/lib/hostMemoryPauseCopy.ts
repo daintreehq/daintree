@@ -26,6 +26,8 @@ export const HOST_MEMORY_PAUSE_COPY = {
     paused: "A terminal host paused its output to reduce its memory use",
     monitoring: "A terminal host lifted its memory pause but still reports a memory warning",
     suggestion: "The pause lifts on its own",
+    chipPaused: "terminal output paused for memory",
+    chipLifted: "terminal host memory warning",
   },
   announcePaused: "Terminal output paused to reduce terminal host memory use",
   announceEnded: "Terminal host memory pause ended",

@@ -68,6 +68,22 @@ const PROFILE_MODE: Record<string, string> = {
 };
 
 /**
+ * Where the terminal-host memory episode stands: the renderer's live episode
+ * once it has synced (so a closed episode stays closed even while an older
+ * poll still counts memory holds), else the collector's own count of them.
+ */
+export function describeHostMemoryPause(
+  snapshot: WhySlowSnapshot,
+  hostMemory: HostMemoryPauseSnapshot | null
+): "paused" | "lifted" | null {
+  if (hostMemory) {
+    if (!hostMemory.active) return null;
+    return hostMemory.paused ? "paused" : "lifted";
+  }
+  return (snapshot.pty?.memoryPausedCount ?? 0) > 0 ? "paused" : null;
+}
+
+/**
  * Turn the snapshot into the observations that explain a slowdown, worst
  * first. Every condition here is one a tile below also flags, so the summary
  * and the readings can never disagree; it states what was measured and never
@@ -84,15 +100,16 @@ export function describeSlowdowns(
   // First among the warnings, so it survives the findings list's collapse
   // behind the alerts: it's what the toolbar's memory-pause indicator opened
   // this tab to explain.
-  const memoryPaused = hostMemory?.active ? hostMemory.paused : (p?.memoryPausedCount ?? 0) > 0;
-  if (hostMemory?.active || memoryPaused) {
+  const memoryPause = describeHostMemoryPause(snapshot, hostMemory);
+  if (memoryPause) {
     findings.push({
       id: "host-memory",
       tone: "warn",
-      text: memoryPaused
-        ? HOST_MEMORY_PAUSE_COPY.whySlow.paused
-        : HOST_MEMORY_PAUSE_COPY.whySlow.monitoring,
-      suggestion: memoryPaused ? HOST_MEMORY_PAUSE_COPY.whySlow.suggestion : undefined,
+      text:
+        memoryPause === "paused"
+          ? HOST_MEMORY_PAUSE_COPY.whySlow.paused
+          : HOST_MEMORY_PAUSE_COPY.whySlow.monitoring,
+      suggestion: memoryPause === "paused" ? HOST_MEMORY_PAUSE_COPY.whySlow.suggestion : undefined,
     });
   }
   const r = snapshot.resource;
@@ -362,6 +379,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
   const findings = snapshot ? describeSlowdowns(snapshot, hostMemory) : [];
   const allClear = snapshot ? isAllClear(snapshot, hostMemory) : false;
   const memory = snapshot?.memory ?? null;
+  const memoryPause = snapshot ? describeHostMemoryPause(snapshot, hostMemory) : null;
   // A verdict over readings that didn't arrive has to say so.
   const readingsIncomplete =
     !!snapshot &&
@@ -579,6 +597,15 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
             ) : (
               <p className="text-xs text-text-secondary">Memory breakdown unavailable</p>
             )}
+            {memoryPause ? (
+              <div className="mt-1.5 flex flex-wrap gap-1.5" data-testid="why-slow-memory-pause">
+                <Chip tone="warn">
+                  {memoryPause === "paused"
+                    ? HOST_MEMORY_PAUSE_COPY.whySlow.chipPaused
+                    : HOST_MEMORY_PAUSE_COPY.whySlow.chipLifted}
+                </Chip>
+              </div>
+            ) : null}
           </section>
 
           <section aria-labelledby="why-slow-background">
@@ -592,6 +619,11 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
               <MetricTile
                 label="Paused terminals"
                 value={snapshot.pty ? String(snapshot.pty.pausedCount) : "—"}
+                hint={
+                  snapshot.pty && snapshot.pty.memoryPausedCount > 0
+                    ? `${snapshot.pty.memoryPausedCount} for memory`
+                    : undefined
+                }
                 tone={snapshot.pty && snapshot.pty.pausedCount > 0 ? "warn" : "default"}
               />
               <MetricTile

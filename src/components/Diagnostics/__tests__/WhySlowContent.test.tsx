@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import { WhySlowContent, describeSlowdowns, isAllClear } from "../WhySlowContent";
 import type { WhySlowSnapshot } from "@shared/types/whySlow";
+import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 
 const getWhySlowSnapshot = vi.fn();
 vi.mock("@/clients/systemClient", () => ({
@@ -701,6 +702,28 @@ describe("host memory pause findings", () => {
     const at = findings.findIndex((f) => f.id === "host-memory");
     expect(findings.length).toBeGreaterThan(5);
     expect(findings.slice(0, at).every((f) => f.tone === "alert")).toBe(true);
+  });
+
+  it("stays quiet once the live episode has closed, whatever an older poll counted", () => {
+    const findings = describeSlowdowns(base(), { active: false, paused: false, stalled: false });
+    expect(findings.map((f) => f.id)).not.toContain("host-memory");
+  });
+
+  it("gives the memory finding a reading in the Memory section for either state", async () => {
+    for (const paused of [true, false]) {
+      useHostMemoryPauseStore.setState({ snapshot: { active: true, paused, stalled: false } });
+      getWhySlowSnapshot.mockResolvedValue({ ...base(), pty: makeQuietPty() });
+      const { unmount } = render(<WhySlowContent />);
+      const chip = await screen.findByTestId("why-slow-memory-pause");
+      const finding = describeSlowdowns(
+        { ...base(), pty: makeQuietPty() },
+        useHostMemoryPauseStore.getState().snapshot
+      ).find((f) => f.id === "host-memory");
+      expect(finding).toBeTruthy();
+      expect(chip.closest('[aria-labelledby="why-slow-memory"]')).not.toBeNull();
+      unmount();
+    }
+    useHostMemoryPauseStore.setState({ snapshot: null });
   });
 
   it("is never all clear while the episode the toolbar shows is open", () => {
