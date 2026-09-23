@@ -434,6 +434,12 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "Path input and its browse button are one compound control — the ring is painted once on the wrapper via has-[input:focus-visible], so an element-owned ring here would draw a second ring around the pair",
   },
   {
+    file: "src/components/Project/projectDialogFields.tsx",
+    fragment: "focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-50",
+    reason:
+      "The project dialogs' compound fields (location + browse, emoji + name) follow WorktreePathPicker: the ring is painted once on COMPOUND_FIELD via has-[input:focus-visible], switching to the error colour when invalid, so an element-owned ring would draw a second one inside it",
+  },
+  {
     file: "src/components/ui/PopoverSearchField.tsx",
     fragment: "h-10 min-w-0 flex-1 bg-transparent text-sm text-text-primary",
     reason:

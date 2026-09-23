@@ -12,6 +12,12 @@ const { createProjectFolderMock, openDialogMock, getHomeDirMock } = vi.hoisted((
   getHomeDirMock: vi.fn(),
 }));
 
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
+
 vi.mock("@/clients", () => ({
   projectClient: { openDialog: openDialogMock },
 }));
@@ -46,7 +52,12 @@ vi.mock("@/components/ui/AppDialog", () => {
   AppDialog.Title = ({ children }: SectionProps) => <h2>{children}</h2>;
   AppDialog.CloseButton = () => <button type="button">close</button>;
   AppDialog.Body = ({ children }: SectionProps) => <div>{children}</div>;
-  AppDialog.Footer = ({ children }: SectionProps) => <div>{children}</div>;
+  AppDialog.Footer = ({ children, hint }: SectionProps & { hint?: ReactNode }) => (
+    <div>
+      {hint}
+      {children}
+    </div>
+  );
 
   return { AppDialog };
 });
@@ -73,7 +84,7 @@ function emojiTrigger() {
 }
 
 function folderInput() {
-  return screen.getByLabelText<HTMLInputElement>(/folder name/i);
+  return screen.getByLabelText<HTMLInputElement>(/^name$/i);
 }
 
 async function renderDialog() {
@@ -82,10 +93,34 @@ async function renderDialog() {
   // The dialog resolves the home directory on open; wait for it to land, or the
   // Create button stays disabled on a missing parent path.
   await waitFor(() =>
-    expect(screen.getByLabelText<HTMLInputElement>(/parent directory/i).value).toBe("/Users/test")
+    expect(screen.getByLabelText<HTMLInputElement>(/^location$/i).value).toBe("/Users/test")
   );
   return { onClose, ...result };
 }
+
+describe("CreateProjectFolderDialog validation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getHomeDirMock.mockResolvedValue("/Users/test");
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { system: { getHomeDir: getHomeDirMock } },
+    });
+  });
+
+  it("flags an invalid name as it is typed and never offers it as the destination", async () => {
+    await renderDialog();
+    fireEvent.change(folderInput(), { target: { value: "helios:dashboard" } });
+
+    expect(folderInput().getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByRole("alert").textContent).toBeTruthy();
+    expect(screen.queryByTitle("/Users/test/helios:dashboard")).toBeNull();
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Create folder" }).disabled).toBe(
+      true
+    );
+  });
+});
 
 describe("CreateProjectFolderDialog identity", () => {
   beforeEach(() => {

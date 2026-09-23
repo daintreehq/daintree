@@ -13,14 +13,18 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { validateFolderName } from "@shared/utils/folderName";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 import { ProjectEmojiButton } from "./ProjectEmojiButton";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
-  FIELD_LABEL_CLASS,
-  FIELD_INPUT_CLASS,
-  FIELD_READONLY_INPUT_CLASS,
-  FIELD_CHECKBOX_CLASS,
-  FIELD_BROWSE_BUTTON_CLASS,
-  FIELD_EMOJI_ROW_INDENT,
-  OpenDestinationField,
+  FormGrid,
+  FormSection,
+  FormRow,
+  FIELD_INPUT,
+} from "@/components/Worktree/views/WorktreeFormLayout";
+import {
+  DirectoryPickerField,
+  SlottedInputField,
+  EMOJI_SLOT_CLASS,
+  OpenDestinationControl,
   PathCaption,
   type ProjectOpenDestination,
 } from "./projectDialogFields";
@@ -114,13 +118,51 @@ function normalizeCloneUrl(input: string, shorthandHost: string | null): string 
   return trimmed;
 }
 
-function isValidCloneUrl(url: string, shorthandHost: string | null): boolean {
-  const normalized = normalizeCloneUrl(url, shorthandHost);
-  return /^https?:\/\//i.test(normalized) || /^git@/i.test(normalized);
+type CloneUrlCheck = "empty" | "ok" | "unsupported-scheme" | "needs-host" | "malformed";
+
+/**
+ * Structure, not just a prefix: a bare `https://` or a host with a space in it
+ * used to pass and enable Clone. The schemes mirror the main-process clone
+ * handler, which accepts HTTP(S) and scp-style `git@` only.
+ */
+function checkCloneUrl(url: string, shorthandHost: string | null): CloneUrlCheck {
+  const trimmed = url.trim();
+  if (trimmed === "") return "empty";
+  if (/\s/.test(trimmed)) return "malformed";
+  if (isOwnerRepoShorthand(trimmed) && !shorthandHost) return "needs-host";
+  const normalized = normalizeCloneUrl(trimmed, shorthandHost);
+  if (/^https?:\/\//i.test(normalized)) {
+    try {
+      const parsed = new URL(normalized);
+      return parsed.hostname !== "" && parsed.pathname.split("/").some(Boolean)
+        ? "ok"
+        : "malformed";
+    } catch {
+      return "malformed";
+    }
+  }
+  if (/^git@/i.test(normalized)) {
+    return /^git@[^\s/:@]+:[^\s]*[^\s/:]$/i.test(normalized) ? "ok" : "malformed";
+  }
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(normalized)) return "unsupported-scheme";
+  return "malformed";
 }
+
+function isValidCloneUrl(url: string, shorthandHost: string | null): boolean {
+  return checkCloneUrl(url, shorthandHost) === "ok";
+}
+
+const URL_PROBLEM_COPY: Record<Exclude<CloneUrlCheck, "ok">, string> = {
+  empty: "Paste a repository URL to continue",
+  "unsupported-scheme": "Use an https:// or git@ address",
+  "needs-host": "Use a full repository URL",
+  malformed: "Check the repository URL",
+};
 
 export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialogProps) {
   const folderNameErrorId = useId();
+  const shallowHintId = useId();
+  const urlProblemId = useId();
   const [url, setUrl] = useState("");
   const [parentPath, setParentPath] = useState("");
   const [folderName, setFolderName] = useState("");
@@ -293,6 +335,9 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   };
 
   const startClone = async () => {
+    // Every entry point (button, Enter, Retry) funnels here, so the guard does
+    // too: a Retry after the user cleared a field must not launch a clone.
+    if (isCloning || !canClone) return;
     const targetFolder = folderName.trim();
     setIsCloning(true);
     setError(null);
@@ -442,6 +487,8 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     // Enter acts as Retry too — startClone resets `error` internally, so this
     // matches the on-screen Retry button instead of going dead after a failure.
+    // Enter that confirms an IME candidate is composition, not submission.
+    if (e.nativeEvent.isComposing) return;
     if (e.key === "Enter" && canClone && !isCloning && !isComplete) {
       e.preventDefault();
       void startClone();
@@ -478,6 +525,33 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       ariaLabel: `Sign in to ${matchedProvider.name}`,
     };
   }, [error?.gitReason, url, shorthandHost, forgeProviders]);
+
+  // What pressing Clone will do, said once — or, until it can, what is still
+  // missing. Replaces the path caption that used to hang under the name field.
+  const urlCheck = checkCloneUrl(url, shorthandHost);
+  const urlProblem = urlCheck === "ok" ? null : URL_PROBLEM_COPY[urlCheck];
+  const urlIsInvalid = urlCheck !== "ok" && urlCheck !== "empty";
+
+  // What pressing Clone will do, said once — or, until it can, the first thing
+  // still in the way. Blockers are checked before the summary so a path from an
+  // earlier valid state never stands in for why Clone went dark.
+  const outcomeHint =
+    urlProblem !== null ? (
+      <span id={urlProblemId} className="truncate">
+        {urlProblem}
+      </span>
+    ) : parentPath.trim() === "" ? (
+      <span className="truncate">Choose a location to continue</span>
+    ) : folderNameError !== null ? (
+      <span className="truncate">Fix the folder name to continue</span>
+    ) : destinationPath === null ? (
+      <span className="truncate">Name the folder to continue</span>
+    ) : (
+      <span className="flex min-w-0 items-center gap-1.5">
+        <span className="shrink-0">Clones into</span>
+        <PathCaption path={destinationPath} className="min-w-0 text-text-primary" />
+      </span>
+    );
 
   const summary =
     destinationPath !== null ? (
@@ -532,10 +606,10 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       dismissible={!isCloning && !canFinalize}
       initialFocus="none"
     >
-      <AppDialog.Header>
+      <AppDialog.Header className="py-3">
         {/* Neutral, not accent: the header glyph is decoration, and this focus
             region's one load-bearing accent is the keyboard focus ring. */}
-        <AppDialog.Title icon={<FolderGit2 className="h-5 w-5 text-text-secondary" />}>
+        <AppDialog.Title icon={<FolderGit2 className="h-4 w-4 text-text-secondary" />}>
           Clone repository
         </AppDialog.Title>
         {!isCloning && !canFinalize && <AppDialog.CloseButton />}
@@ -687,127 +761,117 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                 with it stranded, and only this one needs action outside the app. */}
             {cleanupBanner}
 
-            {/* URL Input */}
-            <div className="space-y-1.5">
-              <label className={FIELD_LABEL_CLASS} htmlFor="clone-repo-url">
-                Repository URL
-              </label>
-              <input
-                id="clone-repo-url"
-                ref={urlInputRef}
-                type="text"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="owner/repo or repository URL"
-                disabled={isCloning}
-                className={FIELD_INPUT_CLASS}
-              />
-            </div>
-
-            {/* Parent Directory */}
-            <div className="space-y-1.5">
-              <label className={FIELD_LABEL_CLASS} htmlFor="clone-parent-dir">
-                Parent directory
-              </label>
-              <div className="flex gap-2">
-                <input
-                  id="clone-parent-dir"
-                  type="text"
-                  value={parentPath}
-                  readOnly
-                  aria-readonly="true"
-                  placeholder="Select a directory…"
-                  className={`${FIELD_READONLY_INPUT_CLASS} select-all`}
-                />
-                <Button
-                  variant="outline"
-                  onClick={() => void pickDirectory()}
-                  disabled={isCloning}
-                  className={FIELD_BROWSE_BUTTON_CLASS}
+            <FormGrid>
+              <FormSection title="Repository">
+                <FormRow
+                  label="URL"
+                  htmlFor="clone-repo-url"
+                  hint={
+                    <div className="flex min-w-0 items-center gap-1.5 text-xs">
+                      <Checkbox
+                        id="clone-shallow"
+                        checked={shallowClone}
+                        onCheckedChange={(checked) => setShallowClone(checked === true)}
+                        disabled={isCloning}
+                        aria-describedby={shallowHintId}
+                      />
+                      <label
+                        htmlFor="clone-shallow"
+                        className="ml-0.5 cursor-pointer text-text-secondary hover:text-text-primary"
+                      >
+                        Shallow clone
+                      </label>
+                      <span aria-hidden="true" className="text-text-secondary">
+                        ·
+                      </span>
+                      <span id={shallowHintId} className="truncate text-text-secondary">
+                        Latest commit only, limits history
+                      </span>
+                    </div>
+                  }
                 >
-                  <FolderOpen className="h-4 w-4" />
-                  Browse
-                </Button>
-              </div>
-            </div>
+                  <input
+                    id="clone-repo-url"
+                    ref={urlInputRef}
+                    type="text"
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    // Only offer the shorthand when one forge makes it resolvable.
+                    placeholder={shorthandHost ? "owner/repo or repository URL" : "Repository URL"}
+                    disabled={isCloning}
+                    aria-invalid={urlIsInvalid || undefined}
+                    aria-describedby={urlIsInvalid ? urlProblemId : undefined}
+                    spellCheck={false}
+                    autoComplete="off"
+                    className={FIELD_INPUT}
+                  />
+                </FormRow>
+              </FormSection>
 
-            {/* Folder Name */}
-            <div className="space-y-1.5">
-              <label className={FIELD_LABEL_CLASS} htmlFor="clone-folder-name">
-                Folder name
-              </label>
-              <div className="flex items-center gap-2">
-                <ProjectEmojiButton
-                  emoji={effectiveEmoji}
-                  onEmojiChange={setPickedEmoji}
-                  disabled={isCloning}
-                  ariaLabel="Choose project emoji"
-                />
-                <input
-                  id="clone-folder-name"
-                  type="text"
-                  value={folderName}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    setFolderName(next);
-                    // Clearing the field re-enables URL-derived auto-suggest so the
-                    // user can recover after a manual edit they no longer want.
-                    setFolderNameEdited(next !== "");
-                  }}
-                  onKeyDown={handleKeyDown}
-                  disabled={isCloning}
-                  aria-invalid={folderNameError != null}
-                  aria-describedby={folderNameError ? folderNameErrorId : undefined}
-                  className={FIELD_INPUT_CLASS}
-                  placeholder="my-project"
-                />
-              </div>
-              {folderNameError ? (
-                <p
-                  id={folderNameErrorId}
-                  role="alert"
-                  className={`${FIELD_EMOJI_ROW_INDENT} text-xs text-status-error`}
+              <FormSection title="Destination">
+                <FormRow label="Location" htmlFor="clone-parent-dir">
+                  <DirectoryPickerField
+                    id="clone-parent-dir"
+                    value={parentPath}
+                    onBrowse={() => void pickDirectory()}
+                    disabled={isCloning}
+                    browseLabel="Browse for a location"
+                  />
+                </FormRow>
+                <FormRow
+                  label="Name"
+                  htmlFor="clone-folder-name"
+                  hint={
+                    folderNameError && (
+                      <p id={folderNameErrorId} role="alert" className="text-xs text-status-error">
+                        {folderNameError}
+                      </p>
+                    )
+                  }
                 >
-                  {folderNameError}
-                </p>
-              ) : (
-                // Says where the clone will actually land, keeping the leaf
-                // folder that the parent-directory field's own truncation eats.
-                destinationPath !== null && (
-                  <PathCaption path={destinationPath} className={FIELD_EMOJI_ROW_INDENT} />
-                )
-              )}
-            </div>
-
-            <OpenDestinationField
-              value={destination}
-              onChange={setDestination}
-              disabled={isCloning}
-            />
-
-            {/* Shallow Clone */}
-            <div className="space-y-1">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={shallowClone}
-                  onChange={(e) => setShallowClone(e.target.checked)}
-                  disabled={isCloning}
-                  className={FIELD_CHECKBOX_CLASS}
-                />
-                <span className="text-sm text-text-primary">Shallow clone</span>
-              </label>
-              <p className="ml-6 text-xs text-text-secondary">
-                Fetches only the latest commit (<code>--depth 1</code>) — faster for large repos,
-                but limits history and some push paths.
-              </p>
-            </div>
+                  <SlottedInputField
+                    id="clone-folder-name"
+                    value={folderName}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setFolderName(next);
+                      // Clearing the field re-enables URL-derived auto-suggest so the
+                      // user can recover after a manual edit they no longer want.
+                      setFolderNameEdited(next !== "");
+                    }}
+                    onKeyDown={handleKeyDown}
+                    disabled={isCloning}
+                    invalid={folderNameError != null}
+                    aria-describedby={folderNameError ? folderNameErrorId : undefined}
+                    spellCheck={false}
+                    autoComplete="off"
+                    placeholder="my-project"
+                    leading={
+                      <ProjectEmojiButton
+                        emoji={effectiveEmoji}
+                        onEmojiChange={setPickedEmoji}
+                        disabled={isCloning}
+                        ariaLabel="Choose project emoji"
+                        className={EMOJI_SLOT_CLASS}
+                      />
+                    }
+                  />
+                </FormRow>
+                <FormRow label="Open in" selfLabelled>
+                  <OpenDestinationControl
+                    value={destination}
+                    onChange={setDestination}
+                    disabled={isCloning}
+                  />
+                </FormRow>
+              </FormSection>
+            </FormGrid>
           </>
         )}
       </AppDialog.Body>
 
-      <AppDialog.Footer>
+      <AppDialog.Footer hint={mode === "configure" || mode === "failed" ? outcomeHint : undefined}>
         {mode === "complete" ? (
           <Button ref={footerActionRef} variant="contrast" onClick={handleClose} className="gap-2">
             <Check className="h-4 w-4" />
@@ -818,23 +882,25 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             {isStopping ? "Stopping…" : "Stop clone"}
           </Button>
         ) : error ? (
-          <>
-            <Button variant="outline" onClick={onCancel}>
+          <div className="flex shrink-0 items-center gap-3">
+            <Button variant="ghost" size="sm" onClick={onCancel}>
               Close
             </Button>
             <Button
               ref={footerActionRef}
               variant="contrast"
+              size="sm"
               onClick={() => void startClone()}
-              disabled={isCloning}
+              disabled={isCloning || !canClone}
             >
               Retry
             </Button>
-          </>
+          </div>
         ) : (
-          <>
+          <div className="flex shrink-0 items-center gap-3">
             <Button
-              variant="outline"
+              variant="ghost"
+              size="sm"
               onClick={isCloning ? stopClone : onCancel}
               loading={isStopping}
             >
@@ -842,13 +908,21 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             </Button>
             <Button
               variant="contrast"
+              size="sm"
               onClick={() => void startClone()}
               disabled={!canClone}
               loading={isCloning}
+              aria-keyshortcuts="Enter"
             >
               Clone
+              <span
+                className="ml-1 rounded-xs bg-text-inverse/15 px-1 py-0.5 font-mono text-3xs leading-none text-text-inverse"
+                aria-hidden="true"
+              >
+                {"\u21A9"}
+              </span>
             </Button>
-          </>
+          </div>
         )}
       </AppDialog.Footer>
     </AppDialog>

@@ -67,7 +67,12 @@ vi.mock("@/components/ui/AppDialog", () => {
   AppDialog.Title = ({ children }: AppDialogSectionProps) => <h2>{children}</h2>;
   AppDialog.CloseButton = () => <button type="button">close</button>;
   AppDialog.Body = ({ children }: AppDialogSectionProps) => <div>{children}</div>;
-  AppDialog.Footer = ({ children }: AppDialogSectionProps) => <div>{children}</div>;
+  AppDialog.Footer = ({ children, hint }: AppDialogSectionProps & { hint?: ReactNode }) => (
+    <div>
+      {hint}
+      {children}
+    </div>
+  );
 
   return { AppDialog };
 });
@@ -156,7 +161,7 @@ describe("GitInitDialog", () => {
     const button = startButton();
     expect(button.disabled).toBe(false);
 
-    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+    fireEvent.change(screen.getByLabelText(/^message$/i), {
       target: { value: "feat: init" },
     });
     fireEvent.click(button);
@@ -194,7 +199,7 @@ describe("GitInitDialog", () => {
   it("offers every registry template in order and preselects the default", () => {
     renderDialog();
 
-    const select = screen.getByLabelText(/gitignore template/i) as HTMLSelectElement;
+    const select = screen.getByLabelText(/^gitignore$/i) as HTMLSelectElement;
     expect(Array.from(select.options).map((option) => option.value)).toEqual(
       GITIGNORE_TEMPLATE_OPTIONS.map((option) => option.value)
     );
@@ -204,7 +209,7 @@ describe("GitInitDialog", () => {
   it("pre-fills the commit message and submits the default without editing", async () => {
     renderDialog();
 
-    const input = screen.getByLabelText(/initial commit message/i) as HTMLInputElement;
+    const input = screen.getByLabelText(/^message$/i) as HTMLInputElement;
     expect(input.value).toBe("Initial commit");
 
     fireEvent.click(startButton());
@@ -219,7 +224,7 @@ describe("GitInitDialog", () => {
   it("disables submit when the commit message is cleared", () => {
     renderDialog();
 
-    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+    fireEvent.change(screen.getByLabelText(/^message$/i), {
       target: { value: "   " },
     });
 
@@ -240,19 +245,19 @@ describe("GitInitDialog", () => {
     };
     const { rerender } = render(<GitInitDialog isOpen={true} {...dialogProps} />);
 
-    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+    fireEvent.change(screen.getByLabelText(/^message$/i), {
       target: { value: "feat: custom" },
     });
-    fireEvent.change(screen.getByLabelText(/gitignore template/i), {
+    fireEvent.change(screen.getByLabelText(/^gitignore$/i), {
       target: { value: "python" },
     });
 
     rerender(<GitInitDialog isOpen={false} {...dialogProps} />);
     rerender(<GitInitDialog isOpen={true} {...dialogProps} />);
 
-    const input = screen.getByLabelText(/initial commit message/i) as HTMLInputElement;
+    const input = screen.getByLabelText(/^message$/i) as HTMLInputElement;
     expect(input.value).toBe("Initial commit");
-    const select = screen.getByLabelText(/gitignore template/i) as HTMLSelectElement;
+    const select = screen.getByLabelText(/^gitignore$/i) as HTMLSelectElement;
     expect(select.value).toBe(DEFAULT_GITIGNORE_TEMPLATE_ID);
   });
 
@@ -288,10 +293,10 @@ describe("GitInitDialog", () => {
 
     renderDialog();
 
-    fireEvent.change(screen.getByLabelText(/gitignore template/i), {
+    fireEvent.change(screen.getByLabelText(/^gitignore$/i), {
       target: { value: "python" },
     });
-    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+    fireEvent.change(screen.getByLabelText(/^message$/i), {
       target: { value: "feat: bootstrap" },
     });
 
@@ -313,7 +318,7 @@ describe("GitInitDialog", () => {
     renderDialog();
 
     fireEvent.click(screen.getByLabelText(/create initial commit/i));
-    expect(screen.queryByLabelText(/initial commit message/i)).toBeNull();
+    expect(screen.queryByLabelText(/^message$/i)).toBeNull();
 
     fireEvent.click(startButton());
 
@@ -329,8 +334,8 @@ describe("GitInitDialog", () => {
 
     renderDialog();
 
-    fireEvent.change(screen.getByLabelText(/gitignore template/i), { target: { value: "none" } });
-    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+    fireEvent.change(screen.getByLabelText(/^gitignore$/i), { target: { value: "none" } });
+    fireEvent.change(screen.getByLabelText(/^message$/i), {
       target: { value: "feat: init" },
     });
     fireEvent.click(startButton());
@@ -347,7 +352,7 @@ describe("GitInitDialog", () => {
 
     renderDialog();
 
-    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+    fireEvent.change(screen.getByLabelText(/^message$/i), {
       target: { value: "feat: init" },
     });
     const button = startButton();
@@ -361,7 +366,7 @@ describe("GitInitDialog", () => {
     const onSuccess = vi.fn();
     renderDialog({ onSuccess });
 
-    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+    fireEvent.change(screen.getByLabelText(/^message$/i), {
       target: { value: "feat: init" },
     });
     fireEvent.click(startButton());
@@ -384,7 +389,7 @@ describe("GitInitDialog", () => {
     const onSuccess = vi.fn();
     renderDialog({ onSuccess });
 
-    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+    fireEvent.change(screen.getByLabelText(/^message$/i), {
       target: { value: "feat: init" },
     });
     fireEvent.click(startButton());
@@ -406,7 +411,7 @@ describe("GitInitDialog", () => {
     initGitGuidedMock.mockImplementationOnce(() => new Promise(() => {}));
     renderDialog();
 
-    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+    fireEvent.change(screen.getByLabelText(/^message$/i), {
       target: { value: "feat: init" },
     });
     fireEvent.click(startButton());
@@ -443,7 +448,7 @@ describe("GitInitDialog", () => {
     initGitGuidedMock.mockResolvedValueOnce({ outcome: "error", completedSteps: [] });
     renderDialog();
 
-    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+    fireEvent.change(screen.getByLabelText(/^message$/i), {
       target: { value: "feat: init" },
     });
     fireEvent.click(startButton());
@@ -464,7 +469,7 @@ describe("GitInitDialog", () => {
   it("completes from the invoke result when no progress events arrive", async () => {
     renderDialog();
 
-    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+    fireEvent.change(screen.getByLabelText(/^message$/i), {
       target: { value: "feat: init" },
     });
     fireEvent.click(startButton());
@@ -480,7 +485,7 @@ describe("GitInitDialog", () => {
 
     renderDialog();
 
-    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+    fireEvent.change(screen.getByLabelText(/^message$/i), {
       target: { value: "feat: init" },
     });
     fireEvent.click(startButton());
@@ -496,7 +501,7 @@ describe("GitInitDialog", () => {
 
     renderDialog();
 
-    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+    fireEvent.change(screen.getByLabelText(/^message$/i), {
       target: { value: "feat: init" },
     });
     fireEvent.click(startButton());
@@ -547,7 +552,7 @@ describe("GitInitDialog", () => {
 
     renderDialog();
 
-    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+    fireEvent.change(screen.getByLabelText(/^message$/i), {
       target: { value: "feat: init" },
     });
     fireEvent.click(startButton());
@@ -562,7 +567,7 @@ describe("GitInitDialog", () => {
   it("surfaces the git config commands and offers Retry on identity error", async () => {
     renderDialog();
 
-    fireEvent.change(screen.getByLabelText(/initial commit message/i), {
+    fireEvent.change(screen.getByLabelText(/^message$/i), {
       target: { value: "feat: init" },
     });
     fireEvent.click(startButton());
@@ -670,7 +675,7 @@ describe("GitInitDialog", () => {
 
   describe("project identity row", () => {
     function nameInput() {
-      return screen.getByLabelText<HTMLInputElement>(/project name/i);
+      return screen.getByLabelText<HTMLInputElement>(/^name$/i);
     }
 
     it("derives the name from the folder when reached without a carried identity", () => {
@@ -812,7 +817,7 @@ describe("GitInitDialog", () => {
       initGitGuidedMock.mockImplementationOnce(() => new Promise(() => {}));
       renderDialog();
       // Everything off: no gitignore, no commit — one step remains.
-      fireEvent.change(screen.getByLabelText(/gitignore template/i), {
+      fireEvent.change(screen.getByLabelText(/^gitignore$/i), {
         target: { value: "none" },
       });
       fireEvent.click(screen.getByRole("checkbox"));
@@ -903,8 +908,8 @@ describe("GitInitDialog", () => {
       });
 
       await waitFor(() => expect(screen.getByRole("progressbar")).toBeTruthy(), { timeout: 2000 });
-      expect(screen.queryByLabelText(/gitignore template/i)).toBeNull();
-      expect(screen.queryByLabelText(/project name/i)).toBeNull();
+      expect(screen.queryByLabelText(/^gitignore$/i)).toBeNull();
+      expect(screen.queryByLabelText(/^name$/i)).toBeNull();
     });
 
     it("hands focus to the running readout when the mode destroys the focused control", async () => {
@@ -990,8 +995,8 @@ describe("GitInitDialog", () => {
       renderDialog();
       const start = startButton();
       const inputs = [
-        screen.getByLabelText<HTMLInputElement>(/project name/i),
-        screen.getByLabelText<HTMLInputElement>(/initial commit message/i),
+        screen.getByLabelText<HTMLInputElement>(/^name$/i),
+        screen.getByLabelText<HTMLInputElement>(/^message$/i),
       ];
 
       for (const input of inputs) {
