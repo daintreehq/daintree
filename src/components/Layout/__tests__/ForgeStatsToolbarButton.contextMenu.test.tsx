@@ -24,10 +24,17 @@ const dispatchMock = vi.hoisted(() => vi.fn());
 const getRepoUrlMock = vi.hoisted(() => vi.fn<(cwd: string) => Promise<string | null>>());
 const refreshStatsMock = vi.hoisted(() => vi.fn());
 const providerState = vi.hoisted((): { entry: ForgeProviderEntry | null } => ({ entry: null }));
-const statsState = vi.hoisted((): { isTokenError: boolean; rateLimitResetAt: number | null } => ({
-  isTokenError: false,
-  rateLimitResetAt: null,
-}));
+const statsState = vi.hoisted(
+  (): {
+    isTokenError: boolean;
+    rateLimitResetAt: number | null;
+    rateLimitKind: "primary" | "secondary" | null;
+  } => ({
+    isTokenError: false,
+    rateLimitResetAt: null,
+    rateLimitKind: null,
+  })
+);
 const worktrees = vi.hoisted(() => new Map<string, WorktreeFixture>());
 
 vi.mock("@/clients/forgeClient", () => ({
@@ -49,7 +56,7 @@ vi.mock("@/hooks/useRepositoryStats", () => ({
     isStale: false,
     lastUpdated: Date.now(),
     rateLimitResetAt: statsState.rateLimitResetAt,
-    rateLimitKind: null,
+    rateLimitKind: statsState.rateLimitKind,
     freshnessLevel: "fresh" as const,
   }),
 }));
@@ -129,6 +136,7 @@ beforeEach(() => {
   providerState.entry = GITHUB;
   statsState.isTokenError = false;
   statsState.rateLimitResetAt = null;
+  statsState.rateLimitKind = null;
   worktrees.set("wt-1", { id: "wt-1", path: "/test/proj/wt", branch: "feature/x" });
 });
 
@@ -278,7 +286,16 @@ describe("ForgeStatsToolbarButton context menus", () => {
     statsState.rateLimitResetAt = Date.now() + 10 * 60_000;
     await renderStats();
 
-    const menu = await openMenu(screen.getByLabelText(/GitHub rate limit — resets in/));
+    const menu = await openMenu(screen.getByLabelText("GitHub rate limit"));
+
+    expect(itemLabels(menu)).toEqual(CHROME_MENU);
+  });
+
+  it("keeps the rate-limit clock for a throttle that reported no reset time", async () => {
+    statsState.rateLimitKind = "secondary";
+    await renderStats();
+
+    const menu = await openMenu(screen.getByLabelText("GitHub secondary rate limit"));
 
     expect(itemLabels(menu)).toEqual(CHROME_MENU);
   });

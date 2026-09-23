@@ -181,7 +181,9 @@ export const ForgeStatsToolbarButton = memo(
     const [statsJustUpdated, setStatsJustUpdated] = useState(false);
     const [rateLimitCountdown, setRateLimitCountdown] = useState<string | null>(null);
     const [rateLimitTooltipOpen, setRateLimitTooltipOpen] = useState(false);
-    const [rateLimitDetails, setRateLimitDetails] = useState<RateLimitDetails | null>(null);
+    const [rateLimitDetails, setRateLimitDetails] = useState<RateLimitDetails | null | undefined>(
+      undefined
+    );
     const [rateLimitNow, setRateLimitNow] = useState(() => Date.now());
     const prevLastUpdatedRef = useRef<number | null>(null);
 
@@ -358,7 +360,9 @@ export const ForgeStatsToolbarButton = memo(
       };
     }, [rateLimitResetAt]);
 
-    const rateLimitActive = rateLimitCountdown !== null;
+    // A kind with no reset time is still an active throttle (useRepositoryStats
+    // treats either as parked), so the clock stays until both clear.
+    const rateLimitActive = rateLimitCountdown !== null || rateLimitKind !== null;
 
     // The pill row holds three equal flex-1 stat pills budgeted to a constant
     // 13rem. Each active trailing indicator (rate-limit clock, PR-detection-
@@ -398,9 +402,14 @@ export const ForgeStatsToolbarButton = memo(
     useEffect(() => {
       if (!rateLimitActive || !rateLimitTooltipOpen || !projectPath) return;
       let cancelled = false;
-      void forgeClient.getRateLimitDetails(projectPath).then((details) => {
-        if (!cancelled) setRateLimitDetails(details);
-      });
+      void forgeClient.getRateLimitDetails(projectPath).then(
+        (details) => {
+          if (!cancelled) setRateLimitDetails(details ?? null);
+        },
+        () => {
+          if (!cancelled) setRateLimitDetails(null);
+        }
+      );
       setRateLimitNow(Date.now());
       const intervalId = window.setInterval(() => {
         setRateLimitNow(Date.now());
@@ -414,7 +423,7 @@ export const ForgeStatsToolbarButton = memo(
     // Drop stale per-bucket data once the limit clears so the next time the
     // tooltip opens we don't flash old numbers before the fresh fetch lands.
     useEffect(() => {
-      if (!rateLimitActive) setRateLimitDetails(null);
+      if (!rateLimitActive) setRateLimitDetails(undefined);
     }, [rateLimitActive]);
 
     const issuesButtonRef = useRef<HTMLButtonElement>(null);
@@ -1281,8 +1290,8 @@ export const ForgeStatsToolbarButton = memo(
                     data-toolbar-item=""
                     aria-label={
                       rateLimitKind === "secondary"
-                        ? `${providerName} secondary rate limit — resuming in ${rateLimitCountdown}`
-                        : `${providerName} rate limit — resets in ${rateLimitCountdown}`
+                        ? `${providerName} secondary rate limit`
+                        : `${providerName} rate limit`
                     }
                     className="flex h-full w-7 shrink-0 cursor-default items-center justify-center focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
                   >
@@ -1296,6 +1305,7 @@ export const ForgeStatsToolbarButton = memo(
             </ContextMenu>
             <TooltipContent side="bottom" className="px-0 py-0">
               <RateLimitDetailsPanel
+                providerName={providerName}
                 kind={rateLimitKind}
                 details={rateLimitDetails}
                 now={rateLimitNow}
