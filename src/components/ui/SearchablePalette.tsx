@@ -68,6 +68,12 @@ export interface SearchablePaletteProps<T> {
   searchPlaceholder?: string;
   /** ARIA label for the search input */
   searchAriaLabel?: string;
+  /**
+   * Id of an element that describes the search input — for a palette control
+   * the user reaches by a chord from the field rather than by Tab, which moves
+   * the list selection here.
+   */
+  searchAriaDescribedBy?: string;
   /** ID for the listbox container */
   listId?: string;
   /** Prefix for item IDs used in aria-activedescendant */
@@ -182,6 +188,7 @@ export function SearchablePalette<T>({
   tier,
   searchPlaceholder = "Search",
   searchAriaLabel,
+  searchAriaDescribedBy,
   listId = "searchable-palette-list",
   itemIdPrefix = "palette-option",
   emptyMessage = "No items available",
@@ -394,6 +401,7 @@ export function SearchablePalette<T>({
           aria-haspopup="listbox"
           aria-autocomplete="list"
           aria-label={searchAriaLabel ?? searchPlaceholder.replace("...", "")}
+          aria-describedby={searchAriaDescribedBy}
           aria-controls={listRendered ? listId : undefined}
           aria-activedescendant={activeDescendant}
         />
