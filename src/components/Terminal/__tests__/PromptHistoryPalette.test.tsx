@@ -40,6 +40,8 @@ afterAll(() => {
 const { PromptHistoryPalette } = await import("@/components/Terminal/PromptHistoryPalette");
 const { useCommandHistoryStore } = await import("@/store/commandHistoryStore");
 const { usePaletteStore } = await import("@/store/paletteStore");
+const { useProjectStore } = await import("@/store/projectStore");
+const { useAnnouncerStore } = await import("@/store/accessibilityAnnouncerStore");
 
 const PROJECT = "proj-a";
 const OTHER = "proj-b";
@@ -136,7 +138,46 @@ describe("PromptHistoryPalette", () => {
     });
     renderPalette();
     const texts = optionTexts();
-    expect(texts.filter((t) => t.includes("run the full test suite"))).toHaveLength(1);
+    const kept = texts.filter((t) => t.includes("run the full test suite"));
+    expect(kept).toHaveLength(1);
+    expect(kept[0]).toContain("1m ago");
     expect(texts).toHaveLength(2);
+  });
+
+  it("names each prompt's project across all projects, and no project within one", async () => {
+    useProjectStore.setState({
+      projects: [
+        { id: PROJECT, name: "Daintree", path: "/a", emoji: "🌳", lastOpened: 0 },
+        { id: OTHER, name: "Helios", path: "/b", emoji: "☀️", lastOpened: 0 },
+      ],
+    });
+    seed({
+      [PROJECT]: [entry("a", "summarise the diff", 1)],
+      [OTHER]: [entry("b", "add a dark mode toggle", 2)],
+    });
+    const input = renderPalette();
+    expect(optionTexts().join(" ")).not.toMatch(/Daintree|Helios/);
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "r", metaKey: true });
+    });
+    const texts = optionTexts();
+    expect(texts.find((t) => t.includes("dark mode"))).toContain("Helios");
+    expect(texts.find((t) => t.includes("summarise"))).toContain("Daintree");
+  });
+
+  it("describes the scope and its chord from the search field, and announces a switch", async () => {
+    const announce = vi.spyOn(useAnnouncerStore.getState(), "announce");
+    seed({ [PROJECT]: [entry("a", "summarise the diff", 1)] });
+    const input = renderPalette();
+    const describe = () =>
+      document.getElementById(input.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
+    const before = describe();
+    expect(before).toMatch(/R/);
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "r", metaKey: true });
+    });
+    expect(describe()).not.toBe(before);
+    expect(announce).toHaveBeenCalledTimes(1);
+    announce.mockRestore();
   });
 });

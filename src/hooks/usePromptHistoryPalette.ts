@@ -2,6 +2,7 @@ import { useState, useCallback, useMemo } from "react";
 import type { IFuseOptions } from "fuse.js";
 import { useCommandHistoryStore, type PromptHistoryEntry } from "@/store/commandHistoryStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { toPromptPreview } from "@/utils/promptHistoryPreview";
 import { useSearchablePalette } from "./useSearchablePalette";
 
@@ -9,7 +10,11 @@ import { useSearchablePalette } from "./useSearchablePalette";
 export interface PromptHistoryItem extends PromptHistoryEntry {
   preview: string;
   lineCount: number;
+  /** The project whose history the entry came from — the bucket, not a field the store keeps. */
+  projectId: string;
 }
+
+type SourcedEntry = PromptHistoryEntry & { projectId: string };
 
 /**
  * Search runs over the preview rather than the raw prompt so the match ranges
@@ -36,7 +41,7 @@ export interface UsePromptHistoryPaletteOptions {
   projectId: string | undefined;
 }
 
-function toItem(entry: PromptHistoryEntry): PromptHistoryItem {
+function toItem(entry: SourcedEntry): PromptHistoryItem {
   const { text, lineCount } = toPromptPreview(entry.prompt);
   return { ...entry, preview: text, lineCount };
 }
@@ -47,9 +52,9 @@ function toItem(entry: PromptHistoryEntry): PromptHistoryItem {
  * merges every project's list — but recall only ever inserts the text, so two
  * rows for one prompt are two identical choices spending the result cap.
  */
-function newestPerPrompt(entries: readonly PromptHistoryEntry[]): PromptHistoryEntry[] {
+function newestPerPrompt(entries: readonly SourcedEntry[]): SourcedEntry[] {
   const seen = new Set<string>();
-  const out: PromptHistoryEntry[] = [];
+  const out: SourcedEntry[] = [];
   for (const entry of [...entries].sort((a, b) => b.addedAt - a.addedAt)) {
     if (seen.has(entry.prompt)) continue;
     seen.add(entry.prompt);
@@ -64,12 +69,15 @@ export function usePromptHistoryPalette({ terminalId, projectId }: UsePromptHist
   const history = useCommandHistoryStore((s) => s.history);
 
   const items = useMemo(() => {
-    const entries =
+    const buckets =
       scope === "project"
         ? projectId
-          ? (history[projectId] ?? [])
+          ? [[projectId, history[projectId] ?? []] as const]
           : []
-        : Object.values(history).flat();
+        : Object.entries(history);
+    const entries = buckets.flatMap(([source, list]) =>
+      list.map((entry) => ({ ...entry, projectId: source }))
+    );
     return newestPerPrompt(entries).map(toItem);
   }, [scope, projectId, history]);
 
@@ -81,9 +89,27 @@ export function usePromptHistoryPalette({ terminalId, projectId }: UsePromptHist
     includeMatches: true,
   });
 
+  const changeScope = useCallback(
+    (next: HistoryScope) => {
+      if (next === scope) return;
+      setScope(next);
+      // The switch lives in the footer and the chord flips it from the search
+      // field, so nothing under focus changes: say what the list now holds.
+      useAnnouncerStore
+        .getState()
+        .announce(
+          next === "project"
+            ? "Showing prompts from this project"
+            : "Showing prompts from all projects",
+          "polite"
+        );
+    },
+    [scope]
+  );
+
   const toggleScope = useCallback(() => {
-    setScope((prev) => (prev === "project" ? "global" : "project"));
-  }, []);
+    changeScope(scope === "project" ? "global" : "project");
+  }, [scope, changeScope]);
 
   const selectEntry = useCallback(
     (entry: PromptHistoryEntry) => {
@@ -105,7 +131,7 @@ export function usePromptHistoryPalette({ terminalId, projectId }: UsePromptHist
   return {
     ...palette,
     scope,
-    setScope,
+    setScope: changeScope,
     toggleScope,
     selectEntry,
     confirmSelection,

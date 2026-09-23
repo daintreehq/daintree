@@ -7,7 +7,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { PromptHistoryPalette } from "../PromptHistoryPalette";
-import { PROJECT_ID, TERMINAL_ID, requireFixture } from "./promptHistoryFixtures";
+import { useProjectStore } from "@/store/projectStore";
+import { PROJECTS, PROJECT_ID, TERMINAL_ID, requireFixture } from "./promptHistoryFixtures";
 import "@/index.css";
 
 /**
@@ -31,6 +32,7 @@ applyAppThemeToRoot(document.documentElement, resolveAppTheme(themeId));
 document.body.style.background = "var(--color-surface-canvas)";
 
 // Seed before mounting — a store write during render is a cross-component update.
+useProjectStore.setState({ projects: PROJECTS });
 useCommandHistoryStore.setState({ history: fixture.history });
 usePaletteStore.getState().openPalette("prompt-history");
 

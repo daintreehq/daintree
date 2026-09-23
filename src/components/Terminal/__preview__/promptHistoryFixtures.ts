@@ -1,3 +1,4 @@
+import type { Project } from "@shared/types/project";
 import type { PromptHistoryEntry } from "@/store/commandHistoryStore";
 
 /**
@@ -14,6 +15,11 @@ import type { PromptHistoryEntry } from "@/store/commandHistoryStore";
 export const PROJECT_ID = "proj-daintree";
 export const OTHER_PROJECT_ID = "proj-helios";
 export const TERMINAL_ID = "term-preview";
+
+export const PROJECTS: Project[] = [
+  { id: PROJECT_ID, name: "Daintree", path: "/Users/dev/daintree", emoji: "🌳", lastOpened: 0 },
+  { id: OTHER_PROJECT_ID, name: "Helios", path: "/Users/dev/helios", emoji: "☀️", lastOpened: 0 },
+];
 
 const NOW = Date.now();
 const minutes = (n: number) => NOW - n * 60_000;

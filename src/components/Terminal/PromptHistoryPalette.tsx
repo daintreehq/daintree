@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
@@ -17,6 +17,7 @@ import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 import { excerptPreview, findPreviewMatches } from "@/utils/promptHistoryPreview";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { cn } from "@/lib/utils";
+import { useProjectStore } from "@/store/projectStore";
 import { isMac } from "@/lib/platform";
 
 /**
@@ -26,6 +27,8 @@ import { isMac } from "@/lib/platform";
  * header is then the key for the control in the footer.
  */
 const SHORTCUT = "Cmd+R";
+
+const SCOPE_HINT_ID = "prompt-history-scope-hint";
 
 const SCOPE_TITLE = `Switch scope (${isMac() ? "⌘R" : "Ctrl+R"})`;
 
@@ -40,6 +43,8 @@ interface PromptHistoryRowProps {
   isSelected: boolean;
   query: string;
   matches: readonly FuseResultMatch[] | undefined;
+  /** Set only in the all-projects scope, where it is what tells two lists' prompts apart. */
+  projectName?: string | null;
   onSelect: (item: PromptHistoryItem) => void;
   onHoverIndex: (index: number) => void;
 }
@@ -50,6 +55,7 @@ export function PromptHistoryRow({
   isSelected,
   query,
   matches,
+  projectName,
   onSelect,
   onHoverIndex,
 }: PromptHistoryRowProps) {
@@ -63,7 +69,7 @@ export function PromptHistoryRow({
   const targets = item.armedIds?.length ?? 0;
   // What the history recorded about the send, never what recalling it will do:
   // recall puts the text in this composer and nothing else.
-  const meta = [
+  const counts = [
     item.lineCount > 1 ? `${item.lineCount} lines` : null,
     targets > 1 ? `${targets} panes` : null,
   ].filter(Boolean);
@@ -96,9 +102,11 @@ export function PromptHistoryRow({
       </span>
       {/* After the prompt, so the option's name starts with the text on screen. */}
       {agentName && <span className="sr-only">, sent to {agentName}</span>}
-      {meta.length > 0 && (
-        <span className="shrink-0 text-xs text-text-secondary tabular-nums">
-          {meta.join(" · ")}
+      {(projectName || counts.length > 0) && (
+        <span className="flex shrink-0 items-center gap-1 text-xs text-text-secondary tabular-nums">
+          {projectName && <span className="max-w-32 truncate">{projectName}</span>}
+          {projectName && counts.length > 0 && <span aria-hidden="true">·</span>}
+          {counts.length > 0 && <span>{counts.join(" · ")}</span>}
         </span>
       )}
       <span className="shrink-0 min-w-14 text-right text-xs text-text-secondary tabular-nums">
@@ -142,6 +150,12 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
     };
   }, [onOpenRef, open]);
 
+  const projects = useProjectStore((s) => s.projects);
+  const projectNames = useMemo(
+    () => (scope === "global" ? new Map(projects.map((p) => [p.id, p.name])) : null),
+    [scope, projects]
+  );
+
   const getItemId = useCallback((item: PromptHistoryItem) => item.id, []);
 
   const renderItem = useCallback(
@@ -159,11 +173,12 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
         isSelected={isSelected}
         query={query}
         matches={matches}
+        projectName={projectNames?.get(item.projectId)}
         onSelect={selectEntry}
         onHoverIndex={onHoverIndex}
       />
     ),
-    [selectEntry, query]
+    [selectEntry, query, projectNames]
   );
 
   const handleKeyDown = useCallback(
@@ -195,6 +210,12 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
             control — Tab moves the list selection, so this is the keyboard
             route to it. */}
         <KbdChord shortcut={SHORTCUT} aria-label={SCOPE_TITLE} />
+        <span id={SCOPE_HINT_ID} className="sr-only">
+          {scope === "project"
+            ? "Showing this project's prompts."
+            : "Showing every project's prompts."}{" "}
+          {SCOPE_TITLE}.
+        </span>
         <SegmentedToggle
           options={SCOPE_OPTIONS}
           value={scope}
@@ -230,6 +251,7 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
       ariaLabel="Prompt history search"
       searchPlaceholder="Search sent prompts…"
       searchAriaLabel="Search prompt history"
+      searchAriaDescribedBy={SCOPE_HINT_ID}
       listId="prompt-history-list"
       itemIdPrefix="prompt-history-option"
       emptyMessage={

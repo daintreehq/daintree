@@ -19,6 +19,7 @@ function makeEntry(overrides: Partial<PromptHistoryItem> = {}): PromptHistoryIte
     addedAt: Date.now(),
     preview: text,
     lineCount,
+    projectId: "proj-a",
     ...overrides,
   };
 }
