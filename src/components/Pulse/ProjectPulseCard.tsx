@@ -30,6 +30,7 @@ import { useProjectHealth } from "@/hooks/useProjectHealth";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { systemClient } from "@/clients/systemClient";
 import { formatTimeSince } from "@/components/Layout/FreshnessUtils";
+import { formatCompactCount, formatCountExact } from "@/lib/formatCount";
 
 // Collapses paired window.focus + visibilitychange events that fire together
 // on restore-from-minimize. Short enough that legitimate user actions
@@ -92,6 +93,8 @@ function relativeTime(dateStr: string): string {
 interface HealthChipProps {
   icon: React.ReactNode;
   label: string;
+  /** The chip's full meaning when its visible label is only a number. */
+  ariaLabel?: string;
   onClick?: () => void;
   className?: string;
   tone?: "success" | "working" | "warning" | "danger" | "info" | "accent" | "neutral";
@@ -123,7 +126,14 @@ function getPulseChipToneStyle(tone: NonNullable<HealthChipProps["tone"]>): Reac
   };
 }
 
-function HealthChip({ icon, label, onClick, className, tone = "neutral" }: HealthChipProps) {
+function HealthChip({
+  icon,
+  label,
+  ariaLabel,
+  onClick,
+  className,
+  tone = "neutral",
+}: HealthChipProps) {
   const Wrapper = onClick ? "button" : "span";
   return (
     <Wrapper
@@ -134,6 +144,7 @@ function HealthChip({ icon, label, onClick, className, tone = "neutral" }: Healt
       )}
       style={getPulseChipToneStyle(tone)}
       onClick={onClick}
+      aria-label={ariaLabel}
     >
       {icon}
       <span className="font-mono tabular-nums">{label}</span>
@@ -173,13 +184,15 @@ function HealthSignals({
       />
       <HealthChip
         icon={<CircleDot className="w-3.5 h-3.5 text-current" />}
-        label={String(health.issueCount)}
+        label={formatCompactCount(health.issueCount)}
+        ariaLabel={`${formatCountExact(health.issueCount)} open issues`}
         onClick={() => openUrl("/issues")}
         tone="info"
       />
       <HealthChip
         icon={<GitPullRequest className="w-3.5 h-3.5 text-current" />}
-        label={String(health.prCount)}
+        label={formatCompactCount(health.prCount)}
+        ariaLabel={`${formatCountExact(health.prCount)} open pull requests`}
         onClick={() => openUrl("/pulls")}
         tone="working"
       />

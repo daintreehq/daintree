@@ -182,9 +182,9 @@ export function LogFilters({
                     size="xs"
                     onClick={() => handleSourceToggle(source)}
                     className={cn(
-                      "w-full justify-start rounded-none",
+                      "w-full justify-start rounded-none focus-visible:-outline-offset-2",
                       isActive ? "text-status-info bg-status-info/10" : "text-text-primary",
-                      count === 0 && !isActive && "opacity-50"
+                      count === 0 && !isActive && "text-text-secondary"
                     )}
                     aria-pressed={isActive}
                   >

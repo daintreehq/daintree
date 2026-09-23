@@ -65,8 +65,12 @@ describe("ForgeStatsToolbarButton digit pulse", () => {
     source = await fs.readFile(TOOLBAR_PATH, "utf-8");
   });
 
-  it("imports useEffectEvent for stale-closure-safe suppression checks", () => {
-    expect(source).toMatch(/import\s*\{[^}]*useEffectEvent[^}]*\}\s*from\s*"react"/);
+  it("does not use useEffectEvent inside this memo/forwardRef component", () => {
+    // React 19.2 keeps an effect event's first-render closure inside memo /
+    // forwardRef (facebook/react#34818), which left the check reading
+    // `stats === null` forever: no pulse, no chips.
+    expect(source).toMatch(/memo\(\s*forwardRef/);
+    expect(source).not.toMatch(/=\s*useEffectEvent\(/);
   });
 
   it("declares per-digit anim counters and per-count refs", () => {
@@ -78,14 +82,17 @@ describe("ForgeStatsToolbarButton digit pulse", () => {
     expect(source).toMatch(/commitCountRef\s*=\s*useRef</);
   });
 
-  it("uses useEffectEvent for the count-increase check", () => {
-    expect(source).toMatch(/checkForCountIncrease\s*=\s*useEffectEvent/);
+  it("runs the count-increase check inside the effect keyed on lastUpdated", () => {
+    const effect = source.slice(source.indexOf("const checkForCountIncrease = () =>"));
+    expect(effect).toMatch(
+      /^const checkForCountIncrease = \(\) =>[\s\S]*?if \(statsLoading \|\| statsError\)/
+    );
   });
 
   it("reads document.hidden and all three open-state values inside the check", () => {
-    const eventStart = source.indexOf("checkForCountIncrease = useEffectEvent");
+    const eventStart = source.indexOf("const checkForCountIncrease = () =>");
     expect(eventStart).toBeGreaterThan(0);
-    const closeBrace = source.indexOf("});", eventStart);
+    const closeBrace = source.indexOf("\n      };\n", eventStart);
     expect(closeBrace).toBeGreaterThan(eventStart);
     const slice = source.slice(eventStart, closeBrace);
     expect(slice).toContain("document.hidden");
@@ -95,8 +102,8 @@ describe("ForgeStatsToolbarButton digit pulse", () => {
   });
 
   it("only pulses on a strict positive delta, never on first mount", () => {
-    const eventStart = source.indexOf("checkForCountIncrease = useEffectEvent");
-    const closeBrace = source.indexOf("});", eventStart);
+    const eventStart = source.indexOf("const checkForCountIncrease = () =>");
+    const closeBrace = source.indexOf("\n      };\n", eventStart);
     const slice = source.slice(eventStart, closeBrace);
     expect(slice).toMatch(/issueCount\s*>\s*issueCountRef\.current/);
     expect(slice).toMatch(/prCount\s*>\s*prCountRef\.current/);
@@ -119,8 +126,11 @@ describe("ForgeStatsToolbarButton digit pulse", () => {
   });
 
   it("re-seeds the count refs to undefined when lastUpdated transitions to null (project switch)", () => {
-    const effectStart = source.indexOf("if (statsLoading || statsError)");
+    const effectStart = source.indexOf("if (lastUpdated == null) {");
     expect(effectStart).toBeGreaterThan(0);
+    // Ahead of the loading/error guard: a switch lands as statsLoading=true
+    // with lastUpdated=null, and behind the guard the old baseline survived.
+    expect(effectStart).toBeLessThan(source.indexOf("if (statsLoading || statsError) {"));
     const slice = source.slice(effectStart, effectStart + 1500);
     expect(slice).toMatch(/lastUpdated\s*==\s*null/);
     expect(slice).toMatch(/issueCountRef\.current\s*=\s*undefined/);
@@ -155,8 +165,8 @@ describe("ForgeStatsToolbarButton corner activity chip wiring", () => {
   });
 
   it("sets pulseAt alongside the digit-pulse increment for issues and PRs only", () => {
-    const eventStart = source.indexOf("checkForCountIncrease = useEffectEvent");
-    const closeBrace = source.indexOf("});", eventStart);
+    const eventStart = source.indexOf("const checkForCountIncrease = () =>");
+    const closeBrace = source.indexOf("\n      };\n", eventStart);
     const slice = source.slice(eventStart, closeBrace);
     expect(slice).toMatch(/setIssueAnimKey\([\s\S]{0,80}?setIssuesPulseAt\(Date\.now\(\)\)/);
     expect(slice).toMatch(/setPrAnimKey\([\s\S]{0,80}?setPrsPulseAt\(Date\.now\(\)\)/);
@@ -260,13 +270,34 @@ describe("ForgeStatsToolbarButton corner activity chip wiring", () => {
     expect(commitsSlice).not.toContain("activityChip=");
   });
 
-  it('folds "new since last view" into the issues + PRs aria-labels', () => {
-    expect(source).toMatch(/showIssuesChip\s*\?\s*" \(new since last view\)"\s*:\s*""/);
-    expect(source).toMatch(/showPrsChip\s*\?\s*" \(new since last view\)"\s*:\s*""/);
+  it("folds the recent-increase cue into the issues + PRs names and tooltips", () => {
+    // The chip is a three-minute recent-increase cue, not unread state.
+    expect(source).toMatch(/showIssuesChip \? "count increased recently"/);
+    expect(source).toMatch(/showPrsChip \? "count increased recently"/);
+    expect(source).not.toContain("new since last view");
+  });
+
+  it("advances the activity baseline from exact list totals, never from N+", () => {
+    // A total the user has seen in the list must not re-arm the chip when the
+    // next poll confirms it; a paginated lower bound is not a total.
+    expect(source).toMatch(
+      /if \(!hasMore && issueCountRef\.current !== undefined\) \{\s*issueCountRef\.current = count;\s*issueBaselineAtRef\.current = Date\.now\(\);/
+    );
+    expect(source).toMatch(
+      /if \(!hasMore && prCountRef\.current !== undefined\) \{\s*prCountRef\.current = count;\s*prBaselineAtRef\.current = Date\.now\(\);/
+    );
+  });
+
+  it("never lets an observation older than the baseline roll it back", () => {
+    expect(source).toMatch(
+      /issueStale = olderThanBaseline\(issueCountRefreshedAt, issueBaselineAtRef\.current\)/
+    );
+    expect(source).toMatch(/!issueStale && issueCountRef\.current !== issueCount/);
+    expect(source).toMatch(/!prStale && prCountRef\.current !== prCount/);
   });
 
   it("clears both chip pulses on project switch alongside the count refs", () => {
-    const effectStart = source.indexOf("if (statsLoading || statsError)");
+    const effectStart = source.indexOf("if (lastUpdated == null) {");
     const slice = source.slice(effectStart, effectStart + 2000);
     expect(slice).toContain("setIssuesPulseAt(null)");
     expect(slice).toContain("setPrsPulseAt(null)");
@@ -322,28 +353,32 @@ describe("ForgeStatsToolbarButton list-count badge wiring", () => {
       /prCountRefreshedAt\s*=\s*stats\?\.prCountRefreshedAt\s*\?\?\s*statsRecencyFallback/
     );
     expect(source).toMatch(
-      /issueDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*issueCount,\s*issueCountRefreshedAt,\s*issueListCount,\s*issueListHasMore,\s*issueListTimestampRef\.current/
+      /issueDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*issueCount,\s*issueCountRefreshedAt,\s*issueListCount,\s*issueListHasMore,\s*issueListTimestamp\b/
     );
     expect(source).toMatch(
-      /prDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*prCount,\s*prCountRefreshedAt,\s*prListCount,\s*prListHasMore,\s*prListTimestampRef\.current/
+      /prDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*prCount,\s*prCountRefreshedAt,\s*prListCount,\s*prListHasMore,\s*prListTimestamp\b/
     );
   });
 
   it("stamps a recency timestamp when each list count updates (issue #9741)", () => {
-    expect(source).toMatch(/issueListTimestampRef\s*=\s*useRef<number\s*\|\s*null>\(null\)/);
-    expect(source).toMatch(/prListTimestampRef\s*=\s*useRef<number\s*\|\s*null>\(null\)/);
+    expect(source).toMatch(
+      /\[issueListTimestamp, setIssueListTimestamp\]\s*=\s*useState<number\s*\|\s*null>\(null\)/
+    );
+    expect(source).toMatch(
+      /\[prListTimestamp, setPrListTimestamp\]\s*=\s*useState<number\s*\|\s*null>\(null\)/
+    );
     // Each handler must record Date.now() so the resolver can compare it to the
     // stats poll's lastUpdated.
     const issueHandler = source.slice(
       source.indexOf("handleIssueListCountUpdate = useCallback"),
       source.indexOf("handlePrListCountUpdate = useCallback")
     );
-    expect(issueHandler).toContain("issueListTimestampRef.current = Date.now()");
+    expect(issueHandler).toContain("setIssueListTimestamp(Date.now())");
     const prHandler = source.slice(
       source.indexOf("handlePrListCountUpdate = useCallback"),
       source.indexOf("handlePrListCountUpdate = useCallback") + 300
     );
-    expect(prHandler).toContain("prListTimestampRef.current = Date.now()");
+    expect(prHandler).toContain("setPrListTimestamp(Date.now())");
   });
 
   it("passes displayCount to the issue and PR pills", () => {
@@ -365,10 +400,11 @@ describe("ForgeStatsToolbarButton list-count badge wiring", () => {
     expect(source).toContain("count={prCount}");
   });
 
-  it("uses the display count in the issue + PR aria-labels and tooltips", () => {
-    expect(source).toContain('${issueDisplayCount ?? "—"} open issues');
-    expect(source).toContain('${prDisplayCount ?? "—"} open pull requests');
-    expect(source).toContain('${prDisplayCount ?? "—"} open PRs');
+  it("uses the exact display count in the issue + PR aria-labels and tooltips", () => {
+    // The badge is compacted; names and tooltips carry the exact figure.
+    expect(source).toContain("${formatExactCount(issueDisplayCount)} open issues");
+    expect(source).toContain("${formatExactCount(prDisplayCount)} open pull requests");
+    expect(source).toContain("${formatExactCount(prDisplayCount)} open PRs");
   });
 
   it("resets the list counts + timestamps via a project-path effect (issue #9741)", () => {
@@ -386,7 +422,7 @@ describe("ForgeStatsToolbarButton list-count badge wiring", () => {
     expect(slice).toContain("setPrListHasMore(false)");
     // Recency timestamps must clear too or project A's timestamp would suppress
     // project B's first stats poll.
-    expect(slice).toContain("issueListTimestampRef.current = null");
-    expect(slice).toContain("prListTimestampRef.current = null");
+    expect(slice).toContain("setIssueListTimestamp(null)");
+    expect(slice).toContain("setPrListTimestamp(null)");
   });
 });

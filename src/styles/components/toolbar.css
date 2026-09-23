@@ -220,6 +220,54 @@
   box-shadow: var(--_shadow);
 }
 
+/* Segment dividers and end radii live here rather than as `divide-x` on the
+ * container. `divide-x` borders every child but the DOM-last one, and the
+ * DOM-last child is the absolutely positioned status stripe — so the visually
+ * last segment kept a right border that doubled the container's own edge.
+ * Keying on `[data-stat-segment]` (the pills and the trailing indicator slots)
+ * also lets the end segments carry the container's radius: the pills' focus
+ * ring is drawn inset (the container's overflow-hidden clips an outward one),
+ * and an inset ring on a square corner would be cut by the rounded clip. The
+ * container's own radius sits just outside its clip curve, so the ring's
+ * corner stays whole. */
+
+.toolbar-stats > [data-stat-segment] ~ [data-stat-segment] {
+  border-inline-start: 1px solid var(--_divider);
+}
+
+.toolbar-stats > :nth-child(1 of [data-stat-segment]) {
+  border-start-start-radius: var(--toolbar-pill-radius, var(--radius-md));
+  border-end-start-radius: var(--toolbar-pill-radius, var(--radius-md));
+}
+
+.toolbar-stats > :nth-last-child(1 of [data-stat-segment]) {
+  border-start-end-radius: var(--toolbar-pill-radius, var(--radius-md));
+  border-end-end-radius: var(--toolbar-pill-radius, var(--radius-md));
+}
+
+/* Open segment: the fill alone matched hover exactly, and the old outward
+ * `ring-1` was clipped by the container and dropped by forced colors. An inset
+ * edge inside the segment says "this one owns the open panel" without moving
+ * anything. The keyboard ring stays a separate, stronger outline. */
+.toolbar-stat-pill[aria-expanded="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--theme-border-strong);
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+@media (forced-colors: active) {
+  .toolbar-stat-pill[aria-expanded="true"]::after {
+    border-color: ButtonText;
+  }
+
+  .toolbar-stat-pill:focus-visible {
+    outline-color: Highlight;
+  }
+}
+
 /* The stat pills transition opacity, background-color and scale as Tailwind
  * utilities (ForgeStatPill.tsx) — scale is what gives the base Button cva's
  * `active:scale-[0.98]` press snap a property to interpolate.

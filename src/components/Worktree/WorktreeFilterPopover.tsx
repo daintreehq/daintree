@@ -199,7 +199,7 @@ function FilterChip({ label, isActive, onClick, count }: FilterChipProps) {
         isActive
           ? "border-text-secondary bg-filter-selected-bg-strong font-medium text-text-primary"
           : isUnavailable
-            ? "border-border-default bg-transparent text-text-secondary opacity-60 hover:opacity-100"
+            ? "border-border-default bg-transparent text-text-secondary hover:text-text-primary"
             : "border-text-secondary bg-overlay-soft text-text-secondary hover:bg-overlay-medium hover:text-text-primary"
       )}
     >

@@ -903,7 +903,7 @@ export function EnvVarEditor({
           <button
             type="button"
             onClick={handleAdd}
-            className="flex items-center justify-center gap-1.5 py-2 text-2xs text-text-secondary hover:text-text-primary hover:bg-daintree-bg/50 transition-colors"
+            className="flex items-center justify-center gap-1.5 py-2 text-2xs text-text-secondary hover:text-text-primary hover:bg-daintree-bg/50 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
             data-testid="env-editor-add"
           >
             <Plus size={12} aria-hidden="true" />
@@ -912,7 +912,7 @@ export function EnvVarEditor({
           <button
             type="button"
             onClick={() => setIsImportOpen(true)}
-            className="flex items-center justify-center gap-1.5 py-2 text-2xs text-text-secondary hover:text-text-primary hover:bg-daintree-bg/50 transition-colors"
+            className="flex items-center justify-center gap-1.5 py-2 text-2xs text-text-secondary hover:text-text-primary hover:bg-daintree-bg/50 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
             data-testid="env-editor-import"
           >
             <Upload size={12} aria-hidden="true" />
