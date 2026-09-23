@@ -68,6 +68,7 @@ vi.mock("@/config/appColorSchemes", () => {
     },
   });
   return {
+    DEFAULT_APP_SCHEME_ID: "theme-a",
     BUILT_IN_APP_SCHEMES: [
       mkTheme("theme-a", "Theme A", "#f00"),
       mkTheme("theme-b", "Theme B", "#00f"),
@@ -252,7 +253,8 @@ describe("AppThemePicker Change theme button", () => {
     const onClose = vi.fn();
     render(<AppThemePicker onClose={onClose} />);
     expect(screen.getByRole("button", { name: /change theme/i })).toBeTruthy();
-    expect(screen.getByText("Theme A")).toBeTruthy();
+    // The hero caption names the theme; the preferred-theme selects may name it too.
+    expect(screen.getAllByText("Theme A").length).toBeGreaterThan(0);
   });
 
   it("dispatches daintree:open-theme-browser when the Change theme button is clicked", () => {
@@ -312,9 +314,11 @@ describe("AppThemePicker accent contrast warning", () => {
     storeState.accentColorOverride = "#ffffff";
 
     render(<AppThemePicker />);
-    // Surface copy names the theme and the two-decimal ratio, and keeps the
-    // "Low contrast" substring the E2E selector matches on.
-    expect(screen.getByText(/Low contrast.*3\.80:1 on Theme A surfaces/)).toBeTruthy();
+    // Surface copy names the theme and the two-decimal ratio, inside a status that keeps
+    // the "Low contrast" title the E2E selector matches on.
+    const status = screen.getByRole("status");
+    expect(status.textContent).toMatch(/Low contrast/);
+    expect(status.textContent).toMatch(/3\.80:1 on Theme A surfaces/);
   });
 
   it("shows a foreground-specific warning when button text is illegible on the accent", () => {
@@ -326,7 +330,9 @@ describe("AppThemePicker accent contrast warning", () => {
     storeState.accentColorOverride = "#ffffff";
 
     render(<AppThemePicker />);
-    expect(screen.getByText(/Low contrast.*button text scores only 2\.10:1/)).toBeTruthy();
+    const status = screen.getByRole("status");
+    expect(status.textContent).toMatch(/Low contrast/);
+    expect(status.textContent).toMatch(/Button text scores 2\.10:1/);
   });
 
   it("does not show the warning when there is no accent override", () => {

@@ -87,6 +87,7 @@ export function SettingsInput({
               aria-labelledby={labelId}
               aria-describedby={descriptionId}
               aria-invalid={isError ? true : undefined}
+              invalid={isError}
               className={cn("w-full", suffix && "pr-9", className)}
               {...props}
             />

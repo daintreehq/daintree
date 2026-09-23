@@ -26,12 +26,13 @@ export function DockDensityPicker() {
     <SettingsRow
       id="appearance-dock-density"
       label="Dock density"
-      description="Height and spacing of items in the dock — normal is the default"
+      description="Height and spacing of items in the dock · Default: Normal"
       isModified={dockDensity !== DEFAULT_DOCK_DENSITY}
       onReset={() => setDockDensity(DEFAULT_DOCK_DENSITY)}
-      control={({ disabled }) => (
+      control={({ descriptionId, disabled }) => (
         <SegmentedRadioGroup
           aria-label="Dock density"
+          aria-describedby={descriptionId}
           options={DOCK_DENSITY_OPTIONS}
           value={dockDensity}
           onChange={setDockDensity}

@@ -513,7 +513,7 @@ export const SETTINGS_REGISTRY = [
         id: "appearance-color-scheme",
         subtab: "terminal",
         subtabLabel: "Terminal",
-        section: "Terminal color scheme",
+        section: "Color scheme",
         title: "Terminal color scheme",
         description: "Choose the terminal color scheme and palette",
         keywords: ["color", "scheme", "terminal", "colors", "palette", "theme"],

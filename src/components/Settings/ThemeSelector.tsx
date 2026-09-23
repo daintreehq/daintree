@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Check, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Search } from "lucide-react";
+import { Input } from "@/components/ui/input";
 
 interface ThemeSelectorGroup<T> {
   label: string;
@@ -22,12 +23,29 @@ interface ThemeSelectorCommon<T extends { id: string }> {
   onPreviewEnd?: () => void;
   /** Text announced via a polite aria-live region as the previewed item changes. */
   previewAnnouncement?: string;
+  /** Controls at the end of the filter row — a Dark/Light switch, say. */
+  toolbar?: ReactNode;
+  searchPlaceholder?: string;
+  searchLabel?: string;
+  listLabel?: string;
+  emptyMessage?: string;
+  /** Names the listbox from a visible label instead of `listLabel`. */
+  listLabelledBy?: string;
 }
 
 export type ThemeSelectorProps<T extends { id: string }> =
   | (ThemeSelectorCommon<T> & { items: T[]; groups?: never })
   | (ThemeSelectorCommon<T> & { items?: never; groups: ThemeSelectorGroup<T>[] });
 
+/**
+ * A filterable grid of visual options: one listbox, one tab stop.
+ *
+ * Arrow keys walk the grid by row and column, Home/End jump to the ends, and moving
+ * selects — the settings radio contract, where the keyboard and the choice travel
+ * together. Each option is named by its label alone; the preview inside it is
+ * presentation, so a screen reader hears "Dracula, selected" rather than five lines
+ * of sample terminal output first.
+ */
 export function ThemeSelector<T extends { id: string }>({
   items,
   groups,
@@ -42,8 +60,18 @@ export function ThemeSelector<T extends { id: string }>({
   onPreviewItem,
   onPreviewEnd,
   previewAnnouncement,
+  toolbar,
+  searchPlaceholder = "Filter themes...",
+  searchLabel = "Filter themes",
+  listLabel = "Theme list",
+  emptyMessage = "No themes match your search.",
+  listLabelledBy,
 }: ThemeSelectorProps<T>) {
   const [query, setQuery] = useState("");
+  // Where the keyboard is inside the grid. Null until an option takes focus, so Tab
+  // enters on the selection rather than on wherever focus last sat.
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const optionRefs = useRef(new Map<string, HTMLButtonElement>());
 
   // Single rAF handle shared across all cards so rapid pointer moves between
   // cards cancel any pending revert before the next preview fires.
@@ -97,9 +125,17 @@ export function ThemeSelector<T extends { id: string }>({
     return all.filter((item) => getName(item).toLowerCase().includes(lq));
   }, [items, groups, query, getName]);
 
-  const isEmpty = filteredGroups ? filteredGroups.length === 0 : (filteredItems?.length ?? 0) === 0;
+  const flatItems = useMemo(
+    () => (filteredGroups ? filteredGroups.flatMap((g) => g.items) : (filteredItems ?? [])),
+    [filteredGroups, filteredItems]
+  );
 
+  const isEmpty = flatItems.length === 0;
   const colsClass = columns === 3 ? "grid-cols-3" : "grid-cols-2";
+
+  const tabStopId =
+    (focusedId && flatItems.some((item) => item.id === focusedId) ? focusedId : null) ??
+    (flatItems.some((item) => item.id === selectedId) ? selectedId : flatItems[0]?.id);
 
   const handlePreviewEnter = (itemId: string) => {
     if (!onPreviewItem) return;
@@ -112,63 +148,147 @@ export function ThemeSelector<T extends { id: string }>({
     scheduleRevert();
   };
 
-  const renderCard = (item: T) => (
-    <button
-      key={item.id}
-      role="option"
-      aria-selected={item.id === selectedId}
-      onClick={(e) => onSelect(item.id, { x: e.clientX, y: e.clientY })}
-      onPointerEnter={() => handlePreviewEnter(item.id)}
-      onPointerLeave={handlePreviewLeave}
-      onFocus={() => handlePreviewEnter(item.id)}
-      onBlur={handlePreviewLeave}
-      className={cn(
-        "flex flex-col gap-1.5 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-        "[&>*]:pointer-events-none",
-        item.id === selectedId
-          ? "border-border-strong bg-overlay-selected"
-          : "border-border-default bg-surface-canvas hover:border-border-strong"
-      )}
-    >
-      {renderPreview(item)}
-      {renderMeta ? (
-        renderMeta(item)
-      ) : (
-        <span className="text-xs text-text-primary truncate">{getName(item)}</span>
-      )}
-    </button>
-  );
+  const moveTo = (index: number) => {
+    const item = flatItems[index];
+    if (!item) return;
+    setFocusedId(item.id);
+    optionRefs.current.get(item.id)?.focus();
+    if (item.id !== selectedId) onSelect(item.id);
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (flatItems.length === 0) return;
+    // Step from the option that has the keyboard, not from the selection: after a
+    // rejected save they differ, and stepping from the selection would retry it.
+    const from = flatItems.findIndex((item) => item.id === (focusedId ?? selectedId));
+    const current = from === -1 ? 0 : from;
+    const last = flatItems.length - 1;
+    let next: number;
+    switch (event.key) {
+      case "ArrowRight":
+        next = Math.min(current + 1, last);
+        break;
+      case "ArrowLeft":
+        next = Math.max(current - 1, 0);
+        break;
+      case "ArrowDown":
+        // Straight down or not at all: clamping to the last option would slide the
+        // selection sideways off the bottom row.
+        next = current + columns <= last ? current + columns : current;
+        break;
+      case "ArrowUp":
+        next = current - columns >= 0 ? current - columns : current;
+        break;
+      case "Home":
+        next = 0;
+        break;
+      case "End":
+        next = last;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    moveTo(next);
+  };
+
+  const renderCard = (item: T) => {
+    const isSelected = item.id === selectedId;
+    return (
+      <button
+        key={item.id}
+        ref={(el) => {
+          if (el) optionRefs.current.set(item.id, el);
+          else optionRefs.current.delete(item.id);
+        }}
+        type="button"
+        role="option"
+        aria-selected={isSelected}
+        aria-label={getName(item)}
+        tabIndex={item.id === tabStopId ? 0 : -1}
+        onClick={(e) => {
+          setFocusedId(item.id);
+          onSelect(item.id, { x: e.clientX, y: e.clientY });
+        }}
+        onPointerEnter={() => handlePreviewEnter(item.id)}
+        onPointerLeave={handlePreviewLeave}
+        onFocus={() => {
+          setFocusedId(item.id);
+          handlePreviewEnter(item.id);
+        }}
+        onBlur={handlePreviewLeave}
+        className={cn(
+          "group/option flex flex-col gap-1.5 p-1.5 rounded-[var(--radius-md)] border text-left transition-colors",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+          "[&>*]:pointer-events-none",
+          // The selected option carries a check and a text-secondary frame: the frame
+          // clears 3:1 against the card on every built-in theme, where border-strong
+          // (an ink at 14-22% alpha) does not. forced-colors keeps it via the outline.
+          isSelected
+            ? "border-text-secondary bg-overlay-selected forced-colors:outline forced-colors:outline-2"
+            : "border-transparent hover:bg-overlay-soft"
+        )}
+      >
+        <div aria-hidden="true">{renderPreview(item)}</div>
+        <div className="flex items-center gap-1.5 px-0.5 min-w-0">
+          {renderMeta ? (
+            renderMeta(item)
+          ) : (
+            <span className="text-xs text-text-primary truncate flex-1">{getName(item)}</span>
+          )}
+          {isSelected && (
+            <Check className="w-3.5 h-3.5 shrink-0 text-text-primary" aria-hidden="true" />
+          )}
+        </div>
+      </button>
+    );
+  };
+
+  const listboxProps = {
+    role: "listbox" as const,
+    id,
+    "aria-label": listLabelledBy ? undefined : listLabel,
+    "aria-labelledby": listLabelledBy,
+    onKeyDown: handleKeyDown,
+    onBlur: (e: React.FocusEvent<HTMLDivElement>) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocusedId(null);
+    },
+  };
 
   return (
-    <div className={cn("space-y-2", className)}>
-      <div className="sticky top-0 z-20 bg-surface-canvas py-1">
-        <div className="relative">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-secondary" />
-          <input
-            type="search"
+    <div className={cn("space-y-3", className)}>
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1 min-w-0">
+          <Search
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-secondary pointer-events-none"
+            aria-hidden="true"
+          />
+          <Input
+            type="text"
+            density="compact"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Escape") {
+              if (e.key === "Escape" && query) {
                 e.stopPropagation();
                 setQuery("");
               }
             }}
-            placeholder="Filter themes..."
-            aria-label="Filter themes"
-            className="w-full pl-7 pr-2 py-1.5 text-xs rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40"
+            placeholder={searchPlaceholder}
+            aria-label={searchLabel}
+            className="pl-8 h-7"
           />
         </div>
+        {toolbar}
       </div>
 
       {isEmpty ? (
-        <p className="text-xs text-text-secondary text-center py-4">No themes match your search.</p>
+        <p className="text-xs text-text-secondary py-6 text-center">{emptyMessage}</p>
       ) : filteredGroups ? (
-        <div role="listbox" id={id} aria-label="Theme list" className="space-y-2">
+        <div {...listboxProps} className="space-y-3">
           {filteredGroups.map((group) => (
             <div key={group.label} role="group" aria-label={group.label}>
-              <p className="text-3xs font-medium uppercase tracking-wider text-text-secondary select-none px-1 mb-1">
+              <p className="text-xs font-medium text-text-secondary select-none px-0.5 mb-1.5">
                 {group.label}
               </p>
               <div className={cn("grid gap-2", colsClass)}>{group.items.map(renderCard)}</div>
@@ -176,13 +296,14 @@ export function ThemeSelector<T extends { id: string }>({
           ))}
         </div>
       ) : (
-        <div role="listbox" id={id} aria-label="Theme list" className={cn("grid gap-2", colsClass)}>
-          {filteredItems?.map(renderCard)}
+        <div {...listboxProps} className={cn("grid gap-2", colsClass)}>
+          {flatItems.map(renderCard)}
         </div>
       )}
 
+      {/* Always mounted, so a filter that empties the list is heard as well as seen. */}
       <div aria-live="polite" aria-atomic="true" className="sr-only">
-        {previewAnnouncement ?? ""}
+        {isEmpty ? emptyMessage : (previewAnnouncement ?? "")}
       </div>
     </div>
   );

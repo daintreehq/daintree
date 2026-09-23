@@ -55,7 +55,7 @@ describe("ColorSchemePicker hover preview", () => {
   });
 
   it("sets previewSchemeId in the store on pointer enter", () => {
-    render(<ColorSchemePicker />);
+    render(<ColorSchemePicker error={null} onError={() => {}} />);
 
     const draculaCard = screen
       .getAllByRole("option")
@@ -66,7 +66,7 @@ describe("ColorSchemePicker hover preview", () => {
   });
 
   it("clears previewSchemeId on pointer leave after rAF flush", () => {
-    render(<ColorSchemePicker />);
+    render(<ColorSchemePicker error={null} onError={() => {}} />);
 
     const card = screen
       .getAllByRole("option")
@@ -80,7 +80,7 @@ describe("ColorSchemePicker hover preview", () => {
   });
 
   it("clears previewSchemeId when the picker unmounts mid-preview", () => {
-    const { unmount } = render(<ColorSchemePicker />);
+    const { unmount } = render(<ColorSchemePicker error={null} onError={() => {}} />);
     const card = screen
       .getAllByRole("option")
       .find((o) => o.textContent?.toLowerCase().includes("dracula"))!;
@@ -92,7 +92,7 @@ describe("ColorSchemePicker hover preview", () => {
   });
 
   it("keyboard focus mirrors pointer preview behavior", () => {
-    render(<ColorSchemePicker />);
+    render(<ColorSchemePicker error={null} onError={() => {}} />);
     const card = screen
       .getAllByRole("option")
       .find((o) => o.textContent?.toLowerCase().includes("dracula"))!;
@@ -106,7 +106,7 @@ describe("ColorSchemePicker hover preview", () => {
   });
 
   it("commit via click clears the preview override", () => {
-    render(<ColorSchemePicker />);
+    render(<ColorSchemePicker error={null} onError={() => {}} />);
     const card = screen
       .getAllByRole("option")
       .find((o) => o.textContent?.toLowerCase().includes("dracula"))!;
@@ -120,7 +120,7 @@ describe("ColorSchemePicker hover preview", () => {
   });
 
   it("announces the currently previewed scheme via aria-live", () => {
-    const { container } = render(<ColorSchemePicker />);
+    const { container } = render(<ColorSchemePicker error={null} onError={() => {}} />);
     const card = screen
       .getAllByRole("option")
       .find((o) => o.textContent?.toLowerCase().includes("dracula"))!;
