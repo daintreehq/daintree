@@ -100,6 +100,7 @@ import { StaticWorktreeRow } from "./StaticWorktreeRow";
 import { WorkspaceRootSidebar } from "./WorkspaceRootSidebar";
 import { WorktreeCardPlaceholder } from "./WorktreeCardPlaceholder";
 import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
+import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useScrollIndicator } from "./useScrollIndicator";
 import { useSidebarVirtuosoReset } from "./useSidebarVirtuosoReset";
@@ -1437,16 +1438,30 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // Computed after `sidebarItems` because the indicator counts hidden worktree
   // rows directly from the flat list geometry (variable-height rows + section
   // headers, issue #9666), so it needs the full item array as its input.
+  // Uses the agent's own waiting flag rather than `chipState`: the chip ranks
+  // cleanup and completion above waiting, but a pill that says "nothing here
+  // needs you" over an agent blocked on input would be the one lie it can tell.
+  const waitingWorktreeIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const [id, meta] of derivedMetaMap) if (meta.hasWaitingAgent) ids.add(id);
+    return ids;
+  }, [derivedMetaMap]);
+
+  const skipMotion = useShouldSkipMotion();
+
   const {
     hiddenAbove,
     hiddenBelow,
-    scrollToTop,
-    scrollToBottom,
+    revealAbove,
+    revealBelow,
     scrollerRef: scrollIndicatorScrollerRef,
     handleScroll,
     handleItemsRendered,
   } = useScrollIndicator({
     items: sidebarItems,
+    waitingWorktreeIds,
+    virtuosoRef,
+    smoothScroll: !skipMotion,
   });
 
   const setScrollerElement = useCallback(
@@ -2107,17 +2122,24 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               />
             </SortableContext>
           )}
+          {/* Out of the accessibility tree on purpose: these sit inside the
+              grid, where only rows may be owned, and the grid's own rows
+              already carry each worktree's state. Keyboard users have the
+              same reach through arrow navigation and "Focus next waiting
+              agent". */}
           <ScrollIndicator
             direction="above"
-            count={hiddenAbove}
-            onClick={scrollToTop}
+            count={hiddenAbove.count}
+            waitingCount={hiddenAbove.waiting}
+            onClick={revealAbove}
             ariaHidden
             tabIndex={-1}
           />
           <ScrollIndicator
             direction="below"
-            count={hiddenBelow}
-            onClick={scrollToBottom}
+            count={hiddenBelow.count}
+            waitingCount={hiddenBelow.waiting}
+            onClick={revealBelow}
             ariaHidden
             tabIndex={-1}
           />

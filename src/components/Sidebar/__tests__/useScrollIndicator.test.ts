@@ -1,8 +1,26 @@
 // @vitest-environment jsdom
 import { renderHook, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import type { ListItem } from "react-virtuoso";
+import type { ListItem, VirtuosoHandle } from "react-virtuoso";
 import { useScrollIndicator } from "../useScrollIndicator";
+
+const NO_WAITING: ReadonlySet<string> = new Set();
+
+function params(
+  items: ReadonlyArray<{ kind: string; worktreeId?: string }>,
+  overrides: {
+    waitingWorktreeIds?: ReadonlySet<string>;
+    virtuosoRef?: { current: Pick<VirtuosoHandle, "scrollToIndex"> | null };
+    smoothScroll?: boolean;
+  } = {}
+) {
+  return {
+    items,
+    waitingWorktreeIds: overrides.waitingWorktreeIds ?? NO_WAITING,
+    virtuosoRef: overrides.virtuosoRef ?? { current: null },
+    smoothScroll: overrides.smoothScroll ?? true,
+  };
+}
 
 // Controllable rAF queue so we can assert the scroll path coalesces a burst of
 // Virtuoso onScroll callbacks into a single in-flight frame (issue #9580).
@@ -98,7 +116,7 @@ describe("useScrollIndicator hidden-row counts (issue #9666)", () => {
       "row",
       "row",
     ]);
-    const { result } = renderHook(() => useScrollIndicator({ items }));
+    const { result } = renderHook(() => useScrollIndicator(params(items)));
     const scroller = makeScroller({ scrollTop: 250, clientHeight: 300 });
     act(() => {
       result.current.scrollerRef(scroller);
@@ -123,14 +141,14 @@ describe("useScrollIndicator hidden-row counts (issue #9666)", () => {
 
     // Viewport [250, 550]. Rows 1,2 fully above; rows 7,8,9 fully below; rows
     // 3,5,6 visible. Headers never counted.
-    expect(result.current.hiddenAbove).toBe(2);
-    expect(result.current.hiddenBelow).toBe(3);
+    expect(result.current.hiddenAbove.count).toBe(2);
+    expect(result.current.hiddenBelow.count).toBe(3);
   });
 
   it("counts rows that sit outside the rendered overscan window", () => {
     // 20 rows; only indices 5..12 are mounted (rest unmounted past overscan).
     const items = makeItems(Array.from({ length: 20 }, () => "row" as Kind));
-    const { result } = renderHook(() => useScrollIndicator({ items }));
+    const { result } = renderHook(() => useScrollIndicator(params(items)));
     const scroller = makeScroller({ scrollTop: 700, clientHeight: 300 });
     act(() => {
       result.current.scrollerRef(scroller);
@@ -149,13 +167,13 @@ describe("useScrollIndicator hidden-row counts (issue #9666)", () => {
 
     // Viewport [700, 1000]. Unrendered: 5 rows above (0..4), 7 rows below
     // (13..19). Rendered above: idx 5,6. Rendered below: idx 10,11,12.
-    expect(result.current.hiddenAbove).toBe(7);
-    expect(result.current.hiddenBelow).toBe(10);
+    expect(result.current.hiddenAbove.count).toBe(7);
+    expect(result.current.hiddenBelow.count).toBe(10);
   });
 
   it("counts a row hidden within 1px of an edge, visible past it (epsilon)", () => {
     const items = makeItems(["row", "row", "row"]);
-    const { result } = renderHook(() => useScrollIndicator({ items }));
+    const { result } = renderHook(() => useScrollIndicator(params(items)));
     const scroller = makeScroller({ scrollTop: 99, clientHeight: 100 });
     act(() => {
       result.current.scrollerRef(scroller);
@@ -172,8 +190,8 @@ describe("useScrollIndicator hidden-row counts (issue #9666)", () => {
     // Top edge — scrollTop 99, viewport [99, 199]: row 0's bottom (100) is
     // within 1px of the viewport top, so it counts as hidden-above. Row 2's top
     // (200) is within 1px of the viewport bottom (199), so it's hidden-below.
-    expect(result.current.hiddenAbove).toBe(1);
-    expect(result.current.hiddenBelow).toBe(1);
+    expect(result.current.hiddenAbove.count).toBe(1);
+    expect(result.current.hiddenBelow.count).toBe(1);
 
     // scrollTop 98, viewport [98, 198]: row 0 now shows 2px (past epsilon) so
     // it's visible; row 2's top (200) is 2px below the viewport bottom (198) so
@@ -183,14 +201,14 @@ describe("useScrollIndicator hidden-row counts (issue #9666)", () => {
       result.current.handleScroll();
     });
     flushFrames();
-    expect(result.current.hiddenAbove).toBe(0);
-    expect(result.current.hiddenBelow).toBe(1);
+    expect(result.current.hiddenAbove.count).toBe(0);
+    expect(result.current.hiddenBelow.count).toBe(1);
   });
 
   it("ignores section headers that sit outside the rendered window", () => {
     // header, row, row, header, row, row — only indices 3..5 are mounted.
     const items = makeItems(["header", "row", "row", "header", "row", "row"]);
-    const { result } = renderHook(() => useScrollIndicator({ items }));
+    const { result } = renderHook(() => useScrollIndicator(params(items)));
     const scroller = makeScroller({ scrollTop: 400, clientHeight: 100 });
     act(() => {
       result.current.scrollerRef(scroller);
@@ -209,14 +227,14 @@ describe("useScrollIndicator hidden-row counts (issue #9666)", () => {
     // above (the header is ignored). Viewport [400, 500]: rendered row 4
     // (260..360) is fully above → +1; row 5 (360..460) overlaps the viewport so
     // it's visible. Total hidden-above = 2 unrendered rows + row 4 = 3.
-    expect(result.current.hiddenAbove).toBe(3);
-    expect(result.current.hiddenBelow).toBe(0);
+    expect(result.current.hiddenAbove.count).toBe(3);
+    expect(result.current.hiddenBelow.count).toBe(0);
   });
 
   it("applies fresh geometry tagged for the new list right after an items change", () => {
     const itemsA = makeItems(["row", "row", "row"]);
     const itemsB = makeItems(["row", "row", "row", "row"]);
-    const { result, rerender } = renderHook(({ items }) => useScrollIndicator({ items }), {
+    const { result, rerender } = renderHook(({ items }) => useScrollIndicator(params(items)), {
       initialProps: { items: itemsA },
     });
     const scroller = makeScroller({ scrollTop: 250, clientHeight: 50 });
@@ -232,7 +250,7 @@ describe("useScrollIndicator hidden-row counts (issue #9666)", () => {
         ])
       );
     });
-    expect(result.current.hiddenAbove).toBe(2);
+    expect(result.current.hiddenAbove.count).toBe(2);
 
     // Swap the list, then immediately deliver fresh geometry for the new layout
     // (the order Virtuoso fires in). The identity guard must accept geometry
@@ -249,26 +267,26 @@ describe("useScrollIndicator hidden-row counts (issue #9666)", () => {
       );
     });
     // Viewport [250, 300]: rows 0,1 above, row 2 visible, row 3 below.
-    expect(result.current.hiddenAbove).toBe(2);
-    expect(result.current.hiddenBelow).toBe(1);
+    expect(result.current.hiddenAbove.count).toBe(2);
+    expect(result.current.hiddenBelow.count).toBe(1);
   });
 
   it("reports 0/0 before any itemsRendered geometry has been captured", () => {
     const items = makeItems(["row", "row", "row"]);
-    const { result } = renderHook(() => useScrollIndicator({ items }));
+    const { result } = renderHook(() => useScrollIndicator(params(items)));
     const scroller = makeScroller({ scrollTop: 250, clientHeight: 100 });
     act(() => {
       result.current.scrollerRef(scroller);
     });
 
-    expect(result.current.hiddenAbove).toBe(0);
-    expect(result.current.hiddenBelow).toBe(0);
+    expect(result.current.hiddenAbove.count).toBe(0);
+    expect(result.current.hiddenBelow.count).toBe(0);
   });
 
   it("resets counts when the backing list changes until new geometry arrives", () => {
     const itemsA = makeItems(["row", "row", "row"]);
     const itemsB = makeItems(["row", "row"]);
-    const { result, rerender } = renderHook(({ items }) => useScrollIndicator({ items }), {
+    const { result, rerender } = renderHook(({ items }) => useScrollIndicator(params(items)), {
       initialProps: { items: itemsA },
     });
     const scroller = makeScroller({ scrollTop: 250, clientHeight: 100 });
@@ -285,20 +303,20 @@ describe("useScrollIndicator hidden-row counts (issue #9666)", () => {
       );
     });
     // Viewport [250, 350]: rows 0,1 above, row 2 visible.
-    expect(result.current.hiddenAbove).toBe(2);
+    expect(result.current.hiddenAbove.count).toBe(2);
 
     // Swapping the list drops the stale geometry; counts fall back to 0/0 until
     // Virtuoso re-fires itemsRendered against the new layout.
     rerender({ items: itemsB });
-    expect(result.current.hiddenAbove).toBe(0);
-    expect(result.current.hiddenBelow).toBe(0);
+    expect(result.current.hiddenAbove.count).toBe(0);
+    expect(result.current.hiddenBelow.count).toBe(0);
   });
 });
 
 describe("useScrollIndicator scroll path (issues #9580, #9666)", () => {
   it("coalesces a burst of handleScroll calls into a single frame", () => {
     const items = makeItems(["row", "row", "row"]);
-    const { result } = renderHook(() => useScrollIndicator({ items }));
+    const { result } = renderHook(() => useScrollIndicator(params(items)));
     const scroller = makeScroller({ scrollTop: 50, clientHeight: 100 });
     act(() => {
       result.current.scrollerRef(scroller);
@@ -317,7 +335,7 @@ describe("useScrollIndicator scroll path (issues #9580, #9666)", () => {
 
   it("recomputes counts on scroll using cached itemsRendered geometry", () => {
     const items = makeItems(["row", "row", "row"]);
-    const { result, rerender } = renderHook(() => useScrollIndicator({ items }));
+    const { result, rerender } = renderHook(() => useScrollIndicator(params(items)));
     const scroller = makeScroller({ scrollTop: 0, clientHeight: 100 });
     act(() => {
       result.current.scrollerRef(scroller);
@@ -332,8 +350,8 @@ describe("useScrollIndicator scroll path (issues #9580, #9666)", () => {
       );
     });
     // Viewport [0, 100]: row 0 visible, rows 1,2 below.
-    expect(result.current.hiddenAbove).toBe(0);
-    expect(result.current.hiddenBelow).toBe(2);
+    expect(result.current.hiddenAbove.count).toBe(0);
+    expect(result.current.hiddenBelow.count).toBe(2);
 
     // Scroll down without a fresh itemsRendered — the onScroll path must reuse
     // the cached geometry against the new scrollTop.
@@ -344,13 +362,13 @@ describe("useScrollIndicator scroll path (issues #9580, #9666)", () => {
     flushFrames();
     rerender();
     // Viewport [250, 350]: rows 0,1 above, row 2 visible.
-    expect(result.current.hiddenAbove).toBe(2);
-    expect(result.current.hiddenBelow).toBe(0);
+    expect(result.current.hiddenAbove.count).toBe(2);
+    expect(result.current.hiddenBelow.count).toBe(0);
   });
 
   it("cancels a pending scroll frame and resets counts when the scroller detaches", () => {
     const items = makeItems(["row", "row", "row"]);
-    const { result } = renderHook(() => useScrollIndicator({ items }));
+    const { result } = renderHook(() => useScrollIndicator(params(items)));
     const scroller = makeScroller({ scrollTop: 250, clientHeight: 100 });
     act(() => {
       result.current.scrollerRef(scroller);
@@ -364,7 +382,7 @@ describe("useScrollIndicator scroll path (issues #9580, #9666)", () => {
         ])
       );
     });
-    expect(result.current.hiddenAbove).toBe(2);
+    expect(result.current.hiddenAbove.count).toBe(2);
 
     act(() => {
       result.current.handleScroll();
@@ -377,14 +395,14 @@ describe("useScrollIndicator scroll path (issues #9580, #9666)", () => {
     });
     expect(cancelSpy).toHaveBeenCalled();
     expect(rafQueue.size).toBe(0);
-    expect(result.current.hiddenAbove).toBe(0);
-    expect(result.current.hiddenBelow).toBe(0);
+    expect(result.current.hiddenAbove.count).toBe(0);
+    expect(result.current.hiddenBelow.count).toBe(0);
   });
 
   it("a deferred scroll frame applies the latest hook closure after items change", () => {
     const itemsA = makeItems(["row", "row", "row"]);
     const itemsB = makeItems(["row"]);
-    const { result, rerender } = renderHook(({ items }) => useScrollIndicator({ items }), {
+    const { result, rerender } = renderHook(({ items }) => useScrollIndicator(params(items)), {
       initialProps: { items: itemsA },
     });
     const scroller = makeScroller({ scrollTop: 250, clientHeight: 100 });
@@ -410,13 +428,13 @@ describe("useScrollIndicator scroll path (issues #9580, #9666)", () => {
     rerender({ items: itemsB });
     flushFrames();
 
-    expect(result.current.hiddenAbove).toBe(0);
-    expect(result.current.hiddenBelow).toBe(0);
+    expect(result.current.hiddenAbove.count).toBe(0);
+    expect(result.current.hiddenBelow.count).toBe(0);
   });
 
   it("cancels a pending scroll frame on unmount", () => {
     const items = makeItems(["row", "row", "row"]);
-    const { result, unmount } = renderHook(() => useScrollIndicator({ items }));
+    const { result, unmount } = renderHook(() => useScrollIndicator(params(items)));
     const scroller = makeScroller({ scrollTop: 50, clientHeight: 100 });
     act(() => {
       result.current.scrollerRef(scroller);
@@ -433,5 +451,79 @@ describe("useScrollIndicator scroll path (issues #9580, #9666)", () => {
     });
     expect(cancelSpy).toHaveBeenCalled();
     expect(rafQueue.size).toBe(0);
+  });
+});
+
+describe("useScrollIndicator waiting worktrees and reveal targets", () => {
+  // Ten 100px rows, all mounted. Viewport [350, 650]: rows 0-2 hidden above,
+  // row 3 cut by the top edge, rows 4-5 fully visible, row 6 cut by the bottom
+  // edge, rows 7-9 hidden below.
+  const rows = Array.from({ length: 10 }, (_, i) => ({ kind: "row", worktreeId: `w${i}` }));
+  const geometry = makeRendered(
+    rows.map((_, index) => ({ index, offset: index * 100, size: 100, kind: "row" as Kind }))
+  );
+
+  function setup(waiting: string[], smoothScroll = true) {
+    const scrollToIndex = vi.fn<VirtuosoHandle["scrollToIndex"]>();
+    const virtuosoRef = { current: { scrollToIndex } };
+    const hook = renderHook(
+      ({ waitingIds }: { waitingIds: ReadonlySet<string> }) =>
+        useScrollIndicator(
+          params(rows, { waitingWorktreeIds: waitingIds, virtuosoRef, smoothScroll })
+        ),
+      { initialProps: { waitingIds: new Set(waiting) as ReadonlySet<string> } }
+    );
+    act(() => {
+      hook.result.current.scrollerRef(makeScroller({ scrollTop: 350, clientHeight: 300 }));
+    });
+    act(() => {
+      hook.result.current.handleItemsRendered(geometry);
+    });
+    return { ...hook, scrollToIndex };
+  }
+
+  it("counts waiting worktrees per direction, ignoring ones on screen", () => {
+    const { result } = setup(["w0", "w1", "w5", "w9"]);
+    expect(result.current.hiddenAbove).toEqual({ count: 3, waiting: 2 });
+    expect(result.current.hiddenBelow).toEqual({ count: 3, waiting: 1 });
+  });
+
+  it("recomputes when an agent starts waiting, without a scroll or a new list", () => {
+    const { result, rerender } = setup([]);
+    expect(result.current.hiddenBelow.waiting).toBe(0);
+    rerender({ waitingIds: new Set(["w8"]) });
+    expect(result.current.hiddenBelow).toEqual({ count: 3, waiting: 1 });
+    rerender({ waitingIds: new Set() });
+    expect(result.current.hiddenBelow).toEqual({ count: 3, waiting: 0 });
+  });
+
+  it("reveals the NEAREST waiting worktree in each direction, centred", () => {
+    const { result, scrollToIndex } = setup(["w0", "w1", "w8", "w9"]);
+    act(() => result.current.revealBelow());
+    expect(scrollToIndex).toHaveBeenLastCalledWith(
+      expect.objectContaining({ index: 8, align: "center" })
+    );
+    act(() => result.current.revealAbove());
+    expect(scrollToIndex).toHaveBeenLastCalledWith(
+      expect.objectContaining({ index: 1, align: "center" })
+    );
+  });
+
+  it("with nothing waiting, pages: the row cut by the edge moves to the opposite edge", () => {
+    const { result, scrollToIndex } = setup([]);
+    act(() => result.current.revealBelow());
+    expect(scrollToIndex).toHaveBeenLastCalledWith(
+      expect.objectContaining({ index: 6, align: "start" })
+    );
+    act(() => result.current.revealAbove());
+    expect(scrollToIndex).toHaveBeenLastCalledWith(
+      expect.objectContaining({ index: 3, align: "end" })
+    );
+  });
+
+  it("jumps instantly when smooth scrolling is off", () => {
+    const { result, scrollToIndex } = setup(["w9"], false);
+    act(() => result.current.revealBelow());
+    expect(scrollToIndex).toHaveBeenLastCalledWith(expect.objectContaining({ behavior: "auto" }));
   });
 });

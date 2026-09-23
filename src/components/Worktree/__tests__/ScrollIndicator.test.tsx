@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render as rtlRender, screen, fireEvent } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
 
 const { mockUseAnimatedPresence } = vi.hoisted(() => ({
   mockUseAnimatedPresence: vi.fn(),
@@ -69,14 +73,21 @@ describe("ScrollIndicator", () => {
     expect(onClick).toHaveBeenCalledOnce();
   });
 
-  it("has correct aria-label for below direction", () => {
-    render(<ScrollIndicator direction="below" count={3} onClick={onClick} />);
-    expect(screen.getByLabelText("Scroll down, 3 more below")).toBeTruthy();
-  });
-
-  it("has correct aria-label for above direction", () => {
-    render(<ScrollIndicator direction="above" count={5} onClick={onClick} />);
-    expect(screen.getByLabelText("Scroll up, 5 more above")).toBeTruthy();
+  // The number is bare on screen; the name is where the noun lives.
+  it.each([
+    ["below", 3, 0, "3 more worktrees below"],
+    ["above", 1, 0, "1 more worktree above"],
+    ["below", 7, 2, "7 more worktrees below, 2 waiting for input"],
+  ] as const)("names %s with %i hidden, %i waiting", (direction, count, waitingCount, name) => {
+    render(
+      <ScrollIndicator
+        direction={direction}
+        count={count}
+        waitingCount={waitingCount}
+        onClick={onClick}
+      />
+    );
+    expect(screen.getByRole("button").getAttribute("aria-label")).toBe(name);
   });
 
   it("uses translate-y-0 when visible (below)", () => {
@@ -121,7 +132,36 @@ describe("ScrollIndicator", () => {
     rerender(<ScrollIndicator direction="below" count={0} onClick={onClick} />);
     expect(screen.getByText("4")).toBeTruthy();
     expect(screen.queryByText("0")).toBeNull();
-    expect(screen.getByLabelText("Scroll down, 4 more below")).toBeTruthy();
+    expect(screen.getByRole("button").getAttribute("aria-label")).toBe("4 more worktrees below");
+  });
+
+  const waitingMark = () => screen.queryByTestId("scroll-indicator-waiting-mark");
+
+  it("shows the waiting mark only while something past this edge is waiting", () => {
+    const { rerender } = render(<ScrollIndicator direction="below" count={6} onClick={onClick} />);
+    expect(waitingMark()).toBeNull();
+    rerender(<ScrollIndicator direction="below" count={6} waitingCount={1} onClick={onClick} />);
+    expect(waitingMark()).not.toBeNull();
+    // A live pill never keeps a mark for an agent that has stopped waiting.
+    rerender(<ScrollIndicator direction="below" count={6} waitingCount={0} onClick={onClick} />);
+    expect(waitingMark()).toBeNull();
+  });
+
+  it("latches the waiting mark together with the count through the fade-out", () => {
+    mockUseAnimatedPresence.mockReturnValue({ isVisible: false, shouldRender: true });
+    const { rerender } = render(
+      <ScrollIndicator direction="above" count={3} waitingCount={1} onClick={onClick} />
+    );
+    rerender(<ScrollIndicator direction="above" count={0} waitingCount={0} onClick={onClick} />);
+    expect(screen.getByText("3")).toBeTruthy();
+    expect(waitingMark()).not.toBeNull();
+  });
+
+  it("does not take focus on a pointer press", () => {
+    render(<ScrollIndicator direction="below" count={2} onClick={onClick} />);
+    const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    screen.getByRole("button").dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it("uses scoped transition-[opacity,translate] instead of bare transition", () => {

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { ListItem } from "react-virtuoso";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import type { ListItem, VirtuosoHandle } from "react-virtuoso";
 import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
 
 // A row is treated as hidden only once it has fully cleared the viewport edge.
@@ -9,6 +9,37 @@ const VISIBILITY_EPSILON_PX = 1;
 
 interface ScrollIndicatorItem {
   kind: string;
+  /** Present on worktree rows; matched against `waitingWorktreeIds`. */
+  worktreeId?: string;
+}
+
+/** What one edge of the viewport has beyond it. */
+export interface HiddenSide {
+  /** Worktree rows entirely past this edge. */
+  count: number;
+  /** How many of those rows have an agent waiting for input. */
+  waiting: number;
+}
+
+const NO_HIDDEN: HiddenSide = { count: 0, waiting: 0 };
+
+/**
+ * Per-index classification of the list against the viewport, plus the rows a
+ * click on each pill should reveal. Computed fresh on every read so a jump
+ * always targets the list as it is now, not as it was at the last scroll frame.
+ */
+interface Classification {
+  above: HiddenSide;
+  below: HiddenSide;
+  /** The hidden row nearest the top edge, and the nearest one with a waiting agent. */
+  nearestAbove: number | null;
+  nearestWaitingAbove: number | null;
+  /** The hidden row nearest the bottom edge, and the nearest one with a waiting agent. */
+  nearestBelow: number | null;
+  nearestWaitingBelow: number | null;
+  /** Rows cut by the top or bottom edge: on screen, but not all of them. */
+  clippedAtTop: number | null;
+  clippedAtBottom: number | null;
 }
 
 interface UseScrollIndicatorParams {
@@ -18,13 +49,28 @@ interface UseScrollIndicatorParams {
    * to ignore section headers (`kind === "header"`) when tallying hidden rows.
    */
   items: ReadonlyArray<ScrollIndicatorItem>;
+  /**
+   * Worktrees with an agent waiting for input. Kept apart from `items` so an
+   * agent changing state does not change the list's identity, which would
+   * throw away the measured geometry and blank both pills for a frame.
+   */
+  waitingWorktreeIds: ReadonlySet<string>;
+  /** Used to jump by index, since the row a pill targets is usually unmounted. */
+  virtuosoRef: RefObject<Pick<VirtuosoHandle, "scrollToIndex"> | null>;
+  /** False under reduced motion: a long smooth scroll is exactly the motion it asks to drop. */
+  smoothScroll: boolean;
 }
 
 interface UseScrollIndicatorReturn {
-  hiddenAbove: number;
-  hiddenBelow: number;
-  scrollToTop: () => void;
-  scrollToBottom: () => void;
+  hiddenAbove: HiddenSide;
+  hiddenBelow: HiddenSide;
+  /**
+   * Reveal what the above pill reports: the nearest waiting worktree when there
+   * is one, otherwise the next screenful — never the far end of the list,
+   * which throws away the place the person was reading.
+   */
+  revealAbove: () => void;
+  revealBelow: () => void;
   /** Plug into Virtuoso's `scrollerRef` prop. Captures the scrolling element. */
   scrollerRef: (el: HTMLElement | Window | null) => void;
   /** Plug into Virtuoso's `onScroll` prop. */
@@ -33,9 +79,28 @@ interface UseScrollIndicatorReturn {
   handleItemsRendered: (rendered: ListItem<ScrollIndicatorItem>[]) => void;
 }
 
-function useScrollIndicator({ items }: UseScrollIndicatorParams): UseScrollIndicatorReturn {
-  const [hiddenAbove, setHiddenAbove] = useState(0);
-  const [hiddenBelow, setHiddenBelow] = useState(0);
+function sameSide(a: HiddenSide, b: HiddenSide): boolean {
+  return a.count === b.count && a.waiting === b.waiting;
+}
+
+function useScrollIndicator({
+  items,
+  waitingWorktreeIds,
+  virtuosoRef,
+  smoothScroll,
+}: UseScrollIndicatorParams): UseScrollIndicatorReturn {
+  const [hiddenAbove, setHiddenAboveState] = useState<HiddenSide>(NO_HIDDEN);
+  const [hiddenBelow, setHiddenBelowState] = useState<HiddenSide>(NO_HIDDEN);
+  // A fresh object every frame would re-render the sidebar on every scroll
+  // frame; only a real change in either number should.
+  const setHiddenAbove = useCallback(
+    (next: HiddenSide) => setHiddenAboveState((prev) => (sameSide(prev, next) ? prev : next)),
+    []
+  );
+  const setHiddenBelow = useCallback(
+    (next: HiddenSide) => setHiddenBelowState((prev) => (sameSide(prev, next) ? prev : next)),
+    []
+  );
   const scrollerElRef = useRef<HTMLElement | null>(null);
   const [scrollerEl, setScrollerEl] = useState<HTMLElement | null>(null);
   // Latest `items` mirrored into a ref so the stable callbacks below always read
@@ -44,8 +109,12 @@ function useScrollIndicator({ items }: UseScrollIndicatorParams): UseScrollIndic
   // (Virtuoso callbacks, scroll/resize handlers, the items-changed effect) run
   // after commit, so the ref is current by the time they read it.
   const itemsRef = useRef(items);
+  const waitingRef = useRef(waitingWorktreeIds);
+  const smoothScrollRef = useRef(smoothScroll);
   useEffect(() => {
     itemsRef.current = items;
+    waitingRef.current = waitingWorktreeIds;
+    smoothScrollRef.current = smoothScroll;
   });
   // Latest per-item geometry from Virtuoso's `itemsRendered`. Held in a ref (not
   // state) because `itemsRendered` only fires when the rendered set changes —
@@ -64,9 +133,9 @@ function useScrollIndicator({ items }: UseScrollIndicatorParams): UseScrollIndic
   // #9580). The ResizeObserver path already throttles via `useResizeObserverRaf`.
   const scrollRafIdRef = useRef<number | null>(null);
 
-  const updateScrollIndicators = useCallback(() => {
+  const classify = useCallback((): Classification | null => {
     const scroller = scrollerElRef.current;
-    if (!scroller) return;
+    if (!scroller) return null;
 
     const items = itemsRef.current;
     const rendered = renderedItemsRef.current;
@@ -74,44 +143,93 @@ function useScrollIndicator({ items }: UseScrollIndicatorParams): UseScrollIndic
     // geometry belongs to a previous list layout. Virtuoso re-fires
     // `itemsRendered` for the current list momentarily, refreshing the tag.
     if (rendered.length === 0 || geometryItemsRef.current !== items) {
-      setHiddenAbove(0);
-      setHiddenBelow(0);
-      return;
+      return {
+        above: NO_HIDDEN,
+        below: NO_HIDDEN,
+        nearestAbove: null,
+        nearestWaitingAbove: null,
+        nearestBelow: null,
+        nearestWaitingBelow: null,
+        clippedAtTop: null,
+        clippedAtBottom: null,
+      };
     }
 
     const { scrollTop, clientHeight } = scroller;
     const viewportTop = scrollTop;
     const viewportBottom = scrollTop + clientHeight;
+    const waiting = waitingRef.current;
 
     const firstRenderedIndex = rendered[0]!.index;
     const lastRenderedIndex = rendered[rendered.length - 1]!.index;
 
-    let above = 0;
-    let below = 0;
+    const result: Classification = {
+      above: { count: 0, waiting: 0 },
+      below: { count: 0, waiting: 0 },
+      nearestAbove: null,
+      nearestWaitingAbove: null,
+      nearestBelow: null,
+      nearestWaitingBelow: null,
+      clippedAtTop: null,
+      clippedAtBottom: null,
+    };
+
+    // Indices only ever increase through these three passes, so "nearest" is
+    // the LAST hidden row seen above and the FIRST hidden row seen below.
+    const markAbove = (index: number) => {
+      const item = items[index]!;
+      result.above.count++;
+      result.nearestAbove = index;
+      if (item.worktreeId !== undefined && waiting.has(item.worktreeId)) {
+        result.above.waiting++;
+        result.nearestWaitingAbove = index;
+      }
+    };
+    const markBelow = (index: number) => {
+      const item = items[index]!;
+      result.below.count++;
+      result.nearestBelow ??= index;
+      if (item.worktreeId !== undefined && waiting.has(item.worktreeId)) {
+        result.below.waiting++;
+        result.nearestWaitingBelow ??= index;
+      }
+    };
 
     // Rows that sit entirely outside the rendered window are unmounted, so they
     // carry no geometry — count them straight from the backing list by index.
     for (let i = 0; i < firstRenderedIndex && i < items.length; i++) {
-      if (items[i]!.kind === "row") above++;
-    }
-    for (let i = lastRenderedIndex + 1; i < items.length; i++) {
-      if (items[i]!.kind === "row") below++;
+      if (items[i]!.kind === "row") markAbove(i);
     }
 
     // Rendered rows: classify each against the live viewport using its measured
     // offset/size. A partially-visible row counts as visible (not hidden).
     for (const item of rendered) {
-      if (item.data?.kind !== "row") continue;
+      if (item.data?.kind !== "row" || item.index >= items.length) continue;
       if (item.offset + item.size <= viewportTop + VISIBILITY_EPSILON_PX) {
-        above++;
+        markAbove(item.index);
       } else if (item.offset >= viewportBottom - VISIBILITY_EPSILON_PX) {
-        below++;
+        markBelow(item.index);
+      } else {
+        if (item.offset < viewportTop - VISIBILITY_EPSILON_PX) result.clippedAtTop = item.index;
+        if (item.offset + item.size > viewportBottom + VISIBILITY_EPSILON_PX) {
+          result.clippedAtBottom ??= item.index;
+        }
       }
     }
 
-    setHiddenAbove(above);
-    setHiddenBelow(below);
+    for (let i = lastRenderedIndex + 1; i < items.length; i++) {
+      if (items[i]!.kind === "row") markBelow(i);
+    }
+
+    return result;
   }, []);
+
+  const updateScrollIndicators = useCallback(() => {
+    const result = classify();
+    if (!result) return;
+    setHiddenAbove(result.above);
+    setHiddenBelow(result.below);
+  }, [classify, setHiddenAbove, setHiddenBelow]);
 
   // Recompute when the backing list changes (filter, sort, group toggle). Until
   // Virtuoso re-fires `itemsRendered` with geometry tagged for the new list, the
@@ -120,6 +238,12 @@ function useScrollIndicator({ items }: UseScrollIndicatorParams): UseScrollIndic
   useEffect(() => {
     updateScrollIndicators();
   }, [items, updateScrollIndicators]);
+
+  // An agent starting or stopping waiting changes what the pills report without
+  // anything scrolling, so the set is a recompute trigger of its own.
+  useEffect(() => {
+    updateScrollIndicators();
+  }, [waitingWorktreeIds, updateScrollIndicators]);
 
   useResizeObserverRaf(scrollerEl, () => updateScrollIndicators());
 
@@ -154,44 +278,67 @@ function useScrollIndicator({ items }: UseScrollIndicatorParams): UseScrollIndic
     [updateScrollIndicators]
   );
 
-  const scrollerRef = useCallback((el: HTMLElement | Window | null) => {
-    // Virtuoso forwards either the scroller element or window. We only support
-    // element scrolling here (the sidebar is always an in-container scroller).
-    const next = el instanceof HTMLElement ? el : null;
-    scrollerElRef.current = next;
-    setScrollerEl(next);
-    // When Virtuoso unmounts (filter clears to an empty state), reset the
-    // indicator counts so stale "5 above" badges don't briefly remain over
-    // the empty state placeholder, and drop any pending scroll frame that
-    // would otherwise read the now-detached scroller and stale geometry.
-    if (next === null) {
-      if (scrollRafIdRef.current !== null) {
-        cancelAnimationFrame(scrollRafIdRef.current);
-        scrollRafIdRef.current = null;
+  const scrollerRef = useCallback(
+    (el: HTMLElement | Window | null) => {
+      // Virtuoso forwards either the scroller element or window. We only support
+      // element scrolling here (the sidebar is always an in-container scroller).
+      const next = el instanceof HTMLElement ? el : null;
+      scrollerElRef.current = next;
+      setScrollerEl(next);
+      // When Virtuoso unmounts (filter clears to an empty state), reset the
+      // indicator counts so stale "5 above" badges don't briefly remain over
+      // the empty state placeholder, and drop any pending scroll frame that
+      // would otherwise read the now-detached scroller and stale geometry.
+      if (next === null) {
+        if (scrollRafIdRef.current !== null) {
+          cancelAnimationFrame(scrollRafIdRef.current);
+          scrollRafIdRef.current = null;
+        }
+        renderedItemsRef.current = [];
+        geometryItemsRef.current = null;
+        setHiddenAbove(NO_HIDDEN);
+        setHiddenBelow(NO_HIDDEN);
       }
-      renderedItemsRef.current = [];
-      geometryItemsRef.current = null;
-      setHiddenAbove(0);
-      setHiddenBelow(0);
-    }
-  }, []);
+    },
+    [setHiddenAbove, setHiddenBelow]
+  );
 
-  const scrollToTop = useCallback(() => {
-    scrollerElRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-  }, []);
-
-  const scrollToBottom = useCallback(() => {
-    const scroller = scrollerElRef.current;
-    if (scroller) {
-      scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+  // A waiting worktree is centred, so it lands clear of both pills with its
+  // neighbours for context. Without one, it is a page step: the row the edge
+  // was cutting through (or, failing that, the nearest hidden one) moves to
+  // the opposite edge, so nothing half-read is skipped and everything newly on
+  // screen is what came next.
+  const revealAbove = useCallback(() => {
+    const result = classify();
+    const virtuoso = virtuosoRef.current;
+    if (!result || !virtuoso) return;
+    const behavior = smoothScrollRef.current ? "smooth" : "auto";
+    if (result.nearestWaitingAbove !== null) {
+      virtuoso.scrollToIndex({ index: result.nearestWaitingAbove, align: "center", behavior });
+    } else if (result.nearestAbove !== null) {
+      const index = result.clippedAtTop ?? result.nearestAbove;
+      virtuoso.scrollToIndex({ index, align: "end", behavior });
     }
-  }, []);
+  }, [classify, virtuosoRef]);
+
+  const revealBelow = useCallback(() => {
+    const result = classify();
+    const virtuoso = virtuosoRef.current;
+    if (!result || !virtuoso) return;
+    const behavior = smoothScrollRef.current ? "smooth" : "auto";
+    if (result.nearestWaitingBelow !== null) {
+      virtuoso.scrollToIndex({ index: result.nearestWaitingBelow, align: "center", behavior });
+    } else if (result.nearestBelow !== null) {
+      const index = result.clippedAtBottom ?? result.nearestBelow;
+      virtuoso.scrollToIndex({ index, align: "start", behavior });
+    }
+  }, [classify, virtuosoRef]);
 
   return {
     hiddenAbove,
     hiddenBelow,
-    scrollToTop,
-    scrollToBottom,
+    revealAbove,
+    revealBelow,
     scrollerRef,
     handleScroll,
     handleItemsRendered,
