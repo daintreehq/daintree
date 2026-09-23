@@ -1127,6 +1127,22 @@ describe("BrowserToolbar at compact widths", () => {
     rowWidth.current = 1000;
   });
 
+  it("confirms a copy from More on the More trigger, since the in-field check is gone", async () => {
+    const { getByLabelText } = renderToolbar();
+    const more = getByLabelText("More page actions");
+    const glyphBefore = more.innerHTML;
+    fireEvent.pointerDown(more, { button: 0, ctrlKey: false });
+    await waitFor(() => expect(document.querySelector('[role="menu"]')).toBeTruthy());
+    const copyItem = Array.from(document.querySelectorAll('[role="menuitem"]')).find(
+      (i) => i.textContent?.trim() === "Copy URL"
+    )!;
+    fireEvent.click(copyItem);
+    await waitFor(() =>
+      expect(getByLabelText("More page actions").innerHTML).not.toBe(glyphBefore)
+    );
+    expect(getByLabelText("More page actions").querySelector(".text-status-success")).toBeTruthy();
+  });
+
   it("keeps the route by moving Copy URL and the console toggle into More", async () => {
     const onToggleConsole = vi.fn();
     const { queryByLabelText, getByLabelText } = renderToolbar({

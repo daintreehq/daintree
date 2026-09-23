@@ -264,6 +264,7 @@ export function BrowserToolbar({
   });
   const [isZoomPopoverOpen, setIsZoomPopoverOpen] = useState(false);
   const copyButtonRef = useRef<HTMLButtonElement>(null);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
   const errorId = useId();
   const listboxId = useId();
 
@@ -579,7 +580,7 @@ export function BrowserToolbar({
     const enabled = dir === "back" ? canGoBack : canGoForward;
     const tooltip = dir === "back" ? backTooltip || "Go back" : forwardTooltip || "Go forward";
     return (
-      <div className="relative">
+      <div className="relative flex">
         <Tooltip>
           <TooltipTrigger asChild>
             <span className="inline-flex">
@@ -750,7 +751,7 @@ export function BrowserToolbar({
                   error &&
                     "border-status-error focus:border-status-error focus-visible:outline-status-error"
                 )}
-                placeholder="localhost:3000"
+                placeholder={displayHost || "localhost:3000"}
               />
               {showStyledAddress && (
                 <div
@@ -810,12 +811,16 @@ export function BrowserToolbar({
                     <PopoverContent
                       align="end"
                       className="w-auto p-1"
-                      onCloseAutoFocus={(e) => {
-                        // Back at 100% the chip is about to unmount; hand focus to
-                        // its neighbour instead of letting it fall to the body.
+                      onCloseAutoFocus={() => {
+                        // Back at 100% the chip unmounts with the popover, so a
+                        // restore aimed at it lands on the body. The shared policy
+                        // still decides first; only a stranded focus is rescued.
                         if (isNonDefaultZoom) return;
-                        e.preventDefault();
-                        copyButtonRef.current?.focus({ preventScroll: true });
+                        requestAnimationFrame(() => {
+                          if (document.activeElement !== document.body) return;
+                          const fallback = copyButtonRef.current ?? moreButtonRef.current;
+                          fallback?.focus({ preventScroll: true });
+                        });
                       }}
                     >
                       {zoomStepper}
@@ -1028,12 +1033,17 @@ export function BrowserToolbar({
                 <TooltipTrigger asChild>
                   <DropdownMenuTrigger asChild>
                     <button
+                      ref={moreButtonRef}
                       type="button"
                       className={actionClass}
                       aria-label="More page actions"
                       data-testid="browser-more-actions"
                     >
-                      <EllipsisVertical className="w-4 h-4" />
+                      {copied && isCompact ? (
+                        <Check className="w-4 h-4 text-status-success" />
+                      ) : (
+                        <EllipsisVertical className="w-4 h-4" />
+                      )}
                     </button>
                   </DropdownMenuTrigger>
                 </TooltipTrigger>
