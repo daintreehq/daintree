@@ -318,6 +318,8 @@ export function SettingsRow({
         // severity-coloured text falls under 4.5:1 on most themes.
         <p
           id={errorId}
+          // Errors arrive after an action; announce them without moving focus.
+          role="alert"
           className={cn(
             "flex items-start gap-1.5 text-xs text-text-primary",
             layout === "inline" && "basis-full"
