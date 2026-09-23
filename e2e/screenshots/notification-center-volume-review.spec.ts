@@ -23,6 +23,7 @@
  *   grouped    group-by-context on, top and scrolled
  *   focus      keyboard focus on a thread row
  *   menu       a row's overflow menu, then its Snooze submenu
+ *   snoozekey  `h` on a focused row, which opens the durations directly
  *   snoozed    the Snoozed tab
  *   caughtup   everything read: the All tab without a rail, and Unread empty
  *   toast      a toast arriving while the inbox is closed
@@ -716,13 +717,30 @@ test("notification center at fleet volume", async () => {
       await seedAndOpen(page, fleet);
       const rows = page.locator(POPOVER).locator(SEL.notifications.centerRow);
       await rows.nth(1).hover();
-      await rows.nth(1).locator('button[aria-label="Notification options"]').click();
+      await rows.nth(1).locator('button[aria-label^="Options for "]').click();
       await page.locator('[role="menu"]').first().waitFor({ state: "visible", timeout: 5000 });
       await snapWithMenus(page, "08-row-menu");
       await page.locator('[role="menuitem"]', { hasText: "Snooze" }).first().hover();
       await page.keyboard.press("ArrowRight");
       await page.locator('[role="menu"]').nth(1).waitFor({ state: "visible", timeout: 5000 });
       await snapWithMenus(page, "09-row-snooze-submenu");
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
+    });
+
+    await step(page, "snoozekey", async () => {
+      await seedAndOpen(page, fleet);
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("h");
+      await page
+        .locator('[role="menu"]', { hasText: "For 1 hour" })
+        .first()
+        .waitFor({ state: "visible", timeout: 5000 });
+      const onDuration = await page.evaluate(
+        () => document.activeElement?.getAttribute("role") === "menuitem"
+      );
+      if (!onDuration) throw new Error("`h` did not put focus on a duration");
+      await snapWithMenus(page, "09b-row-snooze-by-key");
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
     });
