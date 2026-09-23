@@ -15,6 +15,7 @@ vi.mock("@/services/ActionService", () => ({
 import { ChordIndicator } from "../ChordIndicator";
 import { keybindingService } from "@/services/KeybindingService";
 import { isMac } from "@/lib/platform";
+import { COMMAND_HUD_BLOCKED_EVENT } from "@/hooks/useGlobalKeybindings";
 
 function pressCmdK(): void {
   const mac = isMac();
@@ -220,5 +221,20 @@ describe("ChordIndicator (Cmd+K command HUD)", () => {
 
     const found = options().map((o) => o.id);
     for (const id of ids) expect(found).toContain(id);
+  });
+
+  it("selects the row of a refused direct completion", async () => {
+    render(<ChordIndicator />);
+    pressCmdK();
+    await flushFrames();
+    const last = options()[options().length - 1]!;
+    const actionId = last.id.replace("command-hud-option-", "");
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(COMMAND_HUD_BLOCKED_EVENT, { detail: actionId }));
+    });
+
+    expect(last.getAttribute("aria-selected")).toBe("true");
+    expect(input()!.getAttribute("aria-activedescendant")).toBe(last.id);
   });
 });

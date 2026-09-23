@@ -1224,9 +1224,13 @@ describe("command HUD direct completion", () => {
       enabled: false,
       disabledReason: "No upstream branch",
     });
+    const blocked = vi.fn();
+    window.addEventListener("daintree:command-hud-blocked", blocked);
     render(<Host />);
 
     const event = pressCmdP();
+    window.removeEventListener("daintree:command-hud-blocked", blocked);
+    expect(blocked).toHaveBeenCalledTimes(1);
 
     expect(event.defaultPrevented).toBe(true);
     expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();

@@ -5,7 +5,11 @@ import { combosFieldsEqual, keybindingService } from "@/services/KeybindingServi
 import { notify } from "@/lib/notify";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { COMMAND_HUD_PREFIX, usePendingChord } from "./useGlobalKeybindings";
+import {
+  COMMAND_HUD_BLOCKED_EVENT,
+  COMMAND_HUD_PREFIX,
+  usePendingChord,
+} from "./useGlobalKeybindings";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 
 /** A single entry in the curated Cmd+K power-command layer. */
@@ -143,6 +147,20 @@ export function useCommandHud(): UseCommandHudReturn {
     setQueryState(next);
     setSelectedIndexState(0);
   }, []);
+
+  // A refused direct completion (see useGlobalKeybindings) selects its row, so
+  // the reason printed on it comes into view under the cursor. When the query
+  // has filtered the row out, the spoken reason is the feedback.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onBlocked = (e: Event) => {
+      if (!(e instanceof CustomEvent)) return;
+      const index = results.findIndex((item) => item.actionId === e.detail);
+      if (index >= 0) setSelectedIndexState(index);
+    };
+    window.addEventListener(COMMAND_HUD_BLOCKED_EVENT, onBlocked);
+    return () => window.removeEventListener(COMMAND_HUD_BLOCKED_EVENT, onBlocked);
+  }, [isOpen, results]);
 
   const setSelectedIndex = useCallback((index: number) => {
     setSelectedIndexState(index);

@@ -22,6 +22,13 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 export const COMMAND_HUD_PREFIX = "Cmd+K";
 
 /**
+ * Fired on `window` with the action id as `detail` when a direct Cmd+K
+ * completion is refused because the command is disabled, so the HUD can move
+ * its selection onto that row and bring its inline reason into view.
+ */
+export const COMMAND_HUD_BLOCKED_EVENT = "daintree:command-hud-blocked";
+
+/**
  * Global keybinding handler that provides:
  * 1. Chord sequence support (e.g., Cmd+K Cmd+K)
  * 2. Priority-based resolution (scoped bindings override globals)
@@ -146,6 +153,9 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         if (action && !action.enabled) {
           e.preventDefault();
           e.stopPropagation();
+          window.dispatchEvent(
+            new CustomEvent(COMMAND_HUD_BLOCKED_EVENT, { detail: completion!.actionId })
+          );
           useAnnouncerStore
             .getState()
             .announce(
