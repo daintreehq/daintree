@@ -528,7 +528,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       "New sessions are limited to the Daintree actions the Action capability tier allows"
     );
 
-    fireEvent.change(screen.getByLabelText("Capability tier"), { target: { value: "system" } });
+    fireEvent.click(screen.getByRole("radio", { name: /^System/ }));
 
     await waitForContent(
       container,
@@ -648,8 +648,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     );
     await waitForContent(container, "Capability tier");
 
-    const select = screen.getByLabelText("Capability tier") as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "system" } });
+    fireEvent.click(screen.getByRole("radio", { name: /^System/ }));
 
     await waitFor(() => {
       expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
@@ -989,6 +988,38 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(labels).not.toContain("Codex");
   });
 
+  // A failed catalog read is not "this agent has no models": hiding the row would hide
+  // a saved model override along with the way to recover.
+  it("keeps the Model row with Retry when the model catalog fails to load", async () => {
+    helpPanelState.preferredAgentId = "claude";
+    const getResolvedModelList = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("catalog down"))
+      .mockResolvedValue({
+        agentId: "claude",
+        models: [{ id: "opus", name: "Opus", shortLabel: "Opus" }],
+        contextWindow: 200_000,
+        source: "merged",
+      });
+    window.electron.agentCapabilities.getResolvedModelList = getResolvedModelList;
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Couldn't load this agent's models");
+    expect(screen.getByLabelText("Model")).toBeTruthy();
+
+    // The select stub wraps its row in a <label>, which renames nested buttons; find by text.
+    fireEvent.click(screen.getByText("Retry", { selector: "button" }));
+
+    await waitFor(() => expect(getResolvedModelList).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(container.textContent).not.toContain("Couldn't load this agent's models")
+    );
+  });
+
   it("does not render a Preferred model section", async () => {
     const { container } = render(
       <SettingsValidationProvider>
@@ -999,6 +1030,50 @@ describe("DaintreeAssistantSettingsTab", () => {
 
     expect(container.textContent).not.toContain("Preferred model");
     expect(screen.queryByLabelText("Model")).toBeNull();
+  });
+
+  // Until the saved values arrive the switches show defaults; a click then would
+  // overwrite a real setting with one the user never saw. Retry has to recover.
+  it("keeps settings inert after a failed load, and Retry brings them back", async () => {
+    let resolveRetry: (() => void) | undefined;
+    const retryGate = new Promise<void>((r) => {
+      resolveRetry = r;
+    });
+    const loaded = {
+      docSearch: false,
+      daintreeControl: true,
+      tier: "action" as const,
+      bypassPermissions: false,
+      auditRetention: 7,
+      customArgs: "",
+    };
+    const getSettings = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("EACCES: permission denied"))
+      .mockImplementation(() => retryGate.then(() => loaded));
+    installApi({ getSettings });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Couldn't load assistant settings");
+
+    const toggle = screen.getByRole("switch", { name: "Search documentation" });
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    // While the retry is in flight the defaults are still on screen, so they stay inert.
+    await waitFor(() => expect(getSettings).toHaveBeenCalledTimes(2));
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+    resolveRetry?.();
+
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+      expect(toggle.getAttribute("data-state")).toBe("unchecked");
+    });
+    expect(container.textContent).not.toContain("Couldn't load assistant settings");
   });
 
   it("keeps settings visible when MCP status load fails", async () => {
@@ -1195,11 +1270,13 @@ describe("DaintreeAssistantSettingsTab", () => {
     );
     await waitForContent(container, "Audit log retention");
 
-    const select = screen.getByLabelText("Audit log retention") as HTMLSelectElement;
-    const optionLabels = Array.from(select.options).map((o) => o.label);
-    expect(optionLabels).toEqual(["7 days (default)", "30 days", "Off"]);
+    const group = screen.getByRole("radiogroup", { name: "Audit log retention" });
+    const optionLabels = within(group)
+      .getAllByRole("radio")
+      .map((o) => o.textContent);
+    expect(optionLabels).toEqual(["7 days", "30 days", "Off"]);
 
-    fireEvent.change(select, { target: { value: "30" } });
+    fireEvent.click(within(group).getByRole("radio", { name: "30 days" }));
 
     await waitFor(() => {
       expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
@@ -1395,7 +1472,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitForContent(container, "Audit log retention");
 
     expect(container.textContent).not.toContain("skip logging entirely");
-    expect(container.textContent).toContain("recorded separately");
+    expect(container.textContent).toContain("kept separately");
   });
 
   it("renders turn-outcome diagnostics in the privacy section after expanding advanced diagnostics", async () => {
@@ -1476,6 +1553,31 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitForContent(container, "audit ipc failed");
     // Recording state holds at the last known-good value on failure.
     expect(screen.getByLabelText("Capture audit log").getAttribute("aria-checked")).toBe("true");
+  });
+
+  // Unread, the switch would show its optimistic "on" as if it were the real setting.
+  it("holds the recording switch and offers Retry when the audit config can't be read", async () => {
+    const getAuditConfig = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("ipc down"))
+      .mockResolvedValue({ enabled: false, maxRecords: 500 });
+    installApi({}, { getAuditConfig });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Couldn't read the audit settings");
+    const toggle = screen.getByLabelText("Capture audit log");
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
+    });
   });
 
   it("reflects recording-off state loaded from getAuditConfig", async () => {

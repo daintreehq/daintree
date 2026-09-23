@@ -1,4 +1,5 @@
 import { AlertCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 interface SettingsLoadErrorBannerProps {
   message: string;
@@ -13,6 +14,11 @@ interface SettingsLoadErrorBannerProps {
   retryLabel?: string;
 }
 
+/**
+ * The words stay on the neutral text ramp and only the glyph and tint carry the status
+ * colour: status-coloured text has no contrast floor across the themes, and a
+ * slash-alpha text colour can't be recovered at all.
+ */
 export function SettingsLoadErrorBanner({
   message,
   onRetry,
@@ -26,16 +32,12 @@ export function SettingsLoadErrorBanner({
     >
       <AlertCircle className="w-4 h-4 text-status-error shrink-0" aria-hidden="true" />
       <div className="flex-1 min-w-0">
-        {title && <p className="text-xs font-medium text-status-error">{title}</p>}
-        <p className="text-xs text-status-error/90 select-text break-words">{message}</p>
+        {title && <p className="text-xs font-medium text-text-primary">{title}</p>}
+        <p className="text-xs text-text-secondary select-text break-words">{message}</p>
       </div>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="text-xs px-2 py-1 rounded-sm border border-status-error/30 text-status-error hover:bg-status-error/10 transition-colors shrink-0"
-      >
+      <Button type="button" variant="outline" size="sm" onClick={onRetry} className="shrink-0">
         {retryLabel}
-      </button>
+      </Button>
     </div>
   );
 }
