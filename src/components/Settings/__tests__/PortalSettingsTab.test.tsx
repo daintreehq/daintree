@@ -265,6 +265,24 @@ describe("PortalSettingsTab custom new-tab URL failure", () => {
 
     expect(url.getAttribute("aria-invalid")).toBeNull();
     expect(describedText(url)).not.toBe("");
-    expect(screen.getByRole("status").textContent).not.toBe("");
+    const first = screen.getByRole("alert");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+    // Same words, new node: a repeated failure is announced again.
+    const second = screen.getByRole("alert");
+    expect(second.textContent).toBe(first.textContent);
+    expect(second).not.toBe(first);
+  });
+
+  it("reopens a saved custom URL for editing from its own Edit button", () => {
+    portal.defaultNewTabUrl = "https://intranet.example.com";
+    renderTab();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit", description: "Custom URL" }));
+
+    const url = screen.getByRole("textbox", { name: "Custom URL" }) as HTMLInputElement;
+    expect(url.value).toBe("https://intranet.example.com");
   });
 });

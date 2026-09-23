@@ -107,6 +107,8 @@ function toButtonId(id: UniqueIdentifier): AnyToolbarButtonId {
 
 interface ToolbarButtonCardProps {
   buttonId: AnyToolbarButtonId;
+  /** Only on the live row — the drag overlay renders the same card and must not repeat the id. */
+  switchId?: string;
   metadata: ToolbarButtonMetadata;
   isVisible: boolean;
   onToggle?: () => void;
@@ -168,6 +170,7 @@ function ToolbarButtonMoveMenu({
 // (which mounts outside any `SortableContext`).
 function ToolbarButtonCard({
   buttonId,
+  switchId,
   metadata,
   isVisible,
   onToggle,
@@ -209,6 +212,7 @@ function ToolbarButtonCard({
             <ToolbarButtonMoveMenu buttonId={buttonId} label={metadata.label} moves={moves} />
           )}
           <SettingsSwitch
+            id={switchId}
             checked={isVisible}
             onCheckedChange={() => onToggle?.()}
             aria-label={`Toggle ${metadata.label} visibility`}
@@ -256,6 +260,7 @@ function SortableButtonItem({
     <div ref={setNodeRef} style={style}>
       <ToolbarButtonCard
         buttonId={buttonId}
+        switchId={columnSwitchId(buttonId)}
         metadata={metadata}
         isVisible={isVisible}
         onToggle={() => onToggle(buttonId)}
@@ -384,6 +389,10 @@ function ToolbarSideColumn({
 
 function launcherItemSwitchId(id: AnyToolbarButtonId): string {
   return `toolbar-launcher-item-${id}`;
+}
+
+function columnSwitchId(id: AnyToolbarButtonId): string {
+  return `toolbar-column-${id}`;
 }
 
 // Radix Select reserves the empty string for "no value", so "no default" needs its own token.
@@ -817,6 +826,23 @@ export function ToolbarSettingsTab() {
     };
   };
 
+  // Unpinning a launcher item removes its row from the column too (repinning is
+  // the launcher's job), so focus moves to the row that takes its place.
+  const handleColumnToggle = (buttonId: AnyToolbarButtonId, side: ToolbarSide) => {
+    if (isLauncherItemToolbarButtonId(buttonId) && isLauncherItemOn(buttonId)) {
+      const list = side === "left" ? groupedLeft : layout.rightButtons;
+      const rendered = list.filter((id) => allMetadata[id] !== undefined);
+      const at = rendered.indexOf(buttonId);
+      const neighbour = rendered[at + 1] ?? rendered[at - 1];
+      setFocusTarget(
+        neighbour
+          ? `#${window.CSS.escape(columnSwitchId(neighbour))}`
+          : '#toolbar-left-buttons [role="switch"], #toolbar-right-buttons [role="switch"]'
+      );
+    }
+    handleToggle(buttonId, side);
+  };
+
   const activeMetadata = activeId ? allMetadata[activeId] : undefined;
 
   const pinnedAgentCount = LAUNCHABLE_AGENT_IDS.filter(isAgentOnToolbar).length;
@@ -852,7 +878,7 @@ export function ToolbarSettingsTab() {
               buttonIds={liveLeft}
               allMetadata={allMetadata}
               isVisible={isVisible}
-              onToggle={handleToggle}
+              onToggle={handleColumnToggle}
               getMoves={getMoves}
             />
             <ToolbarSideColumn
@@ -862,7 +888,7 @@ export function ToolbarSettingsTab() {
               buttonIds={liveRight}
               allMetadata={allMetadata}
               isVisible={isVisible}
-              onToggle={handleToggle}
+              onToggle={handleColumnToggle}
               getMoves={getMoves}
             />
           </div>

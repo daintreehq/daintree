@@ -111,9 +111,10 @@ export function PortalSettingsTab() {
   const [showCustomUrlInput, setShowCustomUrlInput] = useState(false);
   const [customDefaultUrl, setCustomDefaultUrl] = useState("");
   const [customUrlError, setCustomUrlError] = useState<LinkError | null>(null);
-  // Async results arrive after focus has moved on; a polite region reads them
-  // out without taking focus back.
-  const [announcement, setAnnouncement] = useState("");
+  // Every submission that fails bumps this, and it keys the rendered message:
+  // a fresh `role="alert"` node is announced even when the text repeats.
+  const [errorSeq, setErrorSeq] = useState(0);
+  const customUrlRef = useRef<HTMLInputElement>(null);
   const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null);
   const customUrlErrorId = useId();
   const addLinkErrorId = useId();
@@ -127,11 +128,14 @@ export function PortalSettingsTab() {
     setReturnFocusTo(null);
   }, [returnFocusTo]);
 
-  // The custom-URL editor sits under the select that opened it; closing it
-  // hands focus back there rather than to the page.
+  // Closing the custom-URL editor hands focus to what opened it: its own Edit
+  // button while a custom URL is in effect, otherwise the select.
   useEffect(() => {
     if (!focusNewTabSelect) return;
-    document.querySelector<HTMLElement>('#portal-default-agent [role="combobox"]')?.focus();
+    (
+      document.querySelector<HTMLElement>("[data-portal-edit-custom-url]") ??
+      document.querySelector<HTMLElement>('#portal-default-agent [role="combobox"]')
+    )?.focus();
     setFocusNewTabSelect(false);
   }, [focusNewTabSelect]);
 
@@ -147,6 +151,7 @@ export function PortalSettingsTab() {
     const problem = validateLink(newLinkName, newLinkUrl);
     if (problem) {
       setAddError(problem);
+      setErrorSeq((n) => n + 1);
       (problem.field === "name" ? addNameRef : addUrlRef).current?.focus();
       return;
     }
@@ -168,11 +173,10 @@ export function PortalSettingsTab() {
     setPending(null);
     if (!result.ok) {
       setAddError({ field: "form", message: "Couldn't add the link. Try again." });
-      setAnnouncement("Couldn't add the link. Try again.");
+      setErrorSeq((n) => n + 1);
       return;
     }
 
-    setAnnouncement(`Added ${newLinkName.trim()}`);
     setNewLinkName("");
     setNewLinkUrl("");
     setAddError(null);
@@ -200,6 +204,7 @@ export function PortalSettingsTab() {
     const problem = validateLink(editName, editUrl);
     if (problem) {
       setEditError(problem);
+      setErrorSeq((n) => n + 1);
       (problem.field === "name" ? editNameRef : editUrlRef).current?.focus();
       return;
     }
@@ -213,10 +218,9 @@ export function PortalSettingsTab() {
     setPending(null);
     if (!result.ok) {
       setEditError({ field: "form", message: "Couldn't save the link. Try again." });
-      setAnnouncement("Couldn't save the link. Try again.");
+      setErrorSeq((n) => n + 1);
       return;
     }
-    setAnnouncement(`Saved ${editName.trim()}`);
     closeEditor();
   };
 
@@ -252,11 +256,15 @@ export function PortalSettingsTab() {
     if (pendingRef.current || customDefaultUrl === defaultNewTabUrl) return;
     if (!customDefaultUrl.trim()) {
       setCustomUrlError({ field: "url", message: "Enter a URL" });
+      setErrorSeq((n) => n + 1);
+      customUrlRef.current?.focus();
       return;
     }
     const problem = validateUrl(customDefaultUrl);
     if (problem) {
       setCustomUrlError({ field: "url", message: problem });
+      setErrorSeq((n) => n + 1);
+      customUrlRef.current?.focus();
       return;
     }
     setPending("custom");
@@ -268,14 +276,20 @@ export function PortalSettingsTab() {
     setPending(null);
     if (!result.ok) {
       setCustomUrlError({ field: "form", message: "Couldn't save the URL. Try again." });
-      setAnnouncement("Couldn't save the URL. Try again.");
+      setErrorSeq((n) => n + 1);
       return;
     }
-    setAnnouncement("New tabs will open the custom URL");
     setShowCustomUrlInput(false);
     setCustomDefaultUrl("");
     setCustomUrlError(null);
     setFocusNewTabSelect(true);
+  };
+
+  const handleEditCustomUrl = () => {
+    if (pendingRef.current || !defaultNewTabUrl) return;
+    setCustomDefaultUrl(defaultNewTabUrl);
+    setCustomUrlError(null);
+    setShowCustomUrlInput(true);
   };
 
   const handleCustomUrlCancel = () => {
@@ -295,7 +309,13 @@ export function PortalSettingsTab() {
           <SettingsRow
             layout="stacked"
             label={`Edit ${link.title || "link"}`}
-            error={editError ? <span id={editErrorId}>{editError.message}</span> : undefined}
+            error={
+              editError ? (
+                <span key={errorSeq} id={editErrorId} role="alert">
+                  {editError.message}
+                </span>
+              ) : undefined
+            }
             control={
               <div className="flex items-center gap-2">
                 <Input
@@ -472,9 +492,6 @@ export function PortalSettingsTab() {
 
   return (
     <div className="space-y-8">
-      <div role="status" aria-live="polite" className="sr-only">
-        {announcement}
-      </div>
       <ConfirmDialog
         isOpen={pendingRemoveId !== null}
         variant="destructive"
@@ -503,13 +520,7 @@ export function PortalSettingsTab() {
           <SettingsSelect
             id="portal-default-agent"
             label="New tabs open"
-            description={
-              isCustomUrl && !showCustomUrlInput && defaultNewTabUrl ? (
-                <span className="block font-mono truncate">{defaultNewTabUrl}</span>
-              ) : (
-                "What the + button in the Portal panel opens"
-              )
-            }
+            description="What the + button in the Portal panel opens"
             isModified={defaultNewTabUrl !== null && !showCustomUrlInput}
             onReset={() => handleDefaultAgentChange("none")}
             resetAriaLabel="Reset new tabs to the Launchpad"
@@ -519,6 +530,28 @@ export function PortalSettingsTab() {
             options={defaultAgentOptions}
           />
 
+          {/* A saved custom URL keeps its own Edit: re-choosing "Custom URL…" in
+              the select is not a change, so it can't reopen the editor. */}
+          {isCustomUrl && !showCustomUrlInput && defaultNewTabUrl && (
+            <SettingsRow
+              label="Custom URL"
+              description={<span className="block font-mono truncate">{defaultNewTabUrl}</span>}
+              control={({ labelId }) => (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleEditCustomUrl}
+                  disabled={pending !== null}
+                  aria-describedby={labelId}
+                  data-portal-edit-custom-url=""
+                >
+                  Edit
+                </Button>
+              )}
+            />
+          )}
+
           {showCustomUrlInput && (
             <>
               <SettingsRow
@@ -526,13 +559,16 @@ export function PortalSettingsTab() {
                 label="Custom URL"
                 error={
                   customUrlError ? (
-                    <span id={customUrlErrorId}>{customUrlError.message}</span>
+                    <span key={errorSeq} id={customUrlErrorId} role="alert">
+                      {customUrlError.message}
+                    </span>
                   ) : undefined
                 }
                 control={({ labelId }) => (
                   <Input
                     type="text"
                     placeholder="https://…"
+                    ref={customUrlRef}
                     value={customDefaultUrl}
                     readOnly={pending === "custom"}
                     onChange={(e) => {
@@ -595,7 +631,13 @@ export function PortalSettingsTab() {
           <SettingsRow
             layout="stacked"
             label="Add a link"
-            error={addError ? <span id={addLinkErrorId}>{addError.message}</span> : undefined}
+            error={
+              addError ? (
+                <span key={errorSeq} id={addLinkErrorId} role="alert">
+                  {addError.message}
+                </span>
+              ) : undefined
+            }
             control={
               <div className="flex items-center gap-2">
                 <Input

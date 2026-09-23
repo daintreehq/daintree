@@ -29,6 +29,8 @@ export function FileBrowserVisibilitySettings() {
 
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Keys the message, so a refusal repeated word for word is announced again.
+  const [errorSeq, setErrorSeq] = useState(0);
   // Removing a chip unmounts the button that had focus; the next chip takes it,
   // then the previous one, then the add field once the list is empty.
   const [focusAfterRemove, setFocusAfterRemove] = useState<string | null>(null);
@@ -57,6 +59,7 @@ export function FileBrowserVisibilitySettings() {
   // field the message describes, so the message is read and the fix is one step.
   const refuse = (message: string) => {
     setError(message);
+    setErrorSeq((n) => n + 1);
     inputRef.current?.focus();
   };
 
@@ -105,7 +108,13 @@ export function FileBrowserVisibilitySettings() {
             setError(null);
           }}
           resetAriaLabel="Reset always-hidden patterns to defaults"
-          error={error}
+          error={
+            error ? (
+              <span key={errorSeq} role="alert">
+                {error}
+              </span>
+            ) : undefined
+          }
           control={({ labelId, descriptionId }) => (
             <div className="grid gap-3">
               <ul ref={listRef} className="flex flex-wrap gap-1.5" aria-labelledby={labelId}>

@@ -241,17 +241,20 @@ vi.mock("../SettingsSwitchCard", () => ({
 // from Radix's pointer-event internals while preserving the aria contract.
 vi.mock("../SettingsSwitch", () => ({
   SettingsSwitch: ({
+    id,
     checked,
     onCheckedChange,
     "aria-label": ariaLabel,
     className,
   }: {
+    id?: string;
     checked: boolean;
     onCheckedChange: (next: boolean) => void;
     "aria-label"?: string;
     className?: string;
   }) => (
     <button
+      id={id}
       type="button"
       role="switch"
       aria-checked={checked}
@@ -995,6 +998,28 @@ describe("ToolbarSettingsTab — launcher pins (#12217)", () => {
     expect(setPanelButtonOnToolbarMock).not.toHaveBeenCalled();
     expect(setPluginButtonPromotedMock).not.toHaveBeenCalled();
     expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
+  });
+
+  it("hands focus to the next row when unpinning removes the focused one", async () => {
+    mockRecipes.list = [
+      { id: "r-1", name: "Ship it" },
+      { id: "r-2", name: "Tidy up" },
+    ];
+    mockToolbarState = makeToolbarState({
+      leftButtons: ["launcher", "launcher:recipe:r-1", "launcher:recipe:r-2"],
+      rightButtons: [],
+      pinnedButtons: { "launcher:recipe:r-1": true, "launcher:recipe:r-2": true },
+    });
+    const { getByLabelText } = render(<ToolbarSettingsTab />);
+    const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+
+    fireEvent.click(getByLabelText("Show Ship it in toolbar"));
+    await act(nextFrame);
+    expect(document.activeElement).toBe(getByLabelText("Show Tidy up in toolbar"));
+
+    fireEvent.click(getByLabelText("Toggle Ship it visibility"));
+    await act(nextFrame);
+    expect(document.activeElement).toBe(getByLabelText("Toggle Tidy up visibility"));
   });
 
   it("shows no row for a pin whose source is not here, and leaves the pin alone", () => {
