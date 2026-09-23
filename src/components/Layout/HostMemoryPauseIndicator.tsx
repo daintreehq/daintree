@@ -57,7 +57,7 @@ export function HostMemoryPauseIndicator() {
         <div className="flex flex-col gap-0.5">
           <span className="font-medium">{copy.title}</span>
           <span>{copy.body}</span>
-          <span className="mt-1 text-text-secondary">{HOST_MEMORY_PAUSE_COPY.detailsHint}</span>
+          <span className="mt-0.5 text-text-secondary">{HOST_MEMORY_PAUSE_COPY.detailsHint}</span>
         </div>
       </TooltipContent>
     </Tooltip>
