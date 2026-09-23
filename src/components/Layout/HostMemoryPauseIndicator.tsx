@@ -25,7 +25,9 @@ export function HostMemoryPauseIndicator() {
   const copy = paused ? HOST_MEMORY_PAUSE_COPY.paused : HOST_MEMORY_PAUSE_COPY.monitoring;
 
   return (
-    <Tooltip>
+    // The body is the explanation, not a hint, so it stays while hovered or
+    // focused rather than timing out mid-read.
+    <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>
         <Button
           variant="ghost"
