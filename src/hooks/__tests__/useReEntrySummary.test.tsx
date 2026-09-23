@@ -413,7 +413,7 @@ describe("useReEntrySummary", () => {
     expect(result.current.rows[0]!.worktreeName).toBe("feature-xyz");
   });
 
-  it("falls back to truncated worktreeId when worktree not in store", () => {
+  it("names an unresolved worktree by the last segment of its path, not a prefix of it", () => {
     const { result } = renderHook(() => useReEntrySummary());
 
     act(() => {
@@ -422,7 +422,7 @@ describe("useReEntrySummary", () => {
     addEntry({
       type: "success",
       message: "Done",
-      context: { worktreeId: "abcdef1234567890" },
+      context: { worktreeId: "/Users/dev/Projects/atlas-api-worktrees/feature-rate-limits" },
     });
 
     const realNow = Date.now;
@@ -434,7 +434,9 @@ describe("useReEntrySummary", () => {
 
     Date.now = realNow;
 
-    expect(result.current.rows[0]!.worktreeName).toBe("abcdef123456");
+    // A worktree id is its path: its first twelve characters are the user's
+    // home directory, the same for every worktree; its last segment is which.
+    expect(result.current.rows[0]!.worktreeName).toBe("feature-rate-limits");
   });
 
   it("falls back to truncated ID when worktree name is empty string", async () => {
