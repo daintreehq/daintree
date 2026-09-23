@@ -167,8 +167,14 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
             label="Name"
             htmlFor="create-folder-name"
             hint={
+              // Only a failed create interrupts. The live name check stays
+              // silent, like `FieldError`: an alert would speak mid-word.
               shownError && (
-                <p id={errorId} role="alert" className="text-xs text-status-error">
+                <p
+                  id={errorId}
+                  role={error ? "alert" : undefined}
+                  className="text-xs text-status-error"
+                >
                   {shownError}
                 </p>
               )

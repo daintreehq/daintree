@@ -114,7 +114,10 @@ describe("CreateProjectFolderDialog validation", () => {
     fireEvent.change(folderInput(), { target: { value: "helios:dashboard" } });
 
     expect(folderInput().getAttribute("aria-invalid")).toBe("true");
-    expect(screen.getByRole("alert").textContent).toBeTruthy();
+    const describedBy = folderInput().getAttribute("aria-describedby");
+    expect(describedBy && document.getElementById(describedBy)?.textContent).toBeTruthy();
+    // Typing never interrupts: the live check is announced through the field.
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByTitle("/Users/test/helios:dashboard")).toBeNull();
     expect(screen.getByRole<HTMLButtonElement>("button", { name: "Create folder" }).disabled).toBe(
       true

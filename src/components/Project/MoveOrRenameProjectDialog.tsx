@@ -513,12 +513,12 @@ function MoveOrRenameProjectDialogInner({
                   label="Folder name"
                   htmlFor="relocate-folder"
                   hint={
+                    // No live role, as with the shared `FieldError`: it would
+                    // speak on every keystroke. aria-invalid plus the
+                    // described-by association announce it on focus, and the
+                    // footer status says once that the name needs fixing.
                     folderNameError && (
-                      <p
-                        id={folderErrorId}
-                        aria-live="polite"
-                        className="text-xs text-status-error"
-                      >
+                      <p id={folderErrorId} className="text-xs text-status-error">
                         {folderNameError}
                       </p>
                     )

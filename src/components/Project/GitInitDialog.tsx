@@ -622,7 +622,6 @@ export function GitInitDialog({
                   isNameMissing && (
                     <p
                       id={nameErrorId}
-                      role="alert"
                       data-testid="git-init-name-error"
                       className="text-xs text-status-error"
                     >
@@ -700,7 +699,6 @@ export function GitInitDialog({
                     isCommitMessageMissing && (
                       <p
                         id={commitMessageErrorId}
-                        role="alert"
                         data-testid="git-init-commit-message-error"
                         className="text-xs text-status-error"
                       >

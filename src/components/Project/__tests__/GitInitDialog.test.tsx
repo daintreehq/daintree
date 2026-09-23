@@ -708,12 +708,14 @@ describe("GitInitDialog", () => {
     it("says why the button went dead instead of only painting the field red", () => {
       renderDialog();
       // Seeded from the folder, so nothing is wrong until the user clears it.
-      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.queryByTestId("git-init-name-error")).toBeNull();
 
       fireEvent.change(nameInput(), { target: { value: "   " } });
 
-      const message = screen.getByRole("alert");
+      const message = screen.getByTestId("git-init-name-error");
       expect(nameInput().getAttribute("aria-describedby")).toBe(message.id);
+      // Clearing the field doesn't interrupt; the association announces it.
+      expect(screen.queryByRole("alert")).toBeNull();
     });
 
     it("reports the edited identity on success", async () => {
@@ -1008,8 +1010,10 @@ describe("GitInitDialog", () => {
         const describedBy = input.getAttribute("aria-describedby");
         expect(describedBy).toBeTruthy();
         const message = document.getElementById(describedBy as string);
-        expect(message?.getAttribute("role")).toBe("alert");
         expect(message?.textContent?.trim().length).toBeGreaterThan(0);
+        // Announced through the field, not as an alert: emptying a field is
+        // typing, and an alert would interrupt it (the shared `FieldError` rule).
+        expect(message?.getAttribute("role")).not.toBe("alert");
         fireEvent.change(input, { target: { value: original } });
       }
     });
