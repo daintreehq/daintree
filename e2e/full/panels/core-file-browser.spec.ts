@@ -223,6 +223,12 @@ test.describe.serial("Core: File browser preview", () => {
       timeout: T_LONG,
     });
 
+    const wrapButton = dialog.getByRole("button", { name: "Wrap long lines" });
+    if ((await wrapButton.getAttribute("aria-pressed")) === "true") {
+      await wrapButton.click();
+    }
+    await expect(wrapButton).toHaveAttribute("aria-pressed", "false");
+
     // Source mode is deliberately left unwrapped: CodeViewer at pane height is
     // the single scrollport, which keeps its horizontal scrollbar on screen.
     // Handing the vertical axis to an outer wrapper would let this element grow

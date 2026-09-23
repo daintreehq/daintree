@@ -66,14 +66,26 @@ const config: KnipConfig = {
     // so declare the TypeScript roots directly and retain analysis of their
     // imported shims and fixtures.
     "src/components/Fleet/__preview__/preview.tsx",
+    "src/components/DevPreview/__preview__/preview.tsx",
+    "src/components/Diagnostics/__preview__/preview.tsx",
     "src/components/FileViewer/__preview__/preview.tsx",
     "src/components/HelpPanel/__preview__/preview.tsx",
     "src/components/Layout/__preview__/preview.tsx",
+    "src/components/Layout/__preview__/dockPreview.tsx",
+    "src/components/Layout/__preview__/forgeStats.tsx",
+    "src/components/Layout/__preview__/launcher.tsx",
+    "src/components/Layout/__preview__/projectPill.tsx",
+    "src/components/Layout/__preview__/toolbar.tsx",
     "src/components/Layout/__preview__/sidebarFooter.tsx",
+    "src/components/Onboarding/__preview__/preview.tsx",
     "src/components/Plugin/__preview__/preview.tsx",
     "src/components/Terminal/__preview__/preview.tsx",
     "src/components/Terminal/__preview__/hybridInput.tsx",
     "src/components/Worktree/__preview__/preview.tsx",
+    "src/components/Worktree/__preview__/quickStateFilter.tsx",
+    "src/components/Worktree/__preview__/sessions.tsx",
+    "src/components/Project/__preview__/preview.tsx",
+    "src/components/TerminalRecipe/__preview__/recipes.tsx",
     "src/components/Panel/__preview__/preview.tsx",
     "src/components/DragDrop/__preview__/preview.tsx",
     "src/components/Recovery/__preview__/preview.tsx",
@@ -161,6 +173,11 @@ const config: KnipConfig = {
   ],
 
   ignoreBinaries: [
+    // The release workflow invokes CLI binaries from local npm workspaces,
+    // while the screenshot harness requires ffmpeg from the host OS.
+    "create-daintree-plugin",
+    "daintree-plugin",
+    "ffmpeg",
     // why: Host OS commands invoked directly by platform-specific runtime,
     // installer, and E2E paths. They are not npm-provided binaries and must
     // not be declared as package dependencies.

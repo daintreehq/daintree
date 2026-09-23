@@ -213,9 +213,10 @@ test.describe.serial("Core: File Viewer Modal", () => {
     await dispatchViewFile(ctx, filePath);
 
     const dialog = await waitForDialog(ctx);
-    await expect(dialog.locator("text=File no longer exists")).toBeVisible({
-      timeout: T_MEDIUM,
-    });
+    const unavailable = dialog.getByTestId("file-pane-unavailable");
+    await expect(unavailable).toBeVisible({ timeout: T_MEDIUM });
+    await expect(unavailable).toContainText("This file was deleted");
+    await expect(unavailable).toContainText("It's no longer on disk.");
 
     await closeDialog(ctx);
   });

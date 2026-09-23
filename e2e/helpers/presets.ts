@@ -192,12 +192,8 @@ export async function getPresetRowByName(
       }
       await expect(listbox).not.toBeVisible({ timeout: 5000 });
 
-      // Return the detail-view panel (the first bordered panel below the selector).
-      return window
-        .locator(
-          `${SEL.preset.section} .rounded-\\[var\\(--radius-md\\)\\].border.border-border-default`
-        )
-        .first();
+      // The selected scope owns the detail view; its test id survives card styling changes.
+      return window.locator(SEL.preset.section).getByTestId("scope-editor-body");
     },
     { box: true }
   );

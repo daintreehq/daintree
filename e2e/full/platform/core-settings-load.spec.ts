@@ -81,9 +81,9 @@ test.describe.serial("Core: Settings Pages Load", () => {
         timeout: T_SHORT,
       });
 
-      // App subtab (default) should show the accent color section
+      // App subtab (default) should show the accent color control
       const settingsPanel = window.locator('[role="dialog"]');
-      await expect(settingsPanel.locator('section[aria-label="Accent color"]')).toBeVisible({
+      await expect(settingsPanel.getByText("Accent color", { exact: true })).toBeVisible({
         timeout: T_SHORT,
       });
     });
@@ -201,8 +201,10 @@ test.describe.serial("Core: Settings Pages Load", () => {
       timeout: T_MEDIUM,
     });
 
-    // Worktree Path Pattern section should be visible
-    await expect(window.locator("text=Worktree Path Pattern")).toBeVisible({ timeout: T_SHORT });
+    // The path pattern control should be visible.
+    await expect(window.getByRole("heading", { name: "Path pattern" })).toBeVisible({
+      timeout: T_SHORT,
+    });
   });
 
   test("Toolbar tab loads", async () => {

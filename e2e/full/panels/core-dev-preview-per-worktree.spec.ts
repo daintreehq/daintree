@@ -18,7 +18,7 @@
  *     panels auto-start without a page reload.
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator } from "@playwright/test";
 import { writeFileSync } from "fs";
 import path from "path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
@@ -68,6 +68,20 @@ function parseDisplayOrigin(displayUrl: string): string {
   expect(parsed.hostname).toMatch(DEV_PREVIEW_PROXY_HOST_RE);
   expect(parsed.port).toMatch(/^\d+$/);
   return parsed.origin;
+}
+
+async function waitForGuestOrigin(webview: Locator): Promise<string> {
+  let guestUrl = "";
+  await expect
+    .poll(
+      async () => {
+        guestUrl = await webview.evaluate((wv) => (wv as Electron.WebviewTag).getURL());
+        return guestUrl;
+      },
+      { timeout: T_LONG }
+    )
+    .toMatch(/^http:\/\/(?:localhost|dp-[a-z0-9-]+\.localhost):\d+/);
+  return parseDisplayOrigin(guestUrl);
 }
 
 function parseUpstreamOrigin(predictedUrl: string | null | undefined): string {
@@ -158,11 +172,7 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
     // under comparison is the one the guest actually loaded.
     const addressBar = window.locator(SEL.browser.addressBar).first();
     await expect(addressBar).toHaveValue(DEV_PREVIEW_ADDRESS_BAR_RE, { timeout: T_MEDIUM });
-    const guestUrl = await window
-      .locator("webview")
-      .first()
-      .evaluate((wv) => (wv as Electron.WebviewTag).getURL());
-    urlMain = parseDisplayOrigin(guestUrl);
+    urlMain = await waitForGuestOrigin(window.locator("webview").first());
   });
 
   // ── Test 2 ─────────────────────────────────────────────────────────────────
@@ -196,10 +206,7 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
     await expect(addressBar).toHaveValue(DEV_PREVIEW_ADDRESS_BAR_RE, {
       timeout: T_MEDIUM,
     });
-    const guestUrlFeature = await featurePanel
-      .locator("webview")
-      .evaluate((wv) => (wv as Electron.WebviewTag).getURL());
-    urlFeature = parseDisplayOrigin(guestUrlFeature);
+    urlFeature = await waitForGuestOrigin(featurePanel.locator("webview"));
 
     // The two panels MUST have different stable origins. They may share the
     // same reverse-proxy port, so compare the whole origin, not just the port.

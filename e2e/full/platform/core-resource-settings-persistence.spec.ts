@@ -96,7 +96,7 @@ async function navigateToResourcesTab(
   await expect(panel.locator("h4", { hasText: "Resource environments" })).toBeVisible({
     timeout: T_MEDIUM,
   });
-  await expect(panel.locator('[aria-label="Add environment"]')).toBeVisible({
+  await expect(panel.getByRole("button", { name: "Add environment" })).toBeVisible({
     timeout: T_SHORT,
   });
 }
@@ -108,7 +108,7 @@ async function addEnvironmentViaGUI(
 ): Promise<void> {
   const panel = window.locator("#settings-panel-project\\:automation");
 
-  await panel.locator('[aria-label="Add environment"]').click();
+  await panel.getByRole("button", { name: "Add environment" }).click();
   const nameInput = panel.locator("#new-environment-name");
   await expect(nameInput).toBeVisible({ timeout: T_SHORT });
   await nameInput.fill(name);

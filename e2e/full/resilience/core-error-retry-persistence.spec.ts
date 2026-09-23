@@ -147,8 +147,8 @@ test.describe.serial("Core: Error Retry & Cancellation", () => {
     await expect(errorRow.getByText("Retrying automatically (attempt 1 of 3)")).toBeVisible({
       timeout: T_MEDIUM,
     });
-    await expect(errorRow.locator('button:text-is("Cancel retry")')).toBeVisible();
-    await expect(errorRow.locator('button:text-is("Retry")')).not.toBeVisible();
+    await expect(errorRow.getByRole("button", { name: "Cancel retry" })).toBeVisible();
+    await expect(errorRow.getByRole("button", { name: "Retry", exact: true })).not.toBeVisible();
   });
 
   test("successful retry clears error from problems panel", async () => {
@@ -168,7 +168,7 @@ test.describe.serial("Core: Error Retry & Cancellation", () => {
 
     const panel = ctx.window.locator(SEL.diagnostics.panel("problems"));
     const errorRow = panel.locator("tr").filter({ hasText: msg });
-    const retryButton = errorRow.locator('button:text-is("Retry")');
+    const retryButton = errorRow.getByRole("button", { name: "Retry", exact: true });
     await expect(retryButton).toBeVisible({ timeout: T_SHORT });
 
     await retryButton.click();
@@ -204,7 +204,7 @@ test.describe.serial("Core: Error Retry & Cancellation", () => {
     });
 
     // Click Cancel
-    const cancelButton = errorRow.locator('button:text-is("Cancel retry")');
+    const cancelButton = errorRow.getByRole("button", { name: "Cancel retry" });
     await cancelButton.click();
 
     // Progress should disappear
@@ -214,7 +214,9 @@ test.describe.serial("Core: Error Retry & Cancellation", () => {
     await expect(panel.getByText(msg)).toBeVisible();
 
     // Retry button should be visible again
-    await expect(errorRow.locator('button:text-is("Retry")')).toBeVisible({ timeout: T_SHORT });
+    await expect(errorRow.getByRole("button", { name: "Retry", exact: true })).toBeVisible({
+      timeout: T_SHORT,
+    });
   });
 });
 
