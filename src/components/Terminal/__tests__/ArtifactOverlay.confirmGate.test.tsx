@@ -6,6 +6,7 @@ import type { Artifact } from "@shared/types";
 import { ArtifactOverlay } from "../ArtifactOverlay";
 
 const applyPatch = vi.fn();
+const copyToClipboard = vi.fn();
 const applyAllPatches = vi.fn();
 let mockArtifacts: Artifact[] = [];
 
@@ -18,7 +19,7 @@ vi.mock("@/hooks/useArtifacts", async (importOriginal) => ({
     actionInProgress: null,
     bulkProgress: null,
     hasArtifacts: mockArtifacts.length > 0,
-    copyToClipboard: vi.fn(),
+    copyToClipboard,
     saveToFile: vi.fn(),
     applyPatch,
     clearArtifacts: vi.fn(),
@@ -228,5 +229,27 @@ describe("ArtifactOverlay confirm gate (issue #10020)", () => {
 
     expect(applyPatch).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("ArtifactOverlay keeps keyboard focus through its own actions", () => {
+  it("leaves focus on Copy while the copy is in flight, rather than disabling it", async () => {
+    let finish: (ok: boolean) => void = () => undefined;
+    copyToClipboard.mockReturnValue(new Promise<boolean>((resolve) => (finish = resolve)));
+    renderOverlay();
+    fireEvent.click(screen.getByText("patch-a.diff"));
+    const copy = within(rowFor("patch-a.diff")).getByRole("button", { name: "Copy" });
+    copy.focus();
+
+    await act(async () => {
+      fireEvent.click(copy);
+    });
+    expect(copy.hasAttribute("disabled")).toBe(false);
+    expect(copy.getAttribute("aria-busy")).toBe("true");
+    expect(document.activeElement).toBe(copy);
+
+    await act(async () => {
+      finish(true);
+    });
   });
 });

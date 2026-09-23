@@ -426,8 +426,13 @@ function ArtifactItem({
     }
   }, []);
 
+  // The control that was pressed shows `loading`, which keeps its focus; only
+  // its siblings disable, so a keyboard user is never dropped out of the tray.
+  const [pending, setPending] = useState<"copy" | "save" | null>(null);
+
   const handleCopy = useCallback(async () => {
-    const success = await onCopy(artifact);
+    setPending("copy");
+    const success = await onCopy(artifact).finally(() => setPending(null));
     if (success) {
       setFeedback(null);
       setCopied(true);
@@ -439,7 +444,8 @@ function ArtifactItem({
   }, [artifact, onCopy, setFeedback]);
 
   const handleSave = useCallback(async () => {
-    const result = await onSave(artifact);
+    setPending("save");
+    const result = await onSave(artifact).finally(() => setPending(null));
     if (result.status === "saved") setFeedback({ kind: "saved", filePath: result.filePath }, true);
     else if (result.status === "failed")
       setFeedback({ kind: "save-failed", message: result.error });
@@ -536,7 +542,8 @@ function ArtifactItem({
               variant="subtle"
               size="sm"
               onClick={() => void handleCopy()}
-              disabled={isProcessing}
+              disabled={isProcessing || pending === "save"}
+              loading={pending === "copy"}
             >
               {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
               {copied ? "Copied" : "Copy"}
@@ -545,7 +552,8 @@ function ArtifactItem({
               variant="subtle"
               size="sm"
               onClick={() => void handleSave()}
-              disabled={isProcessing}
+              disabled={isProcessing || pending === "copy"}
+              loading={pending === "save"}
             >
               <Download aria-hidden="true" />
               Save as…
@@ -639,7 +647,6 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
   const restoreFocusRef = useRef(false);
   const {
     artifacts,
-    actionInProgress,
     bulkProgress,
     hasArtifacts,
     copyToClipboard,
@@ -824,6 +831,21 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     setPendingBulkPatches(null);
     if (!snapshot) return;
     const result = await applyAllPatches(snapshot);
+    // A finished run can remove the bulk button focus returned to, so if focus
+    // has left the tray, put it on the first row that needs attention.
+    requestAnimationFrame(() => {
+      const panel = panelRef.current;
+      if (!panel || panel.contains(document.activeElement)) return;
+      const firstFailed = result.failures[0]?.artifact.id;
+      const row = firstFailed
+        ? panel.querySelector<HTMLButtonElement>(
+            `[data-artifact-item="${CSS.escape(firstFailed)}"] > button`
+          )
+        : null;
+      (row ?? panel.querySelector<HTMLButtonElement>("[data-artifact-item] > button"))?.focus({
+        preventScroll: true,
+      });
+    });
     const failures = new Map(result.failures.map((f) => [f.artifact.id, f.error]));
     // Each patch's own row reports its own result, so a partial run shows which ones landed.
     setApplyResults((prev) => {
@@ -1004,7 +1026,11 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     variant="subtle"
                     size="sm"
                     onClick={() => void handleCopyAll()}
-                    disabled={isBulkActionRunning || copyTargetCount === 0}
+                    disabled={
+                      copyTargetCount === 0 ||
+                      (isBulkActionRunning && bulkProgress?.action !== "copy")
+                    }
+                    loading={bulkProgress?.action === "copy"}
                     className="rounded-r-none"
                   >
                     Copy all
@@ -1037,7 +1063,8 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                       variant="subtle"
                       size="sm"
                       onClick={() => void handleSaveAll()}
-                      disabled={isBulkActionRunning}
+                      disabled={isBulkActionRunning && bulkProgress?.action !== "save"}
+                      loading={bulkProgress?.action === "save"}
                     >
                       Save each…
                     </Button>
@@ -1127,7 +1154,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                 onSave={handleSave}
                 onApplyPatch={handleApplyPatch}
                 canApplyPatch={canApplyPatch(artifact)}
-                isProcessing={isBulkActionRunning || actionInProgress === artifact.id}
+                isProcessing={isBulkActionRunning}
                 isApplying={applyingId === artifact.id}
                 isApplyLocked={isApplyLocked}
               />
