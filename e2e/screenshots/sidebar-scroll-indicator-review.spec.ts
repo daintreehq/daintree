@@ -417,6 +417,11 @@ test("sidebar off-screen indicator review — states and themes", async () => {
     await step("plain", async () => {
       await scrollTo(page, "top");
       await expectPillGone(page, "above");
+      // First frame after load: the pill fades in once Virtuoso has measured,
+      // so wait for it rather than shooting a sidebar that has not settled.
+      await expect(page.locator(PILL.below).first(), "below pill never appeared").toBeVisible({
+        timeout: 5000,
+      });
       await snapSidebar(page, "10-top-sidebar");
       await snapPill(page, "11-top-below-pill", "below");
       await scrollTo(page, "middle");
@@ -427,6 +432,18 @@ test("sidebar off-screen indicator review — states and themes", async () => {
       await expectPillGone(page, "below");
       await snapSidebar(page, "15-bottom-sidebar");
       await snapPill(page, "16-bottom-above-pill", "above");
+
+      // With nothing waiting, a click is a page step — where it lands.
+      await scrollTo(page, "top");
+      const before = await scrollerMetrics(page);
+      await page.locator(PILL.below).first().click();
+      await page.waitForTimeout(1200);
+      await parkPointer(page);
+      const after = await scrollerMetrics(page);
+      notes.push(
+        `plain click below from top: scrollTop ${before.top} -> ${after.top} of ${after.max}`
+      );
+      await snapSidebar(page, "17-plain-after-click-below-sidebar");
     });
 
     // 2. Hover — the pill's only pointer feedback.
@@ -455,6 +472,42 @@ test("sidebar off-screen indicator review — states and themes", async () => {
       await scrollTo(page, "top");
       await snapSidebar(page, "33-waiting-top-sidebar");
       await snapPill(page, "34-waiting-top-below-pill", "below");
+    });
+
+    // 3b. The tooltip — where the noun lives, since the pill itself is bare.
+    await step("tooltip", async () => {
+      await scrollTo(page, "middle");
+      await page.locator(PILL.below).first().hover();
+      await expect(
+        page.locator("[data-radix-popper-content-wrapper] [data-side]").first(),
+        "tooltip never opened"
+      ).toBeVisible({
+        timeout: 5000,
+      });
+      notes.push(
+        `tooltip: "${(await page.locator("[data-radix-popper-content-wrapper] [data-side]").first().innerText()).trim()}"`
+      );
+      await snapSidebar(page, "35-tooltip-below-sidebar");
+      // The tooltip is portalled and may sit past the sidebar's edge, so frame
+      // the pill and the tooltip together rather than trusting the sidebar crop.
+      const tip = await page
+        .locator("[data-radix-popper-content-wrapper] [data-side]")
+        .first()
+        .boundingBox();
+      const pillBox = await page.locator(PILL.below).first().boundingBox();
+      if (!tip || !pillBox) throw new Error("tooltip or pill has no box");
+      const x = Math.max(0, Math.min(tip.x, pillBox.x) - 60);
+      const y = Math.max(0, Math.min(tip.y, pillBox.y) - 60);
+      const right = Math.max(tip.x + tip.width, pillBox.x + pillBox.width) + 60;
+      const bottom = Math.max(tip.y + tip.height, pillBox.y + pillBox.height) + 60;
+      await page.screenshot({
+        path: path.join(OUTPUT_DIR, "36-tooltip-below-region.png"),
+        clip: { x, y, width: right - x, height: bottom - y },
+        animations: "disabled",
+        caret: "hide",
+      });
+      written.add("36-tooltip-below-region.png");
+      await parkPointer(page);
     });
 
     // 4. Where a click lands. The scroll position after the smooth scroll is

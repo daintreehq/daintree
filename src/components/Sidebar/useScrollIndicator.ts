@@ -9,7 +9,7 @@ const VISIBILITY_EPSILON_PX = 1;
 
 interface ScrollIndicatorItem {
   kind: string;
-  /** Present on worktree rows; matched against `waitingWorktreeIds`. */
+  /** Present on worktree rows; matched against `attentionWorktreeIds`. */
   worktreeId?: string;
 }
 
@@ -17,11 +17,14 @@ interface ScrollIndicatorItem {
 export interface HiddenSide {
   /** Worktree rows entirely past this edge. */
   count: number;
-  /** How many of those rows have an agent waiting for input. */
-  waiting: number;
+  /**
+   * How many of those rows need attention — the sidebar's "Attention" bucket,
+   * so the pills break down the same number the quick-state bar shows.
+   */
+  attention: number;
 }
 
-const NO_HIDDEN: HiddenSide = { count: 0, waiting: 0 };
+const NO_HIDDEN: HiddenSide = { count: 0, attention: 0 };
 
 /**
  * Per-index classification of the list against the viewport, plus the rows a
@@ -31,15 +34,21 @@ const NO_HIDDEN: HiddenSide = { count: 0, waiting: 0 };
 interface Classification {
   above: HiddenSide;
   below: HiddenSide;
-  /** The hidden row nearest the top edge, and the nearest one with a waiting agent. */
+  /** The hidden row nearest the top edge, and the nearest one needing attention. */
   nearestAbove: number | null;
-  nearestWaitingAbove: number | null;
-  /** The hidden row nearest the bottom edge, and the nearest one with a waiting agent. */
+  nearestAttentionAbove: number | null;
+  /** The hidden row nearest the bottom edge, and the nearest one needing attention. */
   nearestBelow: number | null;
-  nearestWaitingBelow: number | null;
+  nearestAttentionBelow: number | null;
   /** Rows cut by the top or bottom edge: on screen, but not all of them. */
   clippedAtTop: number | null;
   clippedAtBottom: number | null;
+  /**
+   * The clipped row already reaches the opposite edge too — a card taller than
+   * the viewport. Moving it to that edge would not move the list at all.
+   */
+  clippedAtTopFillsView: boolean;
+  clippedAtBottomFillsView: boolean;
 }
 
 interface UseScrollIndicatorParams {
@@ -50,11 +59,11 @@ interface UseScrollIndicatorParams {
    */
   items: ReadonlyArray<ScrollIndicatorItem>;
   /**
-   * Worktrees with an agent waiting for input. Kept apart from `items` so an
+   * Worktrees in the "Attention" bucket. Kept apart from `items` so an
    * agent changing state does not change the list's identity, which would
    * throw away the measured geometry and blank both pills for a frame.
    */
-  waitingWorktreeIds: ReadonlySet<string>;
+  attentionWorktreeIds: ReadonlySet<string>;
   /** Used to jump by index, since the row a pill targets is usually unmounted. */
   virtuosoRef: RefObject<Pick<VirtuosoHandle, "scrollToIndex"> | null>;
   /** False under reduced motion: a long smooth scroll is exactly the motion it asks to drop. */
@@ -65,7 +74,7 @@ interface UseScrollIndicatorReturn {
   hiddenAbove: HiddenSide;
   hiddenBelow: HiddenSide;
   /**
-   * Reveal what the above pill reports: the nearest waiting worktree when there
+   * Reveal what the above pill reports: the nearest worktree needing attention when there
    * is one, otherwise the next screenful — never the far end of the list,
    * which throws away the place the person was reading.
    */
@@ -80,12 +89,12 @@ interface UseScrollIndicatorReturn {
 }
 
 function sameSide(a: HiddenSide, b: HiddenSide): boolean {
-  return a.count === b.count && a.waiting === b.waiting;
+  return a.count === b.count && a.attention === b.attention;
 }
 
 function useScrollIndicator({
   items,
-  waitingWorktreeIds,
+  attentionWorktreeIds,
   virtuosoRef,
   smoothScroll,
 }: UseScrollIndicatorParams): UseScrollIndicatorReturn {
@@ -109,11 +118,11 @@ function useScrollIndicator({
   // (Virtuoso callbacks, scroll/resize handlers, the items-changed effect) run
   // after commit, so the ref is current by the time they read it.
   const itemsRef = useRef(items);
-  const waitingRef = useRef(waitingWorktreeIds);
+  const attentionRef = useRef(attentionWorktreeIds);
   const smoothScrollRef = useRef(smoothScroll);
   useEffect(() => {
     itemsRef.current = items;
-    waitingRef.current = waitingWorktreeIds;
+    attentionRef.current = attentionWorktreeIds;
     smoothScrollRef.current = smoothScroll;
   });
   // Latest per-item geometry from Virtuoso's `itemsRendered`. Held in a ref (not
@@ -147,31 +156,35 @@ function useScrollIndicator({
         above: NO_HIDDEN,
         below: NO_HIDDEN,
         nearestAbove: null,
-        nearestWaitingAbove: null,
+        nearestAttentionAbove: null,
         nearestBelow: null,
-        nearestWaitingBelow: null,
+        nearestAttentionBelow: null,
         clippedAtTop: null,
         clippedAtBottom: null,
+        clippedAtTopFillsView: false,
+        clippedAtBottomFillsView: false,
       };
     }
 
     const { scrollTop, clientHeight } = scroller;
     const viewportTop = scrollTop;
     const viewportBottom = scrollTop + clientHeight;
-    const waiting = waitingRef.current;
+    const attention = attentionRef.current;
 
     const firstRenderedIndex = rendered[0]!.index;
     const lastRenderedIndex = rendered[rendered.length - 1]!.index;
 
     const result: Classification = {
-      above: { count: 0, waiting: 0 },
-      below: { count: 0, waiting: 0 },
+      above: { count: 0, attention: 0 },
+      below: { count: 0, attention: 0 },
       nearestAbove: null,
-      nearestWaitingAbove: null,
+      nearestAttentionAbove: null,
       nearestBelow: null,
-      nearestWaitingBelow: null,
+      nearestAttentionBelow: null,
       clippedAtTop: null,
       clippedAtBottom: null,
+      clippedAtTopFillsView: false,
+      clippedAtBottomFillsView: false,
     };
 
     // Indices only ever increase through these three passes, so "nearest" is
@@ -180,18 +193,18 @@ function useScrollIndicator({
       const item = items[index]!;
       result.above.count++;
       result.nearestAbove = index;
-      if (item.worktreeId !== undefined && waiting.has(item.worktreeId)) {
-        result.above.waiting++;
-        result.nearestWaitingAbove = index;
+      if (item.worktreeId !== undefined && attention.has(item.worktreeId)) {
+        result.above.attention++;
+        result.nearestAttentionAbove = index;
       }
     };
     const markBelow = (index: number) => {
       const item = items[index]!;
       result.below.count++;
       result.nearestBelow ??= index;
-      if (item.worktreeId !== undefined && waiting.has(item.worktreeId)) {
-        result.below.waiting++;
-        result.nearestWaitingBelow ??= index;
+      if (item.worktreeId !== undefined && attention.has(item.worktreeId)) {
+        result.below.attention++;
+        result.nearestAttentionBelow ??= index;
       }
     };
 
@@ -210,9 +223,19 @@ function useScrollIndicator({
       } else if (item.offset >= viewportBottom - VISIBILITY_EPSILON_PX) {
         markBelow(item.index);
       } else {
-        if (item.offset < viewportTop - VISIBILITY_EPSILON_PX) result.clippedAtTop = item.index;
-        if (item.offset + item.size > viewportBottom + VISIBILITY_EPSILON_PX) {
-          result.clippedAtBottom ??= item.index;
+        const startsAtOrAboveTop = item.offset <= viewportTop + VISIBILITY_EPSILON_PX;
+        const endsAtOrBelowBottom =
+          item.offset + item.size >= viewportBottom - VISIBILITY_EPSILON_PX;
+        if (item.offset < viewportTop - VISIBILITY_EPSILON_PX) {
+          result.clippedAtTop = item.index;
+          result.clippedAtTopFillsView = endsAtOrBelowBottom;
+        }
+        if (
+          result.clippedAtBottom === null &&
+          item.offset + item.size > viewportBottom + VISIBILITY_EPSILON_PX
+        ) {
+          result.clippedAtBottom = item.index;
+          result.clippedAtBottomFillsView = startsAtOrAboveTop;
         }
       }
     }
@@ -243,7 +266,7 @@ function useScrollIndicator({
   // anything scrolling, so the set is a recompute trigger of its own.
   useEffect(() => {
     updateScrollIndicators();
-  }, [waitingWorktreeIds, updateScrollIndicators]);
+  }, [attentionWorktreeIds, updateScrollIndicators]);
 
   useResizeObserverRaf(scrollerEl, () => updateScrollIndicators());
 
@@ -303,18 +326,23 @@ function useScrollIndicator({
     [setHiddenAbove, setHiddenBelow]
   );
 
-  // A waiting worktree is centred, so it lands clear of both pills with its
-  // neighbours for context. Without one, it is a page step: the row the edge
-  // was cutting through (or, failing that, the nearest hidden one) moves to
-  // the opposite edge, so nothing half-read is skipped and everything newly on
-  // screen is what came next.
+  // A worktree needing attention is centred, so it lands clear of both pills
+  // with its neighbours for context. Without one, it is a page step: the row
+  // the edge was cutting through (or, failing that, the nearest hidden one)
+  // moves to the opposite edge, so nothing half-read is skipped and everything
+  // newly on screen is what came next. A clipped card taller than the view is
+  // already at both edges, so aligning it would not move the list; that case
+  // scrolls by one viewport instead, which still walks through the card.
   const revealAbove = useCallback(() => {
     const result = classify();
     const virtuoso = virtuosoRef.current;
-    if (!result || !virtuoso) return;
+    const scroller = scrollerElRef.current;
+    if (!result || !virtuoso || !scroller) return;
     const behavior = smoothScrollRef.current ? "smooth" : "auto";
-    if (result.nearestWaitingAbove !== null) {
-      virtuoso.scrollToIndex({ index: result.nearestWaitingAbove, align: "center", behavior });
+    if (result.nearestAttentionAbove !== null) {
+      virtuoso.scrollToIndex({ index: result.nearestAttentionAbove, align: "center", behavior });
+    } else if (result.clippedAtTopFillsView) {
+      scroller.scrollTo({ top: scroller.scrollTop - scroller.clientHeight, behavior });
     } else if (result.nearestAbove !== null) {
       const index = result.clippedAtTop ?? result.nearestAbove;
       virtuoso.scrollToIndex({ index, align: "end", behavior });
@@ -324,10 +352,13 @@ function useScrollIndicator({
   const revealBelow = useCallback(() => {
     const result = classify();
     const virtuoso = virtuosoRef.current;
-    if (!result || !virtuoso) return;
+    const scroller = scrollerElRef.current;
+    if (!result || !virtuoso || !scroller) return;
     const behavior = smoothScrollRef.current ? "smooth" : "auto";
-    if (result.nearestWaitingBelow !== null) {
-      virtuoso.scrollToIndex({ index: result.nearestWaitingBelow, align: "center", behavior });
+    if (result.nearestAttentionBelow !== null) {
+      virtuoso.scrollToIndex({ index: result.nearestAttentionBelow, align: "center", behavior });
+    } else if (result.clippedAtBottomFillsView) {
+      scroller.scrollTo({ top: scroller.scrollTop + scroller.clientHeight, behavior });
     } else if (result.nearestBelow !== null) {
       const index = result.clippedAtBottom ?? result.nearestBelow;
       virtuoso.scrollToIndex({ index, align: "start", behavior });

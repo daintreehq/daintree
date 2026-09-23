@@ -9,14 +9,14 @@ const NO_WAITING: ReadonlySet<string> = new Set();
 function params(
   items: ReadonlyArray<{ kind: string; worktreeId?: string }>,
   overrides: {
-    waitingWorktreeIds?: ReadonlySet<string>;
+    attentionWorktreeIds?: ReadonlySet<string>;
     virtuosoRef?: { current: Pick<VirtuosoHandle, "scrollToIndex"> | null };
     smoothScroll?: boolean;
   } = {}
 ) {
   return {
     items,
-    waitingWorktreeIds: overrides.waitingWorktreeIds ?? NO_WAITING,
+    attentionWorktreeIds: overrides.attentionWorktreeIds ?? NO_WAITING,
     virtuosoRef: overrides.virtuosoRef ?? { current: null },
     smoothScroll: overrides.smoothScroll ?? true,
   };
@@ -454,7 +454,7 @@ describe("useScrollIndicator scroll path (issues #9580, #9666)", () => {
   });
 });
 
-describe("useScrollIndicator waiting worktrees and reveal targets", () => {
+describe("useScrollIndicator attention worktrees and reveal targets", () => {
   // Ten 100px rows, all mounted. Viewport [350, 650]: rows 0-2 hidden above,
   // row 3 cut by the top edge, rows 4-5 fully visible, row 6 cut by the bottom
   // edge, rows 7-9 hidden below.
@@ -469,7 +469,7 @@ describe("useScrollIndicator waiting worktrees and reveal targets", () => {
     const hook = renderHook(
       ({ waitingIds }: { waitingIds: ReadonlySet<string> }) =>
         useScrollIndicator(
-          params(rows, { waitingWorktreeIds: waitingIds, virtuosoRef, smoothScroll })
+          params(rows, { attentionWorktreeIds: waitingIds, virtuosoRef, smoothScroll })
         ),
       { initialProps: { waitingIds: new Set(waiting) as ReadonlySet<string> } }
     );
@@ -484,17 +484,17 @@ describe("useScrollIndicator waiting worktrees and reveal targets", () => {
 
   it("counts waiting worktrees per direction, ignoring ones on screen", () => {
     const { result } = setup(["w0", "w1", "w5", "w9"]);
-    expect(result.current.hiddenAbove).toEqual({ count: 3, waiting: 2 });
-    expect(result.current.hiddenBelow).toEqual({ count: 3, waiting: 1 });
+    expect(result.current.hiddenAbove).toEqual({ count: 3, attention: 2 });
+    expect(result.current.hiddenBelow).toEqual({ count: 3, attention: 1 });
   });
 
   it("recomputes when an agent starts waiting, without a scroll or a new list", () => {
     const { result, rerender } = setup([]);
-    expect(result.current.hiddenBelow.waiting).toBe(0);
+    expect(result.current.hiddenBelow.attention).toBe(0);
     rerender({ waitingIds: new Set(["w8"]) });
-    expect(result.current.hiddenBelow).toEqual({ count: 3, waiting: 1 });
+    expect(result.current.hiddenBelow).toEqual({ count: 3, attention: 1 });
     rerender({ waitingIds: new Set() });
-    expect(result.current.hiddenBelow).toEqual({ count: 3, waiting: 0 });
+    expect(result.current.hiddenBelow).toEqual({ count: 3, attention: 0 });
   });
 
   it("reveals the NEAREST waiting worktree in each direction, centred", () => {
@@ -525,5 +525,47 @@ describe("useScrollIndicator waiting worktrees and reveal targets", () => {
     const { result, scrollToIndex } = setup(["w9"], false);
     act(() => result.current.revealBelow());
     expect(scrollToIndex).toHaveBeenLastCalledWith(expect.objectContaining({ behavior: "auto" }));
+  });
+});
+
+describe("useScrollIndicator paging past a card taller than the viewport", () => {
+  // Rows 0-1 are 100px, row 2 is 800px, rows 3-4 are 100px. Viewport height 300.
+  const rows = Array.from({ length: 5 }, (_, i) => ({ kind: "row", worktreeId: `w${i}` }));
+  const geometry = makeRendered([
+    { index: 0, offset: 0, size: 100, kind: "row" },
+    { index: 1, offset: 100, size: 100, kind: "row" },
+    { index: 2, offset: 200, size: 800, kind: "row" },
+    { index: 3, offset: 1000, size: 100, kind: "row" },
+    { index: 4, offset: 1100, size: 100, kind: "row" },
+  ]);
+
+  function setup(scrollTop: number) {
+    const scrollToIndex = vi.fn<VirtuosoHandle["scrollToIndex"]>();
+    const scroller = makeScroller({ scrollTop, clientHeight: 300, scrollHeight: 1200 });
+    const scrollTo = vi.fn();
+    Object.defineProperty(scroller, "scrollTo", { value: scrollTo });
+    const { result } = renderHook(() =>
+      useScrollIndicator(params(rows, { virtuosoRef: { current: { scrollToIndex } } }))
+    );
+    act(() => result.current.scrollerRef(scroller));
+    act(() => result.current.handleItemsRendered(geometry));
+    return { result, scrollToIndex, scrollTo };
+  }
+
+  // Viewport [200, 500]: the tall card starts exactly at the top edge, so
+  // aligning it to "start" would be a no-op and the pill would do nothing.
+  it("scrolls on by a viewport when the clipped card already fills it (below)", () => {
+    const { result, scrollToIndex, scrollTo } = setup(200);
+    act(() => result.current.revealBelow());
+    expect(scrollToIndex).not.toHaveBeenCalled();
+    expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ top: 500 }));
+  });
+
+  // Viewport [700, 1000]: the tall card ends exactly at the bottom edge.
+  it("scrolls back by a viewport when the clipped card already fills it (above)", () => {
+    const { result, scrollToIndex, scrollTo } = setup(700);
+    act(() => result.current.revealAbove());
+    expect(scrollToIndex).not.toHaveBeenCalled();
+    expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ top: 400 }));
   });
 });

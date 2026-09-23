@@ -1438,12 +1438,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // Computed after `sidebarItems` because the indicator counts hidden worktree
   // rows directly from the flat list geometry (variable-height rows + section
   // headers, issue #9666), so it needs the full item array as its input.
-  // Uses the agent's own waiting flag rather than `chipState`: the chip ranks
-  // cleanup and completion above waiting, but a pill that says "nothing here
-  // needs you" over an agent blocked on input would be the one lie it can tell.
-  const waitingWorktreeIds = useMemo(() => {
+  // The quick-state bar's "Attention" bucket, by the bar's own predicate, so
+  // each pill's mark is a directional share of the number shown just above the
+  // list and clicking the "Attention" segment filters to exactly these rows.
+  const attentionWorktreeIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const [id, meta] of derivedMetaMap) if (meta.hasWaitingAgent) ids.add(id);
+    for (const [id, meta] of derivedMetaMap) {
+      if (matchesQuickStateFilter("waiting", meta)) ids.add(id);
+    }
     return ids;
   }, [derivedMetaMap]);
 
@@ -1459,7 +1461,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     handleItemsRendered,
   } = useScrollIndicator({
     items: sidebarItems,
-    waitingWorktreeIds,
+    attentionWorktreeIds,
     virtuosoRef,
     smoothScroll: !skipMotion,
   });
@@ -2125,12 +2127,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           {/* Out of the accessibility tree on purpose: these sit inside the
               grid, where only rows may be owned, and the grid's own rows
               already carry each worktree's state. Keyboard users have the
-              same reach through arrow navigation and "Focus next waiting
-              agent". */}
+              same reach through arrow navigation, the "Attention" segment,
+              and "Focus next waiting agent". */}
           <ScrollIndicator
             direction="above"
             count={hiddenAbove.count}
-            waitingCount={hiddenAbove.waiting}
+            attentionCount={hiddenAbove.attention}
             onClick={revealAbove}
             ariaHidden
             tabIndex={-1}
@@ -2138,7 +2140,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           <ScrollIndicator
             direction="below"
             count={hiddenBelow.count}
-            waitingCount={hiddenBelow.waiting}
+            attentionCount={hiddenBelow.attention}
             onClick={revealBelow}
             ariaHidden
             tabIndex={-1}

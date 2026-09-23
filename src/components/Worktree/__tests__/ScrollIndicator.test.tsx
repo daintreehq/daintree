@@ -75,20 +75,24 @@ describe("ScrollIndicator", () => {
 
   // The number is bare on screen; the name is where the noun lives.
   it.each([
-    ["below", 3, 0, "3 more worktrees below"],
-    ["above", 1, 0, "1 more worktree above"],
-    ["below", 7, 2, "7 more worktrees below, 2 waiting for input"],
-  ] as const)("names %s with %i hidden, %i waiting", (direction, count, waitingCount, name) => {
-    render(
-      <ScrollIndicator
-        direction={direction}
-        count={count}
-        waitingCount={waitingCount}
-        onClick={onClick}
-      />
-    );
-    expect(screen.getByRole("button").getAttribute("aria-label")).toBe(name);
-  });
+    ["below", 3, 0, "3 more worktrees below. Click to show the next page"],
+    ["above", 1, 0, "1 more worktree above. Click to show the next page"],
+    ["below", 7, 1, "7 more worktrees below, 1 needs attention. Click to show it"],
+    ["above", 7, 2, "7 more worktrees above, 2 need attention. Click to show the nearest"],
+  ] as const)(
+    "names %s with %i hidden, %i needing attention",
+    (direction, count, attentionCount, name) => {
+      render(
+        <ScrollIndicator
+          direction={direction}
+          count={count}
+          attentionCount={attentionCount}
+          onClick={onClick}
+        />
+      );
+      expect(screen.getByRole("button").getAttribute("aria-label")).toBe(name);
+    }
+  );
 
   it("uses translate-y-0 when visible (below)", () => {
     render(<ScrollIndicator direction="below" count={1} onClick={onClick} />);
@@ -132,29 +136,31 @@ describe("ScrollIndicator", () => {
     rerender(<ScrollIndicator direction="below" count={0} onClick={onClick} />);
     expect(screen.getByText("4")).toBeTruthy();
     expect(screen.queryByText("0")).toBeNull();
-    expect(screen.getByRole("button").getAttribute("aria-label")).toBe("4 more worktrees below");
+    expect(screen.getByRole("button").getAttribute("aria-label")).toMatch(
+      /^4 more worktrees below\./
+    );
   });
 
-  const waitingMark = () => screen.queryByTestId("scroll-indicator-waiting-mark");
+  const attentionMark = () => screen.queryByTestId("scroll-indicator-attention-mark");
 
-  it("shows the waiting mark only while something past this edge is waiting", () => {
+  it("shows the attention mark only while something past this edge needs it", () => {
     const { rerender } = render(<ScrollIndicator direction="below" count={6} onClick={onClick} />);
-    expect(waitingMark()).toBeNull();
-    rerender(<ScrollIndicator direction="below" count={6} waitingCount={1} onClick={onClick} />);
-    expect(waitingMark()).not.toBeNull();
-    // A live pill never keeps a mark for an agent that has stopped waiting.
-    rerender(<ScrollIndicator direction="below" count={6} waitingCount={0} onClick={onClick} />);
-    expect(waitingMark()).toBeNull();
+    expect(attentionMark()).toBeNull();
+    rerender(<ScrollIndicator direction="below" count={6} attentionCount={1} onClick={onClick} />);
+    expect(attentionMark()).not.toBeNull();
+    // A live pill never keeps a mark for a worktree that no longer needs attention.
+    rerender(<ScrollIndicator direction="below" count={6} attentionCount={0} onClick={onClick} />);
+    expect(attentionMark()).toBeNull();
   });
 
-  it("latches the waiting mark together with the count through the fade-out", () => {
+  it("latches the attention mark together with the count through the fade-out", () => {
     mockUseAnimatedPresence.mockReturnValue({ isVisible: false, shouldRender: true });
     const { rerender } = render(
-      <ScrollIndicator direction="above" count={3} waitingCount={1} onClick={onClick} />
+      <ScrollIndicator direction="above" count={3} attentionCount={1} onClick={onClick} />
     );
-    rerender(<ScrollIndicator direction="above" count={0} waitingCount={0} onClick={onClick} />);
+    rerender(<ScrollIndicator direction="above" count={0} attentionCount={0} onClick={onClick} />);
     expect(screen.getByText("3")).toBeTruthy();
-    expect(waitingMark()).not.toBeNull();
+    expect(attentionMark()).not.toBeNull();
   });
 
   it("does not take focus on a pointer press", () => {

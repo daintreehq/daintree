@@ -4,13 +4,15 @@ import { cn } from "../../lib/utils";
 import { useAnimatedPresence } from "../../hooks/useAnimatedPresence";
 import { ScrollPill } from "@/components/ui/ScrollPill";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { HollowCircle } from "@/components/icons";
+import { STATE_COLORS } from "./terminalStateConfig";
 
 interface ScrollIndicatorProps {
   direction: "above" | "below";
   /** Worktrees entirely past this edge of the list. */
   count: number;
-  /** How many of those have an agent waiting for input. */
-  waitingCount?: number;
+  /** How many of those are in the quick-state bar's "Attention" bucket. */
+  attentionCount?: number;
   onClick: () => void;
   tabIndex?: number;
   ariaHidden?: boolean;
@@ -18,18 +20,26 @@ interface ScrollIndicatorProps {
 
 interface Shown {
   count: number;
-  waitingCount: number;
+  attentionCount: number;
 }
 
-function describe(direction: "above" | "below", { count, waitingCount }: Shown): string {
+function describe(direction: "above" | "below", { count, attentionCount }: Shown): string {
   const hidden = `${count} more ${count === 1 ? "worktree" : "worktrees"} ${direction}`;
-  return waitingCount > 0 ? `${hidden}, ${waitingCount} waiting for input` : hidden;
+  if (attentionCount === 0) return hidden;
+  return `${hidden}, ${attentionCount} ${attentionCount === 1 ? "needs" : "need"} attention`;
+}
+
+// What a click does, which differs by state: the pill either jumps to a
+// specific row or pages, and the person should know which before it moves.
+function describeAction({ attentionCount }: Shown): string {
+  if (attentionCount === 0) return "Click to show the next page";
+  return attentionCount === 1 ? "Click to show it" : "Click to show the nearest";
 }
 
 export function ScrollIndicator({
   direction,
   count,
-  waitingCount = 0,
+  attentionCount = 0,
   onClick,
   tabIndex,
   ariaHidden,
@@ -41,20 +51,24 @@ export function ScrollIndicator({
   // filter/sort/group change that resets the offscreen counts) flips `isOpen`
   // false but holds `shouldRender` true for the exit animation, and the live
   // `count` prop — now 0 — would render a bare "0" mid-fade (#10316). The
-  // waiting count is latched WITH the count, as one reading: while the pill is
-  // live both are live, so a waiting mark never outlives the agent it reports.
+  // attention count is latched WITH the count, as one reading: while the pill
+  // is live both are live, so the mark never outlives the state it reports.
   // The latch is state adjusted during render, not a ref: React discards an
   // abandoned concurrent render's state update, so a stale count can't leak in.
-  const [lastPositive, setLastPositive] = useState<Shown>({ count, waitingCount });
-  if (count > 0 && (count !== lastPositive.count || waitingCount !== lastPositive.waitingCount)) {
-    setLastPositive({ count, waitingCount });
+  const [lastPositive, setLastPositive] = useState<Shown>({ count, attentionCount });
+  if (
+    count > 0 &&
+    (count !== lastPositive.count || attentionCount !== lastPositive.attentionCount)
+  ) {
+    setLastPositive({ count, attentionCount });
   }
-  const shown: Shown = count > 0 ? { count, waitingCount } : lastPositive;
+  const shown: Shown = count > 0 ? { count, attentionCount } : lastPositive;
 
   if (!shouldRender) return null;
 
   const Icon = direction === "above" ? ChevronUp : ChevronDown;
   const description = describe(direction, shown);
+  const action = describeAction(shown);
 
   return (
     // Trailing edge, not centred: sidebar rows put identity text in a leading
@@ -82,26 +96,29 @@ export function ScrollIndicator({
             // focus on a button the accessibility tree has been told is absent.
             onMouseDown={(e) => e.preventDefault()}
             tabIndex={tabIndex}
-            aria-label={description}
+            aria-label={`${description}. ${action}`}
             className="flex items-center gap-1.5 px-2.5 py-1"
           >
             <Icon className="h-3 w-3" />
             <span className="font-medium tabular-nums">{shown.count}</span>
-            {shown.waitingCount > 0 && (
-              // The collapsed card's waiting mark, at the same size and in the
-              // same token: a solid square, never rounded (a pill is selection,
-              // a rectangle is status — `WorktreeStatusTick`). Its presence is
-              // the signal, so it does not lean on hue alone, and `status-mark`
-              // keeps it painted under forced colours.
-              <span
-                data-testid="scroll-indicator-waiting-mark"
-                className="status-mark h-1.5 w-1.5 shrink-0 bg-activity-waiting"
+            {shown.attentionCount > 0 && (
+              // The quick-state bar's "Attention" glyph, in its colour, so the
+              // pill says "some of the Attention count is this way" in the one
+              // vocabulary the sidebar already uses for it. A ring rather than a
+              // filled square: in an agent tool a small solid square reads as
+              // Stop, and forced colours flatten any hue to that shape.
+              <HollowCircle
+                data-testid="scroll-indicator-attention-mark"
+                className={cn("h-3 w-3 shrink-0", STATE_COLORS.waiting)}
               />
             )}
           </ScrollPill>
         </TooltipTrigger>
-        <TooltipContent side="left" className="text-xs">
-          {description}
+        {/* Out past the sidebar's edge: to the left it would sit on the very
+            titles the trailing placement keeps the pill off. */}
+        <TooltipContent side="right" className="text-xs">
+          <div>{description}</div>
+          <div className="text-text-secondary">{action}</div>
         </TooltipContent>
       </Tooltip>
     </div>
