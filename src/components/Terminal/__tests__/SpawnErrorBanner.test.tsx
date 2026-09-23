@@ -328,8 +328,36 @@ describe("SpawnErrorBanner", () => {
         expect(screen.queryByText(new RegExp(cause))).toBeNull();
         fireEvent.click(screen.getByRole("button", { name: /copy diagnostics/i }));
         // …but it is on the clipboard, after the fields it was copied with.
-        const copied = (writeText.mock.calls[0] as unknown as [string])[0];
-        expect(copied.split("\n")).toEqual(["errno=127", message]);
+        expect(writeText).toHaveBeenCalledWith(`errno=127\n${message}`);
+      } finally {
+        Object.defineProperty(navigator, "clipboard", { configurable: true, value: original });
+      }
+    });
+
+    it("offers the whole message from the overflow when there are no fields to copy it with", () => {
+      const writeText = vi.fn(() => Promise.resolve());
+      const original = navigator.clipboard;
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+      try {
+        const message = `${"a".repeat(300)} middle cause ${"b".repeat(300)}`;
+        const { unmount } = render(
+          <SpawnErrorBanner
+            terminalId="t-1"
+            error={{ code: "UNKNOWN", message }}
+            onUpdateCwd={vi.fn()}
+            onRetry={vi.fn()}
+            onTrash={vi.fn()}
+          />
+        );
+        expect(screen.queryByTestId("diagnostic-payload")).toBeNull();
+        expect(screen.queryByText(/middle cause/)).toBeNull();
+        fireEvent.click(screen.getByRole("button", { name: /^copy error$/i }));
+        expect(writeText).toHaveBeenCalledWith(message);
+        unmount();
+
+        // With fields present their Copy already carries the message — one way to copy, not two.
+        renderBanner("UNKNOWN", { errno: 1 });
+        expect(screen.queryByRole("button", { name: /^copy error$/i })).toBeNull();
       } finally {
         Object.defineProperty(navigator, "clipboard", { configurable: true, value: original });
       }

@@ -1,6 +1,7 @@
-import { XCircle, RotateCcw, FolderEdit, Trash2, Copy } from "lucide-react";
+import { XCircle, RotateCcw, FolderEdit, Trash2 } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "./InlineStatusBanner";
 import { BannerOverflowMenu } from "./BannerOverflowMenu";
+import { createCopyErrorAction } from "./copyErrorAction";
 import { sanitizeErrorText, boundedErrorText } from "@/utils/errorText";
 import type { TerminalRestartError } from "@/types";
 
@@ -55,18 +56,7 @@ export function TerminalErrorBanner({
     disabled: isRestarting,
   };
 
-  // The description is capped at 200 characters, so the menu is where the
-  // whole message can still be had.
-  const fullMessage = sanitizeErrorText(error.message);
-  const copyErrorAction: BannerAction = {
-    id: "copy-error",
-    label: "Copy error",
-    icon: Copy,
-    variant: "dismiss",
-    onClick: () => {
-      void navigator.clipboard?.writeText(fullMessage).catch(() => undefined);
-    },
-  };
+  const copyErrorAction = createCopyErrorAction(error.message);
 
   // Single contextual action: change directory is the specific fix for a
   // missing-cwd restart failure, otherwise retry. The rest move into the
@@ -74,7 +64,7 @@ export function TerminalErrorBanner({
   const primaryAction = canChangeDir ? changeDirAction : retryAction;
   const overflowActions: BannerAction[] = [
     ...(primaryAction.id === retryAction.id ? [] : [retryAction]),
-    ...(fullMessage ? [copyErrorAction] : []),
+    ...(copyErrorAction ? [copyErrorAction] : []),
     trashAction,
   ];
 
