@@ -1,14 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import {
-  AlertCircle,
-  AlertTriangle,
-  Check,
-  ChevronRight,
-  Copy,
-  FolderOpen,
-  RefreshCw,
-} from "lucide-react";
+import { AlertCircle, AlertTriangle, Check, ChevronRight, Copy, FolderOpen } from "lucide-react";
 import * as semver from "semver";
 import { cn } from "@/lib/utils";
 import { useDeferredLoading, useHelpSessionLiveStatus } from "@/hooks";
@@ -1246,43 +1238,45 @@ export function DaintreeAssistantSettingsTab() {
               />
               Advanced diagnostics
             </button>
-            {advancedDiagnosticsOpen && (
-              <div className="flex flex-col gap-4 px-4 pb-4">
-                <McpAuditLogViewer
-                  records={auditRecords}
-                  turnRecords={turnRecords}
-                  loading={auditLoading}
-                  onRefresh={refreshAuditRecords}
-                  onCopy={handleCopyAuditAsJson}
-                  onClear={() => setShowClearAuditConfirm(true)}
-                  copyFlashActive={auditCopied}
-                  // Privacy section hides external MCP traffic. Grant-lifecycle
-                  // events stay visible — they're tied to this Daintree's own
-                  // help-session bearers, not external API-key clients.
-                  includeRecord={(record) => !isAuditRecord(record) || record.tier !== "external"}
-                  onExport={handleExportAuditAsNdjson}
-                  exportFlashActive={auditExported}
-                />
-                <McpAuditLatencyTable
-                  records={auditRecords}
-                  includeRecord={(record) => !isAuditRecord(record) || record.tier !== "external"}
-                />
-                <TurnOutcomeDiagnostics
-                  auditRecords={auditRecords}
-                  records={turnRecords}
-                  onRefresh={refreshAuditRecords}
-                />
-                {auditStats && auditStats.auth401Count > 0 && (
-                  <p className="text-xs text-text-secondary select-text">
-                    <span className="font-mono text-text-primary">{auditStats.auth401Count}</span>{" "}
-                    bearer rejection{auditStats.auth401Count === 1 ? "" : "s"} since last launch —
-                    an external client is connecting with a stale or missing API key.
-                  </p>
-                )}
-              </div>
-            )}
           </div>
         </SettingsGroup>
+        {/* Each diagnostics view is its own settings group, so they follow the
+            disclosure as siblings rather than nesting cards inside its card. */}
+        {advancedDiagnosticsOpen && (
+          <>
+            <McpAuditLogViewer
+              records={auditRecords}
+              turnRecords={turnRecords}
+              loading={auditLoading}
+              onRefresh={refreshAuditRecords}
+              onCopy={handleCopyAuditAsJson}
+              onClear={() => setShowClearAuditConfirm(true)}
+              copyFlashActive={auditCopied}
+              // Privacy section hides external MCP traffic. Grant-lifecycle
+              // events stay visible — they're tied to this Daintree's own
+              // help-session bearers, not external API-key clients.
+              includeRecord={(record) => !isAuditRecord(record) || record.tier !== "external"}
+              onExport={handleExportAuditAsNdjson}
+              exportFlashActive={auditExported}
+            />
+            <McpAuditLatencyTable
+              records={auditRecords}
+              includeRecord={(record) => !isAuditRecord(record) || record.tier !== "external"}
+            />
+            <TurnOutcomeDiagnostics
+              auditRecords={auditRecords}
+              records={turnRecords}
+              onRefresh={refreshAuditRecords}
+            />
+            {auditStats && auditStats.auth401Count > 0 && (
+              <p className="text-xs text-text-secondary select-text">
+                <span className="font-mono text-text-primary">{auditStats.auth401Count}</span>{" "}
+                bearer rejection{auditStats.auth401Count === 1 ? "" : "s"} since last launch — an
+                external client is connecting with a stale or missing API key.
+              </p>
+            )}
+          </>
+        )}
       </SettingsSection>
 
       <SettingsSection
@@ -1388,38 +1382,43 @@ export function DaintreeAssistantSettingsTab() {
             />
           </SettingsGroup>
         ) : (
-          <SettingsGroup>
-            <SettingsRow
-              label="Client config"
-              description={`Paste into an external MCP client to connect it to port ${runtimeSnapshot.port ?? mcpStatus.port ?? "—"}`}
-              control={
-                <Button variant="outline" size="sm" onClick={handleCopyConfig}>
-                  {copied ? <Check /> : <Copy />}
-                  {copied ? "Copied" : "Copy MCP config"}
-                </Button>
-              }
-            />
-            <SettingsRow
-              label="API key"
-              description={
-                apiKeySuffix
-                  ? `Ends in ${apiKeySuffix}. Rotating it disconnects every client using the old key.`
-                  : "Rotating the key disconnects every client using the old one."
-              }
-              control={
-                <Button
-                  variant="ghost-danger"
-                  size="sm"
-                  onClick={() => setShowRotateConfirm(true)}
-                  disabled={!apiKeySuffix}
-                  title={apiKeySuffix ? undefined : "Waiting for the MCP key to load…"}
-                >
-                  <RefreshCw />
-                  Rotate MCP key
-                </Button>
-              }
-            />
-          </SettingsGroup>
+          <>
+            <SettingsGroup>
+              <SettingsRow
+                label="Client config"
+                description={`Paste into an external MCP client to connect it to port ${runtimeSnapshot.port ?? mcpStatus.port ?? "—"}`}
+                control={
+                  <Button variant="outline" size="sm" onClick={handleCopyConfig}>
+                    {copied ? <Check /> : <Copy />}
+                    {copied ? "Copied" : "Copy MCP config"}
+                  </Button>
+                }
+              />
+            </SettingsGroup>
+            {/* Rotating cuts off every client holding the key, so it sits in its own
+            group rather than beside the everyday copy action. */}
+            <SettingsGroup>
+              <SettingsRow
+                label="API key"
+                description={
+                  apiKeySuffix
+                    ? `Ends in ${apiKeySuffix}. Rotating it disconnects every client using the old key.`
+                    : "Rotating the key disconnects every client using the old one."
+                }
+                control={
+                  <Button
+                    variant="ghost-danger"
+                    size="sm"
+                    onClick={() => setShowRotateConfirm(true)}
+                    disabled={!apiKeySuffix}
+                    title={apiKeySuffix ? undefined : "Waiting for the MCP key to load…"}
+                  >
+                    Rotate MCP key…
+                  </Button>
+                }
+              />
+            </SettingsGroup>
+          </>
         )}
       </SettingsSection>
 
@@ -1428,7 +1427,7 @@ export function DaintreeAssistantSettingsTab() {
         onClose={isClearingAudit ? undefined : handleCancelClearAudit}
         title="Clear audit log?"
         description="All recorded tool dispatches will be permanently deleted — including those from external MCP clients."
-        confirmLabel={clearAuditError ? "Try again" : "Clear log"}
+        confirmLabel={clearAuditError ? "Try again" : "Clear audit log"}
         cancelLabel="Cancel"
         onConfirm={confirmClearAuditLog}
         isConfirmLoading={isClearingAudit}

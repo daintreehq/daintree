@@ -1,6 +1,6 @@
 import { createContext, use, useId } from "react";
 import type { ReactNode } from "react";
-import { Info, RotateCcw } from "lucide-react";
+import { CircleAlert, Info, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -314,11 +314,20 @@ export function SettingsRow({
         renderedControl && <div className="min-w-0">{renderedControl}</div>
       )}
       {error && (
+        // The glyph carries the severity; the words stay neutral, because
+        // severity-coloured text falls under 4.5:1 on most themes.
         <p
           id={errorId}
-          className={cn("text-xs text-status-error", layout === "inline" && "basis-full")}
+          className={cn(
+            "flex items-start gap-1.5 text-xs text-text-primary",
+            layout === "inline" && "basis-full"
+          )}
         >
-          {error}
+          <CircleAlert
+            className="w-3.5 h-3.5 mt-px shrink-0 text-status-error"
+            aria-hidden="true"
+          />
+          <span>{error}</span>
         </p>
       )}
     </div>

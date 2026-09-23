@@ -20,6 +20,7 @@ import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { ForgeAuditLogViewer } from "./ForgeAuditLogViewer";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
+import { ErrorRetryRow } from "@/components/Settings/auditLogParts";
 import { logError } from "@/utils/logger";
 
 const GENERAL_ID = "general";
@@ -75,7 +76,7 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
   const [auditExported, setAuditExported] = useState(false);
   const [showAuditClearConfirm, setShowAuditClearConfirm] = useState(false);
   // A failed read is not an empty log, and a failed copy/export/clear is not silence.
-  const [auditLoadFailed, setAuditLoadFailed] = useState(false);
+  const [auditRecordsFailed, setAuditRecordsFailed] = useState(false);
   const [auditConfigFailed, setAuditConfigFailed] = useState(false);
   const [auditOpError, setAuditOpError] = useState<string | null>(null);
   const auditCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -99,9 +100,9 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
       }
       if (recordsResult.status === "fulfilled") {
         setAuditRecords(recordsResult.value);
-        setAuditLoadFailed(false);
+        setAuditRecordsFailed(false);
       } else {
-        setAuditLoadFailed(true);
+        setAuditRecordsFailed(true);
         logError("Failed to load forge audit log", recordsResult.reason);
       }
       if (statsResult.status === "fulfilled") setAuditStats(statsResult.value);
@@ -130,7 +131,7 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
         if (recordsResult.status === "fulfilled") {
           setAuditRecords(recordsResult.value);
         } else {
-          setAuditLoadFailed(true);
+          setAuditRecordsFailed(true);
           logError("Failed to load forge audit log", recordsResult.reason);
         }
         if (statsResult.status === "fulfilled") {
@@ -276,8 +277,7 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
             <ForgeAuditLogViewer
               records={auditRecords}
               loading={auditLoading}
-              loadFailed={auditLoadFailed}
-              opError={auditOpError}
+              maxRecords={auditMaxRecords}
               anomalySignals={auditStats?.anomalySignals}
               anomalySuppressed={auditStats?.anomalySuppressed ?? true}
               onRefresh={refreshAuditRecords}
@@ -286,6 +286,15 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
               onClear={() => setShowAuditClearConfirm(true)}
               copyFlashActive={auditCopied}
               exportFlashActive={auditExported}
+              loadError={
+                auditRecordsFailed ? (
+                  <ErrorRetryRow
+                    message="The forge audit log couldn't be read"
+                    onRetry={() => void refreshAuditRecords()}
+                  />
+                ) : undefined
+              }
+              actionError={auditOpError}
             />
           </SettingsSection>
         </>
@@ -304,8 +313,8 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
         onConfirm={() => void handleAuditClear()}
         onClose={() => setShowAuditClearConfirm(false)}
         title="Clear forge audit log?"
-        description="This permanently deletes all recorded forge provider calls on this machine. New calls will still be recorded."
-        confirmLabel="Clear log"
+        description={`This permanently deletes ${auditRecords.length === 1 ? "1 recorded forge call" : `${auditRecords.length} recorded forge calls`} on this machine.${auditEnabled ? " New calls will still be recorded." : ""}`}
+        confirmLabel="Clear audit log"
         zIndex="nested"
       />
     </div>

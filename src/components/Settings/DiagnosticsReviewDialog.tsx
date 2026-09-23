@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo } from "react";
-import * as CheckboxPrimitive from "@radix-ui/react-checkbox";
+import { useState, useEffect, useId, useMemo, useRef } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
-import { CheckIcon, Clock, Download, Eye, Replace, ShieldOff } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { ArrowRight, ChevronRight, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   SECTION_LABELS,
@@ -27,6 +27,12 @@ const TIME_WINDOW_OPTIONS: { id: TimeWindowId; label: string }[] = [
 ];
 
 const DEFAULT_TIME_WINDOW: TimeWindowId = "30m";
+
+const RULE_FIELD_CLASS =
+  "h-7 min-w-0 flex-1 px-2 text-xs rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary placeholder:text-text-placeholder focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
+
+const DISCLOSURE_CLASS =
+  "inline-flex items-center gap-1.5 text-sm font-medium text-text-primary rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
 
 function isTimeWindowId(value: string): value is TimeWindowId {
   return TIME_WINDOW_OPTIONS.some((o) => o.id === value);
@@ -87,6 +93,11 @@ export function DiagnosticsReviewDialog({
   const [prebuiltIds, setPrebuiltIds] = useState<Set<PrebuiltRedactionId>>(new Set());
   const [timeWindow, setTimeWindow] = useState<TimeWindowId>(DEFAULT_TIME_WINDOW);
   const [showPreview, setShowPreview] = useState(false);
+  const [showSections, setShowSections] = useState(false);
+  const timeWindowId = useId();
+  const sectionsPanelId = useId();
+  const previewPanelId = useId();
+  const addRuleRef = useRef<HTMLButtonElement>(null);
   // Reference "now" captured at open so the relative windows resolve to a
   // stable cutoff shared by the preview and the save call. Held as state (not a
   // ref) so the render-time reads below don't trip the React Compiler.
@@ -116,6 +127,8 @@ export function DiagnosticsReviewDialog({
       setPrebuiltIds(new Set());
       setTimeWindow(DEFAULT_TIME_WINDOW);
       setShowPreview(false);
+      // A caller that scoped the report opens on the sections it chose.
+      setShowSections(scopedSections !== undefined);
     }
   }, [isOpen, reviewPayload, initialScope]);
 
@@ -164,6 +177,9 @@ export function DiagnosticsReviewDialog({
 
   const removeReplacement = (index: number) => {
     setReplacements((prev) => prev.filter((_, i) => i !== index));
+    // The focused Remove button unmounts with its rule; Add rule is the stable
+    // neighbour, rather than letting focus fall to the dialog body.
+    addRuleRef.current?.focus();
   };
 
   const handleSave = () => {
@@ -188,69 +204,33 @@ export function DiagnosticsReviewDialog({
 
   if (!reviewPayload) return null;
 
+  const enabledCount = reviewPayload.sectionKeys.filter((k) => enabledSections[k]).length;
+  const totalSections = reviewPayload.sectionKeys.length;
+
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="lg" data-testid="diagnostics-review-dialog">
       <AppDialog.Header>
-        <AppDialog.Title icon={<Download className="w-5 h-5" />}>
-          Review Diagnostics
-        </AppDialog.Title>
+        <AppDialog.Title>Review diagnostics</AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
 
-      <AppDialog.Body className="space-y-4">
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <h4 className="text-sm font-medium text-text-primary">Sections</h4>
-            <Button variant="ghost" size="sm" onClick={toggleAll} className="text-xs h-6 px-2">
-              {allEnabled ? "Deselect All" : "Select All"}
-            </Button>
-          </div>
-          <div className="grid grid-cols-2 gap-1.5">
-            {reviewPayload.sectionKeys.map((key) => (
-              <label
-                key={key}
-                className={cn(
-                  "flex items-center gap-2 px-2.5 py-1.5 rounded border text-xs cursor-pointer transition-colors",
-                  enabledSections[key]
-                    ? "border-border-default bg-daintree-bg/50 text-text-primary"
-                    : "border-daintree-border/40 bg-transparent text-daintree-text/40 line-through"
-                )}
-              >
-                <CheckboxPrimitive.Root
-                  checked={enabledSections[key]}
-                  onCheckedChange={() => toggleSection(key)}
-                  className={cn(
-                    "flex shrink-0 w-3.5 h-3.5 rounded-sm border transition-colors",
-                    "bg-surface-canvas border-border-strong",
-                    "data-[state=checked]:bg-text-primary data-[state=checked]:border-text-primary",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                  )}
-                >
-                  <CheckboxPrimitive.Indicator className="flex items-center justify-center text-text-inverse">
-                    <CheckIcon className="w-2.5 h-2.5" />
-                  </CheckboxPrimitive.Indicator>
-                </CheckboxPrimitive.Root>
-                {SECTION_LABELS[key] ?? key}
-              </label>
-            ))}
-          </div>
-        </div>
+      <AppDialog.Body className="space-y-6">
+        <p className="text-sm text-text-secondary">
+          Choose what goes into the report before it&apos;s saved. Saving writes a file on this
+          machine; nothing is uploaded.
+        </p>
 
-        <div>
-          <h4 className="text-sm font-medium text-text-primary flex items-center gap-1.5 mb-2">
-            <Clock className="w-3.5 h-3.5" />
-            Log time window
-          </h4>
+        <div className="space-y-2">
+          <label htmlFor={timeWindowId} className="block text-sm font-medium text-text-primary">
+            Logs from
+          </label>
           <select
+            id={timeWindowId}
             value={timeWindow}
             onChange={(e) => {
               if (isTimeWindowId(e.target.value)) setTimeWindow(e.target.value);
             }}
-            aria-label="Log time window"
-            className={cn(
-              "h-8 text-xs w-full px-2 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas",
-              "text-text-primary focus:outline-hidden focus:border-daintree-accent/40"
-            )}
+            className="h-8 w-60 px-2 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
           >
             {TIME_WINDOW_OPTIONS.map((opt) => (
               <option key={opt.id} value={opt.id}>
@@ -260,50 +240,35 @@ export function DiagnosticsReviewDialog({
           </select>
         </div>
 
-        <div>
-          <h4 className="text-sm font-medium text-text-primary flex items-center gap-1.5 mb-2">
-            <ShieldOff className="w-3.5 h-3.5" />
-            Prebuilt redactions
-          </h4>
-          <div className="grid grid-cols-1 gap-1.5">
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-medium text-text-primary">Redact</legend>
+          <p className="text-xs text-text-secondary">
+            These match patterns, so they can miss things. Check the preview before you share the
+            report.
+          </p>
+          <div className="space-y-1.5">
             {PREBUILT_REDACTIONS.map((preset) => (
               <label
                 key={preset.id}
-                className={cn(
-                  "flex items-center gap-2 px-2.5 py-1.5 rounded border text-xs cursor-pointer transition-colors",
-                  prebuiltIds.has(preset.id)
-                    ? "border-border-default bg-daintree-bg/50 text-text-primary"
-                    : "border-daintree-border/40 bg-transparent text-text-secondary"
-                )}
+                className="flex items-center gap-2 text-sm text-text-primary cursor-pointer"
               >
-                <CheckboxPrimitive.Root
+                <Checkbox
+                  size="sm"
                   checked={prebuiltIds.has(preset.id)}
                   onCheckedChange={() => togglePrebuilt(preset.id)}
-                  className={cn(
-                    "flex shrink-0 w-3.5 h-3.5 rounded-sm border transition-colors",
-                    "bg-surface-canvas border-border-strong",
-                    "data-[state=checked]:bg-text-primary data-[state=checked]:border-text-primary",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                  )}
-                >
-                  <CheckboxPrimitive.Indicator className="flex items-center justify-center text-text-inverse">
-                    <CheckIcon className="w-2.5 h-2.5" />
-                  </CheckboxPrimitive.Indicator>
-                </CheckboxPrimitive.Root>
+                />
                 {preset.label}
               </label>
             ))}
           </div>
-        </div>
+        </fieldset>
 
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <h4 className="text-sm font-medium text-text-primary flex items-center gap-1.5">
-              <Replace className="w-3.5 h-3.5" />
-              Find &amp; Replace
-            </h4>
-            <Button variant="ghost" size="sm" onClick={addReplacement} className="text-xs h-6 px-2">
-              Add Rule
+        <fieldset className="space-y-2">
+          <div className="flex items-center justify-between">
+            <legend className="text-sm font-medium text-text-primary">Find and replace</legend>
+            <Button ref={addRuleRef} variant="ghost" size="sm" onClick={addReplacement}>
+              <Plus aria-hidden="true" />
+              Add rule
             </Button>
           </div>
           <div className="space-y-2">
@@ -313,52 +278,109 @@ export function DiagnosticsReviewDialog({
                   type="text"
                   value={rule.find}
                   onChange={(e) => updateReplacement(i, "find", e.target.value)}
-                  placeholder="Find text"
-                  className={cn(
-                    "h-7 text-xs flex-1 px-2 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas",
-                    "text-text-primary placeholder:text-text-placeholder",
-                    "focus:outline-hidden focus:border-daintree-accent/40"
-                  )}
+                  placeholder="Text to find"
+                  aria-label={`Find, rule ${i + 1}`}
+                  className={RULE_FIELD_CLASS}
                 />
-                <span className="text-daintree-text/40 text-xs">→</span>
+                <ArrowRight
+                  className="w-3.5 h-3.5 shrink-0 text-text-secondary"
+                  aria-hidden="true"
+                />
                 <input
                   type="text"
                   value={rule.replace}
                   onChange={(e) => updateReplacement(i, "replace", e.target.value)}
                   placeholder="Replace with"
-                  className={cn(
-                    "h-7 text-xs flex-1 px-2 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas",
-                    "text-text-primary placeholder:text-text-placeholder",
-                    "focus:outline-hidden focus:border-daintree-accent/40"
-                  )}
+                  aria-label={`Replace with, rule ${i + 1}`}
+                  className={RULE_FIELD_CLASS}
                 />
                 {replacements.length > 1 && (
                   <Button
                     variant="ghost"
-                    size="sm"
+                    size="icon-sm"
                     onClick={() => removeReplacement(i)}
-                    className="text-xs h-7 px-1.5 text-daintree-text/40 hover:text-status-error"
+                    aria-label={`Remove rule ${i + 1}`}
                   >
-                    ×
+                    <X aria-hidden="true" />
                   </Button>
                 )}
               </div>
             ))}
           </div>
+        </fieldset>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => setShowSections((v) => !v)}
+              aria-expanded={showSections}
+              aria-controls={sectionsPanelId}
+              className={DISCLOSURE_CLASS}
+            >
+              <ChevronRight
+                aria-hidden="true"
+                data-animated-chevron
+                className={cn(
+                  "w-3.5 h-3.5 text-text-secondary transition-transform duration-150",
+                  showSections && "rotate-90"
+                )}
+              />
+              Sections
+              <span className="font-normal text-text-secondary">
+                {enabledCount} of {totalSections} included
+              </span>
+            </button>
+            {showSections && (
+              <Button variant="ghost" size="sm" onClick={toggleAll}>
+                {allEnabled ? "Include none" : "Include all"}
+              </Button>
+            )}
+          </div>
+          {showSections && (
+            <div id={sectionsPanelId} className="grid grid-cols-2 gap-x-4 gap-y-1.5 pl-5">
+              {reviewPayload.sectionKeys.map((key) => (
+                <label
+                  key={key}
+                  className="flex items-center gap-2 text-sm text-text-primary cursor-pointer"
+                >
+                  <Checkbox
+                    size="sm"
+                    checked={!!enabledSections[key]}
+                    onCheckedChange={() => toggleSection(key)}
+                  />
+                  {SECTION_LABELS[key] ?? key}
+                </label>
+              ))}
+            </div>
+          )}
         </div>
 
-        <div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setShowPreview(!showPreview)}
-            className="text-xs flex items-center gap-1.5 mb-2"
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => setShowPreview((v) => !v)}
+            aria-expanded={showPreview}
+            aria-controls={previewPanelId}
+            className={DISCLOSURE_CLASS}
           >
-            <Eye className="w-3.5 h-3.5" />
-            {showPreview ? "Hide Preview" : "Show Preview"}
-          </Button>
+            <ChevronRight
+              aria-hidden="true"
+              data-animated-chevron
+              className={cn(
+                "w-3.5 h-3.5 text-text-secondary transition-transform duration-150",
+                showPreview && "rotate-90"
+              )}
+            />
+            Preview the report
+          </button>
           {showPreview && (
-            <pre className="text-3xs leading-relaxed font-mono bg-surface-canvas border border-border-default rounded p-3 max-h-64 overflow-auto text-text-primary whitespace-pre-wrap break-all">
+            <pre
+              id={previewPanelId}
+              tabIndex={0}
+              aria-label="Report preview"
+              className="h-[28rem] overflow-auto text-xs leading-relaxed font-mono bg-surface-canvas border border-border-default rounded-[var(--radius-md)] p-3 text-text-primary whitespace-pre-wrap break-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+            >
               {previewJson}
             </pre>
           )}
@@ -367,7 +389,7 @@ export function DiagnosticsReviewDialog({
 
       <AppDialog.Footer
         primaryAction={{
-          label: isSaving ? "Saving…" : "Save Bundle",
+          label: isSaving ? "Saving…" : "Save report",
           onClick: handleSave,
           disabled: isSaving,
           loading: isSaving,

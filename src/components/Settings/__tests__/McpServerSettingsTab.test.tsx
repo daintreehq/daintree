@@ -208,7 +208,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForApiKeyControls(container);
 
-    const displayArea = container.querySelector(".bg-surface-disabled");
+    const displayArea = container.querySelector("[data-api-key-display]");
     expect(displayArea).toBeTruthy();
     expect(displayArea?.tagName).toBe("DIV");
 
@@ -224,7 +224,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForApiKeyControls(container);
 
-    const displayArea = container.querySelector(".bg-surface-disabled")!;
+    const displayArea = container.querySelector("[data-api-key-display]")!;
     expect(displayArea.textContent).not.toContain("dnt-key-abc123");
     expect(displayArea.textContent).toContain("•");
 
@@ -277,7 +277,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForApiKeyControls(container);
 
-    fireEvent.click(screen.getByTitle("Rotate API key"));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate key…" }));
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
@@ -297,7 +297,7 @@ describe("McpServerSettingsTab", () => {
       expect(window.electron.mcpServer.rotateApiKey).toHaveBeenCalledTimes(1);
     });
 
-    const displayArea = container.querySelector(".bg-surface-disabled")!;
+    const displayArea = container.querySelector("[data-api-key-display]")!;
     await waitFor(() => {
       expect(displayArea.textContent).not.toContain("dnt-key-rotated789");
     });
@@ -312,7 +312,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForApiKeyControls(container);
 
-    fireEvent.click(screen.getByTitle("Rotate API key"));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate key…" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
     });
@@ -334,12 +334,12 @@ describe("McpServerSettingsTab", () => {
     await waitForApiKeyControls(container);
 
     fireEvent.click(screen.getByLabelText("Show API key"));
-    const displayArea = container.querySelector(".bg-surface-disabled")!;
+    const displayArea = container.querySelector("[data-api-key-display]")!;
     await waitFor(() => {
       expect(displayArea.textContent).toContain("dnt-key-abc123");
     });
 
-    fireEvent.click(screen.getByTitle("Rotate API key"));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate key…" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
     });
@@ -368,14 +368,15 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForApiKeyControls(container);
 
-    fireEvent.click(screen.getByTitle("Rotate API key"));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate key…" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
     });
 
     fireEvent.click(screen.getByRole("button", { name: /^rotate key$/i }));
 
-    await waitForContent(container, "rotate failed");
+    // The error sits inside the still-open confirm, which portals out of the tab.
+    await screen.findByText(new RegExp("rotate failed"));
     expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
     expect(window.electron.mcpServer.rotateApiKey).toHaveBeenCalledTimes(1);
     expect(mockedLogError).toHaveBeenCalledWith("Failed to rotate MCP API key", expect.any(Error));
@@ -390,12 +391,12 @@ describe("McpServerSettingsTab", () => {
     await waitForApiKeyControls(container);
 
     fireEvent.click(screen.getByLabelText("Show API key"));
-    const displayArea = container.querySelector(".bg-surface-disabled")!;
+    const displayArea = container.querySelector("[data-api-key-display]")!;
     await waitFor(() => {
       expect(displayArea.textContent).toContain("dnt-key-abc123");
     });
 
-    fireEvent.click(screen.getByTitle("Rotate API key"));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate key…" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /rotate api key\?/i })).toBeTruthy();
     });
@@ -425,7 +426,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForApiKeyControls(container);
 
-    const displayArea = container.querySelector(".bg-surface-disabled")!;
+    const displayArea = container.querySelector("[data-api-key-display]")!;
     const maskSpan = displayArea.querySelector("span")!;
     const bulletCount = (maskSpan.textContent ?? "").length;
     expect(bulletCount).toBe(24);
@@ -503,6 +504,41 @@ describe("McpServerSettingsTab", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect(screen.queryByRole("button", { name: /turn on mcp server/i })).toBeNull();
     expect(screen.queryByText("MCP server is off")).toBeNull();
+  });
+
+  it("keeps the audit history reachable while the server is off", async () => {
+    installMcpApi({
+      getStatus: vi.fn().mockResolvedValue({
+        enabled: false,
+        port: null,
+        configuredPort: null,
+        apiKey: "",
+      }),
+      getLogRecords: vi.fn().mockResolvedValue([
+        {
+          id: "1",
+          timestamp: Date.now(),
+          toolId: "files.read",
+          sessionId: "s",
+          tier: "external",
+          argsSummary: "{}",
+          result: "success",
+          durationMs: 3,
+        },
+      ]),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <McpServerSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    // Stopping the server after something suspicious must not hide what it did.
+    await waitForContent(container, "files.read");
+    expect(screen.getByRole("button", { name: "Clear audit log…" })).toBeTruthy();
+    // Connection setup is still collapsed behind the switch.
+    expect(screen.queryByLabelText("MCP server port")).toBeNull();
   });
 
   it("turning the switch on calls setEnabled(true) and reveals the connection section", async () => {
@@ -745,18 +781,16 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForContent(container, "files.read");
 
-    fireEvent.click(screen.getAllByRole("button", { name: /^clear log$/i })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "Clear audit log…" }));
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /clear audit log\?/i })).toBeTruthy();
     });
     expect(window.electron.mcpServer.clearAuditLog).not.toHaveBeenCalled();
 
-    const buttons = screen.getAllByRole("button", { name: /^clear log$/i });
-    const dialogConfirm = buttons[buttons.length - 1]!;
-    fireEvent.click(dialogConfirm);
+    fireEvent.click(screen.getByRole("button", { name: "Clear audit log" }));
 
-    await waitForContent(container, "No tool dispatches recorded yet");
+    await waitForContent(container, "Audit log cleared");
     expect(mockedNotify).not.toHaveBeenCalled();
   });
 
@@ -781,7 +815,7 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForContent(container, "files.read");
 
-    fireEvent.click(screen.getAllByRole("button", { name: /^clear log$/i })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "Clear audit log…" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /clear audit log\?/i })).toBeTruthy();
     });
@@ -817,16 +851,15 @@ describe("McpServerSettingsTab", () => {
     );
     await waitForContent(container, "files.read");
 
-    fireEvent.click(screen.getAllByRole("button", { name: /^clear log$/i })[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "Clear audit log…" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /clear audit log\?/i })).toBeTruthy();
     });
 
-    const buttons = screen.getAllByRole("button", { name: /^clear log$/i });
-    const dialogConfirm = buttons[buttons.length - 1]!;
-    fireEvent.click(dialogConfirm);
+    fireEvent.click(screen.getByRole("button", { name: "Clear audit log" }));
 
-    await waitForContent(container, "clear failed");
+    // The error sits inside the still-open confirm, which portals out of the tab.
+    await screen.findByText(new RegExp("clear failed"));
     expect(mockedNotify).not.toHaveBeenCalled();
     expect(mockedLogError).toHaveBeenCalledWith("Failed to clear MCP audit log", expect.any(Error));
   });

@@ -117,4 +117,10 @@ describe("runHistoryStore", () => {
       expect(useRunHistoryStore.getState().loading).toBe(false);
     });
   });
+
+  it("clear reports whether it landed, so the caller can say it failed", async () => {
+    expect(await useRunHistoryStore.getState().clear()).toBe(true);
+    clear.mockRejectedValueOnce(new Error("disk full"));
+    expect(await useRunHistoryStore.getState().clear()).toBe(false);
+  });
 });

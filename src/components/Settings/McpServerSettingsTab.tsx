@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { AlertCircle, Eye, EyeOff, ChevronRight } from "lucide-react";
+import { Eye, EyeOff, ChevronRight } from "lucide-react";
+import { SeverityMark } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -13,6 +14,7 @@ import {
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { McpAuditLogViewer } from "@/components/Settings/McpAuditLogViewer";
+import { ErrorRetryRow, InlineErrorRow } from "@/components/Settings/auditLogParts";
 import { TurnOutcomeDiagnostics } from "@/components/Settings/TurnOutcomeDiagnostics";
 import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
@@ -103,6 +105,26 @@ export function McpServerSettingsTab() {
   const [auditMaxRecords, setAuditMaxRecords] = useState(MCP_AUDIT_DEFAULT_MAX_RECORDS);
   const [maxRecordsInput, setMaxRecordsInput] = useState(MCP_AUDIT_DEFAULT_MAX_RECORDS.toString());
   const [auditLoading, setAuditLoading] = useState(true);
+  const [turnsLoadFailed, setTurnsLoadFailed] = useState(false);
+  const [auditLoadFailed, setAuditLoadFailed] = useState(false);
+  const [auditConfigLoaded, setAuditConfigLoaded] = useState(false);
+  const [auditConfigFailed, setAuditConfigFailed] = useState(false);
+  // Each failure is shown where its action lives: beside the audit actions, or
+  // inside the confirm that is still open — never behind a dialog.
+  const [auditActionError, setAuditActionError] = useState<string | null>(null);
+  const [disableError, setDisableError] = useState<string | null>(null);
+  const [rotateError, setRotateError] = useState<string | null>(null);
+  const [clearError, setClearError] = useState<string | null>(null);
+  const [bearersFailed, setBearersFailed] = useState(false);
+  const [auditToggleError, setAuditToggleError] = useState<string | null>(null);
+  const [paneWakeError, setPaneWakeError] = useState<string | null>(null);
+  const [configCopyError, setConfigCopyError] = useState<string | null>(null);
+  const [keyCopyError, setKeyCopyError] = useState<string | null>(null);
+  // Set by a deliberate clear, so the empty log says so instead of reading as
+  // "nothing has ever been recorded" beside turn outcomes that were kept.
+  const [auditCleared, setAuditCleared] = useState(false);
+  const [portError, setPortError] = useState<string | null>(null);
+  const [maxRecordsError, setMaxRecordsError] = useState<string | null>(null);
 
   const [showRotateConfirm, setShowRotateConfirm] = useState(false);
   const [isRotating, setIsRotating] = useState(false);
@@ -168,7 +190,9 @@ export function McpServerSettingsTab() {
     try {
       const bearers = await window.electron.mcpServer.listActiveBearers();
       setActiveBearers(bearers);
+      setBearersFailed(false);
     } catch (err) {
+      setBearersFailed(true);
       logError("Failed to load MCP active bearers", err);
     }
   };
@@ -200,12 +224,16 @@ export function McpServerSettingsTab() {
       ]);
       if (recordsResult.status === "fulfilled") {
         setAuditRecords(recordsResult.value);
+        setAuditLoadFailed(false);
       } else {
+        setAuditLoadFailed(true);
         logError("Failed to load MCP audit log", recordsResult.reason);
       }
       if (turnsResult.status === "fulfilled") {
         setTurnRecords(turnsResult.value);
+        setTurnsLoadFailed(false);
       } else {
+        setTurnsLoadFailed(true);
         logError("Failed to load MCP turn outcome records", turnsResult.reason);
       }
       if (statsResult.status === "fulfilled") {
@@ -218,6 +246,21 @@ export function McpServerSettingsTab() {
     }
   };
 
+  // Until this answers, the capture switch and the cap would be showing guesses.
+  const loadAuditConfig = async (): Promise<void> => {
+    try {
+      const auditCfg = await window.electron.mcpServer.getAuditConfig();
+      setAuditEnabled(auditCfg.enabled);
+      setAuditMaxRecords(auditCfg.maxRecords);
+      setMaxRecordsInput(auditCfg.maxRecords.toString());
+      setAuditConfigLoaded(true);
+      setAuditConfigFailed(false);
+    } catch (err) {
+      setAuditConfigFailed(true);
+      logError("Failed to load MCP audit config", err);
+    }
+  };
+
   useEffect(() => {
     let settled = false;
     const timer = setTimeout(() => {
@@ -227,26 +270,18 @@ export function McpServerSettingsTab() {
       logError("MCP status load timed out");
     }, STATUS_LOAD_TIMEOUT_MS);
 
+    // Server status and the audit reads settle independently: a failed audit
+    // read must not hide a healthy server, or the reverse.
     Promise.all([
       window.electron.mcpServer.getStatus(),
       window.electron.mcpServer.getRuntimeState(),
-      window.electron.mcpServer.getAuditConfig(),
-      window.electron.mcpServer.getLogRecords(),
-      window.electron.mcpServer.getTurnOutcomeRecords(),
-      window.electron.mcpServer.getAuditStats(),
     ])
-      .then(([s, runtime, auditCfg, records, turns, stats]) => {
+      .then(([s, runtime]) => {
         if (settled) return;
         setStatus(s);
         setRuntimeSnapshot(runtime);
         setPortInput(s.configuredPort?.toString() ?? "");
         portDirtyRef.current = false;
-        setAuditEnabled(auditCfg.enabled);
-        setAuditMaxRecords(auditCfg.maxRecords);
-        setMaxRecordsInput(auditCfg.maxRecords.toString());
-        setAuditRecords(records);
-        setTurnRecords(turns);
-        setAuditStats(stats);
         setError(null);
       })
       .catch((err) => {
@@ -258,9 +293,10 @@ export function McpServerSettingsTab() {
         settled = true;
         clearTimeout(timer);
         setLoading(false);
-        setAuditLoading(false);
       });
 
+    void loadAuditConfig();
+    void refreshAuditRecords().finally(() => setAuditLoading(false));
     void refreshActiveBearers();
     void refreshHelpSessionBearers();
     void refreshAssistantControl();
@@ -333,12 +369,12 @@ export function McpServerSettingsTab() {
     if (isDisabling) return;
     setIsDisabling(true);
     try {
-      setError(null);
+      setDisableError(null);
       await applyEnabled(false);
       setShowDisableConfirm(false);
       setDisableClients([]);
     } catch (err) {
-      setError(formatErrorMessage(err, "Failed to update MCP server"));
+      setDisableError(formatErrorMessage(err, "Failed to update MCP server"));
       logError("Failed to update MCP server", err);
     } finally {
       setIsDisabling(false);
@@ -349,6 +385,7 @@ export function McpServerSettingsTab() {
     if (isDisabling) return;
     setShowDisableConfirm(false);
     setDisableClients([]);
+    setDisableError(null);
   };
 
   /**
@@ -363,7 +400,7 @@ export function McpServerSettingsTab() {
   const copyClientConfig = async (workspaceId: string | null) => {
     const generation = ++copyGenerationRef.current;
     try {
-      setError(null);
+      setConfigCopyError(null);
       // Rotating the key elsewhere (the assistant tab has its own control)
       // doesn't broadcast, so the cached status can be stale by the time the
       // user copies. Re-read it rather than hand out a dead key.
@@ -383,7 +420,7 @@ export function McpServerSettingsTab() {
     } catch (err) {
       if (generation !== copyGenerationRef.current) return;
       clearConfigCopyFeedback();
-      setError(formatErrorMessage(err, "Failed to copy config"));
+      setConfigCopyError(formatErrorMessage(err, "Failed to copy config"));
       logError("Failed to copy MCP config", err);
     }
   };
@@ -399,11 +436,11 @@ export function McpServerSettingsTab() {
 
   const handlePortSave = async () => {
     try {
-      setError(null);
+      setPortError(null);
       const portValue = portInput.trim();
       const port = portValue === "" ? null : parseInt(portValue, 10);
       if (port !== null && (isNaN(port) || port < 1024 || port > 65535)) {
-        setError("Port must be between 1024 and 65535");
+        setPortError("Enter a port between 1024 and 65535");
         return;
       }
       const newStatus = await window.electron.mcpServer.setPort(port);
@@ -413,7 +450,7 @@ export function McpServerSettingsTab() {
       setPortInput(newStatus.configuredPort?.toString() ?? "");
       portDirtyRef.current = false;
     } catch (err) {
-      setError(formatErrorMessage(err, "Failed to update port"));
+      setPortError(formatErrorMessage(err, "Failed to update port"));
       logError("Failed to update MCP port", err);
     }
   };
@@ -422,7 +459,7 @@ export function McpServerSettingsTab() {
     if (isRotating) return;
     setIsRotating(true);
     try {
-      setError(null);
+      setRotateError(null);
       const key = await window.electron.mcpServer.rotateApiKey();
       setStatus((prev) => ({ ...prev, apiKey: key }));
       // The rotated key invalidates whatever config was last copied.
@@ -431,7 +468,7 @@ export function McpServerSettingsTab() {
       setShowApiKey(false);
       setShowRotateConfirm(false);
     } catch (err) {
-      setError(formatErrorMessage(err, "Failed to rotate API key"));
+      setRotateError(formatErrorMessage(err, "Failed to rotate API key"));
       logError("Failed to rotate MCP API key", err);
     } finally {
       setIsRotating(false);
@@ -442,9 +479,11 @@ export function McpServerSettingsTab() {
     if (isRotating) return;
     setShowRotateConfirm(false);
     setShowApiKey(false);
+    setRotateError(null);
   };
 
   const handleCopyApiKey = async () => {
+    setKeyCopyError(null);
     try {
       await navigator.clipboard.writeText(status.apiKey);
       setCopiedKey(true);
@@ -456,7 +495,7 @@ export function McpServerSettingsTab() {
         clearTimeout(apiKeyCopyTimeoutRef.current);
         apiKeyCopyTimeoutRef.current = null;
       }
-      setError(formatErrorMessage(err, "Failed to copy API key"));
+      setKeyCopyError(formatErrorMessage(err, "Failed to copy API key"));
       logError("Failed to copy MCP API key", err);
     }
   };
@@ -483,24 +522,24 @@ export function McpServerSettingsTab() {
 
   const handlePaneWakeToggle = async () => {
     try {
-      setError(null);
+      setPaneWakeError(null);
       setPaneWakeEnabled(await window.electron.mcpServer.setPaneWakeEnabled(!paneWakeEnabled));
     } catch (err) {
-      setError(formatErrorMessage(err, "Failed to update pane wakes"));
+      setPaneWakeError(formatErrorMessage(err, "Failed to update pane wakes"));
       logError("Failed to toggle MCP pane wakes", err);
     }
   };
 
   const handleAuditEnabledToggle = async () => {
     try {
-      setError(null);
+      setAuditToggleError(null);
       const next = !auditEnabled;
       const cfg = await window.electron.mcpServer.setAuditEnabled(next);
       setAuditEnabled(cfg.enabled);
       setAuditMaxRecords(cfg.maxRecords);
       setMaxRecordsInput(cfg.maxRecords.toString());
     } catch (err) {
-      setError(formatErrorMessage(err, "Failed to update audit logging"));
+      setAuditToggleError(formatErrorMessage(err, "Failed to update audit logging"));
       logError("Failed to toggle MCP audit log", err);
     }
   };
@@ -513,18 +552,20 @@ export function McpServerSettingsTab() {
       parsed < MCP_AUDIT_MIN_RECORDS ||
       parsed > MCP_AUDIT_MAX_RECORDS
     ) {
-      setError(`Enter a number between ${MCP_AUDIT_MIN_RECORDS} and ${MCP_AUDIT_MAX_RECORDS}.`);
+      setMaxRecordsError(
+        `Enter a number between ${MCP_AUDIT_MIN_RECORDS} and ${MCP_AUDIT_MAX_RECORDS}`
+      );
       return;
     }
     try {
-      setError(null);
+      setMaxRecordsError(null);
       const cfg = await window.electron.mcpServer.setAuditMaxRecords(parsed);
       setAuditEnabled(cfg.enabled);
       setAuditMaxRecords(cfg.maxRecords);
       setMaxRecordsInput(cfg.maxRecords.toString());
       await refreshAuditRecords();
     } catch (err) {
-      setError(formatErrorMessage(err, "Failed to update audit cap"));
+      setMaxRecordsError(formatErrorMessage(err, "Failed to update audit cap"));
       logError("Failed to update audit cap", err);
     }
   };
@@ -533,13 +574,14 @@ export function McpServerSettingsTab() {
     if (isClearing) return;
     setIsClearing(true);
     try {
-      setError(null);
+      setClearError(null);
       await window.electron.mcpServer.clearAuditLog();
       setAuditRecords([]);
       setAuditStats(null);
+      setAuditCleared(true);
       setShowClearConfirm(false);
     } catch (err) {
-      setError(formatErrorMessage(err, "Failed to clear audit log"));
+      setClearError(formatErrorMessage(err, "Failed to clear audit log"));
       logError("Failed to clear MCP audit log", err);
     } finally {
       setIsClearing(false);
@@ -549,11 +591,12 @@ export function McpServerSettingsTab() {
   const handleCancelClear = () => {
     if (isClearing) return;
     setShowClearConfirm(false);
+    setClearError(null);
   };
 
   const handleCopyAuditAsJson = async (records: McpLogRecord[]) => {
     try {
-      setError(null);
+      setAuditActionError(null);
       await navigator.clipboard.writeText(JSON.stringify(records, null, 2));
       setCopiedAudit(true);
       if (auditCopyTimeoutRef.current) clearTimeout(auditCopyTimeoutRef.current);
@@ -564,7 +607,7 @@ export function McpServerSettingsTab() {
         clearTimeout(auditCopyTimeoutRef.current);
         auditCopyTimeoutRef.current = null;
       }
-      setError(formatErrorMessage(err, "Failed to copy audit log"));
+      setAuditActionError(formatErrorMessage(err, "Failed to copy audit log"));
       logError("Failed to copy MCP audit log", err);
     }
   };
@@ -573,7 +616,7 @@ export function McpServerSettingsTab() {
     if (isExporting) return;
     setIsExporting(true);
     try {
-      setError(null);
+      setAuditActionError(null);
       const written = await window.electron.mcpServer.exportAuditLog(records);
       if (written) {
         setExportedAudit(true);
@@ -586,7 +629,7 @@ export function McpServerSettingsTab() {
         clearTimeout(auditExportTimeoutRef.current);
         auditExportTimeoutRef.current = null;
       }
-      setError(formatErrorMessage(err, "Failed to export audit log"));
+      setAuditActionError(formatErrorMessage(err, "Failed to export audit log"));
       logError("Failed to export MCP audit log", err);
     } finally {
       setIsExporting(false);
@@ -616,10 +659,48 @@ export function McpServerSettingsTab() {
   const portUnchanged = portInput.trim() === (status.configuredPort?.toString() ?? "");
   const maxRecordsUnchanged = maxRecordsInput === auditMaxRecords.toString();
 
+  const statusRow = !status.enabled ? null : loading ? (
+    showInlineLoading ? (
+      <SettingsRow label={<span className="text-text-secondary">Loading…</span>} />
+    ) : null
+  ) : runtimeSnapshot.state === "starting" ? (
+    <SettingsRow
+      label={
+        <span className="flex items-center gap-2">
+          <span className="status-mark w-2 h-2 rounded-full bg-text-secondary shrink-0" />
+          Server is starting…
+        </span>
+      }
+    />
+  ) : runtimeSnapshot.state === "failed" ? (
+    <SettingsRow
+      label={
+        <span role="alert" className="flex items-center gap-2">
+          <SeverityMark severity="error" label="Error" className="h-3.5 w-3.5" decorative />
+          MCP server failed to start
+        </span>
+      }
+      description={runtimeSnapshot.lastError ?? "Check the logs for details."}
+    />
+  ) : (
+    <SettingsRow
+      label={
+        <span className="flex items-center gap-2">
+          <span className="status-mark w-2 h-2 rounded-full bg-activity-working shrink-0" />
+          Running on port {boundPort}
+        </span>
+      }
+      description={
+        <span className="font-mono text-text-primary select-all">{clientConfig.url}</span>
+      }
+    />
+  );
+
   return (
     <div className="space-y-8">
-      {/* No section heading: the page is already titled "MCP Server", so the enable
-          switch carries the concept on its own. */}
+      {/* No section heading: the page is already titled "MCP server", so the enable
+          switch carries the concept on its own. What is running, and who is
+          connected, sit directly under it; setup comes after. */}
       <SettingsGroup>
         <SettingsSwitchCard
           id="mcp-server-enable"
@@ -635,447 +716,455 @@ export function McpServerSettingsTab() {
           }
         />
 
-        {status.enabled && (
-          <>
-            <SettingsRow
-              id="mcp-server-port"
-              label="Port"
-              description={
-                <>
-                  Defaults to 45454. If the port is taken, the next one is tried (45455, 45456, …).
-                  {status.port &&
-                    status.configuredPort &&
-                    status.port !== status.configuredPort && (
-                      <span className="mt-1 flex items-start gap-1.5 text-text-secondary">
-                        <AlertCircle
-                          className="w-3.5 h-3.5 mt-px shrink-0 text-status-warning"
-                          aria-hidden="true"
-                        />
-                        <span>
-                          Configured port {status.configuredPort} was in use — bound to{" "}
-                          {status.port} instead.
-                        </span>
-                      </span>
-                    )}
-                </>
-              }
-              control={({ disabled }) => (
-                <>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    value={portInput}
-                    disabled={disabled}
-                    onChange={(e) => {
-                      setPortInput(e.target.value.replace(/\D/g, ""));
-                      portDirtyRef.current = true;
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void handlePortSave();
-                    }}
-                    placeholder="45454"
-                    aria-label="MCP server port"
-                    className={cn(
-                      SETTINGS_CONTROL_WIDTH.number,
-                      "bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-text-primary placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                    )}
-                  />
-                  <Button
-                    variant="subtle"
-                    size="sm"
-                    onClick={handlePortSave}
-                    disabled={portUnchanged}
-                    aria-label="Apply port"
-                  >
-                    Apply
-                  </Button>
-                </>
-              )}
-            />
+        {statusRow}
 
-            <SettingsRow
-              id="mcp-server-auth"
-              label="API key"
-              layout={status.apiKey ? "stacked" : "inline"}
-              description={
-                status.apiKey
-                  ? "Every MCP connection must present this bearer token, and it persists across restarts. Rotate it if you suspect it has leaked — clients holding the old key will need the new one."
-                  : "Generated when the server starts"
-              }
-              control={
-                status.apiKey ? (
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 min-w-0 flex items-center gap-2 rounded-[var(--radius-md)] bg-surface-disabled border border-border-default px-3 py-1.5 font-mono text-xs text-text-primary select-all">
-                      <span className="flex-1 truncate">
-                        {showApiKey ? status.apiKey : MASKED_KEY}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setShowApiKey((v) => !v)}
-                        className="shrink-0 text-text-secondary hover:text-text-primary transition-colors"
-                        aria-label={showApiKey ? "Hide API key" : "Show API key"}
-                      >
-                        {showApiKey ? (
-                          <EyeOff className="h-3.5 w-3.5" />
-                        ) : (
-                          <Eye className="h-3.5 w-3.5" />
-                        )}
-                      </button>
+        {status.enabled && runtimeSnapshot.state === "ready" && bearersFailed && (
+          <ErrorRetryRow
+            message="Connected clients couldn't be read"
+            onRetry={() => void refreshActiveBearers()}
+          />
+        )}
+
+        {status.enabled && runtimeSnapshot.state === "ready" && activeBearers.length > 0 && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setBearersExpanded((v) => !v)}
+              aria-expanded={bearersExpanded}
+              className="flex w-full items-center gap-2 px-4 py-3 text-sm font-medium text-text-primary hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+            >
+              <ChevronRight
+                data-animated-chevron
+                aria-hidden="true"
+                className={cn(
+                  "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150",
+                  bearersExpanded && "rotate-90"
+                )}
+              />
+              External clients ({activeBearers.length})
+            </button>
+
+            {bearersExpanded && (
+              <ul className="border-t border-border-subtle divide-y divide-border-subtle">
+                {activeBearers.map((bearer) => (
+                  <li key={bearer.tokenHash} className="flex items-center gap-3 py-2 pl-9 pr-4">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs text-text-primary">{bearer.userAgent}</div>
+                      <div className="text-2xs text-text-secondary">
+                        <span className="font-mono">…{bearer.token4LastChars}</span>
+                        {" · "}
+                        {bearer.requestsSinceLaunch}{" "}
+                        {bearer.requestsSinceLaunch === 1 ? "request" : "requests"}
+                        {" · active "}
+                        {formatRelativeTime(bearer.lastActiveAt)}
+                      </div>
                     </div>
                     <Button
-                      variant="subtle"
+                      variant="outline"
                       size="sm"
-                      onClick={handleCopyApiKey}
-                      aria-label="Copy API key"
-                      className={cn(copiedKey && "text-status-success border-status-success/30")}
+                      onClick={() => void handleDisconnectBearer(bearer.tokenHash)}
+                      disabled={disconnectingHash !== null}
                     >
-                      {copiedKey ? "Copied!" : "Copy"}
+                      {disconnectingHash === bearer.tokenHash ? "Disconnecting…" : "Disconnect"}
                     </Button>
-                    <Button
-                      variant="subtle"
-                      size="sm"
-                      onClick={() => setShowRotateConfirm(true)}
-                      disabled={!apiKeySuffix}
-                      title={apiKeySuffix ? "Rotate API key" : "Waiting for the MCP key to load…"}
-                    >
-                      Rotate key…
-                    </Button>
-                  </div>
-                ) : undefined
-              }
-            />
-
-            {/* Pane wakes (#12491) */}
-            <SettingsSwitchCard
-              id="mcp-server-pane-wakes"
-              title="Wake agents from terminal watches"
-              subtitle={
-                paneWakeLoadFailed
-                  ? "Couldn't read this setting. Reopen settings to try again."
-                  : "An agent supervising other terminals can ask to hear when they change instead of polling. Daintree types one line into that agent's prompt once it's idle — never into an approval, a question, or an error, and never over your typing. A pane that may be woken shows a radar chip; use it to stop the watches."
-              }
-              isEnabled={paneWakeEnabled}
-              onChange={handlePaneWakeToggle}
-              ariaLabel="Wake agents from terminal watches"
-              disabled={!paneWakeLoaded}
-            />
-          </>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
+
+        {status.enabled && runtimeSnapshot.state === "ready" && helpSessionBearers.length > 0 && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setHelpBearersExpanded((v) => !v)}
+              aria-expanded={helpBearersExpanded}
+              className="flex w-full items-center gap-2 px-4 py-3 text-sm font-medium text-text-primary hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+            >
+              <ChevronRight
+                data-animated-chevron
+                aria-hidden="true"
+                className={cn(
+                  "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150",
+                  helpBearersExpanded && "rotate-90"
+                )}
+              />
+              Internal connections ({helpSessionBearers.length})
+            </button>
+
+            {helpBearersExpanded && (
+              <ul className="border-t border-border-subtle divide-y divide-border-subtle">
+                {helpSessionBearers.map((bearer, i) => (
+                  <li
+                    key={`${bearer.userAgent}-${i}`}
+                    className="flex items-center gap-3 py-2 pl-9 pr-4"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs text-text-primary">{bearer.userAgent}</div>
+                      <div className="text-2xs text-text-secondary">
+                        {bearer.sessionCount} {bearer.sessionCount === 1 ? "session" : "sessions"}
+                        {" · "}
+                        {bearer.requestsSinceLaunch}{" "}
+                        {bearer.requestsSinceLaunch === 1 ? "request" : "requests"}
+                        {" · active "}
+                        {formatRelativeTime(bearer.lastActiveAt)}
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {status.enabled && (
+          <SettingsSwitchCard
+            id="mcp-server-pane-wakes"
+            title="Wake agents from terminal watches"
+            subtitle={
+              paneWakeLoadFailed
+                ? "Couldn't read this setting. Reopen settings to try again."
+                : "An agent supervising other terminals can ask to hear when they change instead of polling. Daintree types one line into that agent's prompt once it's idle — never into an approval, a question, or an error, and never over your typing. A pane that may be woken shows a radar chip; use it to stop the watches."
+            }
+            isEnabled={paneWakeEnabled}
+            onChange={handlePaneWakeToggle}
+            ariaLabel="Wake agents from terminal watches"
+            disabled={!paneWakeLoaded}
+          />
+        )}
+        {status.enabled && paneWakeError && <InlineErrorRow>{paneWakeError}</InlineErrorRow>}
       </SettingsGroup>
+
+      <p className="sr-only" role="status">
+        {configCopyError ??
+          keyCopyError ??
+          (copiedTarget ? "Config copied" : copiedKey ? "API key copied" : "")}
+      </p>
+
+      {error && (
+        <div role="alert" className="flex items-start gap-2 text-xs text-text-primary select-text">
+          <SeverityMark severity="error" label="Error" className="mt-px h-3.5 w-3.5" decorative />
+          <p>{error}</p>
+        </div>
+      )}
 
       {status.enabled && (
         <>
           <SettingsSection
             id="mcp-server-config"
             title="Connection"
-            description="The server binds to 127.0.0.1 (loopback only) — it is never accessible from outside this machine."
+            description="The server binds to 127.0.0.1 (loopback only), so it's never reachable from outside this machine."
           >
-            {loading ? (
-              showInlineLoading ? (
-                <p className="text-xs text-text-secondary">Loading…</p>
-              ) : null
-            ) : runtimeSnapshot.state === "starting" ? (
-              <SettingsGroup>
-                <SettingsRow
-                  label={
-                    <span className="flex items-center gap-2">
-                      <span className="status-mark w-2 h-2 rounded-full bg-text-secondary shrink-0" />
-                      Server is starting…
-                    </span>
-                  }
-                />
-              </SettingsGroup>
-            ) : runtimeSnapshot.state === "failed" ? (
-              <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-                <AlertCircle className="w-4 h-4 text-status-danger shrink-0 mt-0.5" />
-                <p className="text-xs text-status-danger leading-relaxed select-text">
-                  MCP server failed to start.{" "}
-                  {runtimeSnapshot.lastError ?? "Check the logs for details."}
-                </p>
-              </div>
-            ) : (
-              <SettingsGroup>
-                <SettingsRow
-                  label={
-                    <span className="flex items-center gap-2">
-                      <span className="status-mark w-2 h-2 rounded-full bg-activity-working shrink-0" />
-                      Running on port {boundPort}
-                    </span>
-                  }
-                  description={
-                    <span className="font-mono text-text-primary select-all">
-                      {clientConfig.url}
-                    </span>
-                  }
-                />
-
-                <RadioChoiceGroup
-                  legend="Client"
-                  legendHidden
-                  className="space-y-0 divide-y divide-border-subtle"
-                >
-                  <div className="px-4 pt-3 pb-1 border-b-0">
-                    <div className="text-sm font-medium text-text-primary" aria-hidden="true">
-                      Client
+            <SettingsGroup>
+              {!loading && runtimeSnapshot.state === "ready" && (
+                <>
+                  <RadioChoiceGroup
+                    legend="Client"
+                    legendHidden
+                    className="space-y-0 divide-y divide-border-subtle"
+                  >
+                    <div className="px-4 pt-3 pb-1 border-b-0">
+                      <div className="text-sm font-medium text-text-primary" aria-hidden="true">
+                        Client
+                      </div>
+                      <p className="mt-0.5 text-xs text-text-secondary select-text">
+                        Pick the client you&apos;re connecting, then copy its config.
+                      </p>
                     </div>
-                    <p className="mt-0.5 text-xs text-text-secondary select-text">
-                      Pick the client you&apos;re connecting, then copy its config.
-                    </p>
-                  </div>
-                  {MCP_CLIENT_CONFIGS.map((entry) => (
-                    <RadioChoiceRow
-                      key={entry.id}
-                      bare
-                      name="mcpClientConfig"
-                      value={entry.id}
-                      checked={clientConfigId === entry.id}
-                      onChange={() => handleSelectClientConfig(entry.id)}
-                      label={entry.label}
-                      description={entry.destination}
+                    {MCP_CLIENT_CONFIGS.map((entry) => (
+                      <RadioChoiceRow
+                        key={entry.id}
+                        bare
+                        name="mcpClientConfig"
+                        value={entry.id}
+                        checked={clientConfigId === entry.id}
+                        onChange={() => handleSelectClientConfig(entry.id)}
+                        label={entry.label}
+                        description={entry.destination}
+                        className={cn(
+                          "px-4 py-3 transition-colors",
+                          "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary",
+                          clientConfigId === entry.id
+                            ? "bg-overlay-selected"
+                            : "hover:bg-overlay-soft"
+                        )}
+                      />
+                    ))}
+                  </RadioChoiceGroup>
+
+                  <SettingsRow
+                    label="Client config"
+                    error={configCopyError}
+                    description={
+                      <>
+                        {viewWorkspaceId
+                          ? "A project-scoped config pins the client to this project, so its calls keep landing here whichever window you're looking at. The plain config follows whichever Daintree window you focused last."
+                          : null}
+                        {viewWorkspaceId && status.apiKey ? " " : null}
+                        {status.apiKey
+                          ? "The config carries your API key, so treat it like a password — rotating the key cuts off any client still holding an older copy."
+                          : null}
+                      </>
+                    }
+                    layout="stacked"
+                    control={
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button variant="outline" size="sm" onClick={handleCopyConfig}>
+                          {copiedTarget === "plain" ? "Copied!" : "Copy MCP config"}
+                        </Button>
+                        {viewWorkspaceId ? (
+                          <Button variant="outline" size="sm" onClick={handleCopyScopedConfig}>
+                            {copiedTarget === "scoped" ? "Copied!" : "Copy config for this project"}
+                          </Button>
+                        ) : null}
+                      </div>
+                    }
+                  />
+                </>
+              )}
+
+              <SettingsRow
+                id="mcp-server-port"
+                label="Port"
+                error={portError}
+                description={
+                  <>
+                    Defaults to 45454. If it&apos;s taken, the next free port is used.
+                    {status.port &&
+                      status.configuredPort &&
+                      status.port !== status.configuredPort && (
+                        <span className="mt-1 flex items-start gap-1.5 text-text-primary">
+                          <SeverityMark
+                            severity="warning"
+                            label="Warning"
+                            className="w-3.5 h-3.5 mt-px"
+                            decorative
+                          />
+                          <span>
+                            Port {status.configuredPort} was in use, so the server is on{" "}
+                            {status.port}.
+                          </span>
+                        </span>
+                      )}
+                  </>
+                }
+                control={({ disabled, descriptionId }) => (
+                  <>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      value={portInput}
+                      disabled={disabled}
+                      onChange={(e) => {
+                        setPortInput(e.target.value.replace(/\D/g, ""));
+                        portDirtyRef.current = true;
+                        setPortError(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void handlePortSave();
+                      }}
+                      placeholder="45454"
+                      aria-label="MCP server port"
+                      aria-describedby={descriptionId}
+                      aria-invalid={portError ? true : undefined}
                       className={cn(
-                        "px-4 py-3 transition-colors",
-                        "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary",
-                        clientConfigId === entry.id
-                          ? "bg-overlay-selected"
-                          : "hover:bg-overlay-soft"
+                        SETTINGS_CONTROL_WIDTH.number,
+                        "h-7 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 text-sm text-text-primary placeholder:text-text-placeholder font-mono tabular-nums focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                       )}
                     />
-                  ))}
-                </RadioChoiceGroup>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handlePortSave}
+                      disabled={portUnchanged}
+                      aria-label="Apply port"
+                    >
+                      Apply
+                    </Button>
+                  </>
+                )}
+              />
 
-                <SettingsRow
-                  label="Client config"
-                  description={
-                    <>
-                      {viewWorkspaceId
-                        ? "A project-scoped config pins the client to this project, so its calls keep landing here whichever window you're looking at. The plain config follows whichever Daintree window you focused last."
-                        : null}
-                      {viewWorkspaceId && status.apiKey ? " " : null}
-                      {status.apiKey
-                        ? "The config carries your API key, so treat it like a password — rotating the key cuts off any client still holding an older copy."
-                        : null}
-                    </>
-                  }
-                  layout="stacked"
-                  control={
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        variant="subtle"
-                        size="sm"
-                        onClick={handleCopyConfig}
-                        className={cn(
-                          copiedTarget === "plain" && "text-status-success border-status-success/30"
-                        )}
+              <SettingsRow
+                id="mcp-server-auth"
+                label="API key"
+                error={keyCopyError}
+                layout={status.apiKey ? "stacked" : "inline"}
+                description={
+                  status.apiKey
+                    ? "Every connection must present this bearer token. It persists across restarts."
+                    : "Generated when the server starts"
+                }
+                control={
+                  status.apiKey ? (
+                    <div className="flex items-center gap-2">
+                      <div
+                        data-api-key-display=""
+                        className="flex-1 min-w-0 flex items-center gap-2 h-7 rounded-[var(--radius-md)] bg-surface-canvas border border-border-strong px-2 font-mono text-xs text-text-primary select-all"
                       >
-                        {copiedTarget === "plain" ? "Copied!" : "Copy MCP config"}
-                      </Button>
-                      {viewWorkspaceId ? (
-                        <Button
-                          variant="subtle"
-                          size="sm"
-                          onClick={handleCopyScopedConfig}
-                          className={cn(
-                            copiedTarget === "scoped" &&
-                              "text-status-success border-status-success/30"
-                          )}
+                        <span className="flex-1 truncate">
+                          {showApiKey ? status.apiKey : MASKED_KEY}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setShowApiKey((v) => !v)}
+                          className="shrink-0 text-text-secondary hover:text-text-primary transition-colors"
+                          aria-label={showApiKey ? "Hide API key" : "Show API key"}
                         >
-                          {copiedTarget === "scoped" ? "Copied!" : "Copy config for this project"}
-                        </Button>
-                      ) : null}
+                          {showApiKey ? (
+                            <EyeOff className="h-3.5 w-3.5" />
+                          ) : (
+                            <Eye className="h-3.5 w-3.5" />
+                          )}
+                        </button>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleCopyApiKey}
+                        aria-label="Copy API key"
+                      >
+                        {copiedKey ? "Copied!" : "Copy"}
+                      </Button>
                     </div>
+                  ) : undefined
+                }
+              />
+            </SettingsGroup>
+            {status.apiKey && (
+              <SettingsGroup>
+                <SettingsRow
+                  label="Rotate API key"
+                  description="Issues a new key and invalidates the current one. Every client holding it is cut off until it has the new config."
+                  control={
+                    <Button
+                      variant="ghost-danger"
+                      size="sm"
+                      onClick={() => setShowRotateConfirm(true)}
+                      disabled={!apiKeySuffix}
+                    >
+                      Rotate key…
+                    </Button>
                   }
                 />
-
-                {activeBearers.length > 0 && (
-                  <div>
-                    <button
-                      type="button"
-                      onClick={() => setBearersExpanded((v) => !v)}
-                      aria-expanded={bearersExpanded}
-                      className="flex w-full items-center gap-2 px-4 py-3 text-sm font-medium text-text-primary hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-                    >
-                      <ChevronRight
-                        data-animated-chevron
-                        className={cn(
-                          "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150",
-                          bearersExpanded && "rotate-90"
-                        )}
-                      />
-                      External clients ({activeBearers.length})
-                    </button>
-
-                    {bearersExpanded && (
-                      <ul className="border-t border-border-subtle divide-y divide-border-subtle">
-                        {activeBearers.map((bearer) => (
-                          <li
-                            key={bearer.tokenHash}
-                            className="flex items-center gap-3 py-2 pl-9 pr-4"
-                          >
-                            <div className="min-w-0 flex-1">
-                              <div className="truncate text-xs text-text-primary">
-                                {bearer.userAgent}
-                              </div>
-                              <div className="text-2xs text-text-secondary">
-                                <span className="font-mono">…{bearer.token4LastChars}</span>
-                                {" · "}
-                                {bearer.requestsSinceLaunch}{" "}
-                                {bearer.requestsSinceLaunch === 1 ? "request" : "requests"}
-                                {" · active "}
-                                {formatRelativeTime(bearer.lastActiveAt)}
-                              </div>
-                            </div>
-                            <Button
-                              variant="subtle"
-                              size="xs"
-                              onClick={() => void handleDisconnectBearer(bearer.tokenHash)}
-                              disabled={disconnectingHash !== null}
-                            >
-                              {disconnectingHash === bearer.tokenHash
-                                ? "Disconnecting…"
-                                : "Disconnect"}
-                            </Button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                )}
-
-                {helpSessionBearers.length > 0 && (
-                  <div>
-                    <button
-                      type="button"
-                      onClick={() => setHelpBearersExpanded((v) => !v)}
-                      aria-expanded={helpBearersExpanded}
-                      className="flex w-full items-center gap-2 px-4 py-3 text-sm font-medium text-text-primary hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-                    >
-                      <ChevronRight
-                        data-animated-chevron
-                        className={cn(
-                          "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150",
-                          helpBearersExpanded && "rotate-90"
-                        )}
-                      />
-                      Internal connections ({helpSessionBearers.length})
-                    </button>
-
-                    {helpBearersExpanded && (
-                      <ul className="border-t border-border-subtle divide-y divide-border-subtle">
-                        {helpSessionBearers.map((bearer, i) => (
-                          <li
-                            key={`${bearer.userAgent}-${i}`}
-                            className="flex items-center gap-3 py-2 pl-9 pr-4"
-                          >
-                            <div className="min-w-0 flex-1">
-                              <div className="truncate text-xs text-text-primary">
-                                {bearer.userAgent}
-                              </div>
-                              <div className="text-2xs text-text-secondary">
-                                {bearer.sessionCount}{" "}
-                                {bearer.sessionCount === 1 ? "session" : "sessions"}
-                                {" · "}
-                                {bearer.requestsSinceLaunch}{" "}
-                                {bearer.requestsSinceLaunch === 1 ? "request" : "requests"}
-                                {" · active "}
-                                {formatRelativeTime(bearer.lastActiveAt)}
-                              </div>
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                )}
               </SettingsGroup>
             )}
-          </SettingsSection>
-
-          <SettingsSection
-            title="Audit log"
-            description="Every tool dispatched over MCP is recorded with a redacted argument summary. Use this to investigate what an agent did during a session — argument values are never stored verbatim."
-          >
-            <div className="flex flex-col gap-4">
-              <SettingsGroup>
-                <SettingsSwitchCard
-                  title="Capture audit log"
-                  subtitle={
-                    auditEnabled
-                      ? "Recording every dispatch"
-                      : "New dispatches will not be recorded"
-                  }
-                  isEnabled={auditEnabled}
-                  onChange={handleAuditEnabledToggle}
-                />
-                <SettingsRow
-                  label="Max records"
-                  description={`Oldest records are dropped past this limit. Range ${MCP_AUDIT_MIN_RECORDS}–${MCP_AUDIT_MAX_RECORDS}.`}
-                  control={({ labelId, descriptionId }) => (
-                    <>
-                      <input
-                        id="mcp-audit-max-records"
-                        type="text"
-                        inputMode="numeric"
-                        pattern="[0-9]*"
-                        value={maxRecordsInput}
-                        onChange={(e) => setMaxRecordsInput(e.target.value.replace(/\D/g, ""))}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") void handleMaxRecordsSave();
-                        }}
-                        placeholder={MCP_AUDIT_DEFAULT_MAX_RECORDS.toString()}
-                        aria-labelledby={labelId}
-                        aria-describedby={descriptionId}
-                        className={cn(
-                          SETTINGS_CONTROL_WIDTH.number,
-                          "bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-text-primary placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                        )}
-                      />
-                      <Button
-                        variant="subtle"
-                        size="sm"
-                        onClick={() => void handleMaxRecordsSave()}
-                        disabled={maxRecordsUnchanged}
-                        aria-label="Apply max records"
-                      >
-                        Apply
-                      </Button>
-                    </>
-                  )}
-                />
-              </SettingsGroup>
-
-              <McpAuditLogViewer
-                records={auditRecords}
-                turnRecords={turnRecords}
-                loading={auditLoading}
-                onRefresh={refreshAuditRecords}
-                onCopy={handleCopyAuditAsJson}
-                onClear={() => setShowClearConfirm(true)}
-                copyFlashActive={copiedAudit}
-                maxRecords={auditMaxRecords}
-                onExport={handleExportAuditLog}
-                exportFlashActive={exportedAudit}
-                anomalySignals={auditStats?.anomalySignals ?? []}
-                anomalySuppressed={auditStats?.anomalySuppressed ?? true}
-              />
-            </div>
-          </SettingsSection>
-
-          <SettingsSection
-            title="Turn outcome diagnostics"
-            description="Per-turn outcome classification for MCP help sessions. Use the per-tool rollups to identify which tools are producing the most errors, tier rejections, or stuck agents."
-          >
-            <TurnOutcomeDiagnostics auditRecords={auditRecords} />
           </SettingsSection>
         </>
       )}
 
-      {error && (
-        <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-          <AlertCircle className="w-4 h-4 text-status-danger shrink-0 mt-0.5" />
-          <p className="text-xs text-status-danger">{error}</p>
-        </div>
-      )}
+      {/* The log outlives the server: turning MCP off after something suspicious
+          must not hide the record of what happened. */}
+      <>
+        <SettingsSection
+          title="Audit log"
+          description="Every tool call over MCP, with its arguments summarised and anything that looks like a secret masked."
+        >
+          <SettingsGroup>
+            <SettingsSwitchCard
+              title="Capture audit log"
+              subtitle="New tool calls are recorded while this is on"
+              isEnabled={auditEnabled}
+              onChange={handleAuditEnabledToggle}
+              disabled={!auditConfigLoaded}
+            />
+            {auditConfigFailed && (
+              <ErrorRetryRow
+                message="The audit settings couldn't be read"
+                onRetry={() => void loadAuditConfig()}
+              />
+            )}
+            {auditToggleError && <InlineErrorRow>{auditToggleError}</InlineErrorRow>}
+            <SettingsRow
+              label="Records kept"
+              description={`The oldest are dropped past this limit. ${MCP_AUDIT_MIN_RECORDS}–${MCP_AUDIT_MAX_RECORDS}, default ${MCP_AUDIT_DEFAULT_MAX_RECORDS}.`}
+              error={maxRecordsError}
+              control={({ labelId, descriptionId }) => (
+                <>
+                  <input
+                    id="mcp-audit-max-records"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={maxRecordsInput}
+                    disabled={!auditConfigLoaded}
+                    onChange={(e) => {
+                      setMaxRecordsInput(e.target.value.replace(/\D/g, ""));
+                      setMaxRecordsError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleMaxRecordsSave();
+                    }}
+                    placeholder={MCP_AUDIT_DEFAULT_MAX_RECORDS.toString()}
+                    aria-labelledby={labelId}
+                    aria-describedby={descriptionId}
+                    aria-invalid={maxRecordsError ? true : undefined}
+                    className={cn(
+                      SETTINGS_CONTROL_WIDTH.number,
+                      "h-7 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 text-sm text-text-primary placeholder:text-text-placeholder font-mono tabular-nums focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                    )}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void handleMaxRecordsSave()}
+                    disabled={!auditConfigLoaded || maxRecordsUnchanged}
+                    aria-label="Apply max records"
+                  >
+                    Apply
+                  </Button>
+                </>
+              )}
+            />
+          </SettingsGroup>
+
+          <McpAuditLogViewer
+            records={auditRecords}
+            turnRecords={turnRecords}
+            loading={auditLoading}
+            onRefresh={refreshAuditRecords}
+            onCopy={handleCopyAuditAsJson}
+            onClear={() => setShowClearConfirm(true)}
+            copyFlashActive={copiedAudit}
+            maxRecords={auditMaxRecords}
+            onExport={handleExportAuditLog}
+            exportFlashActive={exportedAudit}
+            anomalySignals={auditStats?.anomalySignals ?? []}
+            anomalySuppressed={auditStats?.anomalySuppressed ?? true}
+            emptyLabel={
+              auditCleared
+                ? auditEnabled
+                  ? "Audit log cleared. New tool calls are recorded as they happen"
+                  : "Audit log cleared. Capture is off, so nothing new is recorded"
+                : undefined
+            }
+            actionError={auditActionError}
+            loadError={
+              auditLoadFailed ? (
+                <ErrorRetryRow
+                  message="The audit log couldn't be read"
+                  onRetry={() => void refreshAuditRecords()}
+                />
+              ) : undefined
+            }
+          />
+        </SettingsSection>
+
+        <SettingsSection
+          title="Turn outcomes"
+          description="How each assistant turn ended, and which tools the sessions behind those outcomes used. A tool listed against an outcome was used in that session; it didn't necessarily cause it."
+        >
+          <TurnOutcomeDiagnostics
+            auditRecords={auditRecords}
+            records={turnRecords}
+            onRefresh={refreshAuditRecords}
+            loadFailed={turnsLoadFailed}
+            loading={auditLoading}
+          />
+        </SettingsSection>
+      </>
 
       <ConfirmDialog
         isOpen={showDisableConfirm}
@@ -1090,6 +1179,7 @@ export function McpServerSettingsTab() {
         cancelLabel="Keep running"
         onConfirm={confirmDisable}
         isConfirmLoading={isDisabling}
+        hint={disableError ?? undefined}
         variant="default"
         zIndex="nested"
       >
@@ -1119,6 +1209,7 @@ export function McpServerSettingsTab() {
         cancelLabel="Cancel"
         onConfirm={confirmRotateApiKey}
         isConfirmLoading={isRotating}
+        hint={rotateError ?? undefined}
         variant="destructive"
         zIndex="nested"
       />
@@ -1127,11 +1218,12 @@ export function McpServerSettingsTab() {
         isOpen={showClearConfirm}
         onClose={isClearing ? undefined : handleCancelClear}
         title="Clear audit log?"
-        description="All recorded tool dispatches will be permanently deleted."
-        confirmLabel="Clear log"
+        description={`This permanently deletes ${auditRecords.length === 1 ? "1 audit record" : `${auditRecords.length} audit records`} on this machine. Turn outcomes aren't affected.${auditEnabled ? " New tool calls will still be recorded." : ""}`}
+        confirmLabel="Clear audit log"
         cancelLabel="Cancel"
         onConfirm={confirmClearAuditLog}
         isConfirmLoading={isClearing}
+        hint={clearError ?? undefined}
         variant="destructive"
         zIndex="nested"
       />
