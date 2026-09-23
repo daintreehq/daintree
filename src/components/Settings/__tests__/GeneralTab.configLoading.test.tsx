@@ -159,7 +159,7 @@ describe("GeneralTab — config groups render before their data", () => {
     }
     expect(screen.queryByText(/Loading hibernation settings/)).toBeNull();
     expect(switchDisabled("Hibernate inactive projects")).toBe(true);
-    const threshold = within(screen.getByRole("radiogroup", { name: "Inactivity threshold" }));
+    const threshold = within(screen.getByRole("radiogroup", { name: "Hibernate after" }));
     for (const option of threshold.getAllByRole("radio")) {
       expect(option.getAttribute("aria-checked")).toBe("false");
       expect(option.hasAttribute("disabled")).toBe(true);
@@ -187,5 +187,103 @@ describe("GeneralTab — config groups render before their data", () => {
 
     await waitFor(() => expect(switchDisabled("Hibernate inactive projects")).toBe(false));
     expect(screen.queryByText("Couldn't load hibernation settings")).toBeNull();
+  });
+
+  it("keeps a failed save on its group with a Retry that resends the attempted value", async () => {
+    await renderGeneralTab("overview");
+    await act(async () => {
+      pending.get("sessionRestore.getConfig")?.resolve({ ok: true, result: { enabled: true } });
+    });
+    await waitFor(() => expect(switchDisabled("Restore live projects")).toBe(false));
+
+    mockDispatch.mockImplementationOnce(() =>
+      Promise.resolve({ ok: false, error: { message: "disk full" } })
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("switch", { name: "Restore live projects" }));
+    });
+
+    const startup = screen.getByTestId("section-Startup");
+    const banner = await within(startup).findByRole("alert");
+    expect(banner.textContent).toMatch(/Couldn't save/);
+    expect(
+      screen.getByRole("switch", { name: "Restore live projects" }).getAttribute("aria-checked")
+    ).toBe("true");
+
+    mockDispatch.mockImplementationOnce(() =>
+      Promise.resolve({ ok: true, result: { enabled: false } })
+    );
+    await act(async () => {
+      fireEvent.click(within(startup).getByRole("button", { name: "Retry" }));
+    });
+    expect(mockDispatch).toHaveBeenLastCalledWith(
+      "sessionRestore.updateConfig",
+      { enabled: false },
+      { source: "user" }
+    );
+    await waitFor(() => expect(within(startup).queryByRole("alert")).toBeNull());
+  });
+
+  it("sends one retry however fast Retry is clicked", async () => {
+    await renderGeneralTab("overview");
+    await act(async () => {
+      pending.get("sessionRestore.getConfig")?.resolve({ ok: true, result: { enabled: true } });
+    });
+    await waitFor(() => expect(switchDisabled("Restore live projects")).toBe(false));
+
+    mockDispatch.mockImplementationOnce(() =>
+      Promise.resolve({ ok: false, error: { message: "disk full" } })
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("switch", { name: "Restore live projects" }));
+    });
+    const startup = screen.getByTestId("section-Startup");
+    const retry = await within(startup).findByRole("button", { name: "Retry" });
+
+    let finish: (v: unknown) => void = () => {};
+    mockDispatch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    const before = mockDispatch.mock.calls.filter(
+      ([id]) => id === "sessionRestore.updateConfig"
+    ).length;
+    act(() => {
+      fireEvent.click(retry);
+      fireEvent.click(retry);
+    });
+    await act(async () => {
+      finish({ ok: true, result: { enabled: false } });
+    });
+    const after = mockDispatch.mock.calls.filter(
+      ([id]) => id === "sessionRestore.updateConfig"
+    ).length;
+    expect(after - before).toBe(1);
+  });
+
+  it("a new edit retires the old Retry, so a stale resend can't roll it back", async () => {
+    await renderGeneralTab("overview");
+    await act(async () => {
+      pending.get("sessionRestore.getConfig")?.resolve({ ok: true, result: { enabled: true } });
+    });
+    await waitFor(() => expect(switchDisabled("Restore live projects")).toBe(false));
+
+    mockDispatch.mockImplementationOnce(() =>
+      Promise.resolve({ ok: false, error: { message: "disk full" } })
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("switch", { name: "Restore live projects" }));
+    });
+    const startup = screen.getByTestId("section-Startup");
+    await within(startup).findByRole("button", { name: "Retry" });
+
+    // The new edit's own save stays in flight, so only the edit starting can clear it.
+    mockDispatch.mockImplementationOnce(() => new Promise(() => {}));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("switch", { name: "Restore live projects" }));
+    });
+    expect(within(startup).queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });

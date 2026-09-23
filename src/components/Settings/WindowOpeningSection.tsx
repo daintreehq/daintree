@@ -128,7 +128,7 @@ export function WindowOpeningSection() {
       description="Where a folder goes when you open it — switching between projects isn't affected"
       id="general-window-opening"
     >
-      {mode === null && loadError !== null ? (
+      {mode === null && loadError !== null && (
         <SettingsLoadErrorBanner
           title="Couldn't load window settings"
           message={loadError}
@@ -137,31 +137,28 @@ export function WindowOpeningSection() {
             setLoadNonce((n) => n + 1);
           }}
         />
-      ) : (
-        <>
-          <SettingsGroup>
-            <SettingsSelect
-              label="Open folders in a new window"
-              description={MODE_COPY[value].description}
-              options={MODE_OPTIONS}
-              value={value}
-              onValueChange={(next) => {
-                if (isOpenFoldersInNewWindow(next) && next !== value) void save(next);
-              }}
-              disabled={mode === null || pendingMode !== null}
-              controlWidth="wide"
-              isModified={mode !== null && value !== DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW}
-              onReset={() => void save(DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW)}
-            />
-          </SettingsGroup>
-          {saveFailure && (
-            <SettingsLoadErrorBanner
-              title="Couldn't save window setting"
-              message={saveFailure.message}
-              onRetry={() => void save(saveFailure.mode)}
-            />
-          )}
-        </>
+      )}
+      <SettingsGroup>
+        <SettingsSelect
+          label="Open folders in a new window"
+          description={MODE_COPY[value].description}
+          options={MODE_OPTIONS}
+          value={value}
+          onValueChange={(next) => {
+            if (isOpenFoldersInNewWindow(next) && next !== value) void save(next);
+          }}
+          disabled={mode === null || pendingMode !== null}
+          controlWidth="wide"
+          isModified={mode !== null && value !== DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW}
+          onReset={() => void save(DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW)}
+        />
+      </SettingsGroup>
+      {saveFailure && (
+        <SettingsLoadErrorBanner
+          title="Couldn't save window setting"
+          message={saveFailure.message}
+          onRetry={() => void save(saveFailure.mode)}
+        />
       )}
     </SettingsSection>
   );

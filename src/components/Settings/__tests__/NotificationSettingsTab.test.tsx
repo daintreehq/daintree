@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NotificationSettings } from "@shared/types";
 import { NotificationSettingsTab } from "../NotificationSettingsTab";
@@ -63,7 +63,7 @@ describe("NotificationSettingsTab", () => {
     await waitFor(() => expect(getSettings).toHaveBeenCalled());
 
     const picker = await screen.findByRole("combobox", { name: "Completed sound" });
-    expect(picker instanceof HTMLSelectElement && picker.disabled).toBe(true);
+    expect(picker.hasAttribute("disabled")).toBe(true);
     expect(
       screen.getByText("Turn on Play sound to choose sounds and hear UI feedback")
     ).toBeTruthy();
@@ -121,9 +121,11 @@ describe("NotificationSettingsTab", () => {
     render(<NotificationSettingsTab />);
     await waitFor(() => expect(getSettings).toHaveBeenCalled());
 
-    const delay = await screen.findByRole("combobox", { name: "Escalation delay" });
+    const delay = await screen.findByRole("radiogroup", { name: "Escalation delay" });
     await screen.findByText("Turn on Escalate if still waiting to choose a delay");
-    expect(delay.hasAttribute("disabled")).toBe(true);
+    for (const option of within(delay).getAllByRole("radio")) {
+      expect(option.hasAttribute("disabled")).toBe(true);
+    }
     const reason = screen.getByText("Turn on Escalate if still waiting to choose a delay");
     const describedBy = delay.getAttribute("aria-describedby") ?? "";
     expect(describedBy.split(" ")).toContain(reason.closest("p")?.id);
@@ -138,11 +140,199 @@ describe("NotificationSettingsTab", () => {
     });
     render(<NotificationSettingsTab />);
 
-    const hour = await screen.findByRole("combobox", { name: "Ends at hour" });
-    const describedBy = hour.getAttribute("aria-describedby");
+    const end = await screen.findByRole("combobox", { name: "Ends at" });
+    const describedBy = end.getAttribute("aria-describedby");
     expect(describedBy).toBeTruthy();
     expect(document.getElementById(describedBy!.split(" ")[0]!)?.textContent).toMatch(
       /Start and end match/
     );
+  });
+
+  it("never lets the last active quiet-hours day be cleared into 'every day'", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...BASE,
+      quietHoursEnabled: true,
+      quietHoursWeekdays: [3],
+    });
+    render(<NotificationSettingsTab />);
+
+    const wednesday = await screen.findByRole("button", { name: "Wednesday" });
+    await waitFor(() => expect(wednesday.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(wednesday);
+    expect(setSettings).not.toHaveBeenCalled();
+    expect(wednesday.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Monday" }).getAttribute("aria-pressed")).toBe(
+      "false"
+    );
+  });
+
+  it("marks an overnight schedule as ending the next day", async () => {
+    getSettings.mockResolvedValueOnce({ ...BASE, quietHoursEnabled: true });
+    render(<NotificationSettingsTab />);
+
+    expect(await screen.findByText("22:00 to 08:00 the next day")).toBeTruthy();
+  });
+
+  it("a failed save rolls back only its own change, not a newer one that succeeded", async () => {
+    let rejectFirst: (error: Error) => void = () => {};
+    setSettings
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectFirst = reject;
+          })
+      )
+      .mockResolvedValueOnce(undefined);
+    const { container } = render(<NotificationSettingsTab />);
+
+    const completed = container.querySelector("#notif-completed");
+    const waiting = container.querySelector("#notif-waiting");
+    if (!(completed instanceof HTMLElement) || !(waiting instanceof HTMLElement)) {
+      throw new Error("switches missing");
+    }
+    await waitFor(() => expect(completed.hasAttribute("disabled")).toBe(false));
+
+    fireEvent.click(completed);
+    fireEvent.click(waiting);
+    await act(async () => {
+      rejectFirst(new Error("disk full"));
+    });
+
+    await screen.findByText("Couldn't save that change");
+    expect(completed.getAttribute("aria-checked")).toBe("false");
+    expect(waiting.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("a failed save that a newer edit superseded rolls nothing back", async () => {
+    const rejects: Array<(error: Error) => void> = [];
+    setSettings.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejects.push(reject);
+        })
+    );
+    const { container } = render(<NotificationSettingsTab />);
+
+    const completed = container.querySelector("#notif-completed");
+    if (!(completed instanceof HTMLElement)) throw new Error("switch missing");
+    await waitFor(() => expect(completed.hasAttribute("disabled")).toBe(false));
+
+    fireEvent.click(completed); // on
+    fireEvent.click(completed); // off
+    fireEvent.click(completed); // on — the newest edit
+    await act(async () => {
+      rejects[0]?.(new Error("disk full"));
+    });
+
+    expect(completed.getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByText("Couldn't save that change")).toBeNull();
+  });
+
+  it("ignores a superseded load that settles after a successful retry", async () => {
+    let resolveFirst: (value: NotificationSettings) => void = () => {};
+    getSettings
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          })
+      )
+      .mockResolvedValueOnce({ ...BASE, completedEnabled: true });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { container } = render(<NotificationSettingsTab />);
+      await act(async () => {
+        vi.advanceTimersByTime(10_001);
+      });
+      await act(async () => {
+        fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+      });
+      const completed = container.querySelector("#notif-completed");
+      await waitFor(() => expect(completed?.getAttribute("aria-checked")).toBe("true"));
+
+      await act(async () => {
+        resolveFirst({ ...BASE, completedEnabled: false });
+      });
+      expect(completed?.getAttribute("aria-checked")).toBe("true");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Retry resends only what a newer successful edit hasn't already replaced", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...BASE,
+      quietHoursEnabled: true,
+      quietHoursStartMin: 21 * 60,
+      quietHoursEndMin: 7 * 60,
+    });
+    let rejectReset: (error: Error) => void = () => {};
+    setSettings
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectReset = reject;
+          })
+      )
+      .mockResolvedValue(undefined);
+    render(<NotificationSettingsTab />);
+
+    const resetHours = await screen.findByRole("button", {
+      name: "Reset quiet hours to 22:00 to 08:00",
+    });
+    fireEvent.click(resetHours);
+
+    const start = screen.getByRole("combobox", { name: "Starts at" });
+    fireEvent.keyDown(start, { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: "23:00" }));
+    await waitFor(() => expect(setSettings).toHaveBeenLastCalledWith({ quietHoursStartMin: 1380 }));
+
+    await act(async () => {
+      rejectReset(new Error("disk full"));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    });
+    expect(setSettings).toHaveBeenLastCalledWith({ quietHoursEndMin: 480 });
+  });
+
+  it("an older save that lands after a newer one failed shows what main holds and keeps the failure", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...BASE,
+      quietHoursEnabled: true,
+      quietHoursStartMin: 21 * 60,
+    });
+    const settle: Array<{ resolve: () => void; reject: (e: Error) => void }> = [];
+    setSettings.mockImplementation(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          settle.push({ resolve, reject });
+        })
+    );
+    render(<NotificationSettingsTab />);
+
+    const pick = async (time: string) => {
+      const start = await screen.findByRole("combobox", { name: "Starts at" });
+      await waitFor(() => expect(start.hasAttribute("disabled")).toBe(false));
+      fireEvent.keyDown(start, { key: "ArrowDown" });
+      fireEvent.click(await screen.findByRole("option", { name: time }));
+    };
+    await pick("22:00");
+    await pick("23:00");
+
+    await act(async () => {
+      settle[1]?.reject(new Error("disk full"));
+    });
+    await act(async () => {
+      settle[0]?.resolve();
+    });
+
+    expect(screen.getByRole("combobox", { name: "Starts at" }).textContent).toContain("22:00");
+    expect(screen.getByText("Couldn't save that change")).toBeTruthy();
+    setSettings.mockResolvedValue(undefined);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(setSettings).toHaveBeenLastCalledWith({ quietHoursStartMin: 23 * 60 });
   });
 });

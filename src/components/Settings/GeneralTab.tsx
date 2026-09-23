@@ -8,12 +8,13 @@ import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadError
 import { KeepAwakeSection } from "@/components/Settings/KeepAwakeSection";
 import { WindowOpeningSection } from "@/components/Settings/WindowOpeningSection";
 import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
-import { SettingsDependents, SettingsGroup } from "./SettingsGroup";
+import { SettingsDependents, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { getAgentIds } from "@/config/agents";
 import { AgentIdentityBlock, resolveIdentity } from "@/components/agents/AgentCard";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import type {
   HibernationConfig,
@@ -33,9 +34,8 @@ import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { getBuildChannelLabel } from "@shared/config/distribution";
-import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
-import { formatTimeAgo } from "@/utils/timeAgo";
+import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { useDistributionStore } from "@/store/distributionStore";
 
 const GENERAL_SUBTABS: SettingsSubtabItem[] = [
@@ -114,6 +114,21 @@ const UPDATE_CHANNEL_OPTIONS = [
   { value: "nightly", label: "Nightly" },
 ] as const satisfies readonly { value: "stable" | "nightly"; label: string }[];
 
+function describeUpdateChannel(
+  channel: "stable" | "nightly" | null,
+  lastCheck: number | null
+): string {
+  const base =
+    channel === "nightly"
+      ? "Nightly builds may contain unstable features. You can switch back to stable at any time."
+      : "Stable releases, or nightly builds with the newest changes";
+  if (!lastCheck) return base;
+  const checked = `Last checked ${formatRelativeTime(lastCheck)}.`;
+  return base.endsWith(".") ? `${base} ${checked}` : `${base}. ${checked}`;
+}
+
+type SaveTarget = "sessionRestore" | "updates" | "idleNotify" | "idleAutoClose" | "hibernation";
+
 interface ShortcutDisplay {
   actionId: string;
   key: string;
@@ -166,6 +181,43 @@ export function GeneralTab({
    */
   const [sectionErrors, setSectionErrors] = useState<Record<string, string | null>>({});
   const [configRetryNonce, setConfigRetryNonce] = useState(0);
+  /**
+   * A failed save rolls its control back, which on its own reads as a click that never
+   * landed. The failure stays on the group it belongs to, with a Retry that resends the
+   * attempted value, until a save there succeeds.
+   */
+  const [saveFailures, setSaveFailures] = useState<
+    Partial<Record<SaveTarget, () => Promise<void>>>
+  >({});
+  // A retry in flight per group: the banner clears on the first click, but a second
+  // click can land before it re-renders, and two resends race each other's rollback.
+  const retryingRef = useRef(new Set<SaveTarget>());
+  const recordSaveFailure = (target: SaveTarget, retry: () => Promise<void>) =>
+    setSaveFailures((failures) => ({ ...failures, [target]: retry }));
+  // Cleared when a save to the group succeeds, and when a new edit there begins: the new
+  // edit supersedes whatever the old Retry would have resent.
+  const clearSaveFailure = (target: SaveTarget) =>
+    setSaveFailures((failures) => {
+      if (!failures[target]) return failures;
+      const next = { ...failures };
+      delete next[target];
+      return next;
+    });
+  const saveFailureBanner = (target: SaveTarget) => {
+    const retry = saveFailures[target];
+    return retry ? (
+      <SettingsLoadErrorBanner
+        title="Couldn't save that change"
+        message="The setting is back to its previous value."
+        onRetry={() => {
+          if (retryingRef.current.has(target)) return;
+          retryingRef.current.add(target);
+          clearSaveFailure(target);
+          void retry().finally(() => retryingRef.current.delete(target));
+        }}
+      />
+    ) : null;
+  };
 
   /**
    * What the section header says about the roster. The old copy — "Agents ready to use on
@@ -294,28 +346,18 @@ export function GeneralTab({
     if (storeUpdateSettingsSaving || storeUpdateNotificationsEnabled === null) return;
     if (!window.electron?.storeUpdate?.setSettings) return;
     const prev = storeUpdateNotificationsEnabled;
+    clearSaveFailure("updates");
     const next = !prev;
     setStoreUpdateNotificationsEnabled(next);
     setStoreUpdateSettingsSaving(true);
     try {
       const result = await window.electron.storeUpdate.setSettings(next);
       if (isMountedRef.current) setStoreUpdateNotificationsEnabled(result.enabled);
+      if (isMountedRef.current) clearSaveFailure("updates");
     } catch (error) {
       logError("Failed to set store update notification settings", error);
       if (isMountedRef.current) setStoreUpdateNotificationsEnabled(prev);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Update notification preference couldn't be saved.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleStoreUpdateNotificationsToggle(),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("updates", () => handleStoreUpdateNotificationsToggle());
     } finally {
       if (isMountedRef.current) setStoreUpdateSettingsSaving(false);
     }
@@ -325,27 +367,17 @@ export function GeneralTab({
     if (updatesManagedByStore) return;
     if (channelSaving || channel === updateChannel) return;
     const prev = updateChannel;
+    clearSaveFailure("updates");
     setUpdateChannel(channel);
     setChannelSaving(true);
     try {
       const result = await window.electron.update.setChannel(channel);
       if (isMountedRef.current) setUpdateChannel(result);
+      if (isMountedRef.current) clearSaveFailure("updates");
     } catch (error) {
       logError("Failed to set update channel", error);
       if (isMountedRef.current) setUpdateChannel(prev);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Update channel couldn't be changed.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleChannelChange(channel),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("updates", () => handleChannelChange(channel));
     } finally {
       if (isMountedRef.current) setChannelSaving(false);
     }
@@ -541,6 +573,7 @@ export function GeneralTab({
   const handleHibernationToggle = async () => {
     if (!hibernationConfig || isSaving) return;
     const prev = hibernationConfig;
+    clearSaveFailure("hibernation");
     setHibernationConfig({ ...prev, enabled: !prev.enabled });
     setIsSaving(true);
     try {
@@ -554,19 +587,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setHibernationConfig(result.result as HibernationConfig);
+      clearSaveFailure("hibernation");
     } catch (error) {
       if (!isMountedRef.current) return;
       setHibernationConfig(prev);
       logError("Failed to update hibernation config", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Auto-hibernation couldn't be updated.",
-        actions: [
-          { label: "Try again", variant: "primary", onClick: () => void handleHibernationToggle() },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("hibernation", () => handleHibernationToggle());
     } finally {
       if (isMountedRef.current) {
         setIsSaving(false);
@@ -577,6 +603,7 @@ export function GeneralTab({
   const handleSessionRestoreToggle = async () => {
     if (!sessionRestoreConfig || isSessionRestoreSaving) return;
     const prev = sessionRestoreConfig;
+    clearSaveFailure("sessionRestore");
     setSessionRestoreConfig({ enabled: !prev.enabled });
     setIsSessionRestoreSaving(true);
     try {
@@ -590,23 +617,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setSessionRestoreConfig(result.result as SessionRestoreConfig);
+      clearSaveFailure("sessionRestore");
     } catch (error) {
       if (!isMountedRef.current) return;
       setSessionRestoreConfig(prev);
       logError("Failed to update session restore config", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Project restore couldn't be updated.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleSessionRestoreToggle(),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("sessionRestore", () => handleSessionRestoreToggle());
     } finally {
       if (isMountedRef.current) {
         setIsSessionRestoreSaving(false);
@@ -617,6 +633,7 @@ export function GeneralTab({
   const handleIdleNotifyToggle = async () => {
     if (!idleNotifyConfig || isIdleNotifySaving) return;
     const prev = idleNotifyConfig;
+    clearSaveFailure("idleNotify");
     setIdleNotifyConfig({ ...prev, enabled: !prev.enabled });
     setIsIdleNotifySaving(true);
     try {
@@ -630,19 +647,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setIdleNotifyConfig(result.result as IdleTerminalNotifyConfig);
+      clearSaveFailure("idleNotify");
     } catch (error) {
       if (!isMountedRef.current) return;
       setIdleNotifyConfig(prev);
       logError("Failed to update idle terminal notify config", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Idle terminal notifications couldn't be updated.",
-        actions: [
-          { label: "Try again", variant: "primary", onClick: () => void handleIdleNotifyToggle() },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("idleNotify", () => handleIdleNotifyToggle());
     } finally {
       if (isMountedRef.current) {
         setIsIdleNotifySaving(false);
@@ -653,6 +663,7 @@ export function GeneralTab({
   const handleIdleNotifyThresholdChange = async (value: number) => {
     if (!idleNotifyConfig || isIdleNotifySaving) return;
     const prev = idleNotifyConfig;
+    clearSaveFailure("idleNotify");
     setIdleNotifyConfig({ ...prev, thresholdMinutes: value });
     setIsIdleNotifySaving(true);
     try {
@@ -666,23 +677,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setIdleNotifyConfig(result.result as IdleTerminalNotifyConfig);
+      clearSaveFailure("idleNotify");
     } catch (error) {
       if (!isMountedRef.current) return;
       setIdleNotifyConfig(prev);
       logError("Failed to update idle terminal notify threshold", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Idle threshold couldn't be updated.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleIdleNotifyThresholdChange(value),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("idleNotify", () => handleIdleNotifyThresholdChange(value));
     } finally {
       if (isMountedRef.current) {
         setIsIdleNotifySaving(false);
@@ -693,6 +693,7 @@ export function GeneralTab({
   const handleIdleAutoCloseToggle = async () => {
     if (!idleAutoCloseConfig || isIdleAutoCloseSaving) return;
     const prev = idleAutoCloseConfig;
+    clearSaveFailure("idleAutoClose");
     setIdleAutoCloseConfig({ ...prev, enabled: !prev.enabled });
     setIsIdleAutoCloseSaving(true);
     try {
@@ -706,23 +707,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setIdleAutoCloseConfig(result.result as IdleBackgroundAutoCloseConfig);
+      clearSaveFailure("idleAutoClose");
     } catch (error) {
       if (!isMountedRef.current) return;
       setIdleAutoCloseConfig(prev);
       logError("Failed to update idle background auto-close config", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Auto-close for idle projects couldn't be updated.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleIdleAutoCloseToggle(),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("idleAutoClose", () => handleIdleAutoCloseToggle());
     } finally {
       if (isMountedRef.current) {
         setIsIdleAutoCloseSaving(false);
@@ -733,6 +723,7 @@ export function GeneralTab({
   const handleIdleAutoCloseThresholdChange = async (value: number) => {
     if (!idleAutoCloseConfig || isIdleAutoCloseSaving) return;
     const prev = idleAutoCloseConfig;
+    clearSaveFailure("idleAutoClose");
     setIdleAutoCloseConfig({ ...prev, thresholdMinutes: value });
     setIsIdleAutoCloseSaving(true);
     try {
@@ -746,23 +737,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setIdleAutoCloseConfig(result.result as IdleBackgroundAutoCloseConfig);
+      clearSaveFailure("idleAutoClose");
     } catch (error) {
       if (!isMountedRef.current) return;
       setIdleAutoCloseConfig(prev);
       logError("Failed to update idle background auto-close threshold", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Idle auto-close threshold couldn't be updated.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleIdleAutoCloseThresholdChange(value),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("idleAutoClose", () => handleIdleAutoCloseThresholdChange(value));
     } finally {
       if (isMountedRef.current) {
         setIsIdleAutoCloseSaving(false);
@@ -773,6 +753,7 @@ export function GeneralTab({
   const handleThresholdChange = async (value: number) => {
     if (!hibernationConfig || isSaving) return;
     const prev = hibernationConfig;
+    clearSaveFailure("hibernation");
     setHibernationConfig({ ...prev, inactiveThresholdHours: value });
     setIsSaving(true);
     try {
@@ -786,23 +767,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setHibernationConfig(result.result as HibernationConfig);
+      clearSaveFailure("hibernation");
     } catch (error) {
       if (!isMountedRef.current) return;
       setHibernationConfig(prev);
       logError("Failed to update hibernation threshold", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Inactivity threshold couldn't be updated.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleThresholdChange(value),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("hibernation", () => handleThresholdChange(value));
     } finally {
       if (isMountedRef.current) {
         setIsSaving(false);
@@ -825,27 +795,25 @@ export function GeneralTab({
           <>
             <SettingsSection
               title="System status"
-              description={systemStatusSummary}
+              description={<span role="status">{systemStatusSummary}</span>}
               id="general-system-status"
             >
               {cliCheckFailed ? (
-                <div className="flex flex-wrap items-center gap-3">
-                  <p className="text-sm text-status-error">
-                    Couldn't check which agents are installed
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => void loadAgentAvailability()}
-                    disabled={isRecheckingAgents}
-                    className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline disabled:opacity-60"
-                  >
-                    {isRecheckingAgents ? "Checking…" : "Retry"}
-                  </button>
-                </div>
+                <SettingsLoadErrorBanner
+                  title="Couldn't check which agents are installed"
+                  message={
+                    isRecheckingAgents
+                      ? "Checking again…"
+                      : "The agent list stays empty until the check succeeds."
+                  }
+                  onRetry={() => {
+                    if (!isRecheckingAgents) void loadAgentAvailability();
+                  }}
+                />
               ) : !cliAvailability ? (
-                <div className="text-sm text-text-secondary">
-                  Checking which agents are installed…
-                </div>
+                <SettingsGroup>
+                  <SettingsEmptyRow>Checking which agents are installed…</SettingsEmptyRow>
+                </SettingsGroup>
               ) : (
                 (() => {
                   const allAgentIds = getAgentIds();
@@ -863,34 +831,36 @@ export function GeneralTab({
 
                   if (installed.length === 0) {
                     return (
-                      <div className="space-y-3">
-                        <p className="text-sm text-text-secondary">
-                          No agent CLIs found on this machine. Install one and Daintree will pick it
-                          up.
-                        </p>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() =>
-                              window.dispatchEvent(
-                                new CustomEvent("daintree:open-agent-setup-wizard")
-                              )
-                            }
-                          >
-                            Run setup wizard
-                          </Button>
-                          {onNavigateToAgents && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => onNavigateToAgents?.()}
-                            >
-                              Browse available agents
-                            </Button>
-                          )}
-                        </div>
-                      </div>
+                      <SettingsGroup>
+                        <SettingsEmptyRow
+                          action={
+                            <div className="flex flex-wrap items-center gap-2">
+                              {onNavigateToAgents && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => onNavigateToAgents?.()}
+                                >
+                                  Browse available agents
+                                </Button>
+                              )}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() =>
+                                  window.dispatchEvent(
+                                    new CustomEvent("daintree:open-agent-setup-wizard")
+                                  )
+                                }
+                              >
+                                Run setup wizard
+                              </Button>
+                            </div>
+                          }
+                        >
+                          No agent CLIs found on this machine — install one and Daintree picks it up
+                        </SettingsEmptyRow>
+                      </SettingsGroup>
                     );
                   }
 
@@ -927,11 +897,11 @@ export function GeneralTab({
                           type="button"
                           data-agent-row={id}
                           className={cn(
-                            "settings-list-item group flex w-full items-center gap-3 px-3 py-2 text-left",
+                            "settings-list-item group flex w-full items-center gap-3 py-2 pl-4 pr-4 text-left",
                             "cursor-pointer transition-colors",
                             "hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))]",
                             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
-                            bordered && "border-t border-border-default"
+                            bordered && "border-t border-border-subtle"
                           )}
                           aria-label={`${name} — ${status ? status.label : "ready"}. Open agent settings`}
                           onClick={() => onNavigateToAgents?.(id)}
@@ -979,7 +949,7 @@ export function GeneralTab({
                   };
 
                   return (
-                    <div className="rounded-[var(--radius-md)] border border-border-default overflow-hidden">
+                    <SettingsGroup className="divide-y-0 overflow-hidden">
                       {/* A list, not a stack of divs: eighteen agents is a collection, and a
                         screen-reader user gets the count and the position from the role.
                         Agents needing attention always show; the healthy remainder is an
@@ -999,21 +969,22 @@ export function GeneralTab({
                             aria-controls="general-system-status-ready-agents"
                             onClick={() => setShowReadyAgents((v) => !v)}
                             className={cn(
-                              "settings-list-item group flex w-full items-center gap-3 px-3 py-2 text-left",
+                              "settings-list-item group flex w-full items-center gap-3 py-2 pl-4 pr-4 text-left",
                               "cursor-pointer transition-colors",
                               "hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))]",
                               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
-                              attentionAgentIds.length > 0 && "border-t border-border-default"
+                              attentionAgentIds.length > 0 && "border-t border-border-subtle"
                             )}
                           >
-                            <ChevronRight
-                              data-animated-chevron
-                              className={cn(
-                                "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 group-hover:text-text-primary",
-                                showReadyAgents ? "rotate-90" : "rotate-0"
-                              )}
-                              aria-hidden="true"
-                            />
+                            <span className="flex w-7 shrink-0 justify-center" aria-hidden="true">
+                              <ChevronRight
+                                data-animated-chevron
+                                className={cn(
+                                  "w-3.5 h-3.5 text-text-secondary transition-transform duration-150 group-hover:text-text-primary",
+                                  showReadyAgents ? "rotate-90" : "rotate-0"
+                                )}
+                              />
+                            </span>
                             <span className="flex-1 text-sm text-text-secondary group-hover:text-text-primary transition-colors">
                               {showReadyAgents
                                 ? "Hide ready agents"
@@ -1035,12 +1006,13 @@ export function GeneralTab({
                           type="button"
                           onClick={() => onNavigateToAgents?.()}
                           className={cn(
-                            "settings-list-item group flex w-full items-center gap-3 px-3 py-2 text-left",
-                            "cursor-pointer transition-colors border-t border-border-default",
+                            "settings-list-item group flex w-full items-center gap-3 py-2 pl-4 pr-4 text-left",
+                            "cursor-pointer transition-colors border-t border-border-subtle",
                             "hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))]",
                             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
                           )}
                         >
+                          <span className="w-7 shrink-0" aria-hidden="true" />
                           <span className="flex-1 text-sm text-text-secondary group-hover:text-text-primary transition-colors">
                             {`Daintree supports ${hiddenCount} more ${hiddenCount === 1 ? "agent" : "agents"}`}
                           </span>
@@ -1050,7 +1022,7 @@ export function GeneralTab({
                           />
                         </button>
                       )}
-                    </div>
+                    </SettingsGroup>
                   );
                 })()
               )}
@@ -1070,6 +1042,7 @@ export function GeneralTab({
                   onRetry={() => setConfigRetryNonce((n) => n + 1)}
                 />
               )}
+              {saveFailureBanner("sessionRestore")}
               <SettingsGroup>
                 <SettingsSwitchCard
                   title="Restore live projects"
@@ -1096,6 +1069,7 @@ export function GeneralTab({
                 description="Updates are managed by the Microsoft Store on Windows"
                 id="general-update-channel"
               >
+                {saveFailureBanner("updates")}
                 <SettingsGroup>
                   <SettingsSwitchCard
                     title="Notify when a new version is available"
@@ -1108,86 +1082,99 @@ export function GeneralTab({
               </SettingsSection>
             ) : (
               <SettingsSection title="Updates" id="general-update-channel">
-                {updateChannelLoadFailed ? (
+                {updateChannelLoadFailed && (
                   <SettingsLoadErrorBanner
                     message="Couldn't load the update channel"
                     onRetry={() => setChannelRetryNonce((n) => n + 1)}
                   />
-                ) : (
-                  <SettingsGroup>
-                    <SettingsPresetGroup<"stable" | "nightly">
-                      label="Update channel"
-                      description={
-                        updateChannel === "nightly"
-                          ? "Nightly builds may contain unstable features. You can switch back to stable at any time."
-                          : "Stable releases, or nightly builds with the newest changes"
-                      }
-                      options={UPDATE_CHANNEL_OPTIONS}
-                      value={updateChannel}
-                      onChange={(ch) => void handleChannelChange(ch)}
-                      disabled={updateChannel === null || channelSaving}
-                      isModified={
-                        updateChannel !== null && updateChannel !== DEFAULT_UPDATE_CHANNEL
-                      }
-                      onReset={() => void handleChannelChange(DEFAULT_UPDATE_CHANNEL)}
-                    />
-                  </SettingsGroup>
                 )}
-                {lastUpdateCheck && (
-                  <p className="text-xs text-text-secondary">
-                    Last checked: {formatTimeAgo(lastUpdateCheck)}
-                  </p>
-                )}
+                {saveFailureBanner("updates")}
+                {/* The row stays through a failed load, with no channel selected: an
+                    unknown channel must never read as "stable". */}
+                <SettingsGroup>
+                  <SettingsPresetGroup<"stable" | "nightly">
+                    label="Update channel"
+                    description={describeUpdateChannel(updateChannel, lastUpdateCheck)}
+                    options={UPDATE_CHANNEL_OPTIONS}
+                    value={updateChannel}
+                    onChange={(ch) => void handleChannelChange(ch)}
+                    disabled={updateChannel === null || channelSaving}
+                    isModified={updateChannel !== null && updateChannel !== DEFAULT_UPDATE_CHANNEL}
+                    onReset={() => void handleChannelChange(DEFAULT_UPDATE_CHANNEL)}
+                  />
+                </SettingsGroup>
               </SettingsSection>
             )}
 
             <SettingsSection
               title="Quick reference"
-              description="Common keyboard shortcuts — edit them all in Keyboard settings"
+              description="Common keyboard shortcuts"
+              action={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    window.dispatchEvent(
+                      new CustomEvent("daintree:open-settings-tab", { detail: { tab: "keyboard" } })
+                    )
+                  }
+                >
+                  Edit shortcuts
+                </Button>
+              }
             >
-              <button
-                type="button"
-                onClick={() => setIsShortcutsOpen(!isShortcutsOpen)}
-                aria-expanded={isShortcutsOpen}
-                aria-controls="keyboard-shortcuts-content"
-                className="flex items-center gap-2 text-sm text-text-secondary hover:text-text-primary transition-colors"
-              >
-                <ChevronRight
-                  data-animated-chevron
+              <SettingsGroup className="divide-y-0 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setIsShortcutsOpen(!isShortcutsOpen)}
+                  aria-expanded={isShortcutsOpen}
+                  aria-controls="keyboard-shortcuts-content"
                   className={cn(
-                    "w-3.5 h-3.5 transition-transform duration-150",
-                    isShortcutsOpen && "rotate-90"
+                    "settings-list-item group flex w-full items-center gap-3 py-2.5 pl-4 pr-4 text-left",
+                    "cursor-pointer transition-colors",
+                    "hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))]",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
                   )}
-                />
-                <span>{isShortcutsOpen ? "Hide shortcuts" : "Show shortcuts"}</span>
-              </button>
+                >
+                  <ChevronRight
+                    data-animated-chevron
+                    className={cn(
+                      "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 group-hover:text-text-primary",
+                      isShortcutsOpen ? "rotate-90" : "rotate-0"
+                    )}
+                    aria-hidden="true"
+                  />
+                  <span className="flex-1 text-sm text-text-secondary group-hover:text-text-primary transition-colors">
+                    {isShortcutsOpen ? "Hide shortcuts" : "Show shortcuts"}
+                  </span>
+                </button>
 
-              {isShortcutsOpen && (
-                <div id="keyboard-shortcuts-content" className="space-y-4">
-                  {shortcuts.map((category) => (
-                    <div key={category.category} className="space-y-2">
-                      <h5 className="text-xs font-medium text-text-secondary">
-                        {category.category}
-                      </h5>
-                      <dl className="space-y-1">
-                        {category.shortcuts.map((shortcut) => (
-                          <div
-                            key={shortcut.actionId}
-                            className="flex items-center justify-between text-sm py-1"
-                          >
-                            <dt className="text-text-primary">{shortcut.description}</dt>
-                            <dd>
-                              <kbd className="settings-kbd px-2 py-1 rounded-[var(--radius-sm)] border text-xs font-mono text-text-primary">
-                                {shortcut.key}
-                              </kbd>
-                            </dd>
-                          </div>
-                        ))}
-                      </dl>
-                    </div>
-                  ))}
+                <div id="keyboard-shortcuts-content">
+                  {isShortcutsOpen &&
+                    shortcuts.map((category) => (
+                      <div key={category.category} className="border-t border-border-subtle">
+                        <h5 className="pt-3 pb-1 pl-4 pr-4 text-xs font-medium text-text-secondary">
+                          {category.category}
+                        </h5>
+                        <dl className="pb-2">
+                          {category.shortcuts.map((shortcut) => (
+                            <div
+                              key={shortcut.actionId}
+                              className="flex items-center justify-between gap-4 py-1.5 pl-4 pr-4 text-sm"
+                            >
+                              <dt className="min-w-0 text-text-primary">{shortcut.description}</dt>
+                              <dd className="shrink-0">
+                                <kbd className="settings-kbd px-2 py-1 rounded-[var(--radius-sm)] border text-xs font-mono text-text-primary">
+                                  {shortcut.key}
+                                </kbd>
+                              </dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </div>
+                    ))}
                 </div>
-              )}
+              </SettingsGroup>
             </SettingsSection>
 
             {/* Identity sits at the FOOT of Overview, not the head of it. A user opens
@@ -1210,12 +1197,9 @@ export function GeneralTab({
                 </span>
               )}
               {buildChannelLabel && (
-                <span
-                  data-testid="about-build-channel"
-                  className="text-3xs font-medium px-1.5 py-0.5 rounded-full bg-status-info/15 text-status-info leading-none"
-                >
+                <Badge size="xs" data-testid="about-build-channel">
                   {buildChannelLabel}
-                </span>
+                </Badge>
               )}
               <button
                 onClick={() =>
@@ -1239,17 +1223,24 @@ export function GeneralTab({
             {/* Every group renders before its config arrives. Until the stored value is
                 known each switch shows the default, disabled, and each threshold shows no
                 selection — a load error sits on the group it belongs to, with Retry. */}
-            <SettingsSection title="Idle terminal notifications" id="general-idle-terminal-notify">
+            {/* One section for everything Daintree does about projects left in the
+                background: remind, close, or stop their processes. Idle-terminal reminders
+                were a section of their own whose only row repeated its heading. */}
+            <SettingsSection
+              title="Background projects"
+              description="What happens to projects you haven't used in a while — the active project is never touched"
+            >
               {sectionErrors.idleNotify && (
                 <SettingsLoadErrorBanner
                   message={sectionErrors.idleNotify}
                   onRetry={() => setConfigRetryNonce((n) => n + 1)}
                 />
               )}
-              <SettingsGroup>
+              {saveFailureBanner("idleNotify")}
+              <SettingsGroup id="general-idle-terminal-notify">
                 <SettingsSwitchCard
                   title="Notify me about idle terminals"
-                  subtitle="A reminder when terminals in background projects go quiet — nothing is closed, and the active project is never flagged"
+                  subtitle="A reminder when terminals in background projects go quiet, offering to close them — nothing closes on its own"
                   isEnabled={idleNotifyConfig?.enabled ?? true}
                   onChange={handleIdleNotifyToggle}
                   disabled={!idleNotifyConfig}
@@ -1266,8 +1257,8 @@ export function GeneralTab({
                 >
                   <SettingsPresetGroup<number>
                     id="general-idle-terminal-threshold"
-                    label="Idle threshold"
-                    description="How long background terminals stay quiet before the reminder, which offers to close them"
+                    label="Remind after"
+                    description="How long background terminals stay quiet before the reminder"
                     options={IDLE_TERMINAL_THRESHOLD_PRESETS}
                     value={idleNotifyConfig?.thresholdMinutes ?? null}
                     onChange={(v) => void handleIdleNotifyThresholdChange(v)}
@@ -1282,20 +1273,13 @@ export function GeneralTab({
                   />
                 </SettingsDependents>
               </SettingsGroup>
-            </SettingsSection>
-            {/* One section for the two ways Daintree frees a background project: closing
-                it outright, or keeping it open with its processes stopped. They were two
-                sections whose only row repeated the heading above it. */}
-            <SettingsSection
-              title="Background projects"
-              description="Free memory and processes from projects you haven't used in a while"
-            >
               {sectionErrors.idleAutoClose && (
                 <SettingsLoadErrorBanner
                   message={sectionErrors.idleAutoClose}
                   onRetry={() => setConfigRetryNonce((n) => n + 1)}
                 />
               )}
+              {saveFailureBanner("idleAutoClose")}
               <SettingsGroup id="general-idle-background-auto-close">
                 <SettingsSwitchCard
                   title="Close idle projects automatically"
@@ -1316,8 +1300,8 @@ export function GeneralTab({
                 >
                   <SettingsPresetGroup<number>
                     id="general-idle-background-threshold"
-                    label="Idle threshold"
-                    description="How long a background project sits idle before it closes — the active project is never touched"
+                    label="Close after"
+                    description="How long a background project sits idle before it closes"
                     options={IDLE_BACKGROUND_THRESHOLD_PRESETS}
                     value={idleAutoCloseConfig?.thresholdMinutes ?? null}
                     onChange={(v) => void handleIdleAutoCloseThresholdChange(v)}
@@ -1342,6 +1326,7 @@ export function GeneralTab({
                   onRetry={() => setConfigRetryNonce((n) => n + 1)}
                 />
               )}
+              {saveFailureBanner("hibernation")}
               <SettingsGroup id="general-hibernation">
                 <SettingsSwitchCard
                   title="Hibernate inactive projects"
@@ -1360,8 +1345,8 @@ export function GeneralTab({
                 >
                   <SettingsPresetGroup<number>
                     id="general-hibernation-threshold"
-                    label="Inactivity threshold"
-                    description="Projects idle longer than this have their processes stopped"
+                    label="Hibernate after"
+                    description="How long a project sits idle before its processes are stopped"
                     options={THRESHOLD_PRESETS}
                     value={hibernationConfig?.inactiveThresholdHours ?? null}
                     onChange={(v) => void handleThresholdChange(v)}
@@ -1388,7 +1373,7 @@ export function GeneralTab({
             <SettingsGroup>
               <SettingsSwitchCard
                 title="Project pulse"
-                subtitle="Show activity heatmap on the empty panel grid"
+                subtitle="Show an activity heatmap on the empty panel grid"
                 isEnabled={showProjectPulse}
                 onChange={() =>
                   void actionService.dispatch(
@@ -1411,7 +1396,7 @@ export function GeneralTab({
               <SettingsSwitchCard
                 id="general-developer-tools"
                 title="Developer tools"
-                subtitle="Show problems panel button in the toolbar"
+                subtitle="Show the Problems button in the toolbar — it appears on its own while file watching is degraded"
                 isEnabled={showDeveloperTools}
                 onChange={() =>
                   void actionService.dispatch(
@@ -1433,7 +1418,7 @@ export function GeneralTab({
               <SettingsSwitchCard
                 id="general-grid-agent-highlights"
                 title="Grid panel agent highlights"
-                subtitle="Show waiting and working state borders on grid panels. Failed state borders are always visible."
+                subtitle="Show waiting and working borders on grid panels — failed borders always show"
                 isEnabled={showGridAgentHighlights}
                 onChange={() =>
                   void actionService.dispatch(
@@ -1455,7 +1440,7 @@ export function GeneralTab({
               <SettingsSwitchCard
                 id="general-dock-agent-highlights"
                 title="Dock item agent highlights"
-                subtitle="Show waiting state borders on dock items. Failed state borders are always visible."
+                subtitle="Show waiting borders on dock items — failed borders always show"
                 isEnabled={showDockAgentHighlights}
                 onChange={() =>
                   void actionService.dispatch(
