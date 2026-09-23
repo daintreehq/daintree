@@ -13,17 +13,15 @@ export function rateLimitMessage(kind: "primary" | "secondary", resumeAt: number
   return `GitHub rate limit exceeded. Resets in ${human}.`;
 }
 
+// Same shape as the toolbar's rate-limit panel (`formatRateLimitCountdown`),
+// so one reset time never reads two ways: `42s`, `14m 05s`, `2h 05m`.
 function formatCountdown(totalSeconds: number): string {
   if (totalSeconds <= 0) return "a moment";
   if (totalSeconds < 60) return `${totalSeconds}s`;
+  const pad2 = (n: number) => String(n).padStart(2, "0");
   const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes < 60) {
-    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
-  }
-  const hours = Math.floor(minutes / 60);
-  const remMinutes = minutes % 60;
-  return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
+  if (minutes < 60) return `${minutes}m ${pad2(totalSeconds % 60)}s`;
+  return `${Math.floor(minutes / 60)}h ${pad2(minutes % 60)}m`;
 }
 
 const TRANSIENT_API_MESSAGE = "GitHub is temporarily unavailable. Please retry.";
