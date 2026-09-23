@@ -10,7 +10,7 @@ import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import {
   STATE_LABELS,
-  STATE_PRIORITY,
+  summarizeSessionStates,
   getEffectiveStateIcon,
   getEffectiveStateColor,
 } from "../terminalStateConfig";
@@ -263,16 +263,22 @@ export function WorktreeTerminalSection({
   );
   const armedIdsSize = useFleetArmingStore((s) => s.armedIds.size);
 
-  const { visibleTerminalStates, terminalSessionAriaLabel } = useMemo(() => {
-    const visible = STATE_PRIORITY.filter((s) => s !== "idle" && counts.byState[s] > 0).map(
-      (s) => ({
-        state: s,
-        count: counts.byState[s],
-      })
+  const { visibleTerminalStates, terminalSessionAriaLabel, collapsedTriggerLabel } = useMemo(() => {
+    const { visibleStates, label, breakdown } = summarizeSessionStates(
+      counts.byState,
+      counts.total
     );
-    const parts = visible.map((v) => `${v.count} ${STATE_LABELS[v.state]}`);
-    const label = `${counts.total} session${counts.total !== 1 ? "s" : ""}: ${parts.join(", ")}`;
-    return { visibleTerminalStates: visible, terminalSessionAriaLabel: label };
+    const plural = counts.total !== 1 ? "s" : "";
+    // The collapsed trigger names itself once. Left to name-from-content it
+    // read "3 active 3 sessions: 2 working, …" — the visible summary, then
+    // the cluster's own name repeating the total. Starts with the visible
+    // "N active" so speech input can still target it by what is on screen.
+    const triggerLabel = `${counts.total} active session${plural}${breakdown ? `: ${breakdown}` : ""}`;
+    return {
+      visibleTerminalStates: visibleStates,
+      terminalSessionAriaLabel: label,
+      collapsedTriggerLabel: triggerLabel,
+    };
   }, [counts.byState, counts.total]);
 
   const SummaryIcon = useMemo(() => {
@@ -594,13 +600,14 @@ export function WorktreeTerminalSection({
           onClick={onToggle}
           aria-expanded={false}
           aria-controls={terminalsPanelId}
+          aria-label={collapsedTriggerLabel}
           className={cn(
             "justify-between transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
             density.row
           )}
           id={`${terminalsId}-button`}
         >
-          <div className="flex items-center gap-1.5 text-2xs text-text-secondary">
+          <span className="flex items-center gap-1.5 text-2xs text-text-secondary">
             <ChevronRight className="h-3 w-3 shrink-0 text-text-secondary" aria-hidden="true" />
             {/* Kept here, unlike the expanded trigger: collapsed, this glyph
                 is the ONLY thing on screen saying which agent is running. The
@@ -615,7 +622,7 @@ export function WorktreeTerminalSection({
               <span className="font-mono tabular-nums">{counts.total}</span>
               <span className="font-sans">active</span>
             </span>
-          </div>
+          </span>
 
           {visibleTerminalStates.length > 0 && (
             <CollapsedSessionIndicators

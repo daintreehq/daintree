@@ -753,3 +753,35 @@ describe("WorktreeTerminalSection drag handle reveal", () => {
     }
   });
 });
+
+describe("WorktreeTerminalSection collapsed trigger name", () => {
+  it("names itself once, starting with the visible summary, and repeats no count", () => {
+    // Left to name-from-content the button read its visible "N active" and then
+    // the nested cluster's own name, which restates the total. It also has to
+    // start with what is on screen, so speech input can target it.
+    const terminals = [
+      makeTerminal({ detectedAgentId: "claude" }),
+      makeTerminal({ detectedAgentId: "claude" }),
+      makeTerminal({ detectedAgentId: "claude" }),
+    ];
+    renderSection({
+      isExpanded: false,
+      terminals,
+      counts: {
+        total: 3,
+        byState: { idle: 0, working: 2, waiting: 1, directing: 0, completed: 0, exited: 0 },
+      },
+    });
+    const button = document.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
+    const name = button.getAttribute("aria-label") ?? "";
+    // The visible words sit in separate flex items, so compare without spaces.
+    const squash = (text: string) => text.replace(/\s+/g, "");
+    const visible = squash(button.querySelector("span")!.textContent ?? "");
+    expect(visible.length).toBeGreaterThan(0);
+    expect(squash(name).startsWith(visible)).toBe(true);
+    expect(name.match(/\b3\b/g) ?? []).toHaveLength(1);
+    expect(name).toContain("2 working");
+    expect(name).toContain("1 waiting");
+    expect(button.querySelector("div")).toBeNull();
+  });
+});
