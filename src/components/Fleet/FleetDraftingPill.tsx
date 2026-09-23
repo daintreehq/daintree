@@ -93,7 +93,7 @@ export function FleetDraftingPill(): ReactElement | null {
               <span
                 data-testid="fleet-drafting-pill-divergence-dot"
                 aria-label={`${overridesCount + skippedCount} per-target edit${overridesCount + skippedCount === 1 ? "" : "s"} pending`}
-                className="tabular-nums"
+                className="min-w-0 truncate tabular-nums"
               >
                 {[
                   overridesCount > 0 ? `${overridesCount} edited` : null,

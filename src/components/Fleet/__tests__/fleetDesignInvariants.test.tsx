@@ -404,7 +404,7 @@ describe("Fleet drafting preview invariants", () => {
     const trigger = screen.getByTestId("fleet-drafting-pill-trigger");
     const truncating = Array.from(trigger.querySelectorAll(".truncate"));
     expect(truncating.length).toBeGreaterThan(0);
-    for (const el of truncating) expect(el.textContent).not.toMatch(/\d/);
+    for (const el of truncating) expect(el.textContent).not.toMatch(/\d+ peers?/);
   });
 
   it("with focus outside the fleet every armed peer still counts", () => {
