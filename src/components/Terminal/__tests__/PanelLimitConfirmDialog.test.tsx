@@ -131,7 +131,7 @@ describe("PanelLimitConfirmDialog", () => {
     render(<PanelLimitConfirmDialog />);
     const { result } = await startBatch(18, 4);
 
-    fireEvent.click(screen.getByRole("button", { name: /change limits/i }));
+    fireEvent.click(screen.getByRole("button", { name: /change your panel limits/i }));
 
     expect(await result).toEqual({ allowed: 0, declined: true });
     expect(mocks.dispatch).toHaveBeenCalledTimes(1);

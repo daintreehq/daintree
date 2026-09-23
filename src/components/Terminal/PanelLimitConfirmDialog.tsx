@@ -109,16 +109,21 @@ export function PanelLimitConfirmDialog() {
         cancelLabel="Cancel"
         onConfirm={() => resolveConfirmation(true)}
         variant="default"
-        hint={
+      >
+        {/* In the body, not the footer hint: every other dialog keeps that slot
+            for status text, and this link is a second way to answer. */}
+        <p className="text-xs text-text-secondary">
+          To be asked less often,{" "}
           <button
             type="button"
             onClick={changeLimits}
-            className="min-w-0 truncate rounded-sm text-xs text-text-secondary underline underline-offset-2 transition-colors hover:text-text-primary outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+            className="rounded-sm underline underline-offset-2 transition-colors hover:text-text-primary outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
           >
-            Cancel and change limits
+            cancel and change your panel limits
           </button>
-        }
-      />
+          .
+        </p>
+      </ConfirmDialog>
     </ErrorBoundary>
   );
 }
