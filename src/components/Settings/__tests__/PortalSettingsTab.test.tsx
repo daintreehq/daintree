@@ -2,6 +2,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PortalLink } from "@shared/types/portal";
+import { DEFAULT_SYSTEM_LINKS } from "@shared/types";
 
 const dispatch = vi.fn();
 vi.mock("@/services/ActionService", () => ({
@@ -194,5 +195,76 @@ describe("PortalSettingsTab custom new-tab URL", () => {
       target: { value: "https://intranet.example.com/home" },
     });
     expect(save().disabled).toBe(false);
+  });
+});
+
+describe("PortalSettingsTab while a save is in flight", () => {
+  it("won't open a second editor, or close the first, until the save answers", async () => {
+    const other: PortalLink = { ...DOCS, id: "wiki", title: "Wiki", order: 1 };
+    portal.links = [DOCS, other];
+    let answer: (value: unknown) => void = () => {};
+    renderTab();
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]!);
+    fireEvent.change(screen.getByRole("textbox", { name: "Link name" }), {
+      target: { value: "Handbook" },
+    });
+    dispatch.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+
+    const otherEdit = screen.getByRole("button", { name: "Edit" }) as HTMLButtonElement;
+    expect(otherEdit.disabled).toBe(true);
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Link name" }), { key: "Escape" });
+    expect(screen.getByRole("textbox", { name: "Link name" })).toBeTruthy();
+
+    await act(async () => answer({ ok: true, result: undefined }));
+  });
+});
+
+describe("PortalSettingsTab built-in links", () => {
+  it("marks a changed built-in link and restores what shipped", () => {
+    const shipped = DEFAULT_SYSTEM_LINKS[0]!;
+    portal.links = [{ ...shipped, url: "https://example.com/elsewhere" }];
+    renderTab();
+
+    fireEvent.click(screen.getByRole("button", { name: `Reset ${shipped.title} to its default` }));
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "portal.links.update",
+      {
+        id: shipped.id,
+        updates: { title: shipped.title, url: shipped.url, enabled: shipped.enabled },
+      },
+      { source: "user" }
+    );
+  });
+
+  it("offers no reset for a built-in link that matches what shipped", () => {
+    const shipped = DEFAULT_SYSTEM_LINKS[0]!;
+    portal.links = [{ ...shipped }];
+    renderTab();
+    expect(
+      screen.queryByRole("button", { name: `Reset ${shipped.title} to its default` })
+    ).toBeNull();
+  });
+});
+
+describe("PortalSettingsTab custom new-tab URL failure", () => {
+  it("reports a failed write as a form problem and announces it", async () => {
+    renderTab();
+    fireEvent.change(screen.getByRole("combobox", { name: "New tabs open" }), {
+      target: { value: "custom" },
+    });
+    const url = screen.getByRole("textbox", { name: "Custom URL" });
+    fireEvent.change(url, { target: { value: "https://intranet.example.com" } });
+    dispatch.mockResolvedValue({ ok: false, error: { message: "store unavailable" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+
+    expect(url.getAttribute("aria-invalid")).toBeNull();
+    expect(describedText(url)).not.toBe("");
+    expect(screen.getByRole("status").textContent).not.toBe("");
   });
 });

@@ -228,7 +228,7 @@ export function WorktreeSettingsTab() {
             // Measured against the field, not the saved value: reset fills in the
             // default and the explicit Save below still commits it.
             isModified={!unavailable && pattern !== DEFAULT_WORKTREE_PATH_PATTERN}
-            onReset={() => editPattern(DEFAULT_WORKTREE_PATH_PATTERN)}
+            onReset={isSaving ? undefined : () => editPattern(DEFAULT_WORKTREE_PATH_PATTERN)}
             resetAriaLabel="Reset path pattern to default"
             control={({ labelId, disabled }) => (
               <div className="grid gap-2">

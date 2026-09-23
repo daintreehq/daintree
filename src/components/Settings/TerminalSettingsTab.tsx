@@ -174,6 +174,10 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const cachedProjectViews = useCachedProjectViewsStore((s) => s.cachedProjectViews);
 
   const [hardwareInfo, setHardwareInfo] = useState<HardwareInfo | null>(null);
+  // What the user is typing into the threshold while it is out of range. The
+  // store keeps the value in effect; the field shows the draft and says why it
+  // isn't applied, and leaving the field puts the effective value back.
+  const [thresholdDraft, setThresholdDraft] = useState<string | null>(null);
 
   useEffect(() => {
     void initializeFromHardware();
@@ -425,23 +429,26 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                     max={32768}
                     step={1024}
                     suffix="MB"
-                    value={autoRestartThresholdMb}
+                    value={thresholdDraft ?? autoRestartThresholdMb}
+                    error={
+                      thresholdDraft !== null ? "Enter a value from 1,024 to 32,768 MB" : undefined
+                    }
+                    onBlur={() => setThresholdDraft(null)}
                     isModified={autoRestartThresholdMb !== DEFAULT_AUTO_RESTART_THRESHOLD_MB}
-                    onReset={() =>
+                    onReset={() => {
+                      setThresholdDraft(null);
                       saveAutoRestartThreshold(
                         DEFAULT_AUTO_RESTART_THRESHOLD_MB,
                         autoRestartThresholdMb
-                      )
-                    }
+                      );
+                    }}
                     onChange={(e) => {
                       const val = parseInt(e.target.value, 10);
-                      if (!isNaN(val)) {
-                        const previous = autoRestartThresholdMb;
-                        if (val >= 1024 && val <= 32768) {
-                          saveAutoRestartThreshold(val, previous);
-                        } else {
-                          setAutoRestartThresholdMb(val);
-                        }
+                      if (!isNaN(val) && val >= 1024 && val <= 32768) {
+                        setThresholdDraft(null);
+                        saveAutoRestartThreshold(val, autoRestartThresholdMb);
+                      } else {
+                        setThresholdDraft(e.target.value);
                       }
                     }}
                   />
@@ -651,7 +658,10 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                           disabled={disabled}
                         />
                         <span
-                          className="text-xs text-text-secondary font-mono w-12 text-right"
+                          className={cn(
+                            "text-xs text-text-secondary font-mono w-12 text-right",
+                            disabled && "opacity-50"
+                          )}
                           aria-hidden="true"
                         >
                           {Math.round(twoPaneSplitConfig.defaultRatio * 100)}/

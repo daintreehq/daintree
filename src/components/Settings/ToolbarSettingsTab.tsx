@@ -143,6 +143,7 @@ function ToolbarButtonMoveMenu({
           className={cn(
             "flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)]",
             "text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors",
+            "data-[state=open]:bg-overlay-soft data-[state=open]:text-text-primary",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
           )}
         >
@@ -274,6 +275,7 @@ interface TrayButtonRowProps {
   metadata: ToolbarButtonMetadata | undefined;
   /** Off where every description would only restate the label ("Launch Claude AI agent"). */
   showDescription?: boolean;
+  switchId?: string;
 }
 
 // Tray-backed buttons toggle promotion, not visibility — they always remain
@@ -289,6 +291,7 @@ function TrayButtonRow({
   onToggle,
   metadata,
   showDescription = true,
+  switchId,
 }: TrayButtonRowProps) {
   if (!metadata) return null;
   const Icon = metadata.icon;
@@ -306,6 +309,7 @@ function TrayButtonRow({
       onRowClick={() => onToggle(buttonId)}
       control={({ descriptionId }) => (
         <SettingsSwitch
+          id={switchId}
           checked={isVisible}
           onCheckedChange={() => onToggle(buttonId)}
           aria-label={`Show ${metadata.label} in toolbar`}
@@ -378,6 +382,10 @@ function ToolbarSideColumn({
   );
 }
 
+function launcherItemSwitchId(id: AnyToolbarButtonId): string {
+  return `toolbar-launcher-item-${id}`;
+}
+
 // Radix Select reserves the empty string for "no value", so "no default" needs its own token.
 const NO_DEFAULT_SELECTION = "none";
 
@@ -416,22 +424,21 @@ export function ToolbarSettingsTab() {
   const [touchedAgents, setTouchedAgents] = useState<ReadonlySet<AnyToolbarButtonId>>(
     () => new Set()
   );
-  // A move across sides remounts the row under the other column; focus follows
-  // it to its new menu button instead of falling to the page.
-  const [focusMovedButton, setFocusMovedButton] = useState<AnyToolbarButtonId | null>(null);
+  // Where focus goes once a change unmounts the control that had it: a move
+  // across sides remounts the row under the other column, and unpinning a
+  // launcher item removes its row. Focus follows instead of falling to the page.
+  const [focusTarget, setFocusTarget] = useState<string | null>(null);
 
   useEffect(() => {
-    if (focusMovedButton === null) return;
-    // After the menu's own close, which tries to restore focus to the trigger
+    if (focusTarget === null) return;
+    // After the menu's own close, which tries to restore focus to a trigger
     // that no longer exists.
     const frame = requestAnimationFrame(() => {
-      document
-        .querySelector<HTMLElement>(`[data-move-trigger="${window.CSS.escape(focusMovedButton)}"]`)
-        ?.focus();
-      setFocusMovedButton(null);
+      document.querySelector<HTMLElement>(focusTarget)?.focus();
+      setFocusTarget(null);
     });
     return () => cancelAnimationFrame(frame);
-  }, [focusMovedButton]);
+  }, [focusTarget]);
   const agentListId = useId();
 
   const liveRight = dragState?.right ?? layout.rightButtons;
@@ -794,7 +801,7 @@ export function ToolbarSettingsTab() {
       onMoveDown: stepTo(1),
       acrossLabel: side === "left" ? "Move to right side" : "Move to left side",
       onMoveAcross: () => {
-        setFocusMovedButton(buttonId);
+        setFocusTarget(`[data-move-trigger="${window.CSS.escape(buttonId)}"]`);
         if (side === "left") {
           moveButton(buttonId, "left", "right", layout.rightButtons.length);
           return;
@@ -976,12 +983,24 @@ export function ToolbarSettingsTab() {
           description={`Recipes, plugin agents and panels you pinned in the launcher. ${launcherItemRows.length} pinned.`}
         >
           <SettingsGroup>
-            {launcherItemRows.map((row) => (
+            {launcherItemRows.map((row, index) => (
               <TrayButtonRow
                 key={row.id}
                 buttonId={row.id}
+                switchId={launcherItemSwitchId(row.id)}
                 isVisible={isLauncherItemOn(row.id)}
-                onToggle={(id) => handleToggle(id, "left")}
+                onToggle={(id) => {
+                  // Unpinning drops the row (repinning belongs to the launcher),
+                  // so hand focus to the next row, the previous, or the section
+                  // below once this one was the last.
+                  const neighbour = launcherItemRows[index + 1] ?? launcherItemRows[index - 1];
+                  setFocusTarget(
+                    neighbour
+                      ? `#${window.CSS.escape(launcherItemSwitchId(neighbour.id))}`
+                      : '#toolbar-launcher [role="switch"]'
+                  );
+                  handleToggle(id, "left");
+                }}
                 metadata={row.metadata}
               />
             ))}

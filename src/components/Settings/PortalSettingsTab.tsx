@@ -8,6 +8,7 @@ import { actionService } from "@/services/ActionService";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DEFAULT_SYSTEM_LINKS } from "@shared/types";
 import { SettingsActions, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
@@ -109,7 +110,10 @@ export function PortalSettingsTab() {
   const [returnFocusTo, setReturnFocusTo] = useState<string | null>(null);
   const [showCustomUrlInput, setShowCustomUrlInput] = useState(false);
   const [customDefaultUrl, setCustomDefaultUrl] = useState("");
-  const [customUrlError, setCustomUrlError] = useState("");
+  const [customUrlError, setCustomUrlError] = useState<LinkError | null>(null);
+  // Async results arrive after focus has moved on; a polite region reads them
+  // out without taking focus back.
+  const [announcement, setAnnouncement] = useState("");
   const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null);
   const customUrlErrorId = useId();
   const addLinkErrorId = useId();
@@ -164,15 +168,18 @@ export function PortalSettingsTab() {
     setPending(null);
     if (!result.ok) {
       setAddError({ field: "form", message: "Couldn't add the link. Try again." });
+      setAnnouncement("Couldn't add the link. Try again.");
       return;
     }
 
+    setAnnouncement(`Added ${newLinkName.trim()}`);
     setNewLinkName("");
     setNewLinkUrl("");
     setAddError(null);
   };
 
   const handleStartEdit = (id: string, title: string, url: string) => {
+    if (pendingRef.current) return;
     setEditingLinkId(id);
     setEditName(title);
     setEditUrl(url);
@@ -180,6 +187,7 @@ export function PortalSettingsTab() {
   };
 
   const closeEditor = () => {
+    if (pendingRef.current) return;
     setReturnFocusTo(editingLinkId);
     setEditingLinkId(null);
     setEditName("");
@@ -205,8 +213,10 @@ export function PortalSettingsTab() {
     setPending(null);
     if (!result.ok) {
       setEditError({ field: "form", message: "Couldn't save the link. Try again." });
+      setAnnouncement("Couldn't save the link. Try again.");
       return;
     }
+    setAnnouncement(`Saved ${editName.trim()}`);
     closeEditor();
   };
 
@@ -216,11 +226,12 @@ export function PortalSettingsTab() {
     defaultNewTabUrl !== null && !enabledLinks.some((l) => l.url === defaultNewTabUrl);
 
   const handleDefaultAgentChange = (value: string) => {
+    if (pendingRef.current) return;
     if (value === "none") {
       void actionService.dispatch("portal.setDefaultNewTab", { url: null }, { source: "user" });
       setShowCustomUrlInput(false);
       setCustomDefaultUrl("");
-      setCustomUrlError("");
+      setCustomUrlError(null);
     } else if (value === "custom") {
       setShowCustomUrlInput(true);
       if (isCustomUrl && defaultNewTabUrl) {
@@ -230,7 +241,7 @@ export function PortalSettingsTab() {
       void actionService.dispatch("portal.setDefaultNewTab", { url: value }, { source: "user" });
       setShowCustomUrlInput(false);
       setCustomDefaultUrl("");
-      setCustomUrlError("");
+      setCustomUrlError(null);
     }
   };
 
@@ -240,12 +251,12 @@ export function PortalSettingsTab() {
   const handleCustomUrlSave = async () => {
     if (pendingRef.current || customDefaultUrl === defaultNewTabUrl) return;
     if (!customDefaultUrl.trim()) {
-      setCustomUrlError("URL is required");
+      setCustomUrlError({ field: "url", message: "Enter a URL" });
       return;
     }
     const problem = validateUrl(customDefaultUrl);
     if (problem) {
-      setCustomUrlError(problem);
+      setCustomUrlError({ field: "url", message: problem });
       return;
     }
     setPending("custom");
@@ -256,19 +267,22 @@ export function PortalSettingsTab() {
     );
     setPending(null);
     if (!result.ok) {
-      setCustomUrlError("Couldn't save the URL. Try again.");
+      setCustomUrlError({ field: "form", message: "Couldn't save the URL. Try again." });
+      setAnnouncement("Couldn't save the URL. Try again.");
       return;
     }
+    setAnnouncement("New tabs will open the custom URL");
     setShowCustomUrlInput(false);
     setCustomDefaultUrl("");
-    setCustomUrlError("");
+    setCustomUrlError(null);
     setFocusNewTabSelect(true);
   };
 
   const handleCustomUrlCancel = () => {
+    if (pendingRef.current) return;
     setShowCustomUrlInput(false);
     setCustomDefaultUrl("");
-    setCustomUrlError("");
+    setCustomUrlError(null);
     setFocusNewTabSelect(true);
   };
 
@@ -336,7 +350,7 @@ export function PortalSettingsTab() {
                   variant="ghost-danger"
                   size="sm"
                   onClick={() => setPendingRemoveId(link.id)}
-                  disabled={link.alwaysEnabled}
+                  disabled={link.alwaysEnabled || pending !== null}
                 >
                   Remove link
                 </Button>
@@ -366,9 +380,33 @@ export function PortalSettingsTab() {
       );
     }
 
+    // A built-in link the user renamed, re-pointed or turned off is a departure
+    // from what shipped, and gets the same bar and reset as any other setting.
+    const shipped = allowDelete ? undefined : DEFAULT_SYSTEM_LINKS.find((d) => d.id === link.id);
+    const isModified =
+      !!shipped &&
+      (shipped.title !== link.title ||
+        shipped.url !== link.url ||
+        shipped.enabled !== link.enabled);
+
     return (
       <SettingsRow
         key={link.id}
+        isModified={isModified}
+        onReset={
+          shipped
+            ? () =>
+                void actionService.dispatch(
+                  "portal.links.update",
+                  {
+                    id: link.id,
+                    updates: { title: shipped.title, url: shipped.url, enabled: shipped.enabled },
+                  },
+                  { source: "user" }
+                )
+            : undefined
+        }
+        resetAriaLabel={`Reset ${shipped?.title ?? link.title} to its default`}
         label={
           <span className="flex items-center gap-2">
             {allowDelete ? <FaviconIcon url={link.url} /> : <ServiceIcon name={link.icon} />}
@@ -391,6 +429,7 @@ export function PortalSettingsTab() {
               variant="outline"
               size="sm"
               onClick={() => handleStartEdit(link.id, link.title, link.url)}
+              disabled={pending !== null}
               aria-describedby={labelId}
               data-portal-edit={link.id}
             >
@@ -433,6 +472,9 @@ export function PortalSettingsTab() {
 
   return (
     <div className="space-y-8">
+      <div role="status" aria-live="polite" className="sr-only">
+        {announcement}
+      </div>
       <ConfirmDialog
         isOpen={pendingRemoveId !== null}
         variant="destructive"
@@ -483,7 +525,9 @@ export function PortalSettingsTab() {
                 layout="stacked"
                 label="Custom URL"
                 error={
-                  customUrlError ? <span id={customUrlErrorId}>{customUrlError}</span> : undefined
+                  customUrlError ? (
+                    <span id={customUrlErrorId}>{customUrlError.message}</span>
+                  ) : undefined
                 }
                 control={({ labelId }) => (
                   <Input
@@ -493,7 +537,7 @@ export function PortalSettingsTab() {
                     readOnly={pending === "custom"}
                     onChange={(e) => {
                       setCustomDefaultUrl(e.target.value);
-                      setCustomUrlError("");
+                      setCustomUrlError(null);
                     }}
                     className="min-w-0 font-mono"
                     onKeyDown={(e) => {
@@ -501,8 +545,8 @@ export function PortalSettingsTab() {
                       if (e.key === "Escape") handleCustomUrlCancel();
                     }}
                     aria-labelledby={labelId}
-                    invalid={!!customUrlError}
-                    aria-invalid={!!customUrlError || undefined}
+                    invalid={customUrlError?.field === "url"}
+                    aria-invalid={customUrlError?.field === "url" || undefined}
                     aria-describedby={customUrlError ? customUrlErrorId : undefined}
                     autoFocus
                   />

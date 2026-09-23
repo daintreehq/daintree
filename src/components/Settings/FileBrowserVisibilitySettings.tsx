@@ -53,25 +53,32 @@ export function FileBrowserVisibilitySettings() {
 
   const isModified = !sameList(patterns, DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN);
 
+  // A refusal from the Add button leaves focus on the button; move it to the
+  // field the message describes, so the message is read and the fix is one step.
+  const refuse = (message: string) => {
+    setError(message);
+    inputRef.current?.focus();
+  };
+
   const commitAdd = () => {
     const trimmed = draft.trim();
     if (trimmed === "") return;
     if (trimmed.includes("/") || trimmed.includes("\\")) {
-      setError("Match by name only — no slashes");
+      refuse("Match by name only — no slashes");
       return;
     }
     if (trimmed.length > MAX_ALWAYS_HIDDEN_PATTERN_LENGTH) {
-      setError("That pattern is too long");
+      refuse("That pattern is too long");
       return;
     }
     if (patterns.includes(trimmed)) {
-      setError("Already in the list");
+      refuse("Already in the list");
       return;
     }
     // Reject at the cap rather than let the sanitizer silently drop the add
     // while the input clears as though it saved. Keep the draft so it isn't lost.
     if (patterns.length >= MAX_ALWAYS_HIDDEN_PATTERNS) {
-      setError("List is full — remove one first");
+      refuse("List is full — remove one first");
       return;
     }
     // The store re-sanitizes, so this stays the single source of truth for the
