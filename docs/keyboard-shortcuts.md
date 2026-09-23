@@ -15,9 +15,10 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
-| Open Quick Switcher | `⌘+P` | `Ctrl+P` |
+| Open quick switcher | `⌘+P` | `Ctrl+P` |
 | Focus next region | `F6` | `F6` |
 | Focus previous region | `⇧+F6` | `Shift+F6` |
+| Open quick switcher | `⌘+⇧+A` | `Ctrl+Shift+A` |
 | Open command palette | `⌘+⇧+P` | `Ctrl+Shift+P` |
 | Repeat last action | `⌘+⇧+.` | `Ctrl+Shift+.` |
 | Toggle sidebar | `⌘+B` | `Ctrl+B` |
@@ -79,7 +80,6 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
-| Open quick switcher | `⌘+⇧+A` | `Ctrl+Shift+A` |
 | Launch Claude Code agent | `⌘+⌥+C` | `Ctrl+Alt+C` |
 | Launch Gemini agent | `⌘+⌥+G` | `Ctrl+Alt+G` |
 | Launch Codex agent | `⌘+⌥+X` | `Ctrl+Alt+X` |

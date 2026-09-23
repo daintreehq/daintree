@@ -19,7 +19,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+P",
     scope: "global",
     priority: 0,
-    description: "Open Quick Switcher",
+    description: "Open quick switcher",
     category: "Navigation",
   },
   {
@@ -300,7 +300,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Open quick switcher",
-    category: "Agents",
+    category: "Navigation",
   },
   {
     actionId: "agent.claude",
