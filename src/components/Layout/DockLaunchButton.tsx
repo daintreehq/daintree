@@ -17,9 +17,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { useDockLaunchPointerSelection } from "./useDockLaunchPointerSelection";
+import { headingBand, layoutLauncherColumns } from "./launcherColumnLayout";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { KbdChord } from "@/components/ui/Kbd";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { BrandMark, Workflow } from "@/components/icons";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
@@ -73,7 +75,6 @@ import {
   type DockLaunchCueId,
   type DockLaunchInventoryState,
   type DockLaunchItem,
-  type DockLaunchBandId,
   type DockLaunchRow,
 } from "./dockLaunchItems";
 import { unavailableAgentHint } from "@/utils/agentAvailabilityCopy";
@@ -417,7 +418,30 @@ export function DockLaunchButton({
   //
   // Arranged first, so the column a band is drawn in and its place in the
   // navigation order are one decision rather than two that can drift.
-  const arranged = useMemo(() => arrangeBrowseRows(model.browseRows), [model.browseRows]);
+  //
+  // Whether two columns actually fit is measured, not guessed from the window:
+  // the popover is capped at the window width, and balancing a list into a
+  // second column that has folded under the first only splits the agents.
+  const [layoutNode, setLayoutNode] = useState<HTMLDivElement | null>(null);
+  const activeDescendantRef = useRef<string | undefined>(undefined);
+  const [twoColumns, setTwoColumns] = useState(true);
+  useEffect(() => {
+    if (!layoutNode || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return;
+      setTwoColumns(entry.contentRect.width >= TWO_COLUMN_MIN_WIDTH);
+      // A shorter window shrinks the scroller without moving the selection, so
+      // nothing else would notice it has slid out of view.
+      const id = activeDescendantRef.current;
+      if (id) document.getElementById(id)?.scrollIntoView({ block: "nearest" });
+    });
+    observer.observe(layoutNode);
+    return () => observer.disconnect();
+  }, [layoutNode]);
+  const arranged = useMemo(
+    () => layoutLauncherColumns(model.browseRows, twoColumns),
+    [model.browseRows, twoColumns]
+  );
   const browseRows = useMemo(
     () => insertExpandedPresetRows(arranged.rows, expandedPresetParentKey),
     [arranged.rows, expandedPresetParentKey]
@@ -563,6 +587,20 @@ export function DockLaunchButton({
     document.getElementById(activeDescendant)?.scrollIntoView({ block: "nearest" });
   }, [activeDescendant]);
 
+  // Folding to one column (or back) moves rows without changing which one is
+  // selected, so the effect above would not run and the selection could sit
+  // offscreen with Enter still acting on it. Bring it back into view.
+  useEffect(() => {
+    activeDescendantRef.current = activeDescendant;
+  }, [activeDescendant]);
+  const lastColumnModeRef = useRef(twoColumns);
+  useEffect(() => {
+    if (lastColumnModeRef.current === twoColumns) return;
+    lastColumnModeRef.current = twoColumns;
+    if (!activeDescendant) return;
+    document.getElementById(activeDescendant)?.scrollIntoView({ block: "nearest" });
+  }, [twoColumns, activeDescendant]);
+
   // Single close path. Radix only calls onOpenChange for closes it initiates, so
   // the Enter-to-launch path (which sets `open` directly) would otherwise skip
   // the query reset and reopen still filtered.
@@ -657,28 +695,16 @@ export function DockLaunchButton({
       activateDockLaunchItem(
         item,
         { cwd, activeWorktreeId, recipeContext, onLaunchAgent: launchAgent, source: "menu" },
-        // A preset child always launches its own preset. What a PARENT row means
-        // is the one thing placement decides, because the two hosts disagreed
-        // before one component served both:
-        //
-        //   toolbar — explicit Default (`null`), which also clears the saved
-        //     preset. That is what the split trigger's left half did, and the
-        //     behaviour #11691 named as having to come across.
-        //   dock — inherit the saved preset (`undefined`). The dock never
-        //     offered presets at all, so its rows launched whatever was saved,
-        //     and making a plain click silently reset that would be a
-        //     regression nobody asked for.
-        //
-        // Explicit Default stays one keystroke away in the dock — it is the
-        // first row of the expansion.
-        row.kind === "preset"
-          ? row.preset.presetId
-          : placement === "toolbar" && rowHasPresets(row)
-            ? null
-            : undefined
+        // A preset child launches its own preset; a parent row inherits the
+        // saved one (`undefined`) in both placements. That is what the toolbar's
+        // own agent button does on a plain click, so the launcher now agrees
+        // with it and with the dock instead of launching Default and silently
+        // clearing the saved choice from one of the two. Explicit Default is
+        // one keystroke away — the first row of the expansion.
+        row.kind === "preset" ? row.preset.presetId : undefined
       );
     },
-    [activeWorktreeId, closeLauncher, cwd, launchAgent, placement, recipeContext]
+    [activeWorktreeId, closeLauncher, cwd, launchAgent, recipeContext]
   );
 
   // The recorder took DOM focus; typing has to land back in the search box.
@@ -856,7 +882,7 @@ export function DockLaunchButton({
   // it in order, so ArrowDown reads down the agents, then down the panels and
   // recipes, then along the footer — the same order the eye reads them in.
   const isBrowsing = results.length > 0 && results[0]!.band !== "results";
-  const columns = splitIntoColumns(results, arranged.recipesWithAgents);
+  const columns = splitIntoColumns(results, arranged.columnOf);
 
   const renderRow = ({ row, index }: { row: DockLaunchRow; index: number }) => (
     // The band heading is a sibling of the row, not a child of it. It used to
@@ -864,7 +890,8 @@ export function DockLaunchButton({
     // component that replaces the option outright — rendered no heading, and
     // recording a shortcut on the first agent silently deleted the heading.
     <Fragment key={row.rowKey}>
-      {shouldShowBandLabel(results, index) && (
+      {(shouldShowBandLabel(results, index) ||
+        (isBrowsing && arranged.continuedKeys.has(row.rowKey))) && (
         <div
           // Decorative inside the listbox — the band is conveyed by the row's
           // own accessible name, and an extra child would break option counting.
@@ -1030,6 +1057,8 @@ export function DockLaunchButton({
             // would leave the combobox describing a popup that isn't there.
             aria-expanded={results.length > 0}
             aria-haspopup="listbox"
+            // The list filters as the query is typed.
+            aria-autocomplete="list"
             aria-label="Search agents, panels, and recipes"
             aria-controls={results.length > 0 ? listboxId : undefined}
             aria-activedescendant={activeDescendant}
@@ -1043,6 +1072,10 @@ export function DockLaunchButton({
           // side, less the header, rather than the centred dialog's 60vh — which
           // clipped the footer in a short window with space still below it.
           maxHeight="max-h-[min(40rem,calc(var(--radix-popover-content-available-height)-5.5rem))]"
+          // Browse gives the scrolling to the columns alone, so the footer
+          // below them is laid out rather than estimated: the body stops
+          // scrolling and hands its remaining height down a flex chain.
+          scrollClassName={isBrowsing ? "p-2 flex min-h-0 flex-col overflow-hidden" : undefined}
           ariaLabel="Launcher results"
           activeDescendant={activeDescendant}
           onNavigationKeyDown={handleNavigationKeyDown}
@@ -1061,32 +1094,41 @@ export function DockLaunchButton({
           {results.length === 0 ? (
             <AppPaletteDialog.Empty query={query} emptyMessage="Nothing to launch" />
           ) : (
-            // The container, not the viewport, decides whether the columns fit:
-            // the popover is capped at the window width minus its gutters.
-            <div className="@container">
+            <div ref={setLayoutNode} className={cn(isBrowsing && "flex min-h-0 flex-1 flex-col")}>
               <div
                 id={listboxId}
                 role="listbox"
                 aria-label="Launcher results"
                 data-launcher-layout={isBrowsing ? "columns" : "list"}
-                className={cn(
-                  isBrowsing &&
-                    "grid gap-x-3 @min-[560px]:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]"
-                )}
+                className={cn(isBrowsing && "flex min-h-0 flex-1 flex-col")}
               >
                 {isBrowsing ? (
                   <>
-                    <div role="none" data-launcher-column="agents" className="min-w-0">
-                      {columns.agents.map(renderRow)}
-                    </div>
-                    <div role="none" data-launcher-column="launch" className="min-w-0">
-                      {columns.launch.map(renderRow)}
-                    </div>
+                    {/* The columns scroll; the footer below them does not, so
+                        Manage agents and Customize toolbar stay in view however
+                        long the agent list is. The columns take
+                        whatever height the body has left after the footer. */}
+                    <ScrollShadow role="none" className="min-h-0 flex-1">
+                      <div
+                        role="none"
+                        className={cn(
+                          "grid gap-x-3",
+                          twoColumns && "grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]"
+                        )}
+                      >
+                        <div role="none" data-launcher-column="start" className="min-w-0">
+                          {columns.start.map(renderRow)}
+                        </div>
+                        <div role="none" data-launcher-column="end" className="min-w-0">
+                          {columns.end.map(renderRow)}
+                        </div>
+                      </div>
+                    </ScrollShadow>
                     {columns.footer.length > 0 && (
                       <div
                         role="none"
                         data-launcher-column="footer"
-                        className="col-span-full mt-1 flex flex-wrap gap-1 border-t border-divider pt-1"
+                        className="mt-1 flex shrink-0 flex-wrap gap-1 border-t border-divider pt-1"
                       >
                         {columns.footer.map(renderRow)}
                       </div>
@@ -1104,83 +1146,38 @@ export function DockLaunchButton({
   );
 }
 
-/** Every agent band renders under the one "Agents" heading. */
-const AGENT_BANDS: ReadonlySet<DockLaunchBandId> = new Set([
-  "recent",
-  "pinned",
-  "other",
-  "agents",
-  "needs-setup",
-  "available-agents",
-  "presets",
-]);
-
-/**
- * The band whose label heads this row. Recency, pinning and setup are row
- * state now — a trailing "Recent" or "Setup", a lit pin — so every agent band
- * shares one heading instead of each spending a full-width label on one to
- * four rows.
- */
-function headingBand(band: DockLaunchBandId): DockLaunchBandId {
-  return AGENT_BANDS.has(band) && band !== "presets" ? "agents" : band;
-}
+/** Content width below which the two columns fold into one. */
+const TWO_COLUMN_MIN_WIDTH = 560;
 
 interface IndexedRow {
   row: DockLaunchRow;
   index: number;
 }
 
-/**
- * Which column the recipes join. With the usual inventory the agents are the
- * long column and recipes follow the panels. With fewer agents than panels that
- * leaves the agent column mostly empty beside an overflowing one, so recipes
- * move under the agents instead. Decided from the inventory alone — never from
- * a query or an expansion — so the layout cannot rebalance under the pointer.
- * The rows are reordered to match, because the flat order is the navigation
- * order and it has to read down each column in turn.
- */
-function arrangeBrowseRows(rows: ReadonlyArray<DockLaunchRow>): {
-  rows: DockLaunchRow[];
-  recipesWithAgents: boolean;
-} {
-  const agentCount = rows.filter((row) => AGENT_BANDS.has(row.band)).length;
-  const panelCount = rows.filter(
-    (row) => row.band === "dock-panels" || row.band === "grid-panels"
-  ).length;
-  if (agentCount >= panelCount) return { rows: [...rows], recipesWithAgents: false };
-  const byGroup = (test: (row: DockLaunchRow) => boolean) => rows.filter(test);
-  return {
-    rows: [
-      ...byGroup((row) => AGENT_BANDS.has(row.band)),
-      ...byGroup((row) => row.band === "recipes"),
-      ...byGroup(
-        (row) => !AGENT_BANDS.has(row.band) && row.band !== "recipes" && row.band !== "actions"
-      ),
-      ...byGroup((row) => row.band === "actions"),
-    ],
-    recipesWithAgents: true,
-  };
-}
-
-/** Cut the browse rows into the agent column, the launch column and the footer. */
+/** Cut the arranged rows into the two columns and the footer. */
 function splitIntoColumns(
   rows: ReadonlyArray<DockLaunchRow>,
-  recipesWithAgents: boolean
-): {
-  agents: IndexedRow[];
-  launch: IndexedRow[];
-  footer: IndexedRow[];
-} {
-  const agents: IndexedRow[] = [];
-  const launch: IndexedRow[] = [];
+  columnOf: ReadonlyMap<string, 0 | 1>
+): { start: IndexedRow[]; end: IndexedRow[]; footer: IndexedRow[] } {
+  const start: IndexedRow[] = [];
+  const end: IndexedRow[] = [];
   const footer: IndexedRow[] = [];
+  let previous: IndexedRow[] = start;
   rows.forEach((row, index) => {
-    if (row.band === "actions") footer.push({ row, index });
-    else if (AGENT_BANDS.has(row.band) || (recipesWithAgents && row.band === "recipes"))
-      agents.push({ row, index });
-    else launch.push({ row, index });
+    // An expanded agent's presets sit in whichever column their parent does,
+    // and in search every row is in the one list.
+    const column =
+      row.kind === "preset"
+        ? previous
+        : row.band === "actions"
+          ? footer
+          : columnOf.get(row.rowKey) === 1
+            ? end
+            : start;
+    column.push({ row, index });
+    previous = column;
   });
-  return { agents, launch, footer };
+  return { start, end, footer };
 }
 
 /** The built-in agent whose `agent.<id>` binding a row can edit, if any. */
@@ -1386,19 +1383,14 @@ function DockLaunchOption({
   const reservesShortcutSlot =
     row.band === "results" || (row.kind === "item" && item?.category === "agent");
 
-  // What Enter does on an agent that has a saved named preset, because the two
-  // placements disagree: the toolbar launches Default (and clears the saved
-  // choice), the dock launches the saved preset. The expansion's "Current" names
-  // the saved state; this names the action.
+  // Which saved named preset Enter launches, so a plain click on the agent
+  // never starts something the row did not say. The expansion's "Current"
+  // marks the same choice from the inside.
   const savedPreset =
     row.kind === "item" && rowHasPresets(row)
       ? agent?.presetChoices?.find((choice) => choice.isSelected && choice.presetId !== null)
       : undefined;
-  const launchOutcome = savedPreset
-    ? placement === "toolbar"
-      ? "Default"
-      : savedPreset.label
-    : undefined;
+  const launchOutcome = savedPreset?.label;
 
   // The one flag that separates the two modes. Browse keeps its per-band rows;
   // search collapses everything into a single `results` band.

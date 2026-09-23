@@ -1310,23 +1310,23 @@ describe("DockLaunchButton", () => {
     );
   });
 
-  it("stacks recipes under the agents when agents are the short column", () => {
-    // Two agents against six panels: recipes beneath the panels would leave the
-    // agent column mostly empty beside an overflowing one.
+  it("fills the first column past a short agent list instead of leaving it empty", () => {
     mockRecipes = [{ id: "r-1", name: "Deploy", worktreeId: undefined }];
     const { container } = renderButton({
       agents: [{ id: "claude", name: "Claude", availability: "ready" }],
     });
 
-    const agentColumn = listbox(container).querySelector('[data-launcher-column="agents"]')!;
-    const deploy = rowByName(container, "Deploy");
-    expect(agentColumn.contains(deploy)).toBe(true);
-    // DOM order is navigation order, so Deploy comes before every panel.
+    const start = listbox(container).querySelector('[data-launcher-column="start"]')!;
+    const end = listbox(container).querySelector('[data-launcher-column="end"]')!;
+    // Something launchable besides the one agent shares the first column, and
+    // the second still holds rows — neither column is left nearly empty.
+    expect(start.querySelectorAll('[role="option"]').length).toBeGreaterThan(1);
+    expect(end.querySelectorAll('[role="option"]').length).toBeGreaterThan(0);
+    // DOM order is navigation order: the whole first column precedes the second.
     const rows = options(container);
-    const firstPanel = rows.findIndex((row) =>
-      row.getAttribute("aria-label")?.startsWith("Terminal,")
-    );
-    expect(rows.indexOf(deploy)).toBeLessThan(firstPanel);
+    const lastStart = rows.filter((row) => start.contains(row)).pop()!;
+    const firstEnd = rows.find((row) => end.contains(row))!;
+    expect(rows.indexOf(lastStart)).toBeLessThan(rows.indexOf(firstEnd));
   });
 
   it("keeps recipes with the panels when the agents are the long column", () => {
@@ -1338,8 +1338,67 @@ describe("DockLaunchButton", () => {
     }));
     const { container } = renderButton({ agents: many });
 
-    const agentColumn = listbox(container).querySelector('[data-launcher-column="agents"]')!;
+    const agentColumn = listbox(container).querySelector('[data-launcher-column="start"]')!;
     expect(agentColumn.contains(rowByName(container, "Deploy"))).toBe(false);
+  });
+
+  describe("a long agent list", () => {
+    const ALL = [
+      "claude",
+      "codex",
+      "cursor",
+      "goose",
+      "kimi",
+      "amp",
+      "qwen",
+      "crush",
+      "aider",
+      "copilot",
+      "grok",
+      "gemini",
+      "opencode",
+      "mistral",
+      "kiro",
+      "interpreter",
+    ].map((id) => ({ id, name: id, availability: "ready" as const }));
+
+    const column = (container: HTMLElement, name: string) =>
+      listbox(container).querySelector(`[data-launcher-column="${name}"]`)!;
+
+    it("flows its tail to the head of the second column, heading repeated", () => {
+      mockRecipes = [{ id: "r-1", name: "Deploy", worktreeId: undefined }];
+      const { container, getAllByTestId } = renderButton({ agents: ALL });
+
+      const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
+      expect(labels.filter((label) => label === "Agents")).toHaveLength(2);
+      const end = column(container, "end");
+      const agentRows = options(container).filter((row) =>
+        ALL.some((agent) => row.getAttribute("aria-label")?.startsWith(`${agent.id},`))
+      );
+      const moved = agentRows.filter((row) => end.contains(row));
+      expect(moved.length).toBeGreaterThanOrEqual(3);
+      // Only the tail moves, in order, and it opens the second column — so the
+      // keyboard reads straight on from the first column into it.
+      expect(column(container, "start").contains(agentRows[0]!)).toBe(true);
+      expect(moved).toEqual(agentRows.slice(-moved.length));
+      expect(end.querySelector('[role="option"]')).toBe(moved[0]);
+    });
+
+    it("keeps the footer outside the scrolling columns", () => {
+      const { container } = renderButton({ agents: ALL });
+      const footer = column(container, "footer");
+      const agents = column(container, "start");
+      expect(footer).not.toBeNull();
+      // Siblings rather than nested: the columns' scroller does not hold it.
+      expect(footer.contains(agents) || agents.parentElement?.contains(footer)).toBe(false);
+    });
+
+    it("leaves a short agent list whole in the first column", () => {
+      const { container, queryAllByTestId } = renderButton({ agents: ALL.slice(0, 7) });
+      const labels = queryAllByTestId("dock-launcher-band").map((el) => el.textContent);
+      expect(labels.filter((label) => label === "Agents")).toHaveLength(1);
+      expect(column(container, "end").querySelector('[aria-label^="claude,"]')).toBeNull();
+    });
   });
 
   it("gives action cues a spoken qualifier like every other row", () => {
@@ -2507,16 +2566,15 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
 
     it("names what Enter launches when a named preset is saved", () => {
       mockAgentSettings = { agents: { claude: { presetId: "fast" } } };
-      const dock = renderButton({ agents: READY });
-      expect(qualifierTextOf(rowByName(dock.container, "Claude"))).toBe("Fast");
-      dock.unmount();
-
-      // The toolbar's parent row launches Default whatever is saved.
-      const toolbar = renderButton({ agents: READY, placement: "toolbar" });
-      expect(qualifierTextOf(rowByName(toolbar.container, "Claude"))).toBe("Default");
-      expect(rowByName(toolbar.container, "Claude").getAttribute("aria-label")).toContain(
-        "Launches Default"
-      );
+      // Identical in both placements: a parent row launches the saved preset.
+      for (const placement of ["dock", "toolbar"] as const) {
+        const view = renderButton({ agents: READY, placement });
+        expect(qualifierTextOf(rowByName(view.container, "Claude"))).toBe("Fast");
+        expect(rowByName(view.container, "Claude").getAttribute("aria-label")).toContain(
+          "Launches Fast"
+        );
+        view.unmount();
+      }
     });
 
     it("keeps the launch outcome behind the category in search", () => {
@@ -2524,7 +2582,7 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       const { container } = renderButton({ agents: READY, placement: "toolbar" });
       fireEvent.change(searchInput(container), { target: { value: "claude" } });
 
-      expect(qualifierTextOf(rowByName(container, "Claude"))).toBe("Agent · Default");
+      expect(qualifierTextOf(rowByName(container, "Claude"))).toBe("Agent · Fast");
     });
 
     it("states no outcome when nothing named is saved", () => {
@@ -2598,7 +2656,7 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       expect(container.querySelectorAll('[role="option"][aria-selected="true"]')).toHaveLength(1);
     });
 
-    it("launches the explicit default from a toolbar parent and the chosen id from a child", () => {
+    it("inherits the saved preset from a toolbar parent and launches the chosen id from a child", () => {
       const onLaunchAgent = vi.fn();
       const { container } = renderButton({
         agents: READY,
@@ -2606,10 +2664,10 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
         placement: "toolbar",
       });
 
-      // The toolbar's parent row means explicit Default — `null`, the sentinel
-      // that clears a saved preset — matching the split trigger it replaced.
+      // Same as the dock and as the toolbar's own agent button: a plain click
+      // launches whatever is saved, and never resets it.
       fireEvent.click(rowByName(container, "Claude"));
-      expect(onLaunchAgent).toHaveBeenCalledWith("claude", null);
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
 
       onLaunchAgent.mockReset();
       const { container: c2 } = renderButton({ agents: READY, onLaunchAgent });
@@ -2899,13 +2957,14 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       mockMergedPresets = [{ id: "fast", name: "Fast" }];
     });
 
-    it("clears the saved preset when the toolbar launches explicit Default", () => {
+    it("clears the saved preset when the Default row launches, in either placement", () => {
       const { container } = renderButton({
         agents: READY,
         placement: "toolbar",
         activeWorktreeId: "wt-1",
       });
-      fireEvent.click(rowByName(container, "Claude"));
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+      fireEvent.click(presetRows(container)[0]!);
 
       // Both halves of "explicit default": the agent-level preset and the
       // worktree-scoped override.
