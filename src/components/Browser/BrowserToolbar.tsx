@@ -26,6 +26,7 @@ import { useUrlHistoryStore, getFrecencySuggestions } from "@/store/urlHistorySt
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -40,8 +41,10 @@ import type {
   BrowserNavigationHistorySnapshot,
 } from "@shared/types/browser";
 import { logError } from "@/utils/logger";
+import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
 
 const LONG_PRESS_MS = 400;
+const COMPACT_ROW_WIDTH = 640;
 const COPIED_FEEDBACK_RESET_MS = 2000;
 
 const ZOOM_PRESETS = [
@@ -252,6 +255,15 @@ export function BrowserToolbar({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const lastViewportPresetRef = useRef<ViewportPresetId>("iphone");
+  // Below this width the row keeps the route readable by moving Copy URL and the
+  // console toggle into More, rather than letting the address shrink to nothing.
+  const [rowElement, setRowElement] = useState<HTMLDivElement | null>(null);
+  const [isCompact, setIsCompact] = useState(false);
+  useResizeObserverRaf(rowElement, (entry) => {
+    setIsCompact(entry.contentRect.width < COMPACT_ROW_WIDTH);
+  });
+  const [isZoomPopoverOpen, setIsZoomPopoverOpen] = useState(false);
+  const copyButtonRef = useRef<HTMLButtonElement>(null);
   const errorId = useId();
   const listboxId = useId();
 
@@ -259,9 +271,21 @@ export function BrowserToolbar({
     (state) => (projectId ? state.entries[projectId] : undefined) ?? EMPTY_ENTRIES
   );
 
-  const suggestions = useMemo(
-    () => (isEditing && projectId ? getFrecencySuggestions(projectEntries, inputValue) : []),
-    [isEditing, projectId, projectEntries, inputValue]
+  // Matched against the address people see and type, never the URL underneath:
+  // a dev preview's history is stored on its proxy origin, and "localhost:5173/da"
+  // has to find the dashboard. Rows keep the stored URL for navigation and removal.
+  const suggestions = useMemo(() => {
+    if (!isEditing || !projectId) return [];
+    if (!toAddress) return getFrecencySuggestions(projectEntries, inputValue);
+    const byAddress = new Map(projectEntries.map((entry) => [toAddress(entry.url), entry]));
+    const shown = projectEntries.map((entry) => ({ ...entry, url: toAddress(entry.url) }));
+    return getFrecencySuggestions(shown, inputValue).flatMap(
+      (entry) => byAddress.get(entry.url) ?? []
+    );
+  }, [isEditing, projectId, projectEntries, inputValue, toAddress]);
+  const addressOf = useCallback(
+    (target: string) => getDisplayUrl(toAddress ? toAddress(target) : target),
+    [toAddress]
   );
 
   useEffect(() => {
@@ -357,7 +381,7 @@ export function BrowserToolbar({
           if (projectId) {
             useUrlHistoryStore.getState().removeUrl(projectId, entry.url);
           }
-          announceHistoryChange(`Removed ${getDisplayUrl(entry.url)} from history`);
+          announceHistoryChange(`Removed ${addressOf(entry.url)} from history`);
           const remaining = suggestions.length - 1;
           if (remaining === 0) {
             setIsDropdownOpen(false);
@@ -374,7 +398,15 @@ export function BrowserToolbar({
         inputRef.current?.blur();
       }
     },
-    [isDropdownOpen, suggestions, highlightedIndex, onNavigate, projectId, announceHistoryChange]
+    [
+      isDropdownOpen,
+      suggestions,
+      highlightedIndex,
+      onNavigate,
+      projectId,
+      announceHistoryChange,
+      addressOf,
+    ]
   );
 
   const handleCopy = useCallback(async () => {
@@ -475,7 +507,11 @@ export function BrowserToolbar({
   // behind it there is no drawer to show, so the toggle must not read as pressed.
   const isConsoleShown = canToggleConsole && isConsoleOpen;
   const showStop = isLoading && Boolean(onStop);
-  const hasMoreMenu = Boolean(onZoomChange || onToggleDevTools || onPromoteToPortal);
+  const consoleInMenu = isCompact && Boolean(onToggleConsole);
+  const hasMoreMenu = Boolean(onZoomChange || onToggleDevTools || onPromoteToPortal || isCompact);
+  // The chip stays while its popover is open, so stepping through 100% keeps the
+  // controls under the pointer; it goes once the popover closes at the default.
+  const showZoomChip = Boolean(onZoomChange) && (isNonDefaultZoom || isZoomPopoverOpen);
 
   // The resting address reads host-then-route, with the route carrying the weight:
   // the host is the same on every page of a dev server, the route is what changed.
@@ -626,7 +662,7 @@ export function BrowserToolbar({
       <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {screenshotCopied ? "Screenshot copied to clipboard" : ""}
       </span>
-      <div className="flex items-center gap-2 px-2 py-1.5">
+      <div ref={setRowElement} className="flex items-center gap-2 px-2 py-1.5">
         <div className="flex shrink-0 items-center gap-0.5">
           {navButton("back")}
           {navButton("forward")}
@@ -705,13 +741,14 @@ export function BrowserToolbar({
                 spellCheck={false}
                 className={cn(
                   "w-full h-7 pl-7 text-xs rounded-[var(--radius-md)]",
-                  isNonDefaultZoom && onZoomChange ? "pr-20" : "pr-8",
+                  showZoomChip ? (isCompact ? "pr-16" : "pr-20") : isCompact ? "pr-2" : "pr-8",
                   "bg-surface-canvas border border-overlay",
                   "focus:outline-hidden focus:border-border-strong",
                   "focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                   "text-text-primary placeholder:text-text-placeholder",
                   showStyledAddress && "text-transparent",
-                  error && "border-status-error focus:border-status-error"
+                  error &&
+                    "border-status-error focus:border-status-error focus-visible:outline-status-error"
                 )}
                 placeholder="localhost:3000"
               />
@@ -721,25 +758,35 @@ export function BrowserToolbar({
                   data-testid="browser-address-display"
                   className={cn(
                     "pointer-events-none absolute inset-y-0 left-7 flex items-center min-w-0 text-xs",
-                    isNonDefaultZoom && onZoomChange ? "right-20" : "right-8"
+                    showZoomChip
+                      ? isCompact
+                        ? "right-16"
+                        : "right-20"
+                      : isCompact
+                        ? "right-2"
+                        : "right-8"
                   )}
                 >
-                  <span
-                    className={cn(
-                      "min-w-0 truncate [flex-shrink:1000]",
-                      displayRoute ? "text-text-secondary" : "text-text-primary"
-                    )}
-                  >
-                    {displayHost}
-                  </span>
+                  {!(isCompact && displayRoute) && (
+                    <span
+                      className={cn(
+                        "min-w-0 truncate [flex-shrink:1000]",
+                        displayRoute ? "text-text-secondary" : "text-text-primary"
+                      )}
+                    >
+                      {displayHost}
+                    </span>
+                  )}
                   {displayRoute && (
-                    <span className="min-w-0 truncate text-text-primary">{displayRoute}</span>
+                    <span className="min-w-0 truncate text-left text-text-primary [direction:rtl]">
+                      <bdi>{displayRoute}</bdi>
+                    </span>
                   )}
                 </div>
               )}
               <div className="absolute right-0.5 flex items-center gap-0.5">
-                {isNonDefaultZoom && onZoomChange && (
-                  <Popover>
+                {showZoomChip && (
+                  <Popover open={isZoomPopoverOpen} onOpenChange={setIsZoomPopoverOpen}>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <PopoverTrigger asChild>
@@ -749,36 +796,53 @@ export function BrowserToolbar({
                             aria-label={`Zoom ${currentZoomLabel}`}
                             data-testid="browser-zoom-indicator"
                           >
-                            <ZoomIn className="w-3 h-3 text-text-secondary" aria-hidden="true" />
+                            {zoomFactor < 1 ? (
+                              <ZoomOut className="w-3 h-3 text-text-secondary" aria-hidden="true" />
+                            ) : (
+                              <ZoomIn className="w-3 h-3 text-text-secondary" aria-hidden="true" />
+                            )}
                             {currentZoomLabel}
                           </button>
                         </PopoverTrigger>
                       </TooltipTrigger>
                       <TooltipContent side="bottom">Zoom</TooltipContent>
                     </Tooltip>
-                    <PopoverContent align="end" className="w-auto p-1">
+                    <PopoverContent
+                      align="end"
+                      className="w-auto p-1"
+                      onCloseAutoFocus={(e) => {
+                        // Back at 100% the chip is about to unmount; hand focus to
+                        // its neighbour instead of letting it fall to the body.
+                        if (isNonDefaultZoom) return;
+                        e.preventDefault();
+                        copyButtonRef.current?.focus({ preventScroll: true });
+                      }}
+                    >
                       {zoomStepper}
                     </PopoverContent>
                   </Popover>
                 )}
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={handleCopy}
-                      disabled={!address}
-                      className="toolbar-icon-button flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary disabled:opacity-30 disabled:pointer-events-none"
-                      aria-label="Copy URL"
-                    >
-                      {copied ? (
-                        <Check className="w-3.5 h-3.5 text-status-success" />
-                      ) : (
-                        <Copy className="w-3.5 h-3.5" />
-                      )}
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Copy URL</TooltipContent>
-                </Tooltip>
+                {!isCompact && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        ref={copyButtonRef}
+                        type="button"
+                        onClick={handleCopy}
+                        disabled={!address}
+                        className="toolbar-icon-button flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary disabled:opacity-30 disabled:pointer-events-none"
+                        aria-label="Copy URL"
+                      >
+                        {copied ? (
+                          <Check className="w-3.5 h-3.5 text-status-success" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Copy URL</TooltipContent>
+                  </Tooltip>
+                )}
               </div>
             </div>
             {error && (
@@ -800,7 +864,7 @@ export function BrowserToolbar({
               className="absolute left-0 right-0 top-full mt-1 z-50 rounded-[var(--radius-lg)] surface-overlay shadow-overlay overflow-hidden"
             >
               {suggestions.map((entry, index) => {
-                const entryAddress = getDisplayUrl(toAddress ? toAddress(entry.url) : entry.url);
+                const entryAddress = addressOf(entry.url);
                 return (
                   <div
                     key={entry.url}
@@ -905,7 +969,7 @@ export function BrowserToolbar({
               </TooltipContent>
             </Tooltip>
           )}
-          {onToggleConsole && (
+          {onToggleConsole && !consoleInMenu && (
             <Tooltip>
               <TooltipTrigger asChild>
                 {canToggleConsole ? (
@@ -976,6 +1040,26 @@ export function BrowserToolbar({
                 <TooltipContent side="bottom">More page actions</TooltipContent>
               </Tooltip>
               <DropdownMenuContent align="end" className="min-w-[200px]">
+                {isCompact && (
+                  <>
+                    <DropdownMenuItem disabled={!address} onSelect={() => void handleCopy()}>
+                      <Copy className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Copy URL
+                    </DropdownMenuItem>
+                    {consoleInMenu && (
+                      <DropdownMenuCheckboxItem
+                        checked={isConsoleShown}
+                        disabled={!canToggleConsole}
+                        onSelect={() => onToggleConsole?.()}
+                      >
+                        Console
+                      </DropdownMenuCheckboxItem>
+                    )}
+                    {(onZoomChange || onToggleDevTools || onPromoteToPortal) && (
+                      <DropdownMenuSeparator />
+                    )}
+                  </>
+                )}
                 {onZoomChange && (
                   <>
                     <DropdownMenuLabel className="flex items-center justify-between">

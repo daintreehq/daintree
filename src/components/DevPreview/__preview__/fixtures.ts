@@ -42,7 +42,8 @@ export interface DevPreviewChromeFixture {
     | "hover-action"
     | "more-menu"
     | "zoom-popover"
-    | "device-menu";
+    | "device-menu"
+    | "address-typed";
 }
 
 export const FIXTURES = {
@@ -153,6 +154,21 @@ export const FIXTURES = {
     viewportDpr: 2,
     viewportFit: true,
     isFocused: true,
+  },
+  "narrow-more": {
+    width: 560,
+    route: "/dashboard",
+    canGoBack: true,
+    consoleOpen: true,
+    isFocused: true,
+    drive: "more-menu",
+  },
+  "address-typed": {
+    width: 900,
+    route: "/",
+    canGoBack: true,
+    isFocused: true,
+    drive: "address-typed",
   },
 } satisfies Record<string, DevPreviewChromeFixture>;
 

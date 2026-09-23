@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, render, fireEvent, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { BrowserToolbar } from "../BrowserToolbar";
 import { normalizeBrowserUrl } from "../browserUtils";
 import type { ViewportPresetId } from "@shared/types/panel";
@@ -39,8 +39,23 @@ vi.mock("@/store/urlHistoryStore", () => ({
   useUrlHistoryStore: Object.assign(() => STABLE_ENTRIES, {
     getState: () => ({ removeUrl: mockRemoveUrl }),
   }),
-  getFrecencySuggestions: () => STABLE_ENTRIES,
+  getFrecencySuggestions: vi.fn((entries: typeof STABLE_ENTRIES) => entries),
 }));
+
+const rowWidth = vi.hoisted(() => ({ current: 1000 }));
+vi.mock("@/hooks/useResizeObserverRaf", async () => {
+  const { useLayoutEffect } = await import("react");
+  return {
+    useResizeObserverRaf: (
+      element: HTMLElement | null,
+      onResize: (entry: { contentRect: { width: number } }) => void
+    ) => {
+      useLayoutEffect(() => {
+        if (element) onResize({ contentRect: { width: rowWidth.current } });
+      }, [element]);
+    },
+  };
+});
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn(() => Promise.resolve({ ok: true })) },
@@ -1084,5 +1099,48 @@ describe("BrowserToolbar zoom", () => {
     );
     fireEvent.click(items.find((i) => i.textContent?.trim() === "Zoom in")!);
     expect(onZoomChange).toHaveBeenCalledWith(1.25);
+  });
+});
+
+describe("BrowserToolbar history on a mapped address", () => {
+  it("matches what was typed against the shown address, and rows keep the stored URL", async () => {
+    const { getFrecencySuggestions } = await import("@/store/urlHistoryStore");
+    const spy = vi.mocked(getFrecencySuggestions);
+    const toAddress = (url: string) => url.replace("localhost:3000", "shown.test:1");
+    const { getByTestId } = renderToolbar({ toAddress });
+    const input = openDropdown(getByTestId("browser-address-bar"));
+    fireEvent.change(input, { target: { value: "shown.test" } });
+    const searched = spy.mock.calls.at(-1)![0].map((e: { url: string }) => e.url);
+    expect(searched).toContain("http://shown.test:1/");
+    expect(searched).not.toContain("http://localhost:3000/");
+    const onNavigate = defaultProps.onNavigate;
+    fireEvent.mouseDown(document.querySelectorAll('[role="option"]')[0]!);
+    expect(onNavigate).toHaveBeenCalledWith("http://localhost:3000/");
+  });
+});
+
+describe("BrowserToolbar at compact widths", () => {
+  beforeEach(() => {
+    rowWidth.current = 500;
+  });
+  afterEach(() => {
+    rowWidth.current = 1000;
+  });
+
+  it("keeps the route by moving Copy URL and the console toggle into More", async () => {
+    const onToggleConsole = vi.fn();
+    const { queryByLabelText, getByLabelText } = renderToolbar({
+      onToggleConsole,
+      canToggleConsole: true,
+    });
+    expect(queryByLabelText("Copy URL")).toBeNull();
+    expect(queryByLabelText("Toggle console")).toBeNull();
+
+    fireEvent.pointerDown(getByLabelText("More page actions"), { button: 0, ctrlKey: false });
+    await waitFor(() => expect(document.querySelector('[role="menu"]')).toBeTruthy());
+    const consoleItem = document.querySelector('[role="menuitemcheckbox"]') as HTMLElement;
+    expect(consoleItem.textContent).toContain("Console");
+    fireEvent.click(consoleItem);
+    expect(onToggleConsole).toHaveBeenCalledOnce();
   });
 });

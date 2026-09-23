@@ -153,6 +153,12 @@ async function drive(page: Page, fixture: FixtureName): Promise<void> {
       await expect(page.getByRole("tooltip").first()).toBeVisible();
       break;
     }
+    case "address-typed": {
+      await address.click();
+      await address.fill("localhost:5173/dash");
+      await expect(page.getByRole("option")).not.toHaveCount(0);
+      break;
+    }
     case "more-menu": {
       await page.getByRole("button", { name: "More page actions" }).click();
       await expect(page.getByRole("menu")).toBeVisible();
