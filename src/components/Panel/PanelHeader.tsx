@@ -123,6 +123,13 @@ import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 import type { ActionId } from "@shared/types/actions";
 
+/**
+ * The window controls keep `icon-xs`'s 24px target but draw a 14px glyph, the
+ * size of the kind icon at the other end of the bar; `icon-xs`'s own 12px reads
+ * as fine print beside it and made maximize and dock hard to tell apart.
+ */
+const CONTROL_ICON = "[&_svg]:size-3.5";
+
 /** An overflow item's shortcut: the action's live keybinding, or nothing. */
 function OverflowMenuShortcut({ actionId }: { actionId: ActionId }) {
   const combo = useKeybindingDisplay(actionId);
@@ -133,9 +140,9 @@ export interface PanelHeaderProps {
   id: string;
   title: string;
   /**
-   * The task-first form of the title for a narrow header. Swapped in by a
-   * container query at 420px of header width; the accessible name, the
-   * tooltip and the rename prefill always use the full title.
+   * The task alone, painted in place of the composed title — the brand mark
+   * carries the agent's identity. The accessible name, the tooltip and the
+   * rename prefill always use the full title.
    */
   compactTitle?: string;
   /** The id of the region the tab strip switches, for each tab's `aria-controls`. */
@@ -404,6 +411,7 @@ function PanelHeaderComponent({
   const showMoveToDock =
     !!onMinimize && !isMaximized && location !== "dock" && kindCapabilities.isDockable;
   const hasOverflowItems = true;
+  const holdsDockSlot = !!onMinimize && !isMaximized && location === "grid";
 
   // The panel's own worktree, not the selected one: a panel can sit in a
   // worktree other than the one the sidebar has active.
@@ -602,20 +610,14 @@ function PanelHeaderComponent({
   // The title prop is already variant-resolved by ContentPanel (identity-only
   // in the dock, task-composed in the grid) — render it verbatim.
   const displayTitle = title;
-  // What the title actually paints: the full composition, or under 420px of
-  // header the task alone — "fix flaky auth tests" tells panes apart where
-  // "Claud…" cannot, and the glyph carries identity. Shared by the static
-  // title and by the invisible copy that sizes the rename field, so the two
-  // measure identically.
-  const titleContent =
-    compactTitle && compactTitle !== displayTitle ? (
-      <>
-        <span className="@max-[420px]/header:hidden">{displayTitle}</span>
-        <span className="hidden @max-[420px]/header:inline">{compactTitle}</span>
-      </>
-    ) : (
-      displayTitle
-    );
+  // What the title actually paints: the task alone whenever the agent has
+  // reported one. The brand mark in front of it already says which agent this
+  // is, so "Claude: fix flaky auth tests" spends the scarcest space in the bar
+  // on the one word every Claude pane shares, and truncates the part that
+  // tells panes apart. The full composition stays in the accessible name, the
+  // tooltip and the rename prefill. Shared by the static title and by the
+  // invisible copy that sizes the rename field, so the two measure identically.
+  const titleContent = compactTitle && compactTitle !== displayTitle ? compactTitle : displayTitle;
   // A truncated badge, or one hidden by the compact query, still has to give
   // the branch back somewhere — the title tooltip carries it.
   const titleTooltip = [title, worktreeBranch && worktreeAccentColor ? worktreeBranch : null]
@@ -1207,33 +1209,6 @@ function PanelHeaderComponent({
             {/* Live plugin-contributed badges (host.setPanelBadge) for this panel */}
             <PluginPanelBadges panelId={id} />
 
-            {/* Add tab button for single panels */}
-            {onAddTab && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onAddTab();
-                    }}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    // Revealed by hover or by keyboard focus anywhere in the
-                    // header, so a keyboard user on the title can find it.
-                    className="shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 @max-[420px]/header:hidden"
-                    aria-label="Duplicate panel as new tab"
-                    aria-keyshortcuts={duplicateAriaShortcut}
-                  >
-                    <Plus aria-hidden="true" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {createTooltipContent("Duplicate panel as new tab", duplicateShortcut)}
-                </TooltipContent>
-              </Tooltip>
-            )}
-
             {/* Worktree branch badge — shown when multiple worktrees are active */}
             {worktreeBranch && worktreeAccentColor && (
               // The worktree colour carries identity through the wash and the
@@ -1259,6 +1234,39 @@ function PanelHeaderComponent({
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">{worktreeBranch}</TooltipContent>
+              </Tooltip>
+            )}
+
+            {/* Add tab button for single panels. Last in the identity group: it
+                keeps its box while hidden, so hovering never reflows the title,
+                and that box sits after the badges rather than between them and
+                the title, where it read as a gap. */}
+            {onAddTab && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAddTab();
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    // Revealed by hover or by keyboard focus anywhere in the
+                    // header, so a keyboard user on the title can find it.
+                    className={cn(
+                      CONTROL_ICON,
+                      "shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 @max-[420px]/header:hidden"
+                    )}
+                    aria-label="Duplicate panel as new tab"
+                    aria-keyshortcuts={duplicateAriaShortcut}
+                  >
+                    <Plus aria-hidden="true" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {createTooltipContent("Duplicate panel as new tab", duplicateShortcut)}
+                </TooltipContent>
               </Tooltip>
             )}
 
@@ -1334,7 +1342,7 @@ function PanelHeaderComponent({
         aria-orientation="horizontal"
         onKeyDown={handleControlsKeyDown}
         data-testid="panel-header-controls"
-        className="ml-1.5 flex shrink-0 items-center gap-1.5"
+        className="ml-1.5 flex shrink-0 items-center gap-1"
       >
         {/* Overflow menu — panel management actions */}
         {hasOverflowItems && (
@@ -1349,6 +1357,7 @@ function PanelHeaderComponent({
                       ref={overflowButtonRef}
                       variant="ghost"
                       size="icon-xs"
+                      className={CONTROL_ICON}
                       onPointerDown={(e) => e.stopPropagation()}
                       aria-label="More panel actions"
                     >
@@ -1551,6 +1560,7 @@ function PanelHeaderComponent({
               <Button
                 variant="ghost"
                 size="icon-xs"
+                className={CONTROL_ICON}
                 onClick={(e) => {
                   e.stopPropagation();
                   onMinimize!();
@@ -1569,6 +1579,12 @@ function PanelHeaderComponent({
           </Tooltip>
         )}
 
+        {/* A kind that cannot dock keeps the dock button's slot, empty, so its
+            overflow button lines up with the panes above and below it. */}
+        {!showMoveToDock && holdsDockSlot && (
+          <span aria-hidden="true" data-testid="panel-dock-slot" className="size-6 shrink-0" />
+        )}
+
         {/* Middle control: Move-to-grid (dock) / Maximize / Restore. Dock panels
             never receive onToggleMaximize, so this branch owns the slot whenever
             location is "dock". Collapse is handled by Escape, outside-click, and
@@ -1581,6 +1597,7 @@ function PanelHeaderComponent({
                   <Button
                     variant="ghost"
                     size="icon-xs"
+                    className={CONTROL_ICON}
                     onClick={(e) => {
                       e.stopPropagation();
                       onRestore();
@@ -1626,6 +1643,7 @@ function PanelHeaderComponent({
                 <Button
                   variant="ghost"
                   size="icon-xs"
+                  className={CONTROL_ICON}
                   onClick={(e) => {
                     e.stopPropagation();
                     onFocus();
@@ -1665,7 +1683,10 @@ function PanelHeaderComponent({
               onPointerDown={(e) => e.stopPropagation()}
               // Quiet at rest like its neighbours; the destructive hue arrives
               // only on hover and focus, where it names what the click does.
-              className="hover:bg-status-error/15 hover:text-status-error focus-visible:bg-status-error/15 focus-visible:text-status-error focus-visible:outline-status-error"
+              className={cn(
+                CONTROL_ICON,
+                "hover:bg-status-error/15 hover:text-status-error focus-visible:bg-status-error/15 focus-visible:text-status-error focus-visible:outline-status-error"
+              )}
               data-testid="panel-close"
               aria-label={formatShortcutForTooltip(
                 location === "dock"
@@ -1696,9 +1717,11 @@ function PanelHeaderComponent({
       {agentIndicator !== undefined && (
         // The agent state glyph's home: the far right, past close. It never
         // moves, and nothing else goes after it.
+        // ml-2 against the controls' 4px rhythm: the glyph is a signal, not a
+        // fifth button, and the extra step is what keeps it from reading as one.
         <div
           data-testid="panel-header-agent-indicator"
-          className="ml-1.5 flex h-5 w-5 shrink-0 items-center justify-center"
+          className="ml-2 flex h-5 w-5 shrink-0 items-center justify-center"
         >
           {agentIndicator}
         </div>

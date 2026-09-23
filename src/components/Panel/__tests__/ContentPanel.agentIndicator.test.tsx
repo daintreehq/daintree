@@ -86,12 +86,14 @@ function panel(props: {
   kind?: "terminal" | "browser";
   tabs?: TabInfo[];
   completedWithNoChanges?: boolean;
+  location?: "grid" | "dock";
 }) {
   return (
     <ContentPanel
       id="t-1"
       title="Panel"
       kind={props.kind ?? "terminal"}
+      location={props.location}
       agentId={props.agentId}
       isFocused
       onFocus={() => {}}
@@ -162,10 +164,19 @@ describe("ContentPanel agent glyph placement", () => {
     expect(screen.getByTestId("panel-header-agent-indicator").childElementCount).toBe(0);
   });
 
-  it("reserves no glyph box for a plain terminal", () => {
+  // In the grid every pane holds the glyph box, empty when there is no agent,
+  // so a column of mixed panes lines its controls up and a shell that starts
+  // an agent does not jump its controls left when the agent is detected.
+  it("holds an empty glyph box for a plain terminal in the grid", () => {
     render(panel({}));
 
     expect(screen.queryByTestId("panel-header-status")).not.toBeNull();
+    expect(screen.getByTestId("panel-header-agent-indicator").childElementCount).toBe(0);
+  });
+
+  it("reserves no glyph box for a plain terminal outside the grid", () => {
+    render(panel({ location: "dock" }));
+
     expect(screen.queryByTestId("panel-header-agent-indicator")).toBeNull();
   });
 
@@ -194,21 +205,21 @@ describe("ContentPanel agent glyph placement", () => {
     expect(box.contains(agentGlyphs()[0]!)).toBe(true);
   });
 
-  it("reserves no glyph box for a group of plain terminals", () => {
+  it("holds an empty glyph box for a group of plain terminals in the grid", () => {
     const tabs: TabInfo[] = [
       { id: "t-1", title: "One", kind: "terminal", chrome, isActive: true },
       { id: "t-2", title: "Two", kind: "terminal", chrome, isActive: false },
     ];
     render(panel({ tabs }));
 
-    expect(screen.queryByTestId("panel-header-agent-indicator")).toBeNull();
+    expect(screen.getByTestId("panel-header-agent-indicator").childElementCount).toBe(0);
   });
 
-  it("reserves no boxes for a lone non-terminal pane", () => {
+  it("gives a lone non-terminal pane the glyph box but no status box", () => {
     render(panel({ kind: "browser" }));
 
     expect(screen.queryByTestId("panel-header-status")).toBeNull();
-    expect(screen.queryByTestId("panel-header-agent-indicator")).toBeNull();
+    expect(screen.getByTestId("panel-header-agent-indicator").childElementCount).toBe(0);
   });
 
   it("hands the metadata row the lifecycle state, not the glyph's display state", () => {

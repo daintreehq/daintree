@@ -504,7 +504,11 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // detected in it, or once agent state arrives ahead of identity (#6650).
   const isAgentTerminal =
     agentId != null || terminalChrome.isAgent || headerAgentState !== undefined;
+  // Every grid pane holds the box, agent or not: a shell someone starts
+  // `claude` in would otherwise jump its controls left the moment the agent is
+  // detected, and a column of mixed panes lines its close buttons up.
   const reservesAgentSlot =
+    (location === "grid" && !isMaximized) ||
     (isAutoTerminalHeader && isAgentTerminal) ||
     (tabs?.some(
       (tab) =>
@@ -656,6 +660,12 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         location === "grid" &&
           !isMaximized &&
           "rounded-lg border shadow-[var(--theme-shadow-ambient)] transition-colors duration-150",
+        // The selected chrome is how a grid pane says it has the keyboard. A
+        // non-PTY pane's root takes real DOM focus when it becomes the focused
+        // pane (usePanelRootFocus), and after a keyboard move Chromium rings
+        // it in accent — a second, louder focus language that terminals, whose
+        // focus lives in xterm, never show.
+        showGridAttention && showSelectedChrome && "focus-visible:outline-hidden",
         location === "grid" &&
           !isMaximized &&
           resolveGridPanelChromeClass({
@@ -794,8 +804,9 @@ export const ContentPanel = forwardRef<HTMLDivElement, ContentPanelProps>(
         showTask: showAgentTaskTitles,
       });
     });
-    // The task alone, for a header with no room for the identity prefix. Only
-    // the grid composes tasks, and only when the compact form actually differs.
+    // The task alone, which is what the header paints: the brand mark beside it
+    // already names the agent. Only the grid composes tasks, and only when the
+    // compact form actually differs.
     const compactTitle = usePanelStore((s) => {
       const panel = s.panelsById[props.id];
       if (!panel || !isPtyPanel(panel) || panel.title !== propsTitle) return undefined;

@@ -10,6 +10,7 @@ import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getGenericPanelMenuGroups, type GenericPanelMenuInput } from "../genericPanelMenu";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
+import type { PanelKind } from "@/types";
 import {
   __resetPanelCloseGuardsForTests,
   registerPanelCloseGuard,
@@ -2009,6 +2010,21 @@ describe("PanelHeader", () => {
   // Design-review invariants. Each asserts a rule the header must keep, never
   // the value that happens to satisfy it today.
   describe("design invariants", () => {
+    it("gives every grid kind the same control slots, dockable or not", () => {
+      const slots = (kind: PanelKind) => {
+        const { unmount } = render(
+          <PanelHeader {...makeProps({ kind, onMinimize: vi.fn(), onToggleMaximize: vi.fn() })} />
+        );
+        const count = screen.getByTestId("panel-header-controls").childElementCount;
+        unmount();
+        return count;
+      };
+      // Review and diff opt out of the dock; their overflow button must still sit
+      // where a terminal's does in the same column.
+      expect(slots("review")).toBe(slots("terminal"));
+      expect(slots("diff")).toBe(slots("terminal"));
+    });
+
     it("builds every window control from the Button primitive", () => {
       render(
         <PanelHeader
@@ -2148,7 +2164,7 @@ describe("PanelHeader", () => {
       expect(row.textContent?.toLowerCase()).toContain("waiting");
     });
 
-    it("keeps the full title as the accessible name when a compact title is shown", () => {
+    it("paints the task alone and keeps the full title as the accessible name", () => {
       render(
         <PanelHeader
           {...makeProps({
@@ -2161,11 +2177,9 @@ describe("PanelHeader", () => {
       const title = screen.getByRole("button", {
         name: /title: Claude: fix flaky auth tests/,
       });
-      // Both compositions are rendered as their own nodes; the container
-      // query decides which paints. The name never compacts.
-      const nodes = Array.from(title.querySelectorAll("span")).map((n) => n.textContent);
-      expect(nodes).toContain("Claude: fix flaky auth tests");
-      expect(nodes).toContain("fix flaky auth tests");
+      // The bar paints the task alone — the brand mark names the agent — but
+      // the name never compacts.
+      expect(title.textContent).toBe("fix flaky auth tests");
     });
 
     it("gives the branch badge a full-text surface for when it truncates or hides", () => {
