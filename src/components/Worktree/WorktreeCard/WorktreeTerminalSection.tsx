@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useId, useMemo, useRef, useState } from "react";
 import type React from "react";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -70,9 +70,20 @@ function TerminalRow({ term, onClick, padY }: TerminalRowProps) {
   const isArmable = isFleetArmEligible(term);
   const StateIcon = agentState ? getEffectiveStateIcon(agentState) : null;
   const placementLabel = term.location === "dock" ? "Docked" : "On grid";
-  const placementId = `session-${term.id}-placement`;
   const showCommand = !chrome.isAgent && term.activityStatus === "working" && !!term.lastCommand;
-  const commandId = `session-${term.id}-command`;
+  // `useId`, not the terminal id: the sidebar card and the overview grid can
+  // render the same session at once, and a shared id resolves to the wrong row.
+  const idBase = useId();
+  const titleId = `${idBase}-title`;
+  const placementId = `${idBase}-placement`;
+  const commandId = `${idBase}-command`;
+  // The metadata tooltips sit inside the title tooltip's trigger, so pointing
+  // at one would otherwise open both.
+  const [isOverMeta, setIsOverMeta] = useState(false);
+  const metaPointer = {
+    onPointerEnter: () => setIsOverMeta(true),
+    onPointerLeave: () => setIsOverMeta(false),
+  };
 
   return (
     <div
@@ -113,7 +124,7 @@ function TerminalRow({ term, onClick, padY }: TerminalRowProps) {
           <GripVertical className="w-3 h-3" aria-hidden="true" />
         </button>
 
-        <TruncatedTooltip content={term.title} isTruncated={isTruncated}>
+        <TruncatedTooltip content={term.title} isTruncated={isTruncated} disabled={isOverMeta}>
           {/* The whole rest of the row is the button, trailing marks
               included: the hover fill paints the full row, so the full row is
               what a click has to answer to. */}
@@ -124,6 +135,10 @@ function TerminalRow({ term, onClick, padY }: TerminalRowProps) {
               onClick(term);
             }}
             aria-pressed={isArmable ? isArmed : undefined}
+            // Named by the title alone: the placement and command below are
+            // descriptions, and as descendant text they would otherwise be
+            // read twice and change the toggle's name whenever they change.
+            aria-labelledby={titleId}
             aria-describedby={showCommand ? `${commandId} ${placementId}` : placementId}
             className={cn(
               // The ring is drawn by a pseudo-element reaching back over the
@@ -137,6 +152,7 @@ function TerminalRow({ term, onClick, padY }: TerminalRowProps) {
             <span className="flex min-w-0 flex-1 flex-col">
               <span
                 ref={ref}
+                id={titleId}
                 className="truncate text-xs font-medium text-text-secondary transition-colors group-hover/termrow:text-text-primary group-has-[:focus-visible]/termrow:text-text-primary"
               >
                 {term.title}
@@ -147,6 +163,7 @@ function TerminalRow({ term, onClick, padY }: TerminalRowProps) {
                     <span
                       id={commandId}
                       className="truncate text-2xs font-mono text-text-secondary"
+                      {...metaPointer}
                     >
                       {term.lastCommand}
                     </span>
@@ -179,7 +196,7 @@ function TerminalRow({ term, onClick, padY }: TerminalRowProps) {
 
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="text-text-secondary">
+                  <span className="text-text-secondary" {...metaPointer}>
                     <span id={placementId} className="sr-only">
                       {placementLabel}
                     </span>
