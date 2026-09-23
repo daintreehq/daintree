@@ -207,7 +207,14 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
 
       <SettingsSection title="Sound">
         <SettingsGroup>
-          {booleanRow("soundEnabled", NOTIFICATION_COPY.sound, MASTER_OFF_REASON)}
+          {booleanRow(
+            "soundEnabled",
+            {
+              label: NOTIFICATION_COPY.sound.label,
+              description: NOTIFICATION_COPY.sound.projectDescription,
+            },
+            MASTER_OFF_REASON
+          )}
           <SettingsDependents
             disabled={!soundOn || globalMasterOff}
             reason={globalMasterOff || soundOn ? undefined : "Turn on Play sound to choose sounds"}

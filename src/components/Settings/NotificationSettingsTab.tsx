@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitch } from "./SettingsSwitch";
@@ -44,8 +44,8 @@ const DEFAULT_SETTINGS: NotificationSettings = {
   quietHoursWeekdays: [],
 };
 
-const HOUR_OPTIONS = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0"));
-const MINUTE_OPTIONS = [0, 15, 30, 45];
+/** Every quarter hour, as minutes since midnight. */
+const TIME_OPTIONS = Array.from({ length: 96 }, (_, i) => i * 15);
 
 const WEEKDAYS: { value: number; label: string; name: string }[] = [
   { value: 0, label: "Sun", name: "Sunday" },
@@ -57,13 +57,8 @@ const WEEKDAYS: { value: number; label: string; name: string }[] = [
   { value: 6, label: "Sat", name: "Saturday" },
 ];
 
-function splitMinutes(total: number): { hour: number; minute: number } {
-  const safe = Math.max(0, Math.min(1439, Math.floor(total)));
-  return { hour: Math.floor(safe / 60), minute: safe % 60 };
-}
-
-function joinMinutes(hour: number, minute: number): number {
-  return Math.max(0, Math.min(1439, hour * 60 + minute));
+function clampMinutes(total: number): number {
+  return Math.max(0, Math.min(1439, Math.floor(total)));
 }
 
 function describeSchedule(startMin: number, endMin: number): string {
@@ -187,40 +182,55 @@ export function NotificationSettingsTab() {
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [loadNonce, setLoadNonce] = useState(0);
   // A failed save rolls the control back, which on its own looks like the click never
-  // registered — so the failure stays on the group until a save there succeeds.
-  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  // registered — so the failure stays on its group until a later save there covers it.
+  const [saveFailures, setSaveFailures] = useState<Partial<Record<SaveGroup, SaveFailure>>>({});
   const loading = loadState === "loading";
+  // What main is known to hold, per key, and the newest edit made to each key. A failed
+  // save only rolls back a key it is still the newest edit for, and rolls it back to the
+  // last value main confirmed — never to whatever the screen showed when it was sent.
+  const confirmedRef = useRef<NotificationSettings>(DEFAULT_SETTINGS);
+  const revisionRef = useRef(new Map<string, number>());
 
   useEffect(() => {
     setLoadState("loading");
-    let settled = false;
+    // A retry supersedes the request before it: only the newest may settle the page.
+    let current = true;
     const timer = setTimeout(() => {
-      if (!settled) setLoadState("error");
+      if (current) setLoadState("error");
     }, 10_000);
 
     window.electron?.notification
       ?.getSettings()
       .then((s) => {
-        settled = true;
+        if (!current) return;
         clearTimeout(timer);
+        confirmedRef.current = s;
         setSettings(s);
         setLoadState("ready");
       })
       .catch(() => {
-        settled = true;
+        if (!current) return;
         clearTimeout(timer);
         setLoadState("error");
       });
 
-    return () => clearTimeout(timer);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
   }, [loadNonce]);
 
   const update = (patch: Partial<NotificationSettings>) => {
     const group = saveGroupOf(patch);
     const keys = Object.keys(patch);
-    const previous: Partial<NotificationSettings> = {};
-    for (const key of keys) Object.assign(previous, { [key]: Reflect.get(settings, key) });
-    const previousStore = storeSlice(useNotificationSettingsStore.getState(), keys);
+    const revisions = revisionRef.current;
+    const mine = new Map<string, number>();
+    for (const key of keys) {
+      const next = (revisions.get(key) ?? 0) + 1;
+      revisions.set(key, next);
+      mine.set(key, next);
+    }
+    const isNewest = (key: string) => revisions.get(key) === mine.get(key);
 
     setSettings((current) => ({ ...current, ...patch }));
     const mirrored = storeSlice(patch, keys);
@@ -229,24 +239,31 @@ export function NotificationSettingsTab() {
     window.electron?.notification
       ?.setSettings(patch)
       .then(() => {
-        setSaveFailure((current) => (current?.group === group ? null : current));
-      })
-      .catch(() => {
-        setSaveFailure({ group, patch });
-        // Roll back only what this save changed, and only where nothing newer has
-        // replaced it — a later save that succeeded must stay on screen.
-        setSettings((current) => {
-          const next = { ...current };
-          for (const key of keys) {
-            if (Reflect.get(current, key) === Reflect.get(patch, key)) {
-              Object.assign(next, { [key]: Reflect.get(previous, key) });
-            }
+        confirmedRef.current = { ...confirmedRef.current, ...patch };
+        // A success retires a failure it fully covers: the failed values are superseded.
+        setSaveFailures((failures) => {
+          const failure = failures[group];
+          if (!failure || !Object.keys(failure.patch).every((k) => keys.includes(k))) {
+            return failures;
           }
+          const next = { ...failures };
+          delete next[group];
           return next;
         });
-        if (Object.keys(previousStore).length > 0) {
-          useNotificationSettingsStore.setState(previousStore);
+      })
+      .catch(() => {
+        const stale = keys.filter(isNewest);
+        if (stale.length === 0) return;
+        const restored: Partial<NotificationSettings> = {};
+        for (const key of stale) {
+          Object.assign(restored, { [key]: Reflect.get(confirmedRef.current, key) });
         }
+        setSettings((current) => ({ ...current, ...restored }));
+        const restoredStore = storeSlice(restored, stale);
+        if (Object.keys(restoredStore).length > 0) {
+          useNotificationSettingsStore.setState(restoredStore);
+        }
+        setSaveFailures((failures) => ({ ...failures, [group]: { group, patch } }));
       });
   };
 
@@ -266,14 +283,16 @@ export function NotificationSettingsTab() {
   const masterOff = !settings.enabled || unavailable;
   const masterOffReason = unavailable ? undefined : "Turn on notifications to use this";
 
-  const saveError = (group: SaveGroup) =>
-    saveFailure?.group === group ? (
+  const saveError = (group: SaveGroup) => {
+    const failure = saveFailures[group];
+    return failure ? (
       <SettingsLoadErrorBanner
         title="Couldn't save that change"
         message="The setting is back to its previous value."
-        onRetry={() => update(saveFailure.patch)}
+        onRetry={() => update(failure.patch)}
       />
     ) : null;
+  };
 
   const soundRow = (key: SoundFileKey) => (
     <SoundPickerRow
@@ -510,53 +529,24 @@ function TimePicker({
   disabled: boolean;
   onChange: (value: number) => void;
 }) {
-  const { hour, minute } = splitMinutes(totalMinutes);
-  // A stored minute off the 15-minute grid still shows as itself rather than blank.
-  const minutes = MINUTE_OPTIONS.includes(minute)
-    ? MINUTE_OPTIONS
-    : [...MINUTE_OPTIONS, minute].sort((a, b) => a - b);
+  const current = clampMinutes(totalMinutes);
+  // A stored time off the 15-minute grid still shows as itself rather than blank.
+  const times = TIME_OPTIONS.includes(current)
+    ? TIME_OPTIONS
+    : [...TIME_OPTIONS, current].sort((a, b) => a - b);
   return (
-    <div className="flex items-center gap-1">
-      <Select
-        value={String(hour)}
-        onValueChange={(v) => onChange(joinMinutes(Number(v), minute))}
-        disabled={disabled}
-      >
-        <SelectTrigger aria-label={`${label} hour`} aria-describedby={describedBy} className="w-18">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {HOUR_OPTIONS.map((text, h) => (
-            <SelectItem key={h} value={String(h)}>
-              {text}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <span className="text-sm text-text-secondary" aria-hidden="true">
-        :
-      </span>
-      <Select
-        value={String(minute)}
-        onValueChange={(v) => onChange(joinMinutes(hour, Number(v)))}
-        disabled={disabled}
-      >
-        <SelectTrigger
-          aria-label={`${label} minute`}
-          aria-describedby={describedBy}
-          className="w-18"
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {minutes.map((m) => (
-            <SelectItem key={m} value={String(m)}>
-              {String(m).padStart(2, "0")}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
+    <Select value={String(current)} onValueChange={(v) => onChange(Number(v))} disabled={disabled}>
+      <SelectTrigger aria-label={label} aria-describedby={describedBy} className="w-24">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {times.map((minutes) => (
+          <SelectItem key={minutes} value={String(minutes)}>
+            {formatTimeOfDay(minutes)}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -625,9 +615,11 @@ function WeekdayRow({
                   "px-2.5 py-1 text-xs rounded-[var(--radius-md)] border transition-colors",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
                   "disabled:cursor-not-allowed disabled:opacity-50",
+                  // The selected outline is a text-ramp token so it clears 3:1 against the
+                  // card on every theme; the border ramp's strongest step does not.
                   active
-                    ? "border-border-strong bg-overlay-medium text-text-primary"
-                    : "border-border-default bg-surface-canvas text-text-secondary hover:text-text-primary"
+                    ? "border-text-secondary bg-overlay-medium text-text-primary"
+                    : "border-border-default bg-transparent text-text-secondary hover:text-text-primary"
                 )}
                 aria-pressed={active}
               >

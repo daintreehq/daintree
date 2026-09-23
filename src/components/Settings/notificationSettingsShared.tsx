@@ -63,6 +63,8 @@ export const NOTIFICATION_COPY = {
   sound: {
     label: "Play sound",
     description: "Sounds for agent notifications, the working pulse and UI feedback",
+    /** A project can't override UI feedback sounds, so its switch doesn't claim them. */
+    projectDescription: "Sounds for this project's agent notifications and working pulse",
   },
   workingPulse: {
     label: "Working pulse",
