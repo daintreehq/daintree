@@ -286,3 +286,19 @@ describe("VoiceInputSettingsTab key state honesty", () => {
     expect(container.textContent).toContain("Not set");
   });
 });
+
+describe("VoiceInputSettingsTab key operations", () => {
+  it("runs one key operation at a time, so the result names the one the user ran", async () => {
+    const key = "sk-proj-abcdefghijklmnop6789";
+    const pending = new Promise<void>(() => {});
+    install({ openaiApiKey: key }, { setSettings: vi.fn().mockReturnValue(pending) });
+    const { container } = render(<VoiceInputSettingsTab />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Remove key" }));
+
+    const input = container.querySelector<HTMLInputElement>("#voice-stt-openai-key input");
+    await waitFor(() => expect(input?.disabled).toBe(true));
+    const save = screen.getByRole("button", { name: "Check and save" });
+    expect(save.hasAttribute("disabled")).toBe(true);
+  });
+});

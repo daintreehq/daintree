@@ -793,11 +793,13 @@ function ApiKeyRow({
   const statusId = useId();
   const testing = status.kind === "testing";
   const removing = status.kind === "removing";
+  const busy = testing || removing;
   const savedId = useId();
 
   const handleSave = async () => {
     const key = keyInput.trim();
-    if (!key) return;
+    // One credential operation at a time, so a result always describes the one the user ran.
+    if (!key || busy) return;
     setStatus({ kind: "testing" });
     let verified = false;
     if (onValidate) {
@@ -826,6 +828,7 @@ function ApiKeyRow({
   };
 
   const handleRemove = async () => {
+    if (busy) return;
     setStatus({ kind: "removing" });
     setStatus((await onSave("")) ? { kind: "removed" } : { kind: "remove-failed" });
   };
@@ -892,7 +895,7 @@ function ApiKeyRow({
                 aria-invalid={status.kind === "invalid" ? true : undefined}
                 onChange={(e) => {
                   setKeyInput(e.target.value);
-                  if (status.kind !== "idle" && status.kind !== "testing") {
+                  if (status.kind !== "idle" && !busy) {
                     setStatus({ kind: "idle" });
                   }
                 }}
@@ -906,7 +909,7 @@ function ApiKeyRow({
                 className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 pr-9 font-mono text-sm text-text-primary placeholder:font-sans placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
                 autoComplete="new-password"
                 spellCheck={false}
-                disabled={disabled || testing}
+                disabled={disabled || busy}
               />
               <button
                 type="button"
@@ -923,7 +926,7 @@ function ApiKeyRow({
             </div>
             <Button
               onClick={() => void handleSave()}
-              disabled={disabled || !keyInput.trim()}
+              disabled={disabled || busy || !keyInput.trim()}
               loading={testing}
               size="sm"
               variant="contrast"

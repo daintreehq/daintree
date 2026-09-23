@@ -412,6 +412,9 @@ export function DaintreeAssistantSettingsTab() {
   // no models" (also nothing). The model picker only appears once a non-empty
   // catalog resolves for the selected agent.
   const [resolvedModels, setResolvedModels] = useState<AgentModelConfig[] | null>(null);
+  // A failed catalog read is not "this agent has no models": the row stays, with Retry.
+  const [modelCatalogFailed, setModelCatalogFailed] = useState(false);
+  const [modelCatalogAttempt, setModelCatalogAttempt] = useState(0);
 
   useEffect(() => {
     if (!preferredAgentId) {
@@ -420,6 +423,7 @@ export function DaintreeAssistantSettingsTab() {
     }
     let cancelled = false;
     setResolvedModels(null);
+    setModelCatalogFailed(false);
     agentCapabilitiesClient
       .getResolvedModelList(preferredAgentId)
       .then((catalog) => {
@@ -429,12 +433,13 @@ export function DaintreeAssistantSettingsTab() {
       .catch((err) => {
         if (cancelled) return;
         setResolvedModels([]);
+        setModelCatalogFailed(true);
         logError("Failed to load model catalog for assistant tab", err);
       });
     return () => {
       cancelled = true;
     };
-  }, [preferredAgentId]);
+  }, [preferredAgentId, modelCatalogAttempt]);
 
   const modelOptions = useMemo(() => {
     const models = resolvedModels ?? [];
@@ -451,7 +456,9 @@ export function DaintreeAssistantSettingsTab() {
   }, [resolvedModels, settings.modelId]);
 
   const modelSelectValue = settings.modelId || MODEL_DEFAULT_SENTINEL;
-  const showModelPicker = Boolean(resolvedModels && resolvedModels.length > 0);
+  const showModelPicker =
+    Boolean(resolvedModels && resolvedModels.length > 0) ||
+    (modelCatalogFailed && Boolean(preferredAgentId));
 
   useEffect(() => {
     let cancelled = false;
@@ -1024,7 +1031,23 @@ export function DaintreeAssistantSettingsTab() {
           {showModelPicker && (
             <SettingsSelect
               label="Model"
-              description="A --model flag in Custom CLI args overrides this"
+              description={
+                modelCatalogFailed ? (
+                  <>
+                    Couldn&apos;t load this agent&apos;s models, so only the saved choice is listed
+                    ·{" "}
+                    <button
+                      type="button"
+                      onClick={() => setModelCatalogAttempt((n) => n + 1)}
+                      className="text-text-secondary underline underline-offset-2 hover:text-text-primary transition-colors"
+                    >
+                      Retry
+                    </button>
+                  </>
+                ) : (
+                  "A --model flag in Custom CLI args overrides this"
+                )
+              }
               value={modelSelectValue}
               onValueChange={handleModelChange}
               options={modelOptions}
@@ -1338,7 +1361,9 @@ export function DaintreeAssistantSettingsTab() {
         title="External clients"
         description="Share the assistant's local MCP server with other clients, such as Claude Code or Cursor"
       >
-        {connectionError && <InlineError>{connectionError}</InlineError>}
+        {connectionError && (
+          <InlineError onRetry={() => void handleCopyConfig()}>{connectionError}</InlineError>
+        )}
         {loading ? (
           showInlineLoading ? (
             <p className="text-xs text-text-secondary">Loading…</p>

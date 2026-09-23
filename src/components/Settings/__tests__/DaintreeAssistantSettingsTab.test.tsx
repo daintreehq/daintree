@@ -988,6 +988,38 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(labels).not.toContain("Codex");
   });
 
+  // A failed catalog read is not "this agent has no models": hiding the row would hide
+  // a saved model override along with the way to recover.
+  it("keeps the Model row with Retry when the model catalog fails to load", async () => {
+    helpPanelState.preferredAgentId = "claude";
+    const getResolvedModelList = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("catalog down"))
+      .mockResolvedValue({
+        agentId: "claude",
+        models: [{ id: "opus", name: "Opus", shortLabel: "Opus" }],
+        contextWindow: 200_000,
+        source: "merged",
+      });
+    window.electron.agentCapabilities.getResolvedModelList = getResolvedModelList;
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Couldn't load this agent's models");
+    expect(screen.getByLabelText("Model")).toBeTruthy();
+
+    // The select stub wraps its row in a <label>, which renames nested buttons; find by text.
+    fireEvent.click(screen.getByText("Retry", { selector: "button" }));
+
+    await waitFor(() => expect(getResolvedModelList).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(container.textContent).not.toContain("Couldn't load this agent's models")
+    );
+  });
+
   it("does not render a Preferred model section", async () => {
     const { container } = render(
       <SettingsValidationProvider>
