@@ -1,7 +1,13 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { keybindingService, type RegisteredKeybindingConfig } from "@/services/KeybindingService";
+import {
+  keybindingService,
+  type KeyScope,
+  type RegisteredKeybindingConfig,
+} from "@/services/KeybindingService";
+import { isMac } from "@/lib/platform";
+import { parseChord } from "@/lib/kbdShortcut";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -18,6 +24,11 @@ import { SettingsShortcutCapture } from "@/components/KeyboardShortcuts";
 
 interface ShortcutBinding extends RegisteredKeybindingConfig {
   effectiveCombo: string;
+  effectiveCombos: string[];
+  /** Where it applies, shown only when the same action is registered in more than one scope. */
+  scopeNote?: string;
+  /** Displayed key glyphs, so search matches what the rail shows (⌘, ⌥) as well as the names. */
+  searchKeys: string;
   isOverridden: boolean;
   /**
    * One action can be registered more than once under different scopes (e.g.
@@ -137,6 +148,7 @@ function ShortcutRow({
       <SettingsRow
         className="py-2"
         label={name}
+        description={binding.scopeNote}
         isModified={binding.isOverridden}
         onReset={onReset}
         onRowClick={onEdit}
@@ -149,19 +161,26 @@ function ShortcutRow({
                 onClick={onEdit}
                 className={cn(
                   "inline-flex items-center h-6 px-2 rounded-[var(--radius-sm)]",
-                  "ring-1 ring-border-default text-text-secondary",
-                  "hover:ring-border-strong hover:bg-overlay-soft hover:text-text-primary",
+                  "ring-1 ring-border-strong text-text-secondary",
+                  "hover:bg-overlay-soft hover:text-text-primary",
                   "transition-colors duration-150 ease-out"
                 )}
               >
                 {binding.effectiveCombo ? (
                   <>
                     <span className="sr-only">Edit shortcut for {name}: </span>
-                    <KbdChord
-                      shortcut={binding.effectiveCombo}
-                      density="bare"
-                      className="text-text-primary"
-                    />
+                    <span className="inline-flex items-center gap-2">
+                      {binding.effectiveCombos.map((combo, index) => (
+                        <span key={combo} className="inline-flex items-center gap-2">
+                          {index > 0 && (
+                            <span className="text-3xs text-text-secondary" aria-hidden="true">
+                              /
+                            </span>
+                          )}
+                          <KbdChord shortcut={combo} density="bare" foreground="primary" />
+                        </span>
+                      ))}
+                    </span>
                   </>
                 ) : (
                   <span className="text-xs">
@@ -229,6 +248,13 @@ function matchesQuery(query: string, ...fields: (string | undefined)[]): boolean
   return fields.some((field) => field?.toLowerCase().includes(query) ?? false);
 }
 
+const SCOPE_NOTES: Record<KeyScope, string> = {
+  global: "Everywhere else",
+  worktreeGrid: "In an expanded worktree card",
+  portal: "In the portal",
+  "dev-preview": "In dev preview",
+};
+
 type FilterMode = "all" | "modified";
 
 const FILTER_MODES: { value: FilterMode; label: string }[] = [
@@ -249,10 +275,23 @@ export function KeyboardShortcutsTab() {
 
   const loadBindings = useCallback(() => {
     const allBindings = keybindingService.getAllBindingsWithEffectiveCombos();
+    const registrations = new Map<string, number>();
+    for (const b of allBindings) {
+      registrations.set(b.actionId, (registrations.get(b.actionId) ?? 0) + 1);
+    }
+    const mac = isMac();
     setBindings(
       allBindings.map((b, index) => ({
         ...b,
         isOverridden: keybindingService.hasOverride(b.actionId),
+        scopeNote: (registrations.get(b.actionId) ?? 0) > 1 ? SCOPE_NOTES[b.scope] : undefined,
+        searchKeys: b.effectiveCombos
+          .map((combo) =>
+            parseChord(combo, mac)
+              .map((step) => step.join(""))
+              .join(" ")
+          )
+          .join(" "),
         // `combo` is the DEFAULT binding, so this stays stable when an override
         // changes `effectiveCombo`. The index disambiguates the registry's few
         // legal exact duplicates (a plugin may register the same action, scope
@@ -283,7 +322,16 @@ export function KeyboardShortcutsTab() {
     return bindings.filter(
       (b) =>
         (filterMode === "all" || b.isOverridden) &&
-        (!query || matchesQuery(query, b.description, b.actionId, b.effectiveCombo, b.category))
+        (!query ||
+          matchesQuery(
+            query,
+            b.description,
+            b.actionId,
+            b.effectiveCombos.join(" "),
+            b.searchKeys,
+            b.scopeNote,
+            b.category
+          ))
     );
   }, [bindings, query, filterMode]);
 
@@ -356,8 +404,10 @@ export function KeyboardShortcutsTab() {
       return;
     }
     setShortcutError(null);
-    // The reset button goes away with the override; keep focus on the row.
-    setFocusRowId(rowId);
+    // The reset button goes away with the override; keep focus on the row, or on
+    // search when the Modified filter is about to drop the row itself.
+    if (filterMode === "modified") searchRef.current?.focus();
+    else setFocusRowId(rowId);
     loadBindings();
   };
 
@@ -523,7 +573,7 @@ export function KeyboardShortcutsTab() {
                             /
                           </span>
                         )}
-                        <KbdChord shortcut={key} density="bare" className="text-text-primary" />
+                        <KbdChord shortcut={key} density="bare" foreground="primary" />
                       </span>
                     ))}
                   </span>

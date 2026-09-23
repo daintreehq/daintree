@@ -54,6 +54,13 @@ export interface KbdChordProps {
    * {@link KBD_BARE_CLASS}).
    */
   density?: "default" | "compact" | "bare";
+  /**
+   * Key glyph colour. `secondary` (the default) suits a hint beside a label;
+   * `primary` is for places where the keys are the content being read, such as
+   * a shortcut editor's binding column. The class sits on each key, so a colour
+   * on the wrapper cannot reach it.
+   */
+  foreground?: "secondary" | "primary";
 }
 
 /**
@@ -68,13 +75,17 @@ export function KbdChord({
   className,
   "aria-label": ariaLabel,
   density = "default",
+  foreground = "secondary",
 }: KbdChordProps) {
   const mac = isMacProp ?? isMac();
   const steps = parseChord(shortcut, mac);
   if (steps.length === 0) return null;
   const compact = density === "compact";
   const bare = density === "bare";
-  const keyClass = bare ? KBD_BARE_CLASS : compact ? KBD_COMPACT_CLASS : KBD_CLASS;
+  const keyClass = cn(
+    bare ? KBD_BARE_CLASS : compact ? KBD_COMPACT_CLASS : KBD_CLASS,
+    foreground === "primary" && "text-text-primary"
+  );
 
   return (
     <span

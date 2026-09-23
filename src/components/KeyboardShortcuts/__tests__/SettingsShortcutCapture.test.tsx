@@ -1247,5 +1247,56 @@ describe("SettingsShortcutCapture", () => {
       expect(mockOnCapture).toHaveBeenCalledWith("Cmd+Ctrl+r");
       vi.mocked(isMac).mockReturnValue(false);
     });
+
+    it("unbinds a plugin binding the defaults don't know, and Undo puts it back to inherited", async () => {
+      const { keybindingService } = await import("@/services/KeybindingService");
+      const { actionService } = await import("@/services/ActionService");
+      vi.mocked(keybindingService.getOverride).mockReturnValue(undefined);
+      vi.mocked(keybindingService.getDefaultCombo).mockReturnValue(undefined);
+      vi.mocked(keybindingService.findConflicts).mockReturnValue([
+        {
+          actionId: "plugin.thing",
+          description: "Plugin thing",
+          combo: "Cmd+K",
+          scope: "global",
+          priority: 0,
+          kind: "conflict",
+        },
+      ]);
+      render(
+        <SettingsShortcutCapture
+          onCapture={mockOnCapture}
+          onCancel={mockOnCancel}
+          excludeActionId="test.action"
+          autoStart
+        />
+      );
+      press({ key: "k", code: "KeyK", ctrlKey: true });
+      act(() => {
+        vi.advanceTimersByTime(1100);
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Unbind Plugin thing" }));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(actionService.dispatch).toHaveBeenCalledWith(
+        "keybinding.setOverride",
+        { actionId: "plugin.thing", combo: [] },
+        { source: "user" }
+      );
+
+      const toast = notifyMock.mock.calls.at(-1)?.[0] as {
+        action: { onClick: () => Promise<void> };
+      };
+      await act(async () => {
+        await toast.action.onClick();
+      });
+      expect(actionService.dispatch).toHaveBeenLastCalledWith(
+        "keybinding.removeOverride",
+        { actionId: "plugin.thing" },
+        { source: "user" }
+      );
+    });
   });
 });

@@ -96,6 +96,7 @@ vi.mock("@/services/KeybindingService", () => ({
         category: "File",
         scope: "global",
         effectiveCombo: "Cmd+S",
+        effectiveCombos: ["Cmd+S"],
       },
     ],
     hasOverride: (actionId: string) => overrides.has(actionId),
@@ -106,6 +107,8 @@ vi.mock("@/services/KeybindingService", () => ({
 }));
 
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { isMac } from "@/lib/platform";
+import { parseChord } from "@/lib/kbdShortcut";
 import { KeyboardShortcutsTab } from "../KeyboardShortcutsTab";
 
 function deferred<T = void>() {
@@ -315,6 +318,13 @@ describe("KeyboardShortcutsTab — finding a shortcut", () => {
     expect(screen.queryAllByTestId("shortcut-row")).toHaveLength(0);
     expect(screen.getByText("Reorder panel")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Clear search" })).toBeNull();
+  });
+
+  it("finds a binding by the key glyphs the rail shows, not only by the stored names", async () => {
+    await renderTab();
+    await search(parseChord("Cmd+S", isMac()).flat().join(""));
+
+    expect(screen.getAllByTestId("shortcut-row")).toHaveLength(1);
   });
 
   it("offers one way back when nothing at all matches", async () => {

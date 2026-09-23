@@ -94,9 +94,14 @@ describe("CommandOverridesTab", () => {
 
     expect(onChange).not.toHaveBeenCalled();
     expect(prompt.getAttribute("aria-invalid")).toBe("true");
+    const status = screen
+      .getAllByRole("status")
+      .find((el) => el.textContent === "Custom prompt not saved");
+    expect(status).toBeTruthy();
     expect(screen.getByText(/saved prompt stays in use/)).toBeTruthy();
 
     fireEvent.change(prompt, { target: { value: "About {labels}" } });
+    expect(status?.textContent).toBe("Custom prompt saved");
     expect(onChange).toHaveBeenLastCalledWith([
       { commandId: "github:create-issue", prompt: "About {labels}" },
     ]);

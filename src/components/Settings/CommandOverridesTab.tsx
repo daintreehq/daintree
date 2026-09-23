@@ -434,10 +434,17 @@ function PromptRow({ commandId, args, value, onChange }: PromptRowProps) {
   }, [draft, argNames]);
   const invalid = validation !== null && !validation.valid;
 
+  // Announced only when saving stops or resumes, not on every keystroke while
+  // the draft stays invalid; the error itself stays wired to the field.
+  const [announcement, setAnnouncement] = useState("");
+
   const update = (next: string) => {
     setDraft(next);
     const result = next.trim() ? validatePromptTemplate(next, argNames) : null;
-    if (!result || result.valid) {
+    const nowInvalid = !!result && !result.valid;
+    if (nowInvalid && !invalid) setAnnouncement("Custom prompt not saved");
+    if (!nowInvalid && invalid) setAnnouncement("Custom prompt saved");
+    if (!nowInvalid) {
       setSyncedValue(next);
       onChange(next);
     }
@@ -470,7 +477,10 @@ function PromptRow({ commandId, args, value, onChange }: PromptRowProps) {
       }
       layout="stacked"
       isModified={value.trim() !== ""}
-      onReset={() => update("")}
+      onReset={() => {
+        update("");
+        textareaRef.current?.focus();
+      }}
       resetAriaLabel={`Reset ${commandId} custom prompt`}
       error={
         invalid
@@ -483,6 +493,9 @@ function PromptRow({ commandId, args, value, onChange }: PromptRowProps) {
       }
       control={({ labelId, descriptionId, disabled }) => (
         <div className="grid gap-2">
+          <p className="sr-only" role="status" aria-live="polite">
+            {announcement}
+          </p>
           {args.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-xs text-text-secondary">Insert</span>

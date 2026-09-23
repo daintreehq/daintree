@@ -145,6 +145,8 @@ export function SettingsShortcutCapture({
         setChordStep("first");
         if (previousDraftRef.current.length > 0) {
           setCapturedCombos(previousDraftRef.current);
+          // The recorder that held focus is gone; the restored combo's Save is next.
+          requestAnimationFrame(() => saveRef.current?.focus());
         } else {
           setCapturedCombos([]);
           onCancel();
@@ -256,7 +258,11 @@ export function SettingsShortcutCapture({
     onCancel();
   };
 
-  const handleUnbindConflict = async (conflict: { actionId: string; description?: string }) => {
+  const handleUnbindConflict = async (conflict: {
+    actionId: string;
+    description?: string;
+    combo?: string;
+  }) => {
     const { actionId } = conflict;
     setIsUnbinding(true);
 
@@ -289,6 +295,16 @@ export function SettingsShortcutCapture({
         }
       }
 
+      // A plugin or second scoped registration isn't in the shipped defaults; the
+      // conflict itself carries the combo that clashed.
+      if (
+        !conflictingCombo &&
+        conflict.combo &&
+        combosFieldsEqual(conflict.combo, capturedCombo!)
+      ) {
+        conflictingCombo = conflict.combo;
+      }
+
       if (isOverrideConflict) {
         // Removing the last custom combo stores an empty binding rather than
         // dropping the override: dropping it would bring back the default, which
@@ -317,8 +333,8 @@ export function SettingsShortcutCapture({
       }
 
       setConflictRefreshKey((prev) => prev + 1);
-
-      const undoCombo = conflictingCombo!;
+      // The Unbind button goes away with the conflict; Save is the next step.
+      requestAnimationFrame(() => saveRef.current?.focus());
 
       notify({
         type: "success",
@@ -335,14 +351,19 @@ export function SettingsShortcutCapture({
           label: "Undo",
           onClick: async () => {
             try {
-              const restoreResult = await actionService.dispatch(
-                "keybinding.setOverride",
-                {
-                  actionId,
-                  combo: isOverrideConflict && currentOverride ? currentOverride : [undoCombo],
-                },
-                { source: "user" }
-              );
+              // Put back exactly what was there: the previous override, or no
+              // override at all when the binding was inherited.
+              const restoreResult = currentOverride
+                ? await actionService.dispatch(
+                    "keybinding.setOverride",
+                    { actionId, combo: currentOverride },
+                    { source: "user" }
+                  )
+                : await actionService.dispatch(
+                    "keybinding.removeOverride",
+                    { actionId },
+                    { source: "user" }
+                  );
               if (!restoreResult.ok) {
                 throw new Error(restoreResult.error?.message || "Failed to undo");
               }
@@ -392,7 +413,7 @@ export function SettingsShortcutCapture({
         <p className="flex items-center gap-2 text-xs text-text-secondary">
           <span>Current</span>
           {currentCombo ? (
-            <KbdChord shortcut={currentCombo} density="bare" className="text-text-primary" />
+            <KbdChord shortcut={currentCombo} density="bare" foreground="primary" />
           ) : (
             <span>Not set</span>
           )}
@@ -430,7 +451,7 @@ export function SettingsShortcutCapture({
               aria-describedby={describedBy}
               className={cn(fieldClass, "border-border-default bg-surface-input text-text-primary")}
             >
-              <KbdChord shortcut={capturedCombo} />
+              <KbdChord shortcut={capturedCombo} foreground="primary" />
               {isChord && <span className="text-xs text-text-secondary">Two-step shortcut</span>}
             </div>
           ) : (
@@ -482,7 +503,12 @@ export function SettingsShortcutCapture({
                 <li key={conflict.actionId} className="flex items-center gap-2 min-h-7 text-sm">
                   <span className="min-w-0 truncate text-text-primary">{name}</span>
                   {conflict.combo && (
-                    <KbdChord shortcut={conflict.combo} density="bare" className="shrink-0" />
+                    <KbdChord
+                      shortcut={conflict.combo}
+                      density="bare"
+                      foreground="primary"
+                      className="shrink-0"
+                    />
                   )}
                   {conflict.kind === "shadowed" ? (
                     // Shadowed = chord-prefix overlap. Auto-unbind can't resolve it

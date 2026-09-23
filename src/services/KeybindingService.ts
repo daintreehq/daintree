@@ -188,6 +188,9 @@ class KeybindingService {
         const effectiveCombos = hasOverride ? overrideCombos : binding.combo ? [binding.combo] : [];
 
         let matched: "conflict" | "shadowed" | null = null;
+        // The combo that clashed, which is not the registration's default when an
+        // override is in force — the editor shows it beside the conflicting action.
+        let matchedCombo: string | undefined;
         for (const existingCombo of effectiveCombos) {
           const existingParts = existingCombo.trim().split(/\s+/).filter(Boolean);
           if (existingParts.length === 0) continue;
@@ -196,6 +199,7 @@ class KeybindingService {
             existingParts.every((p, i) => combosFieldsEqual(p, candidateParts[i]!))
           ) {
             matched = "conflict";
+            matchedCombo = existingCombo;
             break;
           }
 
@@ -207,13 +211,14 @@ class KeybindingService {
             existingParts.every((p, i) => combosFieldsEqual(p, candidateParts[i]!));
           if (candidateIsPrefix || existingIsPrefix) {
             matched = "shadowed";
+            matchedCombo = existingCombo;
             // Don't break: a later combo on the same binding might be an exact
             // conflict, which outranks "shadowed".
           }
         }
 
         if (matched) {
-          conflicts.push({ ...binding, kind: matched });
+          conflicts.push({ ...binding, combo: matchedCombo ?? binding.combo, kind: matched });
         }
       }
     }
@@ -665,21 +670,28 @@ class KeybindingService {
     return display;
   }
 
+  /**
+   * Every registration with the keys that actually trigger it. Resolved per
+   * registration, not per action: an action registered under two scopes with
+   * different defaults keeps each default on its own row, and an override (which
+   * applies to the whole action) reports every combo it holds, not just the first.
+   */
   getAllBindingsWithEffectiveCombos(): Array<
-    RegisteredKeybindingConfig & { effectiveCombo: string }
+    RegisteredKeybindingConfig & { effectiveCombo: string; effectiveCombos: string[] }
   > {
-    // Resolved per binding, the way the matcher resolves it: an action can be
-    // registered twice (`terminal.close` on ⌘W and ⌃F4), and resolving by action
-    // ID would report the first binding's combo on every one of its rows.
     return Array.from(this.bindings.values())
       .flat()
       .map((binding) => {
-        const effectiveCombo = this.overrides.has(binding.actionId)
-          ? this.overrides.get(binding.actionId)?.[0]
-          : binding.combo;
+        const override = this.overrides.get(binding.actionId);
+        const effectiveCombos = override
+          ? override.filter(Boolean)
+          : binding.combo
+            ? [binding.combo]
+            : [];
         return {
           ...binding,
-          effectiveCombo: effectiveCombo ?? "",
+          effectiveCombo: effectiveCombos[0] ?? "",
+          effectiveCombos,
         };
       });
   }

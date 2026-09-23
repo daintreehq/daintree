@@ -1,4 +1,4 @@
-import type { ComponentPropsWithoutRef, ReactNode } from "react";
+import { useRef, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { SETTINGS_CONTROL_WIDTH, SettingsRow } from "./SettingsGroup";
@@ -49,6 +49,7 @@ export function OverrideField({
   disabled,
   ...props
 }: OverrideFieldProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
   const isOverriding = value !== undefined;
   const name = labelText ?? (typeof label === "string" ? label : "setting");
 
@@ -61,13 +62,18 @@ export function OverrideField({
       description={inheritDescription}
       layout={layout}
       isModified={isOverriding}
-      onReset={onReset}
+      onReset={() => {
+        onReset();
+        // The reset button goes away with the override; the field is what's left.
+        inputRef.current?.focus();
+      }}
       resetAriaLabel={`Reset ${name} to default`}
       disabled={disabled}
       error={error}
       control={({ labelId, descriptionId, disabled: rowDisabled }) => (
         <div className={cn(layout === "inline" && SETTINGS_CONTROL_WIDTH[controlWidth])}>
           <Input
+            ref={inputRef}
             type="text"
             value={value ?? ""}
             onChange={(e) => {
