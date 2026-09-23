@@ -336,7 +336,7 @@ async function captureAll(page: Page, state: "empty" | "populated"): Promise<voi
       await expect(editor.locator('input[value="ANTHROPIC_BASE_URL"]')).toBeVisible();
     }
     await captureAt(page, state, "agents-env", page.locator("#agents-global-env"), [
-      populated ? "Key" : "Add your first variable",
+      populated ? "Import .env" : "Add your first variable",
     ]);
   });
   await closeSettings(page);
@@ -458,8 +458,8 @@ async function captureValidation(page: Page): Promise<void> {
     await p.getByLabel("Environment variable name").last().fill("DATABASE_URL");
     await p.getByRole("button", { name: "Save", exact: true }).click();
     await capturePage(page, "validation", "project:variables", [
-      "Use letters, digits, and underscores only",
-      "Duplicate variable name",
+      "Start with a letter or underscore",
+      "Another variable already uses this name",
     ]);
     await p.getByRole("button", { name: "Discard" }).click();
   });
@@ -471,7 +471,7 @@ async function captureValidation(page: Page): Promise<void> {
     await p.getByLabel("Environment variable name").last().fill("MY-KEY");
     await p.getByLabel("Environment variable value").last().fill("on");
     await p.getByRole("button", { name: "Save", exact: true }).click();
-    await capturePage(page, "validation", "environment", ["Invalid name"]);
+    await capturePage(page, "validation", "environment", ["Start with a letter or underscore"]);
     await p.getByRole("button", { name: "Discard" }).click();
   });
 
@@ -536,8 +536,8 @@ async function captureValidation(page: Page): Promise<void> {
     await blank.fill("");
     await blank.blur();
     await captureAt(page, "validation", "agents-env", page.locator("#agents-global-env"), [
-      "Key required",
-      "Duplicate key",
+      "Enter a name",
+      "Another variable already uses this name",
     ]);
   });
 
