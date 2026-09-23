@@ -1,6 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
+import { useState } from "react";
 import { describe, it, expect, afterEach, beforeAll, vi } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { SegmentedRadioGroup } from "../SegmentedRadioGroup";
@@ -120,5 +121,80 @@ describe("SegmentedRadioGroup keyboard model", () => {
     fireEvent.keyDown(group, { key: "ArrowRight" });
 
     expect(onChange).toHaveBeenLastCalledWith("third");
+  });
+});
+
+describe("SegmentedRadioGroup thumb motion", () => {
+  const thumbSlides = (container: HTMLElement) =>
+    container
+      .querySelector('[data-slot="segmented-thumb"]')
+      ?.className.includes("transition-[translate,width]") ?? false;
+
+  function Controlled({ initial }: { initial: string }) {
+    const [value, setValue] = useState(initial);
+    return (
+      <>
+        <SegmentedRadioGroup
+          options={OPTIONS}
+          value={value}
+          onChange={setValue}
+          aria-label="Branch mode"
+        />
+        <button type="button" onClick={() => setValue("third")}>
+          Load
+        </button>
+      </>
+    );
+  }
+
+  it("does not slide into place on mount", () => {
+    const { container } = render(<Controlled initial="existing" />);
+
+    expect(thumbSlides(container)).toBe(false);
+  });
+
+  it("snaps when the value changes from outside the control", () => {
+    const { container } = render(<Controlled initial="new" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Load" }));
+
+    expect(screen.getByRole("radio", { name: "Third" }).getAttribute("aria-checked")).toBe("true");
+    expect(thumbSlides(container)).toBe(false);
+  });
+
+  it("forgets a pick the owner rejected once the user re-picks the current value", () => {
+    function Rejecting() {
+      const [value, setValue] = useState("new");
+      return (
+        <>
+          <SegmentedRadioGroup
+            options={OPTIONS}
+            value={value}
+            onChange={(next) => {
+              if (next === "new") setValue(next);
+            }}
+            aria-label="Branch mode"
+          />
+          <button type="button" onClick={() => setValue("existing")}>
+            Load
+          </button>
+        </>
+      );
+    }
+    const { container } = render(<Rejecting />);
+
+    fireEvent.click(screen.getByRole("radio", { name: "Existing branch" }));
+    fireEvent.click(screen.getByRole("radio", { name: "New branch" }));
+    fireEvent.click(screen.getByRole("button", { name: "Load" }));
+
+    expect(thumbSlides(container)).toBe(false);
+  });
+
+  it("slides when the user picks a segment", () => {
+    const { container } = render(<Controlled initial="new" />);
+
+    fireEvent.click(screen.getByRole("radio", { name: "Existing branch" }));
+
+    expect(thumbSlides(container)).toBe(true);
   });
 });

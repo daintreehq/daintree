@@ -167,3 +167,15 @@
 .settings-list-item {
   background: var(--settings-list-item-bg, var(--theme-surface-panel-elevated));
 }
+
+/* Opening a settings tab never animates. Until the user points or types inside the
+   panel, its values are still arriving from main and its measured controls are
+   settling from a hidden layout — a switch sliding to its loaded state or a segmented
+   thumb gliding in from zero would replay a change nobody made. The attribute clears
+   on the first pointer or key event, before the click that follows it, so the user's
+   own changes still animate. Keyframe animations (loading pulses) are left alone. */
+[data-settings-settling] *,
+[data-settings-settling] *::before,
+[data-settings-settling] *::after {
+  transition: none !important;
+}

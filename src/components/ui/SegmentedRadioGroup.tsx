@@ -36,6 +36,11 @@ interface SegmentedRadioGroupProps<T extends string> {
  * width is knowable from the DOM. Measurement runs in a layout effect and on
  * container resize, so a late-loading font or a changed option list moves the
  * thumb before paint instead of leaving it stranded.
+ *
+ * Only the user's own pick slides the thumb. Every other move snaps: a value
+ * loaded after mount, a rollback, and above all a group that was measured while
+ * hidden (a `display: none` tab panel reads as zero) and resized on reveal —
+ * otherwise opening a surface replays a selection nobody just made.
  */
 export function SegmentedRadioGroup<T extends string>({
   options,
@@ -49,26 +54,34 @@ export function SegmentedRadioGroup<T extends string>({
 }: SegmentedRadioGroupProps<T>) {
   const containerRef = useRef<HTMLDivElement>(null);
   const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const [thumb, setThumb] = useState<{ left: number; width: number } | null>(null);
+  const [thumb, setThumb] = useState<{ left: number; width: number; animate: boolean } | null>(
+    null
+  );
+  const pendingPickRef = useRef<T | null>(null);
   const skipMotion = useShouldSkipMotion();
 
   const activeIndex = options.findIndex((option) => option.value === value);
 
-  const measure = useCallback(() => {
-    const button = buttonRefs.current[activeIndex];
-    const container = containerRef.current;
-    if (!button || !container) {
-      setThumb(null);
-      return;
-    }
-    setThumb({ left: button.offsetLeft, width: button.offsetWidth });
-  }, [activeIndex]);
+  const measure = useCallback(
+    (animate: boolean) => {
+      const button = buttonRefs.current[activeIndex];
+      const container = containerRef.current;
+      if (!button || !container) {
+        setThumb(null);
+        return;
+      }
+      setThumb({ left: button.offsetLeft, width: button.offsetWidth, animate });
+    },
+    [activeIndex]
+  );
 
   useLayoutEffect(() => {
-    measure();
+    const picked = pendingPickRef.current;
+    pendingPickRef.current = null;
+    measure(picked !== null && picked === value);
     const container = containerRef.current;
     if (!container || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
+    const observer = new ResizeObserver(() => measure(false));
     observer.observe(container);
     // The segments too, not just their container: under `fullWidth` a segment's box
     // can settle after the container's has (late font metrics, a flex reflow), and a
@@ -78,12 +91,19 @@ export function SegmentedRadioGroup<T extends string>({
       if (button) observer.observe(button);
     }
     return () => observer.disconnect();
-  }, [measure, options.length]);
+  }, [measure, options.length, value]);
+
+  const pick = (next: T) => {
+    // A pick of the current value clears the intent too, so a pick the owner
+    // rejected can't make a later outside change to that option slide.
+    pendingPickRef.current = next === value ? null : next;
+    onChange(next);
+  };
 
   const select = (index: number) => {
     const option = options[index];
     if (!option) return;
-    onChange(option.value);
+    pick(option.value);
     buttonRefs.current[index]?.focus();
   };
 
@@ -151,7 +171,7 @@ export function SegmentedRadioGroup<T extends string>({
             "forced-colors:border-[Highlight]",
             // Only the thumb's own geometry animates, and reduced motion drops
             // it entirely rather than shortening it.
-            !skipMotion && "transition-[translate,width] duration-150 ease-out",
+            thumb.animate && !skipMotion && "transition-[translate,width] duration-150 ease-out",
             "motion-reduce:transition-none",
             disabled && "opacity-40"
           )}
@@ -172,7 +192,7 @@ export function SegmentedRadioGroup<T extends string>({
             aria-checked={isActive}
             // Roving tabindex: the group is one tab stop, arrows move within it.
             tabIndex={isActive || (activeIndex === -1 && index === 0) ? 0 : -1}
-            onClick={() => onChange(option.value)}
+            onClick={() => pick(option.value)}
             disabled={disabled}
             className={cn(
               "relative z-10 px-2.5 py-1 text-xs font-medium rounded-[var(--radius-sm)]",

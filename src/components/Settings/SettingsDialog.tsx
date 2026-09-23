@@ -515,6 +515,10 @@ function SettingsDialogInner({
   // deferredQuery drives the expensive filtering computation only.
   const isSearching = searchQuery.trim().length > 0;
 
+  const [panelSettled, markPanelInteracted] = usePanelSettled(
+    `${isOpen}|${isSearching}|${activeTab}|${activeSubtabs[activeTab] ?? ""}`
+  );
+
   // What a gated result depends on, held until its landing reports whether the setting
   // was actually on the page. Showing the note up front claimed the setting was hidden
   // even when its parent was already on.
@@ -936,7 +940,11 @@ function SettingsDialogInner({
                 is a role="tab" whose aria-controls points at one of these panels, and a
                 tab pointing at an id that is not in the document is a broken reference
                 for assistive tech — the panels have to outlive the search overlay. */}
-            <div className={isSearching ? "hidden" : undefined}>
+            <div
+              className={isSearching ? "hidden" : undefined}
+              onPointerDownCapture={markPanelInteracted}
+              onKeyDownCapture={markPanelInteracted}
+            >
               <>
                 {hiddenSettingBanner && (
                   // An explanation, not a warning: nothing is wrong, the setting is
@@ -993,6 +1001,7 @@ function SettingsDialogInner({
                       aria-labelledby={`settings-tab-${entry.id}`}
                       tabIndex={0}
                       className={isActive ? SETTINGS_PANEL_CLASS : "hidden"}
+                      data-settings-settling={isActive && panelSettled ? undefined : ""}
                     >
                       {entry.importKind === "eager" ? (
                         // Only GeneralTab is eager — render with its specific props
@@ -1051,6 +1060,7 @@ function SettingsDialogInner({
                           aria-labelledby={`settings-tab-${entry.id}`}
                           tabIndex={0}
                           className={isActive ? SETTINGS_PANEL_CLASS : "hidden"}
+                          data-settings-settling={isActive && panelSettled ? undefined : ""}
                         >
                           {visitedTabs.has(tabId) && (
                             <Suspense fallback={null}>
@@ -1382,6 +1392,32 @@ export function landOnSettingByText(sectionId: string, tab: SettingsTab): boolea
   if (!target) return false;
   landOn(target);
   return true;
+}
+
+/**
+ * Whether the user has pointed or typed inside the visible settings panel since
+ * `visit` last changed. Until then the panel renders with transitions off (see
+ * `[data-settings-settling]` in settings.css): switching tabs or subtabs reveals
+ * values still loading in and controls measured while hidden, and none of that
+ * should play out as motion. Every change of `visit` — a tab, a subtab, search,
+ * a reopen — starts settling again, including a return to a tab settled before.
+ *
+ * Events on a tab control don't count: a subtab click is navigation, and
+ * unsettling the panel just before it swaps content would animate the swap.
+ */
+export function usePanelSettled(
+  visit: string
+): [boolean, (event: { target: EventTarget }) => void] {
+  const [state, setState] = useState({ visit, settled: false });
+  // Reset during render, not in an effect: an effect would leave one painted frame in
+  // which a revisited panel still counts as settled.
+  if (state.visit !== visit) setState({ visit, settled: false });
+  const markInteracted = (event: { target: EventTarget }) => {
+    if (state.visit === visit && state.settled) return;
+    if (event.target instanceof Element && event.target.closest('[role="tab"]')) return;
+    setState({ visit, settled: true });
+  };
+  return [state.visit === visit && state.settled, markInteracted];
 }
 
 // Two-tier hover/focus prefetch for lazy settings tabs.
