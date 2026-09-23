@@ -474,7 +474,6 @@ export function WorktreeHeader({
           branchLabel={branchLabel}
           isActive={isActive}
           isMuted={isMuted}
-          hasUpstreamDelta={hasUpstreamDelta}
           hasAuthFailedSignIn={hasAuthFailedSignIn}
           authProviderId={worktree.matchedForgeProviderId ?? worktree.linked?.providerId ?? null}
           aheadCount={worktree.aheadCount}

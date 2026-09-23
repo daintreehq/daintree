@@ -1404,7 +1404,9 @@ describe("WorktreeHeader upstream sync indicator", () => {
     const indicator = screen.getByTestId("upstream-sync-indicator");
     expect(indicator).toBeDefined();
     expect(indicator.getAttribute("data-fetch-auth-failed")).toBe("true");
-    expect(indicator.textContent).toContain("—");
+    // With no counts to carry, the line is the action alone — never an empty
+    // control.
+    expect(indicator.textContent).toContain("Reconnect");
   });
 
   it("renders the sign-in affordance when matchedForgeProviderId is set and no linked data (#9982)", () => {
@@ -1424,7 +1426,7 @@ describe("WorktreeHeader upstream sync indicator", () => {
     });
     const indicator = screen.getByRole("button", { name: /Forge authentication failed/ });
     expect(indicator.getAttribute("data-fetch-auth-failed")).toBe("true");
-    expect(indicator.textContent).toContain("—");
+    expect(indicator.textContent).toContain("Reconnect");
     // Recovery path must be reachable on the no-linked-data path too — the
     // badge owns the only per-worktree way out of the auth-suspended fetch.
     fireEvent.click(indicator);
@@ -1560,31 +1562,27 @@ describe("WorktreeHeader upstream sync indicator", () => {
         fetchNetworkFailed: true,
       },
     });
-    // The badge still renders the count display (transient failure doesn't
-    // replace the indicator like the auth+github path does), but it carries a
-    // partial dim so the failed row is distinguishable from a healthy one at
-    // the row level — without grayscale, which is reserved for the persistent
-    // auth-failure treatment.
+    // The counts stay at full strength — a failed fetch does not make them
+    // unreadable, only unconfirmed — and the line carries a mark saying so,
+    // distinct from the auth-failure treatment.
     const indicator = screen.getByTestId("upstream-sync-indicator");
-    expect(indicator).toBeDefined();
     expect(indicator.textContent).toContain("↑1");
-    expect(indicator.className).toContain("opacity-75");
-    expect(indicator.className).not.toContain("grayscale");
-    expect(indicator.className).not.toContain("opacity-50");
+    expect(indicator.className).not.toMatch(/\bopacity-/);
     expect(indicator.getAttribute("data-fetch-network-failed")).toBe("true");
+    const mark = indicator.querySelector('[data-testid="upstream-sync-status"]');
+    expect(mark?.getAttribute("data-status")).toBe("unreachable");
   });
 
-  it("does not dim the count display on a healthy worktree", () => {
+  it("carries no failure mark on a healthy worktree", () => {
     renderHeader({
-      worktree: { ...baseWorktree, aheadCount: 1 },
+      worktree: { ...baseWorktree, aheadCount: 1, lastFetchedAt: Date.now() },
     });
     const indicator = screen.getByTestId("upstream-sync-indicator");
-    expect(indicator).toBeDefined();
-    expect(indicator.className).not.toContain("opacity-75");
+    expect(indicator.querySelector('[data-testid="upstream-sync-status"]')).toBeNull();
     expect(indicator.getAttribute("data-fetch-network-failed")).toBeNull();
   });
 
-  it("prefers the auth-failed treatment over the network-failed dim", () => {
+  it("prefers the auth-failed treatment over the network-failed mark", () => {
     // Mutually exclusive at source (RepoFetchCoordinator), but pin the
     // precedence so a regression can't surface both treatments at once.
     renderHeader({
@@ -1600,7 +1598,8 @@ describe("WorktreeHeader upstream sync indicator", () => {
     const indicator = screen.getByTestId("upstream-sync-indicator");
     expect(indicator.getAttribute("data-fetch-auth-failed")).toBe("true");
     expect(indicator.getAttribute("data-fetch-network-failed")).toBeNull();
-    expect(indicator.className).not.toContain("opacity-75");
+    const marks = indicator.querySelectorAll('[data-testid="upstream-sync-status"]');
+    expect(Array.from(marks, (m) => m.getAttribute("data-status"))).toEqual(["auth"]);
   });
 });
 
