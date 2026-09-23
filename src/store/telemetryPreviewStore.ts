@@ -33,10 +33,12 @@ const createStore: StateCreator<TelemetryPreviewStoreState> = (set) => ({
   setStateRead: (stateRead) =>
     set((state) => (state.stateRead === stateRead ? state : { stateRead })),
 
+  // Every caller passes main's answer (a read, a push, or the toggle's
+  // result), so a value arriving here also settles whether it's known.
   setActive: (active) =>
     set((state) => {
-      if (state.active === active) return state;
-      return { active };
+      if (state.active === active && state.stateRead === "known") return state;
+      return { active, stateRead: "known" };
     }),
 
   appendEvents: (incoming) =>

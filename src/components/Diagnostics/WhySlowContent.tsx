@@ -87,7 +87,10 @@ export function describeSlowdowns(snapshot: WhySlowSnapshot): SlowdownFinding[] 
     const current = PROFILE_RANK[r.currentProfile] ?? 0;
     const target = PROFILE_RANK[r.targetProfile] ?? 0;
     if (current > 0) {
-      const easing = target < current;
+      // The event-loop lag latch holds the profile down whatever the pressure
+      // score says, so a lower target isn't a recovery in progress while it's on.
+      const easing = target < current && !r.lagPressureActive;
+      const heldByLag = target < current && r.lagPressureActive;
       findings.push({
         id: "profile",
         // Already on its way back is less urgent than staying throttled.
@@ -96,9 +99,11 @@ export function describeSlowdowns(snapshot: WhySlowSnapshot): SlowdownFinding[] 
         suggestion:
           target === current
             ? undefined
-            : easing
-              ? `Pressure has eased; it's heading back to ${PROFILE_MODE[r.targetProfile]} mode`
-              : `Pressure is still rising; it's heading to ${PROFILE_MODE[r.targetProfile]} mode`,
+            : heldByLag
+              ? `It returns to ${PROFILE_MODE[r.targetProfile]} mode once the main process catches up`
+              : easing
+                ? `Pressure has eased; it's heading back to ${PROFILE_MODE[r.targetProfile]} mode`
+                : `Pressure is still rising; it's heading to ${PROFILE_MODE[r.targetProfile]} mode`,
       });
     } else if (target > 0) {
       findings.push({
@@ -334,6 +339,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
     (!snapshot.resource ||
       !snapshot.pty ||
       !snapshot.memory ||
+      snapshot.memory.appMemoryMb === null ||
       !snapshot.memory.terminalWorkloads.available ||
       // Terminals exist but no view has reported how it draws them. An empty
       // renderer cache is fine with no terminals; with some, it's a gap.

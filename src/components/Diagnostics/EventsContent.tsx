@@ -1,7 +1,7 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
-import { useEventStore } from "@/store/eventStore";
+import { useEventStore, type EventRecord } from "@/store/eventStore";
 import { EventTimeline } from "../EventInspector/EventTimeline";
 import { EventDetail } from "../EventInspector/EventDetail";
 import { EventFilters } from "../EventInspector/EventFilters";
@@ -54,6 +54,11 @@ export function EventsContent({ className }: EventsContentProps) {
 
   useEffect(() => {
     let disposed = false;
+    // Batches that land before the snapshot does are held and merged into it:
+    // replacing the store with the snapshot would drop an event that arrived
+    // first and isn't in it yet.
+    let hydrated = false;
+    const buffered: EventRecord[] = [];
 
     eventInspectorClient.subscribe();
     setLoadState("loading");
@@ -62,16 +67,28 @@ export function EventsContent({ className }: EventsContentProps) {
       .getEvents()
       .then((existingEvents) => {
         if (disposed) return;
+        const byId = new Map<string, EventRecord>();
+        for (const event of existingEvents) byId.set(event.id, event);
+        for (const event of buffered) byId.set(event.id, event);
+        hydrated = true;
         setLoadState("loaded");
-        setEvents(existingEvents);
+        setEvents(Array.from(byId.values()).sort((a, b) => a.timestamp - b.timestamp));
       })
       .catch((error) => {
         logError("Failed to load events", error);
-        if (!disposed) setLoadState("failed");
+        if (disposed) return;
+        hydrated = true;
+        // Nothing authoritative to replace what's on screen: keep it, add what arrived.
+        if (buffered.length > 0) addEvents(buffered);
+        setLoadState("failed");
       });
 
     const unsubscribe = eventInspectorClient.onEventBatch((events) => {
       if (disposed) return;
+      if (!hydrated) {
+        buffered.push(...events);
+        return;
+      }
       addEvents(events);
     });
 

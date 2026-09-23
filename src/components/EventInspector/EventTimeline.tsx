@@ -119,6 +119,11 @@ export function EventTimeline({
   // Ignore the "not at bottom" Virtuoso reports during its first layout, before
   // the initial scroll to the tail lands — it isn't the user scrolling away.
   const reachedBottomRef = useRef(false);
+  // The list unmounts while nothing matches; a remount lays out afresh.
+  const listMounted = events.length > 0;
+  useEffect(() => {
+    if (!listMounted) reachedBottomRef.current = false;
+  }, [listMounted]);
   const handleAtBottomChange = useCallback(
     (bottom: boolean) => {
       if (bottom) reachedBottomRef.current = true;

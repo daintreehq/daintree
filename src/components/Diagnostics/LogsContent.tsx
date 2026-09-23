@@ -68,6 +68,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
   const {
     logs,
     filters,
+    filtersResetCount,
     autoScroll,
     expandedIds,
     addLogs,
@@ -80,6 +81,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
     useShallow((state) => ({
       logs: state.logs,
       filters: state.filters,
+      filtersResetCount: state.filtersResetCount,
       autoScroll: state.autoScroll,
       expandedIds: state.expandedIds,
       addLogs: state.addLogs,
@@ -160,14 +162,18 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
     ]).then(([existingLogs, existingSources]) => {
       if (disposed) return;
 
+      // A failed read has no history to replace what's already on screen with:
+      // entries that arrived live since the dock opened stay, and only a
+      // successful read is authoritative enough to replace them.
+      const base = readFailed ? useLogsStore.getState().logs : existingLogs;
       const deduped = new Map<string, LogEntryType>();
-      for (const log of existingLogs) deduped.set(log.id, log);
+      for (const log of base) deduped.set(log.id, log);
       for (const log of bufferedLogs) deduped.set(log.id, log);
 
       const allLogs = Array.from(deduped.values()).sort((a, b) => a.timestamp - b.timestamp);
       setLogs(allLogs);
 
-      const allSources = new Set([...existingSources]);
+      const allSources = new Set([...existingSources, ...(readFailed ? sourcesRef.current : [])]);
       for (const log of bufferedLogs) {
         if (log.source) allSources.add(log.source);
       }
@@ -227,6 +233,12 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
   // away turned auto-scroll off on every open, so only a departure after the
   // list has reached the bottom once counts.
   const reachedBottomRef = useRef(false);
+  // The list unmounts whenever nothing matches, and a remounted list lays out
+  // afresh — so the guard is per mount of the list, not per mount of the tab.
+  const listMounted = displayEntries.length > 0;
+  useEffect(() => {
+    if (!listMounted) reachedBottomRef.current = false;
+  }, [listMounted]);
   const handleAtBottomChange = useCallback(
     (bottom: boolean) => {
       if (bottom) reachedBottomRef.current = true;
@@ -282,6 +294,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
         availableSources={sources}
         levelCounts={levelCounts}
         sourceCounts={sourceCounts}
+        resetSignal={filtersResetCount}
       />
 
       {previousSessionEntry && previousSessionTail && !filters?.search && (

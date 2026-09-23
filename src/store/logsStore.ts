@@ -75,6 +75,12 @@ interface LogsState {
   logs: LogEntry[];
   isOpen: boolean;
   filters: LogFilterOptions;
+  /**
+   * Bumped by every clearFilters(). The search box holds an uncommitted draft
+   * for its debounce, and a clear from elsewhere (the filtered-empty state)
+   * can't reach it — this is the signal that it must drop the draft too.
+   */
+  filtersResetCount: number;
   autoScroll: boolean;
   expandedIds: Set<string>;
 
@@ -98,6 +104,7 @@ const createLogsStore: StateCreator<LogsState> = (set) => ({
   logs: [],
   isOpen: false,
   filters: {},
+  filtersResetCount: 0,
   autoScroll: true,
   expandedIds: new Set(),
 
@@ -145,7 +152,8 @@ const createLogsStore: StateCreator<LogsState> = (set) => ({
       filters: { ...state.filters, ...newFilters },
     })),
 
-  clearFilters: () => set({ filters: {} }),
+  clearFilters: () =>
+    set((state) => ({ filters: {}, filtersResetCount: state.filtersResetCount + 1 })),
 
   setAutoScroll: (autoScroll) => set({ autoScroll }),
 

@@ -396,6 +396,7 @@ describe("WhySlowContent", () => {
         pty: makeQuietPty(),
         worktrees: quietWorktrees,
         memory: null,
+        rendererTerminals: quietRenderer,
       })
     );
 
@@ -405,6 +406,24 @@ describe("WhySlowContent", () => {
       await screen.findByText("No slowdowns found, but some readings are unavailable")
     ).toBeTruthy();
     expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
+  });
+
+  it("treats an unreadable app-memory sweep as a missing reading", async () => {
+    getWhySlowSnapshot.mockResolvedValue(
+      makeSnapshot({
+        resource: makeQuietResource(),
+        pty: makeQuietPty(),
+        worktrees: quietWorktrees,
+        memory: { ...quietMemory!, appMemoryMb: null },
+        rendererTerminals: quietRenderer,
+      })
+    );
+
+    render(<WhySlowContent />);
+
+    expect(
+      await screen.findByText("No slowdowns found, but some readings are unavailable")
+    ).toBeTruthy();
   });
 
   it("does not claim all-clear when the resource section degraded to null", async () => {
@@ -431,12 +450,15 @@ describe("WhySlowContent", () => {
       makeSnapshot({
         resource: makeQuietResource(),
         pty: makeQuietPty(),
+        worktrees: quietWorktrees,
+        memory: quietMemory,
+        rendererTerminals: quietRenderer,
         focusThrottle: { throttled: true, pollMultiplier: 4 },
       })
     );
 
     const { unmount } = render(<WhySlowContent />);
-    await screen.findByText("Resource mode");
+    expect(await screen.findByText(/background checks run 4× less often/)).toBeTruthy();
     expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
     unmount();
 
@@ -445,11 +467,14 @@ describe("WhySlowContent", () => {
       makeSnapshot({
         resource: makeQuietResource(),
         pty: { ...makeQuietPty(), eventLoopP99Ms: 80 },
+        worktrees: quietWorktrees,
+        memory: quietMemory,
+        rendererTerminals: quietRenderer,
       })
     );
 
     render(<WhySlowContent />);
-    await screen.findByText("Resource mode");
+    expect(await screen.findByText(/terminal host is busy: 80ms/)).toBeTruthy();
     expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
   });
 
@@ -602,6 +627,19 @@ describe("WhySlowContent", () => {
       })
     ).find((f) => f.id === "profile");
     expect(easing?.suggestion).toMatch(/eased/);
+    // The lag latch holds the profile down whatever the target says.
+    const held = describeSlowdowns(
+      makeSnapshot({
+        resource: {
+          ...base,
+          currentProfile: "efficiency",
+          targetProfile: "performance",
+          lagPressureActive: true,
+        },
+      })
+    ).find((f) => f.id === "profile");
+    expect(held?.suggestion).not.toMatch(/eased/);
+    expect(held?.suggestion).toMatch(/catches up/);
     expect(worsening?.suggestion).not.toMatch(/eased/);
     expect(worsening?.suggestion).toMatch(/power-saving/);
   });

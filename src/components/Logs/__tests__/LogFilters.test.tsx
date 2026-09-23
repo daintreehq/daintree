@@ -47,10 +47,12 @@ describe("LogFilters accessibility", () => {
     expect(infoBtn.getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("renders sources trigger with aria-haspopup", () => {
+  it("renders sources trigger as a dialog popup trigger", async () => {
     render(<LogFilters {...baseProps} />);
     const trigger = screen.getByText(/Sources/).closest("button")!;
-    expect(trigger.getAttribute("aria-haspopup")).toBe("true");
+    // The popover opens a dialog of toggle buttons, not a menu: "true" would
+    // mean menu, so the trigger must say "dialog".
+    await waitFor(() => expect(trigger.getAttribute("aria-haspopup")).toBe("dialog"));
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
   });
 
@@ -97,6 +99,28 @@ describe("LogFilters accessibility", () => {
       expect(onFiltersChange).toHaveBeenCalledWith({ search: "g" });
     });
     expect(input.value).toBe("g");
+  });
+
+  it("drops an uncommitted draft when filters are cleared from outside the bar", async () => {
+    const onFiltersChange = vi.fn();
+    const { rerender } = render(
+      <LogFilters
+        {...baseProps}
+        filters={{ levels: ["error"] }}
+        onFiltersChange={onFiltersChange}
+        resetSignal={0}
+      />
+    );
+    const input = screen.getByRole("searchbox", { name: "Search logs" }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "kube" } });
+
+    // Cleared from the filtered-empty state before the debounce committed the draft.
+    rerender(
+      <LogFilters {...baseProps} filters={{}} onFiltersChange={onFiltersChange} resetSignal={1} />
+    );
+    await waitFor(() => expect(input.value).toBe(""));
+    await new Promise((r) => setTimeout(r, 250));
+    expect(onFiltersChange).not.toHaveBeenCalledWith(expect.objectContaining({ search: "kube" }));
   });
 
   it("syncs the local search input when filters.search is cleared externally", async () => {
@@ -169,6 +193,7 @@ describe("LogFilters accessibility", () => {
     expect(preloadBtn.getAttribute("aria-pressed")).toBe("true");
     expect(preloadBtn.classList.contains("text-text-secondary")).toBe(false);
     expect(preloadBtn.dataset.empty).toBeUndefined();
+    expect(preloadBtn.className.split(/\s+/)).not.toContainEqual(expect.stringMatching(/^opacity-/));
   });
 
   it("does not dim non-zero source rows", async () => {
@@ -177,5 +202,8 @@ describe("LogFilters accessibility", () => {
     const rendererBtn = screen.getByText(/^\*?renderer/).closest("button")!;
     expect(rendererBtn.classList.contains("text-text-secondary")).toBe(false);
     expect(rendererBtn.dataset.empty).toBeUndefined();
+    expect(rendererBtn.className.split(/\s+/)).not.toContainEqual(
+      expect.stringMatching(/^opacity-/)
+    );
   });
 });

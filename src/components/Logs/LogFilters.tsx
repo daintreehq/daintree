@@ -13,6 +13,8 @@ interface LogFiltersProps {
   availableSources: string[];
   levelCounts?: Partial<Record<LogLevel, number>>;
   sourceCounts?: Partial<Record<string, number>>;
+  /** Changes whenever filters are cleared from anywhere, so a pending search draft is dropped too. */
+  resetSignal?: number;
 }
 
 // The dot is a recognition aid beside the word, never the only signal.
@@ -30,6 +32,7 @@ export function LogFilters({
   availableSources,
   levelCounts,
   sourceCounts,
+  resetSignal,
 }: LogFiltersProps) {
   const [searchValue, setSearchValue] = useState(filters.search || "");
   const [isSourcesOpen, setIsSourcesOpen] = useState(false);
@@ -49,6 +52,16 @@ export function LogFilters({
   // committed search going from set to empty — reacting to "empty while the
   // box has text" would also fire on every first keystroke, before the
   // debounce commits it, and erase what was typed.
+  // A clear from outside the bar (the filtered-empty state's Clear filters)
+  // must drop a draft that hasn't been committed yet, or the debounce would
+  // re-apply it a moment later.
+  const lastResetRef = useRef(resetSignal);
+  useEffect(() => {
+    if (lastResetRef.current === resetSignal) return;
+    lastResetRef.current = resetSignal;
+    setSearchValue("");
+  }, [resetSignal]);
+
   const committedSearchRef = useRef(filters.search);
   useEffect(() => {
     const previous = committedSearchRef.current;
@@ -154,7 +167,6 @@ export function LogFilters({
             <Button
               variant="subtle"
               size="xs"
-              aria-haspopup="true"
               className={cn(activeSourceCount > 0 && PRESSED_TOGGLE)}
             >
               Sources{activeSourceCount > 0 ? ` (${activeSourceCount})` : ""}
