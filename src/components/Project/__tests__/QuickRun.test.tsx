@@ -482,6 +482,46 @@ describe("QuickRun", () => {
     }
   });
 
+  it("keeps a pinned command's settings while focus moves to the toggles", () => {
+    settingsMock.runCommands = [
+      { id: "s", name: "Docs", command: "npx serve docs", preferredLocation: "dock" },
+    ];
+    mockAddTerminal.mockResolvedValue(undefined);
+    try {
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.change(input, { target: { value: "npx serve docs" } });
+      const dockToggle = screen.getByRole("button", { name: /run in the dock/i });
+      expect(dockToggle.getAttribute("aria-pressed")).toBe("true");
+
+      // Tab from the field to the toggle: a real focus move, not a click.
+      fireEvent.focusOut(input, { relatedTarget: dockToggle });
+      dockToggle.focus();
+      expect(dockToggle.getAttribute("aria-pressed")).toBe("true");
+      expect(input.getAttribute("aria-expanded")).toBe("true");
+
+      // Pressing it from the keyboard overrides this launch, not the default.
+      fireEvent.click(dockToggle);
+      expect(dockToggle.getAttribute("aria-pressed")).toBe("false");
+      fireEvent.click(screen.getByRole("button", { name: "Run" }));
+      expect(mockAddTerminal).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "npx serve docs", location: "grid" })
+      );
+    } finally {
+      settingsMock.runCommands = [];
+    }
+  });
+
+  it("closes the list once focus leaves the field and its controls", () => {
+    seedHistory("ls -la");
+    render(<Footer projectId="test-project" />);
+    const input = openPanel();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.focusOut(input, { relatedTarget: document.body });
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("brings a lit row back into view when the list reopens", () => {
     seedHistory("a", "b", "c");
     const scrolled: string[] = [];

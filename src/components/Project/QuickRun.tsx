@@ -753,6 +753,19 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
           <>
             {activeWorktreeId && <RunningTaskList worktreeId={activeWorktreeId} />}
             <div
+              // The list closes when focus leaves the field and its own
+              // controls, not the field alone: tabbing to a toggle keeps the lit
+              // command — and with it a pinned command's own settings, which the
+              // toggles show and a press overrides — rather than dropping back
+              // to the defaults mid-choice.
+              onBlur={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget)) setShowSuggestions(false);
+              }}
+              onKeyDown={(e) => {
+                // The field handles its own keys; from a toggle, Escape still
+                // dismisses the list it kept open.
+                if (e.key === "Escape" && e.target !== inputRef.current) setShowSuggestions(false);
+              }}
               className={cn(
                 // Fallback keeps themes without --dock-input-bg byte-identical.
                 "relative flex flex-wrap items-center rounded-[var(--radius-md)] border border-selection-outline bg-[var(--dock-input-bg,var(--color-overlay-soft))]",
@@ -785,7 +798,6 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                   if (!quietFocusRef.current) setShowSuggestions(true);
                 }}
                 onClick={() => setShowSuggestions(true)}
-                onBlur={() => setShowSuggestions(false)}
                 onKeyDown={handleKeyDown}
                 placeholder="Run a command"
                 aria-label="Command input"

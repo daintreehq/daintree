@@ -104,9 +104,12 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
     });
   }, [quickRunTerminals, dismissedIds]);
 
-  // Clean dismissed IDs when terminals disappear from store
+  // Forget dismissals only for panels that are gone from the renderer
+  // altogether. Pruning against this worktree's tasks dropped every other
+  // worktree's dismissals the moment the user switched away.
+  const allPanelIds = usePanelStore((s) => s.panelIds);
   useEffect(() => {
-    const currentIds = new Set(quickRunTerminals.map((t) => t.id));
+    const currentIds = new Set(allPanelIds);
     setDismissedIds((prev) => {
       const next = new Set<string>();
       for (const id of prev) {
@@ -114,7 +117,7 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
       }
       return next.size !== prev.size ? next : prev;
     });
-  }, [quickRunTerminals]);
+  }, [allPanelIds]);
 
   const handleStop = useCallback((id: string) => {
     terminalClient.kill(id).catch((err) => logError("Failed to kill terminal", err));

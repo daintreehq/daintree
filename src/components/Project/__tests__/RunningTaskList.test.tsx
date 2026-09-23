@@ -246,6 +246,17 @@ describe("RunningTaskList overflow", () => {
     expect(screen.getByText("cmd-0")).toBeTruthy();
   });
 
+  it("keeps a dismissal while another worktree is shown", () => {
+    seedTasks(2, { runtimeStatus: "exited", exitCode: 1 });
+    const { rerender } = render(<RunningTaskList worktreeId={WORKTREE_ID} />);
+    const row = screen.getByText("cmd-1").closest<HTMLElement>("[data-task-row]")!;
+    fireEvent.click(within(row).getByLabelText("Dismiss"));
+
+    rerender(<RunningTaskList worktreeId="wt-other" />);
+    rerender(<RunningTaskList worktreeId={WORKTREE_ID} />);
+    expect(screen.queryByText("cmd-1")).toBeNull();
+  });
+
   it("drops the disclosure once the tail shrinks back under the cap", () => {
     seedTasks(6);
     const { rerender } = render(<RunningTaskList worktreeId={WORKTREE_ID} />);
