@@ -29,6 +29,19 @@ export function PluginActionsSettingsTab() {
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const exportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const loadConfig = useCallback(async (): Promise<void> => {
+    try {
+      const cfg = await window.electron.plugin.getAuditConfig();
+      setAuditEnabled(cfg.enabled);
+      setMaxRecords(cfg.maxRecords);
+      setConfigLoaded(true);
+      setConfigFailed(false);
+    } catch (err) {
+      setConfigFailed(true);
+      logError("Failed to load plugin audit config", err);
+    }
+  }, []);
+
   const refreshRecords = useCallback(async (): Promise<void> => {
     try {
       const next = await window.electron.plugin.getAuditRecords();
@@ -144,10 +157,13 @@ export function PluginActionsSettingsTab() {
             isEnabled={auditEnabled}
             onChange={() => void handleEnabledToggle()}
             disabled={!configLoaded}
-            disabledReason={
-              configFailed ? "Couldn't read this setting. Reopen settings to try again." : undefined
-            }
           />
+          {configFailed && (
+            <ErrorRetryRow
+              message="Whether plugin actions are recorded couldn't be read"
+              onRetry={() => void loadConfig()}
+            />
+          )}
           {toggleError && <InlineErrorRow>{toggleError}</InlineErrorRow>}
         </SettingsGroup>
         <PluginActionAuditLogViewer

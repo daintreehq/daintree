@@ -837,7 +837,9 @@ export function McpServerSettingsTab() {
       </SettingsGroup>
 
       <p className="sr-only" role="status">
-        {copiedTarget ? "Config copied" : copiedKey ? "API key copied" : ""}
+        {configCopyError ??
+          keyCopyError ??
+          (copiedTarget ? "Config copied" : copiedKey ? "API key copied" : "")}
       </p>
 
       {error && (
@@ -1067,12 +1069,13 @@ export function McpServerSettingsTab() {
               isEnabled={auditEnabled}
               onChange={handleAuditEnabledToggle}
               disabled={!auditConfigLoaded}
-              disabledReason={
-                auditConfigFailed
-                  ? "Couldn't read this setting. Reopen settings to try again."
-                  : undefined
-              }
             />
+            {auditConfigFailed && (
+              <ErrorRetryRow
+                message="The audit settings couldn't be read"
+                onRetry={() => void loadAuditConfig()}
+              />
+            )}
             {auditToggleError && <InlineErrorRow>{auditToggleError}</InlineErrorRow>}
             <SettingsRow
               label="Records kept"

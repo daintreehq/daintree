@@ -74,6 +74,9 @@ function SystemHealthSection() {
           </Button>
         }
       />
+      <p className="sr-only" role="status">
+        {checkError ?? ""}
+      </p>
       {result && (
         <div className="py-2 pl-4 pr-4">
           <p className="sr-only" role="status">
@@ -235,8 +238,10 @@ function HardwareAccelerationSection() {
   const [disabled, setDisabled] = useState<boolean | null>(null);
   const [angleFallback, setAngleFallback] = useState<boolean>(false);
   const [readFailed, setReadFailed] = useState(false);
+  const [readNonce, setReadNonce] = useState(0);
 
   useEffect(() => {
+    setReadFailed(false);
     window.electron.gpu
       .getStatus()
       .then((status) => {
@@ -247,7 +252,7 @@ function HardwareAccelerationSection() {
         setReadFailed(true);
         logError("Failed to read GPU status", err);
       });
-  }, []);
+  }, [readNonce]);
 
   const handleToggle = () => {
     if (disabled === null) return;
@@ -261,17 +266,22 @@ function HardwareAccelerationSection() {
     // Rendered from the start so the group doesn't shift when the read lands, and
     // so a failed read says so instead of the setting silently missing.
     return (
-      <SettingsSwitchCard
-        id="troubleshooting-gpu-acceleration"
-        title="Hardware acceleration"
-        subtitle="Uses the GPU to render the interface. Turn off if you see blank panels or repeated GPU crashes. The app restarts on change."
-        isEnabled={false}
-        onChange={() => {}}
-        disabled
-        disabledReason={
-          readFailed ? "Couldn't read the GPU status. Reopen settings to try again." : undefined
-        }
-      />
+      <>
+        <SettingsSwitchCard
+          id="troubleshooting-gpu-acceleration"
+          title="Hardware acceleration"
+          subtitle="Uses the GPU to render the interface. Turn off if you see blank panels or repeated GPU crashes. The app restarts on change."
+          isEnabled={false}
+          onChange={() => {}}
+          disabled
+        />
+        {readFailed && (
+          <ErrorRetryRow
+            message="The GPU status couldn't be read"
+            onRetry={() => setReadNonce((n) => n + 1)}
+          />
+        )}
+      </>
     );
   }
 
@@ -406,7 +416,13 @@ export function TroubleshootingTab() {
     }
   };
 
+  const [developerModeReadFailed, setDeveloperModeReadFailed] = useState(false);
+  const [developerModeNonce, setDeveloperModeNonce] = useState(0);
+  const [verboseReadFailed, setVerboseReadFailed] = useState(false);
+  const [verboseNonce, setVerboseNonce] = useState(0);
+
   useEffect(() => {
+    setDeveloperModeReadFailed(false);
     appClient
       .getState()
       .then((appState) => {
@@ -418,10 +434,13 @@ export function TroubleshootingTab() {
         setDeveloperModeLoaded(true);
       })
       .catch((error) => {
-        setDeveloperModeError("Developer settings couldn't be read. Reopen settings to try again.");
+        setDeveloperModeReadFailed(true);
         logError("Failed to read developer mode settings", error);
       });
+  }, [developerModeNonce]);
 
+  useEffect(() => {
+    setVerboseReadFailed(false);
     actionService
       .dispatch("logs.getVerbose", undefined, { source: "user" })
       .then((result) => {
@@ -429,18 +448,14 @@ export function TroubleshootingTab() {
           setVerboseLogging((result.result as { verbose: boolean }).verbose);
           setVerboseLoaded(true);
         } else {
-          setVerboseError(
-            "Couldn't read whether verbose logging is on. Reopen settings to try again."
-          );
+          setVerboseReadFailed(true);
         }
       })
       .catch((error) => {
-        setVerboseError(
-          "Couldn't read whether verbose logging is on. Reopen settings to try again."
-        );
+        setVerboseReadFailed(true);
         logError("Failed to get verbose logging state", error);
       });
-  }, []);
+  }, [verboseNonce]);
 
   /** Resolves false when main refused the change, so the caller can put the switches back. */
   const saveDeveloperModeSettings = async (
@@ -594,6 +609,12 @@ export function TroubleshootingTab() {
             disabled={verboseLoggingPending || !verboseLoaded}
           />
           {verboseError && <InlineErrorRow>{verboseError}</InlineErrorRow>}
+          {verboseReadFailed && (
+            <ErrorRetryRow
+              message="Whether verbose logging is on couldn't be read"
+              onRetry={() => setVerboseNonce((n) => n + 1)}
+            />
+          )}
           {verboseLogging && (
             <RowNote>Verbose logging may impact performance and increase log file size.</RowNote>
           )}
@@ -670,6 +691,12 @@ export function TroubleshootingTab() {
             ariaLabel="Developer Mode Toggle"
           />
           {developerModeError && <InlineErrorRow>{developerModeError}</InlineErrorRow>}
+          {developerModeReadFailed && (
+            <ErrorRetryRow
+              message="Developer settings couldn't be read"
+              onRetry={() => setDeveloperModeNonce((n) => n + 1)}
+            />
+          )}
           <SettingsDependents
             disabled={!developerMode}
             reason="Turn on developer mode to use these"
