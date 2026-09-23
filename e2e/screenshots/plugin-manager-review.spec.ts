@@ -51,6 +51,7 @@
  *   notagline      an installed plugin with no tagline — the common case.
  *   permissions    the Permissions tab, capability severities and scopes.
  *   settings       the generated settings form.
+ *   selectescape   Escape on an open settings Select keeps the manager open.
  *   disabled       a disabled row and its detail header.
  *   dev            a dev-mode plugin, generation badge and hot-reload state.
  *   failed         a plugin whose load errored while still reading "enabled".
@@ -578,6 +579,22 @@ test("plugin manager review — provenance, states, and overflow", async () => {
       await select(page, "Markdown Studio");
       await openTab(page, "Settings");
       await snap(page, "31-settings");
+    });
+
+    // 6b. Escape on an open settings Select closes the list and leaves the
+    //     manager open. The manager is non-modal, so the global keybinding
+    //     layer pops the escape stack before Radix sees the key.
+    await step("selectescape", async () => {
+      await select(page, "Markdown Studio");
+      await openTab(page, "Settings");
+      await page.locator('[role="combobox"]').first().click();
+      await settle(page, 300);
+      await page.keyboard.press("Escape");
+      await settle(page, 300);
+      if (!(await page.locator(MANAGER).isVisible())) {
+        throw new Error("Escape on the settings Select closed the plugin manager");
+      }
+      await snap(page, "32-settings-after-escape");
     });
 
     // 7. Disabled by the user.
