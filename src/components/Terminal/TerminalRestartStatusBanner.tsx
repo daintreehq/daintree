@@ -127,6 +127,9 @@ export function TerminalRestartStatusBanner({
           title={RESTART_BANNER_COPY["exit-error"]({ exitCode: variant.exitCode }).title}
           severity="error"
           animated={false}
+          // One line and two controls: in a narrow pane they drop beneath the
+          // title instead of squeezing it.
+          layout="pane"
           action={{
             id: "restart",
             label: "Restart session",
