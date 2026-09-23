@@ -181,7 +181,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
   };
 
   const filteredEmptyText = query
-    ? `No commands match “${searchQuery.trim()}”`
+    ? `No commands match "${searchQuery.trim()}"`
     : filterMode === "modified"
       ? "No command is changed for this project yet. Expand one to set its overrides"
       : "No command is turned off for this project";

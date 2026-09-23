@@ -577,7 +577,7 @@ export function KeyboardShortcutsTab() {
               }
             >
               {query
-                ? `No shortcuts match \u201c${searchQuery.trim()}\u201d${filterMode === "modified" ? " among modified ones" : ""}`
+                ? `No shortcuts match "${searchQuery.trim()}"${filterMode === "modified" ? " among modified ones" : ""}`
                 : "No shortcuts are customized yet. Edit one to change its keys"}
             </SettingsEmptyRow>
           </SettingsGroup>
