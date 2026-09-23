@@ -5,8 +5,10 @@ import { resolveAppTheme } from "@shared/theme/themes";
 import type { AgentAvailabilityState } from "@shared/types/ipc/system";
 import type { TerminalRecipe } from "@shared/types";
 import type { AnyToolbarButtonId } from "@shared/types/toolbar";
+import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
-import { initBuiltInPanelKinds } from "@/panels/registry";
+import { initBuiltInPanelKinds, registerPanelKindDefinition } from "@/panels/registry";
+import { registerPanelKind } from "@shared/config/panelKindRegistry";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { getAgentConfig } from "@/config/agents";
 import { sortAgentsByToolbarPin } from "@/lib/agentMenuOrder";
@@ -34,7 +36,7 @@ import "@/index.css";
  * Query parameters (the screenshot spec drives these):
  *   ?theme=daintree|bondi|…      built-in theme id
  *   ?placement=toolbar|dock      which trigger is mounted (default toolbar)
- *   ?fixture=populated|setup|few inventory to seed (default populated)
+ *   ?fixture=populated|setup|few|all|plugins inventory to seed (default populated)
  */
 
 const params = new URLSearchParams(window.location.search);
@@ -47,7 +49,12 @@ const OTHERS = ["opencode", "gemini", "cursor", "goose", "kimi"] as const;
 
 function availabilityFor(): Record<string, AgentAvailabilityState> {
   const availability: Record<string, AgentAvailabilityState> = {};
-  const launchable = fixture === "few" ? ["claude", "codex"] : [...PINNED, ...OTHERS];
+  const launchable =
+    fixture === "few"
+      ? ["claude", "codex"]
+      : fixture === "all"
+        ? LAUNCHABLE_AGENT_IDS.slice()
+        : [...PINNED, ...OTHERS];
   for (const id of launchable) availability[id] = "ready";
   if (fixture === "setup") {
     availability.aider = "installed";
@@ -84,8 +91,47 @@ const RECIPES: TerminalRecipe[] = [
  * flags a store write during another component's render as a cross-component
  * update, and the launcher reads every one of these on mount.
  */
+/** Fifteen plugin-contributed panels, for the case where panels are the long list. */
+const PLUGIN_PANELS = [
+  "Pull Requests",
+  "Issues",
+  "CI Runs",
+  "Deployments",
+  "Sentry Errors",
+  "Linear",
+  "Jira Board",
+  "Figma Frames",
+  "Storybook",
+  "Database",
+  "Redis Browser",
+  "API Client",
+  "Log Stream",
+  "Feature Flags",
+  "Metrics",
+];
+
+function seedPluginPanels(): void {
+  const NoView = () => null;
+  PLUGIN_PANELS.forEach((name, i) => {
+    const id = `preview.plugin-${i}`;
+    registerPanelKind({
+      id,
+      name,
+      iconId: "package",
+      color: "#8b8b8b",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      dockable: false,
+      extensionId: "preview.plugins",
+    });
+    registerPanelKindDefinition(id, NoView);
+  });
+}
+
 function seedStores(): void {
   initBuiltInPanelKinds();
+  if (fixture === "plugins") seedPluginPanels();
   const availability = availabilityFor();
   useCliAvailabilityStore.setState({ availability, hasRealData: true });
   const pinned: AnyToolbarButtonId[] = fixture === "few" ? ["claude"] : [...PINNED];

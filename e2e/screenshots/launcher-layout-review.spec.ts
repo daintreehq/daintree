@@ -311,6 +311,40 @@ test("launcher layout review", async ({ page }) => {
     await snapSurface(page, "12-few-agents.png");
   });
 
+  // Every launchable agent installed: the agent column is the long one, and
+  // the popover's height budget decides whether it scrolls.
+  for (const height of [1000, 800]) {
+    await step(`all-agents-${height}`, page, async () => {
+      await openLauncher(page, { fixture: "all", height });
+      await snapSurface(page, `15-all-agents-${height}.png`);
+    });
+  }
+
+  // Fifteen plugin panels: the panel list is the long one this time.
+  await step("plugins", page, async () => {
+    await openLauncher(page, { fixture: "plugins" });
+    await snapSurface(page, "16-plugin-panels.png");
+  });
+
+  // The dock opens the same launcher upward; its inventories must lay out
+  // the same way the toolbar's do.
+  for (const fixture of ["all", "plugins"] as const) {
+    await step(`dock-${fixture}`, page, async () => {
+      await openLauncher(page, { placement: "dock", fixture });
+      await snapSurface(page, `17-dock-${fixture}.png`);
+    });
+  }
+
+  await step("all-agents-narrow", page, async () => {
+    await openLauncher(page, { fixture: "all", width: 520, height: 900 });
+    await snapSurface(page, "15-all-agents-narrow.png", 8);
+  });
+
+  await step("all-agents-short", page, async () => {
+    await openLauncher(page, { fixture: "all", height: 620 });
+    await snapSurface(page, "15-all-agents-620.png");
+  });
+
   await step("setup", page, async () => {
     await openLauncher(page, { fixture: "setup" });
     await snapSurface(page, "13-needs-setup.png");
