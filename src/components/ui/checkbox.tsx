@@ -7,6 +7,11 @@ import { cn } from "@/lib/utils";
 import { useFieldControl } from "@/components/ui/field";
 
 /**
+ * The unchecked edge is drawn in `text-secondary`, not `border-strong`: the box
+ * edge is the only thing that says "a control is here", so WCAG 1.4.11 asks 3:1
+ * of it, and `border-strong` is a low-alpha ink that lands near 1.5:1 on most
+ * themes. `text-secondary` is floored at 4.5:1 against every surface already.
+ *
  * Checked is painted with the text colour, not the accent: a checkbox marks
  * membership, and the accent is reserved for the one load-bearing signal in a
  * focus region. `rounded-sm` (6px) rather than the repo's bare `rounded` (10px),
@@ -20,7 +25,7 @@ import { useFieldControl } from "@/components/ui/field";
  * bundled theme, so a 16px box keeps a boundary wherever it is dropped.
  */
 const checkboxVariants = cva(
-  "group relative flex shrink-0 items-center justify-center border border-border-strong bg-surface-canvas transition-colors duration-150 ease-out " +
+  "group relative flex shrink-0 items-center justify-center border border-text-secondary bg-surface-canvas transition-colors duration-150 ease-out " +
     "data-[state=checked]:bg-text-primary data-[state=checked]:border-text-primary " +
     "data-[state=indeterminate]:bg-text-primary data-[state=indeterminate]:border-text-primary " +
     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary " +
