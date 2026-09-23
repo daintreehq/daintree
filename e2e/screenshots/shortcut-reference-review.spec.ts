@@ -15,8 +15,8 @@
  *   overrides    a query that lands on user-changed and user-cleared bindings
  *   chord        a chord-prefix query ("⌘K"), the two-step chord family
  *   empty        a query with no matches
- *   narrow-rest  the same dialog in a small window
- *   narrow-query a filtered list in the small window
+ *   narrow-rest  the same dialog at the smallest window, zoomed in (≈450 CSS px)
+ *   narrow-query a filtered list at that width
  *
  * Each state is captured in every theme listed in DAINTREE_SHOT_THEMES (a dark and a
  * light theme by default), in one launch.
@@ -53,7 +53,11 @@ const SCALE = process.env.DAINTREE_SCREENSHOT_SCALE ?? "2";
 
 const MOD = process.platform === "darwin" ? "Meta" : "Control";
 const WIDE = { width: 1680, height: 1050 };
-const NARROW = { width: 760, height: 620 };
+// The window can't go below 800×600 (createWindow's minimum), so a narrow
+// layout is reached the way a user reaches it: zooming in. 1.75× at the
+// minimum width leaves about 450 CSS px for the page.
+const NARROW = { width: 800, height: 600 };
+const NARROW_ZOOM = 1.75;
 
 const DIALOG = '[role="dialog"]:has(input[aria-label="Search shortcuts"])';
 // AppDialog puts role="dialog" on the full-viewport scrim; the card is its child.
@@ -105,6 +109,13 @@ async function settle(page: Page, ms = 350): Promise<void> {
     () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
   );
   await page.waitForTimeout(ms);
+}
+
+/** Zoom every renderer; zoom is per-origin and survives reloads, so reset it too. */
+async function setZoom(app: ElectronApplication, factor: number): Promise<void> {
+  await app.evaluate(({ webContents }, f) => {
+    for (const wc of webContents.getAllWebContents()) wc.setZoomFactor(f);
+  }, factor);
 }
 
 async function setWindowSize(
@@ -258,6 +269,7 @@ test("shortcut reference review — every state, every theme", async () => {
 
     for (const theme of THEMES) {
       await setWindowSize(app, WIDE);
+      await setZoom(app, 1);
       // setAppTheme reloads the renderer, which is also what loads the overrides.
       await setAppTheme(page, theme);
       await page.addStyleTag({ content: POLISH_CSS });
@@ -324,7 +336,10 @@ test("shortcut reference review — every state, every theme", async () => {
       );
 
       await setWindowSize(app, NARROW);
+      await setZoom(app, NARROW_ZOOM);
       await settle(page, 600);
+      const cssWidth = await page.evaluate(() => window.innerWidth);
+      if (cssWidth > 520) failures.push(`narrow: page is ${cssWidth} CSS px wide, expected ≤ 520`);
 
       await state(
         "narrow-rest",
