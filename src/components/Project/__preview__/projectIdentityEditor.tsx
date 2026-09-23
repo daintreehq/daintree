@@ -83,6 +83,7 @@ function ToolbarStage({ fixture }: { fixture: Fixture }) {
             emoji={project.emoji}
             chipState={chipState}
             branchName="develop"
+            headSha={undefined}
             isDropdownOpen={false}
             data-state="closed"
           />

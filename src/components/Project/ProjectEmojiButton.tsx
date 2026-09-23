@@ -36,8 +36,8 @@ export function ProjectEmojiButton({
           disabled={disabled}
           className={cn(
             "flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-md)]",
-            "border border-border-default bg-muted/50 text-lg leading-none",
-            "transition-colors hover:bg-muted disabled:opacity-50",
+            "border border-border-default bg-overlay-subtle text-lg leading-none",
+            "transition-colors hover:bg-overlay-soft data-[state=open]:bg-overlay-soft disabled:opacity-50",
             "focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
             className
           )}
@@ -47,6 +47,7 @@ export function ProjectEmojiButton({
       </PopoverTrigger>
       <PopoverContent className="w-auto p-0" align="start" aria-label="Choose project emoji">
         <EmojiPicker
+          currentEmoji={emoji}
           onEmojiSelect={({ emoji: picked }) => {
             onEmojiChange(picked);
             setIsOpen(false);

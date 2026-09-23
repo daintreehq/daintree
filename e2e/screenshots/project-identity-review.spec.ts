@@ -91,10 +91,12 @@ const STATES: State[] = [
   { slug: "suggestion", fixture: "suggestion" },
   { slug: "long-name", fixture: "long-name" },
   {
-    slug: "long-name-end",
+    // Autofocus leaves the caret at the end, so the head of a long name is the
+    // part a user has to go looking for.
+    slug: "long-name-start",
     fixture: "long-name",
     drive: async (page) => {
-      await page.keyboard.press("End");
+      await page.keyboard.press("Home");
     },
   },
   {
@@ -129,6 +131,15 @@ const STATES: State[] = [
     drive: async (page) => {
       await tabToSearch(page);
       await page.keyboard.type("tree");
+    },
+  },
+  {
+    // The project's own emoji among results, where the current-value mark shows.
+    slug: "search-current",
+    fixture: "rest",
+    drive: async (page) => {
+      await tabToSearch(page);
+      await page.keyboard.type("palm");
     },
   },
   {
@@ -204,8 +215,11 @@ async function snap(page: Page, state: State, file: string): Promise<string> {
     throw new Error(`${state.slug}: no real box (${JSON.stringify({ strip, popover })})`);
   }
   const margin = 24;
-  const x = Math.max(0, Math.min(popover.x, strip.x + 300) - margin);
-  const right = popover.x + popover.width + margin;
+  // The pill as well as the popover, so a long name's pill is never cut.
+  const pillLocator = page.locator('[data-testid="project-switcher-trigger"]');
+  const pill = (await pillLocator.count()) > 0 ? await pillLocator.boundingBox() : null;
+  const x = Math.max(0, Math.min(popover.x, pill?.x ?? popover.x) - margin);
+  const right = Math.max(popover.x + popover.width, pill ? pill.x + pill.width : 0) + margin;
   const y = Math.max(0, strip.y - 8);
   const bottom = popover.y + popover.height + margin;
   const out = path.join(OUT_DIR, file);
@@ -230,6 +244,10 @@ async function verify(page: Page, state: State): Promise<void> {
     case "search":
       expect(q).toBe("tree");
       await expect(cell(page, 0)).toBeVisible();
+      break;
+    case "search-current":
+      expect(q).toBe("palm");
+      await expect(page.locator('[frimousse-emoji][aria-current="true"]')).toHaveCount(1);
       break;
     case "search-empty":
       expect(q).toBe("zzqqxx");

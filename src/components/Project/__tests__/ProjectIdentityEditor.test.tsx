@@ -122,8 +122,18 @@ function closeAutoFocus(): boolean {
 }
 
 vi.mock("@/components/ui/emoji-picker", () => ({
-  EmojiPicker: ({ onEmojiSelect }: { onEmojiSelect: (e: { emoji: string }) => void }) => (
-    <button type="button" onClick={() => onEmojiSelect({ emoji: "🦄" })}>
+  EmojiPicker: ({
+    onEmojiSelect,
+    currentEmoji,
+  }: {
+    onEmojiSelect: (e: { emoji: string }) => void;
+    currentEmoji?: string;
+  }) => (
+    <button
+      type="button"
+      data-current-emoji={currentEmoji}
+      onClick={() => onEmojiSelect({ emoji: "🦄" })}
+    >
       pick-unicorn
     </button>
   ),
@@ -302,6 +312,12 @@ describe("ProjectIdentityEditor", () => {
       expect(updateProjectMock).toHaveBeenCalledWith("p1", { emoji: "🦄" });
     });
 
+    it("tells the picker which emoji the project has now", () => {
+      renderEditor(makeProject({ emoji: "🛰️" }));
+
+      expect(screen.getByText("pick-unicorn").getAttribute("data-current-emoji")).toBe("🛰️");
+    });
+
     it("closes itself once an emoji is picked", () => {
       const onOpenChange = vi.fn();
       renderEditor(makeProject(), { onOpenChange });
@@ -402,6 +418,23 @@ describe("ProjectIdentityEditor", () => {
 
       expect(updateProjectMock).not.toHaveBeenCalled();
       expect(nameField().value).toBe("my-api");
+    });
+
+    it("explains a blanked name instead of leaving the field silently empty", () => {
+      renderEditor(makeProject({ name: "Kept Name" }));
+      const describedText = () =>
+        (nameField().getAttribute("aria-describedby") ?? "")
+          .split(" ")
+          .map((id) => document.getElementById(id)?.textContent ?? "")
+          .join(" ");
+      const untouched = describedText();
+      expect(untouched).not.toContain("Kept Name");
+
+      fireEvent.change(nameField(), { target: { value: "  " } });
+      expect(describedText()).toContain("Kept Name");
+
+      fireEvent.change(nameField(), { target: { value: "New" } });
+      expect(describedText()).toBe(untouched);
     });
 
     it("does not write when the name is unchanged", () => {

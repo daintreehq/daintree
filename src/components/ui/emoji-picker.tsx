@@ -1,67 +1,150 @@
 import { EmojiPicker as EmojiPickerPrimitive } from "frimousse";
+import { Check, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { POPOVER_SEARCH_INPUT_CLASS, POPOVER_SEARCH_STRIP_CLASS } from "./PopoverSearchField";
+import { PALETTE_SECTION_LABEL_CLASS } from "./paletteRowStyles";
 
 interface EmojiPickerProps {
   className?: string;
   onEmojiSelect: (emoji: { emoji: string; label: string }) => void;
+  /** The value the caller holds now, marked in the grid and shown in the footer at rest. */
+  currentEmoji?: string;
 }
 
-export function EmojiPicker({ className, onEmojiSelect }: EmojiPickerProps) {
+const SKELETON_ROWS = 6;
+const COLUMNS = 9;
+
+/**
+ * Stored emoji and emojibase's disagree on the emoji presentation selector
+ * (`☀️` vs `☀`), so the current value is matched with it stripped.
+ */
+function sameEmoji(a: string, b: string): boolean {
+  return a.replace(/\uFE0F/g, "") === b.replace(/\uFE0F/g, "");
+}
+
+export function EmojiPicker({ className, onEmojiSelect, currentEmoji }: EmojiPickerProps) {
   return (
     <EmojiPickerPrimitive.Root
       className={cn("isolate flex h-[320px] w-[320px] flex-col", className)}
       onEmojiSelect={onEmojiSelect}
       emojibaseUrl="/emojibase"
+      columns={COLUMNS}
     >
-      <EmojiPickerPrimitive.Search
-        className="z-10 mx-2 mt-2 appearance-none rounded-[var(--radius-md)] bg-surface-canvas border border-border-default px-3 py-2 text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
-        placeholder="Search emojis..."
-      />
-      <EmojiPickerPrimitive.Viewport className="relative flex-1 outline-hidden">
-        <EmojiPickerPrimitive.Loading className="absolute inset-0 flex items-center justify-center text-text-secondary text-sm">
-          Loading…
-        </EmojiPickerPrimitive.Loading>
-        <EmojiPickerPrimitive.Empty className="absolute inset-0 flex items-center justify-center text-text-secondary text-sm">
-          No emoji found.
-        </EmojiPickerPrimitive.Empty>
-        <EmojiPickerPrimitive.List
-          className="select-none pb-1.5"
-          components={{
-            CategoryHeader: ({ category, ...props }) => (
-              <div
-                className="bg-surface-sidebar px-3 pt-3 pb-1.5 font-medium text-text-secondary text-xs"
-                {...props}
-              >
-                {category.label}
-              </div>
-            ),
-            Row: ({ children, ...props }) => (
-              <div className="scroll-my-1.5 px-1.5" {...props}>
-                {children}
-              </div>
-            ),
-            Emoji: ({ emoji, ...props }) => (
-              <button
-                type="button"
-                className="flex size-8 items-center justify-center rounded-[var(--radius-md)] text-lg transition-colors hover:bg-border-default data-[active]:bg-border-default"
-                {...props}
-              >
-                {emoji.emoji}
-              </button>
-            ),
-          }}
+      {/* The house filtering-popover strip rather than a boxed field: it is
+          autofocused in two of the three consumers, so an accent ring here would
+          be chrome that is always lit. */}
+      <label className={POPOVER_SEARCH_STRIP_CLASS}>
+        <Search className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
+        <EmojiPickerPrimitive.Search
+          className={cn(
+            POPOVER_SEARCH_INPUT_CLASS,
+            // Escape already closes the popover; a second, heavier clear control
+            // drawn by the engine was the loudest thing on the panel.
+            "appearance-none [&::-webkit-search-cancel-button]:appearance-none"
+          )}
+          placeholder="Search emoji…"
         />
-      </EmojiPickerPrimitive.Viewport>
+      </label>
+      {/* Loading and Empty sit beside the viewport rather than inside it, so they
+          centre on the panel and not on the viewport minus its scrollbar gutter. */}
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        {/* Sized by the column rather than positioned: frimousse stamps
+            `position: relative` inline on the viewport. The gutter is reserved
+            on both edges (over frimousse's inline one-sided `stable`) so the
+            grid sits centred rather than hard against the left. */}
+        <EmojiPickerPrimitive.Viewport className="min-h-0 flex-1 outline-hidden [scrollbar-gutter:stable_both-edges]!">
+          <EmojiPickerPrimitive.List
+            className="select-none pb-1.5"
+            components={{
+              CategoryHeader: ({ category, ...props }) => (
+                <div
+                  className={cn(
+                    PALETTE_SECTION_LABEL_CLASS,
+                    // Opaque, since it is sticky over scrolling rows, and the
+                    // panel's own solid tone so it never reads as a band.
+                    "bg-[var(--overlay-surface-solid)] px-3 pt-2.5 pb-1"
+                  )}
+                  {...props}
+                >
+                  {category.label}
+                </div>
+              ),
+              Row: ({ children, ...props }) => (
+                <div className="scroll-my-1.5 flex px-1.5" {...props}>
+                  {children}
+                </div>
+              ),
+              Emoji: ({ emoji, ...props }) => {
+                const isCurrent =
+                  currentEmoji !== undefined && sameEmoji(emoji.emoji, currentEmoji);
+                return (
+                  <button
+                    type="button"
+                    aria-current={isCurrent ? "true" : undefined}
+                    className={cn(
+                      "relative flex h-8 w-1/9 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-lg leading-none transition-colors",
+                      // Pointer and arrow keys drive the same `data-active`, and
+                      // Enter acts on it. The raised fill alone clears about
+                      // 1.1-1.3:1, so the neutral outline carries the 3:1 — the
+                      // menu rows' highlighted treatment, and it survives forced
+                      // colours where the fill is stripped.
+                      "data-[active]:bg-overlay-raised data-[active]:outline-solid data-[active]:outline-2 data-[active]:outline-selection-outline data-[active]:outline-offset-[-2px]"
+                    )}
+                    {...props}
+                  >
+                    {emoji.emoji}
+                    {isCurrent && (
+                      <span
+                        aria-hidden="true"
+                        className="absolute right-0.5 bottom-0 flex size-3.5 items-center justify-center rounded-full bg-text-primary text-[var(--overlay-surface-solid)]"
+                      >
+                        <Check className="size-2.5" strokeWidth={3.5} />
+                      </span>
+                    )}
+                  </button>
+                );
+              },
+            }}
+          />
+        </EmojiPickerPrimitive.Viewport>
+        <EmojiPickerPrimitive.Loading className="absolute inset-0 flex flex-col gap-1 px-1.5 pt-8">
+          <span className="sr-only">Loading emoji</span>
+          {Array.from({ length: SKELETON_ROWS }, (_, row) => (
+            <span key={row} aria-hidden="true" className="flex">
+              {Array.from({ length: COLUMNS }, (_, col) => (
+                <span key={col} className="flex h-8 w-1/9 shrink-0 items-center justify-center">
+                  <span className="size-5 rounded-full bg-overlay-soft animate-pulse-delayed" />
+                </span>
+              ))}
+            </span>
+          ))}
+        </EmojiPickerPrimitive.Loading>
+        <EmojiPickerPrimitive.Empty className="absolute inset-0 flex flex-col items-center justify-center gap-1 px-6 text-center">
+          {({ search }) => (
+            <>
+              <span className="text-sm text-text-primary">No emoji match “{search}”</span>
+              <span className="text-xs text-text-secondary">Try a shorter or different word</span>
+            </>
+          )}
+        </EmojiPickerPrimitive.Empty>
+      </div>
       <EmojiPickerPrimitive.ActiveEmoji>
         {({ emoji }) => (
-          <div className="flex items-center gap-2 px-3 py-2 border-t border-border-default text-sm text-text-secondary min-h-[40px]">
+          // Fixed height: the preview glyph is taller than a line of text, and a
+          // footer that grew on hover shrank the grid above it.
+          <div className="flex h-11 shrink-0 items-center gap-2 border-t border-border-default px-3 text-sm">
             {emoji ? (
               <>
-                <span className="text-xl">{emoji.emoji}</span>
-                <span className="truncate">{emoji.label}</span>
+                <span className="text-xl leading-none">{emoji.emoji}</span>
+                <span className="truncate text-text-primary">{emoji.label}</span>
+              </>
+            ) : currentEmoji ? (
+              <>
+                <span className="text-xl leading-none">{currentEmoji}</span>
+                <span className="truncate text-text-secondary">Current icon</span>
               </>
             ) : (
-              <span>Select an emoji…</span>
+              <span className="text-text-secondary">Pick an emoji</span>
             )}
           </div>
         )}

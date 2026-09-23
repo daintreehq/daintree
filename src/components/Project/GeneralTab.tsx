@@ -441,6 +441,7 @@ export function GeneralTab({
                     </PopoverTrigger>
                     <PopoverContent className="w-auto p-0">
                       <EmojiPicker
+                        currentEmoji={emoji}
                         onEmojiSelect={({ emoji }) => {
                           onEmojiChange(emoji);
                           setIsEmojiPickerOpen(false);
