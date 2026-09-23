@@ -217,7 +217,7 @@ const STATES: ShotState[] = [
       },
       [CH.voiceMic]: "denied",
     },
-    expectText: ["Organization and project IDs"],
+    expectText: ["Organization ID"],
   },
   {
     // Deepgram transcription with AI correction switched on but no OpenAI key: the
@@ -276,7 +276,7 @@ const STATES: ShotState[] = [
     sweep: true,
   },
   {
-    // The two disclosures open: the tier's action inventory and the diagnostics.
+    // The tier's action inventory open.
     slug: "a03-disclosures-open",
     tab: "assistant",
     preferredAgent: "claude",
@@ -287,6 +287,19 @@ const STATES: ShotState[] = [
     },
     act: async (page) => {
       await page.getByRole("button", { name: /What this tier allows/ }).click();
+    },
+  },
+  {
+    // The diagnostics disclosure open, scrolled into its own shot.
+    slug: "a08-diagnostics-open",
+    tab: "assistant",
+    preferredAgent: "claude",
+    stubs: {
+      [CH.assistantGet]: ASSISTANT_BASE,
+      [CH.mcpRuntime]: MCP_RUNNING,
+      [CH.mcpStatus]: MCP_STATUS,
+    },
+    act: async (page) => {
       await page.getByRole("button", { name: /Advanced diagnostics/ }).click();
     },
   },
