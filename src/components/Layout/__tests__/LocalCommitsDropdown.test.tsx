@@ -333,7 +333,7 @@ describe("LocalCommitsDropdown push status", () => {
     listCommitsMock.mockResolvedValue(makeResponse([makeCommit(1)]));
     listPushCommitsMock.mockResolvedValue(pushPreview(["hash-1"], "unverified"));
 
-    const { findByText, findAllByText } = render(
+    const { findAllByText } = render(
       <LocalCommitsDropdown cwd="/repo" branch="main" open initialCount={1} />
     );
     await findAllByText("commit message 1");
