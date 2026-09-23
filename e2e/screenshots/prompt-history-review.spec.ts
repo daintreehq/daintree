@@ -42,7 +42,7 @@ test.use({ deviceScaleFactor: 2 });
 
 const DIALOG = '[role="dialog"][aria-label="Prompt history search"]';
 const VIEWPORT = { width: 1000, height: 900 };
-const STATES_PER_THEME = 7;
+const STATES_PER_THEME = 8;
 
 let server: PreviewServer | undefined;
 
@@ -192,9 +192,23 @@ test("prompt history palette — states, interactions and themes", async ({ page
       // Search narrows the list and highlights what matched.
       await dialog.getByRole("combobox").fill("palette");
       await expect(row(dialog, "audit every palette row")).toBeVisible({ timeout });
+      // The second "palette" sits ~60 characters into its prompt — past the
+      // window a location-weighted search would look in.
+      await expect(row(dialog, "palette store")).toBeVisible({ timeout });
       await expect(row(dialog, "fix the failing typecheck")).toHaveCount(0);
       await page.waitForTimeout(250);
       written.push(await snap(page, dialog, `populated--${theme}--search.png`));
+
+      // A word deep inside the longest prompt: the row has to open on the match.
+      await dialog.getByRole("combobox").fill("retry");
+      const deep = row(dialog, "retry backoff");
+      await expect(deep).toBeVisible({ timeout });
+      const lead = await deep.evaluate((el) => el.textContent?.indexOf("retry") ?? -1);
+      if (lead < 0 || lead > 60) {
+        throw new Error(`deep match is not on screen (offset ${lead}) — refusing to write`);
+      }
+      await page.waitForTimeout(250);
+      written.push(await snap(page, dialog, `populated--${theme}--search-deep.png`));
 
       // A search nothing matches.
       await dialog.getByRole("combobox").fill("kubernetes helm chart");
@@ -208,7 +222,11 @@ test("prompt history palette — states, interactions and themes", async ({ page
       const dialog = await open(page, "populated", theme);
       await expect(row(dialog, "fix the failing typecheck")).toBeVisible({ timeout });
       await expect(row(dialog, "Helios dashboard")).toHaveCount(0);
-      await dialog.getByRole("button", { name: /this project|all projects/i }).click();
+      await dialog.getByRole("button", { name: "All projects" }).click();
+      await expect(dialog.getByRole("button", { name: "All projects" })).toHaveAttribute(
+        "aria-pressed",
+        "true"
+      );
       await expect(row(dialog, "Helios dashboard")).toBeVisible({ timeout });
       await page.waitForTimeout(150);
       written.push(await snap(page, dialog, `populated--${theme}--all-projects.png`));
