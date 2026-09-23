@@ -13,78 +13,70 @@ vi.stubGlobal(
   }
 );
 
-const mockBindings: Array<RegisteredKeybindingConfig & { effectiveCombo: string }> = [
-  {
-    actionId: "terminal.stashInput",
-    combo: "Cmd+K Cmd+S",
-    scope: "portal",
-    priority: 0,
-    description: "Stash Current Input",
-    category: "Terminal",
-    effectiveCombo: "Cmd+K Cmd+S",
-  },
-  {
-    actionId: "nav.toggleSidebar",
-    combo: "Cmd+B",
-    scope: "global",
-    priority: 0,
-    description: "Toggle Sidebar",
-    category: "System",
-    effectiveCombo: "Cmd+B",
-  },
-  {
-    actionId: "terminal.new",
-    combo: "Cmd+T",
-    scope: "global",
-    priority: 0,
-    description: "New Terminal Panel",
-    category: "Terminal",
-    effectiveCombo: "Cmd+T",
-  },
-  {
-    actionId: "app.settings",
-    combo: "Cmd+,",
-    scope: "global",
-    priority: 0,
-    description: "Open Settings",
-    category: "System",
-    effectiveCombo: "Cmd+,",
-  },
-  {
-    actionId: "action.palette.open",
-    combo: "Cmd+Shift+P",
-    scope: "global",
-    priority: 0,
-    description: "Command Palette",
-    category: "System",
-    effectiveCombo: "Cmd+Shift+P",
-  },
-  {
-    actionId: "file.open",
-    combo: "",
-    scope: "global",
-    priority: 0,
-    description: "Unbound Action",
-    category: "System",
-    effectiveCombo: "",
-  },
-];
+vi.mock("@/lib/platform", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/platform")>()),
+  isMac: () => true,
+}));
 
-const mockDisplayCombos: Record<string, string> = {
-  "terminal.stashInput": "⌘K ⌘S",
-  "nav.toggleSidebar": "⌘B",
-  "terminal.new": "⌘T",
-  "app.settings": "⌘,",
-  "action.palette.open": "⌘⇧P",
-  "file.open": "",
-};
+type Binding = RegisteredKeybindingConfig & { effectiveCombo: string };
+
+function binding(
+  actionId: string,
+  description: string,
+  category: string,
+  effectiveCombo: string,
+  scope: Binding["scope"] = "global"
+): Binding {
+  return {
+    actionId: actionId as Binding["actionId"],
+    combo: effectiveCombo,
+    scope,
+    priority: 0,
+    description,
+    category,
+    effectiveCombo,
+  };
+}
+
+let mockBindings: Binding[] = [];
+let mockOverrides = new Set<string>();
+
+function seed(): void {
+  mockBindings = [
+    binding("terminal.new", "New terminal", "Terminal", "Cmd+Alt+T"),
+    binding("terminal.close", "Close focused terminal", "Terminal", "Cmd+W"),
+    binding("terminal.close", "Close focused terminal", "Terminal", "Ctrl+F4"),
+    binding("terminal.stashInput", "Stash current input", "Terminal", "Cmd+Shift+S"),
+    binding("terminal.restartAll", "Restart all terminals", "Terminal", "Cmd+K Cmd+A"),
+    binding("terminal.redraw", "Redraw focused terminal", "Terminal", ""),
+    ...[1, 2, 3, 4].map((n) =>
+      binding(`terminal.focusIndex${n}`, `Focus terminal ${n}`, "Terminal", `Cmd+${n}`)
+    ),
+    binding("agent.claude", "Launch Claude Code agent", "Agents", "Cmd+Alt+C"),
+    binding(
+      "terminal.sendToAgent",
+      "Send selection to another terminal",
+      "Terminal",
+      "Cmd+Shift+E"
+    ),
+    binding("action.palette.open", "Open command palette", "Navigation", "Cmd+Shift+P"),
+    binding("nav.toggleSidebar", "Toggle sidebar", "Navigation", "Cmd+B"),
+    binding("help.shortcuts", "Open keyboard shortcuts reference", "Help", "Cmd+K Cmd+S"),
+    binding("help.shortcutsAlt", "Open keyboard shortcuts reference", "Help", "Cmd+/"),
+    binding("portal.closeTab", "Close active portal tab", "Portal", "Cmd+W", "portal"),
+    binding("portal.newTab", "New portal tab", "Portal", "Cmd+T", "portal"),
+    binding("app.settings", "Open settings", "System", "Cmd+,"),
+    binding("plugin.thing", "Do the plugin thing", "Acme plugin", "Cmd+Alt+Y"),
+  ];
+  mockOverrides = new Set(["terminal.redraw", "terminal.stashInput"]);
+}
 
 vi.mock("@/services/KeybindingService", () => {
   const listeners: Array<() => void> = [];
   return {
     keybindingService: {
       getAllBindingsWithEffectiveCombos: vi.fn(() => mockBindings),
-      getDisplayCombo: vi.fn((actionId: string) => mockDisplayCombos[actionId] || actionId),
+      hasOverride: vi.fn((actionId: string) => mockOverrides.has(actionId)),
       subscribe: vi.fn((listener: () => void) => {
         listeners.push(listener);
         return () => {
@@ -92,329 +84,230 @@ vi.mock("@/services/KeybindingService", () => {
           if (index > -1) listeners.splice(index, 1);
         };
       }),
-      notifyListeners: vi.fn(() => listeners.forEach((l) => l())),
+      notifyListeners: () => listeners.forEach((l) => l()),
     },
   };
 });
 
-vi.mock("@/lib/utils", () => ({
-  cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
-}));
+function search(): HTMLInputElement {
+  return screen.getByLabelText("Search shortcuts") as HTMLInputElement;
+}
+
+function type(value: string): void {
+  fireEvent.change(search(), { target: { value } });
+}
+
+function rowNames(): string[] {
+  return screen
+    .getAllByRole("listitem")
+    .map((row) => row.firstElementChild?.firstChild?.textContent ?? "");
+}
+
+function rowFor(name: string): HTMLElement {
+  const row = screen.getAllByRole("listitem").find((el) => el.textContent?.startsWith(name));
+  if (!row) throw new Error(`no row named ${name}`);
+  return row;
+}
+
+function countRegion(): HTMLElement {
+  return screen.getAllByRole("status").find((el) => el.textContent?.includes("shortcut"))!;
+}
 
 describe("ShortcutReferenceDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    seed();
   });
 
-  it("renders all categories with no query", () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+  describe("opening", () => {
+    it("puts focus in the search field once the dialog has settled", async () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+      expect(document.activeElement).toBe(search());
+    });
 
-    expect(screen.getByText("Keyboard shortcuts")).toBeTruthy();
-    expect(screen.getByText("Terminal")).toBeTruthy();
-    expect(screen.getByText("System")).toBeTruthy();
-    expect(screen.getByText("Stash Current Input")).toBeTruthy();
-    expect(screen.getByText("Toggle Sidebar")).toBeTruthy();
-    expect(screen.getByText("New Terminal Panel")).toBeTruthy();
-    expect(screen.getByText("Open Settings")).toBeTruthy();
-  });
+    it("starts every opening with an empty query", async () => {
+      const { rerender } = render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      type("zzqx");
+      expect(search().value).toBe("zzqx");
 
-  it("shows empty results state for non-matching query", async () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      rerender(<ShortcutReferenceDialog isOpen={false} onClose={vi.fn()} />);
+      rerender(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
 
-    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
-    fireEvent.change(searchInput, { target: { value: "nonexistent" } });
-
-    await waitFor(() => {
-      expect(screen.getByText('No shortcuts found matching "nonexistent"')).toBeTruthy();
+      await waitFor(() => expect(search().value).toBe(""));
+      expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0);
     });
   });
 
-  it("fuzzy search finds binding from partial description match", async () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+  describe("browsing", () => {
+    it("orders categories by the shared browse order, with unknown ones last", () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      const headings = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
+      const names = headings.map((h) => h?.replace(/In the portal$/, "") ?? "");
+      expect(names.indexOf("Navigation")).toBeLessThan(names.indexOf("Terminal"));
+      expect(names.indexOf("Terminal")).toBeLessThan(names.indexOf("Help"));
+      expect(names[names.length - 1]).toBe("Acme plugin");
+    });
 
-    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
-    fireEvent.change(searchInput, { target: { value: "stsh" } });
+    it("shows an action bound twice as one row carrying both keys", () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      const rows = rowNames().filter((name) => name === "Close focused terminal");
+      expect(rows).toHaveLength(1);
+      const spoken = rowFor("Close focused terminal").querySelector(".sr-only")!.textContent!;
+      expect(spoken).toMatch(/Command W, or Control F4/);
+    });
 
-    await waitFor(() => {
-      expect(screen.getByText("Stash Current Input")).toBeTruthy();
+    it("merges two actions that are described identically in one category", () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      expect(rowNames().filter((n) => n === "Open keyboard shortcuts reference")).toHaveLength(1);
+    });
+
+    it("folds a numbered family into one row", () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      const names = rowNames();
+      expect(names.filter((n) => n.startsWith("Focus terminal"))).toEqual(["Focus terminal 1–4"]);
+    });
+
+    it("states a scope once on the heading when a whole category shares it", () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      const heading = screen
+        .getAllByRole("heading", { level: 3 })
+        .find((h) => h.textContent?.startsWith("Portal"))!;
+      expect(heading.textContent).toMatch(/In the portal/);
+      expect(rowFor("New portal tab").textContent).not.toMatch(/In the portal/);
+    });
+
+    it("marks customised rows, and only those, as custom", () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      for (const row of screen.getAllByRole("listitem")) {
+        const name = row.firstElementChild?.firstChild?.textContent ?? "";
+        const custom = name === "Redraw focused terminal" || name === "Stash current input";
+        expect(row.textContent?.includes("Custom"), name).toBe(custom);
+      }
+    });
+
+    it("says an unbound action is not set rather than leaving the column blank", () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      expect(rowFor("Redraw focused terminal").textContent).toMatch(/Not set/);
+    });
+
+    it("never gives assistive tech a modifier glyph to read", () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      for (const row of screen.getAllByRole("listitem")) {
+        const spoken = row.querySelector(".sr-only")?.textContent ?? "";
+        expect(spoken, row.textContent ?? "").not.toMatch(/[⌘⌥⇧⌃]/);
+        for (const kbd of row.querySelectorAll("kbd")) {
+          expect(kbd.closest('[aria-hidden="true"]')).toBeTruthy();
+        }
+      }
+    });
+
+    it("uses list/listitem roles for shortcut rows", () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      expect(screen.getAllByRole("list").length).toBeGreaterThan(0);
+      expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0);
     });
   });
 
-  it("fuzzy search finds binding by actionId", async () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+  describe("searching", () => {
+    it("ranks a word match above a near miss from an earlier category", async () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      type("agent");
+      await waitFor(() => expect(rowNames()[0]).toBe("Launch Claude Code agent"));
+      expect(rowNames()).not.toContain("Send selection to another terminal");
+    });
 
-    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
-    fireEvent.change(searchInput, { target: { value: "stashInput" } });
+    it("labels each result with its category, since results lose their headings", async () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      type("agent");
+      await waitFor(() => expect(rowFor("Launch Claude Code agent").textContent).toMatch(/Agents/));
+      expect(screen.queryAllByRole("heading", { level: 3 })).toHaveLength(0);
+    });
 
-    await waitFor(() => {
-      expect(screen.getByText("Stash Current Input")).toBeTruthy();
+    it("filters to a chord family by key prefix, in glyphs or words", async () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      for (const query of ["cmd+k", "⌘k", "cmd k"]) {
+        type(query);
+        await waitFor(() => expect(rowNames()).toContain("Restart all terminals"));
+        expect(rowNames(), query).not.toContain("Toggle sidebar");
+      }
+    });
+
+    it("finds an alternative key, not only the first one", async () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      type("⌘/");
+      await waitFor(() => expect(rowNames()).toContain("Open keyboard shortcuts reference"));
+    });
+
+    it("lists every key using a lone modifier", async () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      type("cmd");
+      await waitFor(() => expect(rowNames()).toContain("Toggle sidebar"));
+      expect(rowNames()).not.toContain("Redraw focused terminal");
+    });
+
+    it("falls back to fuzzy matching for a misspelling", async () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      type("stsh");
+      await waitFor(() => expect(rowNames()).toContain("Stash current input"));
+    });
+
+    it("offers a way out of an empty result and returns focus to the search", async () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      type("zzqx");
+      const clear = await screen.findByRole("button", { name: "Clear search" });
+      expect(screen.getByText(/No shortcuts match/, { selector: "p" })).toBeTruthy();
+      fireEvent.click(clear);
+      expect(search().value).toBe("");
+      expect(document.activeElement).toBe(search());
+      expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0);
     });
   });
 
-  it("fuzzy search filters by description", async () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+  describe("announcements", () => {
+    it("keeps a single polite, atomic count region mounted through every state", async () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      expect(countRegion().getAttribute("aria-live")).toBe("polite");
+      expect(countRegion().getAttribute("aria-atomic")).toBe("true");
 
-    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
-    fireEvent.change(searchInput, { target: { value: "settings" } });
+      type("zzqx");
+      await waitFor(() => expect(countRegion().textContent).toMatch(/No shortcuts match "zzqx"/));
+      expect(screen.getAllByRole("status")).toHaveLength(1);
+    });
 
-    await waitFor(() => {
-      expect(screen.getByText("Open Settings")).toBeTruthy();
-      expect(screen.queryByText("Toggle Sidebar")).toBeNull();
+    it("counts the rows the user sees, and re-announces a same-count change", async () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      expect(countRegion().textContent).toBe(`${screen.getAllByRole("listitem").length} shortcuts`);
+
+      type("settings");
+      await waitFor(() =>
+        expect(countRegion().textContent).toBe('1 shortcut found for "settings"')
+      );
+      type("sidebar");
+      await waitFor(() => expect(countRegion().textContent).toBe('1 shortcut found for "sidebar"'));
+    });
+
+    it("links the search field to the results it controls", () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      const controlsId = search().getAttribute("aria-controls");
+      expect(controlsId && document.getElementById(controlsId)).toBeTruthy();
     });
   });
 
-  it("chord prefix query filters to chord family", async () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+  it("hands off to the Settings keyboard page and closes", () => {
+    const onClose = vi.fn();
+    const details: unknown[] = [];
+    const listener = (event: Event) => {
+      if (event instanceof CustomEvent) details.push(event.detail);
+    };
+    window.addEventListener("daintree:open-settings-tab", listener);
+    render(<ShortcutReferenceDialog isOpen={true} onClose={onClose} />);
 
-    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
-    fireEvent.change(searchInput, { target: { value: "cmd+k" } });
+    fireEvent.click(screen.getByRole("button", { name: "Edit shortcuts" }));
 
-    await waitFor(() => {
-      expect(screen.getByText("Stash Current Input")).toBeTruthy();
-      expect(screen.queryByText("Toggle Sidebar")).toBeNull();
-      expect(screen.queryByText("New Terminal Panel")).toBeNull();
-    });
-  });
-
-  it("chord prefix query works with unicode symbol", async () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
-    fireEvent.change(searchInput, { target: { value: "⌘k" } });
-
-    await waitFor(() => {
-      expect(screen.getByText("Stash Current Input")).toBeTruthy();
-      expect(screen.queryByText("Toggle Sidebar")).toBeNull();
-    });
-  });
-
-  it("non-chord queries do not collapse list incorrectly", async () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
-    fireEvent.change(searchInput, { target: { value: "toggle" } });
-
-    await waitFor(() => {
-      expect(screen.getByText("Toggle Sidebar")).toBeTruthy();
-    });
-  });
-
-  it("single modifier key is not treated as chord prefix", async () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
-    fireEvent.change(searchInput, { target: { value: "cmd" } });
-
-    await waitFor(() => {
-      expect(screen.getByText("Stash Current Input")).toBeTruthy();
-      expect(screen.getByText("Toggle Sidebar")).toBeTruthy();
-    });
-  });
-
-  it("displays scope for non-global bindings", () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    expect(screen.getByText("Scope: portal")).toBeTruthy();
-  });
-
-  it("does not display scope for global bindings", () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    const scopeElements = screen.getAllByText("Scope: portal");
-    expect(scopeElements.length).toBe(1);
-  });
-
-  it("shows Esc to close hint in footer", () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    const footer = screen.getByText(/Esc/i).closest("div");
-    expect(footer?.textContent).toContain("Esc");
-    expect(footer?.textContent).toContain("close");
-  });
-
-  it("handles space-separated chord query", async () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
-    fireEvent.change(searchInput, { target: { value: "cmd k" } });
-
-    await waitFor(() => {
-      expect(screen.getByText("Stash Current Input")).toBeTruthy();
-      expect(screen.queryByText("Toggle Sidebar")).toBeNull();
-    });
-  });
-
-  it("modifier-like words use fuzzy search, not chord prefix", async () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
-    fireEvent.change(searchInput, { target: { value: "commander" } });
-
-    await waitFor(() => {
-      // Should find "Command Palette" via fuzzy search, not trigger chord prefix
-      expect(screen.getByText("Command Palette")).toBeTruthy();
-    });
-  });
-
-  it("trailing separator falls back to fuzzy search", async () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
-    fireEvent.change(searchInput, { target: { value: "cmd+" } });
-
-    await waitFor(() => {
-      // Should use fuzzy search and find Cmd-related bindings
-      expect(screen.getByText("Stash Current Input")).toBeTruthy();
-    });
-  });
-
-  it("multiple modifier chord prefix works", async () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
-    fireEvent.change(searchInput, { target: { value: "cmd+shift+p" } });
-
-    await waitFor(() => {
-      expect(screen.getByText("Command Palette")).toBeTruthy();
-      expect(screen.queryByText("Toggle Sidebar")).toBeNull();
-    });
-  });
-
-  it("unicode multiple modifier chord prefix works", async () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
-    fireEvent.change(searchInput, { target: { value: "⌘⇧p" } });
-
-    await waitFor(() => {
-      expect(screen.getByText("Command Palette")).toBeTruthy();
-      expect(screen.queryByText("Toggle Sidebar")).toBeNull();
-    });
-  });
-
-  it("search input has aria-label for assistive tech", () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    expect(screen.getByLabelText("Search shortcuts")).toBeTruthy();
-  });
-
-  it("renders italic 'unbound' placeholder when binding has no effective combo", () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    const unboundCell = screen.getByText("unbound");
-    expect(unboundCell).toBeTruthy();
-    expect(unboundCell.tagName.toLowerCase()).toBe("span");
-  });
-
-  it("uses list/listitem roles for shortcut rows", () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    const lists = screen.getAllByRole("list");
-    expect(lists.length).toBeGreaterThan(0);
-    const listItems = screen.getAllByRole("listitem");
-    expect(listItems.length).toBeGreaterThan(0);
-  });
-
-  it("search input has aria-controls linking to results container", () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    const input = screen.getByLabelText("Search shortcuts");
-    const controlsId = input.getAttribute("aria-controls");
-    expect(controlsId).toBeTruthy();
-    const results = document.getElementById(controlsId!);
-    expect(results).toBeTruthy();
-  });
-
-  it("includes sr-only live region for result count announcements", () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    const statusRegions = screen.getAllByRole("status");
-    const countRegion = statusRegions.find((el) => el.textContent?.includes("shortcut"));
-    expect(countRegion).toBeTruthy();
-    expect(countRegion!.getAttribute("aria-live")).toBe("polite");
-    expect(countRegion!.getAttribute("aria-atomic")).toBe("true");
-  });
-
-  it("empty state container has status role for screen reader announcement", async () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
-    fireEvent.change(searchInput, { target: { value: "nonexistent" } });
-
-    await waitFor(() => {
-      const emptyDiv = screen.getByText('No shortcuts found matching "nonexistent"');
-      expect(emptyDiv.closest('[role="status"]')).toBeTruthy();
-      expect(emptyDiv.closest('[aria-live="polite"]')).toBeTruthy();
-    });
-  });
-
-  it("sr-only count updates when search filters results", async () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    const countRegion = screen
-      .getAllByRole("status")
-      .find((el) => el.textContent?.includes("shortcut"));
-    expect(countRegion?.textContent).toBe("6 shortcuts");
-
-    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
-    fireEvent.change(searchInput, { target: { value: "stash" } });
-
-    await waitFor(() => {
-      const updated = screen
-        .getAllByRole("status")
-        .find((el) => el.textContent?.includes("shortcut"));
-      expect(updated?.textContent).toBe('1 shortcut found for "stash"');
-    });
-  });
-
-  it("sr-only count region is always mounted", async () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    // Should exist when results are shown
-    let statusRegions = screen.getAllByRole("status");
-    let countRegion = statusRegions.find((el) => el.textContent?.includes("shortcut"));
-    expect(countRegion).toBeTruthy();
-
-    // Should still exist when search yields no results
-    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
-    fireEvent.change(searchInput, { target: { value: "nonexistent" } });
-
-    await waitFor(() => {
-      statusRegions = screen.getAllByRole("status");
-      countRegion = statusRegions.find((el) => el.textContent?.includes("shortcut"));
-      expect(countRegion).toBeTruthy();
-    });
-  });
-
-  it("sr-only announcement changes when same-count but different results", async () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
-
-    // settings → 1 result
-    fireEvent.change(searchInput, { target: { value: "settings" } });
-    await waitFor(() => {
-      const region = screen
-        .getAllByRole("status")
-        .find((el) => el.textContent?.includes("shortcut"));
-      expect(region?.textContent).toBe('1 shortcut found for "settings"');
-    });
-
-    // stash → also 1 result, but different text → re-announces
-    fireEvent.change(searchInput, { target: { value: "stash" } });
-    await waitFor(() => {
-      const region = screen
-        .getAllByRole("status")
-        .find((el) => el.textContent?.includes("shortcut"));
-      expect(region?.textContent).toBe('1 shortcut found for "stash"');
-    });
-  });
-
-  it("footer renders Esc inside a kbd element", () => {
-    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-
-    const kbds = document.querySelectorAll("kbd");
-    const escKbd = Array.from(kbds).find((el) => el.textContent === "Esc");
-    expect(escKbd).toBeTruthy();
+    expect(onClose).toHaveBeenCalled();
+    expect(details).toEqual([{ tab: "keyboard" }]);
+    window.removeEventListener("daintree:open-settings-tab", listener);
   });
 });
