@@ -103,9 +103,8 @@ describe("PluginInputBoxDialog — plugin attribution", () => {
 
     // The display name is the plugin's own claim, so the manifest id rides
     // beside it; the instance key never does.
-    expect(provenanceText()).toBe(
-      "Requested by the 'Video Manager' plugin (gregpriday.video-manager)"
-    );
+    expect(provenanceText()).toContain("Requested by the 'Video Manager' plugin");
+    expect(provenanceText()).toContain("gregpriday.video-manager");
     expect(document.body.textContent).not.toContain("project__b6700c7a__");
   });
 

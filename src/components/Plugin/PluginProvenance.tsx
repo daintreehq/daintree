@@ -28,20 +28,19 @@ export function PluginProvenance({ attribution, id, className }: PluginProvenanc
       className={cn("flex min-w-0 items-start gap-1.5 text-xs text-text-secondary", className)}
     >
       <Package className="mt-px size-3.5 shrink-0" aria-hidden="true" />
-      {/* The quoted name is one inline box, so a narrow footer moves it to the
-          next line whole instead of splitting the identity across two. A name
-          wider than the line still wraps inside its own box. */}
+      {/* "'Name' plugin" is one inline box, so a narrow footer moves it to the
+          next line whole instead of splitting the identity or stranding
+          "plugin". A name wider than the line still wraps inside its own box. */}
       <span className="min-w-0 [overflow-wrap:anywhere]">
         Requested by the{" "}
         <span className="inline-block max-w-full">
-          &apos;<span className="font-medium text-text-primary">{attribution.name}</span>&apos;
-        </span>{" "}
-        plugin
+          &apos;<span className="font-medium text-text-primary">{attribution.name}</span>&apos;{" "}
+          plugin
+        </span>
+        {/* Its own line, in the install confirm's id treatment, so it reads
+            as the plugin's identifier rather than trailing prose. */}
         {attribution.manifestId && (
-          <>
-            {" "}
-            <span className="inline-block max-w-full font-mono">({attribution.manifestId})</span>
-          </>
+          <span className="mt-0.5 block font-mono text-2xs">{attribution.manifestId}</span>
         )}
       </span>
     </span>
