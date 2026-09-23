@@ -8,14 +8,17 @@ import {
   useState,
 } from "react";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
-import { Check, Copy, Ellipsis, FileText, type LucideIcon } from "lucide-react";
+import { Check, ChevronDown, Copy, Ellipsis, FileText, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 
 let measureContext: CanvasRenderingContext2D | null = null;
 
@@ -512,6 +515,88 @@ function MoreActions({
   );
 }
 
+/**
+ * Below this row width the mode selector folds from a segmented control into
+ * one menu button naming the current mode — the second step after the file
+ * actions fold, so a renderable file keeps a readable name at the narrowest
+ * widths the viewer reaches.
+ */
+const MODE_MENU_BELOW = 420;
+
+/**
+ * The Source / Rendered (/ Edit) choice. Segmented while it fits, a menu once
+ * the row is tight — the same options in the same order either way, with the
+ * current one named on the trigger so the state is still visible at a glance.
+ */
+function ModeControl<T extends string>({
+  options,
+  value,
+  onChange,
+  menuBelow = MODE_MENU_BELOW,
+}: {
+  options: Array<{ value: T; label: string; disabled?: boolean }>;
+  value: T;
+  onChange: (value: T) => void;
+  /** Row width under which the segments fold into the menu. */
+  menuBelow?: number;
+}) {
+  const width = useFileViewerToolbarWidth();
+  const current = options.find((option) => option.value === value) ?? options[0];
+
+  if (width === null || width >= menuBelow || !current) {
+    return (
+      // Compact density: the toolbar's icon buttons are 26px, and the default
+      // 28px segment made every renderable file's row taller than every other.
+      <SegmentedToggle<T> options={options} value={value} onChange={onChange} density="compact" />
+    );
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`View mode: ${current.label}`}
+          data-testid="file-browser-mode-menu"
+          className="toolbar-icon-button flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-text-primary"
+        >
+          {current.label}
+          <ChevronDown className="h-3 w-3 text-text-secondary" aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-[160px]">
+        <DropdownMenuRadioGroup
+          aria-label="View mode"
+          value={value}
+          onValueChange={(next) => {
+            const match = options.find((option) => option.value === next);
+            if (match) onChange(match.value);
+          }}
+        >
+          {options.map((option) => (
+            <DropdownMenuRadioItem
+              key={option.value}
+              value={option.value}
+              disabled={option.disabled}
+            >
+              {option.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * Renders `wide` while the row has room and `narrow` once it is compact — the
+ * seam a surface uses to fold its own actions into `MoreActions` without
+ * restructuring its handlers into a separate component.
+ */
+function Responsive({ wide, narrow }: { wide: React.ReactNode; narrow: React.ReactNode }) {
+  return <>{useFileViewerToolbarCompact() ? narrow : wide}</>;
+}
+
 export const FileViewerToolbar = {
   Root,
   Path,
@@ -519,4 +604,6 @@ export const FileViewerToolbar = {
   IconButton,
   CopyContentsButton,
   MoreActions,
+  ModeControl,
+  Responsive,
 };

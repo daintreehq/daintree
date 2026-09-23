@@ -1,5 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Copy,
   ExternalLink,
   FileDiff as FileDiffIcon,
   FileText,
@@ -23,7 +24,21 @@ import type { TabInfo } from "@/components/Panel/TabButton";
 import { MarkdownViewer, type MarkdownViewerHandle } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import { isProseFilePath } from "@/components/FileViewer/isProseFile";
-import { MarkdownTextSizeControl } from "@/components/Markdown/MarkdownTextSizeControl";
+import {
+  MarkdownTextSizeControl,
+  MarkdownTextSizeMenuItems,
+} from "@/components/Markdown/MarkdownTextSizeControl";
+import {
+  DropdownMenuCheckboxItem,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import { getFileTypeIcon } from "@/panels/file-browser/fileTypeIcons";
+import {
+  FileUnavailableState,
+  unavailableCopy,
+  type UnavailableReason,
+} from "@/components/FileViewer/FileUnavailableState";
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
@@ -50,17 +65,13 @@ import {
 } from "@/components/FileViewer/filePreviewKinds";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
 import { formatBytes } from "@/lib/formatBytes";
-import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { useDiffContent } from "@/panels/diff/useDiffContent";
 import type { DiffSubject } from "@/panels/diff/diffContentCache";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone, SkeletonHint, SkeletonText } from "@/components/ui/Skeleton";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
-import {
-  FILE_READ_ERROR_MESSAGES,
-  toFileReadErrorCode,
-} from "@/components/FileViewer/fileReadErrors";
+import { toFileReadErrorCode } from "@/components/FileViewer/fileReadErrors";
 import { filesClient } from "@/clients/filesClient";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
@@ -1153,104 +1164,177 @@ export function FilePane({
     />
   ) : undefined;
 
+  const showMarkdownWrap = (isMarkdown && viewMode === "source") || viewMode === "edit";
+  const copyableContents = loadState === "loaded" ? content : null;
   const toolbar = filePath ? (
     <>
-      <FileViewerToolbar.Root label="File viewer controls">
+      <FileViewerToolbar.Root
+        label="File viewer controls"
+        // Where the secondary actions fold into "More actions" — the same
+        // priority rule as the file browser's viewer: the mode control and
+        // the file's name keep their room, the icon row gives way first. A
+        // row with a mode toggle folds earlier, because the toggle alone
+        // takes ~120px.
+        compactBelow={availableModes.length > 1 ? 600 : 440}
+      >
         {availableModes.length > 1 && (
           <div ref={modeToggleRef} className="contents">
-            <SegmentedToggle<FileViewMode>
+            <FileViewerToolbar.ModeControl<FileViewMode>
               options={toggleOptions}
               value={viewMode}
               onChange={handleViewModeChange}
             />
           </div>
         )}
-        <FileViewerToolbar.Path path={displayPath} copied={pathCopied} onCopy={handleCopyPath} />
+        <FileViewerToolbar.Path
+          path={displayPath}
+          icon={getFileTypeIcon(fileName ?? filePath).Icon}
+          copied={pathCopied}
+          onCopy={handleCopyPath}
+        />
         <FileViewerToolbar.Actions>
-          {/* The mirror of Wrap below it: each owns the slot in the mode it
-              applies to, so rendered and source both carry exactly one
-              markdown-specific control rather than a row that grows. */}
-          {isMarkdown && viewMode === "rendered" && (
-            <MarkdownTextSizeControl
-              value={markdownFontSize}
-              onValueChange={setMarkdownFontSize}
-              data-testid="file-pane-text-size"
-            />
-          )}
-          {((isMarkdown && viewMode === "source") || viewMode === "edit") && (
-            <FileViewerToolbar.IconButton
-              label="Wrap long lines"
-              pressed={markdownWrapLines}
-              onClick={() => setMarkdownWrapLines(!markdownWrapLines)}
-            >
-              <WrapText className={TOOLBAR_ICON_CLASS} />
-            </FileViewerToolbar.IconButton>
-          )}
-          {/* Diff mode's own wrap, on the shared `diffWrapLines` the diff panel
-              writes — not the markdown one above it, which only ever applied to
-              Source view. Ungated by file type: the diff below renders as text
-              for every file, images and binaries included. */}
-          {viewMode === "diff" && (
-            <FileViewerToolbar.IconButton
-              label="Wrap long lines"
-              pressed={effectiveDiffWrapLines}
-              onClick={() => setDiffWrapLines(!effectiveDiffWrapLines)}
-            >
-              <WrapText className={TOOLBAR_ICON_CLASS} />
-            </FileViewerToolbar.IconButton>
-          )}
-          {/* Refresh follows what's on screen — re-reading the file wouldn't
-              refetch a diff, and vice versa. */}
-          <FileViewerToolbar.IconButton label="Refresh" onClick={handleToolbarRefresh}>
-            <SpinningIcon
-              icon={RefreshCw}
-              active={refreshingMode !== null}
-              className={TOOLBAR_ICON_CLASS}
-            />
-          </FileViewerToolbar.IconButton>
-          {/* The raw file text, whichever view mode is showing: rendered
-              markdown and the diff view both copy the source, never what they
-              drew from it. `content` only ever holds a settled read, so the
-              button is absent while one is in flight and for every state that
-              has no text — image, SVG, media, PDF, and reads that failed as
-              binary, oversized or an LFS pointer. Keyed on the path so the
-              confirmation resets when a file is swapped for one whose contents
-              happen to be identical. */}
-          <FileViewerToolbar.CopyContentsButton
-            key={filePath}
-            contents={loadState === "loaded" ? content : null}
+          <FileViewerToolbar.Responsive
+            wide={
+              <>
+                {/* The mirror of Wrap below it: each owns the slot in the mode
+                    it applies to, so rendered and source both carry exactly
+                    one markdown-specific control rather than a row that grows. */}
+                {isMarkdown && viewMode === "rendered" && (
+                  <MarkdownTextSizeControl
+                    value={markdownFontSize}
+                    onValueChange={setMarkdownFontSize}
+                    data-testid="file-pane-text-size"
+                  />
+                )}
+                {showMarkdownWrap && (
+                  <FileViewerToolbar.IconButton
+                    label="Wrap long lines"
+                    pressed={markdownWrapLines}
+                    onClick={() => setMarkdownWrapLines(!markdownWrapLines)}
+                  >
+                    <WrapText className={TOOLBAR_ICON_CLASS} />
+                  </FileViewerToolbar.IconButton>
+                )}
+                {/* Diff mode's own wrap, on the shared `diffWrapLines` the diff
+                    panel writes — not the markdown one above it, which only
+                    ever applied to Source view. Ungated by file type: the diff
+                    below renders as text for every file. */}
+                {viewMode === "diff" && (
+                  <FileViewerToolbar.IconButton
+                    label="Wrap long lines"
+                    pressed={effectiveDiffWrapLines}
+                    onClick={() => setDiffWrapLines(!effectiveDiffWrapLines)}
+                  >
+                    <WrapText className={TOOLBAR_ICON_CLASS} />
+                  </FileViewerToolbar.IconButton>
+                )}
+                {/* Refresh follows what's on screen — re-reading the file
+                    wouldn't refetch a diff, and vice versa. */}
+                <FileViewerToolbar.IconButton label="Refresh" onClick={handleToolbarRefresh}>
+                  <SpinningIcon
+                    icon={RefreshCw}
+                    active={refreshingMode !== null}
+                    className={TOOLBAR_ICON_CLASS}
+                  />
+                </FileViewerToolbar.IconButton>
+                {/* The raw file text, whichever view mode is showing: rendered
+                    markdown and the diff view both copy the source. `content`
+                    only ever holds a settled read, so the button is absent
+                    while one is in flight and for every state with no text.
+                    Keyed on the path so the confirmation resets when a file is
+                    swapped for one whose contents happen to be identical. */}
+                <FileViewerToolbar.CopyContentsButton key={filePath} contents={copyableContents} />
+                {/* The route back to the tree this file was opened from.
+                    Offered only when a live worktree contains the file. */}
+                {revealWorktreeId && (
+                  <FileViewerToolbar.IconButton
+                    label="Show in file browser"
+                    onClick={() => void handleOpenExternal("file-browser")}
+                  >
+                    <FolderTree className={TOOLBAR_ICON_CLASS} />
+                  </FileViewerToolbar.IconButton>
+                )}
+                {/* Reveal is always offered, even for a file the viewer can't
+                    render — the OS file manager is then the only way forward. */}
+                <FileViewerToolbar.IconButton
+                  label={reveal.label}
+                  onClick={() => void handleOpenExternal("reveal")}
+                >
+                  <FolderOpen className={TOOLBAR_ICON_CLASS} />
+                </FileViewerToolbar.IconButton>
+                <FileViewerToolbar.IconButton
+                  label={openTarget === "browser" ? "Open in browser" : "Open in editor"}
+                  onClick={() => void handleOpenExternal(openTarget)}
+                >
+                  {openTarget === "browser" ? (
+                    <Globe className={TOOLBAR_ICON_CLASS} />
+                  ) : (
+                    <ExternalLink className={TOOLBAR_ICON_CLASS} />
+                  )}
+                </FileViewerToolbar.IconButton>
+              </>
+            }
+            narrow={
+              <FileViewerToolbar.MoreActions data-testid="file-pane-more-actions">
+                {isMarkdown && viewMode === "rendered" && (
+                  <>
+                    <MarkdownTextSizeMenuItems
+                      value={markdownFontSize}
+                      onValueChange={setMarkdownFontSize}
+                    />
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                {(showMarkdownWrap || viewMode === "diff") && (
+                  <>
+                    <DropdownMenuCheckboxItem
+                      checked={viewMode === "diff" ? effectiveDiffWrapLines : markdownWrapLines}
+                      onCheckedChange={(checked) =>
+                        viewMode === "diff"
+                          ? setDiffWrapLines(checked)
+                          : setMarkdownWrapLines(checked)
+                      }
+                    >
+                      Wrap long lines
+                    </DropdownMenuCheckboxItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                <DropdownMenuItem onSelect={handleToolbarRefresh}>
+                  <RefreshCw className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                  Refresh
+                </DropdownMenuItem>
+                {copyableContents !== null && (
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      void navigator.clipboard?.writeText(copyableContents).catch(() => {});
+                    }}
+                  >
+                    <Copy className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                    Copy file contents
+                  </DropdownMenuItem>
+                )}
+                {revealWorktreeId && (
+                  <DropdownMenuItem onSelect={() => void handleOpenExternal("file-browser")}>
+                    <FolderTree className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                    Show in file browser
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onSelect={() => void handleOpenExternal("reveal")}>
+                  <FolderOpen className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                  {reveal.label}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => void handleOpenExternal(openTarget)}>
+                  {openTarget === "browser" ? (
+                    <Globe className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                  ) : (
+                    <ExternalLink className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                  )}
+                  {openTarget === "browser" ? "Open in browser" : "Open in editor"}
+                </DropdownMenuItem>
+              </FileViewerToolbar.MoreActions>
+            }
           />
-          {/* Reveal is always offered, even for a file the viewer can't render
-              (oversized, unsupported video) — the OS file manager is then the
-              only way forward. */}
-          {/* The route back to the tree this file was opened from. Offered only
-              when a live worktree contains the file — the browser is
-              worktree-scoped, so there is nothing to open for a file outside
-              every worktree. */}
-          {revealWorktreeId && (
-            <FileViewerToolbar.IconButton
-              label="Show in file browser"
-              onClick={() => void handleOpenExternal("file-browser")}
-            >
-              <FolderTree className={TOOLBAR_ICON_CLASS} />
-            </FileViewerToolbar.IconButton>
-          )}
-          <FileViewerToolbar.IconButton
-            label={reveal.label}
-            onClick={() => void handleOpenExternal("reveal")}
-          >
-            <FolderOpen className={TOOLBAR_ICON_CLASS} />
-          </FileViewerToolbar.IconButton>
-          <FileViewerToolbar.IconButton
-            label={openTarget === "browser" ? "Open in browser" : "Open in editor"}
-            onClick={() => void handleOpenExternal(openTarget)}
-          >
-            {openTarget === "browser" ? (
-              <Globe className={TOOLBAR_ICON_CLASS} />
-            ) : (
-              <ExternalLink className={TOOLBAR_ICON_CLASS} />
-            )}
-          </FileViewerToolbar.IconButton>
         </FileViewerToolbar.Actions>
       </FileViewerToolbar.Root>
       {location !== "dialog" &&
@@ -1421,52 +1505,16 @@ export function FilePane({
           viewMode !== "edit" &&
           loadState === "error" &&
           errorCode && (
-            <div className="flex h-full flex-col items-center gap-3 p-6 [&>*:first-child]:mt-auto [&>*:last-child]:mb-auto">
-              <p className="text-sm text-muted-foreground">
-                {errorMessage ?? FILE_READ_ERROR_MESSAGES[errorCode]}
-              </p>
-              {/* An unsupported format is deterministic — retrying the same
-                extension can never succeed, so the action would be dead. A
-                directory is the same: it never becomes a readable file
-                (#12309). */}
-              <div className="flex flex-wrap items-center justify-center gap-2">
-                {errorCode !== "NOT_A_FILE" &&
-                  !isUnsupportedVideoFilePath(filePath) &&
-                  !isUnsupportedAudioFilePath(filePath) && (
-                    <Button variant="subtle" size="sm" onClick={() => loadFile("explicit")}>
-                      <RefreshCw />
-                      Retry
-                    </Button>
-                  )}
-                {/* A PDF the viewer can't frame may still be a perfectly good
-                    file, so hand it to something that can show it (#12598).
-                    The OS open is root-contained and checks the canonical
-                    path, so it is only offered inside a governed root — and
-                    even there a link can resolve outside it. Reveal carries a
-                    guarded out-of-root fallback, so it is always offered as
-                    the route that still works when the open can't. */}
-                {isPdfFilePath(filePath) && isInsideGovernedRoot && (
-                  <Button
-                    variant="subtle"
-                    size="sm"
-                    onClick={() => void handleOpenExternal("default-app")}
-                  >
-                    <ExternalLink />
-                    Open in default app
-                  </Button>
-                )}
-                {isPdfFilePath(filePath) && (
-                  <Button
-                    variant="subtle"
-                    size="sm"
-                    onClick={() => void handleOpenExternal("reveal")}
-                  >
-                    <FolderOpen />
-                    {reveal.label}
-                  </Button>
-                )}
-              </div>
-            </div>
+            <FilePaneUnavailable
+              reason={toUnavailableReason(filePath, errorCode, errorMessage)}
+              message={errorMessage ?? ""}
+              fileName={fileName ?? filePath}
+              revealLabel={reveal.label}
+              openTarget={openTarget}
+              canOpenInDefaultApp={isInsideGovernedRoot}
+              onRetry={() => loadFile("explicit")}
+              onExternal={(target) => void handleOpenExternal(target)}
+            />
           )}
 
         {filePath && viewMode !== "diff" && (loadState === "image" || loadState === "svg") && (
@@ -1630,5 +1678,128 @@ export function FilePane({
           ))}
       </div>
     </ContentPanel>
+  );
+}
+
+/**
+ * The structured reason behind the pane's error state, recovered from the
+ * code and message it already keeps. The pane stores a read-error code even
+ * for failures no read produced — an image that won't decode, a codec the
+ * player lacks — so the file's kind decides which of those it really was.
+ */
+function toUnavailableReason(
+  filePath: string,
+  code: FileReadErrorCode,
+  message: string | null
+): UnavailableReason {
+  if (isUnsupportedVideoFilePath(filePath) || isUnsupportedAudioFilePath(filePath)) {
+    return "UNSUPPORTED_MEDIA";
+  }
+  // Previews before the size code: a PDF or a video refused as too large is a
+  // preview limit with the OS app as its way out, not text for the editor.
+  if (isPdfFilePath(filePath)) return "PDF_FAILED";
+  if (isVideoFilePath(filePath) || isAudioFilePath(filePath)) return "MEDIA_FAILED";
+  if (code === "FILE_TOO_LARGE") return "FILE_TOO_LARGE";
+  if (isSvgFilePath(filePath) && message !== null) return "SVG_REJECTED";
+  // A raster image never goes through a read; its only failure is a decode.
+  if (isImageFilePath(filePath)) return "IMAGE_FAILED";
+  return code;
+}
+
+/**
+ * Failures a second attempt can't change: a directory never becomes a file, an
+ * unsupported container never becomes playable, and a binary never becomes
+ * text. Everything else keeps Retry — a permission can clear, a decode can
+ * succeed once a half-written file settles, a refused PDF can come back.
+ */
+const NOT_RETRYABLE: ReadonlySet<UnavailableReason> = new Set<UnavailableReason>([
+  "NOT_A_FILE",
+  "UNSUPPORTED_MEDIA",
+  "BINARY_FILE",
+]);
+
+/**
+ * The file panel's unavailable body: the same cause-first wording as the file
+ * browser's (`FileUnavailableState`), wired to this pane's own handlers. The
+ * cause's own way out comes first. "Open" follows the file's kind — the editor
+ * for oversized text, the OS default app for media, images and PDFs, but only
+ * inside a governed root where that open is contained; outside one, Reveal,
+ * which carries a guarded out-of-root fallback, takes its place. A PDF always
+ * keeps Reveal beside its open, since a link out of the root passes the lexical
+ * check and fails the OS one. Retry follows for anything a retry can fix.
+ */
+function FilePaneUnavailable({
+  reason,
+  message,
+  fileName,
+  revealLabel,
+  openTarget,
+  canOpenInDefaultApp,
+  onRetry,
+  onExternal,
+}: {
+  reason: UnavailableReason;
+  message: string;
+  fileName: string;
+  revealLabel: string;
+  openTarget: "browser" | "editor";
+  canOpenInDefaultApp: boolean;
+  onRetry: () => void;
+  onExternal: (target: ExternalTarget) => void;
+}) {
+  const copy = unavailableCopy(reason, message);
+  const isPreviewLimit =
+    reason === "UNSUPPORTED_MEDIA" ||
+    reason === "MEDIA_FAILED" ||
+    reason === "IMAGE_FAILED" ||
+    reason === "PDF_FAILED";
+  const openVia: ExternalTarget | null =
+    copy.action !== "open"
+      ? null
+      : isPreviewLimit
+        ? canOpenInDefaultApp
+          ? "default-app"
+          : null
+        : openTarget;
+  const offersReveal =
+    copy.action === "reveal" ||
+    reason === "NOT_A_FILE" ||
+    reason === "PDF_FAILED" ||
+    (copy.action === "open" && openVia === null);
+  const offersRetry = !NOT_RETRYABLE.has(reason);
+
+  return (
+    <FileUnavailableState
+      icon={getFileTypeIcon(fileName).Icon}
+      title={copy.title}
+      description={copy.description}
+      data-testid="file-pane-unavailable"
+      action={
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {openVia !== null && (
+            <Button variant="subtle" size="sm" onClick={() => onExternal(openVia)}>
+              {openVia === "browser" ? <Globe /> : <ExternalLink />}
+              {openVia === "default-app"
+                ? "Open in default app"
+                : openVia === "browser"
+                  ? "Open in browser"
+                  : "Open in editor"}
+            </Button>
+          )}
+          {offersReveal && (
+            <Button variant="subtle" size="sm" onClick={() => onExternal("reveal")}>
+              <FolderOpen />
+              {revealLabel}
+            </Button>
+          )}
+          {offersRetry && (
+            <Button variant="subtle" size="sm" onClick={onRetry}>
+              <RefreshCw />
+              Retry
+            </Button>
+          )}
+        </div>
+      }
+    />
   );
 }

@@ -1,6 +1,5 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ChevronDown,
   Copy,
   ExternalLink,
   FileText,
@@ -17,14 +16,9 @@ import {
 } from "lucide-react";
 import { CircleCheck, FolderOpen } from "@/components/icons";
 import {
-  DropdownMenu,
   DropdownMenuCheckboxItem,
-  DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { actionService } from "@/services/ActionService";
@@ -34,7 +28,6 @@ import {
   FileViewerToolbar,
   TOOLBAR_ICON_CLASS,
   useFileViewerToolbarCompact,
-  useFileViewerToolbarWidth,
 } from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -63,10 +56,13 @@ import {
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { toFileReadErrorCode } from "@/components/FileViewer/fileReadErrors";
-import type { FileReadErrorCode } from "@shared/types/ipc/files";
+import {
+  FileUnavailableState as UnavailableState,
+  unavailableCopy,
+  type UnavailableReason,
+} from "@/components/FileViewer/FileUnavailableState";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
-import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { FolderListingView } from "./FolderListingView";
@@ -239,20 +235,6 @@ type ViewerState =
   | { status: "audio" }
   | { status: "pdf" }
   | { status: "error"; reason: UnavailableReason; message: string };
-
-/**
- * Why a file can't be shown, kept structured past the read so the unavailable
- * state can say it in words and offer the way out that fits — rather than one
- * generic "Can't show this file" over a terse code.
- */
-type UnavailableReason =
-  | FileReadErrorCode
-  | "UNSUPPORTED_MEDIA"
-  | "MEDIA_FAILED"
-  | "IMAGE_FAILED"
-  | "SVG_REJECTED"
-  | "PDF_FAILED"
-  | "READ_FAILED";
 
 // Markdown and HTML both get a Source/Rendered switch mirroring FilePane's
 // toggle. Typed at the constant so the option values stay `FileRenderMode`
@@ -726,7 +708,7 @@ export function FileBrowserViewer({
         </FileViewerToolbar.IconButton>
         {showModeToggle && (
           <div ref={modeToggleRef} className="contents">
-            <ModeControl
+            <FileViewerToolbar.ModeControl<FileRenderMode | "edit">
               options={renderOptions}
               value={renderMode}
               onChange={setExplicitRenderMode}
@@ -894,6 +876,7 @@ export function FileBrowserViewer({
     const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
     return (
       <UnavailableState
+        data-testid="file-browser-unavailable"
         icon={FileX}
         title="This file was deleted"
         description={`${basename(path)} is no longer on disk.`}
@@ -932,6 +915,7 @@ export function FileBrowserViewer({
     if (folderStatus === "error") {
       return (
         <UnavailableState
+          data-testid="file-browser-unavailable"
           icon={FolderTree}
           title="Can't show this folder"
           description="It couldn't be read. It may have been moved or deleted."
@@ -1091,6 +1075,7 @@ export function FileBrowserViewer({
           ) : undefined;
         return (
           <UnavailableState
+            data-testid="file-browser-unavailable"
             icon={getFileTypeIcon(fileName).Icon}
             title={copy.title}
             description={copy.description}
@@ -1284,138 +1269,6 @@ const OPEN_ACTION_COPY: Record<OpenTarget, { label: string; icon: LucideIcon }> 
   browser: { label: "Open in browser", icon: Globe },
 };
 
-interface UnavailableCopy {
-  title: string;
-  description: string;
-  /** The way out the body offers, beyond the toolbar's own actions. */
-  action: "open" | "reveal" | "retry" | null;
-}
-
-/**
- * What an unavailable file says, per cause: a title naming what happened, a
- * line saying what to do instead, and the one action that does it. The open
- * action follows the toolbar's own target for the file's type, so "open" means
- * the editor for text and the OS default app for media — never the OS default
- * for a binary, which may execute it; a binary gets Reveal.
- */
-function unavailableCopy(reason: UnavailableReason, message: string): UnavailableCopy {
-  switch (reason) {
-    case "BINARY_FILE":
-      return {
-        title: "Binary file",
-        description: "It can't be shown as text. Reveal it to open it with another app.",
-        action: "reveal",
-      };
-    case "FILE_TOO_LARGE":
-      return {
-        title: "Too large to preview",
-        description: "It's over the size this viewer opens. Open it outside Daintree instead.",
-        action: "open",
-      };
-    case "LFS_POINTER":
-      return {
-        title: "Git LFS pointer",
-        description: "Run `git lfs pull` to download the file's contents, then refresh.",
-        action: "retry",
-      };
-    case "NOT_FOUND":
-      return {
-        title: "This file was deleted",
-        description: "It's no longer on disk.",
-        action: "retry",
-      };
-    case "PERMISSION":
-      return {
-        title: "No permission to read this file",
-        description: "Reveal it to check its permissions.",
-        action: "reveal",
-      };
-    case "OUTSIDE_ROOT":
-      return {
-        title: "Outside this worktree",
-        description: "The file resolves to a location outside the folder being browsed.",
-        action: "reveal",
-      };
-    case "NOT_A_FILE":
-      return {
-        title: "This is a folder",
-        description: "Refresh to show its contents.",
-        action: "retry",
-      };
-    case "INVALID_PATH":
-      return {
-        title: "Couldn't read this file",
-        description: "Its path isn't valid.",
-        action: "reveal",
-      };
-    case "UNSUPPORTED_MEDIA":
-      return { title: "Can't play this format", description: message, action: "open" };
-    case "MEDIA_FAILED":
-      return {
-        title: message || "Couldn't play this file",
-        description: "Open it in your default app to play it.",
-        action: "open",
-      };
-    case "IMAGE_FAILED":
-      return {
-        title: "Couldn't load this image",
-        description: "It may be damaged, or in a format that can't be decoded here.",
-        action: "open",
-      };
-    case "SVG_REJECTED":
-      return { title: "Can't preview this SVG", description: message, action: "open" };
-    case "PDF_FAILED":
-      return {
-        title: message || "This PDF couldn't be displayed",
-        description: "Open it in your default app to read it.",
-        action: "open",
-      };
-    case "READ_FAILED":
-      return {
-        title: "Couldn't read this file",
-        description: "Something went wrong reading it from disk.",
-        action: "retry",
-      };
-  }
-}
-
-/**
- * The body for every file the viewer can't show, and for a file that vanished.
- * A polite status region, so the change is announced without moving focus
- * (WCAG 4.1.3): selecting a binary in the tree otherwise reads as nothing
- * having happened at all.
- */
-function UnavailableState({
-  icon: Icon,
-  title,
-  description,
-  action,
-}: {
-  icon: LucideIcon;
-  title: string;
-  description: string;
-  action?: React.ReactNode;
-}) {
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="flex h-full w-full items-center justify-center p-6"
-      data-testid="file-browser-unavailable"
-    >
-      <EmptyState
-        variant="zero-data"
-        scale="canvas"
-        icon={<Icon className="h-6 w-6" />}
-        title={title}
-        description={description}
-        action={action}
-        className="w-full"
-      />
-    </div>
-  );
-}
-
 /**
  * The file's own actions, laid out as buttons at width and folded into one
  * "More actions" menu once the row is compact — so at a narrow width the path
@@ -1526,78 +1379,5 @@ function FileActions({
         <OpenIcon className={TOOLBAR_ICON_CLASS} />
       </FileViewerToolbar.IconButton>
     </>
-  );
-}
-
-/**
- * Below this row width the mode selector folds from a segmented control into
- * one menu button naming the current mode — the second step after the file
- * actions fold, so a renderable file keeps a readable name at the narrowest
- * widths the viewer reaches.
- */
-const MODE_MENU_BELOW = 420;
-
-type ViewerMode = FileRenderMode | "edit";
-
-/**
- * The Source / Rendered (/ Edit) choice. Segmented while it fits, a menu once
- * the row is tight — the same options in the same order either way, with the
- * current one named on the trigger so the state is still visible at a glance.
- */
-function ModeControl({
-  options,
-  value,
-  onChange,
-}: {
-  options: Array<{ value: ViewerMode; label: string }>;
-  value: ViewerMode;
-  onChange: (value: ViewerMode) => void;
-}) {
-  const width = useFileViewerToolbarWidth();
-  const current = options.find((option) => option.value === value) ?? options[0];
-
-  if (width === null || width >= MODE_MENU_BELOW || !current) {
-    return (
-      // Compact density: the toolbar's icon buttons are 26px, and the default
-      // 28px segment made every renderable file's row taller than every other.
-      <SegmentedToggle<ViewerMode>
-        options={options}
-        value={value}
-        onChange={onChange}
-        density="compact"
-      />
-    );
-  }
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label={`View mode: ${current.label}`}
-          data-testid="file-browser-mode-menu"
-          className="toolbar-icon-button flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-text-primary"
-        >
-          {current.label}
-          <ChevronDown className="h-3 w-3 text-text-secondary" aria-hidden="true" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-[160px]">
-        <DropdownMenuRadioGroup
-          aria-label="View mode"
-          value={value}
-          onValueChange={(next) => {
-            const match = options.find((option) => option.value === next);
-            if (match) onChange(match.value);
-          }}
-        >
-          {options.map((option) => (
-            <DropdownMenuRadioItem key={option.value} value={option.value}>
-              {option.label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }

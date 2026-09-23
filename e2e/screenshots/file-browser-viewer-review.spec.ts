@@ -691,6 +691,36 @@ test("file browser review — viewer formats and states", async () => {
           await panel.locator('[data-testid="file-browser-sidebar-toggle"]').click();
           await settle(page, 500);
         });
+        // The standalone file panel shares the toolbar and the unavailable
+        // states, so it is captured alongside for the consistency roll-out:
+        // the browser panel closes first, then each file panel has the grid to
+        // itself at this pass's width.
+        await state("file-panel", async () => {
+          await dispatchAction(page, "terminal.close", { terminalId: panelId });
+          await settle(page, 800);
+          const samples: Array<[string, string]> = [
+            ["docs/architecture/state-management.md", "21-file-panel-markdown"],
+            ["src/components/Panel/ContentPanel.tsx", "22-file-panel-code"],
+            ["bin/fixture-tool", "23-file-panel-binary"],
+            ["assets/video/screen-recording.mov", "24-file-panel-unsupported"],
+            ["assets/brand/corrupt-thumbnail.png", "25-file-panel-broken-image"],
+          ];
+          for (const [relative, slug] of samples) {
+            const result = await dispatchAction(page, "file.openPanel", {
+              path: path.join(repo.dir, relative),
+            });
+            const filePanelId = result.result?.panelId;
+            if (!filePanelId) throw new Error(`file.openPanel gave no panel for ${relative}`);
+            const filePanel = page.locator(`[data-panel-id="${filePanelId}"]`);
+            await filePanel.waitFor({ state: "visible", timeout: T_MEDIUM });
+            await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+            await page.mouse.move(2, 2);
+            await settle(page, 1500);
+            await filePanel.screenshot({ path: path.join(OUTPUT_DIR, `${prefix}${slug}.png`) });
+            await dispatchAction(page, "terminal.close", { terminalId: filePanelId });
+            await settle(page, 600);
+          }
+        });
       } finally {
         if (ctx) await closeApp(ctx.app);
         repo.cleanup();

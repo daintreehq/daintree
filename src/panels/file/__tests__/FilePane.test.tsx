@@ -219,6 +219,7 @@ vi.mock("@/components/Markdown/MarkdownTextSizeControl", () => ({
       onClick={() => props.onValueChange("2xl")}
     />
   ),
+  MarkdownTextSizeMenuItems: () => null,
 }));
 vi.mock("@/components/FileViewer/CodeViewer", () => ({
   // Surfaces `content` so a re-read's result is observable — the only way to
@@ -1665,11 +1666,13 @@ describe("FilePane diff mode (#11274)", () => {
 
         await waitFor(() => expect(buttonByText(container, "Retry")).toBeDefined());
         expect(container.querySelector("iframe")).toBeNull();
-        const message = container.querySelector('[data-testid="file-pane-body"] p')?.textContent;
+        const message = container.querySelector(
+          '[data-testid="file-pane-unavailable"]'
+        )?.textContent;
         expect(message).toBeTruthy();
         // The code is shared with the text path, whose message names its own
         // 500 KB ceiling — a PDF refused under a different cap must not borrow it.
-        expect(message).not.toBe(FILE_READ_ERROR_MESSAGES.FILE_TOO_LARGE);
+        expect(message).not.toContain(FILE_READ_ERROR_MESSAGES.FILE_TOO_LARGE);
       });
 
       it("always offers the guarded reveal beside the open, which a link out of the root defeats", async () => {
@@ -1770,14 +1773,15 @@ describe("FilePane diff mode (#11274)", () => {
         expect(pdfProbeMock).toHaveBeenCalledTimes(2);
       });
 
-      it("offers no default-app action for a file that isn't a PDF", async () => {
+      it("never hands a binary to the OS default app, which may execute it", async () => {
         seedWorktree([]);
         readMock.mockRejectedValueOnce(new ClientAppError("BINARY_FILE", "binary"));
         const { container } = await renderPane({ filePath: "/repo/bin/blob.bin" });
 
-        await waitFor(() => expect(buttonByText(container, "Retry")).toBeDefined());
+        // Reveal is its way out; a Retry could never turn a binary into text.
+        await waitFor(() => expect(buttonByText(container, revealCopy().label)).toBeDefined());
         expect(buttonByText(container, "Open in default app")).toBeUndefined();
-        expect(buttonByText(container, revealCopy().label)).toBeUndefined();
+        expect(buttonByText(container, "Retry")).toBeUndefined();
       });
     });
   });
@@ -2656,11 +2660,13 @@ describe("FilePane live disk refresh (#11451)", () => {
     const img = container.querySelector("img");
     if (!img) throw new Error("image preview not rendered");
     fireEvent.error(img);
-    expect(screen.getByText(FILE_READ_ERROR_MESSAGES.NOT_FOUND)).toBeTruthy();
+    // Named as a decode failure, not "File no longer exists" — the file is
+    // right there; it just didn't decode on that pass.
+    expect(screen.getByText("Couldn't load this image")).toBeTruthy();
 
     await commitTick(rerender, true);
 
-    expect(screen.queryByText(FILE_READ_ERROR_MESSAGES.NOT_FOUND)).toBeNull();
+    expect(screen.queryByText("Couldn't load this image")).toBeNull();
     expect(container.querySelector("img")).not.toBeNull();
   });
 
@@ -3457,6 +3463,22 @@ describe("FilePane copy file contents (#12136)", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("the whole file\n"));
   });
 
+  it("folds its actions into one menu when the toolbar is narrow, keeping the path", async () => {
+    const rect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue(new DOMRect(0, 0, 320, 30));
+    try {
+      readMock.mockResolvedValue({ content: "x" });
+      await renderPane("/repo/src/index.ts");
+
+      expect(await screen.findByRole("button", { name: "More actions" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Open in editor" })).toBeNull();
+      expect(screen.getByRole("button", { name: /^Copy file path/ })).toBeTruthy();
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
   it("withholds the control until the read settles", async () => {
     readMock.mockReturnValue(new Promise(() => {}));
     await renderPane("/repo/src/index.ts");
@@ -3475,7 +3497,7 @@ describe("FilePane copy file contents (#12136)", () => {
 
       // Prove the pane actually settled into the matching error, or the absence
       // below could just be a frame that never rendered.
-      expect(await screen.findByText(FILE_READ_ERROR_MESSAGES[code])).toBeTruthy();
+      expect(await screen.findByTestId("file-pane-unavailable")).toBeTruthy();
       // The extension says nothing here; the read is what knows, and its failure
       // is what has to keep the button away.
       expect(copyButton()).toBeNull();
@@ -3491,7 +3513,7 @@ describe("FilePane copy file contents (#12136)", () => {
     readMock.mockRejectedValue(new ClientAppError(code, code));
     await renderPane("/repo/vendor/sub");
 
-    expect(await screen.findByText(FILE_READ_ERROR_MESSAGES[code])).toBeTruthy();
+    expect(await screen.findByTestId("file-pane-unavailable")).toBeTruthy();
     const hasRetry = [...document.querySelectorAll("button")].some(
       (button) => button.textContent === "Retry"
     );
