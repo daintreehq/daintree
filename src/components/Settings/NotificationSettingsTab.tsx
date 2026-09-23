@@ -358,10 +358,7 @@ export function NotificationSettingsTab() {
     <div className="space-y-8">
       {showInlineLoading && <p className="text-xs text-text-secondary">Loading…</p>}
 
-      <SettingsSection
-        title="Agent notifications"
-        description="Suppressed while you're already viewing the relevant worktree."
-      >
+      <SettingsSection title="Agent notifications">
         {loadFailed && (
           <SettingsLoadErrorBanner
             title="Notification settings didn't load"
