@@ -14,13 +14,18 @@ export interface ParsedCommitBody {
 // letters/digits/hyphens (`Co-authored-by`, `Signed-off-by`, `Change-Id`).
 const TRAILER_LINE = /^[A-Za-z0-9][A-Za-z0-9-]*:\s+\S/;
 const CO_AUTHOR = /^co-authored-by:\s*(.+?)\s*<([^>]*)>\s*$/i;
+// A paragraph only counts as a trailer block when git (or a forge) plainly
+// wrote it: at least one attribution trailer (`*-by`) or a Change-Id. Without
+// that anchor, "Note: requires restarting the worker" is prose that merely
+// looks like a trailer, and dropping it would lose what the author wrote.
+const TRAILER_ANCHOR = /^(?:[A-Za-z0-9-]+-by|change-id):/i;
 
 /**
  * Split a commit body into its prose and the trailer block git appends to it.
  *
  * The trailer block is the last paragraph, and only when every line in it is a
- * `Token: value` trailer — the same rule `git interpret-trailers` applies. That
- * keeps a prose paragraph that happens to start "Note: …" in the body, while
+ * `Token: value` trailer and at least one is an attribution trailer or a
+ * Change-Id. That keeps a closing "Note: …" in the body, while
  * `Co-authored-by` / `Signed-off-by` are lifted out so they are not read twice.
  */
 export function parseCommitBody(body: string | null | undefined): ParsedCommitBody {
@@ -30,7 +35,10 @@ export function parseCommitBody(body: string | null | undefined): ParsedCommitBo
   const paragraphs = normalized.split(/\n\s*\n/);
   const last = paragraphs[paragraphs.length - 1]!;
   const lines = last.split("\n").map((l) => l.trim());
-  const isTrailerBlock = lines.length > 0 && lines.every((l) => TRAILER_LINE.test(l));
+  const isTrailerBlock =
+    lines.length > 0 &&
+    lines.every((l) => TRAILER_LINE.test(l)) &&
+    lines.some((l) => TRAILER_ANCHOR.test(l));
   if (!isTrailerBlock) return { text: normalized, coAuthors: [] };
 
   const coAuthors: CommitPerson[] = [];

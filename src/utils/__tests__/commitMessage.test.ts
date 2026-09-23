@@ -26,6 +26,11 @@ describe("parseCommitBody", () => {
     expect(parseCommitBody(body)).toEqual({ text: body, coAuthors: [] });
   });
 
+  it("keeps a closing line that only looks like a trailer", () => {
+    const body = "Actual explanation.\n\nNote: Requires restarting the worker";
+    expect(parseCommitBody(body)).toEqual({ text: body, coAuthors: [] });
+  });
+
   it("returns empty prose when the body is nothing but trailers", () => {
     const parsed = parseCommitBody("Signed-off-by: dependabot[bot] <support@github.com>");
     expect(parsed.text).toBe("");

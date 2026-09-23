@@ -38,6 +38,7 @@ vi.mock("../logger.js", () => ({
 import {
   getLatestTrackedFileMtime,
   getWorktreeChangesWithStats,
+  capCommitBody,
   listCommits,
   invalidateWorktreeCache,
   __clearPerFileDiffStatCacheForTesting,
@@ -1334,5 +1335,21 @@ describe("getWorktreeChangesWithStats cancellation (#12460)", () => {
     await expect(cancelled).rejects.toThrow("aborted");
     await expect(fresh).resolves.toMatchObject({ changedFileCount: 0 });
     expect(vi.mocked(createHardenedGit)).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("capCommitBody", () => {
+  it("keeps the trailer block when a long body is capped", () => {
+    const trailers = "Co-authored-by: Sam Okafor <sam@helios.dev>";
+    const body = `${"prose ".repeat(900)}\n\n${trailers}`;
+    const capped = capCommitBody(body);
+    expect(capped.length).toBeLessThanOrEqual(4000);
+    expect(capped.endsWith(trailers)).toBe(true);
+  });
+
+  it("leaves a body under the cap untouched", () => {
+    expect(capCommitBody("short\n\nCo-authored-by: A <a@x>")).toBe(
+      "short\n\nCo-authored-by: A <a@x>"
+    );
   });
 });

@@ -79,6 +79,21 @@ const LAST_COMMIT_LOG_FORMAT = "--format=%ct%x09%an%x09%ae%x09%s%x00%b";
 // changelog. The hover card clamps far below this.
 const LAST_COMMIT_BODY_MAX = 4000;
 
+/**
+ * Cap a commit body without losing its trailers: git appends them as the final
+ * paragraph, so a plain head slice of a long body drops the co-authors first.
+ * Keep the head of the prose and re-attach the final paragraph when it is
+ * short enough to be a trailer block.
+ */
+export function capCommitBody(body: string): string {
+  if (body.length <= LAST_COMMIT_BODY_MAX) return body;
+  const lastBreak = body.lastIndexOf("\n\n");
+  const tail = lastBreak === -1 ? "" : body.slice(lastBreak + 2);
+  if (!tail || tail.length > LAST_COMMIT_BODY_MAX / 4) return body.slice(0, LAST_COMMIT_BODY_MAX);
+  const head = body.slice(0, LAST_COMMIT_BODY_MAX - tail.length - 2).trimEnd();
+  return `${head}\n\n${tail}`;
+}
+
 const LAST_COMMIT_LOG_CACHE = new Cache<string, string>({
   maxSize: 100,
   defaultTTL: 300_000,
@@ -691,11 +706,7 @@ export async function getWorktreeChangesWithStats(
         const nul = logOutput.indexOf("\0");
         const header = nul === -1 ? logOutput : logOutput.slice(0, nul);
         if (nul !== -1) {
-          lastCommitBody =
-            logOutput
-              .slice(nul + 1)
-              .trim()
-              .slice(0, LAST_COMMIT_BODY_MAX) || undefined;
+          lastCommitBody = capCommitBody(logOutput.slice(nul + 1).trim()) || undefined;
         }
         const [tsLine, authorName, authorEmail, ...msgParts] = header.split("\t");
         const parsed = Number.parseInt((tsLine ?? "").trim(), 10);
