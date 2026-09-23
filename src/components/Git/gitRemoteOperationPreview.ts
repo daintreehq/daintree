@@ -106,6 +106,11 @@ export interface GitRemoteOperationPreview {
    */
   hasRemote: boolean;
   /**
+   * Uncommitted changes to tracked files, staged or not. A pull-rebase refuses
+   * over any of them; untracked files don't count, because they don't stop it.
+   */
+  trackedChangeCount: number;
+  /**
    * The commits the operation would act on.
    *
    * Never the branch's recent history: for `"push"` the actual publish range
@@ -179,6 +184,9 @@ export async function buildGitRemoteOperationPreview(
     rebaseTotalSteps: repoOperation === "REBASING" ? status.rebaseTotalSteps : null,
     // A status payload from before the field existed must not read as "no remote".
     hasRemote: status.hasRemote !== false,
+    trackedChangeCount:
+      (status.staged?.length ?? 0) +
+      (status.unstaged ?? []).filter((entry) => entry.status !== "untracked").length,
     destination: status.pushDestination,
     pullSource: status.pullSource,
   };
@@ -279,6 +287,12 @@ export function formatGitRemoteOperationPreviewLines(
     ];
   }
   const branchLine = `Branch: ${preview.branch ?? "(detached HEAD)"}`;
+  if (isPullRebase && (preview.trackedChangeCount ?? 0) > 0) {
+    return [
+      `${MCP_PREVIEW_CAUTION_PREFIX}This worktree has uncommitted changes to tracked files — the pull will be refused until they are committed or stashed.`,
+      branchLine,
+    ];
+  }
   if (preview.hasRemote === false && preview.branch !== null) {
     return [
       `${MCP_PREVIEW_CAUTION_PREFIX}This repository has no remote configured — this operation will be refused.`,

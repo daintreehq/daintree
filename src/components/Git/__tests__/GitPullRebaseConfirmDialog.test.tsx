@@ -572,4 +572,20 @@ describe("GitPullRebaseConfirmDialog", () => {
     expect(await describes(2)).toBe(true);
     expect(await describes(0)).toBe(false);
   });
+
+  // Git refuses to rebase over uncommitted tracked changes, and the handler
+  // refuses before the network. Said before approval, not as a failure after it.
+  it("blocks over uncommitted tracked changes and says what to do first", async () => {
+    mocks.buildPreview.mockResolvedValue(loaded({ trackedChangeCount: 3 }));
+    render(<GitPullRebaseConfirmDialog />);
+
+    await act(async () => {
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    expect(screen.getByTestId("git-pull-rebase-dirty").textContent).toContain("3");
+    expect(rebaseButton().getAttribute("aria-disabled")).toBe("true");
+    // What the pull would do is still on screen while deciding to commit first.
+    expect(screen.getAllByTestId("git-pull-rebase-commit-row")).toHaveLength(1);
+  });
 });

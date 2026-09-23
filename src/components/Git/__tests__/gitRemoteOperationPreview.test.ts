@@ -339,6 +339,23 @@ describe("buildGitRemoteOperationPreview — blocking context", () => {
     expect(listRebaseCommits).not.toHaveBeenCalled();
   });
 
+  it("counts tracked changes and leaves untracked files out", async () => {
+    stubGit({});
+    const status = await window.electron.git.getStagingStatus("/repo");
+    Object.assign(status, {
+      staged: [{ path: "a", status: "modified" }],
+      unstaged: [
+        { path: "b", status: "modified" },
+        { path: "c", status: "untracked" },
+      ],
+    });
+    (window.electron.git.getStagingStatus as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      status
+    );
+    const preview = await buildGitRemoteOperationPreview("/repo", "pull-rebase");
+    expect(preview.trackedChangeCount).toBe(2);
+  });
+
   it("reports a repository with no remote as such", async () => {
     stubGit({ hasRemote: false, pushDestination: null });
     await expect(buildGitRemoteOperationPreview("/repo", "push")).resolves.toMatchObject({
@@ -374,6 +391,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -402,6 +420,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -424,6 +443,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -445,6 +465,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -469,6 +490,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -491,6 +513,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -511,6 +534,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -536,6 +560,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -558,6 +583,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: { total: 4, rangeBasis: "tracked" as const, behind: 0 },
         rebaseRange: null,
       },
@@ -578,6 +604,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: { total: 1, rangeBasis: "tracked" as const, behind: 0 },
         rebaseRange: null,
       },
@@ -600,6 +627,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -622,6 +650,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: { total: 0, rangeBasis: "creates" as const, behind: 0 },
         rebaseRange: null,
       },
@@ -642,6 +671,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: { total: 0, rangeBasis: "unverified" as const, behind: 0 },
         rebaseRange: null,
       },
@@ -666,6 +696,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: { total: 0, rangeBasis: "unverified" as const, behind: 0 },
         rebaseRange: null,
       },
@@ -691,6 +722,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: { total: 0, rangeBasis: "tracked" as const, behind: 0 },
         rebaseRange: null,
       },
@@ -717,6 +749,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: null,
         rebaseRange: null,
       },
@@ -738,6 +771,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: null,
         rebaseRange: { total: 0, rangeBasis: "tracked", behind: 0, incoming: [] },
       },
@@ -761,6 +795,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: null,
         rebaseRange: { total: 0, rangeBasis: "tracked", behind: 4, incoming: [] },
       },
@@ -785,6 +820,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         rebaseStep: null,
         rebaseTotalSteps: null,
         hasRemote: true,
+        trackedChangeCount: 0,
         pushRange: null,
         rebaseRange: { total: 0, rangeBasis: "unfetched", behind: 0, incoming: [] },
       },
@@ -812,12 +848,28 @@ describe("formatGitRemoteOperationPreviewLines — blocking context", () => {
     rebaseStep: null,
     rebaseTotalSteps: null,
     hasRemote: true,
+    trackedChangeCount: 0,
     destination: { remote: "origin", branch: "main" },
     pullSource: { remote: "origin", branch: "main" },
     commits: [{ hash: "abcdef1234567", message: "First", author: "Ada" }],
     pushRange: null,
     rebaseRange: null,
   };
+
+  it("tells the agent approver a pull over tracked changes will be refused, and a push won't", () => {
+    const pull = formatGitRemoteOperationPreviewLines(
+      { ...base, trackedChangeCount: 2 },
+      "none",
+      "pull-rebase"
+    );
+    const push = formatGitRemoteOperationPreviewLines(
+      { ...base, trackedChangeCount: 2 },
+      "none",
+      "push"
+    );
+    expect(pull.join("\n")).toMatch(/uncommitted/);
+    expect(push.join("\n")).not.toMatch(/uncommitted/);
+  });
 
   it("names a halted rebase instead of labelling the detached HEAD it causes", () => {
     const lines = formatGitRemoteOperationPreviewLines(

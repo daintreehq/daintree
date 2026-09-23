@@ -583,5 +583,7 @@ describe("GitPushConfirmDialog", () => {
     expect(
       await describes({ ...base, commits: [], pushRange: { ...base.pushRange, total: 0 } })
     ).toBe(false);
+    // A warning leads instead: the push goes ahead, but not as the list implies.
+    expect(await describes({ ...base, pushRange: { ...base.pushRange, behind: 2 } })).toBe(false);
   });
 });

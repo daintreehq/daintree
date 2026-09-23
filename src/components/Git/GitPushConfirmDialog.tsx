@@ -168,6 +168,10 @@ function GitPushConfirmDialogInner() {
   const isEmptyUnverified = isLoaded && commits.length === 0 && isUnverified;
   const total = pushRange?.total ?? commits?.length ?? 0;
   const hasOutgoing = isLoaded && commits.length > 0;
+  // A push that will go ahead but not as it looks: git will refuse it, or the
+  // list is an estimate. The warning leads, and the consequence moves to the
+  // footnote rather than sitting above the thing the user most needs to read.
+  const hasWarning = isLoaded && (behind > 0 || isUnverified);
 
   // A destination nobody can name can't be approved — the handler would refuse
   // the write anyway, and guessing `origin` is the bug (#11746). `commits === null`
@@ -281,7 +285,7 @@ function GitPushConfirmDialogInner() {
       // push that can't or won't happen sat above the one fact that mattered,
       // which now leads the frame instead.
       description={
-        isPending || hasOutgoing ? (
+        isPending || (hasOutgoing && !hasWarning) ? (
           <span>
             Publishing puts commits on the remote, where everyone working from it sees them. Taking
             them back afterwards needs a force-push.
@@ -370,17 +374,21 @@ function GitPushConfirmDialogInner() {
           </>
         )}
       </PreviewFrame>
-      {/* The quietest tier on the surface, and last: the one question a push
-          raises that nothing else here answers. Only where a push is actually
-          about to happen, and not where the notice above already answers it —
-          a caution about a refusal under a panel saying the push is blocked, or
-          saying it WILL be refused, is noise. */}
-      {isLoaded && commits.length > 0 && behind === 0 && (
-        <p className="text-2xs text-text-secondary">
-          If the remote has commits this branch doesn&apos;t by then, Git refuses the push rather
-          than overwriting them.
-        </p>
-      )}
+      {/* The quietest tier on the surface, and last, and only where a push is
+          actually about to happen. Ordinarily it answers the one question a push
+          raises that nothing else here does. Under a warning, the warning already
+          answers that, so it carries the consequence the description would have. */}
+      {hasOutgoing &&
+        (hasWarning ? (
+          <p className="text-2xs text-text-secondary">
+            Once published, taking these back needs a force-push.
+          </p>
+        ) : (
+          <p className="text-2xs text-text-secondary">
+            If the remote has commits this branch doesn&apos;t by then, Git refuses the push rather
+            than overwriting them.
+          </p>
+        ))}
     </ConfirmDialog>
   );
 }

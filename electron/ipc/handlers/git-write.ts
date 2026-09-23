@@ -578,6 +578,28 @@ async function requireCleanTree(
 }
 
 /**
+ * Refuse a pull-rebase over uncommitted changes to tracked files — the ones git
+ * itself refuses to rebase over. Untracked files don't block a rebase, so unlike
+ * {@link requireCleanTree} they are not counted here.
+ */
+async function requireNoTrackedChanges(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "status">,
+  cwd: string,
+  op: string
+): Promise<void> {
+  const status = await git.status();
+  const tracked = status.files.filter((f) => !(f.index === "?" && f.working_dir === "?"));
+  if (tracked.length === 0) return;
+  const message =
+    "This worktree has uncommitted changes to tracked files. Commit or stash them before pulling.";
+  throw new GitOperationError(
+    "worktree-dirty",
+    encodeGitOperationErrorMessage("worktree-dirty", message),
+    { cwd, op, rawMessage: message }
+  );
+}
+
+/**
  * Refuse to start a second operation on top of a halted one.
  *
  * Starting a rebase mid-rebase is refused by git anyway, but the message is
@@ -1258,7 +1280,27 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         "pull-rebase",
         "upstream"
       );
-      await git.pull(source.remote, source.branch, ["--rebase"]);
+      await requireNoOperationInProgress(git, payload.cwd, "pull-rebase");
+      await requireNoTrackedChanges(git, payload.cwd, "pull-rebase");
+      // The same pins the base rebase carries, for the same reason: each closes
+      // a gap between what the confirm previewed and what git would do under a
+      // user's config. `rebase.updateRefs` moves OTHER local branches pointing
+      // into the replayed range; `rebase.rebaseMerges` recreates the merges the
+      // preview's `--no-merges` replay set leaves out; `rebase.autoStash` would
+      // replay over the changes the check above just refused. `-c` rather than
+      // flags, because git ignores an unknown key where an unknown flag errors.
+      await git.raw([
+        "-c",
+        "rebase.updateRefs=false",
+        "-c",
+        "rebase.rebaseMerges=false",
+        "-c",
+        "rebase.autoStash=false",
+        "pull",
+        "--rebase=true",
+        source.remote,
+        source.branch,
+      ]);
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
         playSoundFireAndForget("git-push");
       }

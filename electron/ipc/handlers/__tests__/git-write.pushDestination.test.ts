@@ -224,14 +224,62 @@ describe("git push — lease capture", () => {
 });
 
 describe("git pull --rebase — resolved destination", () => {
+  type StatusFile = { path: string; index: string; working_dir: string };
+  function makePullGit(files: StatusFile[] = []): FakeGit {
+    return makeGit({ status: vi.fn(async () => ({ files })) });
+  }
+  function pullArgv(git: FakeGit): string[] | undefined {
+    return (git.raw.mock.calls as unknown[][])
+      .map((call) => (call[0] ?? []) as string[])
+      .find((argv) => argv.includes("pull"));
+  }
+
   it("pulls from the branch upstream, not from its push target", async () => {
-    const git = makeGit();
+    const git = makePullGit();
     createAuthenticatedGitMock.mockResolvedValue(git);
 
     await getHandler("git:pull-rebase")(FAKE_EVENT, { cwd: CWD });
 
-    expect(git.pull).toHaveBeenCalledWith(UPSTREAM_REMOTE, UPSTREAM_BRANCH, ["--rebase"]);
-    expect(git.pull).not.toHaveBeenCalledWith(REMOTE, REMOTE_BRANCH, ["--rebase"]);
+    const argv = pullArgv(git) ?? [];
+    expect(argv.slice(-2)).toEqual([UPSTREAM_REMOTE, UPSTREAM_BRANCH]);
+    expect(argv).not.toContain(REMOTE);
+  });
+
+  // The confirm previews a plain rebase: merges left out, only this branch
+  // moved, nothing stashed. A user's config must not widen what runs past what
+  // was approved — the same pins the base rebase carries.
+  it("pins the rebase to what the confirm previewed, whatever the user's config says", async () => {
+    const git = makePullGit();
+    createAuthenticatedGitMock.mockResolvedValue(git);
+
+    await getHandler("git:pull-rebase")(FAKE_EVENT, { cwd: CWD });
+
+    const argv = pullArgv(git) ?? [];
+    const pinned = argv.filter((_, i) => argv[i - 1] === "-c");
+    for (const key of ["rebase.updateRefs", "rebase.rebaseMerges", "rebase.autoStash"]) {
+      expect(pinned).toContain(`${key}=false`);
+    }
+    expect(argv.indexOf("pull")).toBeGreaterThan(argv.lastIndexOf("-c"));
+  });
+
+  it("refuses over uncommitted changes to tracked files, before touching the network", async () => {
+    const git = makePullGit([{ path: "a.ts", index: " ", working_dir: "M" }]);
+    createAuthenticatedGitMock.mockResolvedValue(git);
+
+    await expect(getHandler("git:pull-rebase")(FAKE_EVENT, { cwd: CWD })).rejects.toThrow(
+      /uncommitted/
+    );
+    expect(pullArgv(git)).toBeUndefined();
+  });
+
+  // Untracked files don't stop a rebase, so they don't stop this one.
+  it("lets untracked files through", async () => {
+    const git = makePullGit([{ path: "scratch.txt", index: "?", working_dir: "?" }]);
+    createAuthenticatedGitMock.mockResolvedValue(git);
+
+    await getHandler("git:pull-rebase")(FAKE_EVENT, { cwd: CWD });
+
+    expect(pullArgv(git)).toBeDefined();
   });
 });
 

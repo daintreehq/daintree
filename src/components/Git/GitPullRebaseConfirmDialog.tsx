@@ -174,6 +174,12 @@ function GitPullRebaseConfirmDialogInner() {
   const isUpstreamMissing =
     isSettled && !haltedOperation && branch !== null && hasRemote && upstream === null;
   const isLoaded = isSettled && !haltedOperation && commits !== null && upstream !== null;
+  // Git refuses to rebase over uncommitted changes to tracked files, and the
+  // handler refuses before it touches the network. Said here, before approval,
+  // rather than as a failure after it. The refs and lists still render: what the
+  // pull WOULD do is still worth seeing while deciding whether to commit first.
+  const trackedChanges = isLoaded ? (preview?.trackedChangeCount ?? 0) : 0;
+  const isDirty = trackedChanges > 0;
   const isUnfetched = isLoaded && rebaseRange?.rangeBasis === "unfetched";
   const isMeasured = isLoaded && !isUnfetched;
   const total = rebaseRange?.total ?? commits?.length ?? 0;
@@ -204,7 +210,7 @@ function GitPullRebaseConfirmDialogInner() {
   // surface whose entire job is showing what gets rewritten must not hand out an
   // approval in the one state where it cannot answer that. Fetching is a
   // non-destructive thing the user can go and do; approving past an unknown is not.
-  const confirmDisabled = !isLoaded || isUnfetched || !!loadError;
+  const confirmDisabled = !isLoaded || isUnfetched || isDirty || !!loadError;
 
   // Names the one unmet prerequisite rather than leaving a dead button to be read as
   // arbitrary. Ordered by which the user can act on first.
@@ -218,11 +224,13 @@ function GitPullRebaseConfirmDialogInner() {
           ? "Add a remote to continue"
           : isUpstreamMissing
             ? "Set an upstream to continue"
-            : isUnfetched
-              ? "Fetch the upstream to continue"
-              : showPendingHint
-                ? "Checking what would be replayed…"
-                : null;
+            : isDirty
+              ? "Commit or stash to continue"
+              : isUnfetched
+                ? "Fetch the upstream to continue"
+                : showPendingHint
+                  ? "Checking what would be replayed…"
+                  : null;
 
   const notice = loadError ? (
     <PreviewNotice
@@ -278,6 +286,17 @@ function GitPullRebaseConfirmDialogInner() {
       This branch doesn&apos;t track anything, so there is nothing to replay it onto. Point it at a
       remote branch:
     </PreviewNotice>
+  ) : isDirty ? (
+    <PreviewNotice
+      tone="error"
+      title={`${trackedChanges} uncommitted change${trackedChanges === 1 ? "" : "s"}`}
+      onRetry={loadPreview}
+      retryTestId="git-pull-rebase-dirty-retry"
+      testId="git-pull-rebase-dirty"
+    >
+      Git won&apos;t replay commits over uncommitted changes to tracked files. Commit or stash them,
+      then retry.
+    </PreviewNotice>
   ) : isUnfetched ? (
     // Blocking, not a quiet note: the one state where the surface cannot answer
     // the question it exists to answer.
@@ -306,7 +325,7 @@ function GitPullRebaseConfirmDialogInner() {
       // and it sat above the one fact that mattered. It names the concrete
       // consequence: "the hashes change" is what actually breaks a branch.
       description={
-        isPending || rewrites ? (
+        isPending || (rewrites && !isDirty) ? (
           <span>
             Rebasing replays your local commits on top of the upstream, so each becomes a new commit
             with a different hash and anything pointing at the old ones stops matching.
