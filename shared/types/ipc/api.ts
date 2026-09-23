@@ -2173,6 +2173,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onUiPromptCancel(
       callback: (payload: import("../pluginUiPrompt.js").PluginUiPromptCancel) => void
     ): () => void;
+    /**
+     * Listen for plugin backend requests to reload one of its panels' views
+     * (`host.reloadPanel`, #12610). Reply with {@link sendPanelReloadResponse},
+     * correlated by `requestId`.
+     */
+    onPanelReloadRequest(
+      callback: (payload: import("../pluginPanelReload.js").PluginPanelReloadRequest) => void
+    ): () => void;
+    /** Acknowledge (or refuse) a plugin panel reload request. */
+    sendPanelReloadResponse(
+      payload: import("../pluginPanelReload.js").PluginPanelReloadResponse
+    ): void;
   };
   // list / toolbarButtons / validateActionIds / get|register|
   // unregisterAction / getPanelKinds / getForgeProviders / getDecorations

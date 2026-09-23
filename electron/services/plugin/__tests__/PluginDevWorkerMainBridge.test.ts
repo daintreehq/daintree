@@ -57,6 +57,7 @@ function makeHost() {
     showInputBox: vi.fn(async (): Promise<unknown> => undefined),
     showConfirm: vi.fn(async () => false),
     dispatch: vi.fn(async () => ({ ok: true, result: undefined })),
+    reloadPanel: vi.fn(async () => "scheduled"),
     actions: {
       list: vi.fn(async () => [{ id: "terminal.new", danger: "safe", requiresArgs: false }]),
       get: vi.fn(async (id: string) => ({ id, danger: "safe", requiresArgs: false })),
@@ -205,6 +206,20 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(host.getWorktrees).toHaveBeenCalled();
     const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c1");
     expect(result).toMatchObject({ ok: true, result: [{ id: "w1" }] });
+  });
+
+  it("relays reloadPanel with only the panel id and returns the acknowledgment (#12610)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-rp",
+      method: "reloadPanel",
+      params: { panelId: "p1", pluginId: "someone-else" },
+    });
+    await flush();
+    expect(host.reloadPanel).toHaveBeenCalledWith("p1");
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-rp");
+    expect(result).toMatchObject({ ok: true, result: "scheduled" });
   });
 
   it("relays getWorktreesResult and returns the union object unchanged (#12174)", async () => {

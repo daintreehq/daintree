@@ -49,7 +49,11 @@ export { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "./plugin.js";
 
 // ── Panel lifecycle (worker-facing) ─────────────────────────────────
 
-export type { PluginPanelLifecycleEvent, PluginPanelLifecyclePhase } from "./plugin.js";
+export type {
+  PluginPanelLifecycleEvent,
+  PluginPanelLifecyclePhase,
+  PanelReloadResult,
+} from "./plugin.js";
 
 // ── System wake (worker-facing) ─────────────────────────────────────
 

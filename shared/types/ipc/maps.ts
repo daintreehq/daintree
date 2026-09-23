@@ -1594,6 +1594,16 @@ export interface IpcEventMap {
   "plugin:ui-prompt-request": import("../pluginUiPrompt.js").PluginUiPromptRequest;
 
   /**
+   * Plugin backend panel reload (#12610). Main emits this on the one
+   * WebContents that reported the panel's view when a plugin calls
+   * `host.reloadPanel(panelId)`, and awaits a renderer `ipcRenderer.send` reply
+   * on `CHANNELS.PLUGIN_PANEL_RELOAD_RESPONSE`, correlated by `requestId`. The
+   * response channel is a renderer→main fire-and-forget send tracked in
+   * `DEAD_CHANNEL_ALLOWLIST` in channelDrift.test.ts.
+   */
+  "plugin:panel-reload-request": import("../pluginPanelReload.js").PluginPanelReloadRequest;
+
+  /**
    * Cancel pending plugin UI prompts (#10522). Main broadcasts this to the
    * active renderer when a plugin is unloaded with a prompt still open so the
    * renderer can dismiss the dialog and resolve its queued promise. Omitting

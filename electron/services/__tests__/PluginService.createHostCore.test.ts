@@ -261,6 +261,7 @@ type CreateHostShape = (pluginId: string) => {
     broadcastToRenderer: (channel: string, payload: unknown) => void;
     postToPanel: (channel: string, payload: unknown, panelId?: string | null) => Promise<void>;
     setPanelBadge: (panelId: string, badge: unknown) => Promise<void>;
+    reloadPanel: (panelId: unknown) => Promise<string>;
     invalidateFileDecorations: (scope: string, paths?: string[]) => Promise<void>;
     registerForgeProvider: (descriptor: { id: string }, impl: unknown) => () => void;
   };
@@ -526,6 +527,36 @@ describe("createHost (plugin activation API)", () => {
 
     // Liveness no-op stays a silent resolve even with an otherwise-invalid badge.
     await expect(host.setPanelBadge("", { kind: "bogus" })).resolves.toBeUndefined();
+  });
+
+  it("host.reloadPanel rejects a malformed or non-plugin target and answers not-mounted for an unknown one (#12610)", async () => {
+    await writePlugin("reload-panel", { name: "acme.reload-panel", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.reload-panel"
+    );
+
+    await expect(host.reloadPanel("")).rejects.toThrow(/reloadPanel: panelId must be/);
+    await expect(host.reloadPanel(42)).rejects.toThrow(/reloadPanel: panelId must be/);
+    await expect(host.reloadPanel("nobody")).resolves.toBe("not-mounted");
+
+    service.ingestPanelInventory(5, ["terminal-1"]);
+    await expect(host.reloadPanel("terminal-1")).rejects.toThrow(/is not a plugin panel/);
+  });
+
+  it("host.reloadPanel answers unavailable once the plugin is unloaded (#12610)", async () => {
+    await writePlugin("reload-unloaded", { name: "acme.reload-unloaded", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const { host } = (service as unknown as { createHost: CreateHostShape }).createHost(
+      "acme.reload-unloaded"
+    );
+    service.unloadPlugin("acme.reload-unloaded");
+
+    await expect(host.reloadPanel("p1")).resolves.toBe("unavailable");
   });
 
   it("host.invalidateFileDecorations rejects an empty scope (#10617)", async () => {

@@ -3252,6 +3252,18 @@ function buildElectronApi(): ElectronAPI {
           payload: import("../shared/types/pluginUiPrompt.js").PluginUiPromptCancel
         ) => void
       ) => _typedOn(CHANNELS.PLUGIN_UI_PROMPT_CANCEL, callback),
+
+      onPanelReloadRequest: (
+        callback: (
+          payload: import("../shared/types/pluginPanelReload.js").PluginPanelReloadRequest
+        ) => void
+      ) => _typedOn(CHANNELS.PLUGIN_PANEL_RELOAD_REQUEST, callback),
+
+      sendPanelReloadResponse: (
+        payload: import("../shared/types/pluginPanelReload.js").PluginPanelReloadResponse
+      ) => {
+        ipcRenderer.send(CHANNELS.PLUGIN_PANEL_RELOAD_RESPONSE, payload);
+      },
     },
 
     plugin: {

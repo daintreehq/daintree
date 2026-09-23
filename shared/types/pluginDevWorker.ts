@@ -47,6 +47,7 @@ export type PluginHostCallMethod =
   | "sendToActiveAgent"
   | "showToast"
   | "dispatch"
+  | "reloadPanel"
   | "actions.list"
   | "actions.get"
   | "settings.get"
@@ -454,6 +455,11 @@ export interface ShowToastParams {
   message: string;
   type?: string;
   durationMs?: number;
+}
+
+/** Params for `reloadPanel` (`host-call`, #12610). */
+export interface ReloadPanelParams {
+  panelId: string;
 }
 
 /** Params for `dispatch` (`host-call`). */

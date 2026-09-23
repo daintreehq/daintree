@@ -146,3 +146,59 @@ describe("usePluginPanelLifecycle", () => {
     expect(syncMock).toHaveBeenCalled();
   });
 });
+
+describe("non-plugin panel inventory (#12610)", () => {
+  it("reports registered non-plugin panels, and only when that set changes", () => {
+    const reportPanelInventory = vi.fn<(ids: string[]) => Promise<void>>(() => Promise.resolve());
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { plugin: { onPanelKindsChanged, reportPanelInventory } },
+    });
+    // Registered with no plugin — a built-in kind.
+    kinds.set("terminal", "");
+    store.state.panelsById = {
+      p1: { kind: "acme.dash", location: "grid" },
+      t2: { kind: "terminal", location: "grid" },
+      t1: { kind: "terminal", location: "grid" },
+      // Unregistered: may be a plugin kind mid-upgrade, so never called non-plugin.
+      u1: { kind: "gone.kind", location: "grid" },
+    };
+
+    renderHook(() => usePluginPanelLifecycle());
+    expect(reportPanelInventory).toHaveBeenCalledTimes(1);
+    expect(reportPanelInventory).toHaveBeenLastCalledWith(["t1", "t2"]);
+
+    // A write that moves a panel but keeps the set says nothing new.
+    store.set({ ...store.state.panelsById, t1: { kind: "terminal", location: "dock" } });
+    expect(reportPanelInventory).toHaveBeenCalledTimes(1);
+
+    const { t2: _removed, ...rest } = store.state.panelsById;
+    store.set(rest);
+    expect(reportPanelInventory).toHaveBeenCalledTimes(2);
+    expect(reportPanelInventory).toHaveBeenLastCalledWith(["t1"]);
+  });
+
+  it("resends an unchanged inventory after a failed report", async () => {
+    const reportPanelInventory = vi
+      .fn<(ids: string[]) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("ipc down"))
+      .mockResolvedValue(undefined);
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { plugin: { onPanelKindsChanged, reportPanelInventory } },
+    });
+    kinds.set("terminal", "");
+    store.state.panelsById = { t1: { kind: "terminal", location: "grid" } };
+
+    renderHook(() => usePluginPanelLifecycle());
+    expect(reportPanelInventory).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    store.set({ t1: { kind: "terminal", location: "dock" } });
+    expect(reportPanelInventory).toHaveBeenCalledTimes(2);
+    expect(reportPanelInventory).toHaveBeenLastCalledWith(["t1"]);
+  });
+});

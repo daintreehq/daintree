@@ -640,3 +640,148 @@ describe("requestReload racing a backend restart (#12609)", () => {
     await waitFor(() => expect(attempts()).toHaveLength(3));
   });
 });
+
+describe("host.reloadPanel reaching a mounted view (#12610)", () => {
+  async function hostReload(panelId = "panel-1"): Promise<string> {
+    const { reloadRegisteredPanel } = await import("@/services/plugin/pluginPanelReload");
+    let result = "";
+    await act(async () => {
+      result = await reloadRegisteredPanel(panelId);
+    });
+    return result;
+  }
+
+  it("remounts the view and acknowledges it as scheduled", async () => {
+    await mountContent();
+    const before = latest();
+
+    await expect(hostReload()).resolves.toBe("scheduled");
+
+    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    expect(before.disposeSignal.aborted).toBe(true);
+    expect(latest().disposeSignal.aborted).toBe(false);
+    expect(latest().panelRemovedSignal).toBe(before.panelRemovedSignal);
+  });
+
+  it("reloads only the targeted panel", async () => {
+    const { Content } = await mountContent();
+    render(<Content panelId="panel-2" offerRequestReload />);
+    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    const sibling = h.renders.filter((props) => props.panelId === "panel-2").at(-1);
+
+    await expect(hostReload("panel-1")).resolves.toBe("scheduled");
+
+    await waitFor(() => expect(h.mounts).toHaveLength(3));
+    expect(sibling?.disposeSignal.aborted).toBe(false);
+  });
+
+  it("shares the view's budget and answers rate-limited once it is spent", async () => {
+    const { lifecycle } = await mountContent();
+    await requestReload();
+    for (let i = 1; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
+      await expect(hostReload()).resolves.toBe("scheduled");
+    }
+    expect(blockedBanner()).toBeNull();
+
+    await expect(hostReload()).resolves.toBe("rate-limited");
+    expect(blockedBanner()).not.toBeNull();
+    // A stopped view stays stopped; the backend cannot lift the block.
+    await expect(hostReload()).resolves.toBe("rate-limited");
+    expect(blockedBanner()).not.toBeNull();
+  });
+
+  it("answers unavailable while the view shows an error, leaving recovery to the user", async () => {
+    const { lifecycle } = await mountContent();
+    await act(async () => {
+      boundaryCallbacks.onError?.(new Error("view threw"));
+    });
+
+    await expect(hostReload()).resolves.toBe("unavailable");
+    expect(h.mounts).toHaveLength(1);
+    expect(lifecycle.isViewReloadBlocked("panel-1")).toBe(false);
+  });
+
+  it("answers unavailable mid-restart without charging the budget", async () => {
+    const { lifecycle } = await mountContent();
+    await pushStatus(worker({ generation: 1 }));
+    await pushStatus(worker({ generation: 2, state: "starting" }));
+
+    await expect(hostReload()).resolves.toBe("unavailable");
+    expect(attempts()).toHaveLength(1);
+
+    // The restart's own rebind replaces the view, uncharged.
+    await pushStatus(worker({ generation: 2 }));
+    await waitFor(() => expect(attempts()).toHaveLength(2));
+    for (let i = 0; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
+      await expect(hostReload()).resolves.toBe("scheduled");
+    }
+    expect(blockedBanner()).toBeNull();
+  });
+
+  it("folds a request landing while the replacement loads into it, uncharged", async () => {
+    const { lifecycle } = await mountContent();
+    const { reloadRegisteredPanel } = await import("@/services/plugin/pluginPanelReload");
+    let results: string[] = [];
+    await act(async () => {
+      // The second request lands after the first was admitted but before its
+      // replacement committed.
+      const first = await reloadRegisteredPanel("panel-1");
+      const second = await reloadRegisteredPanel("panel-1");
+      results = [first, second];
+    });
+    expect(results).toEqual(["scheduled", "scheduled"]);
+    await waitFor(() => expect(h.mounts).toHaveLength(2));
+
+    for (let i = 1; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
+      await expect(hostReload()).resolves.toBe("scheduled");
+    }
+    expect(blockedBanner()).toBeNull();
+  });
+
+  it("merges requests landing together into one charged reload", async () => {
+    const { lifecycle } = await mountContent();
+    const { reloadRegisteredPanel } = await import("@/services/plugin/pluginPanelReload");
+    let results: string[] = [];
+    await act(async () => {
+      results = await Promise.all([
+        reloadRegisteredPanel("panel-1"),
+        reloadRegisteredPanel("panel-1"),
+      ]);
+    });
+    expect(results).toEqual(["scheduled", "scheduled"]);
+    await waitFor(() => expect(h.mounts).toHaveLength(2));
+
+    for (let i = 1; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
+      await expect(hostReload()).resolves.toBe("scheduled");
+    }
+    expect(blockedBanner()).toBeNull();
+  });
+
+  it("is not offered where the host withholds requestReload", async () => {
+    const { Content } = await mountContent();
+    render(<Content panelId="surface-1" />);
+    await waitFor(() =>
+      expect(h.renders.some((props) => props.panelId === "surface-1")).toBe(true)
+    );
+    await expect(hostReload("surface-1")).resolves.toBe("not-mounted");
+  });
+
+  it("answers not-mounted once the view has unmounted", async () => {
+    const { unmount } = await mountContent();
+    unmount();
+    await act(async () => {});
+    await expect(hostReload()).resolves.toBe("not-mounted");
+  });
+
+  it("does not move focus to the reloaded panel", async () => {
+    await mountContent();
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    outside.focus();
+
+    await expect(hostReload()).resolves.toBe("scheduled");
+    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
+  });
+});

@@ -116,7 +116,12 @@ import { discoverProjectPlugins } from "./plugin/projectPluginDiscovery.js";
 import { ProjectPluginWatcher } from "./plugin/ProjectPluginWatcher.js";
 import { PluginDevArtifactWatcher } from "./plugin/PluginDevArtifactWatcher.js";
 import { getPluginCapabilityConsentService } from "./plugin-capability/instances.js";
-import { getWebContentsForProject } from "../window/webContentsRegistry.js";
+import {
+  getProjectForWebContents,
+  getWebContentsForProject,
+  isCachedViewWebContents,
+  resolveLiveWebContents,
+} from "../window/webContentsRegistry.js";
 import { projectStore } from "./ProjectStore.js";
 import { store } from "../store.js";
 import type { EventBusEnvelope } from "../../shared/types/ipc/maps.js";
@@ -132,6 +137,7 @@ import {
 } from "./plugin/PluginPanelLifecycleBroker.js";
 import { PLUGIN_VIEW_GENERATION_PREFIX } from "../../shared/utils/pluginViewUrl.js";
 import { PluginRendererDispatcher } from "./plugin/PluginRendererDispatcher.js";
+import { PluginPanelReloadDispatcher } from "./plugin/PluginPanelReloadDispatcher.js";
 import { PluginUIPromptDispatcher } from "./plugin/PluginUIPromptDispatcher.js";
 import { PluginSettingsManager } from "./plugin/PluginSettingsManager.js";
 import { PluginStorageManager } from "./plugin/PluginStorageManager.js";
@@ -983,6 +989,7 @@ export class PluginService {
    * {@link dispose}.
    */
   private readonly dispatcher: PluginRendererDispatcher;
+  private readonly panelReloadDispatcher: PluginPanelReloadDispatcher;
   /**
    * Owns the imperative `host.showQuickPick`/`showInputBox`/`showConfirm`
    * main→renderer round-trip (#10522): the active-renderer resolution, the lazy
@@ -1057,6 +1064,14 @@ export class PluginService {
 
     this.dispatcher = new PluginRendererDispatcher({
       isDisposed: () => this.disposed,
+    });
+
+    this.panelReloadDispatcher = new PluginPanelReloadDispatcher({
+      isDisposed: () => this.disposed,
+      locate: (panelId, pluginId) => this.panelLifecycleBroker.locate(panelId, pluginId),
+      resolveWebContents: (id) => resolveLiveWebContents(id),
+      isCached: (id) => isCachedViewWebContents(id),
+      projectFor: (id) => getProjectForWebContents(id),
     });
 
     this.promptDispatcher = new PluginUIPromptDispatcher({
@@ -1159,6 +1174,21 @@ export class PluginService {
   }
 
   /**
+   * Accept a renderer's set of live non-plugin panel ids (#12610), keyed like
+   * {@link ingestPanelLifecycleEvents} so it is forgotten with the renderer.
+   * Used only to reject `host.reloadPanel()` on a non-plugin panel.
+   */
+  ingestPanelInventory(
+    sourceId: number,
+    nonPluginPanelIds: readonly unknown[],
+    sender?: PanelLifecycleSourceHandle
+  ): void {
+    if (this.disposed) return;
+    if (sender) this.watchPanelLifecycleSource(sourceId, sender);
+    this.panelLifecycleBroker.setNonPluginPanels(sourceId, nonPluginPanelIds);
+  }
+
+  /**
    * Attach a one-shot `destroyed` listener the first time a renderer reports,
    * so its panels are forgotten when its `WebContentsView` goes away. Without
    * this the broker would keep a closed project view's panels forever and
@@ -1232,6 +1262,7 @@ export class PluginService {
     this.resolveInit?.();
     this.resolveInit = null;
     this.dispatcher.dispose();
+    this.panelReloadDispatcher.dispose();
     this.promptDispatcher.dispose();
     for (const detach of this.panelLifecycleSourceCleanups.values()) detach();
     this.panelLifecycleSourceCleanups.clear();
@@ -3215,6 +3246,7 @@ export class PluginService {
       broadcaster: this.broadcaster,
       panelLifecycleBroker: this.panelLifecycleBroker,
       dispatcher: this.dispatcher,
+      panelReloadDispatcher: this.panelReloadDispatcher,
       promptDispatcher: this.promptDispatcher,
       settings: this.settings,
       storage: this.storage,
@@ -5198,6 +5230,9 @@ export class PluginService {
     // otherwise strand a listener holding this plugin's closure alive.
     runUnloadStep(pluginId, "clearPanelLifecycleListeners", () =>
       this.panelLifecycleBroker.clearPlugin(pluginId)
+    );
+    runUnloadStep(pluginId, "cancelPanelReloads", () =>
+      this.panelReloadDispatcher.cancelPlugin(pluginId)
     );
     runUnloadStep(pluginId, "unregisterForgeProviders", () => unregisterForgeProviders(pluginId));
     runUnloadStep(pluginId, "unregisterForgeProviderImpls", () =>

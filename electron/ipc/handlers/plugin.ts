@@ -992,6 +992,19 @@ async function handleReportPanelLifecycle(
   );
 }
 
+async function handleReportPanelInventory(
+  ctx: IpcContext,
+  nonPluginPanelIds: string[]
+): Promise<void> {
+  // Same sender-keyed bucket as the lifecycle batch, so a destroyed view's
+  // inventory is forgotten with its panels (#12610).
+  (await getPluginService()).ingestPanelInventory(
+    ctx.webContentsId,
+    nonPluginPanelIds,
+    ctx.event.sender
+  );
+}
+
 async function handleForgeProvidersGet(): Promise<RegisteredForgeProvider[]> {
   // Same init-race guard as the surrounding pull-on-mount handlers (#9285) —
   // forge descriptors register during the deferred initialize().
@@ -1876,6 +1889,11 @@ export const pluginNamespace = defineIpcNamespace({
     reportPanelLifecycle: op(
       PLUGIN_METHOD_CHANNELS.reportPanelLifecycle,
       handleReportPanelLifecycle,
+      { withContext: true }
+    ),
+    reportPanelInventory: op(
+      PLUGIN_METHOD_CHANNELS.reportPanelInventory,
+      handleReportPanelInventory,
       { withContext: true }
     ),
     getRuntimeStatuses: op(PLUGIN_METHOD_CHANNELS.getRuntimeStatuses, handleRuntimeStatusesGet, {

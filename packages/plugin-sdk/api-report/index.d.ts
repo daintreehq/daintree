@@ -2123,10 +2123,31 @@ interface PluginPanelLifecycleEvent {
     readonly panelId: string;
     /** Namespaced panel kind, i.e. `${pluginId}.${panel.id}`. */
     readonly panelKindId: string;
-    /** Owning plugin's manifest `name`. Always this plugin's own id. */
+    /**
+     * Owning plugin's runtime id — the manifest `name` for an installed or
+     * builtin plugin, the project-qualified instance key for a project plugin.
+     * Always this plugin's own id.
+     */
     readonly pluginId: string;
     readonly phase: PluginPanelLifecyclePhase;
 }
+/**
+ * What the host did with a `host.reloadPanel()` request (#12610). An
+ * acknowledgment of scheduling only — never proof that the fresh view
+ * rendered, and never a statement about memory.
+ *
+ * - `"scheduled"` — the panel's view was mounted and a fresh attempt is queued.
+ * - `"not-mounted"` — the panel exists but has no mounted view (hidden,
+ *   backgrounded, trashed), or the host knows no such panel. Nothing is opened
+ *   or focused; the panel's next ordinary mount is already fresh.
+ * - `"rate-limited"` — the panel's reload budget is spent or its view is
+ *   already stopped for reloading too often. Shared with the view's own
+ *   `requestReload`.
+ * - `"unavailable"` — the host could not act right now: the panel's window is
+ *   cached, closed, or unresponsive, its view is showing an error, or its
+ *   backend is restarting.
+ */
+type PanelReloadResult = "scheduled" | "not-mounted" | "rate-limited" | "unavailable";
 /**
  * One machine wake observation delivered to a plugin (#12175). Frozen before
  * delivery, and carries only timing — never what the machine was doing while
@@ -4232,6 +4253,31 @@ interface PluginHostApi extends PluginActivationApi {
      */
     setPanelBadge(panelId: string, badge: PluginPanelBadge | null): Promise<void>;
     /**
+     * Ask the host to discard one of this plugin's own panel views and mount a
+     * fresh one (#12610) — the backend-side twin of the view's
+     * `PanelViewProps.requestReload`. Use it when the worker has finished work
+     * whose view should start clean, without restarting the worker and rebinding
+     * every panel it owns. Panel ids come from {@link onDidChangePanelLifecycle}.
+     *
+     * No capability is required: only panels of kinds this plugin instance
+     * contributed can be targeted, and the caller's identity comes from this
+     * host, never from an argument. A project plugin reaches only its own
+     * project's panels.
+     *
+     * Resolves with a {@link PanelReloadResult} — a scheduling acknowledgment,
+     * never confirmation of a render. Reloads draw on the same per-panel budget
+     * as `requestReload` (three per rolling 30 seconds, after which the view is
+     * stopped until the user reloads it). A panel that is not mounted resolves
+     * `"not-mounted"` and is not opened or focused.
+     *
+     * Like {@link setPanelBadge} this is NOT revoke-guarded, and resolves
+     * `"unavailable"` once the plugin is unloaded.
+     *
+     * @throws {Error} (as a rejection) if `panelId` is not a non-empty string,
+     *   names another plugin's panel, or names a panel that belongs to no plugin.
+     */
+    reloadPanel(panelId: string): Promise<PanelReloadResult>;
+    /**
      * Surface a toast notification. The host namespaces the message as
      * `{pluginId}: {message}` for provenance — a plugin cannot spoof another
      * plugin's id since `pluginId` is bound to the host at activation. Routes
@@ -4540,4 +4586,4 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
+export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelReloadResult, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
