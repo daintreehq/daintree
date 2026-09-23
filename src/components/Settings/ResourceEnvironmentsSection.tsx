@@ -1,9 +1,7 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import {
   Plus,
-  X,
-  ChevronUp,
-  ChevronDown,
+  Trash2,
   Server,
   Cloud,
   Container,
@@ -19,12 +17,25 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import type { ResourceEnvironment } from "@shared/types/project";
-import { FIELD_INPUT } from "@/components/Worktree/views";
 import { RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { SettingsSection } from "./SettingsSection";
-import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import {
+  SETTINGS_CONTROL_WIDTH,
+  SettingsEmptyRow,
+  SettingsGroup,
+  SettingsRow,
+} from "./SettingsGroup";
 import { SettingsInput } from "./SettingsInput";
+import { SettingsListRow } from "./SettingsListEditor";
 
 interface EnvironmentSettingsTabProps {
   resourceEnvironments?: Record<string, ResourceEnvironment>;
@@ -60,7 +71,7 @@ const RESOURCE_VARIABLES = [
   ["{project_root}", "project root path"],
 ] as const;
 
-const ICON_COMPONENTS = {
+const ICON_COMPONENTS: Record<(typeof ENVIRONMENT_ICON_OPTIONS)[number]["name"], typeof Server> = {
   Server,
   Cloud,
   Container,
@@ -73,103 +84,6 @@ const ICON_COMPONENTS = {
   Layers,
 };
 
-function CommandList({
-  commands,
-  onChange,
-  placeholder,
-  label,
-  helpText,
-}: {
-  commands: string[];
-  onChange: (commands: string[]) => void;
-  placeholder: string;
-  label: string;
-  helpText: string;
-}) {
-  const updateCommand = (index: number, value: string) => {
-    const updated = [...commands];
-    updated[index] = value;
-    onChange(updated);
-  };
-
-  const addCommand = () => {
-    onChange([...commands, ""]);
-  };
-
-  const removeCommand = (index: number) => {
-    onChange(commands.filter((_, i) => i !== index));
-  };
-
-  const moveCommand = (index: number, direction: -1 | 1) => {
-    const target = index + direction;
-    if (target < 0 || target >= commands.length) return;
-    const updated = [...commands];
-    [updated[index], updated[target]] = [updated[target]!, updated[index]!];
-    onChange(updated);
-  };
-
-  return (
-    // A repeated-row editor is a stacked row: the list is the control.
-    <SettingsRow
-      label={label}
-      description={helpText}
-      layout="stacked"
-      control={({ labelId }) => (
-        <div className="space-y-2" role="group" aria-labelledby={labelId}>
-          {commands.map((cmd, index) => (
-            <div key={index} className="flex items-center gap-2">
-              <span className="text-xs text-text-secondary w-5 text-right font-mono select-none">
-                {index + 1}.
-              </span>
-              <Input
-                type="text"
-                value={cmd}
-                onChange={(e) => updateCommand(index, e.target.value)}
-                placeholder={placeholder}
-                spellCheck={false}
-                aria-label={`${label} ${index + 1}`}
-                className="flex-1 min-w-0 font-mono"
-              />
-              <div className="flex flex-col">
-                <button
-                  type="button"
-                  onClick={() => moveCommand(index, -1)}
-                  disabled={index === 0}
-                  className="p-0.5 rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary hover:bg-overlay-soft disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
-                  aria-label={`Move command ${index + 1} up`}
-                >
-                  <ChevronUp className="h-3 w-3" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => moveCommand(index, 1)}
-                  disabled={index === commands.length - 1}
-                  className="p-0.5 rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary hover:bg-overlay-soft disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
-                  aria-label={`Move command ${index + 1} down`}
-                >
-                  <ChevronDown className="h-3 w-3" />
-                </button>
-              </div>
-              <button
-                type="button"
-                onClick={() => removeCommand(index)}
-                className="p-1 rounded-[var(--radius-sm)] text-text-secondary hover:text-status-error hover:bg-overlay-soft transition-colors"
-                aria-label={`Remove command ${index + 1}`}
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          ))}
-          <Button type="button" variant="outline" size="xs" onClick={addCommand}>
-            <Plus />
-            Add command
-          </Button>
-        </div>
-      )}
-    />
-  );
-}
-
 interface IconPickerButtonProps {
   currentIcon?: string;
   onChange: (iconName: string) => void;
@@ -177,50 +91,48 @@ interface IconPickerButtonProps {
 
 function IconPickerButton({ currentIcon, onChange }: IconPickerButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
-
-  const DefaultIcon = (ICON_COMPONENTS as Record<string, any>)["Server"];
-  const SelectedIcon = currentIcon ? (ICON_COMPONENTS as Record<string, any>)[currentIcon] : null;
-  const DisplayIcon = SelectedIcon || DefaultIcon;
+  const current = ENVIRONMENT_ICON_OPTIONS.find((o) => o.name === currentIcon);
+  const DisplayIcon = ICON_COMPONENTS[current?.name ?? "Server"];
 
   return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={() => setIsOpen(!isOpen)}
-        className="h-8 w-8 rounded-[var(--radius-md)] hover:bg-overlay-soft border border-border-default transition-colors flex items-center justify-center"
-        aria-label="Select environment icon"
-      >
-        <DisplayIcon className="h-4 w-4 text-text-primary" />
-      </button>
-
-      {isOpen && (
-        <div className="absolute top-full left-0 mt-1 z-50 p-2 bg-surface-inset border border-border-default rounded-[var(--radius-md)] shadow-lg grid grid-cols-5 gap-1 w-max">
+    <Popover open={isOpen} onOpenChange={setIsOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-sm"
+          aria-label={`Environment icon: ${current?.label ?? "Server"}`}
+        >
+          <DisplayIcon />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-auto p-2">
+        <div role="group" aria-label="Environment icon" className="grid grid-cols-5 gap-1">
           {ENVIRONMENT_ICON_OPTIONS.map(({ name, label }) => {
-            const IconComp = (ICON_COMPONENTS as Record<string, any>)[name];
-            const isSelected = currentIcon === name;
+            const IconComp = ICON_COMPONENTS[name];
+            const isSelected = (currentIcon ?? "Server") === name;
             return (
-              <button
+              <Button
                 key={name}
                 type="button"
+                variant="ghost"
+                size="icon"
+                aria-pressed={isSelected}
+                aria-label={label}
+                title={label}
                 onClick={() => {
                   onChange(name);
                   setIsOpen(false);
                 }}
-                className={cn(
-                  "p-2 rounded-[var(--radius-sm)] flex items-center justify-center transition-colors",
-                  isSelected
-                    ? "bg-overlay-medium border border-border-strong"
-                    : "hover:bg-surface-hover border border-transparent"
-                )}
-                title={label}
+                className={cn(isSelected && "bg-overlay-selected text-text-primary")}
               >
-                <IconComp className="h-4 w-4 text-text-primary" />
-              </button>
+                <IconComp />
+              </Button>
             );
           })}
         </div>
-      )}
-    </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -238,6 +150,16 @@ export function ResourceEnvironmentsSection({
   const [newEnvironmentName, setNewEnvironmentName] = useState("");
   const [addEnvironmentError, setAddEnvironmentError] = useState<string | null>(null);
   const [pendingDeleteEnvironment, setPendingDeleteEnvironment] = useState<string | null>(null);
+  // The inline add form unmounts the focused field when it closes, so say where
+  // focus goes: the selector showing the new environment, or back to Add.
+  const [returnFocus, setReturnFocus] = useState<"selector" | "add" | null>(null);
+  const selectorRef = useRef<HTMLButtonElement>(null);
+  const addButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!returnFocus) return;
+    (returnFocus === "selector" ? selectorRef : addButtonRef).current?.focus();
+    setReturnFocus(null);
+  }, [returnFocus]);
 
   const [selectedEnvName, setSelectedEnvName] = useState<string>(() => {
     if (activeResourceEnvironment && envKeys.includes(activeResourceEnvironment)) {
@@ -280,11 +202,11 @@ export function ResourceEnvironmentsSection({
   const handleAddEnv = () => {
     const trimmed = newEnvironmentName.trim();
     if (!trimmed) {
-      setAddEnvironmentError("Enter an environment name.");
+      setAddEnvironmentError("Enter a name for the environment");
       return;
     }
     if ((resourceEnvironments ?? {})[trimmed]) {
-      setAddEnvironmentError(`Environment "${trimmed}" already exists.`);
+      setAddEnvironmentError(`An environment named "${trimmed}" already exists`);
       return;
     }
     const envs = { ...(resourceEnvironments ?? {}) };
@@ -295,6 +217,7 @@ export function ResourceEnvironmentsSection({
     setIsAddingEnvironment(false);
     setNewEnvironmentName("");
     setAddEnvironmentError(null);
+    setReturnFocus("selector");
   };
 
   const handleRemoveEnv = (name: string) => {
@@ -316,6 +239,7 @@ export function ResourceEnvironmentsSection({
   };
 
   const cancelAddForm = () => {
+    setReturnFocus("add");
     setIsAddingEnvironment(false);
     setNewEnvironmentName("");
     setAddEnvironmentError(null);
@@ -328,7 +252,13 @@ export function ResourceEnvironmentsSection({
       description="Run worktrees somewhere other than this machine — a container, a VM, a remote host"
       action={
         envKeys.length > 0 && !isAddingEnvironment ? (
-          <Button type="button" variant="outline" size="sm" onClick={openAddForm}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={openAddForm}
+            ref={addButtonRef}
+          >
             <Plus />
             Add environment
           </Button>
@@ -339,13 +269,19 @@ export function ResourceEnvironmentsSection({
         {envKeys.length === 0 && !isAddingEnvironment && (
           <SettingsEmptyRow
             action={
-              <Button type="button" variant="outline" size="sm" onClick={openAddForm}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={openAddForm}
+                ref={addButtonRef}
+              >
                 <Plus />
                 Add environment
               </Button>
             }
           >
-            No environments yet — add one to provision worktrees in a container, VM, or remote host
+            Add an environment to run worktrees off this machine
           </SettingsEmptyRow>
         )}
 
@@ -355,29 +291,34 @@ export function ResourceEnvironmentsSection({
             description="The environment the commands below belong to"
             control={({ labelId, descriptionId }) => (
               <div data-testid="environment-selector-bar" className="flex items-center gap-2">
-                <select
-                  value={currentEnvName}
-                  onChange={(e) => handleSelectEnv(e.target.value)}
-                  aria-labelledby={labelId}
-                  aria-describedby={descriptionId}
-                  className={cn(FIELD_INPUT, "w-52 min-w-0 pr-8")}
-                >
-                  {envKeys.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
+                <Select value={currentEnvName} onValueChange={handleSelectEnv}>
+                  <SelectTrigger
+                    ref={selectorRef}
+                    aria-labelledby={labelId}
+                    aria-describedby={descriptionId}
+                    className={cn(SETTINGS_CONTROL_WIDTH.select, "font-mono")}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {envKeys.map((name) => (
+                      <SelectItem key={name} value={name} className="font-mono">
+                        {name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <IconPickerButton currentIcon={env.icon} onChange={(icon) => updateEnv({ icon })} />
                 {envKeys.length > 1 && (
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost-danger"
+                    size="icon-sm"
                     onClick={() => setPendingDeleteEnvironment(currentEnvName)}
-                    className="p-1 rounded-[var(--radius-sm)] text-text-secondary hover:text-status-error hover:bg-overlay-soft transition-colors"
-                    aria-label={`Remove ${currentEnvName} environment`}
+                    aria-label={`Delete ${currentEnvName} environment`}
                   >
-                    <X className="h-4 w-4" />
-                  </button>
+                    <Trash2 />
+                  </Button>
                 )}
               </div>
             )}
@@ -416,7 +357,7 @@ export function ResourceEnvironmentsSection({
                     aria-describedby={
                       addEnvironmentError ? "new-environment-name-error" : undefined
                     }
-                    className="flex-1 min-w-0 font-mono"
+                    className={cn(SETTINGS_CONTROL_WIDTH.wide, "font-mono")}
                   />
                   <Button type="button" variant="contrast" size="sm" onClick={handleAddEnv}>
                     Add
@@ -443,33 +384,45 @@ export function ResourceEnvironmentsSection({
       {envKeys.length > 0 && (
         <>
           <SettingsGroup label="Lifecycle commands">
-            <CommandList
-              commands={env.provision ?? []}
+            <SettingsListRow
+              items={env.provision ?? []}
               onChange={(provision) => updateEnv({ provision })}
               placeholder="e.g. docker compose up -d"
               label="Provision commands"
-              helpText="Commands to run when provisioning a remote environment"
+              description="Commands to run when provisioning a remote environment"
+              itemNoun="Provision command"
+              addLabel="Add command"
+              reorderable
             />
-            <CommandList
-              commands={env.teardown ?? []}
+            <SettingsListRow
+              items={env.teardown ?? []}
               onChange={(teardown) => updateEnv({ teardown })}
               placeholder="e.g. docker compose down"
               label="Teardown commands"
-              helpText="Commands to run when destroying the environment"
+              description="Commands to run when destroying the environment"
+              itemNoun="Teardown command"
+              addLabel="Add command"
+              reorderable
             />
-            <CommandList
-              commands={env.resume ?? []}
+            <SettingsListRow
+              items={env.resume ?? []}
               onChange={(resume) => updateEnv({ resume })}
               placeholder="e.g. docker unpause container"
               label="Resume commands"
-              helpText="Commands to resume a paused environment without destroying"
+              description="Commands to resume a paused environment without destroying"
+              itemNoun="Resume command"
+              addLabel="Add command"
+              reorderable
             />
-            <CommandList
-              commands={env.pause ?? []}
+            <SettingsListRow
+              items={env.pause ?? []}
               onChange={(pause) => updateEnv({ pause })}
               placeholder="e.g. docker pause container"
               label="Pause commands"
-              helpText="Commands to pause the environment while preserving state"
+              description="Commands to pause the environment while preserving state"
+              itemNoun="Pause command"
+              addLabel="Add command"
+              reorderable
             />
           </SettingsGroup>
 
@@ -520,38 +473,46 @@ export function ResourceEnvironmentsSection({
         </>
       )}
 
-      <SettingsGroup className="checkbox-neutral">
-        <SettingsRow
-          label="Default worktree mode"
-          description="Default mode when creating new worktrees"
-          layout="stacked"
-          control={({ labelId }) => (
-            <div role="radiogroup" aria-labelledby={labelId} className="-mx-3 -my-1">
-              <RadioChoiceRow
-                name="worktreeMode"
-                value="local"
-                checked={(defaultWorktreeMode ?? "local") === "local"}
-                onChange={() => onDefaultWorktreeModeChange("local")}
-                label="Local"
-                description="Run worktrees directly on this machine"
-                bare
-              />
-              {envKeys.map((key) => (
+      {envKeys.length > 0 && (
+        <SettingsGroup className="checkbox-neutral">
+          <SettingsRow
+            label="Default worktree mode"
+            description="Where new worktrees run unless you choose otherwise when creating one"
+            layout="stacked"
+            control={({ labelId }) => (
+              <div
+                role="radiogroup"
+                aria-labelledby={labelId}
+                className="-mx-4 -mb-3 border-t border-border-subtle divide-y divide-border-subtle"
+              >
                 <RadioChoiceRow
-                  key={key}
                   name="worktreeMode"
-                  value={key}
-                  checked={defaultWorktreeMode === key}
-                  onChange={() => onDefaultWorktreeModeChange(key)}
-                  label={key}
-                  description="Run worktrees in this resource environment"
+                  value="local"
+                  checked={(defaultWorktreeMode ?? "local") === "local"}
+                  onChange={() => onDefaultWorktreeModeChange("local")}
+                  label="Local"
+                  description="Run worktrees directly on this machine"
                   bare
+                  className="w-full px-4 py-3"
                 />
-              ))}
-            </div>
-          )}
-        />
-      </SettingsGroup>
+                {envKeys.map((key) => (
+                  <RadioChoiceRow
+                    key={key}
+                    name="worktreeMode"
+                    value={key}
+                    checked={defaultWorktreeMode === key}
+                    onChange={() => onDefaultWorktreeModeChange(key)}
+                    label={key}
+                    description="Run worktrees in this resource environment"
+                    bare
+                    className="w-full px-4 py-3"
+                  />
+                ))}
+              </div>
+            )}
+          />
+        </SettingsGroup>
+      )}
 
       <ConfirmDialog
         isOpen={pendingDeleteEnvironment !== null}

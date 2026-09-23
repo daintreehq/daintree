@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef } from "react";
-import { Eye, EyeOff, Trash2, Plus } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
+import { EnvVarRow, validateEnvRows, type EnvVarDraft } from "./EnvVarRow";
+import { useRowFocus } from "./useRowFocus";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
@@ -14,13 +14,7 @@ import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { invalidateGlobalEnvCache } from "@/clients/globalEnvClient";
 
-interface EnvVar {
-  id: string;
-  key: string;
-  value: string;
-}
-
-function envVarsFromRecord(record: Record<string, string> | undefined): EnvVar[] {
+function envVarsFromRecord(record: Record<string, string> | undefined): EnvVarDraft[] {
   if (!record) return [];
   return Object.entries(record)
     .sort(([a], [b]) => a.localeCompare(b))
@@ -31,7 +25,7 @@ function envVarsFromRecord(record: Record<string, string> | undefined): EnvVar[]
     }));
 }
 
-function envVarsToRecord(vars: EnvVar[]): Record<string, string> {
+function envVarsToRecord(vars: EnvVarDraft[]): Record<string, string> {
   const record: Record<string, string> = {};
   for (const v of vars) {
     const trimmedKey = v.key.trim();
@@ -42,25 +36,39 @@ function envVarsToRecord(vars: EnvVar[]): Record<string, string> {
   return record;
 }
 
-const ENV_KEY_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+function sameRecord(a: Record<string, string>, b: Record<string, string>): boolean {
+  const aKeys = Object.keys(a);
+  if (aKeys.length !== Object.keys(b).length) return false;
+  return aKeys.every((k) => Object.prototype.hasOwnProperty.call(b, k) && a[k] === b[k]);
+}
 
 export function EnvironmentSettingsTab() {
-  const [envRows, setEnvRows] = useState<EnvVar[]>([]);
+  const [envRows, setEnvRows] = useState<EnvVarDraft[]>([]);
   const [visibleEnvVars, setVisibleEnvVars] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
-  const [isDirty, setIsDirty] = useState(false);
+  // Errors appear on a failed Save and then track every edit, so fixing a name
+  // clears its message and breaking another one shows straight away.
+  const [saveAttempted, setSaveAttempted] = useState(false);
   const [savedSnapshot, setSavedSnapshot] = useState<Record<string, string>>({});
+  const focus = useRowFocus();
 
   const [loadFailed, setLoadFailed] = useState(false);
   const [loadNonce, setLoadNonce] = useState(0);
 
+  const rowErrors = useMemo(
+    () => (saveAttempted ? validateEnvRows(envRows) : {}),
+    [saveAttempted, envRows]
+  );
+  const errorCount = Object.keys(rowErrors).length;
+  // Dirty against what is stored, not "was anything typed": editing a value and
+  // typing it back is not a change, and a blank row adds nothing to save.
+  const isDirty = !isLoading && !sameRecord(envVarsToRecord(envRows), savedSnapshot);
+
   // Report validation state to sidebar — a failed load also marks the tab
   // as in-error so the sidebar reflects the user-visible error block.
-  const hasError = Object.keys(rowErrors).length > 0;
-  useSettingsTabValidation("environment", hasError || loadFailed);
+  useSettingsTabValidation("environment", errorCount > 0 || loadFailed);
 
   // Suppress duplicate toasts when the tab remounts (close/reopen Settings)
   // while the IPC failure persists — notify() has no dedup-by-key.
@@ -105,55 +113,39 @@ export function EnvironmentSettingsTab() {
 
   const updateRow = (index: number, field: "key" | "value", value: string) => {
     setEnvRows((prev) => {
-      const updated = [...prev];
-      const row = updated[index];
+      const row = prev[index];
       if (!row) return prev;
-      const oldKey = row.key;
-      const rowId = row.id;
-      updated[index] = { ...row, [field]: value };
-
-      if (field === "key") {
-        const wasSensitive = isSensitiveEnvKey(oldKey);
-        const nowSensitive = isSensitiveEnvKey(value);
-        if (!wasSensitive && nowSensitive) {
-          setVisibleEnvVars((prev) => {
-            const next = new Set(prev);
-            next.delete(rowId);
-            return next;
-          });
-        }
+      if (field === "key" && !isSensitiveEnvKey(row.key) && isSensitiveEnvKey(value)) {
+        // A name that turns sensitive re-masks a value the user had revealed.
+        setVisibleEnvVars((visible) => {
+          const next = new Set(visible);
+          next.delete(row.id);
+          return next;
+        });
       }
-
-      setRowErrors((prev) => {
-        if (!prev[rowId]) return prev;
-        const next = { ...prev };
-        delete next[rowId];
-        return next;
-      });
-
+      const updated = [...prev];
+      updated[index] = { ...row, [field]: value };
       return updated;
     });
-    setIsDirty(true);
   };
 
   const addRow = () => {
-    setEnvRows((prev) => [...prev, { id: `env-${crypto.randomUUID()}`, key: "", value: "" }]);
-    setIsDirty(true);
+    const id = `env-${crypto.randomUUID()}`;
+    setEnvRows((prev) => [...prev, { id, key: "", value: "" }]);
+    focus.focusRow(id);
   };
 
   const deleteRow = (index: number, id: string) => {
+    focus.focusAfterDelete(
+      envRows.map((r) => r.id),
+      index
+    );
     setEnvRows((prev) => prev.filter((_, i) => i !== index));
     setVisibleEnvVars((prev) => {
       const next = new Set(prev);
       next.delete(id);
       return next;
     });
-    setRowErrors((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-    setIsDirty(true);
   };
 
   const toggleVisibility = (id: string) => {
@@ -165,36 +157,10 @@ export function EnvironmentSettingsTab() {
     });
   };
 
-  const validate = (): boolean => {
-    const errors: Record<string, string> = {};
-    const seenKeys = new Map<string, number>();
-    let valid = true;
-
-    for (let i = 0; i < envRows.length; i++) {
-      const row = envRows[i]!;
-      const trimmedKey = row.key.trim();
-      if (!trimmedKey) continue;
-
-      if (!ENV_KEY_REGEX.test(trimmedKey)) {
-        errors[row.id] = "Invalid name: use letters, digits, and underscores only";
-        valid = false;
-      }
-
-      const prevIndex = seenKeys.get(trimmedKey);
-      if (prevIndex !== undefined) {
-        errors[row.id] = `Duplicate variable name`;
-        valid = false;
-      }
-      seenKeys.set(trimmedKey, i);
-    }
-
-    setRowErrors(errors);
-    return valid;
-  };
-
   const handleSave = async () => {
     if (isSaving) return;
-    if (!validate()) return;
+    setSaveAttempted(true);
+    if (Object.keys(validateEnvRows(envRows)).length > 0) return;
 
     setIsSaving(true);
     setSaveError(null);
@@ -206,7 +172,7 @@ export function EnvironmentSettingsTab() {
       // freshly saved values rather than the pre-save snapshot.
       invalidateGlobalEnvCache();
       setSavedSnapshot(record);
-      setIsDirty(false);
+      setSaveAttempted(false);
     } catch (err) {
       setSaveError(formatErrorMessage(err, "Failed to save environment variables"));
     } finally {
@@ -217,9 +183,8 @@ export function EnvironmentSettingsTab() {
   const handleDiscard = () => {
     setEnvRows(envVarsFromRecord(savedSnapshot));
     setVisibleEnvVars(new Set());
-    setRowErrors({});
+    setSaveAttempted(false);
     setSaveError(null);
-    setIsDirty(false);
   };
 
   // Persist pending edits before the dialog dismisses (X click) or the
@@ -230,7 +195,7 @@ export function EnvironmentSettingsTab() {
 
   const sectionTitle = "Global variables";
   const sectionDescription =
-    "Global environment variables injected into all new terminals. Project-level variables override globals with the same name.";
+    "Injected into every new terminal in every project. A project variable with the same name overrides one of these.";
 
   if (loadFailed) {
     return (
@@ -249,10 +214,33 @@ export function EnvironmentSettingsTab() {
   }
 
   const addButton = (
-    <Button variant="outline" size="sm" onClick={addRow} disabled={isLoading}>
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={addRow}
+      disabled={isLoading}
+      ref={focus.registerFallback}
+    >
       <Plus aria-hidden="true" />
       Add variable
     </Button>
+  );
+
+  const status = saveError ? (
+    <span role="alert" className="text-status-error">
+      {saveError}
+    </span>
+  ) : errorCount > 0 ? (
+    // The actions row is already a polite live region; each field names its own error.
+    <span className="text-status-error">
+      {errorCount === 1
+        ? "Fix the name above to save"
+        : `Fix the ${errorCount} names above to save`}
+    </span>
+  ) : isDirty ? (
+    "Unsaved changes — they're also saved when you close Settings"
+  ) : (
+    "Applies to new terminals — reopen a terminal to pick up changes"
   );
 
   return (
@@ -268,91 +256,25 @@ export function EnvironmentSettingsTab() {
             Add a variable to set it in every new terminal
           </SettingsEmptyRow>
         ) : (
-          envRows.map((envVar, index) => {
-            const isSensitive = isSensitiveEnvKey(envVar.key);
-            const isVisible = visibleEnvVars.has(envVar.id);
-            const shouldMask = isSensitive && !isVisible;
-            const error = rowErrors[envVar.id];
-            const errorId = error ? `${envVar.id}-error` : undefined;
-
-            return (
-              <div key={envVar.id} className="px-4 py-2.5">
-                <div className="flex items-center gap-2">
-                  <Input
-                    type="text"
-                    density="compact"
-                    value={envVar.key}
-                    onChange={(e) => updateRow(index, "key", e.target.value)}
-                    spellCheck={false}
-                    autoCapitalize="none"
-                    className="flex-1 min-w-0 font-mono"
-                    placeholder="VARIABLE_NAME"
-                    aria-label="Environment variable name"
-                    invalid={!!error}
-                    aria-invalid={!!error || undefined}
-                    aria-describedby={errorId}
-                  />
-                  <span className="text-text-secondary" aria-hidden="true">
-                    =
-                  </span>
-                  <div className="flex-1 min-w-0 relative">
-                    <Input
-                      type={shouldMask ? "password" : "text"}
-                      density="compact"
-                      value={envVar.value}
-                      onChange={(e) => updateRow(index, "value", e.target.value)}
-                      spellCheck={false}
-                      autoCapitalize="none"
-                      autoComplete={isSensitive ? "new-password" : "off"}
-                      className={cn("font-mono", isSensitive && "pr-8")}
-                      placeholder="e.g. /usr/local/bin"
-                      aria-label="Environment variable value"
-                      aria-describedby={errorId}
-                    />
-                    {isSensitive && (
-                      <button
-                        type="button"
-                        onClick={() => toggleVisibility(envVar.id)}
-                        className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
-                        aria-pressed={isVisible}
-                        aria-label={`${isVisible ? "Hide" : "Show"} value${envVar.key ? ` for ${envVar.key}` : ""}`}
-                      >
-                        {isVisible ? (
-                          <EyeOff className="h-4 w-4" aria-hidden="true" />
-                        ) : (
-                          <Eye className="h-4 w-4" aria-hidden="true" />
-                        )}
-                      </button>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => deleteRow(index, envVar.id)}
-                    className="p-1 rounded-[var(--radius-sm)] text-text-secondary hover:text-status-error hover:bg-status-error/10 transition-colors"
-                    aria-label="Delete environment variable"
-                  >
-                    <Trash2 className="h-4 w-4" aria-hidden="true" />
-                  </button>
-                </div>
-                {error && (
-                  <p id={errorId} className="text-xs text-status-error mt-1">
-                    {error}
-                  </p>
-                )}
-              </div>
-            );
-          })
+          envRows.map((envVar, index) => (
+            <EnvVarRow
+              key={envVar.id}
+              row={envVar}
+              position={index + 1}
+              error={rowErrors[envVar.id]}
+              sensitive={isSensitiveEnvKey(envVar.key)}
+              revealed={visibleEnvVars.has(envVar.id)}
+              onToggleReveal={() => toggleVisibility(envVar.id)}
+              onKeyChange={(v) => updateRow(index, "key", v)}
+              onValueChange={(v) => updateRow(index, "value", v)}
+              onDelete={() => deleteRow(index, envVar.id)}
+              valuePlaceholder="e.g. /usr/local/bin"
+              keyRef={focus.register(envVar.id)}
+            />
+          ))
         )}
 
-        <SettingsActions
-          status={
-            saveError && (
-              <span role="alert" className="text-status-error">
-                {saveError}
-              </span>
-            )
-          }
-        >
+        <SettingsActions status={status}>
           <Button
             variant="outline"
             size="sm"

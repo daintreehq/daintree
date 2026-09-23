@@ -1,7 +1,24 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render as rtlRender, screen, fireEvent, waitFor } from "@testing-library/react";
+import { useContext, type ReactElement, type ReactNode } from "react";
+import { SettingsValidationProvider } from "@/components/Settings/SettingsValidationRegistry";
+import {
+  SettingsFlushContext,
+  SettingsFlushProvider,
+} from "@/components/Settings/SettingsFlushRegistry";
+
+// The editor reports errors to the sidebar and registers a close-time flush, both
+// through the dialog's registries.
+function Providers({ children }: { children: ReactNode }) {
+  return (
+    <SettingsValidationProvider>
+      <SettingsFlushProvider>{children}</SettingsFlushProvider>
+    </SettingsValidationProvider>
+  );
+}
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: Providers });
 import { EnvironmentVariablesEditor } from "../EnvironmentVariablesEditor";
 import type { EnvVar } from "../projectSettingsDirty";
 import type { ProjectSettings } from "@shared/types/project";
@@ -93,9 +110,7 @@ describe("EnvironmentVariablesEditor", () => {
       expect(screen.getByText("API_KEY")).toBeTruthy();
 
       const globalSection = screen.getByRole("group", { name: "Inherited from global" });
-      const deleteButtons = globalSection.querySelectorAll(
-        '[aria-label="Delete environment variable"]'
-      );
+      const deleteButtons = globalSection.querySelectorAll('[aria-label^="Delete"]');
       expect(deleteButtons.length).toBe(0);
 
       const inputs = globalSection.querySelectorAll("input");
@@ -121,7 +136,7 @@ describe("EnvironmentVariablesEditor", () => {
       expect(valueInputs.length).toBe(1);
       expect((valueInputs[0] as HTMLInputElement).value).toBe("my-value");
 
-      const deleteButtons = screen.getAllByLabelText("Delete environment variable");
+      const deleteButtons = screen.getAllByRole("button", { name: /^Delete / });
       expect(deleteButtons.length).toBe(1);
     });
 
@@ -150,7 +165,7 @@ describe("EnvironmentVariablesEditor", () => {
         />
       );
 
-      expect(screen.getByText("********")).toBeTruthy();
+      expect(screen.getByText("••••••••")).toBeTruthy();
       expect(screen.getByText("visible")).toBeTruthy();
     });
 
@@ -310,7 +325,7 @@ describe("EnvironmentVariablesEditor", () => {
       fireEvent.click(screen.getByRole("button", { name: "Move 1 value out of shared settings" }));
 
       expect(onFlush).not.toHaveBeenCalled();
-      expect(screen.getByText(/fix the errors above before saving/i)).toBeTruthy();
+      expect(screen.getByText(/fix the name above to save/i)).toBeTruthy();
     });
   });
 });
@@ -323,7 +338,7 @@ describe("EnvironmentVariablesEditor — DOM anchors for settings deep-links", (
 });
 
 describe("EnvironmentVariablesEditor save controls", () => {
-  it("keeps Save changes and Discard disabled until the draft differs from what was loaded", () => {
+  it("keeps Save and Discard disabled until the draft differs from what was loaded", () => {
     render(
       <EnvironmentVariablesEditor
         {...defaultProps}
@@ -332,7 +347,7 @@ describe("EnvironmentVariablesEditor save controls", () => {
       />
     );
 
-    const save = screen.getByRole("button", { name: "Save changes" }) as HTMLButtonElement;
+    const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
     const discard = screen.getByRole("button", { name: "Discard" }) as HTMLButtonElement;
     expect(save.disabled).toBe(true);
     expect(discard.disabled).toBe(true);
@@ -345,5 +360,60 @@ describe("EnvironmentVariablesEditor save controls", () => {
 
     fireEvent.click(discard);
     expect(save.disabled).toBe(true);
+  });
+});
+
+describe("EnvironmentVariablesEditor close-time flush", () => {
+  // Matches the global Environment page: closing Settings keeps a valid draft
+  // rather than silently dropping it, and never stores an invalid one.
+  let flushAll: (() => Promise<void>) | undefined;
+  function CaptureFlush() {
+    flushAll = useContext(SettingsFlushContext)?.flushAll;
+    return null;
+  }
+
+  const renderEditor = (onChange: (value: EnvVar[]) => void, onFlush: () => Promise<void>) =>
+    render(
+      <>
+        <CaptureFlush />
+        <EnvironmentVariablesEditor
+          {...defaultProps}
+          environmentVariables={[makeEnvVar("MY_VAR", "a")]}
+          onEnvironmentVariablesChange={onChange}
+          onFlush={onFlush}
+        />
+      </>
+    );
+
+  it("saves a valid draft when the dialog flushes", async () => {
+    const onChange = vi.fn<(value: EnvVar[]) => void>();
+    const onFlush = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    renderEditor(onChange, onFlush);
+    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+      target: { value: "b" },
+    });
+    await flushAll!();
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange.mock.calls[0]![0][0]).toMatchObject({ key: "MY_VAR", value: "b" });
+    expect(onFlush).toHaveBeenCalled();
+  });
+
+  it("does not store a draft with an invalid name when the dialog flushes", async () => {
+    const onChange = vi.fn<(value: EnvVar[]) => void>();
+    const onFlush = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    renderEditor(onChange, onFlush);
+    fireEvent.change(screen.getByLabelText("Environment variable name"), {
+      target: { value: "1BAD" },
+    });
+    await flushAll!();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onFlush).not.toHaveBeenCalled();
+  });
+
+  it("registers nothing while the draft is clean", async () => {
+    const onChange = vi.fn<(value: EnvVar[]) => void>();
+    renderEditor(onChange, vi.fn<() => Promise<void>>().mockResolvedValue(undefined));
+    await flushAll!();
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

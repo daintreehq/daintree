@@ -96,7 +96,7 @@ describe("EnvironmentSettingsTab", () => {
     await waitFor(() => {
       expect(
         screen.getByText(
-          "Global environment variables injected into all new terminals. Project-level variables override globals with the same name."
+          "Injected into every new terminal in every project. A project variable with the same name overrides one of these."
         )
       ).toBeTruthy();
     });
@@ -182,7 +182,9 @@ describe("EnvironmentSettingsTab", () => {
 
     const errorId = nameInput.getAttribute("aria-describedby");
     expect(errorId).toBeTruthy();
-    expect(document.getElementById(errorId!)?.textContent).toContain("Invalid name");
+    expect(document.getElementById(errorId!)?.textContent).toContain(
+      "Start with a letter or underscore"
+    );
 
     expect(valueInput.getAttribute("aria-invalid")).toBeNull();
     expect(valueInput.getAttribute("aria-describedby")).toBe(errorId);

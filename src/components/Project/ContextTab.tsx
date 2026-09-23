@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from "react";
-import { Plus, Trash2, AlertTriangle, Play, Check } from "lucide-react";
+import { AlertTriangle, Play, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import { SettingsListGroup, SettingsListRow } from "@/components/Settings/SettingsListEditor";
+import { useNumberDraft } from "@/components/Settings/useNumberDraft";
 import { SettingsInput } from "@/components/Settings/SettingsInput";
 import { SettingsSelect } from "@/components/Settings/SettingsSelect";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -96,11 +97,26 @@ function describeTopExclusions(byReason: Partial<Record<CopyTreeExclusionReason,
 
 const FILE_PREVIEW_COUNT = 10;
 
+/** A whole number above zero, or nothing — "1.5" is an entry to fix, not a 1. */
 function parsePositiveInt(value: string): number | undefined {
   if (!value) return undefined;
   const num = Number(value);
-  if (!Number.isFinite(num) || num <= 0) return undefined;
-  return Math.floor(num);
+  return Number.isInteger(num) && num > 0 ? num : undefined;
+}
+
+const BYTES_PER_MB = 1024 * 1024;
+
+/** Size limits are stored in bytes but read in MB — nobody reasons about 52428800. */
+function bytesToMbInput(bytes: number | undefined): string {
+  if (bytes === undefined) return "";
+  return String(Math.round((bytes / BYTES_PER_MB) * 100) / 100);
+}
+
+function parseMbToBytes(value: string): number | undefined {
+  if (!value) return undefined;
+  const mb = Number(value);
+  if (!Number.isFinite(mb) || mb <= 0) return undefined;
+  return Math.max(1, Math.round(mb * BYTES_PER_MB));
 }
 
 // Radix Select reserves the empty string, so "no strategy set" needs its own value.
@@ -111,75 +127,6 @@ const STRATEGY_OPTIONS = [
   { value: "all", label: "Include all files" },
   { value: "modified", label: "Recently modified first" },
 ];
-
-function PatternListRow({
-  label,
-  description,
-  patterns,
-  onChange,
-  placeholder,
-  itemLabel,
-  addLabel,
-}: {
-  label: string;
-  description: string;
-  patterns: string[];
-  onChange: (patterns: string[]) => void;
-  placeholder: string;
-  itemLabel: string;
-  addLabel: string;
-}) {
-  const addButton = (
-    <Button variant="outline" size="sm" onClick={() => onChange([...patterns, ""])}>
-      <Plus />
-      {addLabel}
-    </Button>
-  );
-
-  // Empty, the list is just its add action — on the rail, where a filled list's
-  // controls end, rather than a lone button under the description.
-  if (patterns.length === 0) {
-    return <SettingsRow label={label} description={description} control={addButton} />;
-  }
-
-  return (
-    <SettingsRow
-      label={label}
-      description={description}
-      layout="stacked"
-      control={
-        <div className="space-y-2">
-          {patterns.map((pattern, index) => (
-            <div key={index} className="flex items-center gap-2">
-              <Input
-                type="text"
-                value={pattern}
-                onChange={(e) => {
-                  const updated = [...patterns];
-                  updated[index] = e.target.value;
-                  onChange(updated);
-                }}
-                className="flex-1 min-w-0 font-mono"
-                placeholder={placeholder}
-                spellCheck={false}
-                aria-label={itemLabel}
-              />
-              <Button
-                variant="ghost-danger"
-                size="icon-sm"
-                onClick={() => onChange(patterns.filter((_, i) => i !== index))}
-                aria-label="Delete pattern"
-              >
-                <Trash2 />
-              </Button>
-            </div>
-          ))}
-          <div className="flex justify-end">{addButton}</div>
-        </div>
-      }
-    />
-  );
-}
 
 interface ContextTabProps {
   excludedPaths: string[];
@@ -209,6 +156,22 @@ export function ContextTab({
   // new run starts, so a late-resolving testConfig promise can't write a stale
   // result onto a closed/superseded tab.
   const runIdRef = useRef(0);
+
+  const maxContextDraft = useNumberDraft(
+    bytesToMbInput(copyTreeSettings.maxContextSize),
+    parseMbToBytes,
+    (maxContextSize) => setCopyTree({ maxContextSize })
+  );
+  const maxFileDraft = useNumberDraft(
+    bytesToMbInput(copyTreeSettings.maxFileSize),
+    parseMbToBytes,
+    (maxFileSize) => setCopyTree({ maxFileSize })
+  );
+  const charLimitDraft = useNumberDraft(
+    copyTreeSettings.charLimit === undefined ? "" : String(copyTreeSettings.charLimit),
+    parsePositiveInt,
+    (charLimit) => setCopyTree({ charLimit })
+  );
 
   useEffect(() => {
     if (!isOpen) {
@@ -274,103 +237,81 @@ export function ContextTab({
   };
 
   const invalidateTest = () => setTestConfigResult(null);
+  // A dry run tests what is stored, so it can't honestly run while a limit on
+  // screen differs from it.
+  const hasInvalidLimit = maxContextDraft.invalid || maxFileDraft.invalid || charLimitDraft.invalid;
 
   const setCopyTree = (patch: Partial<CopyTreeSettings>) => {
     onCopyTreeSettingsChange({ ...copyTreeSettings, ...patch });
     invalidateTest();
   };
 
-  const addExcludedPathButton = (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => {
-        onExcludedPathsChange([...excludedPaths, ""]);
-        invalidateTest();
-      }}
-    >
-      <Plus />
-      Add path pattern
-    </Button>
-  );
-
   return (
     <div className="space-y-8">
       <SettingsSection
         id="project-excluded-paths"
         title="Excluded paths"
-        description="Glob patterns to exclude from monitoring and context injection (e.g., node_modules/**, dist/**, .git/**)"
+        description="Glob patterns left out of file monitoring and context injection, such as node_modules/** or dist/**"
       >
         <SettingsGroup>
-          {excludedPaths.map((path, index) => (
-            <div key={index} className="flex items-center gap-2 px-4 py-2.5">
-              <Input
-                type="text"
-                value={path}
-                onChange={(e) => {
-                  onExcludedPathsChange(
-                    excludedPaths.map((p, i) => (i === index ? e.target.value : p))
-                  );
-                  invalidateTest();
-                }}
-                className="flex-1 min-w-0 font-mono"
-                placeholder="node_modules/**"
-                spellCheck={false}
-                aria-label="Excluded path glob pattern"
-              />
-              <Button
-                variant="ghost-danger"
-                size="icon-sm"
-                onClick={() => {
-                  onExcludedPathsChange(excludedPaths.filter((_, i) => i !== index));
-                  invalidateTest();
-                }}
-                aria-label="Delete excluded path"
-              >
-                <Trash2 />
-              </Button>
-            </div>
-          ))}
-          {excludedPaths.length === 0 ? (
-            <SettingsEmptyRow action={addExcludedPathButton}>
-              Nothing is excluded yet — add a glob pattern to skip it
-            </SettingsEmptyRow>
-          ) : (
-            <div className="flex justify-end px-4 py-2.5">{addExcludedPathButton}</div>
-          )}
+          <SettingsListGroup
+            items={excludedPaths}
+            onChange={(paths) => {
+              onExcludedPathsChange(paths);
+              invalidateTest();
+            }}
+            placeholder="node_modules/**"
+            itemNoun="Excluded path"
+            addLabel="Add path pattern"
+            emptyText="Nothing is excluded yet — add a glob pattern to skip it"
+          />
         </SettingsGroup>
       </SettingsSection>
 
       <SettingsSection
         id="project-copy-tree"
-        title="Context generation settings"
-        description="Configure how CopyTree generates context for AI agents. These settings apply when injecting context into terminals or copying to clipboard."
+        title="Context generation"
+        description="How much of the project CopyTree packs into context for agents, whether it is injected into a terminal or copied to the clipboard"
       >
         <SettingsGroup label="Limits">
           <SettingsInput
             type="number"
-            label="Max context size (bytes)"
-            description="Total size limit for all files · Default: 100 MB"
-            controlWidth="select"
-            suffix="bytes"
-            value={copyTreeSettings.maxContextSize ?? ""}
-            onChange={(e) => setCopyTree({ maxContextSize: parsePositiveInt(e.target.value) })}
+            label="Max context size"
+            description="Total size of all included files · Default: 100 MB"
+            controlWidth="numberWithUnit"
+            suffix="MB"
+            value={maxContextDraft.value}
+            onChange={(e) => {
+              invalidateTest();
+              maxContextDraft.onChange(e);
+            }}
+            error={maxContextDraft.invalid ? "Enter a size above 0 MB" : undefined}
             isModified={copyTreeSettings.maxContextSize !== undefined}
-            onReset={() => setCopyTree({ maxContextSize: undefined })}
+            onReset={() => {
+              maxContextDraft.clear();
+              setCopyTree({ maxContextSize: undefined });
+            }}
             min={1}
             placeholder="Default"
             className="font-mono"
           />
           <SettingsInput
             type="number"
-            label="Max file size (bytes)"
-            description="Skip files larger than this · Default: 10 MB"
-            controlWidth="select"
-            suffix="bytes"
-            value={copyTreeSettings.maxFileSize ?? ""}
-            onChange={(e) => setCopyTree({ maxFileSize: parsePositiveInt(e.target.value) })}
+            label="Max file size"
+            description="Files larger than this are skipped · Default: 10 MB"
+            controlWidth="numberWithUnit"
+            suffix="MB"
+            value={maxFileDraft.value}
+            onChange={(e) => {
+              invalidateTest();
+              maxFileDraft.onChange(e);
+            }}
+            error={maxFileDraft.invalid ? "Enter a size above 0 MB" : undefined}
             isModified={copyTreeSettings.maxFileSize !== undefined}
-            onReset={() => setCopyTree({ maxFileSize: undefined })}
+            onReset={() => {
+              maxFileDraft.clear();
+              setCopyTree({ maxFileSize: undefined });
+            }}
             min={1}
             placeholder="Default"
             className="font-mono"
@@ -379,12 +320,19 @@ export function ContextTab({
             type="number"
             label="Character budget"
             description="Total characters across all files · Default: no limit"
-            controlWidth="select"
+            controlWidth="numberWithUnit"
             suffix="chars"
-            value={copyTreeSettings.charLimit ?? ""}
-            onChange={(e) => setCopyTree({ charLimit: parsePositiveInt(e.target.value) })}
+            value={charLimitDraft.value}
+            onChange={(e) => {
+              invalidateTest();
+              charLimitDraft.onChange(e);
+            }}
+            error={charLimitDraft.invalid ? "Enter a whole number above 0" : undefined}
             isModified={copyTreeSettings.charLimit !== undefined}
-            onReset={() => setCopyTree({ charLimit: undefined })}
+            onReset={() => {
+              charLimitDraft.clear();
+              setCopyTree({ charLimit: undefined });
+            }}
             min={1}
             placeholder="Default"
             className="font-mono"
@@ -405,22 +353,22 @@ export function ContextTab({
         </SettingsGroup>
 
         <SettingsGroup label="Patterns">
-          <PatternListRow
-            label="Always include (glob patterns)"
-            description="Files matching these patterns are included even when an exclude rule or the max file size would drop them"
-            patterns={copyTreeSettings.alwaysInclude ?? []}
+          <SettingsListRow
+            label="Always include"
+            description="Globs kept even when an exclude rule or the max file size would drop them"
+            items={copyTreeSettings.alwaysInclude ?? []}
             onChange={(alwaysInclude) => setCopyTree({ alwaysInclude })}
             placeholder="**/*.md"
-            itemLabel="Always include pattern"
+            itemNoun="Include pattern"
             addLabel="Add include pattern"
           />
-          <PatternListRow
-            label="Always exclude (glob patterns)"
-            description="Additional exclusion patterns beyond the default excluded paths above"
-            patterns={copyTreeSettings.alwaysExclude ?? []}
+          <SettingsListRow
+            label="Always exclude"
+            description="Globs left out of context on top of the excluded paths above"
+            items={copyTreeSettings.alwaysExclude ?? []}
             onChange={(alwaysExclude) => setCopyTree({ alwaysExclude })}
             placeholder="**/*.lock"
-            itemLabel="Always exclude pattern"
+            itemNoun="Exclude pattern"
             addLabel="Add exclude pattern"
           />
         </SettingsGroup>
@@ -428,14 +376,18 @@ export function ContextTab({
         <SettingsGroup>
           <SettingsRow
             label="Test configuration"
-            description="Preview what files would be included with current settings"
+            description={
+              hasInvalidLimit
+                ? "Fix the limit values above to test"
+                : "Lists the files these settings would include, without copying anything"
+            }
             control={
               <Button
                 variant="outline"
                 size="sm"
                 onClick={handleTestConfig}
                 loading={isTestingConfig}
-                disabled={worktrees.length === 0}
+                disabled={worktrees.length === 0 || hasInvalidLimit}
               >
                 <Play />
                 Test config

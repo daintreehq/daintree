@@ -44,12 +44,12 @@ const OUTCOME_LABEL: Record<ConflictResolution, string> = {
 };
 
 /** The caption-strip recipe shared by the app's other destructive previews. */
-const PREVIEW_FRAME = "rounded border border-tint/[0.08] bg-tint/[0.04] text-xs";
+const PREVIEW_FRAME = "rounded-[var(--radius-md)] border border-tint/[0.08] bg-tint/[0.04] text-xs";
 const PREVIEW_STRIP =
   "px-3 py-2 border-b border-tint/[0.08] flex items-center justify-between gap-2";
 const PREVIEW_CAPTION = "text-2xs font-semibold uppercase tracking-wider text-text-secondary";
 const PREVIEW_COUNT =
-  "ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal";
+  "ml-1.5 tabular-nums bg-tint/10 rounded-[var(--radius-sm)] px-1 py-0.5 text-3xs font-medium normal-case tracking-normal";
 
 function collapsePairs(result: ParseEnvResult): Record<string, string> {
   const out: Record<string, string> = {};
@@ -296,17 +296,17 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
               <div
                 id={errorsId}
                 role="alert"
-                className="rounded-[var(--radius-md)] border border-status-warning/20 bg-status-warning/10 px-3 py-2 text-xs leading-[inherit]"
+                className="rounded-[var(--radius-md)] border border-status-error/30 bg-status-error/10 px-3 py-2 text-xs leading-[inherit]"
                 data-testid="import-env-errors"
               >
-                <div className="flex items-center gap-1.5 font-medium mb-1 text-status-warning">
+                <div className="flex items-center gap-1.5 font-medium mb-1 text-status-error">
                   <AlertTriangle size={12} aria-hidden="true" />
                   <span>
                     {parsed.errors.length} parse error
                     {parsed.errors.length === 1 ? "" : "s"}
                   </span>
                 </div>
-                {/* The tint, border and icon carry "this is a warning". The
+                {/* The tint, border and icon carry "this blocks the import". The
                     lines themselves are what the user has to read and act on,
                     so they run on the audited text tiers — the amber tri-tone
                     this replaced flattened to one uniform run under
