@@ -528,7 +528,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       "New sessions are limited to the Daintree actions the Action capability tier allows"
     );
 
-    fireEvent.change(screen.getByLabelText("Capability tier"), { target: { value: "system" } });
+    fireEvent.click(screen.getByRole("radio", { name: /^System/ }));
 
     await waitForContent(
       container,
@@ -648,8 +648,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     );
     await waitForContent(container, "Capability tier");
 
-    const select = screen.getByLabelText("Capability tier") as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "system" } });
+    fireEvent.click(screen.getByRole("radio", { name: /^System/ }));
 
     await waitFor(() => {
       expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
@@ -1001,6 +1000,41 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(screen.queryByLabelText("Model")).toBeNull();
   });
 
+  // Until the saved values arrive the switches show defaults; a click then would
+  // overwrite a real setting with one the user never saw. Retry has to recover.
+  it("keeps settings inert after a failed load, and Retry brings them back", async () => {
+    const getSettings = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("EACCES: permission denied"))
+      .mockResolvedValue({
+        docSearch: false,
+        daintreeControl: true,
+        tier: "action" as const,
+        bypassPermissions: false,
+        auditRetention: 7,
+        customArgs: "",
+      });
+    installApi({ getSettings });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Couldn't load assistant settings");
+
+    const toggle = screen.getByRole("switch", { name: "Search documentation" });
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+      expect(toggle.getAttribute("data-state")).toBe("unchecked");
+    });
+    expect(container.textContent).not.toContain("Couldn't load assistant settings");
+  });
+
   it("keeps settings visible when MCP status load fails", async () => {
     installApi(
       {
@@ -1195,11 +1229,13 @@ describe("DaintreeAssistantSettingsTab", () => {
     );
     await waitForContent(container, "Audit log retention");
 
-    const select = screen.getByLabelText("Audit log retention") as HTMLSelectElement;
-    const optionLabels = Array.from(select.options).map((o) => o.label);
-    expect(optionLabels).toEqual(["7 days (default)", "30 days", "Off"]);
+    const group = screen.getByRole("radiogroup", { name: "Audit log retention" });
+    const optionLabels = within(group)
+      .getAllByRole("radio")
+      .map((o) => o.textContent);
+    expect(optionLabels).toEqual(["7 days", "30 days", "Off"]);
 
-    fireEvent.change(select, { target: { value: "30" } });
+    fireEvent.click(within(group).getByRole("radio", { name: "30 days" }));
 
     await waitFor(() => {
       expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
@@ -1395,7 +1431,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitForContent(container, "Audit log retention");
 
     expect(container.textContent).not.toContain("skip logging entirely");
-    expect(container.textContent).toContain("recorded separately");
+    expect(container.textContent).toContain("kept separately");
   });
 
   it("renders turn-outcome diagnostics in the privacy section after expanding advanced diagnostics", async () => {

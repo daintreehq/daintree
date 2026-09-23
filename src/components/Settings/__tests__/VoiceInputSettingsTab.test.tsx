@@ -206,9 +206,9 @@ describe("VoiceInputSettingsTab", () => {
     render(<VoiceInputSettingsTab />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("settings-select-value-Recording mode").textContent).toBe(
-        "push-to-talk"
-      );
+      const group = screen.getByRole("radiogroup", { name: "Recording mode" });
+      const checked = group.querySelector('[aria-checked="true"]');
+      expect(checked?.textContent).toBe("Push to talk");
     });
   });
 
@@ -236,10 +236,11 @@ describe("VoiceInputSettingsTab", () => {
 
     render(<VoiceInputSettingsTab />);
 
-    const pttButton = await screen.findByTestId(
-      "settings-select-option-Recording mode-push-to-talk"
+    const group = await screen.findByRole("radiogroup", { name: "Recording mode" });
+    const pttButton = Array.from(group.querySelectorAll<HTMLElement>('[role="radio"]')).find(
+      (el) => el.textContent === "Push to talk"
     );
-    pttButton.click();
+    pttButton?.click();
 
     await waitFor(() => {
       expect(setSettings).toHaveBeenCalledWith({ recordingMode: "push-to-talk" });
