@@ -1,6 +1,8 @@
+import { useEffect, useState } from "react";
 import { ActivityLight } from "../ActivityLight";
 import { isValidPastTimestamp } from "@/utils/timestamps";
 import { parseCommitBody } from "@/utils/commitMessage";
+import { scheduleFlip } from "@/utils/flipScheduler";
 import { CommitAuthorAvatar, type CommitAuthor } from "./CommitAuthorAvatar";
 
 export interface CommitInfoTooltipProps {
@@ -54,6 +56,30 @@ function joinNames(names: string[]): string {
   return `${names[0]} and ${names.length - 1} others`;
 }
 
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+
+/**
+ * Milliseconds until any line of the card could read differently: the next
+ * relative-phrase boundary of either timestamp, or local midnight when that
+ * changes an exact time: a time of "today" gains its date, and at the new
+ * year every date gains its year.
+ */
+export function msUntilCardChanges(timestamps: number[], now: number): number {
+  const midnight = new Date(now);
+  midnight.setHours(24, 0, 0, 0);
+  const today = new Date(now).toDateString();
+  const newYear = midnight.getFullYear() !== new Date(now).getFullYear();
+  const midnightMatters = newYear || timestamps.some((ts) => new Date(ts).toDateString() === today);
+  let next = midnightMatters ? midnight.getTime() - now : Infinity;
+  for (const ts of timestamps) {
+    const age = now - ts;
+    const unit = age < HOUR_MS ? MINUTE_MS : age < DAY_MS ? HOUR_MS : DAY_MS;
+    next = Math.min(next, unit - (age % unit));
+  }
+  return next;
+}
+
 let timeOnlyFormatter: Intl.DateTimeFormat | undefined;
 let sameYearFormatter: Intl.DateTimeFormat | undefined;
 let fullFormatter: Intl.DateTimeFormat | undefined;
@@ -102,6 +128,19 @@ export function CommitInfoTooltip({
   forgeAvatarUrl,
   lastActivityTimestamp,
 }: CommitInfoTooltipProps) {
+  // The card can stay open for as long as it is hovered or focused, so its
+  // phrases keep time rather than freezing at the moment it opened.
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const now = Date.now();
+    const valid = [lastCommitTimestampMs, lastActivityTimestamp].filter((ts): ts is number =>
+      isValidPastTimestamp(ts, now)
+    );
+    if (valid.length === 0) return;
+    return scheduleFlip(msUntilCardChanges(valid, now), () => setTick((n) => n + 1));
+  }, [lastCommitTimestampMs, lastActivityTimestamp, tick]);
+
+  void tick;
   const now = Date.now();
   const hasCommit = isValidPastTimestamp(lastCommitTimestampMs, now);
   const hasActivity = isValidPastTimestamp(lastActivityTimestamp, now);

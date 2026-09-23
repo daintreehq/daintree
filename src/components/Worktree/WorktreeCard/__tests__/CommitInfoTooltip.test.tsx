@@ -2,8 +2,13 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { CommitInfoTooltip, exactTimePhrase, relativeTimePhrase } from "../CommitInfoTooltip";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import {
+  CommitInfoTooltip,
+  exactTimePhrase,
+  msUntilCardChanges,
+  relativeTimePhrase,
+} from "../CommitInfoTooltip";
 
 const human = { name: "Jane Doe", email: "jane@example.com" };
 
@@ -289,6 +294,48 @@ describe("CommitInfoTooltip", () => {
       />
     );
     expect(screen.getByText(longName).className).not.toContain("truncate");
+  });
+});
+
+describe("CommitInfoTooltip while open", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2025, 5, 15, 12, 0, 0).getTime());
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("keeps its phrases current instead of freezing when it opened", () => {
+    render(
+      <CommitInfoTooltip
+        lastCommitTimestampMs={Date.now() - 3_600_000}
+        author={human}
+        lastActivityTimestamp={Date.now() - 20_000}
+      />
+    );
+    expect(screen.getByText(/^Last active just now ·/)).toBeDefined();
+    act(() => {
+      vi.advanceTimersByTime(3 * 60_000);
+    });
+    expect(screen.getByText(/^Last active 3 minutes ago ·/)).toBeDefined();
+  });
+
+  it("wakes exactly when a phrase or the day changes", () => {
+    const now = new Date(2025, 5, 15, 23, 10, 17).getTime();
+    const cases: number[][] = [
+      [now - 20_000],
+      [now - 5 * 60_000 - 3_000],
+      [now - 2 * 3_600_000 - 9_000, now - 50_000],
+      [now - 3 * 86_400_000 - 7_000],
+      [now - 40 * 60_000 - 5_000],
+    ];
+    const view = (ts: number[], at: number) =>
+      ts.map((t) => relativeTimePhrase(at - t) + exactTimePhrase(t, at)).join("|");
+    for (const ts of cases) {
+      const delay = msUntilCardChanges(ts, now);
+      expect(delay).toBeGreaterThan(0);
+      expect(view(ts, now + delay - 1)).toBe(view(ts, now));
+      expect(view(ts, now + delay)).not.toBe(view(ts, now));
+    }
   });
 });
 
