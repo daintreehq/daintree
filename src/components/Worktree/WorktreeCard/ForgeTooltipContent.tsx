@@ -30,7 +30,10 @@ import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
  * where a click would open the item, a drag would pick the card up, and a
  * right-click would open the card's context menu. `data-no-dnd` is read from
  * the DOM (`closest()`), which a portal never reaches, so it goes on the
- * content itself; the handlers stop the synthetic bubbling.
+ * content itself; the handlers stop the synthetic bubbling. Pointer-down is
+ * left alone: Radix's dismissable layer clears its "pressed inside" flag from
+ * a bubbling document listener, so stopping it made the next outside press
+ * fail to close the card — and `data-no-dnd` already refuses the drag.
  */
 const stop = (event: { stopPropagation: () => void }) => event.stopPropagation();
 export const HOVER_CARD_EVENT_FENCE = {
@@ -38,7 +41,6 @@ export const HOVER_CARD_EVENT_FENCE = {
   onClick: stop,
   onDoubleClick: stop,
   onContextMenu: stop,
-  onPointerDown: stop,
 } as const;
 
 // Every body renders at the same width, so the card doesn't resize between the
