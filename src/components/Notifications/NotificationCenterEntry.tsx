@@ -28,6 +28,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -678,9 +679,21 @@ function RowOptionsMenu({
     supportsCopyCorrelationId || supportsReportOnGitHub || supportsGoToSource;
   const hasActions = hasContextActions || supportsSnooze || hasDiagnosticsActions;
   const [open, setOpen] = useState(false);
-  // `h` asks for the snooze choices, not the whole menu, so it opens both and
-  // lands in the submenu.
-  const [snoozeSubOpen, setSnoozeSubOpen] = useState(false);
+  // `h` asks for the snooze durations, not the whole menu, so it opens a menu
+  // of just those. A controlled submenu opened in the same frame as its parent
+  // never mounted, and the programmatic open left focus on <body>.
+  const [snoozeOnly, setSnoozeOnly] = useState(false);
+  const menuContentRef = useRef<HTMLDivElement>(null);
+  // Opened from the keyboard with nothing under the pointer, so focus goes on
+  // the first duration explicitly. Radix's own open focus left it on <body>
+  // for a programmatic open. One frame later so it lands after Radix's.
+  useEffect(() => {
+    if (!open || !snoozeOnly) return;
+    const frame = requestAnimationFrame(() => {
+      menuContentRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open, snoozeOnly]);
   const { copy: copyCorrelationId } = useCopyWithFeedback({
     announcement: "Correlation ID copied",
   });
@@ -695,16 +708,17 @@ function RowOptionsMenu({
       onConsumeSnoozePending?.();
       return;
     }
+    setSnoozeOnly(!isSnoozed);
     setOpen(true);
-    if (!isSnoozed) setSnoozeSubOpen(true);
+    onDropdownOpenChange?.(true);
     onConsumeSnoozePending?.();
-  }, [isSnoozePending, supportsSnooze, isSnoozed, onConsumeSnoozePending]);
+  }, [isSnoozePending, supportsSnooze, isSnoozed, onConsumeSnoozePending, onDropdownOpenChange]);
 
   if (!hasActions) return null;
 
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
-    if (!next) setSnoozeSubOpen(false);
+    if (!next) setSnoozeOnly(false);
     onDropdownOpenChange?.(next);
   };
 
@@ -732,6 +746,22 @@ function RowOptionsMenu({
     });
   };
 
+  const durationItems = SNOOZE_DURATION_OPTIONS.map((option) => (
+    <DropdownMenuItem
+      key={option}
+      onSelect={() => {
+        onSnooze?.(option);
+      }}
+    >
+      {SNOOZE_LABEL[option]}
+      {/* The commitment, before it's made: "Until tomorrow" is 8:00 AM, and
+          "Until next week" is Monday. */}
+      <span className="ml-auto pl-6 text-text-secondary tabular-nums">
+        {formatSnoozeWake(resolveSnoozeDuration(option))}
+      </span>
+    </DropdownMenuItem>
+  ));
+
   return (
     <DropdownMenu open={open} onOpenChange={handleOpenChange}>
       <DropdownMenuTrigger asChild>
@@ -751,100 +781,100 @@ function RowOptionsMenu({
           a floor so short items do not collapse it, and a ceiling so it cannot
           end up wider than the 360px popover it belongs to — it was overlaying
           three rows of the inbox behind it. */}
-      <DropdownMenuContent align="end" sideOffset={4} className="min-w-[200px] max-w-[280px]">
-        {supportsSnooze &&
-          (isSnoozed ? (
-            <DropdownMenuItem
-              onSelect={() => {
-                onUnsnooze?.();
-              }}
-            >
-              <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-              {snoozedUntil !== undefined
-                ? `Snoozed until ${formatSnoozedUntil(snoozedUntil)} · Unsnooze`
-                : "Unsnooze"}
-            </DropdownMenuItem>
-          ) : (
-            <DropdownMenuSub open={snoozeSubOpen} onOpenChange={setSnoozeSubOpen}>
-              <DropdownMenuSubTrigger>
-                <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                Snooze
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {SNOOZE_DURATION_OPTIONS.map((option) => (
-                  <DropdownMenuItem
-                    key={option}
-                    onSelect={() => {
-                      onSnooze?.(option);
-                    }}
-                  >
-                    {SNOOZE_LABEL[option]}
-                    {/* The commitment, before it's made: "Until tomorrow"
-                        is 8:00 AM, and "Until next week" is Monday. */}
-                    <span className="ml-auto pl-6 text-text-secondary tabular-nums">
-                      {formatSnoozeWake(resolveSnoozeDuration(option))}
-                    </span>
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-          ))}
-        {supportsSnooze && hasDiagnosticsActions && <DropdownMenuSeparator />}
-        {supportsCopyCorrelationId && (
-          <DropdownMenuItem onSelect={handleCopyCorrelationId}>
-            <Copy data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-            Copy correlation ID
-          </DropdownMenuItem>
-        )}
-        {supportsGoToSource && (
-          <DropdownMenuItem onSelect={handleGoToSource}>
-            <ArrowRight data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-            Go to source
-          </DropdownMenuItem>
-        )}
-        {supportsReportOnGitHub && (
-          <DropdownMenuItem
-            disabled={reportInFlight}
-            onSelect={() => {
-              void handleReportOnGitHub();
-            }}
-          >
-            <Bug data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-            Report on GitHub
-          </DropdownMenuItem>
-        )}
-        {hasDiagnosticsActions && hasContextActions && <DropdownMenuSeparator />}
-        {!hasDiagnosticsActions && supportsSnooze && hasContextActions && <DropdownMenuSeparator />}
-        {isNotificationEventKind(eventKind) && (
-          <DropdownMenuItem
-            onSelect={() => {
-              const projectId = entry.context?.projectId;
-              if (!isNotificationEventKind(eventKind)) return;
-              void actionService.dispatch("project.silenceNotificationKind", {
-                kind: eventKind,
-                projectId,
-              });
-            }}
-          >
-            {/* No shim. The gutter these two need in a menu that also offers
+      <DropdownMenuContent
+        align="end"
+        sideOffset={4}
+        className="min-w-[200px] max-w-[280px]"
+        ref={menuContentRef}
+      >
+        {snoozeOnly ? (
+          <>
+            <DropdownMenuLabel>Snooze</DropdownMenuLabel>
+            {durationItems}
+          </>
+        ) : (
+          <>
+            {supportsSnooze &&
+              (isSnoozed ? (
+                <DropdownMenuItem
+                  onSelect={() => {
+                    onUnsnooze?.();
+                  }}
+                >
+                  <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                  {snoozedUntil !== undefined
+                    ? `Snoozed until ${formatSnoozedUntil(snoozedUntil)} · Unsnooze`
+                    : "Unsnooze"}
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                    Snooze
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>{durationItems} </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              ))}
+            {supportsSnooze && hasDiagnosticsActions && <DropdownMenuSeparator />}
+            {supportsCopyCorrelationId && (
+              <DropdownMenuItem onSelect={handleCopyCorrelationId}>
+                <Copy data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Copy correlation ID
+              </DropdownMenuItem>
+            )}
+            {supportsGoToSource && (
+              <DropdownMenuItem onSelect={handleGoToSource}>
+                <ArrowRight data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Go to source
+              </DropdownMenuItem>
+            )}
+            {supportsReportOnGitHub && (
+              <DropdownMenuItem
+                disabled={reportInFlight}
+                onSelect={() => {
+                  void handleReportOnGitHub();
+                }}
+              >
+                <Bug data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Report on GitHub
+              </DropdownMenuItem>
+            )}
+            {hasDiagnosticsActions && hasContextActions && <DropdownMenuSeparator />}
+            {!hasDiagnosticsActions && supportsSnooze && hasContextActions && (
+              <DropdownMenuSeparator />
+            )}
+            {isNotificationEventKind(eventKind) && (
+              <DropdownMenuItem
+                onSelect={() => {
+                  const projectId = entry.context?.projectId;
+                  if (!isNotificationEventKind(eventKind)) return;
+                  void actionService.dispatch("project.silenceNotificationKind", {
+                    kind: eventKind,
+                    projectId,
+                  });
+                }}
+              >
+                {/* No shim. The gutter these two need in a menu that also offers
                 Snooze / Copy / Report is allocated by the `:has([data-menu-icon])`
                 rule in index.css, and withdrawn when every icon-bearing item is
                 filtered out — an entry with no correlationId and no panelId
                 leaves only these, and with no projectId either, only this one. */}
-            Silence {EVENT_KIND_LABEL[eventKind]}
-            {entry.context?.projectId && eventKind !== "uiFeedback" ? " from this project" : ""}
-          </DropdownMenuItem>
-        )}
-        {entry.context?.projectId && (
-          <DropdownMenuItem
-            onSelect={() => {
-              const projectId = entry.context?.projectId;
-              if (!projectId) return;
-              void actionService.dispatch("project.muteNotifications", { projectId });
-            }}
-          >
-            Mute project notifications
-          </DropdownMenuItem>
+                Silence {EVENT_KIND_LABEL[eventKind]}
+                {entry.context?.projectId && eventKind !== "uiFeedback" ? " from this project" : ""}
+              </DropdownMenuItem>
+            )}
+            {entry.context?.projectId && (
+              <DropdownMenuItem
+                onSelect={() => {
+                  const projectId = entry.context?.projectId;
+                  if (!projectId) return;
+                  void actionService.dispatch("project.muteNotifications", { projectId });
+                }}
+              >
+                Mute project notifications
+              </DropdownMenuItem>
+            )}
+          </>
         )}
       </DropdownMenuContent>
     </DropdownMenu>

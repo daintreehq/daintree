@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, act, fireEvent } from "@testing-library/react";
+import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
@@ -927,5 +927,26 @@ describe("formatSnoozeWake", () => {
     // "8:00 AM" alone doesn't say which morning "Until tomorrow" means.
     expect(nextDay).not.toBe(today);
     expect(nextDay).toContain(today);
+  });
+});
+
+describe("NotificationCenterEntry snooze keybinding", () => {
+  it("opens straight onto the durations, with focus on the first one", async () => {
+    const onSnooze = vi.fn();
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({ correlationId: "thr-1", context: { projectId: "p1" } })}
+        isSnoozePending
+        onConsumeSnoozePending={vi.fn()}
+        onSnooze={onSnooze}
+      />
+    );
+    const items = await screen.findAllByRole("menuitem");
+    // Only the four durations — `h` asks when, not for the whole menu.
+    expect(items).toHaveLength(4);
+    expect(screen.queryByText("Copy correlation ID")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(items[0]));
+    fireEvent.click(items[1]!);
+    expect(onSnooze).toHaveBeenCalledTimes(1);
   });
 });
