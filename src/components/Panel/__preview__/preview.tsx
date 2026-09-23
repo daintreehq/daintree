@@ -27,6 +27,15 @@ import {
   type FixtureName,
   type PanelHeaderFixture,
 } from "./fixtures";
+import {
+  GRID_SCENES,
+  isGridSceneName,
+  type GridBody,
+  type GridPane,
+  type GridScene,
+  type GridSceneName,
+} from "./gridScenes";
+import { GRID_GAP_PX } from "@/lib/terminalLayout";
 import "@/index.css";
 
 /**
@@ -52,12 +61,15 @@ import "@/index.css";
  * Query parameters (the screenshot spec drives these):
  *   ?theme=daintree|bondi|…    built-in theme id
  *   ?fixture=follower          one state, alone — omit for the contact sheet of all of them
+ *   ?scene=mixed-agents        a whole grid of panes instead (see gridScenes.ts)
  */
 
 const params = new URLSearchParams(window.location.search);
 const themeId = params.get("theme") ?? "daintree";
 const fixtureParam = params.get("fixture") ?? "";
 const single: FixtureName | null = isFixtureName(fixtureParam) ? fixtureParam : null;
+const sceneParam = params.get("scene") ?? "";
+const scene: GridSceneName | null = isGridSceneName(sceneParam) ? sceneParam : null;
 
 const DEFAULT_WIDTH = 560;
 const PANE_HEIGHT = 150;
@@ -124,45 +136,62 @@ function splitTitle(title: string): { identity: string; task?: string } {
   return { identity: title.slice(0, at), task: title.slice(at + 2) };
 }
 
-function seedGlobalStores(fixture: PanelHeaderFixture): void {
+function paneRow(id: string, fixture: SeedablePane): PtyPanelData {
   const { identity, task } = splitTitle(fixture.title);
-  const rows: Record<string, PtyPanelData> = {
-    [PANE_ID]: ptyRow(PANE_ID, {
-      title: identity,
-      lastObservedTitle: task,
-      // The composer only treats the observed title as a task once the agent
-      // has been detected on the PTY, as it would be in the app.
-      detectedAgentId: fixture.agentId,
-      launchAgentId: fixture.agentId,
-      agentState: fixture.agentState,
-      lastStateChange: Date.now() - 65_000,
-      startedAt: Date.now() - 600_000,
-      worktreeId: fixture.branch ? WORKTREE_ID : undefined,
-      ...fixture.panel,
-    }),
-  };
-  (fixture.background ?? []).forEach((bg, index) => {
+  return ptyRow(id, {
+    // A grid scene seeds non-PTY kinds too; the row's kind is what the header's
+    // Duplicate and dock checks read.
+    ...({ kind: fixture.kind } as Partial<PtyPanelData>),
+    title: identity,
+    lastObservedTitle: task,
+    // The composer only treats the observed title as a task once the agent
+    // has been detected on the PTY, as it would be in the app.
+    detectedAgentId: fixture.agentId,
+    launchAgentId: fixture.agentId,
+    agentState: fixture.agentState,
+    lastStateChange: Date.now() - 65_000,
+    startedAt: Date.now() - 600_000,
+    worktreeId: fixture.branch ? WORKTREE_ID : undefined,
+    ...fixture.panel,
+  });
+}
+
+type SeedablePane = Omit<PanelHeaderFixture, "what" | "body">;
+
+function seedGlobalStores(
+  panes: Array<{ id: string; fixture: SeedablePane }>,
+  background: PanelHeaderFixture["background"] = []
+): void {
+  const rows: Record<string, PtyPanelData> = {};
+  for (const { id, fixture } of panes) rows[id] = paneRow(id, fixture);
+  background.forEach((bg, index) => {
     const id = `background-${index + 1}`;
     rows[id] = ptyRow(id, { launchAgentId: "claude", agentState: bg.agentState });
   });
+  const ids = (pick: (f: SeedablePane) => boolean | undefined) =>
+    new Set(panes.filter(({ fixture }) => pick(fixture)).map(({ id }) => id));
+
   usePanelStore.setState({
     panelsById: rows,
     panelIds: Object.keys(rows),
-    watchedPanels: new Set(fixture.watched ? [PANE_ID] : []),
+    watchedPanels: ids((f) => f.watched),
   } as Partial<ReturnType<typeof usePanelStore.getState>>);
 
   // The pane's context menu pulls plugin items over IPC on mount; the shimmed bridge
   // resolves `undefined` where the real one resolves an array, and the store keeps
   // whatever it is given. Pre-empt the pull with an empty list.
   usePluginContextMenuItemsStore.setState({ entries: [], init: () => {} });
-  if (fixture.prefs) usePreferencesStore.setState(fixture.prefs);
+  for (const { fixture } of panes) {
+    if (fixture.prefs) usePreferencesStore.setState(fixture.prefs);
+  }
 
   useFleetArmingStore.setState({
-    armedIds: new Set(fixture.armed ? [PANE_ID] : []),
-    previewArmedIds: new Set(fixture.previewed ? [PANE_ID] : []),
+    armedIds: ids((f) => f.armed),
+    previewArmedIds: ids((f) => f.previewed),
   });
-  if (fixture.fleetFailed) {
-    useFleetFailureStore.getState().recordFailure("git status", [PANE_ID]);
+  const failed = [...ids((f) => f.fleetFailed)];
+  if (failed.length > 0) {
+    useFleetFailureStore.getState().recordFailure("git status", failed);
   }
 }
 
@@ -175,7 +204,7 @@ function SeedWorktrees({
   fixture,
   children,
 }: {
-  fixture: PanelHeaderFixture;
+  fixture: { branch?: string };
   children: ReactNode;
 }) {
   const store = use(WorktreeStoreContext);
@@ -280,6 +309,215 @@ function Pane({ name }: { name: FixtureName }) {
   );
 }
 
+const MONO = "flex-1 min-h-0 overflow-hidden px-3 py-2 font-mono text-xs leading-5 select-none";
+
+/** Stand-in bodies for grid panes: enough texture that a pane reads as its kind. */
+function GridBodyStandIn({ body }: { body: GridBody }) {
+  switch (body) {
+    case "agent-working":
+      return (
+        <div className={`${MONO} text-text-secondary`} aria-hidden="true">
+          <div className="text-text-primary">● Bash(npm test -- src/auth)</div>
+          <div className="text-text-muted"> ⎿ 42 passed, 1 failed (3.1s)</div>
+          <div>&nbsp;</div>
+          <div className="text-text-primary">● Reading src/auth/session.ts…</div>
+          <div className="text-text-muted"> ⎿ 218 lines</div>
+          <div>&nbsp;</div>
+          <div>· Thinking… (41s · ↓ 2.8k tokens)</div>
+        </div>
+      );
+    case "agent-idle":
+      return (
+        <div className={`${MONO} text-text-secondary`} aria-hidden="true">
+          <div className="text-text-primary">Welcome back</div>
+          <div className="text-text-muted">~/Projects/acme-platform</div>
+          <div>&nbsp;</div>
+          <div className="border-y border-divider py-1">› Try &quot;edit plugin.ts to…&quot;</div>
+        </div>
+      );
+    case "shell":
+      return (
+        <div className={`${MONO} text-text-secondary`} aria-hidden="true">
+          <div>$ npm run dev</div>
+          <div className="text-text-muted"> VITE v8.0.14 ready in 412 ms</div>
+          <div className="text-text-muted"> ➜ Local: http://localhost:5173/</div>
+        </div>
+      );
+    case "file-tree":
+      return (
+        <div
+          className="flex-1 min-h-0 overflow-hidden px-2 py-1.5 text-xs leading-6 text-text-secondary select-none"
+          aria-hidden="true"
+        >
+          {[
+            "▾ src",
+            "   ▾ auth",
+            "      session.ts",
+            "      tokens.ts",
+            "   ▸ billing",
+            "   ▸ ui",
+            "▸ tests",
+            "  package.json",
+          ].map((line) => (
+            <div key={line} className="whitespace-pre">
+              {line}
+            </div>
+          ))}
+        </div>
+      );
+    case "code":
+      return (
+        <div className={`${MONO} text-text-secondary`} aria-hidden="true">
+          <div>
+            <span className="text-text-muted">1 </span>import {"{"} rotate {"}"} from
+            &quot;./tokens&quot;;
+          </div>
+          <div>
+            <span className="text-text-muted">2 </span>&nbsp;
+          </div>
+          <div>
+            <span className="text-text-muted">3 </span>export async function refresh(s: Session){" "}
+            {"{"}
+          </div>
+          <div>
+            <span className="text-text-muted">4 </span> if (s.expiresAt &gt; Date.now()) return s;
+          </div>
+          <div>
+            <span className="text-text-muted">5 </span> return rotate(s);
+          </div>
+          <div>
+            <span className="text-text-muted">6 </span>
+            {"}"}
+          </div>
+        </div>
+      );
+    case "diff":
+      return (
+        <div className={`${MONO} text-text-secondary`} aria-hidden="true">
+          <div className="text-text-muted">@@ -12,6 +12,9 @@</div>
+          <div> export async function refresh(s: Session) {"{"}</div>
+          <div className="bg-overlay-soft">- if (s.expiresAt &lt; Date.now()) return s;</div>
+          <div className="bg-overlay-medium">+ if (s.expiresAt &gt; Date.now()) return s;</div>
+          <div> return rotate(s);</div>
+        </div>
+      );
+    case "browser":
+      return <div className="flex-1 min-h-0 m-2 rounded-sm bg-overlay-soft" aria-hidden="true" />;
+    case "review":
+      return (
+        <div
+          className="flex-1 min-h-0 overflow-hidden px-3 py-2 text-xs leading-6 text-text-secondary select-none"
+          aria-hidden="true"
+        >
+          <div className="text-text-primary">3 files changed</div>
+          <div>
+            src/auth/session.ts <span className="text-text-muted">+3 −1</span>
+          </div>
+          <div>
+            src/auth/tokens.ts <span className="text-text-muted">+12 −4</span>
+          </div>
+          <div>
+            tests/auth.spec.ts <span className="text-text-muted">+40</span>
+          </div>
+        </div>
+      );
+  }
+}
+
+/**
+ * The row a browser, editor or diff pane draws under its header. A stand-in at the
+ * real height (`h-8`, see `BrowserPaneSkeleton`) so the vertical rhythm of a
+ * non-terminal pane is the real one.
+ */
+function KindToolbarStandIn({ label }: { label: string }) {
+  return (
+    <div
+      className="flex h-8 shrink-0 items-center gap-2 border-b border-divider px-3 text-xs text-text-muted"
+      aria-hidden="true"
+    >
+      <span className="h-5 flex-1 truncate rounded-sm bg-overlay-subtle px-2 leading-5">
+        {label}
+      </span>
+    </div>
+  );
+}
+
+const TOOLBAR_LABEL: Partial<Record<GridBody, string>> = {
+  browser: "http://localhost:5173/login",
+  code: "src/auth/session.ts",
+  diff: "src/auth/session.ts",
+};
+
+function GridScenePane({ pane }: { pane: GridPane }) {
+  const toolbarLabel = TOOLBAR_LABEL[pane.body];
+  const hasPty = panelKindHasPty(pane.kind);
+  return (
+    <div data-preview-pane={pane.id} className="h-full min-w-0">
+      <ContentPanel
+        id={pane.id}
+        title={splitTitle(pane.title).identity}
+        kind={pane.kind}
+        worktreeId={pane.branch ? WORKTREE_ID : undefined}
+        isFocused={pane.isFocused}
+        location="grid"
+        isMultiPanelGrid
+        onFocus={noop}
+        onClose={noop}
+        onToggleMaximize={noop}
+        onTitleChange={noop}
+        onMinimize={noop}
+        onRestart={hasPty ? noop : undefined}
+        agentId={pane.agentId}
+        detectedAgentId={pane.agentId}
+        agentState={pane.agentState}
+        activityStatus={pane.activityStatus}
+        lastCommand={pane.lastCommand}
+        isExited={pane.isExited}
+        exitCode={pane.exitCode}
+        agentLaunchFlags={pane.agentLaunchFlags}
+        queueCount={pane.queueCount}
+        isSelected={pane.isSelected}
+        isFleetFollower={pane.isFleetFollower}
+        onAddTab={hasPty ? noop : undefined}
+        toolbar={toolbarLabel ? <KindToolbarStandIn label={toolbarLabel} /> : undefined}
+      >
+        <GridBodyStandIn body={pane.body} />
+      </ContentPanel>
+    </div>
+  );
+}
+
+/**
+ * The grid container, drawn the way `ContentGridDefault` draws it: the noise
+ * canvas, the grid background token, the gutter and the edge padding. The gutter
+ * comes from the same constant the grid reads, so a change there shows up here.
+ */
+function GridSceneView({ name }: { name: GridSceneName }) {
+  const def: GridScene = GRID_SCENES[name];
+  const branch = def.panes.find((p: GridPane) => p.branch)?.branch;
+  return (
+    <SeedWorktrees fixture={{ branch }}>
+      <div
+        data-preview-grid={name}
+        className="bg-noise p-1"
+        style={{
+          width: def.width,
+          height: def.height,
+          display: "grid",
+          gridTemplateColumns: `repeat(${def.cols}, minmax(0, 1fr))`,
+          gridAutoRows: "minmax(0, 1fr)",
+          gap: `${GRID_GAP_PX}px`,
+          backgroundColor: "var(--color-grid-bg)",
+        }}
+      >
+        {def.panes.map((pane: GridPane) => (
+          <GridScenePane key={pane.id} pane={pane} />
+        ))}
+      </div>
+    </SeedWorktrees>
+  );
+}
+
 function App() {
   const [ready, setReady] = useState(false);
   const scheme = useMemo(() => resolveAppTheme(themeId), []);
@@ -292,6 +530,10 @@ function App() {
   }, [scheme]);
 
   if (!ready) return null;
+
+  if (scene) {
+    return <GridSceneView name={scene} />;
+  }
 
   if (single) {
     return <Pane name={single} />;
@@ -347,7 +589,14 @@ function App() {
 // rows — it seeds the first and the rest render against it. That is fine for a theme
 // sweep, whose question is "does the palette hold", and wrong for anything that
 // depends on store state, which is why every state that does is captured alone.
-seedGlobalStores(FIXTURES[single ?? FIXTURE_NAMES[0]!]);
+if (scene) {
+  seedGlobalStores(
+    GRID_SCENES[scene].panes.map((pane: GridPane) => ({ id: pane.id, fixture: pane }))
+  );
+} else {
+  const fixture: PanelHeaderFixture = FIXTURES[single ?? FIXTURE_NAMES[0]!];
+  seedGlobalStores([{ id: PANE_ID, fixture }], fixture.background);
+}
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

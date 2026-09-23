@@ -26,6 +26,8 @@
  *                              fallback is how PNGs end up in a working tree.
  *   DAINTREE_SHOT_THEMES       themes for the per-state captures (default daintree,bondi,namib)
  *   DAINTREE_SHOT_SWEEP        "0" skips the all-themes contact sheets (default on)
+ *   DAINTREE_SHOT_ONLY         "grid" captures only the whole-grid scenes, "panes" only the
+ *                              single-pane states (default both)
  *
  * Hard rule, inherited from the sibling harnesses: never write a PNG that has not been
  * verified. Every capture asserts the state it means to show is on screen first, and
@@ -42,6 +44,11 @@ import {
   FIXTURE_NAMES,
   type FixtureName,
 } from "../../src/components/Panel/__preview__/fixtures";
+import {
+  GRID_SCENES,
+  GRID_SCENE_NAMES,
+  type GridSceneName,
+} from "../../src/components/Panel/__preview__/gridScenes";
 
 const ENABLED = !!process.env.DAINTREE_SHOT_PANELHEADER;
 const OUT_DIR = process.env.DAINTREE_SHOT_DIR ?? "";
@@ -50,6 +57,9 @@ const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,namib")
   .map((t) => t.trim())
   .filter(Boolean);
 const SWEEP = process.env.DAINTREE_SHOT_SWEEP !== "0";
+const ONLY = process.env.DAINTREE_SHOT_ONLY ?? "";
+const SHOOT_GRID = ONLY !== "panes";
+const SHOOT_PANES = ONLY !== "grid";
 const ALL_THEMES = BUILT_IN_THEME_SOURCES.map((t) => t.id);
 
 // 2× so a 32px bar's glyphs, 2px stripe and 1px edges are judged at the size a Retina
@@ -339,6 +349,42 @@ async function open(
   return { pane, header };
 }
 
+/**
+ * Load one whole-grid scene. Proves every pane mounted a styled header and that
+ * the agent panes' state glyph box is the last thing in its header.
+ */
+async function openScene(page: Page, name: GridSceneName, theme: string): Promise<Locator> {
+  const def = GRID_SCENES[name];
+  await page.setViewportSize({ width: def.width + 40, height: def.height + 40 });
+  await page.goto(`${baseURL}/panel-header-preview.html?theme=${theme}&scene=${name}`);
+  const grid = page.locator(`[data-preview-grid="${name}"]`);
+  await expect(grid).toBeAttached({ timeout: 30_000 });
+  const headers = grid.locator(HEADER);
+  await expect(headers).toHaveCount(def.panes.length, { timeout: 10_000 });
+  await expect(headers.first()).toHaveCSS("display", "flex");
+  await page.addStyleTag({ content: FREEZE_CSS });
+  await page.evaluate(() => document.fonts.ready);
+  await page.waitForTimeout(300);
+  for (const [index, pane] of def.panes.entries()) {
+    const header = headers.nth(index);
+    if (pane.agentId) {
+      const last = await header.evaluate(
+        (el) => (el.lastElementChild as HTMLElement | null)?.dataset.testid ?? ""
+      );
+      // The fleet preview overlay may follow; anything else after the glyph is a bug.
+      if (last !== "panel-header-agent-indicator" && last !== "fleet-preview-enter-overlay") {
+        const glyph = header.getByTestId("panel-header-agent-indicator");
+        const close = header.getByTestId("panel-close");
+        const [g, c] = [await glyph.boundingBox(), await close.boundingBox()];
+        if (!g || !c || g.x < c.x) {
+          throw new Error(`${name}/${pane.id}: agent glyph is not past close — refusing to write`);
+        }
+      }
+    }
+  }
+  return grid;
+}
+
 /** Tab until focus lands inside `target`; a fixed press count silently lands elsewhere. */
 async function tabTo(page: Page, target: Locator, label: string): Promise<void> {
   await page.mouse.move(0, 0);
@@ -366,8 +412,28 @@ test("panel header — states, interactions and themes", async ({ page }) => {
   await stubViteHmrClient(page);
   const written: string[] = [];
 
+  // Whole grids — how the panes read beside each other.
+  if (SHOOT_GRID) {
+    for (const theme of THEMES) {
+      for (const name of GRID_SCENE_NAMES) {
+        const grid = await openScene(page, name, theme);
+        written.push(await snap(grid, `grid-${name}--${theme}.png`));
+      }
+    }
+    // Pointer over an unfocused pane's header — what the controls do on hover.
+    {
+      const grid = await openScene(page, "claude-trio", THEMES[0]!);
+      await grid
+        .locator(HEADER)
+        .nth(1)
+        .hover({ position: { x: 120, y: 12 } });
+      await page.waitForTimeout(200);
+      written.push(await snap(grid, `grid-claude-trio--${THEMES[0]}--hover-header.png`));
+    }
+  }
+
   // Every state, alone, in the review themes.
-  for (const theme of THEMES) {
+  for (const theme of SHOOT_PANES ? THEMES : []) {
     for (const name of FIXTURE_NAMES) {
       const { pane, header } = await open(page, name, theme);
       await proveState(page, name, header);
@@ -377,7 +443,7 @@ test("panel header — states, interactions and themes", async ({ page }) => {
 
   // The pointer, keyboard and overlay states no fixture can express. First review
   // theme only — these are interaction questions, not palette ones.
-  {
+  if (SHOOT_PANES) {
     const theme = THEMES[0]!;
 
     // Hover over the title bar reveals the "duplicate as tab" control.
@@ -509,7 +575,7 @@ test("panel header — states, interactions and themes", async ({ page }) => {
 
   // Every theme, one contact sheet each. Theme-specific collapse is real and only a
   // sweep finds it.
-  if (SWEEP) {
+  if (SWEEP && SHOOT_PANES) {
     for (const theme of ALL_THEMES) {
       await open(page, null, theme);
       const sheet = page.locator("#root > div").first();
@@ -527,6 +593,9 @@ test("panel header — states, interactions and themes", async ({ page }) => {
   // ends up reasoning about screenshots that were never written.
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(onDisk.length).toBeGreaterThanOrEqual(THEMES.length * FIXTURE_NAMES.length);
+  expect(onDisk.length).toBeGreaterThanOrEqual(
+    (SHOOT_PANES ? THEMES.length * FIXTURE_NAMES.length : 0) +
+      (SHOOT_GRID ? THEMES.length * GRID_SCENE_NAMES.length : 0)
+  );
   console.log(`[panel-header-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });
