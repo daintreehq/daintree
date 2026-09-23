@@ -24,6 +24,7 @@ import {
   worktreeDeleteBlockedBy,
   worktreeDeleteContentRisk,
   PREVIEW_FILE_LIMIT,
+  SUBMODULE_COMMIT_LIMIT,
   type SubmoduleCommitRow,
   type WorktreeDeletePreview,
   type WorktreeSubmoduleRiskState,
@@ -33,6 +34,7 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import type { WorktreeState } from "@/types";
 import type { WorktreeTeardownPreview } from "@shared/types/worktree";
+import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
 import { cn } from "@/lib/utils";
 import { isProtectedBranch as isProtectedBranchName } from "@shared/utils/gitConstants";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
@@ -82,6 +84,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const fetchedForRef = useRef<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const [teardown, setTeardown] = useState<WorktreeTeardownPreview | null>(null);
+  // Distinct from "no teardown": a read that failed can't be allowed to look
+  // like a project with nothing configured.
+  const [teardownUnreadable, setTeardownUnreadable] = useState(false);
   // Monotonic session token bumped on every open/close/worktree change (in the
   // open effect below). An in-flight submit revalidation captures the token and
   // aborts if it changed while awaiting — so a close→reopen (or worktree swap)
@@ -152,16 +157,38 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const submoduleEntryChanges = previewChanges.filter((c) =>
     isSubmoduleChange(c, previewRootPath, submodulePathSet)
   );
-  const fileChanges = previewChanges.filter(
-    (c) => !isSubmoduleChange(c, previewRootPath, submodulePathSet)
+  // Sorted for display so the same tree reads the same way on every open;
+  // git's own order shifts between the seed snapshot and the fresh read.
+  const fileChanges = previewChanges
+    .filter((c) => !isSubmoduleChange(c, previewRootPath, submodulePathSet))
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  // A submodule whose contents are listed under "Inside submodules" needs no
+  // row of its own up here — that row would only point down at the evidence.
+  // One with nothing listed (its checkout moved to another commit, nothing
+  // dirty inside) keeps its row: the pointer change is the whole of it.
+  const risk = submodules?.risk ?? null;
+  const submodulePathsWithEvidence = new Set(
+    [...submodulePathSet].filter(
+      (path) =>
+        [...(risk?.dirtyFiles ?? []), ...(risk?.untrackedFiles ?? [])].some((file) =>
+          file.startsWith(`${path}/`)
+        ) || (risk?.atRiskCommits ?? []).some((commit) => commit.submodulePath === path)
+    )
+  );
+  const pointerOnlyChanges = submoduleEntryChanges.filter(
+    (c) =>
+      c.status !== "ignored" &&
+      !submodulePathsWithEvidence.has(
+        buildWorktreeChangeRows([c], 1, previewRootPath)[0]?.label ?? ""
+      )
   );
   const previewChangeRows = buildWorktreeChangeRows(
-    [...submoduleEntryChanges, ...fileChanges],
+    [...pointerOnlyChanges, ...fileChanges],
     PREVIEW_FILE_LIMIT,
     previewRootPath
   );
   const fileSummary = summarizeWorktreeChanges(fileChanges);
-  const submoduleEntryCount = submoduleEntryChanges.filter((c) => c.status !== "ignored").length;
+  const submoduleEntryCount = pointerOnlyChanges.length;
   const submoduleFileRows = buildSubmoduleFileRows(submodules?.risk ?? null);
   const submoduleCommitRows = buildSubmoduleCommitRows(submodules?.risk ?? null);
   const nestedFileCount = submodules ? submoduleFileCount(submodules) : 0;
@@ -180,7 +207,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
         .filter((path): path is string => !!path)
     ),
   ];
-  const submoduleCommitGroups = groupCommitRows(submoduleCommitRows, submodules?.risk ?? null);
+  const submoduleCommitGroups = groupAtRiskCommits(submodules?.risk ?? null);
   const singleCommitGroupPath =
     submoduleCommitGroups.length === 1 ? (submoduleCommitGroups[0]?.path ?? null) : null;
   /**
@@ -215,6 +242,8 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     !isProtectedBranch && !isDetachedHead && worktree.isMainWorktree === false;
 
   const confirmTarget = worktree.branch || worktree.name;
+  // Gated on the name alone, whatever the tree holds.
+  const isNameGated = isProtectedBranch || worktree.isMainWorktree === true;
   // Names the reason the gate is actually up.
   // A failed status fetch forces `hasTrackedChanges` for the tier; the words
   // must not turn that assumption into an observed fact.
@@ -346,18 +375,21 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
 
   // The delete runs the project's teardown before removing the directory, so
   // the confirm has to name it (bundled operations are disclosed up front).
-  // Informational like the dev-server row: a failed read leaves it unlisted
-  // rather than blocking the dialog.
+  // Informational, not a gate: a failed read is said out loud rather than
+  // blocking the dialog.
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
     setTeardown(null);
+    setTeardownUnreadable(false);
     worktreeClient
       .getDeleteTeardownPreview(worktree.id)
       .then((preview) => {
         if (!cancelled) setTeardown(preview);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) setTeardownUnreadable(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -370,12 +402,18 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   useEffect(() => {
     if (previewPending || !refocusAfterRecheckRef.current) return;
     refocusAfterRecheckRef.current = false;
+    // Says what is actually needed next, never "can be deleted" while the
+    // primary is still waiting on force or a typed name.
     setRecheckStatus(
       isBlocked
         ? "Checked again — still blocked"
         : verifyFailed
           ? "Checked again — still couldn't check this worktree"
-          : "Checked again — the worktree can be deleted"
+          : blockedByDirtyTree
+            ? "Checked again — select Force delete to continue"
+            : isHighTier && !isConfirmMatched
+              ? "Checked again — type the name to continue"
+              : "Checked again — the worktree can be deleted"
     );
     const root = bodyRef.current?.closest<HTMLElement>('[data-testid="delete-worktree-dialog"]');
     const active = document.activeElement;
@@ -385,7 +423,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     if (!isBlocked && (lostFocus || onPrimary)) {
       root?.querySelector<HTMLElement>('[data-confirm-role="cancel"]')?.focus();
     }
-  }, [previewPending, isBlocked, verifyFailed]);
+  }, [previewPending, isBlocked, verifyFailed, blockedByDirtyTree, isHighTier, isConfirmMatched]);
 
   const recheck = () => {
     if (previewPending || isDeleting) return;
@@ -624,6 +662,21 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       ),
     });
   }
+  if (teardownUnreadable) {
+    consequences.push({
+      key: "teardown-unknown",
+      tone: "neutral",
+      content: (
+        <>
+          <span className="font-medium">Project teardown may also run</span>
+          <span className="ml-1 text-text-secondary">
+            {" "}
+            Its commands couldn&apos;t be read, so they aren&apos;t listed here
+          </span>
+        </>
+      ),
+    });
+  }
   if (force && hasFileChanges) {
     // The one irreversible outcome, stated once and specifically. This row
     // replaces the old generic "Uncommitted changes will be lost" line, the
@@ -649,7 +702,8 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       tone: "danger",
       content: `${nestedFileLabel} inside submodules will be permanently lost`,
     });
-  } else if (force && !hasFileChanges && submoduleEntryCount > 0) {
+  }
+  if (force && submoduleEntryCount > 0) {
     // A submodule moved to another commit with nothing dirty inside it: the
     // only thing lost is the parent's uncommitted pointer change.
     consequences.push({
@@ -761,9 +815,17 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
             // fetch is a real remedy alongside a push.
             <>
               {atRiskCommitLabel} on no remote this clone knows about, so this worktree can&apos;t
-              be deleted. Push {atRiskCommitsPlural ? "them" : "it"} from inside the submodule
-              {atRiskCommitPaths.length === 1 && <> {atRiskCommitLocation}</>} — or fetch, if{" "}
-              {atRiskCommitsPlural ? "they are" : "it is"} already on the remote — then retry.
+              be deleted. Push {atRiskCommitsPlural ? "them" : "it"} from inside{" "}
+              {atRiskCommitPaths.length > 1 ? (
+                "each submodule listed below"
+              ) : (
+                <>
+                  the submodule
+                  {atRiskCommitPaths.length === 1 && <> {atRiskCommitLocation}</>}
+                </>
+              )}{" "}
+              — or fetch, if {atRiskCommitsPlural ? "they are" : "it is"} already on the remote —
+              then retry.
             </>
           ) : (
             "Deleting it could destroy nested work that isn't listed here, so it can't be deleted until the check completes."
@@ -794,7 +856,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
         : null
       : verifyFailed
         ? "Couldn't verify this worktree — standard delete may fail"
-        : `Select Force delete to continue — ${atStakeLabel}`;
+        : // What is at stake is stated in the force helper right above; the
+          // hint only says what to do.
+          "Select Force delete to continue";
 
   const changesHeadingId = "worktree-delete-changes-heading";
   const consequencesHeadingId = "worktree-delete-consequences-heading";
@@ -847,7 +911,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           terminals, discard uncommitted work, and delete its branch.
         </AppDialog.Description>
         <span className="sr-only" role="status" aria-live="polite">
-          {recheckStatus}
+          {isDeleting ? SUBMIT_CHECK_LABEL : recheckStatus}
         </span>
 
         <div ref={bodyRef} className="space-y-5">
@@ -929,12 +993,13 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                       )}
                       <span className="min-w-0 [overflow-wrap:anywhere]">
                         <PathText value={row.label} />
-                        {/* The parent sees a submodule with work in it as one
-                            changed path. Labelled so it isn't read as a file,
-                            and pointed at the section that says what's in it. */}
+                        {/* Only a submodule with nothing listed below reaches
+                            this list, so the row is the whole change: its
+                            checkout points at another commit. Labelled so it
+                            isn't read as a file. */}
                         {isSubmoduleRow && (
                           <span aria-hidden="true" className="ml-2 font-sans text-text-secondary">
-                            submodule — contents below
+                            submodule — checked out at a different commit
                           </span>
                         )}
                       </span>
@@ -1018,8 +1083,14 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                     {submoduleCommitGroups.map((group) => (
                       <Fragment key={group.path ?? "__unbound"}>
                         {submoduleCommitGroups.length > 1 && (
-                          <li className="pt-1 first:pt-0 font-sans text-text-secondary">
-                            {group.path ?? "Unnamed module store"}
+                          <li className="pt-2 first:pt-0 font-mono text-text-primary [overflow-wrap:anywhere]">
+                            {group.path ? (
+                              <PathText value={group.path} />
+                            ) : (
+                              <span className="font-sans text-text-secondary">
+                                A module store with no checkout
+                              </span>
+                            )}
                           </li>
                         )}
                         {group.rows.map((row) => (
@@ -1080,6 +1151,13 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                     actually varies is the consequence, stated below and in the
                     "What will happen" list. */}
                   Force delete
+                  {!hasChanges && !forceRequiredBySubmodules && isNameGated && (
+                    <span className="block text-xs text-text-secondary mt-0.5">
+                      {worktree.isMainWorktree === true
+                        ? "Main worktree — a force delete asks you to type its name"
+                        : "Protected branch — a force delete asks you to type its name"}
+                    </span>
+                  )}
                   {(hasChanges || forceRequiredBySubmodules) && (
                     <span className="block text-xs text-text-secondary mt-0.5">
                       {/* After a failed check the plain delete stays on offer,
@@ -1209,9 +1287,13 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           // shows the exact string to type, and putting an untruncated branch
           // name in the footer is what broke this footer in the first place —
           // it just moves the overflow from the button to the hint.
-          isHighTier && !isConfirmMatched
-            ? "Confirm the name above to enable"
-            : (blockedHint ?? undefined)
+          // A force delete re-reads the tree before it dispatches; without a
+          // word here the matched primary just goes dead for the length of it.
+          isDeleting
+            ? SUBMIT_CHECK_LABEL
+            : isHighTier && !isConfirmMatched
+              ? "Confirm the name above to enable"
+              : (blockedHint ?? undefined)
         }
         secondaryAction={{ label: "Cancel", onClick: onClose }}
         primaryAction={
@@ -1234,6 +1316,8 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     </AppDialog>
   );
 }
+
+const SUBMIT_CHECK_LABEL = "Checking current work before deleting";
 
 const CHECKBOX_CLASSES =
   "checkbox-neutral mt-0.5 rounded-[var(--radius-xs)] border-border-strong bg-surface-canvas disabled:opacity-50";
@@ -1281,34 +1365,29 @@ interface SubmoduleCommitGroup {
   rows: SubmoduleCommitRow[];
 }
 
+/** Rows per module once more than one module holds unpushed commits. */
+const MULTI_MODULE_COMMIT_LIMIT = 3;
+
 /**
- * The capped commit rows, grouped by the submodule they were found in, in the
- * order the inventory reported them. The overflow tail stays last on its own.
+ * The retained at-risk commits grouped by the submodule they were found in,
+ * BEFORE any capping, so every affected module keeps a heading and a count —
+ * a global cap applied first could fill all five rows from one module and
+ * drop another from view entirely, and a push in the module shown would then
+ * leave the delete refused for a reason nobody was shown. Each group caps on
+ * its own, and an incomplete walk keeps "at least" on its tail.
  */
-function groupCommitRows(
-  rows: SubmoduleCommitRow[],
-  risk: { atRiskCommits: { oid: string; submodulePath?: string }[] } | null
-): SubmoduleCommitGroup[] {
-  const pathByOid = new Map((risk?.atRiskCommits ?? []).map((c) => [c.oid, c.submodulePath]));
-  const groups: SubmoduleCommitGroup[] = [];
-  const overflow: SubmoduleCommitRow[] = [];
-  for (const row of rows) {
-    if (row.isOverflow) {
-      overflow.push(row);
-      continue;
-    }
-    const path = pathByOid.get(row.oid) ?? null;
-    let group = groups.find((g) => g.path === path);
-    if (!group) {
-      group = { path, rows: [] };
-      groups.push(group);
-    }
-    group.rows.push(row);
+function groupAtRiskCommits(risk: SubmoduleDeleteRisk | null): SubmoduleCommitGroup[] {
+  if (!risk) return [];
+  const byPath = new Map<string | null, SubmoduleDeleteRisk["atRiskCommits"]>();
+  for (const commit of risk.atRiskCommits) {
+    const path = commit.submodulePath ?? null;
+    const bucket = byPath.get(path);
+    if (bucket) bucket.push(commit);
+    else byPath.set(path, [commit]);
   }
-  if (overflow.length > 0) {
-    const last = groups.at(-1) ?? { path: null, rows: [] };
-    if (groups.length === 0) groups.push(last);
-    last.rows.push(...overflow);
-  }
-  return groups;
+  const limit = byPath.size > 1 ? MULTI_MODULE_COMMIT_LIMIT : SUBMODULE_COMMIT_LIMIT;
+  return [...byPath].map(([path, commits]) => ({
+    path,
+    rows: buildSubmoduleCommitRows({ ...risk, atRiskCommits: commits }, limit),
+  }));
 }

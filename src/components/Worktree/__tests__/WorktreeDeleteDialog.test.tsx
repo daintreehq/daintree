@@ -305,6 +305,8 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     expect(screen.queryByText(/Select Force delete to continue/)).toBeNull();
   });
 
+  // The counts live in the force helper; the footer hint only says what to do,
+  // so the same sentence isn't read twice.
   it("shows untracked-file count when only untracked files exist", () => {
     const worktree = makeWorktree(
       makeChanges([
@@ -314,7 +316,7 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     );
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const warning = screen.getByText(/Select Force delete to continue/);
+    const warning = screen.getByText(/Required to delete this worktree/);
     expect(warning.textContent).toContain("2 untracked files");
     expect(warning.textContent).not.toContain("uncommitted file");
   });
@@ -328,7 +330,7 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     );
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const warning = screen.getByText(/Select Force delete to continue/);
+    const warning = screen.getByText(/Required to delete this worktree/);
     expect(warning.textContent).toContain("2 uncommitted files");
     expect(warning.textContent).not.toContain("untracked file");
   });
@@ -343,7 +345,7 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     );
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const warning = screen.getByText(/Select Force delete to continue/);
+    const warning = screen.getByText(/Required to delete this worktree/);
     expect(warning.textContent).toContain("2 uncommitted files and 1 untracked file");
   });
 
@@ -351,7 +353,7 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     const worktree = makeWorktree(makeChanges([{ path: "src/app.ts", status: "modified" }]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const warning = screen.getByText(/Select Force delete to continue/);
+    const warning = screen.getByText(/Required to delete this worktree/);
     expect(warning.textContent).toContain("1 uncommitted file ");
     expect(warning.textContent).not.toContain("1 uncommitted files");
   });
@@ -360,7 +362,7 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     const worktree = makeWorktree(makeChanges([{ path: "new.txt", status: "untracked" }]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const warning = screen.getByText(/Select Force delete to continue/);
+    const warning = screen.getByText(/Required to delete this worktree/);
     expect(warning.textContent).toContain("1 untracked file ");
     expect(warning.textContent).not.toContain("1 untracked files");
   });
@@ -374,7 +376,7 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     );
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const warning = screen.getByText(/Select Force delete to continue/);
+    const warning = screen.getByText(/Required to delete this worktree/);
     expect(warning.textContent).toContain("1 uncommitted file ");
   });
 
@@ -1623,6 +1625,9 @@ describe("WorktreeDeleteDialog — submodules", () => {
     const confirm = screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement;
     expect(confirm.disabled).toBe(true);
     expect(screen.getByTestId("delete-worktree-hint").textContent).toContain(
+      "Select Force delete to continue"
+    );
+    expect(screen.getByText(/Required to delete this worktree/).textContent).toContain(
       "1 file inside submodules will be discarded"
     );
 
@@ -1848,10 +1853,112 @@ describe("WorktreeDeleteDialog — submodule entries, rechecks, teardown", () =>
     const consequences = screen.getByTestId("delete-worktree-consequences").textContent ?? "";
     expect(consequences).toContain("3 files inside submodules will be permanently lost");
     expect(consequences).not.toMatch(/\d+ uncommitted file/);
-    expect(screen.getByTestId("delete-worktree-file-list").textContent).toContain("submodule");
+    // Its contents are listed under "Inside submodules", so it gets no row of
+    // its own pointing down at them.
+    expect(screen.queryByTestId("delete-worktree-file-list")).toBeNull();
+    expect(screen.getByTestId("delete-worktree-submodule-file-list").textContent).toContain(
+      "vendor/lib/a.c"
+    );
     // Display only: the row is still a tracked change to the tier, so the
     // typed-name gate stays up exactly as before.
     expect(screen.getByTestId("delete-worktree-confirm-input")).toBeDefined();
+  });
+
+  it("keeps a submodule's row when its checkout moved and nothing inside is listed", async () => {
+    // A pointer-only change has no nested evidence, so the row IS the change:
+    // folding it away would leave the gate up over a list with nothing in it.
+    buildPreviewMock.mockResolvedValue(
+      makePreview([{ path: "vendor/lib", status: "modified" }], {
+        status: "verified",
+        risk: makeRisk({ entries: [entry("vendor/lib")] }),
+      })
+    );
+    render(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
+    );
+    await settlePreview();
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+
+    expect(screen.getByTestId("delete-worktree-file-list").textContent).toContain(
+      "checked out at a different commit"
+    );
+    const consequences = screen.getByTestId("delete-worktree-consequences").textContent ?? "";
+    expect(consequences).toContain("Uncommitted changes to 1 submodule will be permanently lost");
+    expect(consequences).not.toMatch(/\d+ uncommitted file/);
+    expect(screen.getByTestId("delete-worktree-confirm-input")).toBeDefined();
+  });
+
+  it("gives every submodule holding unpushed commits its own group", async () => {
+    // A global cap applied before grouping could fill every row from one
+    // module and hide the other, so a push there would leave the delete
+    // refused for a reason nobody was shown.
+    buildPreviewMock.mockResolvedValue(
+      makePreview([], {
+        status: "verified",
+        risk: makeRisk({
+          atRiskCommits: [
+            ...Array.from({ length: 6 }, (_, i) => ({
+              oid: `aaaa${i}00000000`,
+              subject: `Codec ${i}`,
+              submodulePath: "vendor/codec",
+            })),
+            { oid: "bbbb000000000", subject: "Zlib fix", submodulePath: "vendor/zlib" },
+          ],
+        }),
+      })
+    );
+    render(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
+    );
+    const list = await screen.findByTestId("delete-worktree-submodule-commit-list");
+    expect(list.textContent).toContain("vendor/codec");
+    expect(list.textContent).toContain("vendor/zlib");
+    expect(list.textContent).toContain("Zlib fix");
+    expect(screen.getByTestId("delete-worktree-blocked").textContent).toContain(
+      "each submodule listed below"
+    );
+  });
+
+  it("says what is still needed when a recheck clears a refusal but force is required", async () => {
+    buildPreviewMock.mockResolvedValue(makePreview([], { status: "unverified", risk: null }));
+    render(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
+    );
+    await screen.findByTestId("delete-worktree-blocked");
+    buildPreviewMock.mockResolvedValue(makePreview([{ path: "a.ts", status: "modified" }]));
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toContain("select Force delete");
+    });
+    expect(screen.getByRole("status").textContent).not.toContain("can be deleted");
+  });
+
+  it("says a teardown it couldn't read may still run", async () => {
+    buildPreviewMock.mockResolvedValue(makePreview([]));
+    teardownPreviewMock.mockRejectedValue(new Error("port timeout"));
+    render(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
+    );
+    await settlePreview();
+    expect(screen.getByTestId("delete-worktree-consequences").textContent).toContain(
+      "Project teardown may also run"
+    );
   });
 
   it("keeps the refusal on screen while a recheck runs, then says what it found", async () => {

@@ -531,6 +531,21 @@ describe("submodule preview rows", () => {
     expect(rows[5]).toEqual({ oid: "", shortOid: "", subject: "…and 2 more", isOverflow: true });
   });
 
+  it("marks the collapsed tail as a floor when the rev walk was capped", () => {
+    // A capped walk stops short, so the retained list — and the "N more" past
+    // the five shown — undercounts. The tail has to say so like the heading.
+    const rows = buildSubmoduleCommitRows(
+      emptyRisk({
+        incomplete: true,
+        atRiskCommits: Array.from({ length: 50 }, (_, i) => ({
+          oid: `${i}abcdef0123456789`,
+          subject: `Commit ${i}`,
+        })),
+      })
+    );
+    expect(rows.at(-1)?.subject).toBe("…and at least 45 more");
+  });
+
   it("returns nothing when there is no inventory to render", () => {
     expect(buildSubmoduleFileRows(null)).toEqual([]);
     expect(buildSubmoduleCommitRows(null)).toEqual([]);

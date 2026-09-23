@@ -575,10 +575,12 @@ export function buildSubmoduleCommitRows(
     isOverflow: false,
   }));
   if (risk.atRiskCommits.length > limit) {
+    // An incomplete inventory's commit list is a floor (see
+    // `submoduleCommitsAreCapped`), so its tail is too.
     rows.push({
       oid: "",
       shortOid: "",
-      subject: `…and ${risk.atRiskCommits.length - limit} more`,
+      subject: `…and ${risk.incomplete ? "at least " : ""}${risk.atRiskCommits.length - limit} more`,
       isOverflow: true,
     });
   }
