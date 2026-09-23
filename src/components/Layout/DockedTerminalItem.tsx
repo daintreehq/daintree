@@ -313,6 +313,9 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   // Indicator stays visible for the lifetime of the agent chrome — idle/missing
   // state coerces to waiting so it never disappears mid-flight.
   const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
+  // The glyph is smoothed (idle/missing shows as waiting); the words are not.
+  // Name and tooltip say what was observed, and nothing when nothing was.
+  const observedStateLabel = agentState ? getEffectiveStateLabel(agentState) : undefined;
   const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
   const isDeprioritized = !isOpen && isDockAgentStateDeprioritized(agentState);
 
@@ -370,7 +373,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                   e.stopPropagation();
                   handleMoveToGrid();
                 }}
-                aria-label={`${terminal.title}${displayAgentState ? ` — agent ${getEffectiveStateLabel(displayAgentState)}` : plainWorking ? " — command running" : ""} - Click to preview, double-click to move to grid, drag to reorder`}
+                aria-label={`${terminal.title}${displayAgentState ? (observedStateLabel ? ` — agent ${observedStateLabel}` : "") : plainWorking ? " — command running" : ""} - Click to preview, double-click to move to grid, drag to reorder`}
               >
                 <div className="flex items-center justify-center shrink-0">
                   <TerminalIcon kind={terminal.kind} chrome={chrome} className="w-3.5 h-3.5" />
@@ -434,7 +437,11 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                         />
                       </div>
                     </TooltipTrigger>
-                    <TooltipContent side="bottom">{`Agent ${displayAgentState}`}</TooltipContent>
+                    <TooltipContent side="bottom">
+                      {observedStateLabel
+                        ? `Agent ${observedStateLabel}`
+                        : "No agent state observed"}
+                    </TooltipContent>
                   </Tooltip>
                 )}
               </button>

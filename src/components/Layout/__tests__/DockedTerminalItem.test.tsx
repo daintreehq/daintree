@@ -19,6 +19,7 @@ const moveTerminalToGridMock = vi.fn();
 
 let mockActiveDockTerminalId: string | null = null;
 let mockDockAgentState: string | undefined = undefined;
+let mockIsAgent = false;
 
 vi.mock("@/store", () => ({
   usePanelStore: (selector: (s: Record<string, unknown>) => unknown) =>
@@ -86,7 +87,7 @@ vi.mock("../dockPopoverGuard", () => ({
 }));
 
 vi.mock("@/utils/terminalChrome", () => ({
-  deriveTerminalChrome: () => ({ isAgent: false, color: "#abc" }),
+  deriveTerminalChrome: () => ({ isAgent: mockIsAgent, color: "#abc" }),
 }));
 
 vi.mock("@/components/Worktree/terminalStateConfig", () => ({
@@ -146,6 +147,7 @@ describe("DockedTerminalItem move-to-grid gesture", () => {
     moveTerminalToGridMock.mockReset();
     mockActiveDockTerminalId = null;
     mockDockAgentState = undefined;
+    mockIsAgent = false;
   });
 
   // #10024 — the dock chip's state icon is aria-hidden, so the agent state must
@@ -154,6 +156,16 @@ describe("DockedTerminalItem move-to-grid gesture", () => {
     mockDockAgentState = "working";
     render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
     expect(screen.getByRole("button", { name: /— agent working/ })).not.toBeNull();
+  });
+
+  // The glyph shows an idle agent as waiting so the indicator never drops out;
+  // the accessible name must still report what was observed.
+  it("names an idle agent idle, not waiting", () => {
+    mockDockAgentState = "idle";
+    mockIsAgent = true;
+    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+    expect(screen.getByRole("button", { name: /— agent idle/ })).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /waiting/ })).toBeNull();
   });
 
   it("omits agent state from the chip aria-label for a plain shell", () => {

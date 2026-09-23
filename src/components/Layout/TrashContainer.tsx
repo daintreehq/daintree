@@ -26,6 +26,7 @@ import {
   DOCK_STATUS_PILL_OPEN_CLASS,
   DockStatusPillLabel,
   dockStatusScopeDescription,
+  useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
@@ -163,10 +164,15 @@ export function TrashContainer({
   // a confirm. The dialog is owned here rather than by the row because the
   // popover is anchored to the toolbar and paints over anything opened beneath
   // it; the popover steps aside, which it cannot do while hosting the dialog.
-  const requestRemoval = useCallback((request: TrashRemovalRequest) => {
-    setIsOpen(false);
-    setPendingRemoval(request);
-  }, []);
+  const focusHandoff = useDockPopoverFocusHandoff();
+  const requestRemoval = useCallback(
+    (request: TrashRemovalRequest) => {
+      focusHandoff.markHandoff();
+      setIsOpen(false);
+      setPendingRemoval(request);
+    },
+    [focusHandoff]
+  );
 
   // Reopen where they were: the popover only closed to get out of the dialog's
   // way, and a cancelled removal that also loses your place is two losses.
@@ -525,7 +531,7 @@ export function TrashContainer({
           sideOffset={8}
           onFocusCapture={noteFocusEntered}
           onOpenAutoFocus={(e) => e.preventDefault()}
-          onCloseAutoFocus={(e) => e.preventDefault()}
+          onCloseAutoFocus={focusHandoff.onCloseAutoFocus}
         >
           <div className="flex flex-col">
             <div className="px-3 py-2 border-b border-divider bg-surface-canvas/50 flex justify-between items-start gap-2">
@@ -548,6 +554,7 @@ export function TrashContainer({
                   // on top of it: this popover is anchored to the toolbar and
                   // paints above the dialog, where it was clipping the confirm
                   // button of the very action it launched.
+                  focusHandoff.markHandoff();
                   setIsOpen(false);
                   setEmptyTrashConfirmOpen(true);
                 }}
