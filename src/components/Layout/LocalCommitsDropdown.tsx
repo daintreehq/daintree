@@ -23,7 +23,11 @@ import { SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { UI_DOHERTY_THRESHOLD, UI_STILL_WORKING_MS } from "@/lib/animationUtils";
+import {
+  UI_ANIMATION_DURATION,
+  UI_DOHERTY_THRESHOLD,
+  UI_STILL_WORKING_MS,
+} from "@/lib/animationUtils";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { formatTimeAgo } from "@/utils/timeAgo";
@@ -59,6 +63,10 @@ const PUSH_RANGE_LIMIT = 100;
 // Mirrors a rendered commit row (py-2.5 + title + metadata) so skeleton rows
 // don't shift the layout when real content lands.
 const COMMIT_ROW_HEIGHT_PX = 58;
+
+// The body's grid-rows transition runs on the shared state-change tier; the
+// reveal scroll waits a frame past it so it measures the settled height.
+const EXPAND_REVEAL_DELAY_MS = UI_ANIMATION_DURATION + 16;
 
 const LIST_ID = "local-commit-list";
 const LOAD_MORE_ID = "local-commit-load-more";
@@ -519,15 +527,14 @@ export function LocalCommitsDropdown({
   }, []);
 
   // Enter doesn't move the cursor, so nothing else scrolls an opening body
-  // into view: a row near the bottom would expand below the fold. Waits out
-  // the 150ms row-height transition so it scrolls to the final size.
+  // into view: a row near the bottom would expand below the fold.
   useEffect(() => {
     const hash = revealHashRef.current;
     if (!hash || !expandedHashes.has(hash)) return;
     revealHashRef.current = null;
     const timer = window.setTimeout(() => {
       document.getElementById(optionIdFor(hash))?.scrollIntoView({ block: "nearest" });
-    }, 160);
+    }, EXPAND_REVEAL_DELAY_MS);
     return () => clearTimeout(timer);
   }, [expandedHashes]);
 
