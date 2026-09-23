@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { parse as parseToml } from "smol-toml";
 import { McpServerSettingsTab } from "../McpServerSettingsTab";
@@ -482,7 +482,7 @@ describe("McpServerSettingsTab", () => {
     expect(mockedLogError).toHaveBeenCalledWith("Failed to load MCP status", expect.any(Error));
   });
 
-  it("renders empty state with 'Turn on MCP server' CTA when MCP is disabled", async () => {
+  it("offers the enable switch as the only way to turn MCP on — no duplicate empty-state CTA", async () => {
     installMcpApi({
       getStatus: vi.fn().mockResolvedValue({
         enabled: false,
@@ -490,53 +490,6 @@ describe("McpServerSettingsTab", () => {
         configuredPort: null,
         apiKey: "",
       }),
-    });
-
-    const { container } = render(
-      <SettingsValidationProvider>
-        <McpServerSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "MCP server is off");
-
-    expect(screen.getByRole("button", { name: /turn on mcp server/i })).toBeTruthy();
-  });
-
-  it("clicking 'Turn on MCP server' from the empty state calls setEnabled(true)", async () => {
-    const setEnabledMock = vi.fn().mockResolvedValue({
-      enabled: true,
-      port: 9020,
-      configuredPort: 9020,
-      apiKey: "",
-    });
-    installMcpApi({
-      getStatus: vi.fn().mockResolvedValue({
-        enabled: false,
-        port: null,
-        configuredPort: null,
-        apiKey: "",
-      }),
-      setEnabled: setEnabledMock,
-    });
-
-    const { container } = render(
-      <SettingsValidationProvider>
-        <McpServerSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "MCP server is off");
-
-    fireEvent.click(screen.getByRole("button", { name: /turn on mcp server/i }));
-
-    await waitFor(() => {
-      expect(setEnabledMock).toHaveBeenCalledWith(true);
-    });
-  });
-
-  it("does not render the empty state while MCP status is still loading", () => {
-    installMcpApi({
-      // Pending forever so the loading state is the rendered state.
-      getStatus: vi.fn().mockReturnValue(new Promise(() => {})),
     });
 
     render(
@@ -544,37 +497,15 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
+
+    const toggle = screen.getByLabelText("Enable MCP server");
+    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(screen.queryByRole("button", { name: /turn on mcp server/i })).toBeNull();
     expect(screen.queryByText("MCP server is off")).toBeNull();
   });
 
-  it("hides the empty state once MCP is enabled", async () => {
-    const { container } = render(
-      <SettingsValidationProvider>
-        <McpServerSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForApiKeyControls(container);
-
-    expect(screen.queryByText("MCP server is off")).toBeNull();
-  });
-
-  it("does not show the empty state when MCP status load fails", async () => {
-    installMcpApi({
-      getStatus: vi.fn().mockRejectedValue(new Error("IPC down")),
-    });
-
-    const { container } = render(
-      <SettingsValidationProvider>
-        <McpServerSettingsTab />
-      </SettingsValidationProvider>
-    );
-
-    await waitForContent(container, "IPC down");
-
-    expect(screen.queryByText("MCP server is off")).toBeNull();
-  });
-
-  it("hides the empty state once MCP is enabled via the CTA", async () => {
+  it("turning the switch on calls setEnabled(true) and reveals the connection section", async () => {
     const setEnabledMock = vi.fn().mockResolvedValue({
       enabled: true,
       port: 9020,
@@ -596,13 +527,17 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "MCP server is off");
 
-    fireEvent.click(screen.getByRole("button", { name: /turn on mcp server/i }));
+    const toggle = screen.getByLabelText("Enable MCP server");
+    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+    expect(container.textContent).not.toContain("The server binds to 127.0.0.1");
+
+    fireEvent.click(toggle);
 
     await waitFor(() => {
-      expect(screen.queryByText("MCP server is off")).toBeNull();
+      expect(setEnabledMock).toHaveBeenCalledWith(true);
     });
+    await waitForContent(container, "The server binds to 127.0.0.1");
   });
 
   it("shows inline error and logs toggle failure without notifying", async () => {
@@ -1690,17 +1625,22 @@ describe("McpServerSettingsTab", () => {
       );
       await waitForApiKeyControls(container);
 
-      const group = screen.getByRole("radiogroup", { name: /client/i });
-      const choices = Array.from(group.querySelectorAll('[role="radio"]'));
-      expect(choices.map((c) => c.textContent)).toEqual([
-        expect.stringContaining("Claude Code"),
-        expect.stringContaining("Codex"),
-        expect.stringContaining("Other client"),
-      ]);
+      // Native radios in a fieldset: the group is named by its legend, and each
+      // option is named by its label alone, with the destination as its description.
+      const group = screen.getByRole("group", { name: /client/i });
+      const choices = within(group).getAllByRole("radio") as HTMLInputElement[];
+      expect(choices).toHaveLength(3);
+      expect(within(group).getByRole("radio", { name: "Claude Code" })).toBeTruthy();
+      expect(within(group).getByRole("radio", { name: "Codex" })).toBeTruthy();
+      expect(within(group).getByRole("radio", { name: "Other client" })).toBeTruthy();
 
-      const checked = choices.filter((c) => c.getAttribute("aria-checked") === "true");
+      const checked = choices.filter((c) => c.checked);
       expect(checked).toHaveLength(1);
-      expect(checked[0]?.textContent).toContain("Claude Code");
+      expect(checked[0]).toBe(within(group).getByRole("radio", { name: "Claude Code" }));
+
+      const describedBy = checked[0]!.getAttribute("aria-describedby");
+      const claude = MCP_CLIENT_CONFIGS.find((entry) => entry.label === "Claude Code")!;
+      expect(document.getElementById(describedBy ?? "")?.textContent).toBe(claude.destination);
     });
 
     it("shows each client's destination only on its own card", async () => {

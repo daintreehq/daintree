@@ -1,7 +1,22 @@
 import { useState, useEffect, useRef, useId } from "react";
-import { Code2, CheckCircle, AlertCircle, RefreshCw, ExternalLink } from "lucide-react";
+import { CheckCircle, AlertCircle, RefreshCw, ExternalLink, ChevronRight } from "lucide-react";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
+import {
+  SETTINGS_CONTROL_WIDTH,
+  SettingsActions,
+  SettingsGroup,
+  SettingsRow,
+} from "@/components/Settings/SettingsGroup";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { editorClient } from "@/clients/editorClient";
 import type { EditorConfig, DiscoveredEditor, KnownEditorId } from "@shared/types/editor";
@@ -9,6 +24,7 @@ import { KNOWN_EDITOR_IDS } from "@shared/types/editor";
 import { useProjectStore, patchCachedProjectSettings } from "@/store";
 import { invalidateProjectSettingsCache } from "@/clients/projectClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 
 const EDITOR_LABELS: Record<KnownEditorId, string> = {
@@ -35,10 +51,12 @@ export function EditorIntegrationTab() {
   const [isTesting, setIsTesting] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<"ok" | "error" | null>(null);
+  const [showDetected, setShowDetected] = useState(false);
   const isMountedRef = useRef(true);
   const editorId = useId();
   const commandId = useId();
   const argsId = useId();
+  const detectedRegionId = useId();
 
   const activeProjectId = useProjectStore((s) => s.currentProject?.id);
   const activeProjectPath = useProjectStore((s) => s.currentProject?.path);
@@ -143,6 +161,49 @@ export function EditorIntegrationTab() {
 
   const availabilityMap = new Map(discoveredEditors.map((d) => [d.id, d]));
 
+  // The inventory rule: the current choice and anything that needs attention stay in
+  // view; the healthy remainder, with its paths, sits behind a disclosure.
+  const selectedEntry = discoveredEditors.find((d) => d.id === selectedId);
+  const missingEditors = discoveredEditors.filter((d) => !d.available && d.id !== selectedId);
+  const otherFoundEditors = discoveredEditors.filter((d) => d.available && d.id !== selectedId);
+  const foundCount = discoveredEditors.filter((d) => d.available).length;
+
+  const renderEditorEntry = (d: DiscoveredEditor) => (
+    <li
+      key={d.id}
+      data-editor-entry={d.id}
+      className="flex min-w-0 items-center gap-2 text-xs text-text-secondary"
+    >
+      {d.available ? (
+        <CheckCircle className="w-3.5 h-3.5 text-text-secondary shrink-0" aria-label="Found" />
+      ) : (
+        <AlertCircle className="w-3.5 h-3.5 text-text-secondary shrink-0" aria-label="Not found" />
+      )}
+      <span
+        className={cn(
+          "shrink-0 whitespace-nowrap",
+          d.available ? "text-text-primary" : "text-text-secondary"
+        )}
+      >
+        {EDITOR_LABELS[d.id]}
+      </span>
+      {d.executablePath && (
+        <span className="min-w-0 truncate font-mono text-text-secondary" title={d.executablePath}>
+          {d.executablePath}
+        </span>
+      )}
+    </li>
+  );
+
+  // No saved preference yet counts as dirty: the auto-selected editor is only a
+  // suggestion until it is saved, and main falls back to discovery order until then.
+  const isDirty =
+    !preferredEditor ||
+    preferredEditor.id !== selectedId ||
+    (selectedId === "custom" &&
+      ((preferredEditor.customCommand ?? "") !== customCommand.trim() ||
+        (preferredEditor.customTemplate ?? "") !== customTemplate.trim()));
+
   if (!activeProjectId) {
     return (
       <div className="p-4 text-sm text-text-secondary">
@@ -152,151 +213,206 @@ export function EditorIntegrationTab() {
   }
 
   return (
-    <div className="space-y-6">
-      <SettingsSection
-        icon={Code2}
-        title="External editor"
-        description="Choose the editor that opens when you click 'Open in editor' in the diff viewer or worktree cards."
-      >
-        <div className="contents">
-          <div className="space-y-1">
-            <label htmlFor={editorId} className="text-xs text-text-secondary">
-              Editor
-            </label>
-            <div className="flex items-center gap-2">
-              <select
-                id={editorId}
-                value={selectedId}
-                onChange={(e) => setSelectedId(e.target.value as KnownEditorId)}
-                className="flex-1 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
-              >
-                {KNOWN_EDITOR_IDS.map((id) => {
-                  const disc = availabilityMap.get(id);
-                  const available = id === "custom" ? true : (disc?.available ?? false);
-                  return (
-                    <option key={id} value={id}>
-                      {EDITOR_LABELS[id]}
-                      {id !== "custom" && !available ? " (not found)" : ""}
-                    </option>
-                  );
-                })}
-              </select>
+    <SettingsSection
+      id="editor-external"
+      title="External editor"
+      description="The editor that opens when you click 'Open in editor' in the diff viewer or worktree cards"
+    >
+      <SettingsGroup>
+        <SettingsRow
+          label="Editor"
+          control={({ labelId, descriptionId, disabled }) => (
+            <>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
                     onClick={handleRescan}
-                    disabled={isRescanning}
+                    disabled={disabled || isRescanning}
                     aria-label="Re-scan for installed editors"
-                    className="p-2 rounded-[var(--radius-md)] border border-border-default hover:bg-tint/5 text-daintree-text/60 hover:text-text-primary transition-colors disabled:opacity-40 disabled:pointer-events-none"
                   >
-                    <SpinningIcon icon={RefreshCw} active={isRescanning} className="w-4 h-4" />
-                  </button>
+                    <SpinningIcon icon={RefreshCw} active={isRescanning} />
+                  </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">Re-scan for installed editors</TooltipContent>
               </Tooltip>
-            </div>
-          </div>
-
-          {selectedId !== "custom" && (
-            <div className="space-y-1">
-              <p className="text-xs text-text-secondary select-text">Detected editors:</p>
-              <div className="space-y-1">
-                {discoveredEditors.map((d) => (
-                  <div key={d.id} className="flex items-center gap-2 text-xs text-text-secondary">
-                    {d.available ? (
-                      <CheckCircle className="w-3.5 h-3.5 text-daintree-text/60 shrink-0" />
-                    ) : (
-                      <AlertCircle className="w-3.5 h-3.5 text-daintree-text/30 shrink-0" />
-                    )}
-                    <span className={d.available ? "text-text-primary" : "text-text-placeholder"}>
-                      {EDITOR_LABELS[d.id]}
-                    </span>
-                    {d.executablePath && (
-                      <span className="font-mono text-text-placeholder truncate">
-                        {d.executablePath}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
+              <Select
+                value={selectedId}
+                onValueChange={(value) => setSelectedId(value as KnownEditorId)}
+                disabled={disabled}
+              >
+                <SelectTrigger
+                  id={editorId}
+                  aria-labelledby={labelId}
+                  aria-describedby={descriptionId}
+                  className={SETTINGS_CONTROL_WIDTH.wide}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {KNOWN_EDITOR_IDS.map((id) => {
+                    const disc = availabilityMap.get(id);
+                    const available = id === "custom" ? true : (disc?.available ?? false);
+                    return (
+                      <SelectItem key={id} value={id}>
+                        {EDITOR_LABELS[id]}
+                        {id !== "custom" && !available ? " (not found)" : ""}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+            </>
           )}
+        />
 
-          {selectedId === "custom" && (
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <label htmlFor={commandId} className="text-xs text-text-secondary">
-                  Command
-                </label>
-                <input
+        {selectedId !== "custom" && discoveredEditors.length > 0 && (
+          <>
+            <SettingsRow
+              label="Detected editors"
+              description={`${foundCount} of ${discoveredEditors.length} found on this machine`}
+              layout="stacked"
+              control={
+                <div className="space-y-1">
+                  {selectedEntry && <ul>{renderEditorEntry(selectedEntry)}</ul>}
+                  {missingEditors.length > 0 && (
+                    <p
+                      data-editor-missing=""
+                      className="flex min-w-0 items-start gap-2 text-xs text-text-secondary"
+                    >
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-px" aria-hidden="true" />
+                      <span>
+                        Not found: {missingEditors.map((d) => EDITOR_LABELS[d.id]).join(", ")}
+                      </span>
+                    </p>
+                  )}
+                </div>
+              }
+            />
+            {otherFoundEditors.length > 0 && (
+              <div>
+                <button
+                  type="button"
+                  aria-expanded={showDetected}
+                  aria-controls={detectedRegionId}
+                  onClick={() => setShowDetected((v) => !v)}
+                  className={cn(
+                    "group flex w-full items-center gap-2 py-2.5 pl-4 pr-4 text-left",
+                    "text-sm text-text-secondary hover:text-text-primary transition-colors",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+                  )}
+                >
+                  <ChevronRight
+                    data-animated-chevron
+                    className={cn(
+                      "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 group-hover:text-text-primary",
+                      showDetected ? "rotate-90" : "rotate-0"
+                    )}
+                    aria-hidden="true"
+                  />
+                  {showDetected
+                    ? "Hide detected editors"
+                    : `Show detected editors (${otherFoundEditors.length})`}
+                </button>
+                <div id={detectedRegionId}>
+                  {showDetected && (
+                    <ul className="space-y-1 pb-3 pl-4 pr-4">
+                      {otherFoundEditors.map(renderEditorEntry)}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {selectedId === "custom" && (
+          <>
+            <SettingsRow
+              label="Command"
+              layout="stacked"
+              control={({ labelId }) => (
+                <Input
                   id={commandId}
                   type="text"
                   value={customCommand}
                   onChange={(e) => setCustomCommand(e.target.value)}
                   placeholder="e.g. code, nvim, subl"
-                  className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary focus:outline-hidden focus:border-daintree-accent/40 transition-colors font-mono"
+                  aria-labelledby={labelId}
+                  className="font-mono"
                 />
-              </div>
-              <div className="space-y-1">
-                <label htmlFor={argsId} className="text-xs text-text-secondary">
-                  Arguments template
-                </label>
-                <input
+              )}
+            />
+            <SettingsRow
+              label="Arguments template"
+              description={
+                <>
+                  Use <code className="font-mono">{"{file}"}</code>,{" "}
+                  <code className="font-mono">{"{line}"}</code>,{" "}
+                  <code className="font-mono">{"{col}"}</code> as placeholders
+                </>
+              }
+              layout="stacked"
+              control={({ labelId, descriptionId }) => (
+                <Input
                   id={argsId}
                   type="text"
                   value={customTemplate}
                   onChange={(e) => setCustomTemplate(e.target.value)}
                   placeholder="{file}:{line}:{col}"
-                  className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary focus:outline-hidden focus:border-daintree-accent/40 transition-colors font-mono"
+                  aria-labelledby={labelId}
+                  aria-describedby={descriptionId}
+                  className="font-mono"
                 />
-                <p className="text-xs text-text-secondary select-text">
-                  Use <code className="font-mono">{"{file}"}</code>,{" "}
-                  <code className="font-mono">{"{line}"}</code>,{" "}
-                  <code className="font-mono">{"{col}"}</code> as placeholders.
-                </p>
-              </div>
-            </div>
-          )}
+              )}
+            />
+          </>
+        )}
 
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleSave}
-              disabled={isSaving || !activeProjectId}
-              className="px-4 py-2 rounded-[var(--radius-md)] bg-accent-primary text-accent-primary-foreground text-sm font-medium hover:bg-daintree-accent/90 disabled:opacity-50 disabled:pointer-events-none transition-colors"
-            >
-              {isSaving ? "Saving…" : "Save"}
-            </button>
-
-            <button
-              onClick={handleTest}
-              disabled={isTesting}
-              className="px-4 py-2 rounded-[var(--radius-md)] border border-border-default text-sm text-text-secondary hover:text-text-primary hover:bg-tint/5 disabled:opacity-50 disabled:pointer-events-none transition-colors flex items-center gap-1.5"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              {isTesting ? "Testing…" : "Test"}
-            </button>
-
-            {testResult === "ok" && (
-              <span className="flex items-center gap-1 text-xs text-status-success">
-                <CheckCircle className="w-3.5 h-3.5" /> Open requested
+        <SettingsActions
+          status={
+            saveError ? (
+              <span className="text-status-error">{saveError}</span>
+            ) : testResult === "ok" ? (
+              <span className="flex items-center gap-1">
+                <CheckCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" /> Open requested
               </span>
-            )}
-            {testResult === "error" && (
-              <span className="flex items-center gap-1 text-xs text-status-error">
-                <AlertCircle className="w-3.5 h-3.5" /> Failed to open
+            ) : testResult === "error" ? (
+              <span className="flex items-center gap-1 text-status-error">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" /> Failed to open
               </span>
-            )}
-          </div>
-
-          {saveError && <p className="text-xs text-status-error">{saveError}</p>}
-
-          {preferredEditor && (
-            <p className="text-xs text-text-secondary">
-              Saved: <span className="font-medium">{EDITOR_LABELS[preferredEditor.id]}</span>
-            </p>
-          )}
-        </div>
-      </SettingsSection>
-    </div>
+            ) : preferredEditor ? (
+              <span>
+                Saved: <span className="font-medium">{EDITOR_LABELS[preferredEditor.id]}</span>
+                {isDirty && " · Save to test this choice"}
+              </span>
+            ) : (
+              "Not saved yet — Daintree uses the first editor it finds"
+            )
+          }
+        >
+          {/* Test opens the SAVED preference (main resolves it from the project), so it
+              stays off while the draft differs rather than testing something else. */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleTest}
+            disabled={isTesting || !preferredEditor || isDirty}
+          >
+            <ExternalLink aria-hidden="true" />
+            {isTesting ? "Testing…" : "Test saved editor"}
+          </Button>
+          <Button
+            variant="contrast"
+            size="sm"
+            onClick={handleSave}
+            disabled={isSaving || !activeProjectId || !isDirty}
+          >
+            {isSaving ? "Saving…" : "Save"}
+          </Button>
+        </SettingsActions>
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

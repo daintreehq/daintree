@@ -326,8 +326,6 @@ export const EXTENSION_KEYS = [
   "settings-scope-bg",
   "settings-search-bg",
   "settings-search-muted",
-  "settings-section-header-bg",
-  "settings-section-header-bg-solid",
   "settings-sidebar-bg",
   "settings-sidebar-scroll-fade",
 

@@ -1,8 +1,11 @@
 import { useState, useEffect, useRef } from "react";
-import { Key, Eye, EyeOff, Trash2, Plus, Save } from "lucide-react";
+import { Eye, EyeOff, Trash2, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import { SettingsSection } from "./SettingsSection";
+import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
@@ -52,6 +55,7 @@ export function EnvironmentSettingsTab() {
   const [savedSnapshot, setSavedSnapshot] = useState<Record<string, string>>({});
 
   const [loadFailed, setLoadFailed] = useState(false);
+  const [loadNonce, setLoadNonce] = useState(0);
 
   // Report validation state to sidebar — a failed load also marks the tab
   // as in-error so the sidebar reflects the user-visible error block.
@@ -63,6 +67,8 @@ export function EnvironmentSettingsTab() {
   const notifiedFailureRef = useRef(false);
   useEffect(() => {
     let cancelled = false;
+    setLoadFailed(false);
+    setIsLoading(true);
     window.electron.globalEnv
       .get()
       .then((vars) => {
@@ -95,7 +101,7 @@ export function EnvironmentSettingsTab() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadNonce]);
 
   const updateRow = (index: number, field: "key" | "value", value: string) => {
     setEnvRows((prev) => {
@@ -222,139 +228,144 @@ export function EnvironmentSettingsTab() {
   // user-initiated save).
   useSettingsTabFlush("environment", handleSave, isDirty);
 
+  const sectionTitle = "Global variables";
+  const sectionDescription =
+    "Global environment variables injected into all new terminals. Project-level variables override globals with the same name.";
+
   if (loadFailed) {
     return (
       <SettingsSection
-        icon={Key}
-        title="Environment variables"
-        description="Global environment variables injected into all new terminals. Project-level variables override globals with the same name."
+        title={sectionTitle}
+        description={sectionDescription}
         id="environment-variables"
       >
-        <div className="text-sm text-status-error/90 py-8 px-4 border border-status-error/20 rounded-[var(--radius-md)] bg-status-error/5">
-          Couldn't load saved environment variables. Close and reopen settings to try again. Editing
-          isn't available right now to avoid overwriting your stored values.
-        </div>
+        <SettingsLoadErrorBanner
+          title="Couldn't load saved environment variables"
+          message="Editing is unavailable until they load, so your stored values can't be overwritten."
+          onRetry={() => setLoadNonce((n) => n + 1)}
+        />
       </SettingsSection>
     );
   }
 
+  const addButton = (
+    <Button variant="outline" size="sm" onClick={addRow} disabled={isLoading}>
+      <Plus aria-hidden="true" />
+      Add variable
+    </Button>
+  );
+
   return (
     <SettingsSection
-      icon={Key}
-      title="Environment variables"
-      description="Global environment variables injected into all new terminals. Project-level variables override globals with the same name."
+      title={sectionTitle}
+      description={sectionDescription}
       id="environment-variables"
+      action={envRows.length > 0 ? addButton : undefined}
     >
-      <div className="contents">
-        <div className="space-y-2">
-          {envRows.length === 0 ? (
-            <div className="text-sm text-text-secondary text-center py-8 border border-dashed border-border-default rounded-[var(--radius-md)]">
-              No environment variables configured yet
-            </div>
-          ) : (
-            envRows.map((envVar, index) => {
-              const isSensitive = isSensitiveEnvKey(envVar.key);
-              const isVisible = visibleEnvVars.has(envVar.id);
-              const shouldMask = isSensitive && !isVisible;
-              const error = rowErrors[envVar.id];
-              const errorId = error ? `${envVar.id}-error` : undefined;
+      <SettingsGroup>
+        {envRows.length === 0 ? (
+          <SettingsEmptyRow action={addButton}>
+            Add a variable to set it in every new terminal
+          </SettingsEmptyRow>
+        ) : (
+          envRows.map((envVar, index) => {
+            const isSensitive = isSensitiveEnvKey(envVar.key);
+            const isVisible = visibleEnvVars.has(envVar.id);
+            const shouldMask = isSensitive && !isVisible;
+            const error = rowErrors[envVar.id];
+            const errorId = error ? `${envVar.id}-error` : undefined;
 
-              return (
-                <div key={envVar.id}>
-                  <div
-                    className={cn(
-                      "flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-surface-canvas border",
-                      error ? "border-status-error/40" : "border-border-default"
-                    )}
-                  >
-                    <input
-                      type="text"
-                      value={envVar.key}
-                      onChange={(e) => updateRow(index, "key", e.target.value)}
+            return (
+              <div key={envVar.id} className="px-4 py-2.5">
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="text"
+                    density="compact"
+                    value={envVar.key}
+                    onChange={(e) => updateRow(index, "key", e.target.value)}
+                    spellCheck={false}
+                    autoCapitalize="none"
+                    className="flex-1 min-w-0 font-mono"
+                    placeholder="VARIABLE_NAME"
+                    aria-label="Environment variable name"
+                    invalid={!!error}
+                    aria-invalid={!!error || undefined}
+                    aria-describedby={errorId}
+                  />
+                  <span className="text-text-secondary" aria-hidden="true">
+                    =
+                  </span>
+                  <div className="flex-1 min-w-0 relative">
+                    <Input
+                      type={shouldMask ? "password" : "text"}
+                      density="compact"
+                      value={envVar.value}
+                      onChange={(e) => updateRow(index, "value", e.target.value)}
                       spellCheck={false}
                       autoCapitalize="none"
-                      className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
-                      placeholder="VARIABLE_NAME"
-                      aria-label="Environment variable name"
-                      aria-invalid={!!error || undefined}
+                      autoComplete={isSensitive ? "new-password" : "off"}
+                      className={cn("font-mono", isSensitive && "pr-8")}
+                      placeholder="e.g. /usr/local/bin"
+                      aria-label="Environment variable value"
                       aria-describedby={errorId}
                     />
-                    <span className="text-daintree-text/60">=</span>
-                    <div className="flex-1 relative">
-                      <input
-                        type={shouldMask ? "password" : "text"}
-                        value={envVar.value}
-                        onChange={(e) => updateRow(index, "value", e.target.value)}
-                        spellCheck={false}
-                        autoCapitalize="none"
-                        autoComplete={isSensitive ? "new-password" : "off"}
-                        className={cn(
-                          "w-full bg-surface-sidebar border border-border-strong rounded px-2 py-1 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30",
-                          isSensitive && "pr-8"
+                    {isSensitive && (
+                      <button
+                        type="button"
+                        onClick={() => toggleVisibility(envVar.id)}
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
+                        aria-pressed={isVisible}
+                        aria-label={`${isVisible ? "Hide" : "Show"} value${envVar.key ? ` for ${envVar.key}` : ""}`}
+                      >
+                        {isVisible ? (
+                          <EyeOff className="h-4 w-4" aria-hidden="true" />
+                        ) : (
+                          <Eye className="h-4 w-4" aria-hidden="true" />
                         )}
-                        placeholder="e.g. /usr/local/bin"
-                        aria-label="Environment variable value"
-                        aria-describedby={errorId}
-                      />
-                      {isSensitive && (
-                        <button
-                          type="button"
-                          onClick={() => toggleVisibility(envVar.id)}
-                          className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-daintree-border/50 transition-colors"
-                          aria-pressed={isVisible}
-                          aria-label={`${isVisible ? "Hide" : "Show"} value${envVar.key ? ` for ${envVar.key}` : ""}`}
-                        >
-                          {isVisible ? (
-                            <EyeOff className="h-4 w-4 text-daintree-text/60" />
-                          ) : (
-                            <Eye className="h-4 w-4 text-daintree-text/60" />
-                          )}
-                        </button>
-                      )}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => deleteRow(index, envVar.id)}
-                      className="p-1 rounded hover:bg-status-error/15 transition-colors"
-                      aria-label="Delete environment variable"
-                    >
-                      <Trash2 className="h-4 w-4 text-status-error" />
-                    </button>
+                      </button>
+                    )}
                   </div>
-                  {error && (
-                    <p id={errorId} className="text-2xs text-status-error mt-1 ml-1">
-                      {error}
-                    </p>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => deleteRow(index, envVar.id)}
+                    className="p-1 rounded-[var(--radius-sm)] text-text-secondary hover:text-status-error hover:bg-status-error/10 transition-colors"
+                    aria-label="Delete environment variable"
+                  >
+                    <Trash2 className="h-4 w-4" aria-hidden="true" />
+                  </button>
                 </div>
-              );
-            })
-          )}
+                {error && (
+                  <p id={errorId} className="text-xs text-status-error mt-1">
+                    {error}
+                  </p>
+                )}
+              </div>
+            );
+          })
+        )}
 
-          <Button variant="outline" onClick={addRow} disabled={isLoading} className="w-full">
-            <Plus />
-            Add Variable
+        <SettingsActions
+          status={
+            saveError && (
+              <span role="alert" className="text-status-error">
+                {saveError}
+              </span>
+            )
+          }
+        >
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleDiscard}
+            disabled={!isDirty || isSaving}
+          >
+            Discard
           </Button>
-        </div>
-
-        {saveError && (
-          <p role="alert" className="text-xs text-status-error">
-            {saveError}
-          </p>
-        )}
-
-        {isDirty && (
-          <div className="flex items-center gap-2 pt-2">
-            <Button onClick={handleSave} disabled={isSaving} size="sm">
-              <Save className="w-4 h-4" />
-              {isSaving ? "Saving…" : "Save"}
-            </Button>
-            <Button variant="ghost" onClick={handleDiscard} disabled={isSaving} size="sm">
-              Discard
-            </Button>
-          </div>
-        )}
-      </div>
+          <Button variant="contrast" size="sm" onClick={handleSave} disabled={!isDirty || isSaving}>
+            {isSaving ? "Saving…" : "Save"}
+          </Button>
+        </SettingsActions>
+      </SettingsGroup>
     </SettingsSection>
   );
 }

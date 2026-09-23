@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { History, Radio, Trash2 } from "lucide-react";
+import { Radio } from "lucide-react";
 import { Workflow } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { EmptyState } from "@/components/ui/EmptyState";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { SettingsEmptyRow, SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { useRunHistoryStore } from "@/store/runHistoryStore";
 import { cn } from "@/lib/utils";
@@ -14,7 +14,7 @@ function CountPill({ tone, label }: { tone: "success" | "danger" | "muted"; labe
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded px-1.5 py-0.5 text-2xs font-medium",
+        "inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 text-2xs font-medium",
         tone === "success" && "bg-status-success/15 text-status-success",
         tone === "danger" && "bg-status-error/15 text-status-error",
         tone === "muted" && "bg-overlay-subtle text-text-secondary"
@@ -31,7 +31,7 @@ function RecipeRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "r
   return (
     <>
       <div className="flex items-start gap-2.5">
-        <Workflow className="mt-0.5 h-4 w-4 shrink-0 text-daintree-text/60" aria-hidden="true" />
+        <Workflow className="mt-0.5 h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate text-sm font-medium text-text-primary">
@@ -54,7 +54,7 @@ function RecipeRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "r
         </time>
       </div>
       {failed.length > 0 ? (
-        <ul className="mt-2 space-y-0.5 pl-6.5 text-xs text-status-error/90">
+        <ul className="mt-2 space-y-0.5 pl-6.5 text-xs text-status-error">
           {failed.map((f) => (
             <li key={f.index} className="truncate">
               #{f.index}: {f.error}
@@ -88,7 +88,7 @@ function FleetRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "fl
   return (
     <>
       <div className="flex items-start gap-2.5">
-        <Radio className="mt-0.5 h-4 w-4 shrink-0 text-daintree-text/60" aria-hidden="true" />
+        <Radio className="mt-0.5 h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-text-primary">
@@ -120,7 +120,7 @@ function FleetRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "fl
         </time>
       </div>
       {rejected.length > 0 ? (
-        <ul className="mt-2 space-y-0.5 pl-6.5 text-xs text-status-error/90">
+        <ul className="mt-2 space-y-0.5 pl-6.5 text-xs text-status-error">
           {rejected.map((t) => (
             <li key={t.terminalId} className="truncate">
               {t.title ?? t.terminalId}
@@ -145,42 +145,30 @@ export function RunHistorySettingsTab() {
   }, [init]);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="space-y-8">
       <SettingsSection
-        icon={History}
-        title="Run history"
-        description="Records each recipe run and fleet broadcast so you can review what an automation actually did. Spawned terminals and targets are snapshots — entries stay readable even after a terminal closes. Terminal output and git state are not duplicated here."
+        id="run-history-log"
+        title="Recent runs"
+        description="Each recipe run and fleet broadcast, so you can review what an automation actually did. Spawned terminals and targets are snapshots, so entries stay readable after a terminal closes. Terminal output and git state aren't duplicated here."
+        action={
+          records.length > 0 ? (
+            <Button variant="ghost-danger" size="sm" onClick={() => setShowClearConfirm(true)}>
+              Clear history…
+            </Button>
+          ) : undefined
+        }
       >
-        <div className="flex flex-col gap-3">
-          {records.length > 0 ? (
-            <div className="flex justify-end">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowClearConfirm(true)}
-                className="text-text-secondary"
-              >
-                <Trash2 className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
-                Clear history
-              </Button>
-            </div>
-          ) : null}
-
-          {loading ? null : records.length === 0 ? (
-            <EmptyState
-              variant="zero-data"
-              scale="canvas"
-              icon={<History aria-hidden="true" />}
-              title="No runs yet"
-              description="Run a recipe or broadcast to a fleet and the outcome shows up here."
-            />
-          ) : (
-            <ul className="flex flex-col gap-2">
+        {loading ? null : records.length === 0 ? (
+          <SettingsGroup>
+            <SettingsEmptyRow>
+              Run a recipe or broadcast to a fleet and the outcome shows up here
+            </SettingsEmptyRow>
+          </SettingsGroup>
+        ) : (
+          <SettingsGroup>
+            <ul className="divide-y divide-border-subtle">
               {records.map((record) => (
-                <li
-                  key={record.id}
-                  className="rounded-md border border-daintree-border/60 bg-overlay-subtle/40 p-3"
-                >
+                <li key={record.id} className="px-4 py-3">
                   {record.kind === "recipe" ? (
                     <RecipeRunRow record={record} />
                   ) : (
@@ -189,8 +177,8 @@ export function RunHistorySettingsTab() {
                 </li>
               ))}
             </ul>
-          )}
-        </div>
+          </SettingsGroup>
+        )}
       </SettingsSection>
 
       <ConfirmDialog

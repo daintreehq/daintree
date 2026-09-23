@@ -275,14 +275,18 @@ describe("CodeForgeSettingsTab — canonical subtab routing", () => {
     await waitFor(() => {
       expect(getCredentialStatus).toHaveBeenCalledWith("acme.forge");
     });
-    expect(screen.getByText("Acme Forge settings")).toBeTruthy();
+    expect(
+      screen.getByText("Credentials are validated against Acme Forge before they're saved")
+    ).toBeTruthy();
 
     rerender(<CodeForgeSettingsTab activeSubtab="globex.forge" onSubtabChange={vi.fn()} />);
 
     await waitFor(() => {
       expect(getCredentialStatus).toHaveBeenCalledWith("globex.forge");
     });
-    expect(screen.getByText("Globex Forge settings")).toBeTruthy();
+    expect(
+      screen.getByText("Credentials are validated against Globex Forge before they're saved")
+    ).toBeTruthy();
   });
 
   it("does not route a third-party 'github' contribution to the built-in GitHub card", async () => {

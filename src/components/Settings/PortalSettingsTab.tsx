@@ -1,11 +1,14 @@
 import { useId, useState } from "react";
-import { Plus, Trash2, Globe, Check, X, Search, PanelRight, Link } from "lucide-react";
+import { Plus, Trash2, Globe, Check, X, Search } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePortalStore } from "@/store/portalStore";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
 import { actionService } from "@/services/ActionService";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitch } from "./SettingsSwitch";
@@ -208,103 +211,121 @@ export function PortalSettingsTab() {
   const renderLinkRow = (link: (typeof links)[0], allowDelete: boolean) => {
     if (editingLinkId === link.id) {
       return (
-        <div
-          key={link.id}
-          className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30"
-        >
-          <input
+        <div key={link.id} className="flex items-center gap-2 px-4 py-3">
+          <Input
             type="text"
+            density="compact"
             value={editName}
             onChange={(e) => setEditName(e.target.value)}
-            className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-text-primary w-32 focus:border-daintree-accent/40 focus:outline-hidden"
+            className="w-40"
             placeholder="e.g. My portal"
             aria-label="Edit link name"
           />
-          <input
+          <Input
             type="text"
+            density="compact"
             value={editUrl}
             onChange={(e) => setEditUrl(e.target.value)}
-            className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-text-primary flex-1 focus:border-daintree-accent/40 focus:outline-hidden"
+            className="flex-1 min-w-0 font-mono"
             placeholder="e.g. https://github.com/owner/repo"
             aria-label="Edit link URL"
           />
           <button
+            type="button"
             onClick={handleSaveEdit}
             aria-label="Save edit"
-            className="p-1.5 rounded hover:bg-daintree-border/50 text-status-success"
+            className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-status-success"
           >
-            <Check className="w-4 h-4" />
+            <Check className="w-4 h-4" aria-hidden="true" />
           </button>
           <button
+            type="button"
             onClick={handleCancelEdit}
             aria-label="Cancel edit"
-            className="p-1.5 rounded hover:bg-daintree-border/50 text-daintree-text/50"
+            className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
           >
-            <X className="w-4 h-4" />
+            <X className="w-4 h-4" aria-hidden="true" />
           </button>
         </div>
       );
     }
 
     return (
-      <div
+      <SettingsRow
         key={link.id}
-        className="flex items-center justify-between p-3 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30"
-      >
-        <div className="flex items-center gap-3">
-          {allowDelete ? <FaviconIcon url={link.url} /> : <ServiceIcon name={link.icon} />}
-          <div className="flex flex-col">
-            <span className="text-sm text-text-primary">{link.title}</span>
-            {!allowDelete && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="text-2xs font-mono text-text-secondary truncate min-w-0">
-                    {link.url}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{link.url}</TooltipContent>
-              </Tooltip>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => handleStartEdit(link.id, link.title, link.url)}
-            className="text-xs text-text-secondary hover:text-text-primary px-2 py-1 rounded hover:bg-daintree-border/50"
-          >
-            Edit
-          </button>
-          <SettingsSwitch
-            checked={link.enabled}
-            onCheckedChange={() =>
-              void actionService.dispatch(
-                "portal.links.toggle",
-                { id: link.id },
-                { source: "user" }
-              )
-            }
-            disabled={link.alwaysEnabled}
-            aria-label={`Toggle ${link.title || "portal link"}`}
-          />
-          {allowDelete && (
-            <button
-              onClick={() => setPendingRemoveId(link.id)}
-              disabled={link.alwaysEnabled}
-              className="p-1.5 rounded hover:bg-daintree-border/50 text-daintree-text/50 hover:text-status-error disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
+        label={
+          <span className="flex items-center gap-2">
+            {allowDelete ? <FaviconIcon url={link.url} /> : <ServiceIcon name={link.icon} />}
+            {link.title}
+          </span>
+        }
+        labelText={link.title}
+        description={
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="block font-mono truncate">{link.url}</span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{link.url}</TooltipContent>
+          </Tooltip>
+        }
+        control={({ labelId }) => (
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => handleStartEdit(link.id, link.title, link.url)}
+              aria-describedby={labelId}
             >
-              <Trash2 className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-      </div>
+              Edit
+            </Button>
+            <SettingsSwitch
+              checked={link.enabled}
+              onCheckedChange={() =>
+                void actionService.dispatch(
+                  "portal.links.toggle",
+                  { id: link.id },
+                  { source: "user" }
+                )
+              }
+              disabled={link.alwaysEnabled}
+              aria-label={`Toggle ${link.title || "portal link"}`}
+            />
+            {allowDelete && (
+              <button
+                type="button"
+                onClick={() => setPendingRemoveId(link.id)}
+                disabled={link.alwaysEnabled}
+                aria-label={`Remove ${link.title || "link"}`}
+                className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-status-error disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
+              >
+                <Trash2 className="w-4 h-4" aria-hidden="true" />
+              </button>
+            )}
+          </>
+        )}
+      />
     );
   };
 
   const pendingRemoveLink = links.find((l) => l.id === pendingRemoveId) ?? null;
 
+  const defaultAgentValue = showCustomUrlInput
+    ? "custom"
+    : defaultNewTabUrl === null
+      ? "none"
+      : isCustomUrl
+        ? "custom"
+        : defaultNewTabUrl;
+
+  const defaultAgentOptions = [
+    { value: "none", label: "None (show Launchpad)" },
+    ...enabledLinks.map((link) => ({ value: link.url, label: link.title })),
+    { value: "custom", label: "Custom URL…" },
+  ];
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <ConfirmDialog
         isOpen={pendingRemoveId !== null}
         variant="destructive"
@@ -324,144 +345,140 @@ export function PortalSettingsTab() {
         onClose={() => setPendingRemoveId(null)}
       />
 
-      <SettingsSection
-        icon={PanelRight}
-        title="Default new tab agent"
-        description='Choose which agent opens when you click the + button. Select "None" to show the Launchpad.'
-      >
-        <div className="flex flex-col gap-3">
+      <SettingsSection title="New tab">
+        <SettingsGroup>
           <SettingsSelect
-            label="Default Agent"
-            value={
-              showCustomUrlInput
-                ? "custom"
-                : defaultNewTabUrl === null
-                  ? "none"
-                  : isCustomUrl
-                    ? "custom"
-                    : defaultNewTabUrl
+            id="portal-default-agent"
+            label="Default agent"
+            description={
+              isCustomUrl && !showCustomUrlInput && defaultNewTabUrl ? (
+                <span className="block font-mono truncate">{defaultNewTabUrl}</span>
+              ) : (
+                "Opens when you click the + button. None shows the Launchpad."
+              )
             }
+            controlWidth="wide"
+            value={defaultAgentValue}
             onValueChange={(v) => handleDefaultAgentChange(v)}
-            options={[
-              { value: "none", label: "None (show Launchpad)" },
-              ...enabledLinks.map((link) => ({ value: link.url, label: link.title })),
-              { value: "custom", label: "Custom URL..." },
-            ]}
+            options={defaultAgentOptions}
           />
 
           {showCustomUrlInput && (
-            <div className="flex gap-2">
-              <input
-                type="text"
-                placeholder="https://..."
-                value={customDefaultUrl}
-                onChange={(e) => {
-                  setCustomDefaultUrl(e.target.value);
-                  setCustomUrlError("");
-                }}
-                className="flex-1 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleCustomUrlSave();
-                  if (e.key === "Escape") handleCustomUrlCancel();
-                }}
-                aria-label="Custom URL"
-                aria-invalid={!!customUrlError || undefined}
-                aria-describedby={customUrlError ? customUrlErrorId : undefined}
-                autoFocus
-              />
-              <button
-                type="button"
-                onClick={handleCustomUrlSave}
-                aria-label="Save custom URL"
-                className="px-3 py-1.5 rounded-[var(--radius-md)] bg-accent-primary text-accent-primary-foreground text-sm hover:bg-daintree-accent/90 transition-colors"
-              >
-                <Check className="w-4 h-4" />
-              </button>
-              <button
-                type="button"
-                onClick={handleCustomUrlCancel}
-                aria-label="Cancel custom URL"
-                className="px-3 py-1.5 rounded-[var(--radius-md)] border border-border-default text-daintree-text/70 text-sm hover:bg-daintree-border/50 transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+            <SettingsRow
+              layout="stacked"
+              label="Custom URL"
+              error={
+                customUrlError ? <span id={customUrlErrorId}>{customUrlError}</span> : undefined
+              }
+              control={({ labelId }) => (
+                <div className="flex gap-2">
+                  <Input
+                    type="text"
+                    placeholder="https://..."
+                    value={customDefaultUrl}
+                    onChange={(e) => {
+                      setCustomDefaultUrl(e.target.value);
+                      setCustomUrlError("");
+                    }}
+                    className="flex-1 min-w-0 font-mono"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleCustomUrlSave();
+                      if (e.key === "Escape") handleCustomUrlCancel();
+                    }}
+                    aria-labelledby={labelId}
+                    invalid={!!customUrlError}
+                    aria-invalid={!!customUrlError || undefined}
+                    aria-describedby={customUrlError ? customUrlErrorId : undefined}
+                    autoFocus
+                  />
+                  <Button
+                    type="button"
+                    variant="contrast"
+                    size="icon"
+                    onClick={handleCustomUrlSave}
+                    aria-label="Save custom URL"
+                  >
+                    <Check aria-hidden="true" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={handleCustomUrlCancel}
+                    aria-label="Cancel custom URL"
+                  >
+                    <X aria-hidden="true" />
+                  </Button>
+                </div>
+              )}
+            />
           )}
-
-          {customUrlError && (
-            <p id={customUrlErrorId} className="text-xs text-status-error">
-              {customUrlError}
-            </p>
-          )}
-
-          {isCustomUrl && !showCustomUrlInput && defaultNewTabUrl && (
-            <div className="text-xs text-text-secondary flex items-center gap-2">
-              <Globe className="w-3 h-3" />
-              <span className="truncate">{defaultNewTabUrl}</span>
-            </div>
-          )}
-        </div>
+        </SettingsGroup>
       </SettingsSection>
 
       <SettingsSection
-        icon={Link}
+        id="portal-default-links"
         title="Default links"
-        description="Built-in agent and service links. Toggle visibility in the portal tab bar."
+        description="Built-in agent and service links. Turn one off to hide it from the portal tab bar."
       >
-        <div className="space-y-2">{systemLinks.map((link) => renderLinkRow(link, false))}</div>
+        <SettingsGroup>{systemLinks.map((link) => renderLinkRow(link, false))}</SettingsGroup>
       </SettingsSection>
 
       <SettingsSection
-        icon={Globe}
+        id="portal-custom-links"
         title="Custom links"
         description="Add your own links to AI services or documentation."
       >
-        <div className="space-y-2">{userLinks.map((link) => renderLinkRow(link, true))}</div>
-
-        <div className="space-y-2">
-          <div className="flex gap-2">
-            <input
-              type="text"
-              placeholder="e.g. My portal"
-              value={newLinkName}
-              onChange={(e) => {
-                setNewLinkName(e.target.value);
-                setUrlError("");
-              }}
-              className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary w-32 focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
-              aria-label="New link name"
-            />
-            <input
-              type="text"
-              placeholder="e.g. https://github.com/owner/repo"
-              value={newLinkUrl}
-              onChange={(e) => {
-                setNewLinkUrl(e.target.value);
-                setUrlError("");
-              }}
-              className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary flex-1 focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleAddLink();
-              }}
-              aria-label="New link URL"
-              aria-invalid={!!urlError || undefined}
-              aria-describedby={urlError ? addLinkErrorId : undefined}
-            />
-            <button
-              onClick={handleAddLink}
-              disabled={!newLinkName.trim() || !newLinkUrl.trim()}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] bg-accent-primary text-accent-primary-foreground text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none hover:bg-daintree-accent/90 transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              Add
-            </button>
-          </div>
-          {urlError && (
-            <p id={addLinkErrorId} className="text-xs text-status-error">
-              {urlError}
-            </p>
-          )}
-        </div>
+        <SettingsGroup>
+          {userLinks.map((link) => renderLinkRow(link, true))}
+          <SettingsRow
+            layout="stacked"
+            label="Add a link"
+            error={urlError ? <span id={addLinkErrorId}>{urlError}</span> : undefined}
+            control={
+              <div className="flex items-center gap-2">
+                <Input
+                  type="text"
+                  placeholder="e.g. My portal"
+                  value={newLinkName}
+                  onChange={(e) => {
+                    setNewLinkName(e.target.value);
+                    setUrlError("");
+                  }}
+                  className="w-40"
+                  aria-label="New link name"
+                />
+                <Input
+                  type="text"
+                  placeholder="e.g. https://github.com/owner/repo"
+                  value={newLinkUrl}
+                  onChange={(e) => {
+                    setNewLinkUrl(e.target.value);
+                    setUrlError("");
+                  }}
+                  className="flex-1 min-w-0 font-mono"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleAddLink();
+                  }}
+                  aria-label="New link URL"
+                  invalid={!!urlError}
+                  aria-invalid={!!urlError || undefined}
+                  aria-describedby={urlError ? addLinkErrorId : undefined}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleAddLink}
+                  disabled={!newLinkName.trim() || !newLinkUrl.trim()}
+                >
+                  <Plus aria-hidden="true" />
+                  Add
+                </Button>
+              </div>
+            }
+          />
+        </SettingsGroup>
       </SettingsSection>
     </div>
   );

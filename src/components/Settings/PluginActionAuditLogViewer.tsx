@@ -3,8 +3,9 @@ import { Check, Copy, Download, Eye, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
-import { EmptyState } from "@/components/ui/EmptyState";
+import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import type {
   PluginActionAuditRecord,
   PluginActionAuditRecordType,
@@ -140,9 +141,13 @@ export function PluginActionAuditLogViewer({
     suppressSuccess;
   const showCopyAll = filteredRecords.length === records.length;
 
+  const countLabel = isFiltering
+    ? `${filteredRecords.length} of ${records.length}`
+    : `${records.length} of ${maxRecords}`;
+
   return (
-    <div className="contents">
-      <div className="flex flex-wrap items-center gap-2">
+    <SettingsGroup>
+      <div className="flex flex-wrap items-center gap-2 px-4 py-3">
         <input
           type="text"
           value={pluginFilter}
@@ -155,9 +160,9 @@ export function PluginActionAuditLogViewer({
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search arguments or errors"
+          placeholder="Search args or errors"
           aria-label="Search audit arguments or error messages"
-          className="w-40 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+          className="w-48 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         />
         <select
           value={resultFilter}
@@ -216,155 +221,115 @@ export function PluginActionAuditLogViewer({
         )}
       </div>
 
-      <div className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-border-default bg-surface-canvas">
-        {loading ? (
-          <Skeleton label="Loading audit records" className="space-y-2 p-3">
-            <SkeletonBone className="h-5 w-5/6" />
-            <SkeletonBone className="h-5 w-4/6" />
-            <SkeletonBone className="h-5 w-3/4" />
-          </Skeleton>
-        ) : filteredRecords.length === 0 ? (
-          records.length === 0 ? (
-            <EmptyState
-              variant="zero-data"
-              scale="sidebar"
-              title="No plugin actions recorded yet"
-            />
-          ) : suppressSuccess &&
-            pluginFilter.trim().length === 0 &&
-            searchQuery.trim().length === 0 &&
-            resultFilter === "all" &&
-            timeRange === "all" ? (
-            <EmptyState
-              variant="user-cleared"
-              scale="sidebar"
-              title="No errors or restricted dispatches"
-            />
-          ) : (
-            <EmptyState
-              variant="filtered-empty"
-              scale="sidebar"
-              title="No records match the current filters"
-            />
-          )
-        ) : (
-          <ul className="divide-y divide-border-default">
-            {filteredRecords.map((record) => (
-              <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 p-2 text-xs">
-                <SeverityMark
-                  severity={RESULT_SEVERITY[record.result]}
-                  label={RESULT_LABEL[record.result]}
-                  className="mt-0.5 h-3 w-3"
-                />
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-text-primary truncate">{record.actionId}</span>
-                    {record.source ? (
-                      <span className="text-3xs uppercase tracking-wide text-text-secondary">
-                        {record.source}
-                      </span>
-                    ) : record.recordType && RECORD_TYPE_LABEL[record.recordType] ? (
-                      <span className="text-3xs uppercase tracking-wide text-text-secondary">
-                        {RECORD_TYPE_LABEL[record.recordType]}
-                      </span>
-                    ) : null}
+      {loading ? (
+        <Skeleton label="Loading audit records" className="space-y-2 px-4 py-3">
+          <SkeletonBone className="h-5 w-5/6" />
+          <SkeletonBone className="h-5 w-4/6" />
+          <SkeletonBone className="h-5 w-3/4" />
+        </Skeleton>
+      ) : filteredRecords.length === 0 ? (
+        <SettingsEmptyRow>
+          {records.length === 0
+            ? "Plugin actions show up here once an installed plugin dispatches one"
+            : suppressSuccess &&
+                pluginFilter.trim().length === 0 &&
+                searchQuery.trim().length === 0 &&
+                resultFilter === "all" &&
+                timeRange === "all"
+              ? "No errors or restricted dispatches"
+              : "No records match the current filters"}
+        </SettingsEmptyRow>
+      ) : (
+        <ul className="max-h-64 overflow-y-auto divide-y divide-border-subtle">
+          {filteredRecords.map((record) => (
+            <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 px-4 py-2 text-xs">
+              <SeverityMark
+                severity={RESULT_SEVERITY[record.result]}
+                label={RESULT_LABEL[record.result]}
+                className="mt-0.5 h-3 w-3"
+              />
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-text-primary truncate">{record.actionId}</span>
+                  {record.source ? (
+                    <span className="text-3xs uppercase tracking-wide text-text-secondary">
+                      {record.source}
+                    </span>
+                  ) : record.recordType && RECORD_TYPE_LABEL[record.recordType] ? (
+                    <span className="text-3xs uppercase tracking-wide text-text-secondary">
+                      {RECORD_TYPE_LABEL[record.recordType]}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-0.5 font-mono text-text-secondary truncate">
+                  {record.pluginId}
+                </div>
+                {record.errorMessage ? (
+                  <div className="mt-0.5 text-status-danger truncate" title={record.errorMessage}>
+                    {record.errorMessage}
                   </div>
+                ) : null}
+                {record.argsPlaintext ? (
                   <div className="mt-0.5 font-mono text-text-secondary truncate">
-                    {record.pluginId}
+                    {record.argsPlaintext}
                   </div>
-                  {record.errorMessage ? (
-                    <div
-                      className="mt-0.5 text-status-danger/80 truncate"
-                      title={record.errorMessage}
-                    >
-                      {record.errorMessage}
-                    </div>
-                  ) : null}
-                  {record.argsPlaintext ? (
-                    <div className="mt-0.5 font-mono text-text-secondary truncate">
-                      {record.argsPlaintext}
-                    </div>
-                  ) : record.argsHash ? (
-                    <div className="mt-0.5 font-mono text-text-secondary truncate">
-                      sha256:{record.argsHash.slice(0, 16)}…
-                    </div>
-                  ) : null}
-                </div>
-                <div className="text-right text-text-secondary whitespace-nowrap">
-                  <div>{formatRelativeTimestamp(record.ts, now)}</div>
-                  <div>{record.durationMs}ms</div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+                ) : record.argsHash ? (
+                  <div className="mt-0.5 font-mono text-text-secondary truncate">
+                    sha256:{record.argsHash.slice(0, 16)}…
+                  </div>
+                ) : null}
+              </div>
+              <div className="text-right text-text-secondary whitespace-nowrap">
+                <div>{formatRelativeTimestamp(record.ts, now)}</div>
+                <div>{record.durationMs}ms</div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
 
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
+      <SettingsActions status={loading ? null : countLabel}>
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => void onRefresh()}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
           aria-label="Refresh audit log"
         >
-          <RefreshCw className="w-3.5 h-3.5" />
+          <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
           Refresh
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => void onCopy(filteredRecords)}
           disabled={filteredRecords.length === 0}
-          className={cn(
-            "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
-            filteredRecords.length === 0
-              ? "border-border-default text-text-placeholder cursor-not-allowed"
-              : copyFlashActive
-                ? "text-status-success border-status-success/30"
-                : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
-          )}
+          className={cn(copyFlashActive && "text-status-success border-status-success/30")}
         >
-          {copyFlashActive ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+          {copyFlashActive ? (
+            <Check className="w-3.5 h-3.5" aria-hidden="true" />
+          ) : (
+            <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+          )}
           {copyFlashActive ? "Copied!" : `Copy ${showCopyAll ? "all" : "filtered"} as JSON`}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => void onExport(filteredRecords)}
           disabled={filteredRecords.length === 0}
-          className={cn(
-            "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
-            filteredRecords.length === 0
-              ? "border-border-default text-text-placeholder cursor-not-allowed"
-              : exportFlashActive
-                ? "text-status-success border-status-success/30"
-                : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
-          )}
+          className={cn(exportFlashActive && "text-status-success border-status-success/30")}
         >
           {exportFlashActive ? (
-            <Check className="w-3.5 h-3.5" />
+            <Check className="w-3.5 h-3.5" aria-hidden="true" />
           ) : (
-            <Download className="w-3.5 h-3.5" />
+            <Download className="w-3.5 h-3.5" aria-hidden="true" />
           )}
           {exportFlashActive ? "Exported!" : "Export as NDJSON"}
-        </button>
-        <button
-          type="button"
-          onClick={onClear}
-          disabled={records.length === 0}
-          className={cn(
-            "px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
-            records.length === 0
-              ? "border-border-default text-text-placeholder cursor-not-allowed"
-              : "border-border-default text-status-danger hover:text-status-danger hover:bg-status-danger/10 hover:border-status-danger/20"
-          )}
-        >
+        </Button>
+        <Button variant="ghost-danger" size="sm" onClick={onClear} disabled={records.length === 0}>
           Clear log
-        </button>
-        <span className="ml-auto text-xs text-text-secondary">
-          {isFiltering
-            ? `${filteredRecords.length} of ${records.length}`
-            : `${records.length} of ${maxRecords}`}
-        </span>
-      </div>
-    </div>
+        </Button>
+      </SettingsActions>
+    </SettingsGroup>
   );
 }

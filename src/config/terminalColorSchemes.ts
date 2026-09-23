@@ -49,7 +49,7 @@ const bondiAppScheme = resolveAppTheme("bondi");
 export const BUILT_IN_SCHEMES: TerminalColorScheme[] = [
   {
     id: "match-app-theme",
-    name: "Match App Theme",
+    name: "Match app theme",
     type: defaultAppScheme.type,
     builtin: true,
     colors: getTerminalThemeFromAppScheme(defaultAppScheme),

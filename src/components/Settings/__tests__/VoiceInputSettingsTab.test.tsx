@@ -29,16 +29,20 @@ vi.mock("../SettingsSwitchCard", () => ({
 vi.mock("../SettingsSelect", () => ({
   SettingsSelect: ({
     label,
+    description,
     value,
     onValueChange,
     options,
   }: {
     label: string;
+    description?: React.ReactNode;
     value: string;
     onValueChange: (v: string) => void;
     options: Array<{ value: string; label: string }>;
   }) => (
     <div data-testid={`settings-select-${label}`}>
+      {/* The provider row carries the data-flow disclosure as its description. */}
+      {description && <p>{description}</p>}
       <span data-testid={`settings-select-value-${label}`}>{value}</span>
       {options.map((opt) => (
         <button

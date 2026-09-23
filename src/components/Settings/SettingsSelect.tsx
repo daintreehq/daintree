@@ -9,6 +9,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import { SETTINGS_CONTROL_WIDTH, SettingsRow, useSettingsGroup } from "./SettingsGroup";
 
 export interface SettingsSelectOption {
   value: string;
@@ -33,7 +35,17 @@ interface SettingsSelectProps {
   options: SettingsSelectOption[];
   placeholder?: string;
   name?: string;
+  /** Row anchor for search deep links. */
+  id?: string;
+  /** Inside a group: `inline` (default) puts the select on the right rail; `stacked` goes full width. */
+  layout?: "inline" | "stacked";
+  /** Inline trigger width — `wide` for values longer than a few words. */
+  controlWidth?: "select" | "wide";
+  /** Why the row is disabled, shown with it while it is. */
+  disabledReason?: string;
 }
+
+const SCOPE_LABEL = { project: "Project", global: "Global", default: "Default" } as const;
 
 export function SettingsSelect({
   label,
@@ -51,7 +63,12 @@ export function SettingsSelect({
   options,
   placeholder,
   name,
+  id: rowId,
+  layout = "inline",
+  controlWidth = "select",
+  disabledReason,
 }: SettingsSelectProps) {
+  const group = useSettingsGroup();
   const id = useId();
   const descriptionId = useId();
   const errorId = useId();
@@ -62,14 +79,56 @@ export function SettingsSelect({
     [isError ? errorId : null, description ? descriptionId : null].filter(Boolean).join(" ") ||
     undefined;
 
-  const scopeBadge = scope ? (
-    <span className="text-3xs px-1.5 py-0.5 rounded-sm font-medium bg-text-secondary/10 text-text-secondary dark:bg-text-secondary/20">
-      {scope === "project" ? "Project" : scope === "global" ? "Global" : "Default"}
-    </span>
-  ) : null;
+  const scopeBadge = scope ? <Badge size="xs">{SCOPE_LABEL[scope]}</Badge> : null;
+
+  const items = options.map((option) => (
+    <SelectItem
+      key={option.value}
+      value={option.value}
+      description={option.description}
+      disabled={option.disabled}
+    >
+      {option.label}
+    </SelectItem>
+  ));
+
+  if (group) {
+    return (
+      <SettingsRow
+        id={rowId}
+        label={label}
+        description={description}
+        accessory={scopeBadge}
+        layout={layout}
+        isModified={isModified}
+        onReset={onReset}
+        resetAriaLabel={resetAriaLabel}
+        disabled={disabled}
+        disabledReason={disabledReason}
+        error={isError ? error : undefined}
+        control={({ labelId, descriptionId: rowDescriptionId, disabled: rowDisabled }) => (
+          <Select value={value} onValueChange={onValueChange} disabled={rowDisabled} name={name}>
+            <SelectTrigger
+              aria-labelledby={labelId}
+              aria-describedby={rowDescriptionId}
+              aria-invalid={isError ? true : undefined}
+              className={cn(
+                layout === "inline" && SETTINGS_CONTROL_WIDTH[controlWidth],
+                isError && "border-status-error focus:border-status-error",
+                className
+              )}
+            >
+              <SelectValue placeholder={placeholder} />
+            </SelectTrigger>
+            <SelectContent>{items}</SelectContent>
+          </Select>
+        )}
+      />
+    );
+  }
 
   return (
-    <div className="group grid grid-cols-subgrid gap-2 col-span-full">
+    <div id={rowId} className="group grid grid-cols-subgrid gap-2 col-span-full">
       <div className="flex items-center gap-2">
         <label htmlFor={id} className="text-sm text-text-secondary">
           {label}
@@ -86,7 +145,7 @@ export function SettingsSelect({
             type="button"
             aria-label={resetAriaLabel ?? `Reset ${label} to default`}
             className={cn(
-              "p-0.5 rounded-sm text-text-muted hover:text-text-primary",
+              "p-0.5 rounded-sm text-text-secondary hover:text-text-primary",
               "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
               "transition-colors"
@@ -106,21 +165,10 @@ export function SettingsSelect({
         >
           <SelectValue placeholder={placeholder} />
         </SelectTrigger>
-        <SelectContent>
-          {options.map((option) => (
-            <SelectItem
-              key={option.value}
-              value={option.value}
-              description={option.description}
-              disabled={option.disabled}
-            >
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
+        <SelectContent>{items}</SelectContent>
       </Select>
       {description && (
-        <p id={descriptionId} className="text-xs text-text-muted select-text">
+        <p id={descriptionId} className="text-xs text-text-secondary select-text">
           {description}
         </p>
       )}

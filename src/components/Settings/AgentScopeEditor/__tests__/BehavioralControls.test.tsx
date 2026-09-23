@@ -41,6 +41,29 @@ describe("BehavioralControls — skip permissions control", () => {
     expect(scoped.queryAllByRole("textbox")).toHaveLength(0);
   });
 
+  it("puts the choice on the row's rail as a segmented control, not a column of tiles", () => {
+    const { container } = render(<BehavioralControls {...makeProps()} />);
+    const region = container.querySelector("#agents-skip-permissions");
+    if (!(region instanceof HTMLElement)) throw new Error("skip-permissions region not found");
+    expect(region.getAttribute("data-settings-row")).toBe("inline");
+    const group = within(region).getByRole("radiogroup", { name: "Skip permissions" });
+    const describedBy = group.getAttribute("aria-describedby") ?? "";
+    const described = describedBy
+      .split(" ")
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(described).toContain("Inherited from global setting");
+  });
+
+  it("names the dangerous flag in the row once bypass is in effect", () => {
+    const { container } = render(
+      <BehavioralControls {...makeProps({ effectiveSkipPerms: true })} />
+    );
+    const region = container.querySelector("#agents-skip-permissions");
+    if (!(region instanceof HTMLElement)) throw new Error("skip-permissions region not found");
+    expect(within(region).getByText("--dangerously-skip-permissions")).toBeTruthy();
+  });
+
   it("surfaces the inherited resolved value inline on the Default option and updates with the parent", () => {
     const { rerender } = render(
       <BehavioralControls {...makeProps({ inheritResolvesToOn: true })} />

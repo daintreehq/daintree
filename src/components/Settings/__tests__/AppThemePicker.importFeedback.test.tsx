@@ -78,7 +78,7 @@ function importResultWith(warnings: AppThemeValidationWarning[]) {
 }
 
 function clickImport() {
-  fireEvent.click(screen.getByText("Import app theme..."));
+  fireEvent.click(screen.getByRole("button", { name: "Import…" }));
 }
 
 beforeEach(() => {

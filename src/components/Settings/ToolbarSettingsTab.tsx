@@ -24,8 +24,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVertical, LayoutGrid, Rocket, RotateCcw } from "lucide-react";
-import { LayoutPanelTop, Plus, Workflow } from "@/components/icons";
+import { GripVertical } from "lucide-react";
 import { useToolbarPreferencesStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -67,7 +66,7 @@ import {
 } from "@/components/Layout/toolbarButtonGrouping";
 import { getAgentConfig } from "@/config/agents";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
-import { DEFAULT_PLUGIN_ICON } from "@/components/icons/pluginIconRegistry";
+
 import { buildPluginToolbarMeta } from "@/components/Layout/pluginToolbarMeta";
 import { cn } from "@/lib/utils";
 import { DRAG_GHOST_OPACITY, EASE_OUT_EXPO, UI_ANIMATION_DURATION } from "@/lib/animationUtils";
@@ -77,7 +76,10 @@ import {
   type ToolbarButtonPlacementState,
 } from "@/lib/toolbarVisibilityDispatch";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
+import { Button } from "@/components/ui/button";
+import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSection } from "./SettingsSection";
+import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 
@@ -123,8 +125,9 @@ function ToolbarButtonCard({
   return (
     <div
       className={cn(
-        "flex items-center gap-2 px-2.5 py-2 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30 transition-colors",
-        isOverlay && "shadow-md bg-surface-canvas cursor-grabbing"
+        "flex items-center gap-2.5 px-3 py-2",
+        isOverlay &&
+          "settings-card rounded-[var(--radius-md)] border border-border-default shadow-md cursor-grabbing"
       )}
     >
       {/* When draggable, gripProps carries dnd-kit's role/tabIndex/describedby —
@@ -141,11 +144,11 @@ function ToolbarButtonCard({
       >
         <GripVertical
           aria-hidden="true"
-          className={cn("h-4 w-4", draggable ? "text-daintree-text/50" : "text-daintree-text/20")}
+          className={cn("h-4 w-4", draggable ? "text-text-secondary" : "text-text-muted")}
         />
       </div>
       <div className="text-text-primary shrink-0">
-        <Icon className="h-4 w-4" />
+        <Icon className="h-4 w-4" aria-hidden="true" />
       </div>
       <span className="text-sm font-medium text-text-primary truncate min-w-0 flex-1">
         {metadata.label}
@@ -181,17 +184,18 @@ function SortableButtonItem({
 
   // Keep the dnd-kit transform/transition/opacity on this single node (the
   // drag-source). Nesting a second transform-holding wrapper would fight the
-  // sortable transform — see #9029.
+  // sortable transform — see #9029. A button that is merely off keeps full
+  // opacity: off is a setting, not a disabled row, and the switch says which.
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? DRAG_GHOST_OPACITY : isVisible ? 1 : 0.5,
+    opacity: isDragging ? DRAG_GHOST_OPACITY : 1,
   };
 
   if (!metadata) return null;
 
   return (
-    <div ref={setNodeRef} style={style} className="shrink-0">
+    <div ref={setNodeRef} style={style}>
       <ToolbarButtonCard
         metadata={metadata}
         isVisible={isVisible}
@@ -208,6 +212,8 @@ interface TrayButtonRowProps {
   isVisible: boolean;
   onToggle: (buttonId: AnyToolbarButtonId) => void;
   metadata: ToolbarButtonMetadata | undefined;
+  /** Off where every description would only restate the label ("Launch Claude AI agent"). */
+  showDescription?: boolean;
 }
 
 // Tray-backed buttons toggle promotion, not visibility — they always remain
@@ -217,37 +223,41 @@ interface TrayButtonRowProps {
 // handle or takes part in cross-side movement. Reusing `SortableButtonItem`
 // would call `useSortable` outside a `SortableContext` and crash; this is a
 // plain non-sortable row.
-function TrayButtonRow({ buttonId, isVisible, onToggle, metadata }: TrayButtonRowProps) {
+function TrayButtonRow({
+  buttonId,
+  isVisible,
+  onToggle,
+  metadata,
+  showDescription = true,
+}: TrayButtonRowProps) {
   if (!metadata) return null;
   const Icon = metadata.icon;
 
   return (
-    <div
-      style={{ opacity: isVisible ? 1 : 0.5 }}
-      className="flex items-center gap-3 p-3 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30"
-    >
-      <div className="flex items-center gap-2 flex-1 min-w-0">
-        <div className="text-text-primary shrink-0">
-          <Icon className="h-4 w-4" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-text-primary truncate">{metadata.label}</div>
-          <div className="text-xs text-text-secondary select-text truncate">
-            {metadata.description}
-          </div>
-        </div>
-      </div>
-      <SettingsSwitch
-        checked={isVisible}
-        onCheckedChange={() => onToggle(buttonId)}
-        aria-label={`Show ${metadata.label} in toolbar`}
-        className="shrink-0"
-      />
-    </div>
+    <SettingsRow
+      label={
+        <span className="flex items-center gap-2">
+          <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+          {metadata.label}
+        </span>
+      }
+      labelText={metadata.label}
+      description={showDescription ? metadata.description : undefined}
+      onRowClick={() => onToggle(buttonId)}
+      control={({ descriptionId }) => (
+        <SettingsSwitch
+          checked={isVisible}
+          onCheckedChange={() => onToggle(buttonId)}
+          aria-label={`Show ${metadata.label} in toolbar`}
+          aria-describedby={descriptionId}
+        />
+      )}
+    />
   );
 }
 
 interface ToolbarSideColumnProps {
+  id: string;
   side: ToolbarSide;
   label: string;
   buttonIds: AnyToolbarButtonId[];
@@ -257,6 +267,7 @@ interface ToolbarSideColumnProps {
 }
 
 function ToolbarSideColumn({
+  id,
   side,
   label,
   buttonIds,
@@ -279,11 +290,9 @@ function ToolbarSideColumn({
   const visibleCount = renderableIds.filter(isVisible).length;
 
   return (
-    <div className="flex-1 min-w-0">
+    <div id={id} className="flex-1 min-w-0 scroll-mt-6">
       <div className="mb-2 flex items-baseline justify-between gap-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-text-secondary">
-          {label}
-        </span>
+        <span className="text-xs font-medium text-text-secondary">{label}</span>
         <span className="text-xs text-text-secondary tabular-nums">
           {visibleCount}/{renderableIds.length}
         </span>
@@ -292,12 +301,12 @@ function ToolbarSideColumn({
         <div
           ref={setNodeRef}
           className={cn(
-            "flex flex-wrap content-start gap-2 rounded-[var(--radius-md)] bg-overlay-subtle p-2 min-h-[4rem] transition-colors",
-            isOver && "ring-1 ring-inset ring-border-default"
+            "settings-card rounded-[var(--radius-lg)] border border-border-default divide-y divide-border-subtle min-h-[3rem] transition-colors",
+            isOver && "ring-1 ring-inset ring-border-strong"
           )}
         >
           {renderableIds.length === 0 ? (
-            <div className="flex w-full items-center justify-center py-3 text-xs text-text-placeholder">
+            <div className="flex w-full items-center justify-center py-3 text-xs text-text-secondary">
               Drop a button here
             </div>
           ) : (
@@ -316,6 +325,9 @@ function ToolbarSideColumn({
     </div>
   );
 }
+
+// Radix Select reserves the empty string for "no value", so "no default" needs its own token.
+const NO_DEFAULT_SELECTION = "none";
 
 const dropAnimation = {
   duration: UI_ANIMATION_DURATION,
@@ -549,9 +561,12 @@ export function ToolbarSettingsTab() {
       if (over.id === overContainer) {
         newIndex = overItems.length;
       } else {
-        const translatedRight = active.rect.current.translated?.right;
+        // Rows stack vertically, so "after" is decided on the vertical axis: the
+        // dragged row's centre below the hovered row's centre.
+        const translated = active.rect.current.translated;
         const isAfterOver =
-          translatedRight != null && translatedRight > over.rect.left + over.rect.width / 2;
+          translated != null &&
+          translated.top + translated.height / 2 > over.rect.top + over.rect.height / 2;
         newIndex = overIndex >= 0 ? overIndex + (isAfterOver ? 1 : 0) : overItems.length;
       }
 
@@ -682,10 +697,17 @@ export function ToolbarSettingsTab() {
 
   const activeMetadata = activeId ? allMetadata[activeId] : undefined;
 
+  const defaultSelectionOptions = [
+    { value: NO_DEFAULT_SELECTION, label: "None (first available)" },
+    { value: "terminal", label: "Terminal" },
+    ...LAUNCHABLE_AGENT_IDS.map((id) => ({ value: id, label: getAgentConfig(id)?.name ?? id })),
+    { value: "browser", label: "Browser" },
+    { value: "dev-server", label: "Dev preview" },
+  ];
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <SettingsSection
-        icon={LayoutGrid}
         title="Toolbar buttons"
         description="Drag to reorder within a side or move a button between the left and right groups. Left-side buttons stay grouped as launcher, agents, panels, then everything else, so dragging one across a boundary snaps it back into its own group. Toggle to show or hide."
       >
@@ -700,6 +722,7 @@ export function ToolbarSettingsTab() {
         >
           <div className="flex flex-row gap-4">
             <ToolbarSideColumn
+              id="toolbar-left-buttons"
               side="left"
               label="Left side"
               buttonIds={liveLeft}
@@ -708,6 +731,7 @@ export function ToolbarSettingsTab() {
               onToggle={handleToggle}
             />
             <ToolbarSideColumn
+              id="toolbar-right-buttons"
               side="right"
               label="Right side"
               buttonIds={liveRight}
@@ -741,11 +765,10 @@ export function ToolbarSettingsTab() {
         array membership, the same way the plugin section does.
       */}
       <SettingsSection
-        icon={Plus}
         title="Agent buttons"
         description={`Every agent lives in the launcher. Pin one to give it its own toolbar button too. ${LAUNCHABLE_AGENT_IDS.filter(isAgentOnToolbar).length} of ${LAUNCHABLE_AGENT_IDS.length} pinned.`}
       >
-        <div className="space-y-2">
+        <SettingsGroup>
           {LAUNCHABLE_AGENT_IDS.map((buttonId) => (
             <TrayButtonRow
               key={buttonId}
@@ -753,9 +776,10 @@ export function ToolbarSettingsTab() {
               isVisible={isAgentOnToolbar(buttonId)}
               onToggle={(id) => handleToggle(id, "left")}
               metadata={allMetadata[buttonId]}
+              showDescription={false}
             />
           ))}
-        </div>
+        </SettingsGroup>
       </SettingsSection>
 
       {/*
@@ -766,11 +790,10 @@ export function ToolbarSettingsTab() {
         membership.
       */}
       <SettingsSection
-        icon={LayoutPanelTop}
         title="Panel buttons"
         description={`Every panel button lives in the launcher. Pin one to give it its own toolbar button too. ${LAUNCHER_PANEL_BUTTON_IDS.filter(isPanelOnToolbar).length} of ${LAUNCHER_PANEL_BUTTON_IDS.length} pinned.`}
       >
-        <div className="space-y-2">
+        <SettingsGroup>
           {LAUNCHER_PANEL_BUTTON_IDS.map((buttonId) => (
             <TrayButtonRow
               key={buttonId}
@@ -780,7 +803,7 @@ export function ToolbarSettingsTab() {
               metadata={allMetadata[buttonId]}
             />
           ))}
-        </div>
+        </SettingsGroup>
       </SettingsSection>
 
       {/*
@@ -794,11 +817,10 @@ export function ToolbarSettingsTab() {
       */}
       {launcherItemRows.length > 0 && (
         <SettingsSection
-          icon={Workflow}
           title="Pinned from the launcher"
           description={`Recipes, plugin agents and panels you pinned in the launcher. ${launcherItemRows.length} pinned.`}
         >
-          <div className="space-y-2">
+          <SettingsGroup>
             {launcherItemRows.map((row) => (
               <TrayButtonRow
                 key={row.id}
@@ -808,17 +830,16 @@ export function ToolbarSettingsTab() {
                 metadata={row.metadata}
               />
             ))}
-          </div>
+          </SettingsGroup>
         </SettingsSection>
       )}
 
       {pluginButtonIds.length > 0 && (
         <SettingsSection
-          icon={DEFAULT_PLUGIN_ICON}
           title="Plugin buttons"
           description={`Every plugin button lives in the plugin tray. Promote one to give it its own toolbar button too. ${pluginButtonIds.filter((id) => isVisible(id)).length} of ${pluginButtonIds.length} promoted.`}
         >
-          <div className="space-y-2">
+          <SettingsGroup>
             {pluginButtonIds.map((buttonId) => (
               <TrayButtonRow
                 key={buttonId}
@@ -828,65 +849,57 @@ export function ToolbarSettingsTab() {
                 metadata={allMetadata[buttonId]}
               />
             ))}
-          </div>
+          </SettingsGroup>
         </SettingsSection>
       )}
 
       <SettingsSection
-        icon={Rocket}
+        id="toolbar-launcher"
         title="Launcher palette"
-        description="Configure defaults for the panel launcher palette."
+        description="Defaults for the panel launcher palette."
       >
-        <div className="space-y-4">
+        <SettingsGroup>
           <SettingsSwitchCard
-            variant="compact"
             title="Always show dev server in launcher"
             subtitle="Show dev server option even if no command is configured in project settings"
             isEnabled={launcher.alwaysShowDevServer}
             onChange={() => setAlwaysShowDevServer(!launcher.alwaysShowDevServer)}
-            ariaLabel="Always show dev server in launcher"
           />
-
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-text-primary block">Default selection</label>
-            <select
-              value={launcher.defaultSelection ?? ""}
-              onChange={(e) =>
-                setDefaultSelection(
-                  e.target.value ? (e.target.value as typeof launcher.defaultSelection) : undefined
-                )
-              }
-              className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
-            >
-              <option value="">None (first available)</option>
-              <option value="terminal">Terminal</option>
-              {LAUNCHABLE_AGENT_IDS.map((id) => (
-                <option key={id} value={id}>
-                  {getAgentConfig(id)?.name ?? id}
-                </option>
-              ))}
-              <option value="browser">Browser</option>
-              <option value="dev-server">Dev Preview</option>
-            </select>
-            <p className="text-xs text-text-secondary select-text">
-              Default option to highlight when opening the launcher palette
-            </p>
-          </div>
-        </div>
+          <SettingsSelect
+            label="Default selection"
+            description="Option highlighted when the launcher palette opens"
+            value={launcher.defaultSelection ?? NO_DEFAULT_SELECTION}
+            onValueChange={(value) =>
+              setDefaultSelection(
+                value === NO_DEFAULT_SELECTION
+                  ? undefined
+                  : (value as typeof launcher.defaultSelection)
+              )
+            }
+            options={defaultSelectionOptions}
+          />
+        </SettingsGroup>
       </SettingsSection>
 
-      <div className="flex justify-end">
-        <button
-          onClick={reset}
-          className={cn(
-            "flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-default",
-            "text-text-secondary hover:text-text-primary hover:bg-tint/5 transition-colors"
+      <SettingsGroup id="toolbar-reset" className="scroll-mt-6">
+        <SettingsRow
+          label="Reset toolbar"
+          description="Restores the default buttons, order and launcher palette options"
+          control={({ labelId, descriptionId, disabled }) => (
+            <Button
+              type="button"
+              variant="ghost-danger"
+              size="sm"
+              onClick={reset}
+              disabled={disabled}
+              aria-labelledby={labelId}
+              aria-describedby={descriptionId}
+            >
+              Reset
+            </Button>
           )}
-        >
-          <RotateCcw className="w-3.5 h-3.5" />
-          Reset toolbar
-        </button>
-      </div>
+        />
+      </SettingsGroup>
     </div>
   );
 }

@@ -8,7 +8,9 @@ import { logError } from "@/utils/logger";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
 import { KeybindingProfileActions } from "./KeybindingProfileActions";
+import { SettingsGroup } from "./SettingsGroup";
 import { SettingsShortcutCapture } from "@/components/KeyboardShortcuts";
 
 interface ShortcutBinding extends RegisteredKeybindingConfig {
@@ -92,7 +94,7 @@ function ShortcutRow({
 
   if (isEditing) {
     return (
-      <div data-testid="shortcut-row" className="py-2 border-b border-daintree-border/50">
+      <div data-testid="shortcut-row" className="px-4 py-2.5">
         <div className="flex items-center justify-between mb-2">
           <span className="text-sm text-text-primary">
             {binding.description || binding.actionId}
@@ -112,43 +114,45 @@ function ShortcutRow({
   }
 
   return (
-    <div data-testid="shortcut-row" className="py-2 border-b border-daintree-border/50">
-      <div className="flex items-center justify-between group/row">
+    <div data-testid="shortcut-row" className="px-4 py-2">
+      {/* The chip sits last so every binding lines up on the row's right edge;
+          the hover actions open to its left rather than pushing it inward. */}
+      <div className="flex items-center justify-between gap-4 group/row">
         <span className="text-sm text-text-primary">{binding.description || binding.actionId}</span>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
+          {binding.isOverridden && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={onReset}
+                  className="p-0.5 rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 transition-opacity"
+                  aria-label="Reset to default"
+                >
+                  <RotateCcw className="w-3 h-3" aria-hidden="true" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Reset to default</TooltipContent>
+            </Tooltip>
+          )}
+          <button
+            onClick={onEdit}
+            className="px-2 py-0.5 rounded-[var(--radius-sm)] text-xs text-text-secondary hover:text-text-primary opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 transition-opacity"
+          >
+            Edit
+          </button>
           {binding.effectiveCombo ? (
             <span
               className={cn(
-                "px-2 py-0.5 text-xs font-mono rounded",
+                "px-2 py-0.5 text-xs font-mono rounded-[var(--radius-sm)]",
                 binding.isOverridden
                   ? "bg-status-info/15 text-status-info"
-                  : "bg-border-default text-text-primary"
+                  : "bg-overlay-soft text-text-primary"
               )}
             >
               {keybindingService.formatComboForDisplay(binding.effectiveCombo)}
             </span>
           ) : (
             <span className="text-xs text-text-secondary italic">unbound</span>
-          )}
-          <button
-            onClick={onEdit}
-            className="px-2 py-0.5 text-xs text-text-secondary hover:text-text-primary opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 transition-opacity"
-          >
-            Edit
-          </button>
-          {binding.isOverridden && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={onReset}
-                  className="p-0.5 text-daintree-text/60 hover:text-text-primary opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 transition-opacity"
-                  aria-label="Reset to default"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Reset to default</TooltipContent>
-            </Tooltip>
           )}
         </div>
       </div>
@@ -344,7 +348,7 @@ export function KeyboardShortcutsTab() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-8">
       <div className="flex items-center gap-3">
         <div
           className={cn(
@@ -354,7 +358,7 @@ export function KeyboardShortcutsTab() {
           )}
         >
           <Search
-            className="w-3.5 h-3.5 shrink-0 text-daintree-text/40 pointer-events-none"
+            className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none"
             aria-hidden="true"
           />
           <input
@@ -372,68 +376,57 @@ export function KeyboardShortcutsTab() {
               type="button"
               onClick={handleClearSearch}
               aria-label="Clear search"
-              className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-daintree-text/40 hover:text-text-primary"
+              className="flex items-center justify-center w-5 h-5 rounded-[var(--radius-sm)] shrink-0 text-text-secondary hover:text-text-primary"
             >
-              <X className="w-3 h-3" />
+              <X className="w-3 h-3" aria-hidden="true" />
             </button>
           )}
         </div>
         <KeybindingProfileActions onImportComplete={handleImportComplete} />
-        <button
+        <Button
+          type="button"
+          variant="outline"
           onClick={handleOpenResetDialog}
           disabled={isResetting}
-          className={cn(
-            "flex items-center gap-1.5 px-3 py-2 text-sm border border-border-default rounded transition-colors",
-            isResetting
-              ? "opacity-50 cursor-not-allowed text-daintree-text/40"
-              : hasOverrides
-                ? "text-text-secondary hover:text-text-primary hover:border-accent-primary"
-                : "text-daintree-text/40 hover:text-daintree-text/60 hover:border-border-default"
-          )}
         >
-          <RotateCcw className="w-3.5 h-3.5" />
+          <RotateCcw aria-hidden="true" />
           Reset all
-        </button>
+        </Button>
       </div>
 
-      <div className="space-y-4">
+      <div className="space-y-6">
         {Array.from(groupedBindings.entries()).map(([category, categoryBindings]) => (
-          <div key={category}>
-            <h4 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">
-              {category}
-            </h4>
-            <div className="space-y-0">
-              {categoryBindings.map((binding) => {
-                const rowError =
-                  shortcutError !== null &&
-                  shortcutError.kind !== "reset-all" &&
-                  shortcutError.rowId === binding.rowId
-                    ? shortcutError
-                    : null;
-                return (
-                  <ShortcutRow
-                    key={binding.rowId}
-                    binding={binding}
-                    isEditing={editingRowId === binding.rowId}
-                    error={rowError}
-                    onEdit={() => {
-                      setShortcutError(null);
-                      setEditingRowId(binding.rowId);
-                    }}
-                    onSave={(combo) => handleSaveShortcut(binding.rowId, binding.actionId, combo)}
-                    onCancel={handleCancelEdit}
-                    onReset={() => handleResetShortcut(binding.rowId, binding.actionId)}
-                    onRetry={() => rowError && handleRetryRow(rowError)}
-                    onDismissError={() => setShortcutError(null)}
-                  />
-                );
-              })}
-            </div>
-          </div>
+          <SettingsGroup key={category} label={category}>
+            {categoryBindings.map((binding) => {
+              const rowError =
+                shortcutError !== null &&
+                shortcutError.kind !== "reset-all" &&
+                shortcutError.rowId === binding.rowId
+                  ? shortcutError
+                  : null;
+              return (
+                <ShortcutRow
+                  key={binding.rowId}
+                  binding={binding}
+                  isEditing={editingRowId === binding.rowId}
+                  error={rowError}
+                  onEdit={() => {
+                    setShortcutError(null);
+                    setEditingRowId(binding.rowId);
+                  }}
+                  onSave={(combo) => handleSaveShortcut(binding.rowId, binding.actionId, combo)}
+                  onCancel={handleCancelEdit}
+                  onReset={() => handleResetShortcut(binding.rowId, binding.actionId)}
+                  onRetry={() => rowError && handleRetryRow(rowError)}
+                  onDismissError={() => setShortcutError(null)}
+                />
+              );
+            })}
+          </SettingsGroup>
         ))}
 
         {filteredBindings.length === 0 && (
-          <div className="text-center py-8 text-text-secondary">
+          <div className="text-center py-8 text-sm text-text-secondary">
             No shortcuts found matching "{searchQuery}"
           </div>
         )}
@@ -442,29 +435,26 @@ export function KeyboardShortcutsTab() {
             roving-focus model, not the keybinding engine — document the keys
             honestly as fixed instead of advertising rebindable rows that
             never fire. */}
-        <div data-testid="worktree-list-keys-help">
-          <h4 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">
-            Worktree list
-          </h4>
-          <div className="space-y-0">
-            <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
+        <div data-testid="worktree-list-keys-help" className="grid gap-2">
+          <SettingsGroup label="Worktree list">
+            <div className="flex items-center justify-between gap-4 px-4 py-2">
               <span className="text-sm text-text-primary shrink-0">Move selection</span>
               <span className="text-xs text-text-secondary text-right">
                 Arrow keys or j / k; PageUp / PageDown and Home / End jump further
               </span>
             </div>
-            <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
+            <div className="flex items-center justify-between gap-4 px-4 py-2">
               <span className="text-sm text-text-primary shrink-0">Open worktree</span>
               <span className="text-xs text-text-secondary text-right">
                 Space or Enter; Enter or ArrowRight moves into the row's actions
               </span>
             </div>
-            <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
+            <div className="flex items-center justify-between gap-4 px-4 py-2">
               <span className="text-sm text-text-primary shrink-0">Reorder worktree</span>
               <span className="text-xs text-text-secondary text-right">Alt+Up / Alt+Down</span>
             </div>
-          </div>
-          <p className="text-xs text-text-secondary mt-2">
+          </SettingsGroup>
+          <p className="text-xs text-text-secondary">
             These shortcuts are fixed and can't be rebound
           </p>
         </div>
@@ -472,33 +462,30 @@ export function KeyboardShortcutsTab() {
         {/* Keyboard drag-and-drop is otherwise only discoverable through
             screen-reader ARIA hints; surface it for sighted keyboard users.
             Static — dnd-kit sensor interactions, not rebindable actions. */}
-        <div data-testid="list-reordering-help">
-          <h4 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">
-            List reordering
-          </h4>
-          <div className="space-y-0">
-            <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
+        <div data-testid="list-reordering-help" className="grid gap-2">
+          <SettingsGroup label="List reordering">
+            <div className="flex items-center justify-between gap-4 px-4 py-2">
               <span className="text-sm text-text-primary shrink-0">Reorder panel</span>
               <span className="text-xs text-text-secondary text-right">
                 Focus the panel header, then Space to pick up, arrows to move, Space to drop, Esc to
                 cancel
               </span>
             </div>
-            <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
+            <div className="flex items-center justify-between gap-4 px-4 py-2">
               <span className="text-sm text-text-primary shrink-0">Reorder tab</span>
               <span className="text-xs text-text-secondary text-right">
                 Focus the active tab, then Space to pick up, arrows to move, Space to drop
               </span>
             </div>
-            <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
+            <div className="flex items-center justify-between gap-4 px-4 py-2">
               <span className="text-sm text-text-primary shrink-0">Reorder worktree</span>
               <span className="text-xs text-text-secondary text-right">
                 {formatShortcutForTooltip("Alt+Up")} / {formatShortcutForTooltip("Alt+Down")} in the
                 sidebar
               </span>
             </div>
-          </div>
-          <p className="text-xs text-text-secondary mt-2">
+          </SettingsGroup>
+          <p className="text-xs text-text-secondary">
             These shortcuts are fixed and can't be rebound
           </p>
         </div>

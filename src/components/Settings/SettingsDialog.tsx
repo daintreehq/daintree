@@ -546,6 +546,17 @@ function SettingsDialogInner({
 
   const tablistRef = useRef<HTMLDivElement>(null);
 
+  // A deep link or search hit can land on a tab below the nav's fold — MCP, Plugins,
+  // Run history — leaving the page with no visible "you are here". Keep the active
+  // item on screen, moving the list only as far as it has to.
+  useEffect(() => {
+    if (!isOpen || isSearching) return;
+    const item = tablistRef.current?.querySelector<HTMLElement>(
+      `[role="tab"][data-tab="${activeTab}"]`
+    );
+    item?.scrollIntoView?.({ block: "nearest" });
+  }, [isOpen, isSearching, activeTab, activeScope]);
+
   const handleTablistKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     const container = tablistRef.current;
     if (!container) return;
@@ -657,7 +668,7 @@ function SettingsDialogInner({
                   searchInputRef.current?.focus();
                 }}
                 aria-label="Clear search"
-                className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-daintree-text/40 hover:text-text-primary"
+                className="flex items-center justify-center w-5 h-5 rounded-[var(--radius-sm)] shrink-0 text-text-secondary hover:text-text-primary"
               >
                 <X className="w-3 h-3" />
               </button>
@@ -1255,7 +1266,10 @@ export function NavGroup({ label, children }: { label: string; children: React.R
   return (
     <div role="none">
       <span
-        className="settings-meta font-medium uppercase tracking-wider px-3 mb-1 block select-none"
+        // Sentence case like every other label in the dialog — the group names are
+        // already written that way, and forcing them to capitals made the sidebar the
+        // one place that shouted.
+        className="text-xs font-medium text-text-secondary px-3 mb-1 block select-none"
         aria-hidden="true"
       >
         {label}
@@ -1319,7 +1333,9 @@ export function NavItem({
       onFocus={onEnter}
       onBlur={onLeave}
       className={cn(
-        "relative text-left px-3 py-1.5 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full",
+        // scroll-my clears the list's 32px scroll fade, so keeping the active item in
+        // view never parks it under the fade where it reads as dimmed.
+        "relative text-left px-3 py-1.5 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full scroll-my-10",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
         "settings-nav-item",
         active ? "text-text-primary" : "text-text-secondary hover:text-text-primary"

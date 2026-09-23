@@ -61,8 +61,6 @@ export const SEL = {
     randomThemeButton: 'button:has-text("Random theme")',
     shortcutConflictWarning: "text=Conflicts with:",
     mcpServerToggle: '[aria-label="Enable MCP server"]',
-    mcpServerEmptyState: "text=MCP server is off",
-    mcpServerEnableButton: 'button:has-text("Turn on MCP server")',
     mcpConnectionMarker: "text=The server binds to 127.0.0.1",
     scopeControl: '[role="radiogroup"][aria-label="Settings scope"]',
     scopeOption: (label: string) =>

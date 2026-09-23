@@ -90,7 +90,7 @@ CI on PRs: `check` + vitest (4 shards) + build + smoke, Ubuntu only, no E2E. `ci
 
 ## Design and UX
 
-Daintree has a strict, heavily litigated visual and interaction contract. The rules load automatically when you touch matching files: `.claude/rules/design-system.md` (colour vocabulary, accent restraint, motion, loading gates, icons), `.claude/rules/user-signals.md` (microcopy, notify routing, runtime-signal tiers, destructive-action tiers), `.claude/rules/overlay-focus.md` (tooltip and focus restoration on overlay close).
+Daintree has a strict, heavily litigated visual and interaction contract. The rules load automatically when you touch matching files: `.claude/rules/design-system.md` (colour vocabulary, accent restraint, motion, loading gates, icons), `.claude/rules/user-signals.md` (microcopy, notify routing, runtime-signal tiers, destructive-action tiers), `.claude/rules/overlay-focus.md` (tooltip and focus restoration on overlay close), `.claude/rules/settings-pages.md` (the section → group → row grammar every settings page is built from).
 
 Two things worth knowing before you write any UI: check `src/components/ui/` before hand-rolling a surface, and accent colour is at most **one** load-bearing signal per focus region — in doubt, no accent.
 

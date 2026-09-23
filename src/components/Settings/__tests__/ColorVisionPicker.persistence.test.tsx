@@ -96,7 +96,7 @@ describe("ColorVisionPicker persistence failures", () => {
     vi.mocked(appThemeClient.setColorVisionMode).mockReturnValue(write.promise);
 
     render(<ColorVisionPicker />);
-    selectMode("Red-Green");
+    selectMode("Red-green");
 
     // Optimistic: the new mode is applied before the write resolves.
     expect(renderedMode()).toBe("red-green");
@@ -119,7 +119,7 @@ describe("ColorVisionPicker persistence failures", () => {
     vi.mocked(appThemeClient.setColorVisionMode).mockReturnValueOnce(failed.promise);
 
     render(<ColorVisionPicker />);
-    selectMode("Blue-Yellow");
+    selectMode("Blue-yellow");
 
     await act(async () => {
       failed.reject(new Error("disk full"));
@@ -143,8 +143,8 @@ describe("ColorVisionPicker persistence failures", () => {
       .mockResolvedValueOnce(undefined);
 
     render(<ColorVisionPicker />);
-    selectMode("Red-Green"); // in flight, will fail late
-    await act(async () => screen.getByText("Blue-Yellow").click()); // supersedes it, succeeds
+    selectMode("Red-green"); // in flight, will fail late
+    await act(async () => screen.getByText("Blue-yellow").click()); // supersedes it, succeeds
 
     expect(storedMode()).toBe("blue-yellow");
 
@@ -165,7 +165,7 @@ describe("ColorVisionPicker persistence failures", () => {
     vi.mocked(appThemeClient.setColorVisionMode).mockReturnValue(write.promise);
 
     const { container } = render(<ColorVisionPicker />);
-    selectMode("Red-Green");
+    selectMode("Red-green");
 
     await act(async () => {
       write.reject(new Error("nope"));

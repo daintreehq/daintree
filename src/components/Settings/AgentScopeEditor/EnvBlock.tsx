@@ -1,4 +1,5 @@
 import { EnvVarEditor } from "../EnvVarEditor";
+import { SettingsRow } from "../SettingsGroup";
 import type { AgentPreset } from "@/config/agents";
 
 type EnvSuggestion = { key: string; hint: string };
@@ -16,7 +17,7 @@ interface EnvBlockProps {
 function EnvVarReference({ suggestions }: { suggestions: EnvSuggestion[] }) {
   return (
     <div className="space-y-0.5 pt-1">
-      <p className="text-2xs text-text-secondary pb-0.5">Available env overrides:</p>
+      <p className="text-2xs text-text-secondary pb-0.5">Available env overrides</p>
       {suggestions.map(({ key, hint }) => (
         <div key={key} className="flex items-baseline gap-2 font-mono">
           <span className="text-2xs text-text-secondary shrink-0">{key}</span>
@@ -38,42 +39,44 @@ export function EnvBlock({
 }: EnvBlockProps) {
   if (scopeKind === "default") {
     return (
-      <div id="agents-global-env" className="space-y-2">
-        <div>
-          <label className="text-sm font-medium text-text-primary">Global env vars</label>
-          <p className="text-xs text-text-secondary select-text">
-            Applied to every launch. Preset-specific vars take precedence.
-          </p>
-        </div>
-        <EnvVarEditor
-          env={globalEnv ?? {}}
-          onChange={onGlobalEnvChange}
-          suggestions={suggestions}
-          contextKey={`global-${agentId}`}
-          data-testid="global-env-editor"
-        />
-      </div>
+      <SettingsRow
+        id="agents-global-env"
+        label="Global env vars"
+        description="Applied to every launch. Preset-specific vars take precedence"
+        layout="stacked"
+        control={
+          <EnvVarEditor
+            env={globalEnv ?? {}}
+            onChange={onGlobalEnvChange}
+            suggestions={suggestions}
+            contextKey={`global-${agentId}`}
+            data-testid="global-env-editor"
+          />
+        }
+      />
     );
   }
 
   if (!selectedPreset) return null;
 
   return (
-    <>
-      <div className="space-y-1.5">
-        <span className="text-2xs text-text-secondary font-medium uppercase tracking-wide block">
-          Env overrides
-        </span>
-        <EnvVarEditor
-          env={selectedPreset.env ?? {}}
-          onChange={onPresetEnvChange}
-          suggestions={suggestions}
-          contextKey={selectedPreset.id}
-          inheritedEnv={globalEnv}
-          data-testid="preset-env-editor"
-        />
-        <EnvVarReference suggestions={suggestions} />
-      </div>
-    </>
+    <SettingsRow
+      label="Env overrides"
+      description="Override the global env vars for this preset only"
+      layout="stacked"
+      control={
+        <div className="grid gap-2">
+          <EnvVarEditor
+            env={selectedPreset.env ?? {}}
+            onChange={onPresetEnvChange}
+            suggestions={suggestions}
+            contextKey={selectedPreset.id}
+            inheritedEnv={globalEnv}
+            data-testid="preset-env-editor"
+          />
+          <EnvVarReference suggestions={suggestions} />
+        </div>
+      }
+    />
   );
 }

@@ -12,6 +12,8 @@ interface SegmentedRadioGroupProps<T extends string> {
   value: T;
   onChange: (value: T) => void;
   "aria-label": string;
+  /** Help text for the whole group, e.g. a settings row's description. */
+  "aria-describedby"?: string;
   disabled?: boolean;
   /** Fill the container and split it evenly between the segments. */
   fullWidth?: boolean;
@@ -40,6 +42,7 @@ export function SegmentedRadioGroup<T extends string>({
   value,
   onChange,
   "aria-label": ariaLabel,
+  "aria-describedby": ariaDescribedBy,
   disabled,
   fullWidth,
   className,
@@ -86,8 +89,14 @@ export function SegmentedRadioGroup<T extends string>({
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
     if (disabled || options.length === 0) return;
-    // Wrap from an unmatched value too: -1 still has to move somewhere sane.
-    const from = activeIndex === -1 ? 0 : activeIndex;
+    // Move from where the keyboard is, not from the selection. They differ after a
+    // rejected change — the owner rolls `value` back while focus stays on the option
+    // the user tried — and stepping from the selection would re-attempt that same
+    // option instead of moving past it. Wrap from an unmatched value too.
+    const focusedIndex = buttonRefs.current.findIndex(
+      (button) => button !== null && button === document.activeElement
+    );
+    const from = focusedIndex !== -1 ? focusedIndex : activeIndex === -1 ? 0 : activeIndex;
     switch (event.key) {
       case "ArrowRight":
       case "ArrowDown":
@@ -122,6 +131,7 @@ export function SegmentedRadioGroup<T extends string>({
       )}
       role="radiogroup"
       aria-label={ariaLabel}
+      aria-describedby={ariaDescribedBy}
       onKeyDown={handleKeyDown}
     >
       {thumb && (
@@ -130,10 +140,11 @@ export function SegmentedRadioGroup<T extends string>({
           className={cn(
             "absolute top-0.5 bottom-0.5 left-0 z-0 rounded-[var(--radius-sm)] pointer-events-none",
             // Per docs/themes/interaction-state-recipes.md "Segmented Toggle Group Active
-            // State": overlay-medium fill, border-strong boundary. The previous
-            // panel-elevated + border-default pairing put the selected segment 1.15:1
-            // against its track, well under SC 1.4.11's 3:1 for a selection indicator.
-            "bg-overlay-medium border border-border-strong shadow-[var(--theme-shadow-ambient)]",
+            // State": overlay-medium fill. The boundary is text-secondary, not
+            // border-strong: border-strong measured 1.5–1.7:1 against the track in dark
+            // and light themes, and the fill barely moves, so the selection leaned on
+            // the label alone — under SC 1.4.11's 3:1 for a state indicator.
+            "bg-overlay-medium border border-text-secondary shadow-[var(--theme-shadow-ambient)]",
             // forced-colors discards the fill and the ambient shadow, so the thumb says
             // "selected" with a system-coloured border. Not a Highlight *fill*: that
             // makes Chromium paint a backplate behind the label and the text vanishes.
@@ -175,7 +186,7 @@ export function SegmentedRadioGroup<T extends string>({
               // selected state.
               isActive &&
                 !thumb &&
-                "bg-overlay-medium border border-border-strong forced-colors:border-[Highlight]",
+                "bg-overlay-medium border border-text-secondary forced-colors:border-[Highlight]",
               disabled && "opacity-40"
             )}
           >

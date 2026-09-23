@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Key, Lock, ShieldAlert, Eye, EyeOff, Plus, Trash2, Save, Globe } from "lucide-react";
+import { Lock, ShieldAlert, Eye, EyeOff, Plus, Trash2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { SettingsSection } from "@/components/Settings/SettingsSection";
+import {
+  SettingsActions,
+  SettingsEmptyRow,
+  SettingsGroup,
+} from "@/components/Settings/SettingsGroup";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { EnvVar } from "./projectSettingsDirty";
@@ -152,91 +160,82 @@ export function EnvironmentVariablesEditor({
 
   const showSaveControls = Boolean(onFlush);
 
-  const helperText = useMemo(() => {
-    return `Toolbar applies to "${projectLabel}" — reopening a terminal spawns with the latest values`;
-  }, [projectLabel]);
+  // Save and Discard only mean something once the draft differs from what was loaded.
+  const isDirty =
+    rows.length !== environmentVariables.length ||
+    rows.some((row, index) => {
+      const original = environmentVariables[index];
+      return !original || original.key !== row.key || original.value !== row.value;
+    });
+
+  const helperText = `Applies to new terminals in "${projectLabel}" — reopen a terminal to pick up changes`;
 
   const hasGlobals = sortedGlobalEntries.length > 0;
 
+  const addButton = (
+    <Button variant="outline" size="sm" onClick={addRow}>
+      <Plus />
+      Add variable
+    </Button>
+  );
+  const insecureCount = settings?.insecureEnvironmentVariables?.length ?? 0;
+
   return (
-    <div id="project-env-vars" className="mb-6">
+    <div id="project-env-vars" className="space-y-8">
       {hasGlobals && (
-        <>
-          <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
-            <Globe className="h-4 w-4" />
-            Inherited (Global)
-          </h3>
-          <div className="space-y-2 mb-4">
+        <SettingsSection
+          title="Inherited from global"
+          description="Read-only here. A project variable with the same name overrides it."
+        >
+          <SettingsGroup>
             {sortedGlobalEntries.map(([key, value]) => {
               const isOverridden = overriddenGlobalKeys.has(key);
               const isSensitive = isSensitiveEnvKey(key);
               return (
-                <div
-                  key={`global-${key}`}
-                  className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-surface-canvas border border-border-default opacity-70"
-                >
+                <div key={`global-${key}`} className="flex items-center gap-3 px-4 py-2.5">
                   <span
                     className={cn(
-                      "flex-1 text-sm text-text-primary font-mono px-2 py-1",
-                      isOverridden && "line-through text-daintree-text/40"
+                      "flex-1 min-w-0 truncate text-sm font-mono",
+                      isOverridden ? "line-through text-text-secondary" : "text-text-primary"
                     )}
                   >
                     {key}
                   </span>
-                  <span className="text-daintree-text/60">=</span>
-                  <span className="flex-1 text-sm text-daintree-text/50 font-mono px-2 py-1">
+                  <span className="text-text-secondary" aria-hidden="true">
+                    =
+                  </span>
+                  <span className="flex-1 min-w-0 truncate text-sm text-text-secondary font-mono">
                     {isSensitive ? "********" : value}
                   </span>
-                  {isOverridden ? (
-                    <span className="text-3xs px-1.5 py-0.5 rounded bg-status-warning/15 text-status-warning font-medium">
-                      Overridden
-                    </span>
-                  ) : (
-                    <span className="text-3xs px-1.5 py-0.5 rounded bg-status-info/15 text-status-info font-medium">
-                      Global
-                    </span>
-                  )}
+                  <Badge size="xs">{isOverridden ? "Overridden" : "Global"}</Badge>
                 </div>
               );
             })}
-          </div>
-          <div className="border-t border-border-default mb-4" />
-        </>
+          </SettingsGroup>
+        </SettingsSection>
       )}
 
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
-          <Key className="h-4 w-4" />
-          Environment Variables
-        </h3>
-        {showSaveControls &&
-          settings?.insecureEnvironmentVariables &&
-          settings.insecureEnvironmentVariables.length > 0 && (
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={isSaving}
-              className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {settings.insecureEnvironmentVariables.length === 1
+      <SettingsSection
+        title="Environment variables"
+        description={
+          <>
+            Project-specific variables injected into new terminals. Names containing KEY, SECRET,
+            TOKEN, or PASSWORD are kept out of the shared settings file{" "}
+            <Lock className="inline h-3 w-3" aria-hidden="true" />.
+          </>
+        }
+        action={
+          showSaveControls && insecureCount > 0 ? (
+            <Button variant="outline" size="sm" onClick={handleSave} disabled={isSaving}>
+              {insecureCount === 1
                 ? "Move 1 value out of shared settings"
-                : `Move ${settings.insecureEnvironmentVariables.length} values out of shared settings`}
-            </button>
-          )}
-      </div>
-      <p className="text-xs text-text-secondary mb-4">
-        Project-specific variables injected into new terminals. Names containing KEY, SECRET, TOKEN,
-        or PASSWORD are kept out of the shared settings file{" "}
-        <Lock className="inline h-3 w-3" aria-hidden="true" />.
-      </p>
-
-      <div className="space-y-2">
-        {rows.length === 0 ? (
-          <div className="text-sm text-text-secondary text-center py-8 border border-dashed border-border-default rounded-[var(--radius-md)]">
-            No environment variables configured yet
-          </div>
-        ) : (
-          rows.map((row, index) => {
+                : `Move ${insecureCount} values out of shared settings`}
+            </Button>
+          ) : undefined
+        }
+      >
+        <SettingsGroup>
+          {rows.map((row, index) => {
             const isSensitive = isSensitiveEnvKey(row.key);
             const isInsecure = settings?.insecureEnvironmentVariables?.includes(row.key);
             const isSecured = isSensitive && !isInsecure;
@@ -244,48 +243,43 @@ export function EnvironmentVariablesEditor({
             const shouldMask = isSensitive && !isVisible;
             const error = rowErrors[row.id];
             return (
-              <div key={row.id}>
-                <div
-                  className={cn(
-                    "flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-surface-canvas border",
-                    error ? "border-status-error/40" : "border-border-default"
-                  )}
-                >
+              <div key={row.id} className="px-4 py-2.5">
+                <div className="flex items-center gap-2">
                   {isSecured && (
                     <Lock
-                      className="h-3.5 w-3.5 text-daintree-text/60 flex-shrink-0"
+                      className="h-3.5 w-3.5 text-text-secondary flex-shrink-0"
                       aria-label="Kept out of shared settings"
                     />
                   )}
                   {isInsecure && (
                     <ShieldAlert
-                      className="h-3.5 w-3.5 text-status-warning/60 flex-shrink-0"
+                      className="h-3.5 w-3.5 text-status-warning flex-shrink-0"
                       aria-label="Stored in the shared settings file"
                     />
                   )}
-                  <input
+                  <Input
                     type="text"
                     value={row.key}
                     onChange={(e) => updateRow(index, "key", e.target.value)}
                     spellCheck={false}
                     autoCapitalize="none"
-                    className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+                    invalid={!!error}
+                    className="flex-1 min-w-0 font-mono"
                     placeholder="VARIABLE_NAME"
                     aria-label="Environment variable name"
                   />
-                  <span className="text-daintree-text/60">=</span>
-                  <div className="flex-1 relative">
-                    <input
+                  <span className="text-text-secondary" aria-hidden="true">
+                    =
+                  </span>
+                  <div className="flex-1 min-w-0 relative">
+                    <Input
                       type={shouldMask ? "password" : "text"}
                       value={row.value}
                       onChange={(e) => updateRow(index, "value", e.target.value)}
                       spellCheck={false}
                       autoCapitalize="none"
                       autoComplete={isSensitive ? "new-password" : "off"}
-                      className={cn(
-                        "w-full bg-surface-sidebar border border-border-strong rounded px-2 py-1 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30",
-                        isSensitive && "pr-8"
-                      )}
+                      className={cn("font-mono", isSensitive && "pr-8")}
                       placeholder="value"
                       aria-label="Environment variable value"
                     />
@@ -293,54 +287,66 @@ export function EnvironmentVariablesEditor({
                       <button
                         type="button"
                         onClick={() => toggleVisibility(row.id)}
-                        className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-daintree-border/50 transition-colors"
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
                         aria-pressed={isVisible}
                         aria-label={`${isVisible ? "Hide" : "Show"} value${row.key ? ` for ${row.key}` : ""}`}
                       >
-                        {isVisible ? (
-                          <EyeOff className="h-4 w-4 text-daintree-text/60" />
-                        ) : (
-                          <Eye className="h-4 w-4 text-daintree-text/60" />
-                        )}
+                        {isVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </button>
                     )}
                   </div>
-                  <button
-                    type="button"
+                  <Button
+                    variant="ghost-danger"
+                    size="icon-sm"
                     onClick={() => deleteRow(index, row.id)}
-                    className="p-1 rounded hover:bg-status-error/15 transition-colors"
                     aria-label="Delete environment variable"
                   >
-                    <Trash2 className="h-4 w-4 text-status-error" />
-                  </button>
+                    <Trash2 />
+                  </Button>
                 </div>
-                {error && <p className="text-2xs text-status-error mt-1 ml-1">{error}</p>}
+                {error && <p className="text-xs text-status-error mt-1">{error}</p>}
               </div>
             );
-          })
-        )}
+          })}
 
-        <Button variant="outline" onClick={addRow} className="w-full">
-          <Plus />
-          Add Variable
-        </Button>
-      </div>
+          {rows.length === 0 ? (
+            <SettingsEmptyRow action={addButton}>
+              No project variables yet — add one to set it in every new terminal
+            </SettingsEmptyRow>
+          ) : (
+            <div className="flex justify-end px-4 py-2.5">{addButton}</div>
+          )}
 
-      <p className="text-xs text-text-secondary mt-2">{helperText}</p>
-
-      {saveError && <p className="text-xs text-status-error mt-2">{saveError}</p>}
-
-      {showSaveControls && (
-        <div className="flex items-center gap-2 pt-3">
-          <Button onClick={handleSave} disabled={isSaving} size="sm">
-            <Save className="h-4 w-4" />
-            {isSaving ? "Saving…" : "Save"}
-          </Button>
-          <Button variant="outline" onClick={handleDiscard} size="sm">
-            Discard
-          </Button>
-        </div>
-      )}
+          {showSaveControls && (
+            <SettingsActions status={helperText}>
+              <Button
+                variant="outline"
+                onClick={handleDiscard}
+                size="sm"
+                disabled={!isDirty || isSaving}
+              >
+                Discard
+              </Button>
+              <Button
+                variant="contrast"
+                onClick={handleSave}
+                disabled={isSaving || !isDirty}
+                size="sm"
+              >
+                {isSaving ? "Saving…" : "Save changes"}
+              </Button>
+            </SettingsActions>
+          )}
+          {!showSaveControls && (
+            <p className="px-4 py-2.5 text-xs text-text-secondary">{helperText}</p>
+          )}
+          {saveError && (
+            <p role="alert" className="px-4 py-2.5 text-xs text-status-error">
+              {saveError}
+            </p>
+          )}
+        </SettingsGroup>
+      </SettingsSection>
     </div>
   );
 }

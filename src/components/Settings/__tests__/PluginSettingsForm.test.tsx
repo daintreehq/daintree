@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { createContext, use } from "react";
+import type { ReactNode } from "react";
 import { PluginSettingsForm } from "../PluginSettingsForm";
 import type {
   LoadedPluginInfo,
@@ -25,6 +27,47 @@ vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (s: { currentProject: { id: string } | null }) => unknown) =>
     selector({ currentProject: currentProjectId ? { id: currentProjectId } : null }),
 }));
+
+// The real Select lazy-loads Radix. This stand-in keeps the trigger's own props (its
+// label wiring and disabled state) and lets a test pick an option with a click.
+vi.mock("@/components/ui/select", () => {
+  interface Ctx {
+    value: string;
+    onValueChange: (v: string) => void;
+    disabled?: boolean;
+  }
+  const SelectCtx = createContext<Ctx | null>(null);
+  return {
+    Select: ({ children, ...ctx }: Ctx & { children: ReactNode }) => (
+      <SelectCtx value={ctx}>{children}</SelectCtx>
+    ),
+    SelectTrigger: ({ children, ...props }: { children: ReactNode }) => {
+      const ctx = use(SelectCtx)!;
+      return (
+        <button type="button" role="combobox" disabled={ctx.disabled} {...props}>
+          {children}
+        </button>
+      );
+    },
+    SelectValue: ({ placeholder }: { placeholder?: string }) => {
+      const ctx = use(SelectCtx)!;
+      return <span>{ctx.value || placeholder}</span>;
+    },
+    SelectContent: ({ children }: { children: ReactNode }) => <div role="listbox">{children}</div>,
+    SelectItem: ({ value, children }: { value: string; children: ReactNode }) => {
+      const ctx = use(SelectCtx)!;
+      return (
+        <div
+          role="option"
+          aria-selected={ctx.value === value}
+          onClick={() => ctx.onValueChange(value)}
+        >
+          {children}
+        </div>
+      );
+    },
+  };
+});
 
 const pluginApi = {
   getSettingValues: vi.fn(),
@@ -167,9 +210,11 @@ describe("PluginSettingsForm", () => {
         plugin={makePlugin([{ id: "mode", type: "enum", label: "Mode", options: ["a", "b"] }])}
       />
     );
-    const select = (await screen.findByLabelText("Mode")) as HTMLSelectElement;
+    const select = (await screen.findByRole("combobox", { name: "Mode" })) as HTMLButtonElement;
     await waitFor(() => expect(select.disabled).toBe(false));
-    fireEvent.change(select, { target: { value: "b" } });
+    // Unset: the placeholder, not a silently adopted first option.
+    expect(select.textContent).toBe("Select…");
+    fireEvent.click(within(screen.getByRole("listbox")).getByRole("option", { name: "b" }));
     await waitFor(() =>
       expect(pluginApi.setSettingValue).toHaveBeenCalledWith("acme.test", "mode", "b", "user", null)
     );
@@ -269,6 +314,60 @@ describe("PluginSettingsForm", () => {
     expect(await screen.findByText(/re-save to move it into the OS keychain/)).toBeTruthy();
   });
 
+  it("marks a stored value as modified and resets it through the row's reset", async () => {
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ values: { host: "remote" } }));
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([{ id: "host", type: "string", label: "Host", default: "localhost" }])}
+      />
+    );
+    const input = (await screen.findByLabelText("Host")) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("remote"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset Host to default" }));
+    await waitFor(() =>
+      expect(pluginApi.deleteSettingValue).toHaveBeenCalledWith("acme.test", "host", "user", null)
+    );
+    await waitFor(() => expect(input.value).toBe("localhost"));
+    // Back at the default: nothing left to reset.
+    expect(screen.queryByRole("button", { name: "Reset Host to default" })).toBeNull();
+  });
+
+  it("shows no reset for a field still at its default", async () => {
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([{ id: "host", type: "string", label: "Host", default: "localhost" }])}
+      />
+    );
+    const input = (await screen.findByLabelText("Host")) as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    expect(screen.queryByRole("button", { name: "Reset Host to default" })).toBeNull();
+
+    fireEvent.change(input, { target: { value: "elsewhere" } });
+    fireEvent.blur(input);
+    expect(await screen.findByRole("button", { name: "Reset Host to default" })).toBeTruthy();
+  });
+
+  it("describes a field by its manifest description and error", async () => {
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([
+          { id: "cfg", type: "json", label: "Config", description: "Extra options" },
+        ])}
+      />
+    );
+    const textarea = (await screen.findByLabelText("Config")) as HTMLTextAreaElement;
+    await waitFor(() => expect(textarea.disabled).toBe(false));
+    fireEvent.change(textarea, { target: { value: "{" } });
+    fireEvent.blur(textarea);
+    await screen.findByText("Enter valid JSON");
+    const described = (textarea.getAttribute("aria-describedby") ?? "")
+      .split(" ")
+      .map((id) => document.getElementById(id)?.textContent);
+    expect(described).toEqual(["Enter valid JSON", "Extra options"]);
+    expect(textarea.getAttribute("aria-invalid")).toBe("true");
+  });
+
   it("renders a scope badge per field", async () => {
     render(
       <PluginSettingsForm
@@ -287,7 +386,7 @@ describe("PluginSettingsForm", () => {
     );
     const input = (await screen.findByLabelText("P")) as HTMLInputElement;
     expect(input.disabled).toBe(true);
-    expect(screen.getByText("Open a project to edit this setting.")).toBeTruthy();
+    expect(screen.getByText("Open a project to edit this setting")).toBeTruthy();
   });
 
   it("renders a directory field as a read-only input plus a Browse button", async () => {

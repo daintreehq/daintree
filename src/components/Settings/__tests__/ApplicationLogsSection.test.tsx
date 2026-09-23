@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { ApplicationLogsSection } from "../TroubleshootingTab";
+import { ClearLogsRow } from "../TroubleshootingTab";
 
 type NotifyPayload = {
   type: string;
@@ -36,7 +36,7 @@ vi.stubGlobal(
   }
 );
 
-describe("ApplicationLogsSection — clear confirmation", () => {
+describe("ClearLogsRow — clear confirmation", () => {
   const clearDispatches = () => mockDispatch.mock.calls.filter((call) => call[0] === "logs.clear");
 
   beforeEach(() => {
@@ -45,19 +45,19 @@ describe("ApplicationLogsSection — clear confirmation", () => {
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
   });
 
-  it("opens a confirmation instead of clearing when Clear Logs is clicked", async () => {
-    render(<ApplicationLogsSection />);
+  it("opens a confirmation instead of clearing when Clear logs is clicked", async () => {
+    render(<ClearLogsRow />);
 
-    fireEvent.click(screen.getByText("Clear Logs"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear logs" }));
 
     expect(await screen.findByRole("alertdialog")).toBeTruthy();
     expect(clearDispatches()).toHaveLength(0);
   });
 
   it("preserves the logs when the confirmation is cancelled", async () => {
-    render(<ApplicationLogsSection />);
+    render(<ClearLogsRow />);
 
-    fireEvent.click(screen.getByText("Clear Logs"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear logs" }));
     const dialog = await screen.findByRole("alertdialog");
     fireEvent.click(within(dialog).getByText("Cancel"));
 
@@ -66,9 +66,9 @@ describe("ApplicationLogsSection — clear confirmation", () => {
   });
 
   it("clears exactly once when confirmed, then closes", async () => {
-    render(<ApplicationLogsSection />);
+    render(<ClearLogsRow />);
 
-    fireEvent.click(screen.getByText("Clear Logs"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear logs" }));
     const dialog = await screen.findByRole("alertdialog");
     fireEvent.click(within(dialog).getByText("Clear logs"));
 
@@ -78,9 +78,9 @@ describe("ApplicationLogsSection — clear confirmation", () => {
 
   it("surfaces a failed clear with a recovery action that re-confirms", async () => {
     mockDispatch.mockResolvedValue({ ok: false, error: { message: "buffer locked" } });
-    render(<ApplicationLogsSection />);
+    render(<ClearLogsRow />);
 
-    fireEvent.click(screen.getByText("Clear Logs"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear logs" }));
     const dialog = await screen.findByRole("alertdialog");
     fireEvent.click(within(dialog).getByText("Clear logs"));
 
@@ -105,8 +105,8 @@ describe("ApplicationLogsSection — clear confirmation", () => {
   it("does not use window.confirm", () => {
     const confirmSpy = vi.spyOn(window, "confirm");
 
-    render(<ApplicationLogsSection />);
-    fireEvent.click(screen.getByText("Clear Logs"));
+    render(<ClearLogsRow />);
+    fireEvent.click(screen.getByRole("button", { name: "Clear logs" }));
 
     expect(confirmSpy).not.toHaveBeenCalled();
     confirmSpy.mockRestore();

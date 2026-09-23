@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Upload, Download } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
 import type { KeybindingImportResult } from "@shared/types/ipc/api";
@@ -85,32 +85,14 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
 
   return (
     <div className="flex items-center gap-2">
-      <button
-        onClick={handleExport}
-        disabled={isLoading}
-        className={cn(
-          "flex items-center gap-1.5 px-3 py-2 text-sm border border-border-default rounded transition-colors",
-          isLoading
-            ? "opacity-50 cursor-not-allowed text-daintree-text/40"
-            : "text-text-secondary hover:text-text-primary hover:border-border-default"
-        )}
-      >
-        <Download className="w-3.5 h-3.5" />
+      <Button type="button" variant="outline" onClick={handleExport} disabled={isLoading}>
+        <Download aria-hidden="true" />
         Export
-      </button>
-      <button
-        onClick={handleImport}
-        disabled={isLoading}
-        className={cn(
-          "flex items-center gap-1.5 px-3 py-2 text-sm border border-border-default rounded transition-colors",
-          isLoading
-            ? "opacity-50 cursor-not-allowed text-daintree-text/40"
-            : "text-text-secondary hover:text-text-primary hover:border-border-default"
-        )}
-      >
-        <Upload className="w-3.5 h-3.5" />
+      </Button>
+      <Button type="button" variant="outline" onClick={handleImport} disabled={isLoading}>
+        <Upload aria-hidden="true" />
         Import
-      </button>
+      </Button>
     </div>
   );
 }

@@ -128,7 +128,7 @@ export function ThemeSelector<T extends { id: string }>({
         "[&>*]:pointer-events-none",
         item.id === selectedId
           ? "border-border-strong bg-overlay-selected"
-          : "border-border-default bg-surface-canvas hover:border-daintree-text/30"
+          : "border-border-default bg-surface-canvas hover:border-border-strong"
       )}
     >
       {renderPreview(item)}
@@ -144,7 +144,7 @@ export function ThemeSelector<T extends { id: string }>({
     <div className={cn("space-y-2", className)}>
       <div className="sticky top-0 z-20 bg-surface-canvas py-1">
         <div className="relative">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-daintree-text/40" />
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-secondary" />
           <input
             type="search"
             value={query}

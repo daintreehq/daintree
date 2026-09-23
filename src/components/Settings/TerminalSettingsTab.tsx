@@ -1,34 +1,24 @@
-import {
-  LayoutGrid,
-  Columns,
-  Rows,
-  AlertTriangle,
-  Zap,
-  HardDrive,
-  ChevronDown,
-  MessageSquare,
-  MousePointerClick,
-  SplitSquareHorizontal,
-  MonitorPlay,
-  RotateCcw,
-  Ear,
-  Activity,
-  Shield,
-  Cpu,
-  MemoryStick,
-  Layers,
-} from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
+import { SettingsPresetGroup } from "@/components/Settings/SettingsPresetGroup";
+import type { SettingsPresetOption } from "@/components/Settings/SettingsPresetGroup";
+import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
+import {
+  SettingsDependents,
+  SettingsGroup,
+  SettingsRow,
+} from "@/components/Settings/SettingsGroup";
+import { Button } from "@/components/ui/button";
 import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
+import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { logError, logWarn } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import type { ActionId } from "@shared/types/actions";
 import {
   useLayoutConfigStore,
   usePerformanceModeStore,
@@ -48,50 +38,63 @@ import { formatBytes } from "@/lib/formatBytes";
 import { actionService } from "@/services/ActionService";
 import { useCachedProjectViewsStore } from "@/store/cachedProjectViewsStore";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
-import { usePanelLimitStore } from "@/store/panelLimitStore";
-import { useMemoryLeakConfigStore } from "@/store/memoryLeakConfigStore";
+import { computeHardwareDefaults, usePanelLimitStore } from "@/store/panelLimitStore";
+import {
+  useMemoryLeakConfigStore,
+  DEFAULT_AUTO_RESTART_THRESHOLD_MB,
+} from "@/store/memoryLeakConfigStore";
+import { SCROLLBACK_DEFAULT } from "@shared/config/scrollback";
+import { computeDefaultCachedViews } from "@shared/config/cachedProjectViews";
 import type { HardwareInfo } from "@shared/types/ipc/system";
 
 const STRATEGIES: Array<{
   id: PanelLayoutStrategy;
   label: string;
   description: string;
-  icon: typeof LayoutGrid;
 }> = [
   {
     id: "automatic",
     label: "Automatic",
-    description: "2→3→4 cols",
-    icon: LayoutGrid,
+    description:
+      "A balanced grid that adapts to the terminal count: 1–4 terminals use 2 columns, 5 or more use up to 4",
   },
   {
     id: "fixed-columns",
-    label: "Fixed Columns",
-    description: "Vertical Scroll",
-    icon: Columns,
+    label: "Fixed columns",
+    description: "Keeps a set number of columns and adds rows as you open more terminals",
   },
   {
     id: "fixed-rows",
-    label: "Fixed Rows",
-    description: "Horizontal Expand",
-    icon: Rows,
+    label: "Fixed rows",
+    description: "Keeps a set number of rows and adds columns as you open more terminals",
   },
 ];
 
-const SCROLLBACK_OPTIONS = [
-  { value: 500, label: "500 lines", description: "Minimal" },
-  { value: 1000, label: "1,000 lines", description: "Default" },
-  { value: 2500, label: "2,500 lines", description: "Extended" },
-  { value: 5000, label: "5,000 lines", description: "Full history" },
-] as const;
+// Mirrors DEFAULT_LAYOUT_CONFIG in layoutConfigStore, which does not export it.
+const DEFAULT_STRATEGY: PanelLayoutStrategy = "automatic";
+const DEFAULT_GRID_VALUE = 3;
+const DEFAULT_SPLIT_RATIO = 0.5;
 
-const CACHED_VIEWS_OPTIONS = [
-  { value: 1, label: "1 project", description: "Minimal" },
-  { value: 2, label: "2 projects", description: "Balanced" },
-  { value: 3, label: "3 projects", description: "Balanced" },
-  { value: 4, label: "4 projects", description: "More cache" },
-  { value: 5, label: "5 projects", description: "Max cache" },
-] as const;
+const SCROLLBACK_OPTIONS: readonly SettingsPresetOption<number>[] = [
+  { value: 500, label: "500" },
+  { value: 1000, label: "1,000" },
+  { value: 2500, label: "2,500" },
+  { value: 5000, label: "5,000" },
+];
+
+const CACHED_VIEWS_OPTIONS: readonly SettingsPresetOption<number>[] = [
+  { value: 1, label: "1" },
+  { value: 2, label: "2" },
+  { value: 3, label: "3" },
+  { value: 4, label: "4" },
+  { value: 5, label: "5" },
+];
+
+const SCREEN_READER_OPTIONS: readonly SettingsPresetOption<ScreenReaderMode>[] = [
+  { value: "auto", label: "Auto" },
+  { value: "on", label: "On" },
+  { value: "off", label: "Off" },
+];
 
 const TYPICAL_TERMINAL_COUNTS: { agent: number; plain: number } = {
   agent: 8,
@@ -107,6 +110,21 @@ const TERMINAL_SUBTABS: SettingsSubtabItem[] = [
 ];
 
 const TERMINAL_SUBTAB_IDS = TERMINAL_SUBTABS.map((s) => s.id);
+
+type SaveGroup =
+  "resources" | "project-views" | "input" | "grid-layout" | "scrollback" | "accessibility";
+
+interface SaveFailure {
+  group: SaveGroup;
+  retry: () => void;
+}
+
+async function dispatchSetting(actionId: ActionId, args: unknown): Promise<void> {
+  const result = await actionService.dispatch(actionId, args, { source: "user" });
+  if (!result.ok) {
+    throw new Error(result.error.message);
+  }
+}
 
 interface TerminalSettingsTabProps {
   activeSubtab: string | null;
@@ -170,8 +188,6 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
       });
   }, [initializeFromHardware]);
 
-  const [showMemoryDetails, setShowMemoryDetails] = useState(false);
-
   const memoryEstimate = useMemo(() => {
     const base = performanceMode ? PERFORMANCE_MODE_SCROLLBACK : scrollbackLines;
     return estimateMemoryUsage(TYPICAL_TERMINAL_COUNTS, base);
@@ -180,8 +196,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const scrollbackLimits = useMemo(() => {
     const effectiveBase = performanceMode ? PERFORMANCE_MODE_SCROLLBACK : scrollbackLines;
     const types: Array<{ isAgent: boolean; label: string }> = [
-      { isAgent: true, label: "Agent (Claude/Gemini/Codex/OpenCode)" },
-      { isAgent: false, label: "Terminal" },
+      { isAgent: true, label: "Agent terminals" },
+      { isAgent: false, label: "Shells and dev servers" },
     ];
     return types.map(({ isAgent, label }) => ({
       label,
@@ -191,109 +207,153 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
     }));
   }, [performanceMode, scrollbackLines]);
 
-  const handleScrollbackChange = async (value: number) => {
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+
+  // Every save here rolls its value back on failure (the actions do it themselves;
+  // the direct IPC calls pass a rollback), so the banner only has to say so and
+  // offer the same write again. `apply` is the whole operation — any optimistic
+  // store update as well as the write — so Retry replays both, and a retry that
+  // succeeds after a rollback leaves the page showing what was saved.
+  const persist = async (
+    group: SaveGroup,
+    apply: () => Promise<unknown>,
+    logMessage: string,
+    rollback?: () => void
+  ): Promise<void> => {
     try {
-      const result = await actionService.dispatch(
-        "terminalConfig.setScrollback",
-        { scrollbackLines: value },
-        { source: "user" }
-      );
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
+      await apply();
+      setSaveFailure((current) => (current?.group === group ? null : current));
     } catch (error) {
-      logError("Failed to persist scrollback setting", error);
+      rollback?.();
+      logError(logMessage, error);
+      setSaveFailure({
+        group,
+        retry: () => void persist(group, apply, logMessage, rollback),
+      });
     }
   };
 
-  const handleStrategyChange = (strategy: PanelLayoutStrategy) => {
-    void actionService.dispatch("panel.gridLayout.setStrategy", { strategy }, { source: "user" });
-  };
+  const saveError = (group: SaveGroup) =>
+    saveFailure?.group === group ? (
+      <SettingsLoadErrorBanner
+        title="Couldn't save that change"
+        message="The setting is back to its previous value."
+        onRetry={saveFailure.retry}
+      />
+    ) : null;
+
+  const handleScrollbackChange = (value: number) =>
+    persist(
+      "scrollback",
+      () => dispatchSetting("terminalConfig.setScrollback", { scrollbackLines: value }),
+      "Failed to persist scrollback setting"
+    );
+
+  const handleStrategyChange = (strategy: PanelLayoutStrategy) =>
+    void persist(
+      "grid-layout",
+      () => dispatchSetting("panel.gridLayout.setStrategy", { strategy }),
+      "Failed to persist grid layout strategy"
+    );
 
   const handleValueChange = (val: string) => {
     const num = parseInt(val, 10);
     if (!isNaN(num) && num >= 1 && num <= 10) {
-      void actionService.dispatch("panel.gridLayout.setValue", { value: num }, { source: "user" });
+      void persist(
+        "grid-layout",
+        () => dispatchSetting("panel.gridLayout.setValue", { value: num }),
+        "Failed to persist grid layout value"
+      );
     }
   };
 
-  const handlePerformanceModeToggle = async () => {
-    const newValue = !performanceMode;
-    try {
-      const result = await actionService.dispatch(
-        "terminalConfig.setPerformanceMode",
-        { performanceMode: newValue },
-        { source: "user" }
-      );
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-    } catch (error) {
-      logError("Failed to persist performance mode setting", error);
-    }
+  const setPerformanceMode = (value: boolean) =>
+    persist(
+      "resources",
+      () => dispatchSetting("terminalConfig.setPerformanceMode", { performanceMode: value }),
+      "Failed to persist performance mode setting"
+    );
+
+  const setResourceMonitoring = (value: boolean) => {
+    const previous = resourceMonitoringEnabled;
+    void persist(
+      "resources",
+      () => {
+        setResourceMonitoringEnabled(value);
+        return window.electron.terminalConfig.setResourceMonitoring(value);
+      },
+      "Failed to persist resource monitoring setting",
+      () => setResourceMonitoringEnabled(previous)
+    );
   };
 
-  const handleHybridInputEnabledToggle = async () => {
-    const nextValue = !hybridInputEnabled;
-    try {
-      const result = await actionService.dispatch(
-        "terminalConfig.setHybridInputEnabled",
-        { enabled: nextValue },
-        { source: "user" }
-      );
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-    } catch (error) {
-      logError("Failed to persist hybrid input setting", error);
-    }
+  const setMemoryLeakDetection = (value: boolean) => {
+    const previous = memoryLeakDetectionEnabled;
+    void persist(
+      "resources",
+      () => {
+        setMemoryLeakDetectionEnabled(value);
+        return window.electron.terminalConfig.setMemoryLeakDetection(value);
+      },
+      "Failed to persist memory leak detection setting",
+      () => setMemoryLeakDetectionEnabled(previous)
+    );
   };
 
-  const handleHybridInputAutoFocusToggle = async () => {
-    const nextValue = !hybridInputAutoFocus;
-    try {
-      const result = await actionService.dispatch(
-        "terminalConfig.setHybridInputAutoFocus",
-        { enabled: nextValue },
-        { source: "user" }
-      );
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-    } catch (error) {
-      logError("Failed to persist hybrid input focus setting", error);
-    }
+  const saveAutoRestartThreshold = (value: number, previous: number) => {
+    void persist(
+      "resources",
+      () => {
+        setAutoRestartThresholdMb(value);
+        return window.electron.terminalConfig.setMemoryLeakAutoRestartThresholdMb(value);
+      },
+      "Failed to persist memory leak auto-restart threshold",
+      () => setAutoRestartThresholdMb(previous)
+    );
   };
 
-  const handleScreenReaderModeChange = async (mode: ScreenReaderMode) => {
-    try {
-      const result = await actionService.dispatch(
-        "terminalConfig.setScreenReaderMode",
-        { mode },
-        { source: "user" }
-      );
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-    } catch (error) {
-      logError("Failed to persist screen reader mode", error);
-    }
-  };
+  const setHybridInputEnabled = (enabled: boolean) =>
+    persist(
+      "input",
+      () => dispatchSetting("terminalConfig.setHybridInputEnabled", { enabled }),
+      "Failed to persist hybrid input setting"
+    );
 
-  const handleCachedProjectViewsChange = async (value: number) => {
-    try {
-      const result = await actionService.dispatch(
-        "terminalConfig.setCachedProjectViews",
-        { cachedProjectViews: value },
-        { source: "user" }
-      );
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-    } catch (error) {
-      logError("Failed to persist cached project views setting", error);
-    }
-  };
+  const setHybridInputAutoFocus = (enabled: boolean) =>
+    persist(
+      "input",
+      () => dispatchSetting("terminalConfig.setHybridInputAutoFocus", { enabled }),
+      "Failed to persist hybrid input focus setting"
+    );
+
+  const handleScreenReaderModeChange = (mode: ScreenReaderMode) =>
+    persist(
+      "accessibility",
+      () => dispatchSetting("terminalConfig.setScreenReaderMode", { mode }),
+      "Failed to persist screen reader mode"
+    );
+
+  const handleCachedProjectViewsChange = (value: number) =>
+    persist(
+      "project-views",
+      () => dispatchSetting("terminalConfig.setCachedProjectViews", { cachedProjectViews: value }),
+      "Failed to persist cached project views setting"
+    );
+
+  // The same recommendation the bulk reset applies; unknown until the hardware
+  // probe answers, and then no row claims to differ from it.
+  const hardwareLimits =
+    hardwareInfo && hardwareInfo.totalMemoryBytes > 0
+      ? computeHardwareDefaults(hardwareInfo.totalMemoryBytes)
+      : null;
+
+  // Main reports the effective count (the stored value, else this same RAM
+  // tier), so a count off the tier is one the user chose. Unknown until the
+  // hardware probe answers.
+  const defaultCachedViews =
+    hardwareInfo && hardwareInfo.totalMemoryBytes > 0
+      ? computeDefaultCachedViews(hardwareInfo.totalMemoryBytes)
+      : null;
 
   const effectiveSubtab =
     activeSubtab && TERMINAL_SUBTAB_IDS.includes(activeSubtab) ? activeSubtab : "performance";
@@ -308,583 +368,450 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         ariaLabel="Terminal settings sections"
       />
 
-      <div {...subtabPanelProps("terminal", effectiveSubtab)} className="space-y-6">
+      <div {...subtabPanelProps("terminal", effectiveSubtab)} className="space-y-8">
         {effectiveSubtab === "performance" && (
-          <SettingsSection
-            icon={Zap}
-            title="Performance mode"
-            id="terminal-performance-mode"
-            description={`Manual safe mode for low-end hardware or high-density workflows. Reduces scrollback to ${PERFORMANCE_MODE_SCROLLBACK} lines and disables animations for maximum performance.`}
-            iconColor="text-status-warning"
-          >
-            <SettingsSwitchCard
-              icon={Zap}
-              title="Performance mode"
-              subtitle="Reduce scrollback and disable animations for low-end hardware or high-density workflows"
-              isEnabled={performanceMode}
-              onChange={handlePerformanceModeToggle}
-              ariaLabel="Performance Mode Toggle"
-              colorScheme="amber"
-              isModified={performanceMode}
-              onReset={() =>
-                void actionService.dispatch(
-                  "terminalConfig.setPerformanceMode",
-                  { performanceMode: false },
-                  { source: "user" }
-                )
-              }
-              lifecycleBadge="New Terminals"
-            />
-
-            {performanceMode && (
-              <p className="text-xs text-status-warning/80 flex items-center gap-1.5 select-text">
-                <AlertTriangle className="w-3 h-3" />
-                New terminals will use reduced scrollback. Existing terminals are unchanged until
-                respawned.
-              </p>
-            )}
-          </SettingsSection>
-        )}
-
-        {effectiveSubtab === "performance" && (
-          <SettingsSection
-            icon={Activity}
-            title="Resource monitoring"
-            id="terminal-resource-monitoring"
-            description="Show CPU and memory usage in terminal panel headers. Polls process tree every 2.5 seconds."
-          >
-            <SettingsSwitchCard
-              icon={Activity}
-              title="Resource monitoring"
-              subtitle="Display per-terminal CPU% and memory in panel headers"
-              isEnabled={resourceMonitoringEnabled}
-              onChange={() => {
-                const newValue = !resourceMonitoringEnabled;
-                setResourceMonitoringEnabled(newValue);
-                safeFireAndForget(window.electron.terminalConfig.setResourceMonitoring(newValue), {
-                  context: "Setting terminal resource monitoring",
-                });
-              }}
-              ariaLabel="Resource Monitoring Toggle"
-              isModified={resourceMonitoringEnabled}
-              onReset={() => {
-                setResourceMonitoringEnabled(false);
-                safeFireAndForget(window.electron.terminalConfig.setResourceMonitoring(false), {
-                  context: "Resetting terminal resource monitoring",
-                });
-              }}
-            />
-          </SettingsSection>
-        )}
-
-        {effectiveSubtab === "performance" && (
-          <SettingsSection
-            icon={MemoryStick}
-            title="Memory leak detection"
-            id="terminal-memory-leak-detection"
-            description="Detect runaway memory growth in terminal processes and alert with restart options. Requires resource monitoring."
-          >
-            <SettingsSwitchCard
-              icon={MemoryStick}
-              title="Memory leak detection"
-              subtitle="Show warnings when a terminal's memory grows continuously"
-              isEnabled={memoryLeakDetectionEnabled}
-              onChange={() => {
-                const newValue = !memoryLeakDetectionEnabled;
-                setMemoryLeakDetectionEnabled(newValue);
-                safeFireAndForget(window.electron.terminalConfig.setMemoryLeakDetection(newValue), {
-                  context: "Setting terminal memory leak detection",
-                });
-              }}
-              ariaLabel="Memory Leak Detection Toggle"
-              isModified={memoryLeakDetectionEnabled}
-              onReset={() => {
-                setMemoryLeakDetectionEnabled(false);
-                safeFireAndForget(window.electron.terminalConfig.setMemoryLeakDetection(false), {
-                  context: "Resetting terminal memory leak detection",
-                });
-              }}
-              disabled={!resourceMonitoringEnabled}
-            />
-
-            <div
-              className={cn(
-                "space-y-2",
-                (!memoryLeakDetectionEnabled || !resourceMonitoringEnabled) &&
-                  "opacity-50 pointer-events-none"
-              )}
-            >
-              <SettingsNumberInput
-                label="Auto-Restart Threshold (MB)"
-                description="Automatically restart a terminal when its RSS exceeds this threshold. Set between 1,024 MB and 32,768 MB."
-                min={1024}
-                max={32768}
-                step={1024}
-                value={autoRestartThresholdMb}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value, 10);
-                  if (!isNaN(val)) {
-                    setAutoRestartThresholdMb(val);
-                    if (val >= 1024 && val <= 32768) {
-                      safeFireAndForget(
-                        window.electron.terminalConfig.setMemoryLeakAutoRestartThresholdMb(val),
-                        { context: "Setting memory leak auto-restart threshold" }
-                      );
-                    }
-                  }
-                }}
-                disabled={!memoryLeakDetectionEnabled || !resourceMonitoringEnabled}
+          <SettingsSection title="Terminal resources">
+            {saveError("resources")}
+            <SettingsGroup>
+              <SettingsSwitchCard
+                id="terminal-performance-mode"
+                title="Performance mode"
+                subtitle={`Cuts scrollback to ${PERFORMANCE_MODE_SCROLLBACK} lines and turns off animations, for low-end hardware or high-density workflows. Existing terminals keep their scrollback until respawned`}
+                isEnabled={performanceMode}
+                onChange={() => void setPerformanceMode(!performanceMode)}
+                ariaLabel="Performance Mode Toggle"
+                colorScheme="amber"
+                isModified={performanceMode}
+                onReset={() => void setPerformanceMode(false)}
+                lifecycleBadge="New terminals"
               />
-            </div>
 
-            {!resourceMonitoringEnabled && (
-              <p className="text-xs text-status-warning/80 flex items-center gap-1.5 select-text">
-                <AlertTriangle className="w-3 h-3" />
-                Enable Resource Monitoring above to use memory leak detection.
-              </p>
-            )}
+              <SettingsSwitchCard
+                id="terminal-resource-monitoring"
+                title="Resource monitoring"
+                subtitle="Show per-terminal CPU and memory in panel headers. Polls the process tree every 2.5 seconds"
+                isEnabled={resourceMonitoringEnabled}
+                onChange={() => setResourceMonitoring(!resourceMonitoringEnabled)}
+                ariaLabel="Resource Monitoring Toggle"
+                isModified={resourceMonitoringEnabled}
+                onReset={() => setResourceMonitoring(false)}
+              />
+
+              <SettingsDependents
+                disabled={!resourceMonitoringEnabled}
+                reason="Turn on resource monitoring to detect memory leaks"
+              >
+                <SettingsSwitchCard
+                  id="terminal-memory-leak-detection"
+                  title="Memory leak detection"
+                  subtitle="Warn when a terminal's memory keeps growing, with options to restart it"
+                  isEnabled={memoryLeakDetectionEnabled}
+                  onChange={() => setMemoryLeakDetection(!memoryLeakDetectionEnabled)}
+                  isModified={memoryLeakDetectionEnabled}
+                  onReset={() => setMemoryLeakDetection(false)}
+                />
+
+                <SettingsDependents
+                  disabled={!memoryLeakDetectionEnabled}
+                  reason={
+                    resourceMonitoringEnabled
+                      ? "Turn on memory leak detection to restart terminals automatically"
+                      : undefined
+                  }
+                >
+                  <SettingsNumberInput
+                    label="Auto-restart threshold"
+                    description="Restart a terminal automatically once its memory (RSS) passes this. 1,024–32,768 MB"
+                    min={1024}
+                    max={32768}
+                    step={1024}
+                    suffix="MB"
+                    value={autoRestartThresholdMb}
+                    isModified={autoRestartThresholdMb !== DEFAULT_AUTO_RESTART_THRESHOLD_MB}
+                    onReset={() =>
+                      saveAutoRestartThreshold(
+                        DEFAULT_AUTO_RESTART_THRESHOLD_MB,
+                        autoRestartThresholdMb
+                      )
+                    }
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 10);
+                      if (!isNaN(val)) {
+                        const previous = autoRestartThresholdMb;
+                        if (val >= 1024 && val <= 32768) {
+                          saveAutoRestartThreshold(val, previous);
+                        } else {
+                          setAutoRestartThresholdMb(val);
+                        }
+                      }
+                    }}
+                  />
+                </SettingsDependents>
+              </SettingsDependents>
+            </SettingsGroup>
           </SettingsSection>
         )}
 
         {effectiveSubtab === "performance" && (
           <SettingsSection
-            icon={Shield}
             title="Panel limits"
             id="terminal-panel-limits"
-            description="Control when warnings appear as you open more panels. Limits are auto-detected from your hardware on first launch."
+            description="When warnings appear as you open more panels. Limits are detected from your hardware on first launch."
           >
-            <SettingsSwitchCard
-              icon={AlertTriangle}
-              title="Panel warnings"
-              subtitle="Show warning banners as you open more panels; batch spawns confirm past the limit"
-              isEnabled={!panelLimits.warningsDisabled}
-              onChange={() => setWarningsDisabled(!panelLimits.warningsDisabled)}
-              ariaLabel="Panel Warnings Toggle"
-              isModified={panelLimits.warningsDisabled}
-              onReset={() => setWarningsDisabled(false)}
-            />
-
-            <div
-              className={cn(
-                "space-y-3",
-                panelLimits.warningsDisabled && "opacity-50 pointer-events-none"
-              )}
-            >
-              <SettingsNumberInput
-                label="Soft Warning"
-                description="Show a dismissible banner when panel count reaches this number."
-                min={4}
-                max={100}
-                value={panelLimits.softWarningLimit}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value, 10);
-                  if (!isNaN(val)) setSoftWarningLimit(val);
-                }}
-                disabled={panelLimits.warningsDisabled}
+            <SettingsGroup>
+              <SettingsSwitchCard
+                id="terminal-panel-warnings-toggle"
+                title="Panel warnings"
+                subtitle="Show warning banners as you open more panels; batch spawns confirm past the limit"
+                isEnabled={!panelLimits.warningsDisabled}
+                onChange={() => setWarningsDisabled(!panelLimits.warningsDisabled)}
+                isModified={panelLimits.warningsDisabled}
+                onReset={() => setWarningsDisabled(false)}
               />
 
+              <SettingsDependents
+                disabled={panelLimits.warningsDisabled}
+                reason="Turn on panel warnings to set when they appear"
+              >
+                <SettingsNumberInput
+                  label="Soft warning"
+                  description="Show a dismissible banner when the panel count reaches this number"
+                  min={4}
+                  max={100}
+                  value={panelLimits.softWarningLimit}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value, 10);
+                    if (!isNaN(val)) setSoftWarningLimit(val);
+                  }}
+                  isModified={
+                    !!hardwareLimits && panelLimits.softWarningLimit !== hardwareLimits.soft
+                  }
+                  onReset={() => hardwareLimits && setSoftWarningLimit(hardwareLimits.soft)}
+                  resetAriaLabel="Reset soft warning to the hardware-recommended value"
+                />
+
+                <SettingsNumberInput
+                  label="Confirmation required"
+                  description="Confirm before a batch spawn (recipe or worktree spin-up) pushes the panel count past this number"
+                  min={4}
+                  max={100}
+                  value={panelLimits.confirmationLimit}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value, 10);
+                    if (!isNaN(val)) setConfirmationLimit(val);
+                  }}
+                  isModified={
+                    !!hardwareLimits && panelLimits.confirmationLimit !== hardwareLimits.confirm
+                  }
+                  onReset={() => hardwareLimits && setConfirmationLimit(hardwareLimits.confirm)}
+                  resetAriaLabel="Reset confirmation limit to the hardware-recommended value"
+                />
+              </SettingsDependents>
+
               <SettingsNumberInput
-                label="Confirmation Required"
-                description="Confirm before a batch spawn (recipe or worktree spin-up) pushes the panel count beyond this number."
+                label="Hard limit"
+                description="Absolute maximum number of panels. Can't be bypassed"
                 min={4}
                 max={100}
-                value={panelLimits.confirmationLimit}
+                value={panelLimits.hardLimit}
                 onChange={(e) => {
                   const val = parseInt(e.target.value, 10);
-                  if (!isNaN(val)) setConfirmationLimit(val);
+                  if (!isNaN(val)) setPanelHardLimit(val);
                 }}
-                disabled={panelLimits.warningsDisabled}
+                isModified={!!hardwareLimits && panelLimits.hardLimit !== hardwareLimits.hard}
+                onReset={() => hardwareLimits && setPanelHardLimit(hardwareLimits.hard)}
+                resetAriaLabel="Reset hard limit to the hardware-recommended value"
               />
-            </div>
 
-            <SettingsNumberInput
-              label="Hard Limit"
-              description="Absolute maximum number of panels. Cannot be bypassed."
-              min={4}
-              max={100}
-              value={panelLimits.hardLimit}
-              onChange={(e) => {
-                const val = parseInt(e.target.value, 10);
-                if (!isNaN(val)) setPanelHardLimit(val);
-              }}
-            />
-
-            {hardwareInfo && hardwareInfo.totalMemoryBytes > 0 && (
-              <div className="flex items-center gap-2 text-xs text-text-secondary">
-                <Cpu className="w-3 h-3" />
-                <span>
-                  Detected: {Math.round(hardwareInfo.totalMemoryBytes / (1024 * 1024 * 1024))} GB
-                  RAM, {hardwareInfo.logicalCpuCount} CPU cores
-                </span>
-              </div>
-            )}
-
-            <button
-              onClick={() => void resetToHardwareDefaults()}
-              className="flex items-center gap-2 text-xs text-text-secondary hover:text-text-primary transition-colors"
-            >
-              <RotateCcw className="w-3 h-3" />
-              <span>Reset to hardware-recommended defaults</span>
-            </button>
+              <SettingsRow
+                label="Hardware-recommended limits"
+                description={
+                  hardwareInfo && hardwareInfo.totalMemoryBytes > 0
+                    ? `Detected ${Math.round(hardwareInfo.totalMemoryBytes / (1024 * 1024 * 1024))} GB RAM, ${hardwareInfo.logicalCpuCount} CPU cores`
+                    : "Recalculate all three limits from this machine's hardware"
+                }
+                control={
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void resetToHardwareDefaults()}
+                    aria-label="Reset to hardware-recommended defaults"
+                  >
+                    Reset
+                  </Button>
+                }
+              />
+            </SettingsGroup>
           </SettingsSection>
         )}
 
         {effectiveSubtab === "performance" && (
-          <SettingsSection
-            icon={Layers}
-            title="Cached project views"
-            id="terminal-cached-project-views"
-            description="Number of project views to keep loaded in memory. Higher values keep more projects warm so switching back is near-instant; lower values save memory. The default scales with your RAM."
-          >
-            <div
-              className="grid grid-cols-5 gap-3"
-              role="radiogroup"
-              aria-label="Cached project views"
-            >
-              {CACHED_VIEWS_OPTIONS.map(({ value, label, description }) => (
-                <button
-                  key={value}
-                  onClick={() => handleCachedProjectViewsChange(value)}
-                  role="radio"
-                  aria-checked={cachedProjectViews === value}
-                  aria-label={`${label} - ${description}`}
-                  className={cn(
-                    "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                    cachedProjectViews === value
-                      ? "bg-overlay-selected border-border-strong text-text-primary font-medium"
-                      : "border-border-default hover:bg-tint/5 text-text-secondary"
-                  )}
-                >
-                  <span className="text-xs font-medium">{label}</span>
-                  <span className="text-2xs mt-0.5 opacity-60">{description}</span>
-                </button>
-              ))}
-            </div>
+          <SettingsSection title="Project views">
+            {saveError("project-views")}
+            <SettingsGroup>
+              <SettingsPresetGroup
+                id="terminal-cached-project-views"
+                label="Cached project views"
+                description="Project views kept loaded in memory. More keeps switching back near-instant; fewer saves memory. The default scales with your RAM."
+                options={CACHED_VIEWS_OPTIONS}
+                value={cachedProjectViews}
+                onChange={(value) => void handleCachedProjectViewsChange(value)}
+                isModified={
+                  defaultCachedViews !== null && cachedProjectViews !== defaultCachedViews
+                }
+                onReset={() =>
+                  defaultCachedViews !== null &&
+                  void handleCachedProjectViewsChange(defaultCachedViews)
+                }
+              />
+            </SettingsGroup>
           </SettingsSection>
         )}
 
         {effectiveSubtab === "input" && (
-          <SettingsSection
-            icon={MessageSquare}
-            title="Hybrid input bar"
-            id="terminal-hybrid-input"
-            description="Configure the bottom input bar used for agent terminals."
-          >
-            <SettingsSwitchCard
-              icon={MessageSquare}
-              title="Hybrid input bar"
-              subtitle="Show the multi-line input bar on agent terminals"
-              isEnabled={hybridInputEnabled}
-              onChange={handleHybridInputEnabledToggle}
-              ariaLabel="Hybrid Input Bar Toggle"
-              isModified={!hybridInputEnabled}
-              onReset={() =>
-                void actionService.dispatch(
-                  "terminalConfig.setHybridInputEnabled",
-                  { enabled: true },
-                  { source: "user" }
-                )
-              }
-            />
-
-            <div className="ml-4 border-l-2 border-border-default pl-4">
+          <SettingsSection title="Agent input">
+            {saveError("input")}
+            <SettingsGroup>
               <SettingsSwitchCard
-                icon={MousePointerClick}
-                title="Default focus target"
-                subtitle="Sets which sub-element starts focused on agent panes — clicking xterm or the input still wins, and Cmd-Opt-Arrow follows whichever you're currently using"
-                isEnabled={hybridInputAutoFocus}
-                onChange={handleHybridInputAutoFocusToggle}
-                ariaLabel="Default focus target toggle"
-                isModified={!hybridInputAutoFocus}
-                onReset={() =>
-                  void actionService.dispatch(
-                    "terminalConfig.setHybridInputAutoFocus",
-                    { enabled: true },
-                    { source: "user" }
-                  )
-                }
-                disabled={!hybridInputEnabled}
+                id="terminal-hybrid-input"
+                title="Hybrid input bar"
+                subtitle="Show the multi-line input bar at the bottom of agent terminals"
+                isEnabled={hybridInputEnabled}
+                onChange={() => void setHybridInputEnabled(!hybridInputEnabled)}
+                isModified={!hybridInputEnabled}
+                onReset={() => void setHybridInputEnabled(true)}
               />
-            </div>
+
+              <SettingsDependents
+                disabled={!hybridInputEnabled}
+                reason="Turn on the hybrid input bar to choose where focus starts"
+              >
+                <SettingsSwitchCard
+                  id="terminal-hybrid-autofocus"
+                  title="Focus the input bar first"
+                  subtitle="Agent panes start with the input bar focused instead of the terminal. Clicking either still wins, and Cmd-Opt-Arrow follows whichever you're using"
+                  isEnabled={hybridInputAutoFocus}
+                  onChange={() => void setHybridInputAutoFocus(!hybridInputAutoFocus)}
+                  isModified={!hybridInputAutoFocus}
+                  onReset={() => void setHybridInputAutoFocus(true)}
+                />
+              </SettingsDependents>
+            </SettingsGroup>
           </SettingsSection>
         )}
 
         {effectiveSubtab === "layout" && (
-          <div className="space-y-6">
-            <SettingsSection
-              icon={SplitSquareHorizontal}
-              title="Two-pane split layout"
-              id="terminal-two-pane-split"
-              description="When exactly two panels are open, display them with a resizable divider instead of equal columns. The split ratio is remembered per worktree."
-            >
-              <SettingsSwitchCard
-                icon={SplitSquareHorizontal}
-                title="Two-pane split"
-                subtitle="Display two panels with a resizable divider instead of equal columns"
-                isEnabled={twoPaneSplitConfig.enabled}
-                onChange={() => setTwoPaneSplitEnabled(!twoPaneSplitConfig.enabled)}
-                ariaLabel="Two-Pane Split Toggle"
-                isModified={!twoPaneSplitConfig.enabled}
-                onReset={() => setTwoPaneSplitEnabled(true)}
-              />
-
-              <div className="ml-4 space-y-3 border-l-2 border-border-default pl-4">
+          <>
+            <SettingsSection title="Two-pane split" id="terminal-two-pane-split">
+              <SettingsGroup>
                 <SettingsSwitchCard
-                  icon={MonitorPlay}
-                  title="Preview-focused layout"
-                  subtitle="Give more space to browser and dev-preview panels"
-                  isEnabled={twoPaneSplitConfig.preferPreview}
-                  onChange={() => setPreferPreview(!twoPaneSplitConfig.preferPreview)}
-                  ariaLabel="Prefer Preview Toggle"
-                  isModified={twoPaneSplitConfig.preferPreview}
-                  onReset={() => setPreferPreview(false)}
-                  disabled={!twoPaneSplitConfig.enabled}
+                  title="Split two panels with a divider"
+                  subtitle="When exactly two panels are open, show a resizable divider instead of equal columns. The ratio is remembered per worktree"
+                  isEnabled={twoPaneSplitConfig.enabled}
+                  onChange={() => setTwoPaneSplitEnabled(!twoPaneSplitConfig.enabled)}
+                  isModified={!twoPaneSplitConfig.enabled}
+                  onReset={() => setTwoPaneSplitEnabled(true)}
                 />
 
-                <div
-                  className={cn(
-                    "space-y-2",
-                    !twoPaneSplitConfig.enabled && "opacity-50 pointer-events-none"
-                  )}
-                >
-                  <label htmlFor="default-ratio-slider" className="text-sm text-text-secondary">
-                    Default Ratio
-                  </label>
-                  <div className="flex items-center gap-4">
-                    <input
-                      id="default-ratio-slider"
-                      type="range"
-                      min="20"
-                      max="80"
-                      value={Math.round(twoPaneSplitConfig.defaultRatio * 100)}
-                      onChange={(e) => setDefaultRatio(Number(e.target.value) / 100)}
-                      aria-valuetext={`${Math.round(twoPaneSplitConfig.defaultRatio * 100)} percent left, ${Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)} percent right`}
-                      className="flex-1 accent-accent-primary"
-                      disabled={!twoPaneSplitConfig.enabled}
-                    />
-                    <span
-                      className="text-xs text-text-secondary font-mono w-16 text-right"
-                      aria-hidden="true"
-                    >
-                      {Math.round(twoPaneSplitConfig.defaultRatio * 100)}/
-                      {Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)}
-                    </span>
-                  </div>
-                  <p className="text-xs text-text-secondary select-text">
-                    Default split ratio when no worktree-specific ratio is saved.
-                  </p>
-                </div>
-
-                <button
-                  onClick={resetAllWorktreeRatios}
+                <SettingsDependents
                   disabled={!twoPaneSplitConfig.enabled}
-                  className={cn(
-                    "flex items-center gap-2 text-xs text-text-secondary transition-colors",
-                    twoPaneSplitConfig.enabled
-                      ? "hover:text-text-primary"
-                      : "opacity-50 cursor-not-allowed"
-                  )}
+                  reason="Turn on the two-pane split to adjust it"
                 >
-                  <RotateCcw className="w-3 h-3" />
-                  <span>Reset all worktree split ratios</span>
-                </button>
-              </div>
+                  <SettingsSwitchCard
+                    id="terminal-preview-layout"
+                    title="Preview-focused layout"
+                    subtitle="Give more space to browser and dev-preview panels"
+                    isEnabled={twoPaneSplitConfig.preferPreview}
+                    onChange={() => setPreferPreview(!twoPaneSplitConfig.preferPreview)}
+                    isModified={twoPaneSplitConfig.preferPreview}
+                    onReset={() => setPreferPreview(false)}
+                  />
+
+                  <SettingsRow
+                    id="terminal-default-ratio"
+                    label="Default ratio"
+                    description="Used when a worktree has no saved ratio of its own. Default: 50/50"
+                    isModified={twoPaneSplitConfig.defaultRatio !== DEFAULT_SPLIT_RATIO}
+                    onReset={() => setDefaultRatio(DEFAULT_SPLIT_RATIO)}
+                    control={({ labelId, descriptionId, disabled }) => (
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="range"
+                          min="20"
+                          max="80"
+                          value={Math.round(twoPaneSplitConfig.defaultRatio * 100)}
+                          onChange={(e) => setDefaultRatio(Number(e.target.value) / 100)}
+                          aria-labelledby={labelId}
+                          aria-describedby={descriptionId}
+                          aria-valuetext={`${Math.round(twoPaneSplitConfig.defaultRatio * 100)} percent left, ${Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)} percent right`}
+                          className="w-40 accent-[var(--color-text-primary)] disabled:opacity-50"
+                          disabled={disabled}
+                        />
+                        <span
+                          className="text-xs text-text-secondary font-mono w-12 text-right"
+                          aria-hidden="true"
+                        >
+                          {Math.round(twoPaneSplitConfig.defaultRatio * 100)}/
+                          {Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)}
+                        </span>
+                      </div>
+                    )}
+                  />
+
+                  <SettingsRow
+                    id="terminal-reset-ratios"
+                    label="Worktree split ratios"
+                    description="Clear every per-worktree ratio so all worktrees use the default"
+                    control={({ disabled }) => (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={resetAllWorktreeRatios}
+                        disabled={disabled}
+                        aria-label="Reset all worktree split ratios"
+                      >
+                        Reset all
+                      </Button>
+                    )}
+                  />
+                </SettingsDependents>
+              </SettingsGroup>
             </SettingsSection>
 
             <SettingsSection
-              icon={LayoutGrid}
               title="Grid layout strategy"
               id="terminal-grid-layout"
-              description="Control how panels arrange in the grid as you add more."
+              description="How panels arrange in the grid as you add more."
             >
-              <div className="grid grid-cols-3 gap-3">
-                {STRATEGIES.map(({ id, label, description, icon: Icon }) => (
-                  <button
-                    key={id}
-                    onClick={() => handleStrategyChange(id)}
-                    className={cn(
-                      "flex flex-col items-center justify-center p-4 rounded-[var(--radius-md)] border transition-colors",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                      layoutConfig.strategy === id
-                        ? "bg-overlay-selected border-border-strong text-text-primary font-medium"
-                        : "border-border-default hover:bg-tint/5 text-text-secondary"
-                    )}
-                  >
-                    <Icon className="w-6 h-6 mb-2" />
-                    <span className="text-xs font-medium">{label}</span>
-                    <span className="text-2xs text-center mt-1 opacity-60">{description}</span>
-                  </button>
-                ))}
-              </div>
-
-              {layoutConfig.strategy !== "automatic" && (
-                <SettingsNumberInput
-                  label={
-                    layoutConfig.strategy === "fixed-columns"
-                      ? "Number of Columns"
-                      : "Number of Rows"
-                  }
-                  description={
-                    layoutConfig.strategy === "fixed-columns"
-                      ? "Terminals will stack vertically when this many columns are filled."
-                      : "Terminals will expand horizontally when this many rows are filled."
-                  }
-                  min={1}
-                  max={10}
-                  value={layoutConfig.value}
-                  onChange={(e) => handleValueChange(e.target.value)}
+              {saveError("grid-layout")}
+              <SettingsGroup className="overflow-hidden">
+                <SettingsRow
+                  label="Strategy"
+                  description={`Default: ${STRATEGIES.find((s) => s.id === DEFAULT_STRATEGY)?.label}`}
+                  isModified={layoutConfig.strategy !== DEFAULT_STRATEGY}
+                  onReset={() => handleStrategyChange(DEFAULT_STRATEGY)}
+                  resetAriaLabel="Reset grid layout strategy to default"
                 />
-              )}
+                <RadioChoiceGroup
+                  legend="Grid layout strategy"
+                  legendHidden
+                  className="space-y-0 divide-y divide-border-subtle"
+                >
+                  {STRATEGIES.map(({ id, label, description }) => (
+                    <RadioChoiceRow
+                      key={id}
+                      bare
+                      name="gridLayoutStrategy"
+                      value={id}
+                      checked={layoutConfig.strategy === id}
+                      onChange={() => handleStrategyChange(id)}
+                      label={label}
+                      description={description}
+                      className={cn(
+                        "px-4 py-3 transition-colors",
+                        "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary",
+                        layoutConfig.strategy === id
+                          ? "bg-overlay-selected"
+                          : "hover:bg-overlay-soft"
+                      )}
+                    />
+                  ))}
+                </RadioChoiceGroup>
 
-              <p className="text-xs text-text-secondary leading-relaxed select-text">
-                {layoutConfig.strategy === "automatic" &&
-                  "Uses a balanced square grid that adapts to the number of terminals (1-4 terminals use 2 columns, 5+ use up to 4 columns)."}
-                {layoutConfig.strategy === "fixed-columns" &&
-                  `Maintains exactly ${layoutConfig.value} column${layoutConfig.value > 1 ? "s" : ""}, adding new rows as you open more terminals.`}
-                {layoutConfig.strategy === "fixed-rows" &&
-                  `Maintains exactly ${layoutConfig.value} row${layoutConfig.value > 1 ? "s" : ""}, adding new columns as you open more terminals.`}
-              </p>
+                {layoutConfig.strategy !== "automatic" && (
+                  <SettingsDependents>
+                    <SettingsNumberInput
+                      label={
+                        layoutConfig.strategy === "fixed-columns"
+                          ? "Number of columns"
+                          : "Number of rows"
+                      }
+                      description={
+                        layoutConfig.strategy === "fixed-columns"
+                          ? `Terminals stack vertically once this many columns are filled. Default: ${DEFAULT_GRID_VALUE}`
+                          : `Terminals expand horizontally once this many rows are filled. Default: ${DEFAULT_GRID_VALUE}`
+                      }
+                      min={1}
+                      max={10}
+                      value={layoutConfig.value}
+                      onChange={(e) => handleValueChange(e.target.value)}
+                      isModified={layoutConfig.value !== DEFAULT_GRID_VALUE}
+                      onReset={() => handleValueChange(String(DEFAULT_GRID_VALUE))}
+                    />
+                  </SettingsDependents>
+                )}
+              </SettingsGroup>
             </SettingsSection>
-          </div>
+          </>
         )}
 
         {effectiveSubtab === "scrollback" && (
           <SettingsSection
-            icon={HardDrive}
             title="Scrollback history"
             id="terminal-scrollback"
-            description="Base scrollback applies to agent terminals. Shells and dev servers use reduced limits automatically. Background terminals may temporarily reduce scrollback under memory pressure."
-            badge="New Terminals"
+            description="Background terminals may temporarily reduce scrollback under memory pressure."
+            badge="New terminals"
           >
-            <div
-              className="grid grid-cols-4 gap-3"
-              role="radiogroup"
-              aria-label="Scrollback presets"
-            >
-              {SCROLLBACK_OPTIONS.map(({ value, label, description }) => (
-                <button
-                  key={value}
-                  onClick={() => handleScrollbackChange(value)}
-                  disabled={performanceMode}
-                  role="radio"
-                  aria-checked={scrollbackLines === value}
-                  aria-label={`${label} - ${description}`}
-                  className={cn(
-                    "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                    performanceMode && "opacity-50 cursor-not-allowed",
-                    scrollbackLines === value
-                      ? "bg-overlay-selected border-border-strong text-text-primary font-medium"
-                      : "border-border-default hover:bg-tint/5 text-text-secondary"
-                  )}
-                >
-                  <span className="text-xs font-medium">{label}</span>
-                  <span className="text-2xs mt-0.5 opacity-60">{description}</span>
-                </button>
-              ))}
-            </div>
-
-            <div className="text-xs text-text-secondary space-y-1.5 bg-daintree-bg/50 rounded-[var(--radius-md)] p-3">
-              <div className="font-medium text-text-secondary mb-2">
-                Effective limits per type{performanceMode ? " (performance mode)" : ""}:
-              </div>
-              {scrollbackLimits.map(({ label, limit }) => (
-                <div key={label} className="flex justify-between">
-                  <span>{label}</span>
-                  <span className="font-mono text-text-secondary">
-                    {limit.toLocaleString()} lines
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            <button
-              onClick={() => setShowMemoryDetails(!showMemoryDetails)}
-              className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors"
-              aria-expanded={showMemoryDetails}
-              aria-controls="memory-details"
-            >
-              <ChevronDown
-                className={cn("w-3 h-3 transition-transform", showMemoryDetails && "rotate-180")}
+            {saveError("scrollback")}
+            <SettingsGroup>
+              <SettingsPresetGroup
+                label="Base scrollback"
+                description={`The base every terminal's history scales from: agent terminals keep 10× it and shells and dev servers 0.3×, each within its own floor and ceiling. Default: ${SCROLLBACK_DEFAULT.toLocaleString()}`}
+                options={SCROLLBACK_OPTIONS}
+                value={scrollbackLines}
+                onChange={(value) => void handleScrollbackChange(value)}
+                disabled={performanceMode}
+                disabledReason={`Performance mode caps scrollback at ${PERFORMANCE_MODE_SCROLLBACK} lines`}
+                isModified={scrollbackLines !== SCROLLBACK_DEFAULT}
+                onReset={() => void handleScrollbackChange(SCROLLBACK_DEFAULT)}
               />
-              <span>Estimated memory usage</span>
-            </button>
+            </SettingsGroup>
 
-            {showMemoryDetails && (
-              <div
-                id="memory-details"
-                className="text-xs text-text-secondary space-y-1.5 bg-daintree-bg/50 rounded-[var(--radius-md)] p-3"
-              >
-                <div className="font-medium text-text-secondary mb-2">
-                  Typical session (8 agents, 8 shells):
-                </div>
-                <div className="flex justify-between">
-                  <span>Agent terminals (8)</span>
-                  <span className="font-mono text-text-secondary">
-                    {formatBytes(memoryEstimate.agent)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Terminals (8)</span>
-                  <span className="font-mono text-text-secondary">
-                    {formatBytes(memoryEstimate.plain)}
-                  </span>
-                </div>
-                <div className="flex justify-between pt-1.5 border-t border-border-default mt-1.5">
-                  <span className="font-medium text-text-secondary">Total estimated</span>
-                  <span className="font-mono font-medium text-accent-primary">
+            <SettingsGroup
+              label={`Lines each terminal keeps${performanceMode ? " (performance mode)" : ""}`}
+            >
+              {scrollbackLimits.map(({ label, limit }) => (
+                <SettingsRow
+                  key={label}
+                  label={label}
+                  control={
+                    <span className="font-mono text-xs text-text-secondary">
+                      {limit.toLocaleString()} lines
+                    </span>
+                  }
+                />
+              ))}
+            </SettingsGroup>
+
+            <SettingsGroup id="memory-details">
+              <SettingsRow
+                label="Estimated memory"
+                description={`A typical session of ${TYPICAL_TERMINAL_COUNTS.agent} agents (${formatBytes(memoryEstimate.agent)}) and ${TYPICAL_TERMINAL_COUNTS.plain} terminals (${formatBytes(memoryEstimate.plain)})`}
+                control={
+                  <span className="font-mono text-xs font-medium text-text-primary">
                     {formatBytes(memoryEstimate.total)}
                   </span>
-                </div>
-              </div>
-            )}
+                }
+              />
+            </SettingsGroup>
           </SettingsSection>
         )}
 
         {effectiveSubtab === "accessibility" && (
-          <SettingsSection
-            icon={Ear}
-            title="Screen reader mode"
-            id="terminal-screen-reader"
-            description="Enable screen reader support so assistive technology can read terminal output. When set to Auto, screen reader mode activates only when the OS reports an active screen reader."
-          >
-            <div
-              className="grid grid-cols-3 gap-3"
-              role="radiogroup"
-              aria-label="Screen reader mode"
-            >
-              {(
-                [
-                  { value: "auto", label: "Auto", description: "Follow OS" },
-                  { value: "on", label: "On", description: "Always enabled" },
-                  { value: "off", label: "Off", description: "Disabled" },
-                ] as const
-              ).map(({ value, label, description }) => (
-                <button
-                  key={value}
-                  onClick={() => handleScreenReaderModeChange(value)}
-                  role="radio"
-                  aria-checked={screenReaderMode === value}
-                  aria-label={`${label} - ${description}`}
-                  className={cn(
-                    "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                    screenReaderMode === value
-                      ? "bg-overlay-selected border-border-strong text-text-primary font-medium"
-                      : "border-border-default hover:bg-tint/5 text-text-secondary"
-                  )}
-                >
-                  <span className="text-xs font-medium">{label}</span>
-                  <span className="text-2xs mt-0.5 opacity-60">{description}</span>
-                </button>
-              ))}
-            </div>
-
-            <p className="text-xs text-text-secondary leading-relaxed select-text">
-              Screen reader mode adds an accessible DOM overlay to each terminal, which has a
-              performance cost. For best results, only enable when using a screen reader.
-            </p>
+          <SettingsSection title="Assistive technology">
+            {saveError("accessibility")}
+            <SettingsGroup>
+              <SettingsPresetGroup
+                id="terminal-screen-reader"
+                label="Screen reader mode"
+                description="Lets assistive technology read terminal output through an overlay that costs some performance. Auto turns it on only while the OS reports an active screen reader. Default: Auto"
+                options={SCREEN_READER_OPTIONS}
+                value={screenReaderMode}
+                onChange={(mode) => void handleScreenReaderModeChange(mode)}
+                isModified={screenReaderMode !== "auto"}
+                onReset={() => void handleScreenReaderModeChange("auto")}
+              />
+            </SettingsGroup>
           </SettingsSection>
         )}
       </div>

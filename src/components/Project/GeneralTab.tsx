@@ -1,24 +1,15 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import {
-  Anchor,
-  Image,
-  Upload,
-  X,
-  Rocket,
-  Check,
-  FolderInput,
-  FolderOpen,
-  Copy,
-  Palette,
-  AlertTriangle,
-  WandSparkles,
-} from "lucide-react";
-import { FolderGit2, McpServerIcon } from "@/components/icons";
+import { Image, Upload, Check, FolderInput, Copy, Palette, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
-import { SettingsChoicebox, type ChoiceboxOption } from "@/components/Settings/SettingsChoicebox";
+import type { ChoiceboxOption } from "@/components/Settings/SettingsChoicebox";
+import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
 import { getProjectGradient, isValidHexColor } from "@/lib/colorUtils";
 import { cn } from "@/lib/utils";
 import { sanitizeSvg, svgToDataUrl } from "@/lib/svg";
@@ -40,7 +31,7 @@ const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
   {
     value: "workbench",
     label: "Workbench",
-    description: "Read-only: worktree status, terminal output, file search, project history.",
+    description: "Read-only: worktree status, terminal output, file search, project history",
   },
   {
     value: "action",
@@ -52,7 +43,7 @@ const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
     value: "system",
     label: "System",
     description:
-      "Action + git commits and pushes, forge and file writes, terminal arming, worktree creation anywhere on disk.",
+      "Action + git commits and pushes, forge and file writes, terminal arming, worktree creation anywhere on disk",
   },
 ];
 
@@ -403,217 +394,277 @@ export function GeneralTab({
     }
   };
 
+  const iconPreview = (() => {
+    if (!projectIconSvg) return null;
+    const sanitized = sanitizeSvg(projectIconSvg);
+    if (!sanitized.ok) {
+      return <Image className="h-6 w-6 text-text-secondary" aria-hidden="true" />;
+    }
+    return (
+      <img
+        src={svgToDataUrl(sanitized.svg)}
+        alt="Project icon preview"
+        className="max-h-10 max-w-10 object-contain"
+      />
+    );
+  })();
+
   return (
-    <>
+    <div className="space-y-8">
       {currentProject && (
-        <div id="project-name" className="mb-6 pb-6 border-b border-border-default">
-          <h3 className="text-sm font-semibold text-text-primary mb-2">Project Identity</h3>
-          <p className="text-xs text-text-secondary mb-4">
-            Customize how your project appears in the sidebar and dashboard.
-          </p>
-
-          <div className="flex items-start gap-3 p-3 rounded-[var(--radius-md)] bg-surface-canvas border border-border-default">
-            <Popover open={isEmojiPickerOpen} onOpenChange={setIsEmojiPickerOpen}>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  aria-label="Change project emoji"
-                  className="flex h-14 w-14 items-center justify-center rounded-[var(--radius-xl)] shadow-inner shrink-0 bg-tint/5 hover:bg-tint/10 transition-colors border border-transparent hover:border-border-default cursor-pointer group"
-                  style={{
-                    background: getProjectGradient(color),
-                  }}
-                >
-                  <span className="text-3xl select-none filter drop-shadow-sm group-hover:scale-110 transition-transform">
-                    {emoji}
-                  </span>
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0">
-                <EmojiPicker
-                  onEmojiSelect={({ emoji }) => {
-                    onEmojiChange(emoji);
-                    setIsEmojiPickerOpen(false);
-                  }}
-                />
-              </PopoverContent>
-            </Popover>
-
-            <div className="flex-1 min-w-0 flex flex-col justify-center h-14">
-              <label
-                htmlFor="project-name-input"
-                className="text-xs font-medium text-text-secondary mb-1.5 ml-1"
-              >
-                Project Name
-              </label>
-              <input
-                id="project-name-input"
-                type="text"
-                value={name}
-                onChange={(e) => onNameChange(e.target.value)}
-                className="w-full bg-transparent border border-border-default rounded px-3 py-2 text-sm text-text-primary focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30 transition-[border-color,box-shadow] placeholder:text-text-placeholder"
-                placeholder="My Awesome Project"
-              />
-            </div>
-          </div>
-
-          <div className="mt-3 flex items-center justify-between gap-3">
-            <p
-              className="min-w-0 flex-1 truncate text-xs font-mono text-text-secondary"
-              title={currentProject.path}
-            >
-              {currentProject.path}
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleMoveOrRename}
-              className="shrink-0 gap-1.5"
-            >
-              <FolderInput className="h-3.5 w-3.5" />
-              Move or rename project…
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {currentProject && (
-        <div className="mb-6 pb-6 border-b border-border-default">
-          <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
-            <Palette className="h-4 w-4" />
-            Project Color
-          </h3>
-          <p className="text-xs text-text-secondary mb-4">
-            Choose a color for your project&apos;s gradient background in the sidebar and dashboard.
-          </p>
-
-          <div className="flex flex-wrap items-center gap-2 mb-3">
-            {resolvedSwatches.map((hex, i) => (
-              <button
-                key={PRESET_SWATCHES[i]!.cssVar}
-                type="button"
-                title={PRESET_SWATCHES[i]!.label}
-                aria-label={`Set project color to ${PRESET_SWATCHES[i]!.label}`}
-                onClick={() => onColorChange(hex)}
-                className={cn(
-                  "h-7 w-7 rounded-full transition-[border-color,scale,box-shadow] border-2 shrink-0",
-                  color === hex
-                    ? "border-text-primary scale-110 shadow-sm"
-                    : "border-transparent hover:border-border-default hover:scale-105"
-                )}
-                style={{ backgroundColor: hex }}
-              />
-            ))}
-          </div>
-
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <input
-                ref={colorInputRef}
-                type="color"
-                value={color ?? "#6366f1"}
-                onChange={(e) => onColorChange(e.target.value.toLowerCase())}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                aria-label="Pick a custom color"
-              />
-              <div
-                className="h-8 w-8 rounded-[var(--radius-md)] border border-border-default flex items-center justify-center cursor-pointer hover:border-daintree-text/40 transition-colors"
-                style={{
-                  backgroundColor: color ?? undefined,
-                }}
-              >
-                {!color && <Palette className="h-4 w-4 text-daintree-text/40" />}
-              </div>
-            </div>
-            <input
-              type="text"
-              value={hexInput}
-              onChange={(e) => handleHexInputChange(e.target.value)}
-              placeholder="#hex"
-              spellCheck={false}
-              autoCapitalize="off"
-              autoComplete="off"
-              aria-label="Hex color value"
-              className={cn(
-                "w-28 bg-surface-canvas border rounded px-3 py-1.5 text-sm text-text-primary font-mono focus:outline-hidden focus:ring-1 transition placeholder:text-text-placeholder",
-                hexInput && !isValidHexColor(hexInput)
-                  ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
-                  : "border-border-default focus:border-daintree-accent/40 focus:ring-daintree-accent/30"
+        <SettingsSection
+          id="project-name"
+          title="Project identity"
+          description="How this project appears in the sidebar and dashboard"
+        >
+          <SettingsGroup>
+            <SettingsRow
+              label="Name"
+              description="Click the emoji to change it"
+              layout="stacked"
+              control={({ labelId, descriptionId }) => (
+                <div className="flex items-center gap-3">
+                  <Popover open={isEmojiPickerOpen} onOpenChange={setIsEmojiPickerOpen}>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label="Change project emoji"
+                        className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-lg)] shadow-inner shrink-0 border border-border-strong cursor-pointer group"
+                        style={{
+                          background: getProjectGradient(color),
+                        }}
+                      >
+                        <span className="text-2xl select-none filter drop-shadow-sm group-hover:scale-110 transition-transform">
+                          {emoji}
+                        </span>
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0">
+                      <EmojiPicker
+                        onEmojiSelect={({ emoji }) => {
+                          onEmojiChange(emoji);
+                          setIsEmojiPickerOpen(false);
+                        }}
+                      />
+                    </PopoverContent>
+                  </Popover>
+                  <Input
+                    id="project-name-input"
+                    type="text"
+                    value={name}
+                    onChange={(e) => onNameChange(e.target.value)}
+                    aria-labelledby={labelId}
+                    aria-describedby={descriptionId}
+                    placeholder="My project"
+                  />
+                </div>
               )}
             />
-            {color && (
-              <button
-                type="button"
-                onClick={() => onColorChange(undefined)}
-                className="flex items-center gap-1 px-2 py-1.5 rounded text-xs text-text-secondary hover:text-text-primary hover:bg-tint/5 transition-colors"
-                aria-label="Clear project color"
-              >
-                <X className="h-3.5 w-3.5" />
-                Clear
-              </button>
-            )}
-          </div>
-        </div>
+
+            <SettingsRow
+              label="Color"
+              description="Tints the project's gradient in the sidebar and dashboard"
+              layout="stacked"
+              control={
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {resolvedSwatches.map((hex, i) => (
+                      <button
+                        key={PRESET_SWATCHES[i]!.cssVar}
+                        type="button"
+                        title={PRESET_SWATCHES[i]!.label}
+                        aria-label={`Set project color to ${PRESET_SWATCHES[i]!.label}`}
+                        onClick={() => onColorChange(hex)}
+                        className={cn(
+                          "h-7 w-7 rounded-full transition-[border-color,scale,box-shadow] border-2 shrink-0",
+                          color === hex
+                            ? "border-text-primary scale-110 shadow-sm"
+                            : "border-transparent hover:border-border-default hover:scale-105"
+                        )}
+                        style={{ backgroundColor: hex }}
+                      />
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <input
+                        ref={colorInputRef}
+                        type="color"
+                        value={color ?? "#6366f1"}
+                        onChange={(e) => onColorChange(e.target.value.toLowerCase())}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        aria-label="Pick a custom color"
+                      />
+                      <div
+                        className="h-8 w-8 rounded-[var(--radius-md)] border border-border-strong flex items-center justify-center cursor-pointer"
+                        style={{
+                          backgroundColor: color ?? undefined,
+                        }}
+                      >
+                        {!color && <Palette className="h-4 w-4 text-text-secondary" />}
+                      </div>
+                    </div>
+                    <Input
+                      type="text"
+                      value={hexInput}
+                      onChange={(e) => handleHexInputChange(e.target.value)}
+                      placeholder="#hex"
+                      spellCheck={false}
+                      autoCapitalize="off"
+                      autoComplete="off"
+                      aria-label="Hex color value"
+                      invalid={!!hexInput && !isValidHexColor(hexInput)}
+                      className="w-28 font-mono"
+                    />
+                    {color && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => onColorChange(undefined)}
+                        aria-label="Clear project color"
+                      >
+                        Clear
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              }
+            />
+
+            <SettingsRow
+              label="Icon"
+              description="An SVG shown in the empty grid, up to 250KB"
+              layout="stacked"
+              error={iconError ?? undefined}
+              control={({ labelId, descriptionId, disabled: rowDisabled }) => (
+                <>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/svg+xml,.svg"
+                    onChange={handleFileSelect}
+                    className="hidden"
+                    aria-label="Select SVG file"
+                  />
+                  {projectIconSvg ? (
+                    <div className="flex items-center gap-3">
+                      <div className="h-12 w-12 rounded-[var(--radius-md)] bg-surface-sidebar flex items-center justify-center overflow-hidden shrink-0">
+                        {iconPreview}
+                      </div>
+                      <p className="flex-1 min-w-0 text-xs text-text-secondary">
+                        Custom icon · {Math.round(new Blob([projectIconSvg]).size / 1024)}KB
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        <Upload />
+                        Replace
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={handleRemoveIcon}>
+                        Remove
+                      </Button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      data-testid="project-icon-uploader"
+                      // The visible prompt joins the row label so the spoken name
+                      // contains what sighted users read on the button (WCAG 2.5.3).
+                      aria-labelledby={`${labelId} project-icon-uploader-prompt`}
+                      aria-describedby={descriptionId}
+                      disabled={rowDisabled}
+                      className={cn(
+                        "flex w-full items-center justify-center gap-2 px-4 py-4 rounded-[var(--radius-md)] border border-dashed border-border-strong transition-colors cursor-pointer",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+                        "disabled:cursor-not-allowed disabled:opacity-50",
+                        isDraggingIcon ? "bg-overlay-soft" : "hover:bg-overlay-subtle"
+                      )}
+                      onDrop={handleIconDrop}
+                      onDragOver={handleIconDragOver}
+                      onDragLeave={handleIconDragLeave}
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      <Upload className="h-4 w-4 text-text-secondary" aria-hidden="true" />
+                      <span
+                        id="project-icon-uploader-prompt"
+                        className="text-xs text-text-secondary"
+                      >
+                        Drop an SVG here or click to browse
+                      </span>
+                    </button>
+                  )}
+                </>
+              )}
+            />
+
+            <SettingsRow
+              label="Location"
+              description={
+                <span className="block truncate font-mono" title={currentProject.path}>
+                  {currentProject.path}
+                </span>
+              }
+              control={
+                <Button variant="outline" size="sm" onClick={handleMoveOrRename}>
+                  <FolderInput />
+                  Move or rename…
+                </Button>
+              }
+            />
+          </SettingsGroup>
+        </SettingsSection>
       )}
 
-      <div id="project-dev-server" className="mb-6 pb-6 border-b border-border-default">
-        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
-          <Rocket className="h-4 w-4" />
-          Dev Server Command
-        </h3>
-        <p className="text-xs text-text-secondary mb-4">
-          Command to start the development server (e.g., npm run dev). When configured, a button
-          will appear in the toolbar to start the dev server.
-        </p>
-
-        {devServerCommand === "" && detectedCandidate && (
-          <div
-            className={cn(
-              "flex items-center gap-2 mb-3 px-3 py-2 rounded-[var(--radius-md)]",
-              "bg-overlay-subtle border border-border-default"
-            )}
-          >
-            <span className="text-xs text-text-secondary">
-              Detected:{" "}
-              <code className="font-mono text-text-primary">{detectedCandidate.command}</code>
-            </span>
-            <Button
-              onClick={handleApplyDetected}
-              variant="ghost"
-              size="sm"
-              className="gap-1.5 px-2.5 py-1 h-auto text-accent-primary"
-            >
-              <WandSparkles className="h-3.5 w-3.5" />
-              Use command
-            </Button>
-          </div>
-        )}
-
-        <input
-          id="dev-server-command"
-          type="text"
-          value={devServerCommand}
-          onChange={(e) => onDevServerCommandChange(e.target.value)}
-          className="w-full bg-surface-canvas border border-border-default rounded px-3 py-2 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-placeholder"
-          placeholder="npm run dev"
-          spellCheck={false}
-          autoCapitalize="off"
-          autoComplete="off"
-          aria-label="Dev server command"
-        />
-
-        <div className="mt-3">
-          <label
-            htmlFor="dev-server-load-timeout"
-            className="block text-xs text-text-secondary mb-1"
-          >
-            Load timeout (seconds)
-          </label>
-          <input
-            id="dev-server-load-timeout"
-            type="number"
+      <SettingsSection
+        id="project-dev-server"
+        title="Dev server"
+        description="When a command is set, the toolbar shows a button that starts it"
+      >
+        <SettingsGroup>
+          <SettingsRow
+            label="Command"
+            layout="stacked"
+            control={
+              <div className="space-y-2">
+                <Input
+                  id="dev-server-command"
+                  type="text"
+                  value={devServerCommand}
+                  onChange={(e) => onDevServerCommandChange(e.target.value)}
+                  className="font-mono"
+                  placeholder="npm run dev"
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoComplete="off"
+                  aria-label="Dev server command"
+                />
+                {devServerCommand === "" && detectedCandidate && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-text-secondary">
+                      Detected:{" "}
+                      <code className="font-mono text-text-primary">
+                        {detectedCandidate.command}
+                      </code>
+                    </span>
+                    <Button onClick={handleApplyDetected} variant="outline" size="sm">
+                      Use command
+                    </Button>
+                  </div>
+                )}
+              </div>
+            }
+          />
+          <SettingsNumberInput
+            label="Load timeout"
+            description="How long to wait for the server to respond · Default: 30 seconds"
+            suffix="s"
             min={1}
             max={120}
             value={devServerLoadTimeout ?? ""}
+            isModified={devServerLoadTimeout !== undefined}
+            onReset={() => onDevServerLoadTimeoutChange(undefined)}
             onChange={(e) => {
               const raw = e.target.value;
               if (raw === "") {
@@ -623,285 +674,167 @@ export function GeneralTab({
                 onDevServerLoadTimeoutChange(num);
               }
             }}
-            className="w-28 bg-surface-canvas border border-border-default rounded px-3 py-2 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-placeholder"
             placeholder="30"
-            aria-label="Dev server load timeout in seconds"
           />
-        </div>
-
-        <div className="mt-3 flex items-center gap-2">
-          <input
-            id="turbopack-enabled"
-            type="checkbox"
-            checked={turbopackEnabled}
-            onChange={(e) => onTurbopackEnabledChange(e.target.checked)}
-            className="h-4 w-4 rounded border-border-default cursor-pointer"
-            aria-label="Auto-inject --turbopack for Next.js 15+ projects"
+          <SettingsSwitchCard
+            title="Use Turbopack for Next.js"
+            subtitle="Adds --turbopack to the dev command in Next.js 15+ projects"
+            isEnabled={turbopackEnabled}
+            onChange={() => onTurbopackEnabledChange(!turbopackEnabled)}
           />
-          <label
-            htmlFor="turbopack-enabled"
-            className="text-xs text-text-secondary cursor-pointer select-none"
-          >
-            Auto-inject <code className="font-mono">--turbopack</code> for Next.js 15+ projects
-          </label>
-        </div>
-      </div>
+        </SettingsGroup>
+      </SettingsSection>
 
-      <div id="project-agent-integrations" className="mb-6 pb-6 border-b border-border-default">
-        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
-          <McpServerIcon className="h-4 w-4" />
-          Agent integrations
-        </h3>
-        <p className="text-xs text-text-secondary mb-4">
-          Choose how much of Daintree the Claude Code agents launched in this project's worktrees
-          can reach. Each tier expands what's available — newly launched agents pick up the change.
-        </p>
-
-        <div className="flex flex-col gap-3">
-          <SettingsChoicebox<DaintreeMcpTier>
-            value={daintreeMcpTier}
-            onChange={onDaintreeMcpTierChange}
-            options={DAINTREE_MCP_TIER_OPTIONS}
-            columns={2}
-            aria-label="Daintree MCP access tier"
-          />
+      <SettingsSection
+        id="project-agent-integrations"
+        title="Agent integrations"
+        description="How much of Daintree the Claude Code agents launched in this project's worktrees can reach. Newly launched agents pick up the change."
+      >
+        <SettingsGroup className="checkbox-neutral">
+          <fieldset className="divide-y divide-border-subtle">
+            <legend className="sr-only">Daintree MCP access tier</legend>
+            {DAINTREE_MCP_TIER_OPTIONS.map((option) => (
+              <RadioChoiceRow
+                key={option.value}
+                name="daintreeMcpTier"
+                value={option.value}
+                checked={daintreeMcpTier === option.value}
+                onChange={() => onDaintreeMcpTierChange(option.value)}
+                label={option.label}
+                description={option.description}
+                bare
+                className="w-full px-4 py-3"
+              />
+            ))}
+          </fieldset>
           {daintreeMcpTier === "system" && (
-            <div
-              className={cn(
-                "flex items-start gap-2 p-3 rounded-[var(--radius-md)]",
-                "bg-overlay-subtle border border-border-default"
-              )}
-            >
-              <AlertTriangle className="w-4 h-4 text-status-warning shrink-0 mt-0.5" />
-              <div className="text-xs text-text-secondary leading-relaxed select-text">
+            <div className="flex items-start gap-2 px-4 py-3">
+              <AlertTriangle className="w-4 h-4 text-status-warning shrink-0 mt-px" />
+              <p className="text-xs text-text-secondary leading-relaxed select-text">
                 System tier adds git commits and pushes, forge issue/PR writes, clipboard and file
                 writes, terminal arming, and worktree creation anywhere on disk — some of these are
                 irreversible or visible to teammates. Only enable it for projects where you trust
                 the agent to take that kind of action.
-              </div>
+              </p>
             </div>
           )}
-
+        </SettingsGroup>
+        <SettingsGroup>
           <SettingsSwitchCard
-            icon={Anchor}
             title="Keep workspace resident"
-            subtitle="Holds this project's view in the cache so a bound MCP session stays reachable"
+            subtitle="Holds this project's view in the cache so a bound MCP session stays reachable. Other projects close first to stay within your cached-view limit; low memory can still unload this one."
             isEnabled={keepResident}
             onChange={() => void handleKeepResidentToggle()}
-            ariaLabel="Keep workspace resident"
             disabled={keepResidentBusy}
           />
-          <p className="text-xs text-text-secondary">
-            Other projects are closed first to stay within your cached-view limit, rather than
-            raising it. Low memory can still unload this one.
-          </p>
           {keepResidentError && (
-            <div
-              className="whitespace-pre-line text-xs text-status-error bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] p-2"
+            <p
+              className="whitespace-pre-line px-4 py-2.5 text-xs text-status-error select-text"
               role="alert"
             >
               {keepResidentError}
+            </p>
+          )}
+        </SettingsGroup>
+      </SettingsSection>
+
+      <SettingsSection
+        id="project-in-repo-settings"
+        title="In-repository settings"
+        description="Keeps the project name, emoji, and run commands in .daintree/ so your team shares one configuration"
+      >
+        <SettingsGroup>
+          <SettingsSwitchCard
+            title="Store settings in repository"
+            subtitle={
+              currentProject?.daintreeConfigPresent
+                ? "Writes to .daintree/project.json and .daintree/settings.json. Settings are currently loaded from .daintree/."
+                : "Writes to .daintree/project.json and .daintree/settings.json"
+            }
+            isEnabled={currentProject?.inRepoSettings ?? false}
+            onChange={handleInRepoToggle}
+            disabled={inRepoEnabling}
+          />
+
+          {!currentProject?.inRepoSettings && inRepoExpanded && (
+            <div className="px-4 py-3 space-y-4">
+              <div>
+                <p className="text-xs font-medium text-text-primary mb-2">
+                  These files will be created
+                </p>
+                <ul className="space-y-1 text-xs text-text-secondary">
+                  <li className="flex items-center gap-2">
+                    <span className="font-mono font-medium text-text-primary">
+                      .daintree/project.json
+                    </span>
+                    <span>project name, emoji, color</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="font-mono font-medium text-text-primary">
+                      .daintree/settings.json
+                    </span>
+                    <span>run commands, dev server, context settings</span>
+                  </li>
+                </ul>
+                <p className="mt-2 text-xs text-text-secondary">
+                  Machine-local settings (environment variables, secrets) are never written to these
+                  files.
+                </p>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <p className="text-xs font-medium text-text-primary">
+                    Recommended <code className="font-mono">.gitignore</code> entries
+                  </p>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => void handleCopyGitignore()}
+                    aria-label="Copy .gitignore snippet"
+                  >
+                    {gitignoreCopied ? <Check /> : <Copy />}
+                    {gitignoreCopied ? "Copied" : "Copy"}
+                  </Button>
+                </div>
+                <pre className="rounded-[var(--radius-md)] border border-border-default bg-surface-sidebar p-3 text-xs font-mono text-text-secondary overflow-x-auto whitespace-pre select-text">
+                  {GITIGNORE_SNIPPET}
+                </pre>
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setInRepoExpanded(false);
+                    setInRepoError(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="contrast"
+                  size="sm"
+                  onClick={() => void handleEnableInRepoSettings()}
+                  disabled={inRepoEnabling}
+                >
+                  {inRepoEnabling ? "Enabling…" : "Confirm and enable"}
+                </Button>
+              </div>
             </div>
           )}
-        </div>
-      </div>
 
-      <div className="mb-6">
-        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
-          <Image className="h-4 w-4" />
-          Project Icon (SVG)
-        </h3>
-        <p className="text-xs text-text-secondary mb-4">
-          Shown in the grid empty state. SVG only, max 250KB.
-        </p>
-
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/svg+xml,.svg"
-          onChange={handleFileSelect}
-          className="hidden"
-          aria-label="Select SVG file"
-        />
-
-        {projectIconSvg ? (
-          <div className="flex items-center gap-4 p-3 rounded-[var(--radius-md)] bg-surface-canvas border border-border-default">
-            <div className="h-16 w-16 rounded-[var(--radius-md)] bg-surface-sidebar flex items-center justify-center overflow-hidden">
-              {(() => {
-                const sanitized = sanitizeSvg(projectIconSvg);
-                if (!sanitized.ok) {
-                  return <Image className="h-8 w-8 text-daintree-text/40" aria-hidden="true" />;
-                }
-                return (
-                  <img
-                    src={svgToDataUrl(sanitized.svg)}
-                    alt="Project icon preview"
-                    className="max-h-14 max-w-14 object-contain"
-                  />
-                );
-              })()}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm text-text-primary mb-1">Custom icon configured</p>
-              <p className="text-xs text-text-secondary">
-                {Math.round(new Blob([projectIconSvg]).size / 1024)}KB
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
-                <Upload />
-                Replace
-              </Button>
-              <Button variant="ghost" size="sm" onClick={handleRemoveIcon}>
-                <X />
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div
-            className={cn(
-              "flex flex-col items-center justify-center p-8 rounded-[var(--radius-md)] border-2 border-dashed transition-colors cursor-pointer",
-              isDraggingIcon
-                ? "border-accent-primary bg-daintree-accent/10"
-                : "border-border-default hover:border-daintree-border/80 hover:bg-daintree-bg/50"
-            )}
-            onDrop={handleIconDrop}
-            onDragOver={handleIconDragOver}
-            onDragLeave={handleIconDragLeave}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <Upload className="h-8 w-8 text-daintree-text/40 mb-3" />
-            <p className="text-sm text-text-secondary text-center mb-1">
-              Drag and drop an SVG file here
+          {inRepoError && (
+            <p
+              className="whitespace-pre-line px-4 py-2.5 text-xs text-status-error select-text"
+              role="alert"
+            >
+              {inRepoError}
             </p>
-            <p className="text-xs text-text-secondary">or click to browse</p>
-          </div>
-        )}
-
-        {iconError && (
-          <div className="mt-2 text-xs text-status-error bg-status-error/10 border border-status-error/20 rounded p-2">
-            {iconError}
-          </div>
-        )}
-      </div>
-
-      {/* In-Repository Settings */}
-      <div id="project-in-repo-settings" className="mt-6">
-        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
-          <FolderGit2 className="h-4 w-4" />
-          In-Repository Settings
-        </h3>
-        <p className="text-xs text-text-secondary mb-4">
-          Store project name, emoji, and run commands in{" "}
-          <code className="font-mono text-text-primary">.daintree/</code> so your team shares the
-          same configuration.
-        </p>
-
-        {currentProject?.daintreeConfigPresent && (
-          <div className="flex items-center gap-2 mb-3 text-xs text-text-secondary">
-            <FolderOpen className="h-3.5 w-3.5 text-daintree-text/60 shrink-0" />
-            <span>
-              Settings loaded from <code className="font-mono text-text-primary">.daintree/</code>
-            </span>
-          </div>
-        )}
-
-        <SettingsSwitchCard
-          icon={FolderGit2}
-          title="Store settings in repository"
-          subtitle="Writes to .daintree/project.json and .daintree/settings.json"
-          isEnabled={currentProject?.inRepoSettings ?? false}
-          onChange={handleInRepoToggle}
-          ariaLabel="Store settings in repository"
-          disabled={inRepoEnabling}
-        />
-
-        {inRepoError && (
-          <div
-            className="mt-2 whitespace-pre-line text-xs text-status-error bg-status-error/10 border border-status-error/20 rounded p-2"
-            role="alert"
-          >
-            {inRepoError}
-          </div>
-        )}
-
-        {!currentProject?.inRepoSettings && inRepoExpanded && (
-          <div className="mt-3 rounded-[var(--radius-lg)] border border-border-default bg-surface-canvas p-4 space-y-4">
-            <div>
-              <p className="text-xs font-medium text-text-primary mb-2">
-                The following files will be created:
-              </p>
-              <ul className="space-y-1 text-xs text-text-secondary">
-                <li className="flex items-center gap-2">
-                  <span className="font-mono font-medium text-text-primary">
-                    .daintree/project.json
-                  </span>
-                  <span className="text-text-secondary"> project name, emoji, color</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <span className="font-mono font-medium text-text-primary">
-                    .daintree/settings.json
-                  </span>
-                  <span className="text-text-secondary">
-                    {" "}
-                    run commands, dev server, context settings
-                  </span>
-                </li>
-              </ul>
-              <p className="mt-2 text-xs text-text-secondary">
-                Machine-local settings (environment variables, secrets) are never written to these
-                files.
-              </p>
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <p className="text-xs font-medium text-text-primary">
-                  Recommended <code className="font-mono">.gitignore</code> guidance
-                </p>
-                <button
-                  type="button"
-                  onClick={() => void handleCopyGitignore()}
-                  className="flex items-center gap-1 px-2 py-1 rounded text-xs text-text-secondary hover:text-text-primary hover:bg-tint/5 transition-colors"
-                  aria-label="Copy .gitignore snippet"
-                >
-                  {gitignoreCopied ? (
-                    <Check className="h-3.5 w-3.5 text-status-success" />
-                  ) : (
-                    <Copy className="h-3.5 w-3.5" />
-                  )}
-                  {gitignoreCopied ? "Copied!" : "Copy"}
-                </button>
-              </div>
-              <pre className="rounded-[var(--radius-md)] border border-border-default bg-surface-sidebar p-3 text-xs font-mono text-text-secondary overflow-x-auto whitespace-pre select-text">
-                {GITIGNORE_SNIPPET}
-              </pre>
-            </div>
-
-            <div className="flex gap-2 pt-1">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setInRepoExpanded(false);
-                  setInRepoError(null);
-                }}
-                className="flex-1"
-              >
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                onClick={() => void handleEnableInRepoSettings()}
-                disabled={inRepoEnabling}
-                className="flex-1"
-              >
-                {inRepoEnabling ? "Enabling..." : "Confirm and enable"}
-              </Button>
-            </div>
-          </div>
-        )}
-      </div>
-    </>
+          )}
+        </SettingsGroup>
+      </SettingsSection>
+    </div>
   );
 }

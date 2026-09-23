@@ -11,6 +11,7 @@ import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
 import { logError } from "@/utils/logger";
+import { Button } from "@/components/ui/button";
 
 function SchemePreview({ scheme }: { scheme: TerminalColorScheme }) {
   const c = scheme.colors;
@@ -18,7 +19,7 @@ function SchemePreview({ scheme }: { scheme: TerminalColorScheme }) {
 
   return (
     <div
-      className="rounded overflow-hidden"
+      className="rounded-[var(--radius-sm)] overflow-hidden"
       style={{
         backgroundColor: c.background ?? "#000",
         padding: "6px 8px",
@@ -60,6 +61,47 @@ async function persistCustomSchemes() {
   await terminalConfigClient.setCustomSchemes(customSchemes);
 }
 
+async function selectScheme(id: string) {
+  const store = useTerminalColorSchemeStore.getState();
+  store.setSelectedSchemeId(id);
+  store.setPreviewSchemeId(null);
+  try {
+    await terminalConfigClient.setColorScheme(id);
+    await terminalConfigClient.setRecentSchemeIds(
+      useTerminalColorSchemeStore.getState().recentSchemeIds
+    );
+  } catch (error) {
+    logError("Failed to persist color scheme", error);
+  }
+}
+
+async function importScheme() {
+  try {
+    const result = await terminalConfigClient.importColorScheme();
+    if (!result.ok) return;
+
+    const scheme: TerminalColorScheme = {
+      ...result.scheme,
+      builtin: false,
+      colors: result.scheme.colors,
+    };
+    useTerminalColorSchemeStore.getState().addCustomScheme(scheme);
+    await persistCustomSchemes();
+    await selectScheme(scheme.id);
+  } catch (error) {
+    logError("Failed to import color scheme", error);
+  }
+}
+
+/** The section's action: an imported scheme joins the list below and becomes the selection. */
+export function ImportColorSchemeButton() {
+  return (
+    <Button variant="outline" size="sm" onClick={() => void importScheme()}>
+      Import color scheme…
+    </Button>
+  );
+}
+
 function resolveSchemeForPreview(
   scheme: TerminalColorScheme,
   appThemeId: string
@@ -73,9 +115,7 @@ function resolveSchemeForPreview(
 export function ColorSchemePicker() {
   const selectedSchemeId = useTerminalColorSchemeStore((s) => s.selectedSchemeId);
   const customSchemes = useTerminalColorSchemeStore((s) => s.customSchemes);
-  const setSelectedSchemeId = useTerminalColorSchemeStore((s) => s.setSelectedSchemeId);
   const setPreviewSchemeId = useTerminalColorSchemeStore((s) => s.setPreviewSchemeId);
-  const addCustomScheme = useTerminalColorSchemeStore((s) => s.addCustomScheme);
   const appThemeId = useAppThemeStore((s) => s.selectedSchemeId);
 
   const [query, setQuery] = useState("");
@@ -132,36 +172,7 @@ export function ColorSchemePicker() {
     };
   }, [setPreviewSchemeId]);
 
-  const handleSelect = async (id: string) => {
-    setSelectedSchemeId(id);
-    setPreviewSchemeId(null);
-    try {
-      await terminalConfigClient.setColorScheme(id);
-      await terminalConfigClient.setRecentSchemeIds(
-        useTerminalColorSchemeStore.getState().recentSchemeIds
-      );
-    } catch (error) {
-      logError("Failed to persist color scheme", error);
-    }
-  };
-
-  const handleImport = async () => {
-    try {
-      const result = await terminalConfigClient.importColorScheme();
-      if (!result.ok) return;
-
-      const scheme: TerminalColorScheme = {
-        ...result.scheme,
-        builtin: false,
-        colors: result.scheme.colors,
-      };
-      addCustomScheme(scheme);
-      await persistCustomSchemes();
-      await handleSelect(scheme.id);
-    } catch (error) {
-      logError("Failed to import color scheme", error);
-    }
-  };
+  const handleSelect = (id: string) => selectScheme(id);
 
   const isEmpty = filteredSchemes.length === 0;
 
@@ -170,7 +181,7 @@ export function ColorSchemePicker() {
       <div className="flex flex-col rounded-[var(--radius-md)] border border-border-default overflow-hidden">
         <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-border-default shrink-0">
           <div className="flex items-center gap-1.5 flex-1 min-w-0 focus-within:border-daintree-accent/40">
-            <Search className="w-3.5 h-3.5 shrink-0 text-daintree-text/40 pointer-events-none" />
+            <Search className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none" />
             <input
               type="search"
               value={query}
@@ -245,7 +256,7 @@ export function ColorSchemePicker() {
                       "[&>*]:pointer-events-none",
                       isSelected
                         ? "border-border-strong bg-overlay-selected"
-                        : "border-border-default bg-surface-canvas hover:border-daintree-text/30"
+                        : "border-border-default bg-surface-canvas hover:border-border-strong"
                     )}
                   >
                     <SchemePreview scheme={resolved} />
@@ -266,13 +277,6 @@ export function ColorSchemePicker() {
           {previewAnnouncement}
         </div>
       </div>
-
-      <button
-        onClick={handleImport}
-        className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors"
-      >
-        Import color scheme...
-      </button>
     </div>
   );
 }

@@ -1,19 +1,11 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  useMemo,
-  Suspense,
-  type ComponentType,
-  type ReactNode,
-} from "react";
-import { GitBranch, Key, Check, AlertCircle, ScrollText } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, useMemo, Suspense } from "react";
+import { Check, AlertCircle } from "lucide-react";
 import type { ForgeProviderContribution, ForgeProviderEntry } from "@shared/types";
 import type { ForgeAuditRecord, ForgeAuditStats } from "@shared/types/ipc/forge";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "@shared/types/ipc/forge";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   ForgeProviderSelectorDropdown,
@@ -23,14 +15,13 @@ import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import { ForgeIntegrationsTab } from "./ForgeIntegrationsTab";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { SettingsSection } from "./SettingsSection";
+import { SettingsActions, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { ForgeAuditLogViewer } from "./ForgeAuditLogViewer";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
 import { appClient } from "@/clients";
 import { logError } from "@/utils/logger";
-
-type ForgeIcon = ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
 
 const GENERAL_ID = "general";
 const CREDENTIAL_RESULT_DISPLAY_MS = 5000;
@@ -232,74 +223,55 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
     : null;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {loadError && <SettingsLoadErrorBanner message={loadError} onRetry={retryAction} />}
 
-      <div className="space-y-4">
-        <div>
-          <h4 className="text-sm font-medium mb-1">Code Forge</h4>
-          <p className="text-xs text-text-secondary select-text">
-            Configure forge providers and authentication
-          </p>
-        </div>
+      <ForgeProviderSelectorDropdown
+        providerOptions={providerOptions}
+        activeSubtab={effectiveSubtab}
+        onSubtabChange={onSubtabChange}
+      />
 
-        <ForgeProviderSelectorDropdown
-          providerOptions={providerOptions}
-          activeSubtab={effectiveSubtab}
-          onSubtabChange={onSubtabChange}
-        />
-
-        {isGeneral && (
-          <>
-            <ForgeIntegrationsTab />
-            <SettingsSection
-              icon={ScrollText}
-              title="Forge audit log"
-              description="Records every forge provider call — list / get / assign / validateToken — with redacted argument summaries. Use it to triage slow providers, failure clusters, and unexpected anomalies surfaced by the audit health snapshot."
-            >
-              <div className="flex flex-col gap-4">
-                <SettingsSwitchCard
-                  id="forge-audit-enable"
-                  title="Record forge provider calls"
-                  subtitle="Append a record each time a forge provider method is invoked"
-                  isEnabled={auditEnabled}
-                  onChange={() => void handleAuditEnabledToggle()}
-                  ariaLabel="Toggle forge audit log"
-                />
-                <ForgeAuditLogViewer
-                  records={auditRecords}
-                  loading={auditLoading}
-                  maxRecords={auditMaxRecords}
-                  anomalySignals={auditStats?.anomalySignals}
-                  anomalySuppressed={auditStats?.anomalySuppressed ?? true}
-                  onRefresh={refreshAuditRecords}
-                  onCopy={handleAuditCopy}
-                  onExport={handleAuditExport}
-                  onClear={() => setShowAuditClearConfirm(true)}
-                  copyFlashActive={auditCopied}
-                  exportFlashActive={auditExported}
-                  developerMode={developerMode}
-                />
-              </div>
-            </SettingsSection>
-          </>
-        )}
-
-        {!isGeneral && selectedEntry && (
-          <ForgeProviderCard
-            name={selectedEntry.contribution.name}
-            iconSlotId={selectedEntry.contribution.slots?.icon}
+      {isGeneral && (
+        <>
+          <ForgeIntegrationsTab />
+          <SettingsSection
+            title="Forge audit log"
+            description="Every forge provider call — list, get, assign, validateToken — with redacted argument summaries, for triaging slow providers, failure clusters and anomalies"
           >
-            <ProviderPanel
-              providerId={makeForgeProviderId(
-                selectedEntry.pluginId,
-                selectedEntry.contribution.id
-              )}
-              entry={selectedEntry}
+            <SettingsGroup>
+              <SettingsSwitchCard
+                id="forge-audit-enable"
+                title="Record forge provider calls"
+                subtitle="Append a record each time a forge provider method is invoked"
+                isEnabled={auditEnabled}
+                onChange={() => void handleAuditEnabledToggle()}
+              />
+            </SettingsGroup>
+            <ForgeAuditLogViewer
+              records={auditRecords}
+              loading={auditLoading}
+              maxRecords={auditMaxRecords}
+              anomalySignals={auditStats?.anomalySignals}
+              anomalySuppressed={auditStats?.anomalySuppressed ?? true}
+              onRefresh={refreshAuditRecords}
+              onCopy={handleAuditCopy}
+              onExport={handleAuditExport}
+              onClear={() => setShowAuditClearConfirm(true)}
+              copyFlashActive={auditCopied}
+              exportFlashActive={auditExported}
+              developerMode={developerMode}
             />
-          </ForgeProviderCard>
-        )}
-      </div>
+          </SettingsSection>
+        </>
+      )}
+
+      {!isGeneral && selectedEntry && (
+        <ProviderPanel
+          providerId={makeForgeProviderId(selectedEntry.pluginId, selectedEntry.contribution.id)}
+          entry={selectedEntry}
+        />
+      )}
 
       <ConfirmDialog
         isOpen={showAuditClearConfirm}
@@ -315,41 +287,9 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
 }
 
 /**
- * Provider brand icon resolved through the provider's `slots.icon` builtin-view
- * ref. Falls back to a neutral `GitBranch` glyph when the provider declares no
- * icon slot or the owning plugin's view is unregistered/disabled.
- */
-function ProviderIcon({ slotId, className }: { slotId?: string; className?: string }) {
-  const SlotIcon = useBuiltinView<{ className?: string; "aria-hidden"?: boolean }>(slotId ?? "");
-  const Icon: ForgeIcon = SlotIcon ?? GitBranch;
-  return <Icon className={className} aria-hidden={true} />;
-}
-
-interface ForgeProviderCardProps {
-  name: string;
-  iconSlotId?: string;
-  children: ReactNode;
-}
-
-function ForgeProviderCard({ name, iconSlotId, children }: ForgeProviderCardProps) {
-  return (
-    <div className="rounded-[var(--radius-lg)] border border-border-default bg-surface p-4 space-y-4">
-      <div className="flex items-center gap-3 pb-3 border-b border-border-default">
-        <ProviderIcon slotId={iconSlotId} className="w-6 h-6 text-text-primary" />
-        <div>
-          <h4 className="text-sm font-medium text-text-primary">{name} settings</h4>
-          <p className="text-xs text-text-secondary select-text">
-            Configure {name} authentication and integrations
-          </p>
-        </div>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-/**
- * Body of a provider's settings card. A provider-owned panel contributed via
+ * Body of a provider's settings. The selector above names the provider with its icon,
+ * so the body opens straight on its sections rather than a second identity heading.
+ * A provider-owned panel contributed via
  * `slots.settingsTab` wins (the slot resolves null while the owning plugin is
  * disabled, so disabling genuinely removes the plugin's settings interface);
  * otherwise the host renders the generic credential form built from the
@@ -390,7 +330,7 @@ function ProviderSettingsBody({ providerId, pluginId, contribution }: ProviderSe
     // token-recovery surfaces target — generic for any provider, regardless
     // of whether the provider ships its own settings slot or uses the host
     // credential form below.
-    <div className="space-y-4" id="forge-access-token">
+    <div className="space-y-8" id="forge-access-token">
       {credentialFields.length > 0 ? (
         <GenericCredentialForm
           providerId={providerId}
@@ -405,7 +345,7 @@ function ProviderSettingsBody({ providerId, pluginId, contribution }: ProviderSe
         </p>
       )}
 
-      <div className="space-y-2 pt-2 border-t border-border-default">
+      <div className="space-y-2">
         <p className="text-xs text-text-secondary font-mono">{pluginId}</p>
         {capabilities && capabilities.length > 0 && (
           <div>
@@ -541,90 +481,90 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
   };
 
   return (
-    <div
-      className="rounded-[var(--radius-lg)] border border-border-default bg-daintree-bg/30 p-4 space-y-3"
-      data-testid="forge-credential-form"
-    >
-      <div>
-        <h5 className="text-sm font-medium text-text-primary flex items-center gap-2">
-          <Key className="w-4 h-4 text-daintree-text/70" aria-hidden="true" />
-          Authentication
-        </h5>
-        <p className="text-xs text-text-secondary mt-0.5 select-text">
-          Credentials are validated against {providerName} before they're saved
-        </p>
-      </div>
-
-      {hasCredential && (
-        <div className="flex items-center gap-1 text-xs text-text-secondary">
-          <Check className="w-3 h-3" />
-          {providerName} connected
-        </div>
-      )}
-
-      <div className="space-y-3">
-        {fields.map((field) => (
-          <div key={field.id} className="space-y-1">
-            <label
-              htmlFor={`forge-cred-${field.id}`}
-              className="text-xs font-medium text-text-secondary"
-            >
-              {field.label}
-            </label>
-            <input
-              id={`forge-cred-${field.id}`}
-              type={field.type === "password" ? "password" : "text"}
-              value={values[field.id] ?? ""}
-              onChange={(e) => setValues((prev) => ({ ...prev, [field.id]: e.target.value }))}
-              placeholder={field.placeholder}
-              aria-label={field.label}
-              autoComplete={field.type === "password" ? "new-password" : "off"}
-              className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
-              disabled={isSaving}
+    <div data-testid="forge-credential-form">
+      <SettingsSection
+        title="Authentication"
+        description={`Credentials are validated against ${providerName} before they're saved`}
+      >
+        <SettingsGroup>
+          {hasCredential && (
+            <SettingsRow
+              label="Status"
+              control={
+                <span className="flex items-center gap-1 text-xs text-text-secondary">
+                  <Check className="w-3 h-3" aria-hidden="true" />
+                  {providerName} connected
+                </span>
+              }
             />
-            {field.helpText && (
-              <p className="text-xs text-text-secondary select-text">{field.helpText}</p>
-            )}
-          </div>
-        ))}
-      </div>
-
-      <div className="flex gap-2">
-        <Button
-          onClick={handleSave}
-          disabled={!canSave}
-          loading={isSaving}
-          size="sm"
-          aria-label="Save credentials"
-          className="min-w-[70px]"
-        >
-          Save
-        </Button>
-        {hasCredential && (
-          <Button
-            onClick={handleClear}
-            variant="outline"
-            size="sm"
-            aria-label="Clear credentials"
-            className="text-status-error border-border-default hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
+          )}
+          {fields.map((field) => (
+            <SettingsRow
+              key={field.id}
+              label={field.label}
+              description={field.helpText}
+              layout="stacked"
+              control={({ descriptionId }) => (
+                <Input
+                  id={`forge-cred-${field.id}`}
+                  type={field.type === "password" ? "password" : "text"}
+                  value={values[field.id] ?? ""}
+                  onChange={(e) => setValues((prev) => ({ ...prev, [field.id]: e.target.value }))}
+                  placeholder={field.placeholder}
+                  aria-label={field.label}
+                  aria-describedby={descriptionId}
+                  autoComplete={field.type === "password" ? "new-password" : "off"}
+                  disabled={isSaving}
+                />
+              )}
+            />
+          ))}
+          <SettingsActions
+            status={
+              result === "success" ? (
+                <span className="flex items-center gap-1">
+                  <Check className="w-3 h-3" aria-hidden="true" />
+                  Credentials saved
+                </span>
+              ) : result === "error" ? (
+                <span className="flex items-center gap-1 text-status-error">
+                  <AlertCircle className="w-3 h-3" aria-hidden="true" />
+                  {errorMessage || "Couldn't save credentials"}
+                </span>
+              ) : null
+            }
           >
-            Clear credentials
-          </Button>
+            <Button
+              variant="contrast"
+              onClick={handleSave}
+              disabled={!canSave}
+              loading={isSaving}
+              size="sm"
+              aria-label="Save credentials"
+            >
+              Save
+            </Button>
+          </SettingsActions>
+        </SettingsGroup>
+        {hasCredential && (
+          <SettingsGroup>
+            <SettingsRow
+              label="Stored credentials"
+              description={`Clearing removes Daintree's copy; ${providerName} features stop until you add them again`}
+              control={
+                <Button
+                  onClick={handleClear}
+                  variant="ghost-danger"
+                  size="sm"
+                  aria-label="Clear credentials"
+                >
+                  Clear credentials
+                </Button>
+              }
+            />
+          </SettingsGroup>
         )}
-      </div>
-
-      {result === "success" && (
-        <p className="text-xs text-status-success flex items-center gap-1">
-          <Check className="w-3 h-3" />
-          Credentials saved
-        </p>
-      )}
-      {result === "error" && (
-        <p className="text-xs text-status-error flex items-center gap-1">
-          <AlertCircle className="w-3 h-3" />
-          {errorMessage || "Couldn't save credentials"}
-        </p>
-      )}
+      </SettingsSection>
     </div>
   );
 }

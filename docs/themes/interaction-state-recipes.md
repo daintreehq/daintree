@@ -177,6 +177,8 @@ Every state is checked across the whole 150ms crossfade rather than at its endpo
 
 **Usage:** Combine with `transition-colors` for smooth toggle transitions. The active segment gets a neutral background fill and text emphasis; the border distinguishes it from inactive peers. Accent must NOT appear on any toggle segment. The canonical target is `overlay-medium` for the active fill.
 
+The sliding thumb of `SegmentedRadioGroup` sits on an inset track, where `border-strong` measured only 1.5–1.7:1 and the fill barely moves. It uses `border-text-secondary` for the boundary instead, which clears SC 1.4.11's 3:1 in both polarities.
+
 ---
 
 ### Switch-Row ON State

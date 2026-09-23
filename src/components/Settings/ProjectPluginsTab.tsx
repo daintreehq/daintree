@@ -1,7 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, FolderOpen, Package, RefreshCw } from "lucide-react";
+import { AlertCircle, FolderOpen, RefreshCw } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { SettingsSection } from "@/components/Settings/SettingsSection";
+import {
+  SETTINGS_CONTROL_WIDTH,
+  SettingsGroup,
+  SettingsRow,
+} from "@/components/Settings/SettingsGroup";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
@@ -29,11 +42,6 @@ import {
   type ProjectPluginInfo,
   type ProjectPluginState,
 } from "@shared/types/plugin";
-
-const BADGE_CLASS =
-  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-border-default/50 text-text-secondary uppercase tracking-wide";
-
-const SECTION_HEADING_CLASS = "text-2xs font-medium uppercase tracking-wide text-text-secondary";
 
 /**
  * The word beside a project plugin's name.
@@ -101,51 +109,57 @@ function EmptyCanvasSection() {
     pluginManifestIdFromInstanceKey(claim.pluginId);
 
   return (
-    <div
-      className="space-y-2 pt-1 border-t border-border-default"
-      data-testid="project-plugins-empty-canvas"
-    >
-      <h5 className={SECTION_HEADING_CLASS}>Empty canvas</h5>
-      <p className="text-xs text-text-secondary leading-relaxed">
-        {pluginName} draws what this project shows when no panels are open, in place of the
-        launcher. {EMPTY_CANVAS_STATUS[choice ?? "none"]}
-      </p>
-      {failedSave !== null && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <p role="alert" className="text-xs text-status-error">
-            Couldn&apos;t save the canvas choice.
-          </p>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => void setSurfaceChoice("emptyCanvas", failedSave.choice)}
-          >
-            Retry
-          </Button>
-        </div>
-      )}
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-2xs text-text-secondary">Show on the empty canvas</span>
-        <SettingsSwitch
-          checked={choice !== "stock"}
-          onCheckedChange={(next) =>
-            void setSurfaceChoice("emptyCanvas", next ? "surface" : "stock")
-          }
-          aria-label="Show on the empty canvas"
-          data-testid="project-empty-canvas-switch"
-        />
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={choice === null}
-          onClick={() => void setSurfaceChoice("emptyCanvas", null)}
-        >
-          Reset choice
-        </Button>
-      </div>
-      <p className="text-2xs text-text-secondary leading-relaxed">
-        Resetting shows the plugin&apos;s canvas again and asks the next time it appears.
-      </p>
+    <div data-testid="project-plugins-empty-canvas">
+      <SettingsSection
+        title="Empty canvas"
+        description={`${pluginName} draws what this project shows when no panels are open, in place of the launcher.`}
+      >
+        <SettingsGroup>
+          <SettingsRow
+            label="Show on the empty canvas"
+            description={EMPTY_CANVAS_STATUS[choice ?? "none"]}
+            control={({ descriptionId }) => (
+              <SettingsSwitch
+                checked={choice !== "stock"}
+                onCheckedChange={(next) =>
+                  void setSurfaceChoice("emptyCanvas", next ? "surface" : "stock")
+                }
+                aria-label="Show on the empty canvas"
+                aria-describedby={descriptionId}
+                data-testid="project-empty-canvas-switch"
+              />
+            )}
+          />
+          <SettingsRow
+            label="Remembered choice"
+            description="Resetting shows the plugin's canvas again and asks the next time it appears"
+            control={
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={choice === null}
+                onClick={() => void setSurfaceChoice("emptyCanvas", null)}
+              >
+                Reset choice
+              </Button>
+            }
+          />
+          {failedSave !== null && (
+            <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+              <p role="alert" className="text-xs text-status-error">
+                Couldn&apos;t save the canvas choice.
+              </p>
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => void setSurfaceChoice("emptyCanvas", failedSave.choice)}
+              >
+                Retry
+              </Button>
+            </div>
+          )}
+        </SettingsGroup>
+      </SettingsSection>
     </div>
   );
 }
@@ -170,81 +184,98 @@ function ProjectOverviewPane({ projectPluginCount }: { projectPluginCount: numbe
   };
 
   return (
-    <Card className="space-y-5" data-testid="project-plugins-overview">
-      <div className="pb-3 border-b border-border-default">
-        <h4 className="text-sm font-medium text-text-primary">This project&apos;s plugins</h4>
-        <p className="text-xs text-text-secondary mt-0.5 select-text">
-          {projectPluginCount === 0
+    <div className="space-y-8" data-testid="project-plugins-overview">
+      <SettingsSection
+        title="This project's plugins"
+        description={
+          projectPluginCount === 0
             ? "No plugins found in .daintree/plugins."
-            : `${projectPluginCount} plugin${projectPluginCount === 1 ? "" : "s"} in .daintree/plugins.`}
-        </p>
-      </div>
-
-      <div className="space-y-2">
-        <h5 className={SECTION_HEADING_CLASS}>Trust</h5>
-        {enabled ? (
-          <>
-            <p className="text-xs text-text-secondary leading-relaxed">
-              This project&apos;s plugins are allowed to run. They execute with your account —
-              Daintree doesn&apos;t sandbox them.
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void decide("disabled")}
-              loading={deciding === "disabled"}
-            >
-              Turn off project plugins
-            </Button>
-            <p className="text-2xs text-text-secondary leading-relaxed">
-              Unloads every plugin this project ships. To silence just one, pick it above and use
-              its own switch.
-            </p>
-          </>
-        ) : (
-          <>
-            <p className="text-xs text-text-secondary leading-relaxed">
-              Nothing in this project&apos;s plugins folder is running. Enabling runs all of them
-              with your account; Daintree doesn&apos;t sandbox them.
-            </p>
-            <div className="flex items-center gap-2 flex-wrap">
+            : `${projectPluginCount} plugin${projectPluginCount === 1 ? "" : "s"} in .daintree/plugins.`
+        }
+      >
+        <SettingsGroup>
+          {enabled ? (
+            <SettingsRow
+              label="Allowed to run"
+              description="They execute with your account — Daintree doesn't sandbox them. Turning them off unloads every plugin this project ships; to silence just one, pick it above and use its own switch."
+              control={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void decide("disabled")}
+                  loading={deciding === "disabled"}
+                >
+                  Turn off project plugins
+                </Button>
+              }
+            />
+          ) : (
+            <SettingsRow
+              label="Not running"
+              description="Nothing in this project's plugins folder is running. Enabling runs all of them with your account; Daintree doesn't sandbox them."
+              control={
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void decide("session")}
+                    loading={deciding === "session"}
+                  >
+                    Enable for this session
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void decide("enabled")}
+                    loading={deciding === "enabled"}
+                  >
+                    Enable for this project
+                  </Button>
+                </div>
+              }
+            />
+          )}
+          <SettingsRow
+            label="Plugins folder"
+            description="Reads every manifest again and reloads what changed. Same trust and staging rules as opening the project."
+            control={
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => void decide("enabled")}
-                loading={deciding === "enabled"}
+                onClick={() => void handleReload()}
+                loading={reloading}
               >
-                Enable for this project
+                <RefreshCw />
+                Re-scan plugins folder
               </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void decide("session")}
-                loading={deciding === "session"}
-              >
-                Enable for this session
-              </Button>
-            </div>
-          </>
-        )}
-      </div>
+            }
+          />
+        </SettingsGroup>
+      </SettingsSection>
 
       <EmptyCanvasSection />
 
       <ProjectAgentToolsSection />
+    </div>
+  );
+}
 
-      <div className="space-y-2 pt-1 border-t border-border-default">
-        <h5 className={SECTION_HEADING_CLASS}>Reload</h5>
-        <Button variant="outline" size="sm" onClick={() => void handleReload()} loading={reloading}>
-          <RefreshCw />
-          Re-scan plugins folder
-        </Button>
-        <p className="text-2xs text-text-secondary leading-relaxed">
-          Reads every manifest again and reloads what changed. Same trust and staging rules as
-          opening the project.
-        </p>
-      </div>
-    </Card>
+/** Whether a loaded plugin contributes settings, so its section is worth a heading. */
+function hasPluginSettings(plugin: LoadedPluginInfo | undefined): plugin is LoadedPluginInfo {
+  return (plugin?.manifest.contributes.settings?.length ?? 0) > 0;
+}
+
+/**
+ * The plugin's name as the section title, its manifest description and id beneath.
+ * The id stays visible because two plugins can share a display name, and the
+ * `collidesWithGlobal` case is exactly two plugins sharing an id.
+ */
+function PluginIdentityDescription({ description, id }: { description?: string; id: string }) {
+  return (
+    <>
+      {description && <span className="block break-words">{description}</span>}
+      <span className="block font-mono break-all">{id}</span>
+    </>
   );
 }
 
@@ -287,132 +318,142 @@ function ProjectPluginPane({
       .catch((err: unknown) => logError("Failed to reveal project plugin folder", err));
   };
 
+  const runStatus = plugin.muted
+    ? "Switched off on its own. The project's other plugins are unaffected, and the folder still has whatever trust you gave it — turning this back on runs it again without asking."
+    : !folderTrusted && plugin.state !== "invalid"
+      ? "Not running because this project's plugins are turned off as a folder. Enable them under “This project”."
+      : undefined;
+
+  const badges = (
+    <>
+      <Badge size="xs">Project</Badge>
+      <Badge size="xs">{projectPluginStatus(plugin)}</Badge>
+      {plugin.version && <Badge size="xs">v{plugin.version}</Badge>}
+    </>
+  );
+
   return (
-    <Card className="space-y-5" data-testid="project-plugin-detail">
-      <div className="pb-3 border-b border-border-default space-y-2">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h4 className="text-sm font-medium text-text-primary break-words">
-              {plugin.displayName}
-            </h4>
-            <p className="mt-0.5 font-mono text-2xs text-text-secondary break-all">{plugin.id}</p>
-          </div>
-          {canMute && (
-            <div className="shrink-0 flex items-center gap-2">
-              <span className="text-2xs text-text-secondary">Run here</span>
-              <SettingsSwitch
-                checked={!plugin.muted}
-                disabled={muting.has(plugin.id)}
-                onCheckedChange={(next) => void setMuted(plugin.id, !next)}
-                aria-label={`Run ${plugin.displayName} in this project`}
-                data-testid="project-plugin-mute-switch"
-              />
-            </div>
+    <div className="space-y-8" data-testid="project-plugin-detail">
+      <SettingsSection
+        title={plugin.displayName}
+        description={<PluginIdentityDescription description={plugin.description} id={plugin.id} />}
+      >
+        <SettingsGroup>
+          {canMute ? (
+            <SettingsRow
+              label="Run here"
+              accessory={badges}
+              description={runStatus}
+              control={({ descriptionId, disabled }) => (
+                <SettingsSwitch
+                  checked={!plugin.muted}
+                  disabled={disabled || muting.has(plugin.id)}
+                  onCheckedChange={(next) => void setMuted(plugin.id, !next)}
+                  aria-label={`Run ${plugin.displayName} in this project`}
+                  aria-describedby={descriptionId}
+                  data-testid="project-plugin-mute-switch"
+                />
+              )}
+            />
+          ) : (
+            <SettingsRow
+              label="Manifest"
+              accessory={badges}
+              error={
+                plugin.error ? (
+                  <span className="flex items-start gap-1.5 break-words">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-px" aria-hidden="true" />
+                    {plugin.error}
+                  </span>
+                ) : undefined
+              }
+            />
           )}
-        </div>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <span className={BADGE_CLASS}>Project</span>
-          <span className={BADGE_CLASS}>{projectPluginStatus(plugin)}</span>
-          {plugin.version && <span className={BADGE_CLASS}>v{plugin.version}</span>}
-        </div>
-        {plugin.description && (
-          <p className="text-xs text-text-secondary break-words">{plugin.description}</p>
-        )}
-      </div>
 
-      {plugin.muted && (
-        <p className="text-2xs text-text-secondary leading-relaxed">
-          Switched off on its own. The project&apos;s other plugins are unaffected, and the folder
-          still has whatever trust you gave it — turning this back on runs it again without asking.
-        </p>
-      )}
-      {!plugin.muted && !folderTrusted && plugin.state !== "invalid" && (
-        <p className="text-2xs text-text-secondary leading-relaxed">
-          Not running because this project&apos;s plugins are turned off as a folder. Enable them
-          under &ldquo;This project&rdquo;.
-        </p>
-      )}
+          <SettingsRow
+            label="Source"
+            description={
+              <span className="font-mono break-all">.daintree/plugins/{plugin.dirName}</span>
+            }
+          />
 
-      <div className="space-y-2">
-        <h5 className={SECTION_HEADING_CLASS}>Source</h5>
-        <p className="font-mono text-2xs text-text-secondary break-all">
-          .daintree/plugins/{plugin.dirName}
-        </p>
-      </div>
+          {plugin.collidesWithGlobal && (
+            <SettingsRow
+              label="Shares an id with an installed plugin"
+              description="Both load — the instance key keeps them apart — so check which one a command or panel came from."
+            />
+          )}
 
-      {plugin.state === "invalid" && plugin.error && (
-        <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
-          <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-          <p className="text-2xs text-status-danger break-words">{plugin.error}</p>
-        </div>
-      )}
+          {granted.length > 0 && (
+            <SettingsRow
+              label="Declared capabilities"
+              layout="stacked"
+              description="What the plugin says it uses. Daintree doesn't sandbox project plugins, so this is a description of intent, not a limit on it."
+              control={
+                <ul className="space-y-1.5">
+                  {granted.map((capability) => (
+                    <CapabilityRow key={capability} capability={capability} />
+                  ))}
+                </ul>
+              }
+            />
+          )}
 
-      {plugin.collidesWithGlobal && (
-        <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
-          <AlertCircle className="w-3.5 h-3.5 text-status-warning shrink-0 mt-0.5" />
-          <p className="text-2xs text-status-warning break-words">
-            An installed plugin already uses this id. Both load — the instance key keeps them apart
-            — so check which one a command or panel came from.
-          </p>
-        </div>
-      )}
-
-      {granted.length > 0 && (
-        <div className="space-y-2">
-          <h5 className={SECTION_HEADING_CLASS}>Declared capabilities</h5>
-          <p className="text-2xs text-text-secondary leading-relaxed">
-            What the plugin says it uses. Daintree doesn&apos;t sandbox project plugins, so this is
-            a description of intent, not a limit on it.
-          </p>
-          <ul className="space-y-1.5">
-            {granted.map((capability) => (
-              <CapabilityRow key={capability} capability={capability} />
-            ))}
-          </ul>
-        </div>
-      )}
-
-      <div className="space-y-2 pt-1 border-t border-border-default">
-        <div className="flex items-center gap-2 flex-wrap">
           {plugin.state === "staged" && !plugin.muted && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void activateStaged(plugin.id)}
-              loading={activating.has(plugin.id)}
-            >
-              Activate plugin
-            </Button>
+            <SettingsRow
+              label="Staged"
+              description="New to this project, so it was read but never run. Activating starts it now and on every future open."
+              control={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void activateStaged(plugin.id)}
+                  loading={activating.has(plugin.id)}
+                >
+                  Activate plugin
+                </Button>
+              }
+            />
           )}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void handleReload()}
-            loading={reloading}
-          >
-            <RefreshCw />
-            Reload from disk
-          </Button>
-          <Button variant="ghost" size="sm" onClick={handleReveal} disabled={!projectPath}>
-            <FolderOpen />
-            Reveal folder
-          </Button>
-        </div>
-        {plugin.state === "staged" && !plugin.muted && (
-          <p className="text-2xs text-text-secondary leading-relaxed">
-            New to this project, so it was read but never run. Activating starts it now and on every
-            future open.
-          </p>
-        )}
-        <p className="text-2xs text-text-secondary leading-relaxed">
-          Reloading re-reads every manifest in the folder, not just this one.
-        </p>
-      </div>
 
-      {loaded && <PluginSettingsForm plugin={loaded} />}
-    </Card>
+          <SettingsRow
+            label="Plugin folder"
+            layout="stacked"
+            description="Reloading re-reads every manifest in the folder, not just this one."
+            control={
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleReload()}
+                  loading={reloading}
+                >
+                  <RefreshCw />
+                  Reload from disk
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleReveal} disabled={!projectPath}>
+                  <FolderOpen />
+                  Reveal folder
+                </Button>
+              </div>
+            }
+          />
+        </SettingsGroup>
+      </SettingsSection>
+
+      {hasPluginSettings(loaded) && (
+        <SettingsSection title="Settings">
+          <PluginSettingsForm plugin={loaded} />
+        </SettingsSection>
+      )}
+    </div>
   );
 }
+
+const VISIBILITY_DEFAULT_OPTIONS = [
+  { value: "all", label: "Every project" },
+  { value: "selected", label: "Only projects I turn it on in" },
+] as const;
 
 /** Detail for one INSTALLED plugin, seen from inside a project. */
 function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
@@ -424,6 +465,7 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
   const hiddenByDefault = visibility.defaultHiddenPluginIds.includes(pluginId);
   const override = visibility.overrides[pluginId];
   const visible = override ?? !hiddenByDefault;
+  const name = plugin.manifest.displayName ?? pluginId;
 
   // The switch always writes an explicit answer for this project EXCEPT when
   // the answer it would write is the default anyway — then it clears the
@@ -434,73 +476,78 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
   };
 
   return (
-    <Card className="space-y-5" data-testid="installed-plugin-detail">
-      <div className="pb-3 border-b border-border-default space-y-2">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h4 className="text-sm font-medium text-text-primary break-words">
-              {plugin.manifest.displayName ?? pluginId}
-            </h4>
-            <p className="mt-0.5 font-mono text-2xs text-text-secondary break-all">{pluginId}</p>
-          </div>
-          <div className="shrink-0 flex items-center gap-2">
-            <span className="text-2xs text-text-secondary">Show here</span>
-            <SettingsSwitch
-              checked={visible}
-              disabled={plugin.disabled}
-              onCheckedChange={handleToggle}
-              aria-label={`Show ${plugin.manifest.displayName ?? pluginId} in this project`}
-              data-testid="installed-plugin-visibility-switch"
+    <div className="space-y-8" data-testid="installed-plugin-detail">
+      <SettingsSection
+        title={name}
+        description={
+          <PluginIdentityDescription description={plugin.manifest.description} id={pluginId} />
+        }
+      >
+        <SettingsGroup>
+          <SettingsRow
+            label="Show here"
+            accessory={
+              <>
+                <Badge size="xs">{plugin.isBuiltin ? "Built-in" : "Installed"}</Badge>
+                {plugin.manifest.version && <Badge size="xs">v{plugin.manifest.version}</Badge>}
+              </>
+            }
+            description="Hiding keeps this plugin out of this project's panels, commands, toolbar buttons, keyboard shortcuts and context menus. It stays installed and keeps running, so anything it contributes elsewhere — agents, recipes, forge providers, file decorations — carries on here regardless. This is which projects see it, not whether it is loaded."
+            disabled={plugin.disabled}
+            disabledReason="Turned off everywhere in Settings → Plugins, so there is nothing for this project to show or hide"
+            control={({ descriptionId, disabled }) => (
+              <SettingsSwitch
+                checked={visible}
+                disabled={disabled}
+                onCheckedChange={handleToggle}
+                aria-label={`Show ${name} in this project`}
+                aria-describedby={descriptionId}
+                data-testid="installed-plugin-visibility-switch"
+              />
+            )}
+          />
+          {!plugin.disabled && (
+            <SettingsRow
+              label="Where it shows up"
+              description={
+                hiddenByDefault
+                  ? "Hidden in projects you haven't decided about, including ones you open later. The switch above is this project's answer."
+                  : "Shown everywhere unless a project says otherwise. The switch above is this project's answer."
+              }
+              control={({ descriptionId, disabled }) => (
+                <Select
+                  value={hiddenByDefault ? "selected" : "all"}
+                  disabled={disabled}
+                  onValueChange={(next) => void setVisibilityDefault(pluginId, next === "selected")}
+                >
+                  <SelectTrigger
+                    aria-label="Which projects show this plugin by default"
+                    aria-describedby={descriptionId}
+                    data-testid="installed-plugin-visibility-default"
+                    className={SETTINGS_CONTROL_WIDTH.wide}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {VISIBILITY_DEFAULT_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             />
-          </div>
-        </div>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <span className={BADGE_CLASS}>{plugin.isBuiltin ? "Built-in" : "Installed"}</span>
-          {plugin.manifest.version && (
-            <span className={BADGE_CLASS}>v{plugin.manifest.version}</span>
           )}
-        </div>
-        {plugin.manifest.description && (
-          <p className="text-xs text-text-secondary break-words">{plugin.manifest.description}</p>
-        )}
-      </div>
+        </SettingsGroup>
+      </SettingsSection>
 
-      {plugin.disabled ? (
-        <p className="text-2xs text-text-secondary leading-relaxed">
-          Turned off everywhere in Settings → Plugins, so there is nothing for this project to show
-          or hide.
-        </p>
-      ) : (
-        <>
-          <div className="space-y-2">
-            <h5 className={SECTION_HEADING_CLASS}>Where it shows up</h5>
-            <select
-              value={hiddenByDefault ? "selected" : "all"}
-              onChange={(e) => void setVisibilityDefault(pluginId, e.target.value === "selected")}
-              aria-label="Which projects show this plugin by default"
-              data-testid="installed-plugin-visibility-default"
-              className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus:border-accent-primary/40 focus:outline-hidden transition-colors"
-            >
-              <option value="all">Every project</option>
-              <option value="selected">Only projects I turn it on in</option>
-            </select>
-            <p className="text-2xs text-text-secondary leading-relaxed">
-              {hiddenByDefault
-                ? "Hidden in projects you haven't decided about, including ones you open later. The switch above is this project's answer."
-                : "Shown everywhere unless a project says otherwise. The switch above is this project's answer."}
-            </p>
-          </div>
-          <p className="text-2xs text-text-secondary leading-relaxed">
-            Hiding keeps this plugin out of this project&apos;s panels, commands, toolbar buttons,
-            keyboard shortcuts and context menus. It stays installed and keeps running, so anything
-            it contributes elsewhere — agents, recipes, forge providers, file decorations — carries
-            on here regardless. This is which projects see it, not whether it is loaded.
-          </p>
-        </>
+      {hasPluginSettings(plugin) && (
+        <SettingsSection title="Settings">
+          <PluginSettingsForm plugin={plugin} />
+        </SettingsSection>
       )}
-
-      <PluginSettingsForm plugin={plugin} />
-    </Card>
+    </div>
   );
 }
 
@@ -597,25 +644,26 @@ export function ProjectPluginsTab() {
   const showOverview = !selectedProjectPlugin && !selectedInstalled;
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h3 className="text-sm font-medium text-text-primary">Plugins</h3>
-        <p className="text-xs text-text-secondary mt-0.5 select-text">
-          Plugins this project ships, and which of your installed plugins show up in it.
-        </p>
-      </div>
-
-      <ProjectPluginSelectorDropdown
-        options={options}
-        activeId={showOverview ? PROJECT_PLUGINS_OVERVIEW_ID : selectedId}
-        onChange={setSelectedId}
-      />
-
-      {error && (
-        <p className="text-2xs text-status-danger leading-tight" role="alert">
-          {error}
-        </p>
-      )}
+    <div className="space-y-8">
+      <SettingsSection
+        title="Plugin"
+        description="Plugins this project ships, and which of your installed plugins show up in it"
+        action={
+          <div className="w-72">
+            <ProjectPluginSelectorDropdown
+              options={options}
+              activeId={showOverview ? PROJECT_PLUGINS_OVERVIEW_ID : selectedId}
+              onChange={setSelectedId}
+            />
+          </div>
+        }
+      >
+        {error && (
+          <p className="text-xs text-status-danger" role="alert">
+            {error}
+          </p>
+        )}
+      </SettingsSection>
 
       {showOverview && <ProjectOverviewPane projectPluginCount={projectPlugins.length} />}
 
@@ -637,10 +685,7 @@ export function ProjectPluginsTab() {
       )}
 
       {showOverview && projectPlugins.length === 0 && installedOnly.length === 0 && (
-        <p className="text-xs text-text-secondary flex items-center gap-2">
-          <Package className="w-4 h-4 text-text-placeholder" aria-hidden="true" />
-          No plugins to configure yet.
-        </p>
+        <p className="text-xs text-text-secondary">No plugins to configure yet.</p>
       )}
     </div>
   );

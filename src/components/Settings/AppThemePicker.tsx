@@ -6,7 +6,7 @@ import {
   type FormEvent,
   type MouseEvent,
 } from "react";
-import { AlertCircle, AlertTriangle, Monitor, Shuffle } from "lucide-react";
+import { AlertCircle, AlertTriangle, Shuffle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { injectSchemeToDOM, useAppThemeStore } from "@/store/appThemeStore";
@@ -28,6 +28,7 @@ import type {
   AppThemeWarningKind,
 } from "@shared/types/appTheme";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
 import { useImageError } from "@/hooks/useImageError";
@@ -92,30 +93,35 @@ function PreferredSchemePicker({
   onSelect: (id: string) => void;
 }) {
   return (
-    <div className="space-y-1">
-      <p className="text-3xs font-medium uppercase tracking-wider text-text-secondary">{label}</p>
-      <div className="flex flex-wrap gap-1.5">
-        {schemes.map((scheme) => (
-          <button
-            key={scheme.id}
-            type="button"
-            onClick={() => onSelect(scheme.id)}
-            className={cn(
-              "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] border text-xs transition-colors",
-              selectedId === scheme.id
-                ? "border-border-strong bg-overlay-medium text-text-primary"
-                : "border-border-default text-text-secondary hover:bg-surface-hover"
-            )}
-          >
-            <div
-              className="w-3 h-3 rounded-sm shrink-0"
-              style={{ backgroundColor: scheme.tokens[APP_THEME_PREVIEW_KEYS.background] }}
-            />
-            {scheme.name}
-          </button>
-        ))}
-      </div>
-    </div>
+    <SettingsRow
+      label={label}
+      layout="stacked"
+      control={({ labelId }) => (
+        <div role="group" aria-labelledby={labelId} className="flex flex-wrap gap-1.5">
+          {schemes.map((scheme) => (
+            <button
+              key={scheme.id}
+              type="button"
+              aria-pressed={selectedId === scheme.id}
+              onClick={() => onSelect(scheme.id)}
+              className={cn(
+                "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] border text-xs transition-colors",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+                selectedId === scheme.id
+                  ? "border-border-strong bg-overlay-medium text-text-primary"
+                  : "border-border-default text-text-secondary hover:bg-surface-hover"
+              )}
+            >
+              <div
+                className="w-3 h-3 rounded-sm shrink-0"
+                style={{ backgroundColor: scheme.tokens[APP_THEME_PREVIEW_KEYS.background] }}
+              />
+              {scheme.name}
+            </button>
+          ))}
+        </div>
+      )}
+    />
   );
 }
 
@@ -491,7 +497,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
     }
 
     const nextId = shuffleQueueRef.current.shift()!;
-    handleSelect(nextId, { x: e.clientX, y: e.clientY });
+    void handleSelect(nextId, { x: e.clientX, y: e.clientY });
   };
 
   const handleChangeTheme = () => {
@@ -499,7 +505,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
   };
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {saveError && (
         <InlineStatusBanner
           className="rounded-[var(--radius-md)]"
@@ -513,30 +519,151 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
         />
       )}
 
-      <SettingsSwitchCard
-        icon={Monitor}
-        title="Match system appearance"
-        subtitle="Automatically switch between dark and light themes"
-        isEnabled={followSystem}
-        onChange={() => void handleToggleFollowSystem()}
-        ariaLabel="Toggle automatic theme switching"
-        variant="compact"
-      />
+      <div className="flex flex-col rounded-[var(--radius-lg)] border border-border-default overflow-hidden">
+        <div className="relative h-[200px] shrink-0 overflow-hidden">
+          {selectedScheme.heroImage && !heroError ? (
+            <img
+              ref={heroImgRef}
+              src={selectedScheme.heroImage}
+              alt=""
+              onError={onHeroError}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <div
+              className="w-full h-full flex items-center justify-center"
+              style={{
+                backgroundColor: selectedScheme.tokens[APP_THEME_PREVIEW_KEYS.background],
+              }}
+            >
+              <PaletteStrip scheme={selectedScheme} />
+            </div>
+          )}
+          {/* Media-overlay caption: sits on a guaranteed-dark scrim over the hero
+              image, so the white label text is intentional and stays readable on
+              every theme. `text-inverse` flips dark on dark themes — not usable here. */}
+          <div className="absolute bottom-0 inset-x-0 bg-scrim-strong backdrop-blur-sm px-3 py-1.5 flex items-center justify-between">
+            <span className="text-sm font-medium text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+              {selectedScheme.name}
+            </span>
+            {selectedScheme.location && (
+              <span className="text-2xs text-white/75 drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+                {selectedScheme.location}
+              </span>
+            )}
+          </div>
+        </div>
 
-      {followSystem && (
-        <div className="space-y-2 pl-1">
-          <PreferredSchemePicker
-            label="Preferred dark theme"
-            schemes={darkSchemes}
-            selectedId={preferredDarkSchemeId}
-            onSelect={(id) => void handlePreferredDarkChange(id)}
-          />
-          <PreferredSchemePicker
-            label="Preferred light theme"
-            schemes={lightSchemes}
-            selectedId={preferredLightSchemeId}
-            onSelect={(id) => void handlePreferredLightChange(id)}
-          />
+        <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-border-default bg-surface-canvas">
+          <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">Current theme</span>
+          {allSchemes.length > 1 && (
+            <Button variant="outline" size="sm" onClick={handleShuffle} className="shrink-0">
+              <Shuffle aria-hidden="true" />
+              Random theme
+            </Button>
+          )}
+          {onClose && (
+            <Button variant="contrast" size="sm" onClick={handleChangeTheme} className="shrink-0">
+              Change theme…
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <SettingsGroup>
+        <SettingsSwitchCard
+          title="Match system appearance"
+          subtitle="Switches between a dark and a light theme when your OS appearance changes"
+          isEnabled={followSystem}
+          onChange={() => void handleToggleFollowSystem()}
+        />
+        {followSystem && (
+          <SettingsDependents>
+            <PreferredSchemePicker
+              label="Dark theme"
+              schemes={darkSchemes}
+              selectedId={preferredDarkSchemeId}
+              onSelect={(id) => void handlePreferredDarkChange(id)}
+            />
+            <PreferredSchemePicker
+              label="Light theme"
+              schemes={lightSchemes}
+              selectedId={preferredLightSchemeId}
+              onSelect={(id) => void handlePreferredLightChange(id)}
+            />
+          </SettingsDependents>
+        )}
+        <SettingsRow
+          label="Accent color"
+          isModified={!!accentColorOverride}
+          description={
+            accentColorOverride
+              ? `Overriding the theme's accent with ${effectiveAccent}`
+              : "Uses the theme's accent — click the swatch to override it"
+          }
+          control={
+            <>
+              {accentColorOverride && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleAccentReset}
+                  data-testid="accent-color-override-reset"
+                >
+                  Reset to theme default
+                </Button>
+              )}
+              <label
+                htmlFor="accent-color-override-input"
+                className="relative shrink-0 cursor-pointer"
+                style={{ width: 32, height: 32 }}
+              >
+                <div
+                  className="w-full h-full rounded-[var(--radius-md)] border border-border-default"
+                  style={{ backgroundColor: effectiveAccent }}
+                  aria-hidden="true"
+                />
+                <input
+                  id="accent-color-override-input"
+                  data-testid="accent-color-override-input"
+                  type="color"
+                  value={pickerValue}
+                  onInput={handleAccentInput}
+                  onChange={handleAccentCommit}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  aria-label="Accent color"
+                />
+              </label>
+            </>
+          }
+        />
+        <SettingsRow
+          label="Theme files"
+          description="Load a theme from a file, or save this one to share it"
+          control={({ disabled }) => (
+            <>
+              <Button variant="outline" size="sm" onClick={handleImport} disabled={disabled}>
+                Import…
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleExport} disabled={disabled}>
+                Export…
+              </Button>
+            </>
+          )}
+        />
+      </SettingsGroup>
+
+      {accentContrastFail && (
+        <div
+          role="status"
+          className="flex items-start gap-2 rounded-[var(--radius-md)] border border-overlay bg-surface-panel px-3 py-2"
+        >
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-warning" />
+          <p className="min-w-0 text-xs text-text-primary">
+            {accentContrastFail.mode === "foreground"
+              ? `Low contrast: button text scores only ${accentContrastFail.worstRatio.toFixed(2)}:1 on the accent color — pick a lighter or darker accent`
+              : `Low contrast: the accent scores only ${accentContrastFail.worstRatio.toFixed(2)}:1 on ${selectedScheme.name} surfaces — pick a more distinct accent`}
+          </p>
         </div>
       )}
 
@@ -579,135 +706,6 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
           </div>
         </div>
       )}
-
-      <div className="flex flex-col rounded-[var(--radius-md)] border border-border-default overflow-hidden">
-        <div className="relative h-[200px] shrink-0 overflow-hidden">
-          {selectedScheme.heroImage && !heroError ? (
-            <img
-              ref={heroImgRef}
-              src={selectedScheme.heroImage}
-              alt=""
-              onError={onHeroError}
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <div
-              className="w-full h-full flex items-center justify-center"
-              style={{
-                backgroundColor: selectedScheme.tokens[APP_THEME_PREVIEW_KEYS.background],
-              }}
-            >
-              <PaletteStrip scheme={selectedScheme} />
-            </div>
-          )}
-          {/* Media-overlay caption: sits on a guaranteed-dark scrim over the hero
-              image, so the white label text is intentional and stays readable on
-              every theme. `text-inverse` flips dark on dark themes — not usable here. */}
-          <div className="absolute bottom-0 inset-x-0 bg-scrim-strong backdrop-blur-sm px-3 py-1.5 flex items-center justify-between">
-            <span className="text-sm font-medium text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
-              {selectedScheme.name}
-            </span>
-            {selectedScheme.location && (
-              <span className="text-2xs text-white/75 drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
-                {selectedScheme.location}
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-border-default bg-surface-canvas">
-          <span className="min-w-0 truncate text-xs text-text-secondary">Current theme</span>
-          {onClose && (
-            <Button variant="contrast" size="sm" onClick={handleChangeTheme} className="shrink-0">
-              Change theme…
-            </Button>
-          )}
-        </div>
-      </div>
-
-      <section
-        aria-label="Accent color"
-        className="flex items-center gap-3 p-2 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas"
-      >
-        <label
-          htmlFor="accent-color-override-input"
-          className="relative shrink-0 cursor-pointer"
-          style={{ width: 32, height: 32 }}
-        >
-          <div
-            className="w-full h-full rounded-md border border-border-default"
-            style={{ backgroundColor: effectiveAccent }}
-            aria-hidden="true"
-          />
-          <input
-            id="accent-color-override-input"
-            data-testid="accent-color-override-input"
-            type="color"
-            value={pickerValue}
-            onInput={handleAccentInput}
-            onChange={handleAccentCommit}
-            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-            aria-label="Accent color"
-          />
-        </label>
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-text-primary">Accent color</div>
-          <div className="text-xs text-text-secondary">
-            {accentColorOverride
-              ? `Overriding theme accent (${effectiveAccent})`
-              : "Click the swatch to override the theme accent"}
-          </div>
-        </div>
-        {accentColorOverride && (
-          <button
-            type="button"
-            onClick={handleAccentReset}
-            data-testid="accent-color-override-reset"
-            className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors shrink-0"
-          >
-            Reset to theme default
-          </button>
-        )}
-      </section>
-
-      {accentContrastFail && (
-        <div
-          role="status"
-          className="flex items-start gap-2 rounded-[var(--radius-md)] border border-overlay bg-surface-panel px-3 py-2"
-        >
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-warning" />
-          <p className="min-w-0 text-xs text-text-primary">
-            {accentContrastFail.mode === "foreground"
-              ? `Low contrast: button text scores only ${accentContrastFail.worstRatio.toFixed(2)}:1 on the accent color — pick a lighter or darker accent`
-              : `Low contrast: the accent scores only ${accentContrastFail.worstRatio.toFixed(2)}:1 on ${selectedScheme.name} surfaces — pick a more distinct accent`}
-          </p>
-        </div>
-      )}
-
-      <div className="flex items-center gap-3">
-        <button
-          onClick={handleExport}
-          className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors"
-        >
-          Export app theme...
-        </button>
-        <button
-          onClick={handleImport}
-          className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors"
-        >
-          Import app theme...
-        </button>
-        {allSchemes.length > 1 && (
-          <button
-            type="button"
-            onClick={handleShuffle}
-            className="ml-auto flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors"
-          >
-            <Shuffle className="h-3 w-3" />
-            Random theme
-          </button>
-        )}
-      </div>
     </div>
   );
 }

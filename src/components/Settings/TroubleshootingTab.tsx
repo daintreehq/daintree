@@ -1,21 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  Activity,
-  FileText,
-  Trash2,
-  Bug,
-  AlertTriangle,
-  ShieldCheck,
-  CircleCheck,
-  CircleX,
-  RotateCw,
-  Download,
-  Monitor,
-  SlidersHorizontal,
-  Square,
-} from "lucide-react";
-import { cn } from "@/lib/utils";
+import { AlertTriangle, CircleCheck, CircleX } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { appClient, systemClient, logsClient } from "@/clients";
 import type { AppState, SystemHealthCheckResult } from "@shared/types";
@@ -27,6 +12,7 @@ import { logError, logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { ClearLogsConfirmDialog } from "@/components/Diagnostics/ClearLogsConfirmDialog";
 
@@ -65,34 +51,25 @@ function SystemHealthSection() {
   };
 
   return (
-    <SettingsSection
-      icon={ShieldCheck}
-      title="System health check"
-      description="Verify that required tools (Git, Node.js, npm) are installed and available."
-    >
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={() => void runCheck()}
-        disabled={isChecking}
-        className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary mb-3"
-      >
-        <span className={cn("inline-flex shrink-0", isChecking && "animate-spin")}>
-          <RotateCw className="w-4 h-4" />
-        </span>
-        {isChecking ? "Checking…" : result ? "Re-run Check" : "Run Health Check"}
-      </Button>
-      {checkError && <p className="text-xs text-status-error mb-3">{checkError}</p>}
+    <>
+      <SettingsRow
+        id="troubleshooting-health"
+        label="System health check"
+        description="Verifies that Git, Node.js, and npm are installed and available"
+        error={checkError}
+        control={
+          <Button variant="outline" size="sm" onClick={() => void runCheck()} disabled={isChecking}>
+            {isChecking ? "Checking…" : result ? "Run health check again" : "Run health check"}
+          </Button>
+        }
+      />
       {result && (
-        <div className="space-y-1.5">
+        <ul className="px-4 py-2" aria-label="Health check results">
           {result.prerequisites.map((check) => {
             const labels: Record<string, string> = { git: "Git", node: "Node.js", npm: "npm" };
             const label = labels[check.tool] ?? check.tool;
             return (
-              <div
-                key={check.tool}
-                className="flex items-center gap-2.5 px-3 py-2 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30"
-              >
+              <li key={check.tool} className="flex items-center gap-2.5 py-1.5">
                 {check.available ? (
                   <CircleCheck className="w-3.5 h-3.5 text-status-success shrink-0" />
                 ) : (
@@ -105,12 +82,12 @@ function SystemHealthSection() {
                 {!check.available && (
                   <span className="ml-auto text-xs text-status-error">Not found</span>
                 )}
-              </div>
+              </li>
             );
           })}
-        </div>
+        </ul>
       )}
-    </SettingsSection>
+    </>
   );
 }
 
@@ -127,23 +104,17 @@ export function DownloadDiagnosticsSection() {
   };
 
   return (
-    <SettingsSection
-      icon={Download}
-      title="Download diagnostics"
-      description="Export a detailed snapshot of your system environment, app state, and recent logs for troubleshooting."
-    >
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={handleOpenReview}
-        disabled={isCollecting}
-        className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary mb-3"
-      >
-        {isCollecting ? <Spinner size="sm" /> : <Download className="w-4 h-4" />}
-        {isCollecting ? "Collecting…" : "Download diagnostics"}
-      </Button>
-      {downloadError && <p className="text-xs text-status-error mb-3">{downloadError}</p>}
-    </SettingsSection>
+    <SettingsRow
+      label="Diagnostics report"
+      description="A snapshot of your system environment, app state, and recent logs. You review it before anything is saved."
+      error={downloadError}
+      control={
+        <Button variant="outline" size="sm" onClick={handleOpenReview} disabled={isCollecting}>
+          {isCollecting && <Spinner size="sm" />}
+          {isCollecting ? "Collecting…" : "Download diagnostics"}
+        </Button>
+      }
+    />
   );
 }
 
@@ -212,42 +183,31 @@ function RendererCpuProfileSection() {
   };
 
   return (
-    <SettingsSection
-      icon={Activity}
-      title="Record CPU profile"
-      description="Capture a 15-second CPU profile of the app's interface to diagnose lag or slow interactions. The saved .cpuprofile file opens in Chrome DevTools."
-    >
-      <div className="flex items-center gap-3">
-        {phase === "recording" ? (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void handleStop()}
-            className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
-          >
-            <Square className="w-4 h-4" />
+    <SettingsRow
+      label="CPU profile"
+      description={
+        phase === "recording"
+          ? `Reproduce the slow interaction — auto-stops in ${secondsLeft}s`
+          : "Captures 15 seconds of the interface's CPU activity to diagnose lag. The saved .cpuprofile file opens in Chrome DevTools."
+      }
+      error={error && <span className="select-text">{error}</span>}
+      control={
+        phase === "recording" ? (
+          <Button variant="outline" size="sm" onClick={() => void handleStop()}>
             Stop recording
           </Button>
         ) : (
           <Button
-            variant="outline"
+            variant="subtle"
             size="sm"
             onClick={() => void handleRecord()}
             disabled={phase === "saving"}
-            className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
           >
-            <Activity className="w-4 h-4" />
             {phase === "saving" ? "Saving…" : "Record profile"}
           </Button>
-        )}
-        {phase === "recording" && (
-          <span className="text-xs text-text-secondary">
-            Reproduce the slow interaction — auto-stops in {secondsLeft}s
-          </span>
-        )}
-      </div>
-      {error && <p className="text-xs text-status-error mt-3 select-text">{error}</p>}
-    </SettingsSection>
+        )
+      }
+    />
   );
 }
 
@@ -272,75 +232,77 @@ function HardwareAccelerationSection() {
 
   if (disabled === null) return null;
 
+  const warning = disabled
+    ? "GPU acceleration was disabled due to repeated crashes. Turn it back on to restore full performance."
+    : angleFallback
+      ? "GPU is running in ANGLE/Vulkan fallback mode after a crash. Performance may be reduced — turn hardware acceleration off and back on to restore the default backend."
+      : null;
+
   return (
-    <SettingsSection
-      icon={Monitor}
-      title="Hardware acceleration"
-      description="GPU hardware acceleration improves rendering performance. Disable if you experience blank panels or repeated GPU crashes."
-    >
+    <>
       <SettingsSwitchCard
-        icon={Monitor}
+        id="troubleshooting-gpu-acceleration"
         title="Hardware acceleration"
-        subtitle="Uses GPU to improve rendering performance. Disable if you experience blank panels or rendering issues. App restarts on change."
+        subtitle="Uses the GPU to render the interface. Turn off if you see blank panels or repeated GPU crashes. The app restarts on change."
         isEnabled={!disabled}
         onChange={handleToggle}
-        ariaLabel="Hardware Acceleration Toggle"
       />
+      {warning && <RowNote>{warning}</RowNote>}
+    </>
+  );
+}
 
-      {disabled && (
-        <p className="text-xs text-status-warning/80 flex items-center gap-1.5 select-text">
-          <AlertTriangle className="w-3 h-3" />
-          GPU acceleration was disabled due to repeated crashes. Re-enable to restore full
-          performance.
-        </p>
-      )}
-
-      {!disabled && angleFallback && (
-        <p className="text-xs text-status-warning/80 flex items-start gap-1.5 select-text">
-          <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
-          <span>
-            GPU is running in ANGLE/Vulkan fallback mode after a crash. Performance may be reduced —
-            toggle hardware acceleration off and back on to restore the default backend.
-          </span>
-        </p>
-      )}
-    </SettingsSection>
+/** A warning attached to the row above it, inside the same group. */
+function RowNote({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="flex items-start gap-1.5 px-4 py-2 text-xs text-text-secondary select-text">
+      <AlertTriangle
+        className="w-3.5 h-3.5 mt-px shrink-0 text-status-warning"
+        aria-hidden="true"
+      />
+      <span>{children}</span>
+    </p>
   );
 }
 
 export function ApplicationLogsSection() {
-  const [showClearDialog, setShowClearDialog] = useState(false);
-
   return (
-    <SettingsSection
-      icon={FileText}
-      title="Application logs"
-      description="View internal application logs for debugging purposes."
-    >
-      <div className="flex gap-3">
+    <SettingsRow
+      id="troubleshooting-logs"
+      label="Application logs"
+      description="Internal logs for debugging"
+      control={
         <Button
           variant="outline"
           size="sm"
           onClick={() =>
             void actionService.dispatch("logs.openFile", undefined, { source: "user" })
           }
-          className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
         >
-          <FileText />
-          Open Log File
+          Open log file
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setShowClearDialog(true)}
-          className="text-status-error border-border-default hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
-        >
-          <Trash2 />
-          Clear Logs
-        </Button>
-      </div>
-      <ClearLogsConfirmDialog isOpen={showClearDialog} onOpenChange={setShowClearDialog} />
-    </SettingsSection>
+      }
+    />
+  );
+}
+
+/** Destructive, so it closes the logging group rather than sharing the logs row. */
+export function ClearLogsRow() {
+  const [showClearDialog, setShowClearDialog] = useState(false);
+
+  return (
+    <SettingsRow
+      label="Clear logs"
+      description="Deletes the application log files. Asks for confirmation first."
+      control={
+        <>
+          <Button variant="ghost-danger" size="sm" onClick={() => setShowClearDialog(true)}>
+            Clear logs
+          </Button>
+          <ClearLogsConfirmDialog isOpen={showClearDialog} onOpenChange={setShowClearDialog} />
+        </>
+      }
+    />
   );
 }
 
@@ -509,150 +471,137 @@ export function TroubleshootingTab() {
     }
   };
 
+  const hasLogOverrides = Object.keys(logOverrides).length > 0;
+
   return (
-    <div className="space-y-6">
-      <HardwareAccelerationSection />
+    <div className="space-y-8">
+      <SettingsSection title="System">
+        <SettingsGroup>
+          <HardwareAccelerationSection />
+          <SystemHealthSection />
+        </SettingsGroup>
+      </SettingsSection>
 
-      <DownloadDiagnosticsSection />
+      <SettingsSection title="Diagnostics">
+        <SettingsGroup>
+          <DownloadDiagnosticsSection />
+          <RendererCpuProfileSection />
+        </SettingsGroup>
+      </SettingsSection>
 
-      <RendererCpuProfileSection />
-
-      <SystemHealthSection />
-
-      <ApplicationLogsSection />
-
-      <SettingsSection
-        icon={Bug}
-        title="Developer mode"
-        description="Enable enhanced debugging features for development and troubleshooting."
-      >
-        <SettingsSwitchCard
-          icon={Bug}
-          title="Developer mode"
-          subtitle="Activates all debugging features below"
-          isEnabled={developerMode}
-          onChange={handleToggleDeveloperMode}
-          ariaLabel="Developer Mode Toggle"
-        />
-
-        <div className="ml-4 space-y-3 border-l-2 border-border-default pl-4">
+      <SettingsSection title="Logging">
+        <SettingsGroup>
+          <ApplicationLogsSection />
           <SettingsSwitchCard
-            variant="compact"
-            title="Auto-open diagnostics dock"
-            subtitle="Automatically open diagnostics panel on app startup"
-            isEnabled={autoOpenDiagnostics}
-            onChange={handleToggleAutoOpenDiagnostics}
-            ariaLabel="Auto-open diagnostics dock"
-            disabled={!developerMode}
+            id="troubleshooting-verbose-logging"
+            title="Verbose logging"
+            subtitle="Captures detailed debug output for troubleshooting. Resets on app restart."
+            isEnabled={verboseLogging}
+            onChange={handleToggleVerboseLogging}
+            disabled={verboseLoggingPending}
+            colorScheme="amber"
           />
+          {verboseLogging && (
+            <RowNote>Verbose logging may impact performance and increase log file size.</RowNote>
+          )}
+          <SettingsRow
+            layout="stacked"
+            label="Persistent verbose logging"
+            description="The switch above resets on restart. To keep verbose logs across restarts, launch the app with this environment variable."
+            control={
+              <code className="block text-xs bg-surface-canvas p-2 rounded-[var(--radius-sm)] border border-border-default font-mono text-text-primary select-text">
+                DAINTREE_DEBUG=1 npm run dev
+              </code>
+            }
+          />
+          <ClearLogsRow />
+        </SettingsGroup>
+        <SettingsGroup label="Log levels">
+          <SettingsRow
+            label="Per-module log levels"
+            description="Override the log level for one module, or a process-wide wildcard. Overrides persist across restarts."
+            control={
+              <Button variant="outline" size="sm" onClick={handleOpenLogLevelPalette}>
+                Set log level…
+              </Button>
+            }
+          />
+          {hasLogOverrides && (
+            <SettingsRow
+              label="Active overrides"
+              description={
+                <ul>
+                  {Object.entries(logOverrides)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([name, level]) => (
+                      <li key={name} className="flex items-center justify-between gap-3 py-0.5">
+                        <span className="font-mono text-text-primary truncate">{name}</span>
+                        <span className="font-mono">{level}</span>
+                      </li>
+                    ))}
+                </ul>
+              }
+              control={
+                <Button
+                  variant="ghost-danger"
+                  size="sm"
+                  onClick={() => void handleClearLogOverrides()}
+                >
+                  Clear all overrides
+                </Button>
+              }
+            />
+          )}
+        </SettingsGroup>
+      </SettingsSection>
 
-          <div className="ml-4">
+      <SettingsSection title="Developer tools">
+        <SettingsGroup>
+          <SettingsSwitchCard
+            id="troubleshooting-devmode"
+            title="Developer mode"
+            subtitle="Turns on the debugging features below"
+            isEnabled={developerMode}
+            onChange={handleToggleDeveloperMode}
+            // e2e selectors (SEL.settings.developerModeToggle) find the switch by this name.
+            ariaLabel="Developer Mode Toggle"
+          />
+          <SettingsDependents
+            disabled={!developerMode}
+            reason="Turn on developer mode to use these"
+          >
             <SettingsSwitchCard
-              variant="compact"
+              id="troubleshooting-auto-diagnostics"
+              title="Auto-open diagnostics dock"
+              subtitle="Opens the diagnostics panel on app startup"
+              isEnabled={autoOpenDiagnostics}
+              onChange={handleToggleAutoOpenDiagnostics}
+            />
+            <SettingsSwitchCard
+              id="troubleshooting-focus-events"
               title="Focus events tab"
-              subtitle="Default to Events tab when diagnostics opens"
+              subtitle="Opens diagnostics on the Events tab"
               isEnabled={focusEventsTab}
               onChange={handleToggleFocusEventsTab}
-              ariaLabel="Focus events tab"
-              disabled={!developerMode || !autoOpenDiagnostics}
+              disabled={!autoOpenDiagnostics}
+              disabledReason={
+                developerMode ? "Turn on auto-open diagnostics dock to use this" : undefined
+              }
             />
-          </div>
-        </div>
-
-        <SettingsSwitchCard
-          icon={AlertTriangle}
-          title="Verbose logging"
-          subtitle="Captures detailed debug output for troubleshooting. Resets on app restart."
-          isEnabled={verboseLogging}
-          onChange={handleToggleVerboseLogging}
-          ariaLabel="Enable verbose logging"
-          disabled={verboseLoggingPending}
-          colorScheme="amber"
-        />
-
-        {verboseLogging && (
-          <div className="flex items-start gap-2 text-xs text-status-warning/90">
-            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-            <span>Verbose logging may impact performance and increase log file size.</span>
-          </div>
-        )}
-
-        <div className="p-3 bg-daintree-border/30 rounded-[var(--radius-md)]">
-          <h5 className="text-xs font-medium text-text-primary mb-2">
-            Advanced: Persistent Verbose Logging
-          </h5>
-          <p className="text-xs text-text-secondary mb-2 select-text">
-            Use the toggle above for quick debugging. For persistent verbose logs across restarts,
-            launch the app with environment variables:
-          </p>
-          <code className="block text-xs bg-surface-canvas p-2 rounded border border-border-default font-mono text-text-primary">
-            DAINTREE_DEBUG=1 npm run dev
-          </code>
-        </div>
+          </SettingsDependents>
+          {/*
+            Named by route, not by chord. The dev-only Alt+Cmd+I accelerator this
+            used to advertise was removed when that chord became the fleet
+            overview's scoped shortcut (#11950), and a settings page promising a
+            key that now does something else entirely is worse than one that does
+            not mention a key at all.
+          */}
+          <SettingsRow
+            label="DevTools"
+            description="In development builds, open DevTools from View → Toggle Developer Tools, or run the Toggle DevTools command from the command palette."
+          />
+        </SettingsGroup>
       </SettingsSection>
-
-      <SettingsSection
-        icon={SlidersHorizontal}
-        title="Per-module log levels"
-        description="Override the log level for a specific module (or a process-wide wildcard). Overrides persist across restarts."
-      >
-        <div className="flex gap-3">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleOpenLogLevelPalette}
-            className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
-          >
-            <SlidersHorizontal />
-            Set Log Level…
-          </Button>
-          {Object.keys(logOverrides).length > 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void handleClearLogOverrides()}
-              className="text-status-error border-border-default hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
-            >
-              <Trash2 />
-              Clear All Overrides
-            </Button>
-          )}
-        </div>
-
-        {Object.keys(logOverrides).length > 0 && (
-          <div className="space-y-1 mt-3">
-            <h5 className="text-xs font-medium text-text-primary mb-1">Active overrides</h5>
-            {Object.entries(logOverrides)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([name, level]) => (
-                <div
-                  key={name}
-                  className="flex items-center justify-between px-3 py-1.5 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30"
-                >
-                  <span className="text-xs font-mono text-text-primary truncate">{name}</span>
-                  <span className="text-3xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-daintree-border/60 text-text-primary">
-                    {level}
-                  </span>
-                </div>
-              ))}
-          </div>
-        )}
-      </SettingsSection>
-
-      <div className="space-y-2">
-        <h4 className="text-sm font-medium text-text-primary">Keyboard Shortcuts</h4>
-        {/*
-          Named by route, not by chord. The dev-only Alt+Cmd+I accelerator this
-          used to advertise was removed when that chord became the fleet
-          overview's scoped shortcut (#11950), and a settings page promising a
-          key that now does something else entirely is worse than one that does
-          not mention a key at all.
-        */}
-        <p className="text-xs text-text-secondary select-text">
-          In development builds, open DevTools from View → Toggle Developer Tools, or run the Toggle
-          DevTools command from the command palette.
-        </p>
-      </div>
     </div>
   );
 }

@@ -109,6 +109,13 @@ function setupElectron() {
   };
 }
 
+// Ready agents sit behind the roster's disclosure row; tests that read a ready
+// row open it first, the way a user would.
+async function expandReadyAgents() {
+  const toggle = await screen.findByRole("button", { name: /^Show \d+ ready agents?$/ });
+  fireEvent.click(toggle);
+}
+
 async function renderGeneralTab(appVersion = "1.0.0") {
   const { GeneralTab } = await import("../GeneralTab");
   return render(
@@ -140,6 +147,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     );
 
     await renderGeneralTab();
+    await expandReadyAgents();
 
     await waitFor(() => {
       expect(screen.getByText("Claude")).toBeTruthy();
@@ -163,6 +171,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     );
 
     await renderGeneralTab();
+    await expandReadyAgents();
 
     await waitFor(() => {
       expect(screen.getByText("Claude")).toBeTruthy();
@@ -186,6 +195,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     );
 
     await renderGeneralTab();
+    await expandReadyAgents();
 
     await waitFor(() => {
       expect(screen.getByText("Claude")).toBeTruthy();
@@ -216,6 +226,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     );
 
     await renderGeneralTab();
+    await expandReadyAgents();
 
     await waitFor(() => {
       expect(screen.getByText("Codex")).toBeTruthy();
@@ -280,6 +291,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     );
 
     await renderGeneralTab();
+    await expandReadyAgents();
 
     await waitFor(() => {
       expect(screen.getByText("Claude")).toBeTruthy();
@@ -301,6 +313,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     );
 
     await renderGeneralTab();
+    await expandReadyAgents();
 
     await waitFor(() => {
       expect(screen.getByText("Claude")).toBeTruthy();
@@ -335,6 +348,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     );
 
     await renderGeneralTab();
+    await expandReadyAgents();
 
     const rowFor = (name: string) => screen.getByLabelText(new RegExp(`^${name} \u2014 `));
     const attention = [
@@ -389,6 +403,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     );
 
     await renderGeneralTab();
+    await expandReadyAgents();
 
     const rowFor = (name: string) => screen.getByLabelText(new RegExp(`^${name} \u2014 `));
 
@@ -422,6 +437,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     );
 
     await renderGeneralTab();
+    await expandReadyAgents();
 
     await waitFor(() => {
       expect(screen.getAllByRole("listitem").length).toBe(5);
@@ -430,6 +446,109 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
       .getAllByRole("listitem")
       .map((li) => li.querySelector("[data-agent-row]")!.getAttribute("data-agent-row"));
     expect(order).toEqual(["gemini", "opencode", "claude", "codex", "cursor"]);
+  });
+
+  // An inventory shows its summary and anything needing action, and discloses the
+  // healthy remainder — eighteen ready rows used to fill the first viewport.
+  it("keeps attention rows visible and collapses ready agents behind a disclosure", async () => {
+    setupDispatchMock(
+      {
+        claude: "ready",
+        gemini: "unauthenticated",
+        codex: "ready",
+        opencode: "missing",
+        cursor: "missing",
+      },
+      { agents: {} }
+    );
+
+    const onNavigate = vi.fn();
+    const { GeneralTab } = await import("../GeneralTab");
+    const { container } = render(
+      <GeneralTab
+        appVersion="1.0.0"
+        onNavigateToAgents={onNavigate}
+        activeSubtab="overview"
+        onSubtabChange={vi.fn()}
+      />
+    );
+
+    const toggle = await screen.findByRole("button", { name: "Show 2 ready agents" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    const regionId = toggle.getAttribute("aria-controls");
+    expect(regionId).toBeTruthy();
+    const region = document.getElementById(regionId!);
+    expect(region).toBeTruthy();
+    expect(region!.querySelector("[data-agent-row]")).toBeNull();
+
+    // The attention row stays in view and still navigates to its agent.
+    const attentionRow = container.querySelector('[data-agent-row="gemini"]');
+    expect(attentionRow).toBeTruthy();
+    expect(container.querySelector('[data-agent-row="claude"]')).toBeNull();
+    expect(container.querySelector('[data-agent-row="codex"]')).toBeNull();
+    fireEvent.click(attentionRow!);
+    expect(onNavigate).toHaveBeenCalledWith("gemini");
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.textContent).toBe("Hide ready agents");
+    const revealed = Array.from(region!.querySelectorAll("[data-agent-row]")).map((el) =>
+      el.getAttribute("data-agent-row")
+    );
+    expect(revealed).toEqual(["claude", "codex"]);
+    fireEvent.click(region!.querySelector('[data-agent-row="codex"]')!);
+    expect(onNavigate).toHaveBeenCalledWith("codex");
+
+    // The "supports more" row stays the group's last row in both states.
+    const group = toggle.parentElement!;
+    const buttons = Array.from(group.querySelectorAll("button"));
+    expect(buttons.at(-1)?.textContent).toMatch(/Daintree supports 2 more agents/);
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(region!.querySelector("[data-agent-row]")).toBeNull();
+  });
+
+  it("shows only the disclosure when every installed agent is ready", async () => {
+    setupDispatchMock(
+      {
+        claude: "ready",
+        gemini: "missing",
+        codex: "missing",
+        opencode: "missing",
+        cursor: "missing",
+      },
+      { agents: {} }
+    );
+
+    const { container } = await renderGeneralTab();
+
+    await screen.findByRole("button", { name: "Show 1 ready agent" });
+    expect(container.querySelector("[data-agent-row]")).toBeNull();
+    expect(screen.getByTestId("section-desc-System status").textContent).toBe(
+      "1 agent installed and ready to use"
+    );
+  });
+
+  it("omits the disclosure when no installed agent is ready", async () => {
+    setupDispatchMock(
+      {
+        claude: "blocked",
+        gemini: "installed",
+        codex: "missing",
+        opencode: "missing",
+        cursor: "missing",
+      },
+      { agents: {} }
+    );
+
+    const { container } = await renderGeneralTab();
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-agent-row="claude"]')).toBeTruthy();
+    });
+    expect(container.querySelector('[data-agent-row="gemini"]')).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /ready agent/ })).toBeNull();
   });
 
   it("renders empty-state CTA when no agents installed", async () => {

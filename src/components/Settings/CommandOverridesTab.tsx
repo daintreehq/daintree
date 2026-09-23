@@ -1,6 +1,12 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { ChevronRight, RotateCcw, Power, PowerOff, AlertCircle, Search } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { SettingsSection } from "./SettingsSection";
+import { SettingsDependents, SettingsGroup, settingsRowFrameClass } from "./SettingsGroup";
+import { SettingsPresetGroup } from "./SettingsPresetGroup";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { commandsClient } from "@/clients/commandsClient";
@@ -18,6 +24,17 @@ interface CommandOverridesTabProps {
 
 type OverrideMode = "defaults" | "prompt";
 type FilterMode = "all" | "overridden" | "disabled";
+
+const FILTER_MODES: { value: FilterMode; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "overridden", label: "Overridden" },
+  { value: "disabled", label: "Disabled" },
+];
+
+const OVERRIDE_MODES: { value: OverrideMode; label: string }[] = [
+  { value: "defaults", label: "Default values" },
+  { value: "prompt", label: "Custom prompt" },
+];
 
 export function CommandOverridesTab({ projectId, overrides, onChange }: CommandOverridesTabProps) {
   const [commands, setCommands] = useState<CommandManifestEntry[]>([]);
@@ -182,6 +199,10 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
   );
 
   const getOverrideMode = (commandId: string, hasArgs: boolean): OverrideMode => {
+    // A command without arguments has nothing to default, so it is always a prompt
+    // override — even when an older save left `defaults` on it, which would otherwise
+    // select a mode with no editor and no way back out.
+    if (!hasArgs) return "prompt";
     const mode = overrideModes[commandId];
     if (mode) return mode;
     return hasArgs ? "defaults" : "prompt";
@@ -248,57 +269,35 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
       : "No disabled commands";
 
   return (
-    <div className="space-y-2">
-      <div className="mb-4">
-        <h3 className="text-sm font-medium text-text-primary mb-2">Command Overrides</h3>
-        <p className="text-xs text-text-secondary select-text">
-          Customize command behavior for this project. Set default argument values, define custom
-          prompts, or disable commands entirely.
-        </p>
-      </div>
-
-      {/* Summary */}
-      <div className="text-xs text-text-secondary mb-2">
-        {overriddenCount} overridden, {disabledCount} disabled
-      </div>
-
-      {/* Search and Filters */}
-      <div className="flex items-center gap-3 mb-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-daintree-text/40" />
-          <input
+    <SettingsSection
+      title="Command overrides"
+      description={`Set default argument values, define custom prompts, or disable commands for this project. ${overriddenCount} overridden, ${disabledCount} disabled.`}
+    >
+      <div className="flex items-center gap-3">
+        <div className="relative flex-1 min-w-0">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-secondary" />
+          <Input
             type="text"
-            placeholder="Search commands..."
+            placeholder="Search commands…"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             disabled={isLoading}
-            className="w-full pl-9 pr-3 py-2 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 disabled:opacity-60 disabled:cursor-not-allowed"
+            className="pl-9"
             aria-label="Search commands"
           />
         </div>
-        <div className="flex gap-1">
-          {(["all", "overridden", "disabled"] as const).map((mode) => (
-            <button
-              key={mode}
-              onClick={() => setFilterMode(mode)}
-              disabled={isLoading}
-              className={cn(
-                "px-3 py-1.5 text-xs font-medium rounded transition-colors capitalize border",
-                filterMode === mode
-                  ? "border-border-strong bg-overlay-medium text-text-primary"
-                  : "border-transparent bg-surface-sidebar text-text-secondary hover:bg-border-default",
-                "disabled:opacity-60 disabled:cursor-not-allowed"
-              )}
-            >
-              {mode}
-            </button>
-          ))}
-        </div>
+        <SegmentedRadioGroup
+          aria-label="Filter commands"
+          options={FILTER_MODES}
+          value={filterMode}
+          onChange={setFilterMode}
+          disabled={isLoading}
+        />
       </div>
 
-      <div className="space-y-1">
+      <SettingsGroup>
         {isLoading ? (
-          <Skeleton label="Loading commands" className="space-y-1">
+          <Skeleton label="Loading commands" className="space-y-1 p-3">
             <SkeletonBone className="h-12 w-full" />
             <SkeletonBone className="h-12 w-full" />
             <SkeletonBone className="h-12 w-full" />
@@ -317,26 +316,24 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
             const currentMode = getOverrideMode(command.id, hasArgs);
 
             return (
-              <div
-                key={command.id}
-                className={cn(
-                  "rounded-[var(--radius-md)] border transition-colors",
-                  hasOverride(command.id)
-                    ? "border-border-strong bg-overlay-subtle"
-                    : "border-border-default bg-surface-canvas"
+              <div key={command.id} className="relative">
+                {hasOverride(command.id) && (
+                  <span
+                    className="status-mark absolute left-0 top-2.5 bottom-2.5 w-0.5 rounded-full bg-state-modified"
+                    aria-hidden="true"
+                  />
                 )}
-              >
-                <div className="flex items-center gap-2 p-3">
+                <div className="flex items-center gap-2 px-4 py-3">
                   {canExpand && (
                     <button
                       onClick={() => toggleExpanded(command.id)}
-                      className="p-0.5 rounded hover:bg-daintree-border/50 transition-colors"
+                      className="p-0.5 rounded-[var(--radius-sm)] text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
                       aria-label={isExpanded ? "Collapse" : "Expand"}
                     >
                       <ChevronRight
                         data-animated-chevron
                         className={cn(
-                          "w-3.5 h-3.5 text-daintree-text/60 transition-transform duration-150",
+                          "w-3.5 h-3.5 transition-transform duration-150",
                           isExpanded && "rotate-90"
                         )}
                       />
@@ -349,23 +346,16 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                       <span
                         className={cn(
                           "text-sm font-medium font-mono",
-                          isDisabled ? "text-daintree-text/40 line-through" : "text-text-primary"
+                          isDisabled ? "text-text-secondary line-through" : "text-text-primary"
                         )}
                       >
                         {command.id}
                       </span>
                       {hasOverride(command.id) && (
-                        <span className="text-2xs text-text-secondary bg-overlay-medium px-1.5 py-0.5 rounded font-medium">
-                          {override?.prompt ? "Custom Prompt" : "Modified"}
-                        </span>
+                        <Badge size="xs">{override?.prompt ? "Custom prompt" : "Modified"}</Badge>
                       )}
                     </div>
-                    <p
-                      className={cn(
-                        "text-xs mt-0.5 select-text",
-                        isDisabled ? "text-text-placeholder" : "text-text-secondary"
-                      )}
-                    >
+                    <p className={cn("text-xs mt-0.5 select-text", "text-text-secondary")}>
                       {command.description}
                     </p>
                   </div>
@@ -392,10 +382,10 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                         <button
                           onClick={() => toggleDisabled(command.id)}
                           className={cn(
-                            "p-1.5 rounded transition-colors",
+                            "p-1.5 rounded-[var(--radius-sm)] transition-colors",
                             isDisabled
                               ? "text-status-error hover:bg-status-error/10"
-                              : "text-daintree-text/60 hover:bg-overlay-hover"
+                              : "text-text-secondary hover:text-text-primary hover:bg-overlay-hover"
                           )}
                           aria-label={
                             isDisabled ? "Command disabled for this project" : "Command enabled"
@@ -416,107 +406,87 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                 </div>
 
                 {isExpanded && !isDisabled && (
-                  <div className="px-3 pb-3 pt-0 border-t border-daintree-border/50 mt-2">
-                    <div className="space-y-3 mt-3">
-                      {/* Mode selector */}
-                      <div className="flex gap-2">
-                        {hasArgs && (
-                          <button
-                            onClick={() => setOverrideMode(command.id, "defaults")}
-                            className={cn(
-                              "px-3 py-1.5 text-xs font-medium rounded-md transition-colors border",
-                              currentMode === "defaults"
-                                ? "border-border-strong bg-overlay-medium text-text-primary"
-                                : "border-transparent bg-surface-sidebar text-text-secondary hover:bg-border-default"
-                            )}
-                          >
-                            Default Values
-                          </button>
-                        )}
-                        <button
-                          onClick={() => setOverrideMode(command.id, "prompt")}
-                          className={cn(
-                            "px-3 py-1.5 text-xs font-medium rounded-md transition-colors border",
-                            currentMode === "prompt"
-                              ? "border-border-strong bg-overlay-medium text-text-primary"
-                              : "border-transparent bg-surface-sidebar text-text-secondary hover:bg-border-default"
-                          )}
-                        >
-                          Custom Prompt
-                        </button>
-                      </div>
-
-                      {/* Default Values Mode */}
-                      {currentMode === "defaults" && hasArgs && (
-                        <div className="space-y-3">
-                          <p className="text-xs text-text-secondary select-text">
-                            Set default values for command arguments. These values will be used when
-                            the argument is not provided.
-                          </p>
-                          {command.args?.map((arg) => {
-                            const currentValue = (override?.defaults?.[arg.name] as string) ?? "";
-                            const hasDefaultValue =
-                              override?.defaults && arg.name in override.defaults;
-
-                            return (
-                              <div key={arg.name} className="space-y-1.5">
-                                <div className="flex items-center gap-2">
-                                  <label
-                                    htmlFor={`${command.id}-${arg.name}`}
-                                    className="text-xs font-medium text-text-primary"
-                                  >
-                                    {arg.name}
-                                    {arg.required && (
-                                      <span className="text-status-error ml-1">*</span>
-                                    )}
-                                  </label>
-                                  {hasDefaultValue && (
-                                    <span className="text-3xs text-text-secondary bg-overlay-medium px-1.5 py-0.5 rounded">
-                                      Custom
-                                    </span>
-                                  )}
-                                </div>
-                                <input
-                                  id={`${command.id}-${arg.name}`}
-                                  type="text"
-                                  value={currentValue}
-                                  onChange={(e) =>
-                                    updateDefault(command.id, arg.name, e.target.value)
-                                  }
-                                  className="w-full bg-surface-sidebar border border-border-strong rounded px-2 py-1.5 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
-                                  placeholder={
-                                    arg.default ? `Default: ${arg.default}` : `Enter ${arg.name}`
-                                  }
-                                />
-                                {arg.description && (
-                                  <p className="text-xs text-text-secondary select-text">
-                                    {arg.description}
-                                  </p>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-
-                      {/* Custom Prompt Mode */}
-                      {currentMode === "prompt" && (
-                        <PromptEditor
-                          commandId={command.id}
-                          args={command.args || []}
-                          value={override?.prompt || ""}
-                          onChange={(prompt) => updatePrompt(command.id, prompt)}
+                  <div className="border-t border-border-subtle">
+                    <SettingsDependents>
+                      {/* Only a command with arguments has a choice to make; one without
+                          can only take a custom prompt. */}
+                      {hasArgs && (
+                        <SettingsPresetGroup
+                          label="Override with"
+                          options={OVERRIDE_MODES}
+                          value={currentMode}
+                          onChange={(mode) => setOverrideMode(command.id, mode)}
                         />
                       )}
-                    </div>
+                      <div className={cn(settingsRowFrameClass(1), "space-y-3")}>
+                        {/* Default Values Mode */}
+                        {currentMode === "defaults" && hasArgs && (
+                          <div className="space-y-3">
+                            <p className="text-xs text-text-secondary select-text">
+                              Set default values for command arguments. These values will be used
+                              when the argument is not provided.
+                            </p>
+                            {command.args?.map((arg) => {
+                              const currentValue = (override?.defaults?.[arg.name] as string) ?? "";
+                              const hasDefaultValue =
+                                override?.defaults && arg.name in override.defaults;
+
+                              return (
+                                <div key={arg.name} className="space-y-1.5">
+                                  <div className="flex items-center gap-2">
+                                    <label
+                                      htmlFor={`${command.id}-${arg.name}`}
+                                      className="text-xs font-medium text-text-primary"
+                                    >
+                                      {arg.name}
+                                      {arg.required && (
+                                        <span className="text-status-error ml-1">*</span>
+                                      )}
+                                    </label>
+                                    {hasDefaultValue && <Badge size="xs">Custom</Badge>}
+                                  </div>
+                                  <Input
+                                    id={`${command.id}-${arg.name}`}
+                                    type="text"
+                                    value={currentValue}
+                                    onChange={(e) =>
+                                      updateDefault(command.id, arg.name, e.target.value)
+                                    }
+                                    className="font-mono"
+                                    placeholder={
+                                      arg.default ? `Default: ${arg.default}` : `Enter ${arg.name}`
+                                    }
+                                  />
+                                  {arg.description && (
+                                    <p className="text-xs text-text-secondary select-text">
+                                      {arg.description}
+                                    </p>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* Custom Prompt Mode */}
+                        {currentMode === "prompt" && (
+                          <PromptEditor
+                            commandId={command.id}
+                            args={command.args || []}
+                            value={override?.prompt || ""}
+                            onChange={(prompt) => updatePrompt(command.id, prompt)}
+                          />
+                        )}
+                      </div>
+                    </SettingsDependents>
                   </div>
                 )}
               </div>
             );
           })
         )}
-      </div>
-    </div>
+      </SettingsGroup>
+    </SettingsSection>
   );
 }
 
@@ -562,10 +532,10 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
                     <button
                       onClick={() => onChange(value + `{${arg.name}}`)}
                       className={cn(
-                        "text-2xs px-2 py-0.5 rounded font-mono transition-colors",
+                        "text-2xs px-2 py-0.5 rounded-[var(--radius-sm)] font-mono transition-colors",
                         usedVariables.includes(arg.name)
                           ? "bg-overlay-medium text-text-secondary border border-border-strong"
-                          : "bg-surface-sidebar text-text-secondary hover:bg-border-default border border-border-default"
+                          : "text-text-secondary hover:bg-overlay-soft border border-border-default"
                       )}
                     >
                       {"{"}
@@ -585,24 +555,23 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
 
       <div className="space-y-1.5">
         <label htmlFor={`${commandId}-prompt`} className="text-xs font-medium text-text-primary">
-          Custom Prompt
+          Custom prompt
         </label>
         <textarea
           id={`${commandId}-prompt`}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           className={cn(
-            "w-full bg-surface-sidebar border rounded px-2 py-1.5 text-sm text-text-primary font-mono focus:outline-hidden focus:ring-1 min-h-[120px] resize-y",
-            validation && !validation.valid
-              ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
-              : "border-border-strong focus:border-daintree-accent/40 focus:ring-daintree-accent/30"
+            "w-full bg-surface-input border rounded-[var(--radius-md)] px-2 py-1.5 text-sm text-text-primary font-mono min-h-[120px] resize-y",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+            validation && !validation.valid ? "border-status-error" : "border-border-input"
           )}
           placeholder={`Example: Work on issue {issueNumber}...\n\nUse {variableName} to include argument values.`}
         />
       </div>
 
       {validation && !validation.valid && (
-        <div className="flex items-start gap-2 text-status-error bg-status-error/10 rounded-md px-3 py-2">
+        <div className="flex items-start gap-2 text-status-error bg-status-error/10 rounded-[var(--radius-md)] px-3 py-2">
           <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
           <p className="text-xs">{validation.error}</p>
         </div>

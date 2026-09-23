@@ -1,7 +1,19 @@
 import { useState, useEffect, useCallback } from "react";
-import { Bell, Volume2, Play } from "lucide-react";
+import { Play } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsCheckbox } from "@/components/Settings/SettingsCheckbox";
+import {
+  SettingsDependents,
+  SettingsGroup,
+  SettingsRow,
+} from "@/components/Settings/SettingsGroup";
 import { SettingsSelect } from "@/components/Settings/SettingsSelect";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import type { NotificationSettings } from "@shared/types/ipc/api";
@@ -21,6 +33,12 @@ const ESCALATION_DELAY_OPTIONS: { value: number; label: string }[] = [
   { value: 300_000, label: "5 minutes" },
   { value: 600_000, label: "10 minutes" },
 ];
+
+const SOUND_FIELDS = [
+  { label: "Completed sound", field: "completedSoundFile" },
+  { label: "Waiting sound", field: "waitingSoundFile" },
+  { label: "Escalation sound", field: "escalationSoundFile" },
+] as const;
 
 interface ProjectNotificationsTabProps {
   overrides: Partial<NotificationSettings>;
@@ -70,277 +88,206 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
     window.electron?.notification?.playSound(soundFile).catch(() => {});
   };
 
+  const retryGlobals = () => {
+    setGlobalError(null);
+    window.electron.notification
+      .getSettings()
+      .then(setGlobalSettings)
+      .catch((err) => {
+        logError("[ProjectNotificationsTab] Retry failed", err);
+        setGlobalError("Failed to load global settings");
+      });
+  };
+
   if (!window.electron?.notification) {
     return <div className="text-sm text-text-secondary">Notification API not available</div>;
   }
 
-  if (globalError) {
+  // The structure renders straight away; until the globals resolve, a row with no
+  // project override has no value to show, so it stays disabled rather than guessing.
+  const loaded = globalSettings !== null;
+
+  const effective = <K extends keyof NotificationSettings>(key: K) =>
+    overrides[key] !== undefined ? overrides[key] : globalSettings?.[key];
+
+  const isOverridden = (key: keyof NotificationSettings) => overrides[key] !== undefined;
+
+  const describe = (
+    key: keyof NotificationSettings,
+    base: string | undefined,
+    format: (value: unknown) => string
+  ) => {
+    // Non-breaking around the value so a wrap never strands "Off" alone on a line.
+    let origin: string;
+    if (isOverridden(key)) {
+      origin = globalSettings
+        ? `Set for this project · global default\u00a0is\u00a0${format(globalSettings[key])}`
+        : "Set for this project";
+    } else {
+      origin = globalSettings
+        ? `Using global\u00a0default\u00a0·\u00a0${format(globalSettings[key])}`
+        : "Loading global default…";
+    }
+    return base ? `${base}. ${origin}` : origin;
+  };
+
+  const onOff = (value: unknown) => (value ? "On" : "Off");
+  const soundName = (value: unknown) =>
+    AVAILABLE_SOUNDS.find((s) => s.file === value)?.label ?? String(value);
+  const delayName = (value: unknown) =>
+    ESCALATION_DELAY_OPTIONS.find((o) => o.value === value)?.label ?? String(value);
+
+  const booleanRow = (
+    key: "completedEnabled" | "waitingEnabled" | "waitingEscalationEnabled" | "soundEnabled",
+    title: string,
+    subtitle: string,
+    resetKeys: (keyof NotificationSettings)[],
+    ariaLabel?: string
+  ) => {
+    const value = effective(key) === true;
     return (
-      <div className="text-sm text-status-error">
-        {globalError}{" "}
-        <button
-          type="button"
-          onClick={() => {
-            setGlobalError(null);
-            window.electron.notification
-              .getSettings()
-              .then(setGlobalSettings)
-              .catch((err) => {
-                logError("[ProjectNotificationsTab] Retry failed", err);
-                setGlobalError("Failed to load global settings");
-              });
-          }}
-          className="text-text-secondary hover:text-text-primary underline-offset-2 underline hover:underline"
-        >
-          Retry
-        </button>
-      </div>
+      <SettingsSwitchCard
+        title={title}
+        subtitle={describe(key, subtitle, onOff)}
+        isEnabled={value}
+        onChange={() => setOverride(key, !value)}
+        ariaLabel={ariaLabel}
+        disabled={!loaded && !isOverridden(key)}
+        isModified={isOverridden(key)}
+        onReset={() => clearOverrides(key, ...resetKeys)}
+        resetAriaLabel={`Reset ${title.toLowerCase()} to global default`}
+      />
     );
-  }
+  };
 
-  if (!globalSettings) {
-    return <div className="text-sm text-text-secondary">Loading global settings…</div>;
-  }
-
-  const effective = (key: keyof NotificationSettings) =>
-    overrides[key] !== undefined ? overrides[key] : globalSettings[key];
-
-  const scopeFor = (key: keyof NotificationSettings): "default" | "global" | "project" =>
-    overrides[key] !== undefined ? "project" : "global";
+  const waitingOn = effective("waitingEnabled") === true;
+  const escalationOn = effective("waitingEscalationEnabled") === true;
+  const soundOn = effective("soundEnabled") === true;
 
   return (
-    <div className="space-y-6">
-      <div className="text-sm text-text-secondary mb-4">
-        Override global notification settings for this project. Unchecked overrides inherit the
-        global default.
-      </div>
-
-      <SettingsSection
-        icon={Bell}
-        title="Agent Notifications"
-        description="Override which agent events trigger OS notifications for this project."
-      >
-        <div className="space-y-3">
-          <OverrideRow
-            label="Agent completed"
-            description="Show a notification when an agent finishes its task"
-            isOverridden={overrides.completedEnabled !== undefined}
-            onToggleOverride={(on) => {
-              if (on) setOverride("completedEnabled", globalSettings.completedEnabled);
-              else clearOverrides("completedEnabled");
-            }}
-          >
-            <SettingsCheckbox
-              id="proj-notif-completed"
-              label="Enabled"
-              description="Override the global completed notification setting"
-              checked={effective("completedEnabled") as boolean}
-              onChange={(v) => setOverride("completedEnabled", v)}
-              scope={scopeFor("completedEnabled")}
-            />
-          </OverrideRow>
-
-          <OverrideRow
-            label="Agent waiting for input"
-            description="Show a notification immediately when an agent needs input"
-            isOverridden={overrides.waitingEnabled !== undefined}
-            onToggleOverride={(on) => {
-              if (on) setOverride("waitingEnabled", globalSettings.waitingEnabled);
-              else {
-                clearOverrides(
-                  "waitingEnabled",
-                  "waitingEscalationEnabled",
-                  "waitingEscalationDelayMs"
-                );
-              }
-            }}
-          >
-            <SettingsCheckbox
-              id="proj-notif-waiting"
-              label="Enabled"
-              description="Override the global waiting notification setting"
-              checked={effective("waitingEnabled") as boolean}
-              onChange={(v) => setOverride("waitingEnabled", v)}
-              scope={scopeFor("waitingEnabled")}
-            />
-            {(effective("waitingEnabled") as boolean) && (
-              <div className="ml-6 space-y-3 border-l border-border-default pl-4 mt-2">
-                <OverrideRow
-                  label="Escalate if still waiting"
-                  description="Fire an additional OS notification if a docked agent remains waiting"
-                  isOverridden={overrides.waitingEscalationEnabled !== undefined}
-                  onToggleOverride={(on) => {
-                    if (on)
-                      setOverride(
-                        "waitingEscalationEnabled",
-                        globalSettings.waitingEscalationEnabled
-                      );
-                    else {
-                      clearOverrides("waitingEscalationEnabled", "waitingEscalationDelayMs");
-                    }
-                  }}
-                >
-                  <SettingsCheckbox
-                    id="proj-notif-escalation"
-                    label="Enabled"
-                    description="Override the global escalation setting"
-                    checked={effective("waitingEscalationEnabled") as boolean}
-                    onChange={(v) => setOverride("waitingEscalationEnabled", v)}
-                    scope={scopeFor("waitingEscalationEnabled")}
-                  />
-                </OverrideRow>
-
-                {(effective("waitingEscalationEnabled") as boolean) && (
-                  <OverrideRow
-                    label="Escalation delay"
-                    isOverridden={overrides.waitingEscalationDelayMs !== undefined}
-                    onToggleOverride={(on) => {
-                      if (on)
-                        setOverride(
-                          "waitingEscalationDelayMs",
-                          globalSettings.waitingEscalationDelayMs
-                        );
-                      else clearOverrides("waitingEscalationDelayMs");
-                    }}
-                  >
-                    <SettingsSelect
-                      label="Delay"
-                      description="Time to wait before escalating"
-                      value={String(effective("waitingEscalationDelayMs"))}
-                      onValueChange={(v) => setOverride("waitingEscalationDelayMs", Number(v))}
-                      scope={scopeFor("waitingEscalationDelayMs")}
-                      options={ESCALATION_DELAY_OPTIONS.map(({ value, label }) => ({
-                        value: String(value),
-                        label,
-                      }))}
-                    />
-                  </OverrideRow>
-                )}
-              </div>
-            )}
-          </OverrideRow>
+    <div className="space-y-8">
+      {globalError && (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-border-default px-4 py-3 text-xs text-status-error"
+        >
+          <span>{globalError}</span>
+          <Button variant="outline" size="xs" onClick={retryGlobals}>
+            Retry
+          </Button>
         </div>
-      </SettingsSection>
-
-      <SettingsSection
-        icon={Volume2}
-        title="Sound"
-        description="Override sound settings for this project."
-      >
-        <div className="space-y-4">
-          <OverrideRow
-            label="Play sound"
-            description="Enable audio alerts for agent notifications"
-            isOverridden={overrides.soundEnabled !== undefined}
-            onToggleOverride={(on) => {
-              if (on) setOverride("soundEnabled", globalSettings.soundEnabled);
-              else {
-                clearOverrides(
-                  "soundEnabled",
-                  "completedSoundFile",
-                  "waitingSoundFile",
-                  "escalationSoundFile"
-                );
-              }
-            }}
-          >
-            <SettingsSwitchCard
-              variant="compact"
-              title="Play sound"
-              subtitle="Enable audio alerts for agent notifications"
-              isEnabled={effective("soundEnabled") as boolean}
-              onChange={() => setOverride("soundEnabled", !(effective("soundEnabled") as boolean))}
-              ariaLabel="Play sound for notifications"
-              scope={scopeFor("soundEnabled")}
-            />
-          </OverrideRow>
-
-          {(effective("soundEnabled") as boolean) &&
-            (
-              [
-                {
-                  label: "Completed sound",
-                  field: "completedSoundFile" as const,
-                },
-                {
-                  label: "Waiting sound",
-                  field: "waitingSoundFile" as const,
-                },
-                {
-                  label: "Escalation sound",
-                  field: "escalationSoundFile" as const,
-                },
-              ] as const
-            ).map(({ label, field }) => (
-              <OverrideRow
-                key={field}
-                label={label}
-                isOverridden={overrides[field] !== undefined}
-                onToggleOverride={(on) => {
-                  if (on) setOverride(field, globalSettings[field]);
-                  else clearOverrides(field);
-                }}
-              >
-                <div className="flex items-center gap-2 flex-1">
-                  <SettingsSelect
-                    label={label}
-                    value={effective(field) as string}
-                    onValueChange={(v) => setOverride(field, v)}
-                    scope={scopeFor(field)}
-                    className="flex-1"
-                    options={AVAILABLE_SOUNDS.map(({ file, label: soundLabel }) => ({
-                      value: file,
-                      label: soundLabel,
-                    }))}
-                  />
-                  <button
-                    onClick={() => handlePreview(effective(field) as string)}
-                    title={`Preview ${label.toLowerCase()}`}
-                    className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-border-default bg-surface-canvas text-text-primary hover:bg-tint/[0.06] transition-colors"
-                  >
-                    <Play className="h-3.5 w-3.5" />
-                    Preview
-                  </button>
-                </div>
-              </OverrideRow>
-            ))}
-        </div>
-      </SettingsSection>
-    </div>
-  );
-}
-
-function OverrideRow({
-  label,
-  description,
-  isOverridden,
-  onToggleOverride,
-  children,
-}: {
-  label: string;
-  description?: string;
-  isOverridden: boolean;
-  onToggleOverride: (on: boolean) => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="space-y-2">
-      <label className="flex items-center gap-2 cursor-pointer">
-        <input
-          type="checkbox"
-          checked={isOverridden}
-          onChange={(e) => onToggleOverride(e.target.checked)}
-          className="rounded border-border-default text-accent-primary focus:ring-daintree-accent/30"
-        />
-        <span className="text-sm font-medium text-text-primary">{label}</span>
-        {!isOverridden && (
-          <span className="text-xs text-text-secondary">(using global default)</span>
-        )}
-      </label>
-      {description && !isOverridden && (
-        <p className="text-xs text-text-secondary ml-6">{description}</p>
       )}
-      {isOverridden && <div className="ml-6">{children}</div>}
+
+      <SettingsSection
+        title="Agent notifications"
+        description="Changing a setting overrides the global value for this project; reset it to inherit again."
+      >
+        <SettingsGroup>
+          {booleanRow(
+            "completedEnabled",
+            "Agent completed",
+            "Show a notification when an agent finishes its task",
+            []
+          )}
+          {booleanRow(
+            "waitingEnabled",
+            "Agent waiting for input",
+            "Show a notification immediately when an agent needs input",
+            ["waitingEscalationEnabled", "waitingEscalationDelayMs"]
+          )}
+          <SettingsDependents
+            disabled={!waitingOn}
+            reason="Turn on Agent waiting for input to escalate reminders"
+          >
+            {booleanRow(
+              "waitingEscalationEnabled",
+              "Escalate if still waiting",
+              "Fire an additional OS notification if a docked agent remains waiting",
+              ["waitingEscalationDelayMs"]
+            )}
+            {escalationOn && (
+              <SettingsSelect
+                label="Escalation delay"
+                description={describe("waitingEscalationDelayMs", undefined, delayName)}
+                value={String(effective("waitingEscalationDelayMs") ?? "")}
+                onValueChange={(v) => setOverride("waitingEscalationDelayMs", Number(v))}
+                disabled={!loaded && !isOverridden("waitingEscalationDelayMs")}
+                isModified={isOverridden("waitingEscalationDelayMs")}
+                onReset={() => clearOverrides("waitingEscalationDelayMs")}
+                resetAriaLabel="Reset escalation delay to global default"
+                options={ESCALATION_DELAY_OPTIONS.map(({ value, label }) => ({
+                  value: String(value),
+                  label,
+                }))}
+              />
+            )}
+          </SettingsDependents>
+        </SettingsGroup>
+      </SettingsSection>
+
+      <SettingsSection title="Sound">
+        <SettingsGroup>
+          {booleanRow(
+            "soundEnabled",
+            "Play sound",
+            "Enable audio alerts for agent notifications",
+            ["completedSoundFile", "waitingSoundFile", "escalationSoundFile"],
+            "Play sound for notifications"
+          )}
+          <SettingsDependents disabled={!soundOn} reason="Turn on Play sound to choose sounds">
+            {SOUND_FIELDS.map(({ label, field }) => {
+              const value = effective(field);
+              return (
+                <SettingsRow
+                  key={field}
+                  label={label}
+                  description={describe(field, undefined, soundName)}
+                  isModified={isOverridden(field)}
+                  onReset={() => clearOverrides(field)}
+                  resetAriaLabel={`Reset ${label.toLowerCase()} to global default`}
+                  disabled={!loaded && !isOverridden(field)}
+                  control={({ labelId, descriptionId, disabled }) => (
+                    <div className="flex items-center gap-2">
+                      <Select
+                        value={typeof value === "string" ? value : ""}
+                        onValueChange={(v) => setOverride(field, v)}
+                        disabled={disabled}
+                      >
+                        <SelectTrigger
+                          aria-labelledby={labelId}
+                          aria-describedby={descriptionId}
+                          className="w-36"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {AVAILABLE_SOUNDS.map(({ file, label: soundLabel }) => (
+                            <SelectItem key={file} value={file}>
+                              {soundLabel}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={disabled || typeof value !== "string"}
+                        onClick={() => {
+                          if (typeof value === "string") handlePreview(value);
+                        }}
+                        aria-label={`Preview ${label.toLowerCase()}`}
+                      >
+                        <Play aria-hidden="true" />
+                        Preview
+                      </Button>
+                    </div>
+                  )}
+                />
+              );
+            })}
+          </SettingsDependents>
+        </SettingsGroup>
+      </SettingsSection>
     </div>
   );
 }
