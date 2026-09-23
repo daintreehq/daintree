@@ -14,6 +14,10 @@ export interface WorktreeActivityChipProps {
   author?: CommitAuthor | null;
   /** Commit subject, shown in the hover tooltip. */
   commitMessage?: string;
+  /** Commit body, shown clamped under the subject in the hover tooltip. */
+  commitBody?: string;
+  /** Full HEAD object id, shown abbreviated in the hover tooltip. */
+  commitSha?: string;
   /** Forge profile picture, tried before Gravatar inside the tooltip. */
   forgeAvatarUrl?: string;
   /** Drives both the activity light and the adjacent relative time. */
@@ -24,6 +28,8 @@ export function WorktreeActivityChip({
   lastCommitTimestampMs,
   author,
   commitMessage,
+  commitBody,
+  commitSha,
   forgeAvatarUrl,
   lastActivityTimestamp,
 }: WorktreeActivityChipProps) {
@@ -54,6 +60,8 @@ export function WorktreeActivityChip({
           lastCommitTimestampMs={lastCommitTimestampMs}
           author={author}
           commitMessage={commitMessage}
+          commitBody={commitBody}
+          commitSha={commitSha}
           forgeAvatarUrl={forgeAvatarUrl}
           lastActivityTimestamp={activityTimestamp}
         />

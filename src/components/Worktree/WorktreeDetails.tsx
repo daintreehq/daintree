@@ -372,6 +372,8 @@ export function WorktreeDetails({
                 lastCommitTimestampMs={lastCommitTs}
                 author={lastCommitAuthor}
                 commitMessage={rawLastCommitMsg}
+                commitBody={worktree.worktreeChanges?.lastCommitBody}
+                commitSha={worktree.worktreeChanges?.headOid}
                 forgeAvatarUrl={forgeAvatarUrl}
                 lastActivityTimestamp={activityTime}
               />

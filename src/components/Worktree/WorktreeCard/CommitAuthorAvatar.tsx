@@ -1,5 +1,6 @@
 import { useEffect, useState, type ComponentType } from "react";
 import { cn } from "@/lib/utils";
+import { Bot } from "@/components/icons";
 import { CAT_COLOR_CLASSES } from "@/config/categoryColors";
 import { AGENT_REGISTRY, type AgentIconProps } from "@/config/agents";
 import { getGravatarUrl, isBotAuthor } from "@/utils/gravatar";
@@ -71,7 +72,7 @@ export interface CommitAuthorAvatarProps {
 /**
  * Commit-author avatar. Resolves through four ordered tiers — branded agent
  * icon, forge profile picture, `d=404` Gravatar probe, then deterministic
- * coloured initials — so a real face shows when one exists and a meaningful
+ * coloured initials (a bot glyph for `[bot]` accounts) — so a real face shows when one exists and a meaningful
  * placeholder shows when it doesn't. Decorative: callers carry the accessible
  * name, so the avatar is `aria-hidden`.
  *
@@ -118,6 +119,21 @@ export function CommitAuthorAvatar({
   }
 
   const src = imgSources[srcIndex];
+  if (src == null && isBotAuthor(author.name)) {
+    return (
+      <span
+        aria-hidden="true"
+        className={cn(
+          "flex shrink-0 items-center justify-center bg-overlay-soft text-text-secondary",
+          radius,
+          className
+        )}
+        style={box}
+      >
+        <Bot style={{ width: Math.round(size * 0.6), height: Math.round(size * 0.6) }} />
+      </span>
+    );
+  }
   if (src == null) {
     const key = (author.email.trim() || author.name.trim()).toLowerCase();
     const color = CAT_COLOR_CLASSES[Math.abs(djb2(key)) % CAT_COLOR_CLASSES.length]!;

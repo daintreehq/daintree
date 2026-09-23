@@ -190,8 +190,10 @@ describe("getWorktreeChangesWithStats last commit metadata", () => {
     const authorUnixSeconds = committerUnixSeconds - 86_400;
     mockGit.raw.mockImplementation((args: string[]) => {
       if (args[0] === "rev-parse") return Promise.resolve(`head-oid\n${cwd}`);
-      if (args.includes("--format=%ct%x09%an%x09%ae%x09%s")) {
-        return Promise.resolve(`${committerUnixSeconds}\tAda\tada@example.com\tShip activity`);
+      if (args.includes("--format=%ct%x09%an%x09%ae%x09%s%x00%b")) {
+        return Promise.resolve(
+          `${committerUnixSeconds}\tAda\tada@example.com\tShip activity\0Why it ships.\n\tIndented\n`
+        );
       }
       if (args[0] === "log") {
         return Promise.resolve(`${authorUnixSeconds}\tAda\tada@example.com\tShip activity`);
@@ -204,6 +206,8 @@ describe("getWorktreeChangesWithStats last commit metadata", () => {
     expect(result.lastCommitTimestampMs).toBe(committerUnixSeconds * 1000);
     expect(result.lastCommitMessage).toBe("Ship activity");
     expect(result.lastCommitAuthor).toEqual({ name: "Ada", email: "ada@example.com" });
+    // The body is split at the NUL, so a tab inside it never leaks into the subject.
+    expect(result.lastCommitBody).toBe("Why it ships.\n\tIndented");
   });
 });
 

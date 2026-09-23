@@ -71,6 +71,14 @@ export function __clearPerFileDiffStatCacheForTesting(): void {
 // commits, amends, resets, and checkouts all change the OID. Per-worktree
 // bound (maxSize matches GIT_WORKTREE_CHANGES_CACHE) keeps memory stable
 // across long sessions with many worktrees.
+// Header fields are tab-separated; the body follows a NUL because it is free
+// text that can hold tabs and newlines. `%s` is the subject alone, so the
+// narrative slot keeps reading `lastCommitMessage` unchanged.
+const LAST_COMMIT_LOG_FORMAT = "--format=%ct%x09%an%x09%ae%x09%s%x00%b";
+// Bodies ride every status snapshot over IPC; a squash merge can carry a
+// changelog. The hover card clamps far below this.
+const LAST_COMMIT_BODY_MAX = 4000;
+
 const LAST_COMMIT_LOG_CACHE = new Cache<string, string>({
   maxSize: 100,
   defaultTTL: 300_000,
@@ -667,7 +675,7 @@ export async function getWorktreeChangesWithStats(
       const logOutput =
         cachedLog !== undefined
           ? cachedLog
-          : await git.raw(["log", "-1", "--format=%ct%x09%an%x09%ae%x09%s"]).catch(() => "");
+          : await git.raw(["log", "-1", LAST_COMMIT_LOG_FORMAT]).catch(() => "");
       // The fallback above also swallows a cancellation; an empty log from a
       // killed child must not sit in the cache as this commit's answer.
       options.signal?.throwIfAborted();
@@ -678,8 +686,18 @@ export async function getWorktreeChangesWithStats(
       let lastCommitMessage: string | undefined;
       let lastCommitTimestampMs: number | undefined;
       let lastCommitAuthor: { name: string; email: string } | undefined;
+      let lastCommitBody: string | undefined;
       if (logOutput) {
-        const [tsLine, authorName, authorEmail, ...msgParts] = logOutput.split("\t");
+        const nul = logOutput.indexOf("\0");
+        const header = nul === -1 ? logOutput : logOutput.slice(0, nul);
+        if (nul !== -1) {
+          lastCommitBody =
+            logOutput
+              .slice(nul + 1)
+              .trim()
+              .slice(0, LAST_COMMIT_BODY_MAX) || undefined;
+        }
+        const [tsLine, authorName, authorEmail, ...msgParts] = header.split("\t");
         const parsed = Number.parseInt((tsLine ?? "").trim(), 10);
         lastCommitTimestampMs = Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : undefined;
         lastCommitMessage = msgParts.join("\t").trim() || undefined;
@@ -987,6 +1005,7 @@ export async function getWorktreeChangesWithStats(
         lastCommitMessage,
         lastCommitTimestampMs,
         lastCommitAuthor,
+        lastCommitBody,
         ahead: tracking ? status.ahead : undefined,
         behind: tracking ? status.behind : undefined,
         tracking,

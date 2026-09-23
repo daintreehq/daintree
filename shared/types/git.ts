@@ -74,6 +74,8 @@ export interface WorktreeChanges {
   lastCommitTimestampMs?: number;
   /** Last commit author. Only set when git log reports a non-empty author name. */
   lastCommitAuthor?: { name: string; email: string };
+  /** Last commit body (everything after the subject), trailers included. Capped. */
+  lastCommitBody?: string;
   /** Commits ahead of upstream from `git status --porcelain -b` (undefined when no upstream). */
   ahead?: number;
   /** Commits behind upstream from `git status --porcelain -b` (undefined when no upstream). */

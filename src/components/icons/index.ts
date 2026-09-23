@@ -17,6 +17,7 @@ export {
   ArrowUpDown, // card organization — pinning, collapsing and reordering a worktree row
   AtSign, // @file reference handed to an agent's prompt
   BellDot, // watch alert / notify on completion
+  Bot, // a commit author that is a bot account (a `[bot]` name) with no picture — shape says machine where initials would say person
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
   CircleCheck, // finished run — blue awaiting review, neutral once acknowledged (Pilot's review and done bands)
   CircleDashed, // run the user snoozed — quiet until it wakes (Pilot's snoozed band)
