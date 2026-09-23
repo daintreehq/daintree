@@ -474,6 +474,127 @@ const STATES: ScopeState[] = [
       await page.emulateMedia({ contrast: "no-preference" });
     },
   },
+  {
+    // Pointer resting on an unselected nav item: hover has to read as distinct from
+    // the selected item without borrowing its accent marker.
+    slug: "20-nav-hover",
+    target: { tab: "general" },
+    extraCrop: "sidebar",
+    sweep: true,
+    arrange: async (page) => {
+      await page.locator(navItem("notifications")).hover();
+    },
+  },
+  {
+    // Keyboard in the sidebar tablist: focus moved off the selected tab with the arrow
+    // keys (manual activation), so focus and selection sit on two different items.
+    slug: "21-nav-keyboard-focus",
+    target: { tab: "general" },
+    extraCrop: "sidebar",
+    sweep: true,
+    arrange: async (page) => {
+      await page.locator(SEARCH).click();
+      await page.keyboard.press("Tab");
+      const onTab = await page.evaluate(
+        () => document.activeElement?.getAttribute("data-tab") ?? null
+      );
+      if (onTab !== "general") throw new Error(`Tab from search landed on ${onTab}`);
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("ArrowDown");
+    },
+  },
+  {
+    // Arrow keys driving the search results: the virtual cursor on the second row.
+    slug: "22-search-keyboard",
+    target: { tab: "general" },
+    sweep: true,
+    arrange: async (page) => {
+      await page.locator(SEARCH).fill("terminal");
+      await page.waitForTimeout(500);
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("ArrowDown");
+    },
+    expectText: ["result"],
+    restore: async (page) => {
+      await page.locator(SEARCH).fill("");
+    },
+  },
+  {
+    slug: "23-search-no-results",
+    target: { tab: "general" },
+    arrange: async (page) => {
+      await page.locator(SEARCH).fill("zzqxv");
+      await page.waitForTimeout(500);
+    },
+    expectText: ["No results"],
+    restore: async (page) => {
+      await page.locator(SEARCH).fill("");
+    },
+  },
+  {
+    // The `@modified` filter over two changed global tabs.
+    slug: "24-search-modified",
+    target: { tab: "general" },
+    arrange: async (page) => {
+      await dispatchAction(page, "preferences.showDeveloperTools.set", { show: true });
+      await dispatchAction(page, "terminalConfig.setPerformanceMode", { performanceMode: true });
+      await page.waitForTimeout(300);
+      await page.locator(SEARCH).fill("@modified");
+      await page.waitForTimeout(500);
+    },
+    expectText: ["result"],
+    restore: async (page) => {
+      await page.locator(SEARCH).fill("");
+      await dispatchAction(page, "preferences.showDeveloperTools.set", { show: false }).catch(
+        () => {}
+      );
+      await dispatchAction(page, "terminalConfig.setPerformanceMode", {
+        performanceMode: false,
+      }).catch(() => {});
+    },
+  },
+  {
+    // Results for settings that only render while a parent is on carry a "Requires"
+    // chip; opening one lands on the page with the hidden-setting banner.
+    slug: "25-search-requires-enabled",
+    target: { tab: "general" },
+    arrange: async (page) => {
+      await page.locator(SEARCH).fill("transcription");
+      await page.waitForTimeout(500);
+    },
+    expectText: ["Requires"],
+    restore: async (page) => {
+      await page.locator(SEARCH).fill("");
+    },
+  },
+  {
+    slug: "26-hidden-setting-banner",
+    target: { tab: "general" },
+    arrange: async (page) => {
+      await page.locator(SEARCH).fill("transcription");
+      await page.waitForTimeout(500);
+      await page
+        .locator(`${DIALOG} [role="option"]`)
+        .filter({ hasText: "Requires" })
+        .first()
+        .click();
+      await page.waitForTimeout(600);
+    },
+    expectText: ["only visible when"],
+  },
+  {
+    // Keyboard on the page-level subtab bar, nested inside the sidebar's tabpanel.
+    slug: "27-subtab-focus",
+    target: { tab: "general" },
+    arrange: async (page) => {
+      const active = page.locator(
+        `${DIALOG} #settings-panel-general [role="tablist"] [role="tab"][aria-selected="true"]`
+      );
+      await active.focus();
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("ArrowLeft");
+    },
+  },
 ];
 
 async function verify(page: Page, state: ScopeState): Promise<void> {
@@ -563,6 +684,12 @@ test("settings dialog scope review — global, project, search, deep link and tr
         captured++;
         await snap(welcome, "01-no-project--sidebar", SIDEBAR);
         captured++;
+        // Search with no project open: project-scope entries must not appear, since
+        // there is no project for them to write to.
+        await welcome.locator(SEARCH).fill("notifications");
+        await welcome.waitForTimeout(500);
+        await snap(welcome, "01-no-project-search--dialog", CARD);
+        captured++;
       } catch (error) {
         failures.push(`01-no-project: ${String(error).slice(0, 400)}`);
       } finally {
@@ -595,6 +722,10 @@ test("settings dialog scope review — global, project, search, deep link and tr
           await openSettingsAt(page, state.target);
         } else {
           await openSettingsAt(page, state.target);
+          // closeSettings clicked the close button, so the pointer is still resting
+          // where the next dialog's close button renders — park it off the card or
+          // every shot shows that button in its hover state.
+          await page.mouse.move(2, 2);
           await settle(page, 700);
           if (state.arrange) await state.arrange(page, app);
         }
@@ -638,7 +769,7 @@ test("settings dialog scope review — global, project, search, deep link and tr
   // The exit code is only meaningful if it accounts for what actually landed on disk.
   const expected =
     planned.reduce((n, s) => n + (s.extraCrop === "sidebar" ? 2 : 1), 0) +
-    (wantsNoProject && !SWEEP_ONLY ? 2 : 0);
+    (wantsNoProject && !SWEEP_ONLY ? 3 : 0);
   console.log(`[settings-scope-shots] ${captured}/${expected} PNGs → ${OUTPUT_DIR}`);
   if (failures.length > 0) {
     throw new Error(`settings-scope capture failed:\n  ${failures.join("\n  ")}`);
