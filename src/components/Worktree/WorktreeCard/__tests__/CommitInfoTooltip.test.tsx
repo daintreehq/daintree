@@ -341,6 +341,8 @@ describe("CommitInfoTooltip while open", () => {
 
 describe("relativeTimePhrase", () => {
   const DAY = 86_400_000;
+  const now = new Date("2025-06-15T12:00:00Z").getTime();
+  const phraseAt = (age: number) => relativeTimePhrase(age, now - age);
 
   it("keeps the count in each unit below the size of the next unit up", () => {
     const limits: Record<string, number> = {
@@ -348,11 +350,10 @@ describe("relativeTimePhrase", () => {
       hour: 24,
       day: 7,
       week: 5,
-      month: 13,
     };
     for (let d = 0; d < 3 * 365; d += 1) {
-      const phrase = relativeTimePhrase(d * DAY + 1_000);
-      const match = /^(\d+) (minute|hour|day|week|month|year)s? ago$/.exec(phrase);
+      const phrase = phraseAt(d * DAY + 1_000);
+      const match = /^(\d+) (minute|hour|day|week)s? ago$/.exec(phrase);
       if (!match) continue;
       const limit = limits[match[2]!];
       if (limit !== undefined) expect(Number(match[1])).toBeLessThan(limit);
@@ -360,11 +361,12 @@ describe("relativeTimePhrase", () => {
   });
 
   it("never goes backwards as the age grows", () => {
-    const order = ["just", "minute", "hour", "day", "week", "month", "year"];
-    const rank = (p: string) => order.findIndex((u) => p.includes(u));
+    const order = ["just", "minute", "hour", "day", "week"];
+    const rank = (p: string) =>
+      p.startsWith("on ") ? order.length : order.findIndex((u) => p.includes(u));
     let previous = -1;
     for (let d = 0; d < 3 * 365; d += 3) {
-      const r = rank(relativeTimePhrase(d * DAY + 5 * 3_600_000));
+      const r = rank(phraseAt(d * DAY + 5 * 3_600_000));
       expect(r).toBeGreaterThanOrEqual(previous);
       previous = r;
     }
