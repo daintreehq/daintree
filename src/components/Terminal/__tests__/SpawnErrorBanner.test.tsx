@@ -281,6 +281,8 @@ describe("SpawnErrorBanner", () => {
     const retry = screen.getByRole("button", { name: /retry starting terminal/i });
     expect(overflow().contains(retry)).toBe(true);
     expect(retry.hasAttribute("disabled")).toBe(true);
+    // Busy, not just unavailable: the retry is in flight.
+    expect(retry.getAttribute("aria-busy")).toBe("true");
     fireEvent.click(retry);
     expect(onRetry).not.toHaveBeenCalled();
   });

@@ -51,7 +51,7 @@ export function BannerOverflowMenu({
               variant={isDanger ? "ghost-danger" : "ghost"}
               size="sm"
               disabled={isDisabled}
-              aria-busy={item.loading || undefined}
+              loading={item.loading}
               aria-label={item.ariaLabel}
               onClick={() => {
                 if (isDisabled) return;
