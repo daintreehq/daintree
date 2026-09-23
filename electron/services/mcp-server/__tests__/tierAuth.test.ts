@@ -2680,6 +2680,14 @@ describe("agent-pane approval (#12692)", () => {
     });
   });
 
+  it("does not advertise a target-picking tool as grantable to a pane", () => {
+    const kill = makeEntry({ id: "terminal.killBatch", kind: "command", danger: "confirm" });
+    expect(buildTargetPolicy(kill, paneSnapshot("workbench"))).toMatchObject({
+      authorizedBy: "approval",
+      grantable: false,
+    });
+  });
+
   it("reports a session approval as waiving the dialog it replaced", () => {
     const del = makeEntry({ id: "worktree.delete", kind: "command", danger: "confirm" });
     expect(

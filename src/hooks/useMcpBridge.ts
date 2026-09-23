@@ -1184,7 +1184,7 @@ export function useMcpBridge(): void {
               });
               return;
             }
-            if (definition?.danger === "confirm" || approvalOnly === true) {
+            if (definition && (definition.danger === "confirm" || approvalOnly === true)) {
               inFlightConfirms.add(requestId);
               // Fetch the fresh preview OFF the critical path so the modal
               // appears immediately (never blocked on a git read) and the

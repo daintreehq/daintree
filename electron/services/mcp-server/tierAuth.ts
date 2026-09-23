@@ -683,7 +683,7 @@ export function buildTargetPolicy(
     // own approval dialog, so it is grantable up to the pane ceiling.
     grantable:
       (grantsReachable && minimumPermittingTier(id) !== null) ||
-      (paneApproval && PANE_APPROVAL_CEILING.has(id)),
+      (paneApproval && PANE_APPROVAL_CEILING.has(id) && isGenericNativeGrantEligible(id)),
     authorizedBy,
     dynamicInvocation: "allowed",
     preferredTool: null,

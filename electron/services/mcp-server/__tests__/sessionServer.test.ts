@@ -9707,13 +9707,12 @@ describe("agent-pane approval (#12692)", () => {
   });
 
   it("neither runs nor remembers an approval for a session that ended while the user decided", async () => {
-    let approve!: (
-      envelope: Awaited<ReturnType<NonNullable<SessionServerDeps["requestApproval"]>>>
-    ) => void;
+    type Envelope = Awaited<ReturnType<NonNullable<SessionServerDeps["requestApproval"]>>>;
+    let approve!: (envelope: Envelope) => void;
     const pane = paneServer("action", {
       requestApproval: vi.fn(
         () =>
-          new Promise((resolve) => {
+          new Promise<Envelope>((resolve) => {
             approve = resolve;
           })
       ),
