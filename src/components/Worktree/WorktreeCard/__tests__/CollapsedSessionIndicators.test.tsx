@@ -27,6 +27,9 @@ const ZERO: Record<AgentState, number> = {
 /** The states `getTerminalAgentDisplayState` can actually hand the cluster. */
 const REACHABLE = ["working", "directing", "waiting"] as const;
 
+/** The drawn glyph: an svg ring, or the CSS-drawn spinner box. */
+const glyphOf = (seg: Element): Element => seg.querySelector("svg, [data-glyph-box]")!;
+
 function renderCluster(byState: Partial<Record<AgentState, number>>, total?: number) {
   const counts = { ...ZERO, ...byState };
   const sum = total ?? Object.values(counts).reduce((a, b) => a + b, 0);
@@ -120,7 +123,7 @@ describe("CollapsedSessionIndicators", () => {
     const { segments } = renderCluster({ working: 1, directing: 1, waiting: 1 });
     expect(segments.map((s) => s.dataset.state).sort()).toEqual([...REACHABLE].sort());
     const shapes = segments.map((seg) => {
-      const glyph = seg.firstElementChild!;
+      const glyph = glyphOf(seg);
       return glyph.tagName === "svg"
         ? glyph.innerHTML
         : `css:${glyph.getAttribute("data-glyph-box")}`;
@@ -131,7 +134,7 @@ describe("CollapsedSessionIndicators", () => {
   it("animates only the working glyph, and lets reduced motion stop it", () => {
     const { segments } = renderCluster({ working: 1, directing: 1, waiting: 1 });
     for (const seg of segments) {
-      const cls = seg.firstElementChild!.getAttribute("class") ?? "";
+      const cls = glyphOf(seg).getAttribute("class") ?? "";
       const spins = /\banimate-/.test(cls);
       expect(spins, `${seg.dataset.state} spin`).toBe(seg.dataset.state === "working");
       if (spins) expect(cls).toContain("motion-reduce:animate-none");
@@ -144,7 +147,7 @@ describe("CollapsedSessionIndicators", () => {
     // 10px step, where working and waiting separated on hue alone.
     const { segments } = renderCluster({ working: 1, waiting: 1 });
     for (const seg of segments) {
-      const glyphCls = seg.firstElementChild!.getAttribute("class") ?? "";
+      const glyphCls = glyphOf(seg).getAttribute("class") ?? "";
       const size = glyphCls.match(/\bw-(\d+(?:\.\d+)?)\b/);
       expect(size, "glyph has no width step").not.toBeNull();
       const textStep = seg.className.match(/\btext-(3xs|2xs|xs)\b/)?.[1] ?? "xs";
@@ -153,7 +156,7 @@ describe("CollapsedSessionIndicators", () => {
     }
   });
 
-  it("keeps the hue on the glyph and the count neutral", () => {
+  it("keeps the hue on the glyph, reachable by forced colors, and the count neutral", () => {
     // State colours are tuned as graphics (3:1). As 11px text they drop under
     // 4.5:1 in every light theme, so no count may inherit one, while each glyph
     // must still carry its own state's hue.
@@ -166,8 +169,15 @@ describe("CollapsedSessionIndicators", () => {
         inherited.filter((c) => stateHues.has(c)),
         `${seg.dataset.state} count is state-coloured`
       ).toEqual([]);
-      const glyphClasses = (seg.firstElementChild!.getAttribute("class") ?? "").split(/\s+/);
-      expect(glyphClasses.some((c) => stateHues.has(c))).toBe(true);
+      // The hue has to sit on an HTML element the glyph inherits from: forced
+      // colors repaints that element's `color`, but a colour set on the svg
+      // itself survives and left waiting amber on white at 1.7:1.
+      const hued = Array.from(seg.querySelectorAll("*")).filter((el) =>
+        (el.getAttribute("class") ?? "").split(/\s+/).some((c) => stateHues.has(c))
+      );
+      expect(hued, `${seg.dataset.state} glyph carries no state hue`).toHaveLength(1);
+      expect(hued[0]!.tagName.toLowerCase()).not.toBe("svg");
+      expect(hued[0]!.contains(glyphOf(seg))).toBe(true);
     }
   });
 

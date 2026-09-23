@@ -18,7 +18,10 @@ interface CollapsedSessionIndicatorsProps {
  * The hue lives on the glyph and the count stays neutral. The state colours
  * are tuned as graphics (3:1), and as 11px text they fall under 4.5:1 in every
  * light theme — hokkaido's waiting amber reads at 3.2:1 — so a count in its
- * state's colour was the hardest thing in the row to read.
+ * state's colour was the hardest thing in the row to read. The hue sits on a
+ * wrapper span rather than on the glyph: forced colors repaints an HTML
+ * element's `color` and the svg's `currentColor` stroke follows, but a colour
+ * set on the `<svg>` itself survives, leaving waiting amber on white at 1.7:1.
  *
  * A `<span>`, not a `<div>`: one placement renders it inside the Sessions
  * disclosure `<button>`, which only admits phrasing content.
@@ -50,13 +53,14 @@ export function CollapsedSessionIndicators({
                 data-state={state}
                 className="flex items-center gap-0.5 text-2xs font-medium text-text-secondary"
               >
-                <Icon
-                  className={cn(
-                    "w-3 h-3 shrink-0",
-                    STATE_COLORS[state],
-                    state === "working" && "animate-spin-slow motion-reduce:animate-none"
-                  )}
-                />
+                <span className={cn("flex shrink-0", STATE_COLORS[state])}>
+                  <Icon
+                    className={cn(
+                      "w-3 h-3",
+                      state === "working" && "animate-spin-slow motion-reduce:animate-none"
+                    )}
+                  />
+                </span>
                 <span className="font-mono tabular-nums">{count}</span>
               </span>
             );
