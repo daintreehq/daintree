@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { actionService } from "@/services/ActionService";
 import { combosFieldsEqual, keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { COMMAND_HUD_PREFIX, usePendingChord } from "./useGlobalKeybindings";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
@@ -17,6 +18,10 @@ export interface CommandHudItem {
   /** Human label shown as the row's primary text. */
   description: string;
   category: string;
+  /** Snapshot of the action's `isEnabled` at open, from the action manifest. */
+  enabled: boolean;
+  /** Why it can't run right now, shown on the row when disabled. */
+  disabledReason?: string;
 }
 
 export interface CommandHudGroup {
@@ -45,16 +50,30 @@ function buildLayerItems(): CommandHudItem[] {
   // The HUD shows only the curated Cmd+K chord layer — every completion of the
   // `Cmd+K` prefix. Synthetic sub-prefix rows (`actionId === ""`, deeper 3-part
   // chords) are filtered out; the flat map has none, but guard anyway.
+  //
+  // Enabled state comes from the manifest, like the command palette's rows, so
+  // a command that can't run says why on its row instead of closing the HUD on
+  // a silent no-op. An id with no registered action is left enabled: dispatch
+  // is still the authority, and the row must not claim a reason it doesn't have.
+  const manifest = new Map(
+    actionService.list(undefined, { includeSchemas: false }).map((entry) => [entry.id, entry])
+  );
   return keybindingService
     .getChordCompletions(COMMAND_HUD_PREFIX)
     .filter((entry) => entry.actionId !== "")
-    .map((entry) => ({
-      actionId: entry.actionId,
-      combo: entry.secondKey,
-      displayKey: entry.displayKey,
-      description: entry.description,
-      category: entry.category,
-    }));
+    .map((entry) => {
+      const action = manifest.get(entry.actionId as Parameters<typeof actionService.get>[0]);
+      const enabled = action?.enabled ?? true;
+      return {
+        actionId: entry.actionId,
+        combo: entry.secondKey,
+        displayKey: entry.displayKey,
+        description: entry.description,
+        category: entry.category,
+        enabled,
+        disabledReason: enabled ? undefined : (action?.disabledReason ?? "Not available right now"),
+      };
+    });
 }
 
 export function useCommandHud(): UseCommandHudReturn {
@@ -86,6 +105,8 @@ export function useCommandHud(): UseCommandHudReturn {
       ? layer.filter(
           (item) =>
             item.description.toLowerCase().includes(trimmed) ||
+            // The group headings are on screen, so "git" finds the Git group.
+            item.category.toLowerCase().includes(trimmed) ||
             (keyQuery.length > 0 &&
               item.displayKey.toLowerCase().replace(/\+/g, "").includes(keyQuery))
         )
@@ -146,6 +167,12 @@ export function useCommandHud(): UseCommandHudReturn {
   }, []);
 
   const run = useCallback((item: CommandHudItem) => {
+    // A disabled row already shows its reason; running it keeps the HUD open
+    // and says the reason aloud rather than dismissing on a no-op.
+    if (!item.enabled) {
+      useAnnouncerStore.getState().announce(item.disabledReason ?? "Not available", "polite");
+      return;
+    }
     // Close first so the HUD never lingers behind an action that opens a modal
     // or moves focus. The layer is a fixed curated set — no MRU recording.
     keybindingService.clearPendingChord();

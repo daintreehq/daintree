@@ -254,7 +254,10 @@ export function ChordIndicator() {
             onBlur={handleBlur}
             className={cn(
               "min-w-0 flex-1 bg-transparent text-sm",
-              "text-text-primary placeholder:text-text-placeholder",
+              // Secondary, not the family's placeholder token: this placeholder
+              // is the instruction ("Next key, or search…"), not a label for an
+              // empty field, and the placeholder token has no contrast floor.
+              "text-text-primary placeholder:text-text-secondary",
               "focus:outline-hidden"
             )}
           />
@@ -304,6 +307,7 @@ export function ChordIndicator() {
                         id={`${OPTION_ID_PREFIX}-${item.actionId}`}
                         role="option"
                         aria-selected={isSelected}
+                        aria-disabled={item.enabled ? undefined : true}
                         data-hud-index={index}
                         onClick={() => runItem(item)}
                         onMouseMove={() => setSelectedIndex(index)}
@@ -313,8 +317,20 @@ export function ChordIndicator() {
                           "duration-150 reduce-motion:transition-none"
                         )}
                       >
-                        <span className="min-w-0 flex-1 truncate text-text-primary">
-                          {item.description}
+                        <span className="flex min-w-0 flex-1 items-baseline gap-2">
+                          <span
+                            className={cn(
+                              "min-w-0 shrink truncate",
+                              item.enabled ? "text-text-primary" : "text-text-secondary"
+                            )}
+                          >
+                            {item.description}
+                          </span>
+                          {item.disabledReason && (
+                            <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary italic">
+                              {item.disabledReason}
+                            </span>
+                          )}
                         </span>
                         <KbdChord
                           shortcut={item.combo}
@@ -332,11 +348,11 @@ export function ChordIndicator() {
         </div>
 
         {/* The family's footer rule: name what Enter does for the current
-            selection, and draw no band when nothing is selectable. Arrows and
+            selection, and draw no band when nothing selected can run. Arrows and
             Esc are conventions the surface doesn't restate. Not
             `AppPaletteDialog.Footer`, whose solid panel fill would cut a
             band out of the glass. */}
-        {results.length > 0 && (
+        {results[selectedIndex]?.enabled === true && (
           <div className="border-t border-[var(--border-overlay)] px-4 py-2 text-xs text-text-secondary select-none">
             <PaletteFooterHints primaryHint={{ keys: ["↵"], label: "to run command" }} />
           </div>

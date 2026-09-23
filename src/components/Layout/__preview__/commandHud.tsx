@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { resolveAppTheme } from "@shared/theme/themes";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { KEYBINDING_PRIORITY, keybindingService } from "@/services/KeybindingService";
+import { actionService } from "@/services/ActionService";
 import { combosFieldsEqual } from "@/services/keybindingUtils";
 import { COMMAND_HUD_PREFIX } from "@/hooks/useGlobalKeybindings";
 import { ChordIndicator } from "../ChordIndicator";
@@ -28,6 +29,7 @@ import "@/index.css";
  *   ?theme=daintree|bondi|…   built-in theme id
  *   ?long=1                   register plugin-style bindings with long labels
  *   ?perf=1                   performance mode (solid glass fallback)
+ *   ?disabled=1               register `git.push` as disabled, with its reason
  */
 
 const params = new URLSearchParams(window.location.search);
@@ -58,6 +60,25 @@ if (params.get("long") === "1") {
     priority: KEYBINDING_PRIORITY.PLUGIN,
     description: "Insert reviewer checklist",
     pluginId: "pr-writer",
+  });
+}
+
+if (params.get("disabled") === "1") {
+  // Nothing registers actions in the preview, so every row reads as enabled.
+  // One real definition shaped like the shipped one, with no remote to push to,
+  // is enough to show the disabled row.
+  actionService.register({
+    id: "git.push",
+    title: "Push to remote",
+    description:
+      "Push the current branch to its upstream remote. Disabled here so the harness can show a command that cannot run.",
+    category: "git",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    isEnabled: () => false,
+    disabledReason: () => "No upstream branch to push to",
+    run: async () => undefined,
   });
 }
 

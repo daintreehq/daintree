@@ -74,6 +74,7 @@ interface OpenOptions {
   height?: number;
   long?: boolean;
   perf?: boolean;
+  disabled?: boolean;
   freeze?: boolean;
 }
 
@@ -83,8 +84,10 @@ async function load(page: Page, opts: OpenOptions): Promise<void> {
   const q = new URLSearchParams({ theme: opts.theme });
   if (opts.long) q.set("long", "1");
   if (opts.perf) q.set("perf", "1");
+  if (opts.disabled) q.set("disabled", "1");
   await page.goto(`${baseURL}/command-hud-preview.html?${q.toString()}`);
-  await expect(page.locator("[data-preview-shell]")).toBeAttached();
+  // Generous: a first load after a new import re-optimises Vite's deps.
+  await expect(page.locator("[data-preview-shell]")).toBeAttached({ timeout: 30_000 });
   await page.evaluate(() => document.fonts.ready);
   if (opts.freeze !== false) await page.addStyleTag({ content: FREEZE_CSS });
   await page.waitForTimeout(150);
@@ -199,6 +202,13 @@ test("Command HUD — states, platforms and themes", async ({ page, browser }) =
     await page.waitForTimeout(100);
     written.push(await snap(page, `07-long-labels-narrow-${theme}.png`, "some"));
 
+    // A command that can't run right now, filtered down beside its neighbours.
+    await load(page, { theme, disabled: true });
+    await openHud(page, `disabled-${theme}`);
+    await input(page).fill("git");
+    await expect(page.locator('[role="option"][aria-disabled="true"]')).toHaveCount(1);
+    written.push(await snap(page, `14-disabled-row-${theme}.png`, 3));
+
     // Motion live: part-way into the entry, and part-way out of the exit.
     await load(page, { theme, freeze: false });
     await page.keyboard.press(`${MOD}+K`);
@@ -245,6 +255,6 @@ test("Command HUD — states, platforms and themes", async ({ page, browser }) =
   expect(pageErrors, `page errors: ${pageErrors.join(" | ")}`).toEqual([]);
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(written.length).toBe(THEMES.length * 9 + 4);
+  expect(written.length).toBe(THEMES.length * 10 + 4);
   console.log(`[command-hud-shots] wrote ${written.length} captures to ${OUT_DIR}`);
 });

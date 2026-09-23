@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 
 const dispatchMock = vi.fn().mockResolvedValue({ ok: true, result: undefined });
+let manifest: Array<{ id: string; enabled: boolean; disabledReason?: string }> = [];
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     get: () => undefined,
+    list: () => manifest,
     dispatch: (...args: unknown[]) => dispatchMock(...args),
   },
 }));
@@ -42,6 +44,8 @@ describe("ChordIndicator (Cmd+K command HUD)", () => {
   let terminal: HTMLTextAreaElement;
 
   beforeEach(() => {
+    manifest = [];
+    dispatchMock.mockClear();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "requestAnimationFrame"] });
     keybindingService.clearPendingChord();
     terminal = document.createElement("textarea");
@@ -179,5 +183,42 @@ describe("ChordIndicator (Cmd+K command HUD)", () => {
     fireEvent.change(input()!, { target: { value: keyText.replace(/\+/g, "") } });
 
     expect(options().map((o) => o.id)).toContain(first.id);
+  });
+
+  it("shows why a disabled command can't run, and stays open instead of dispatching", async () => {
+    render(<ChordIndicator />);
+    pressCmdK();
+    await flushFrames();
+    const target = options()[0]!;
+    const actionId = target.id.replace("command-hud-option-", "");
+    act(() => keybindingService.clearPendingChord());
+    await flushFrames();
+
+    manifest = [{ id: actionId, enabled: false, disabledReason: "No closed sessions" }];
+    pressCmdK();
+    await flushFrames();
+    const row = options().find((o) => o.id === target.id)!;
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(row.textContent).toContain("No closed sessions");
+
+    fireEvent.click(row);
+    await flushFrames();
+
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(keybindingService.getPendingChord()).not.toBeNull();
+  });
+
+  it("finds every row of a group by typing its visible heading", async () => {
+    render(<ChordIndicator />);
+    pressCmdK();
+    await flushFrames();
+    const group = document.querySelector('[role="group"]')!;
+    const heading = document.getElementById(group.getAttribute("aria-labelledby")!)!;
+    const ids = Array.from(group.querySelectorAll('[role="option"]')).map((o) => o.id);
+
+    fireEvent.change(input()!, { target: { value: heading.textContent!.toLowerCase() } });
+
+    const found = options().map((o) => o.id);
+    for (const id of ids) expect(found).toContain(id);
   });
 });
