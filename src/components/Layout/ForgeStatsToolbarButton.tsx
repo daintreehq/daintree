@@ -2,7 +2,6 @@ import {
   useRef,
   useState,
   useEffect,
-  useEffectEvent,
   useCallback,
   useImperativeHandle,
   useMemo,
@@ -717,68 +716,73 @@ export const ForgeStatsToolbarButton = memo(
       [DropdownView, issuesOpen, prsOpen, prefetchResourceList]
     );
 
-    // Delta check for the digit-pulse animation. Wrapped in useEffectEvent so
-    // it reads the latest stats, dropdown-open state, and document.hidden at
-    // fire time without widening the effect's dep array. Each ref is updated
-    // on every fresh stats arrival regardless of suppression — that way a
-    // backgrounded tab returning to focus doesn't replay every poll's worth
-    // of accumulated deltas at once. The `=== undefined` branch handles the
-    // initial seed (no pulse on cold launch); the `!== xCount` branch is
-    // the no-op-poll guard so unchanged counts never re-bump.
-    const checkForCountIncrease = useEffectEvent(() => {
-      const next = stats;
-      if (!next) return;
-      const suppressed = document.hidden;
-
-      if (issueCountRef.current === undefined) {
-        issueCountRef.current = issueCount;
-      } else if (issueCountRef.current !== issueCount) {
-        if (
-          !suppressed &&
-          !issuesOpen &&
-          issueCountRef.current != null &&
-          issueCount != null &&
-          issueCount > issueCountRef.current
-        ) {
-          setIssueAnimKey((k) => k + 1);
-          setIssuesPulseAt(Date.now());
-        }
-        issueCountRef.current = issueCount;
-      }
-
-      if (prCountRef.current === undefined) {
-        prCountRef.current = prCount;
-      } else if (prCountRef.current !== prCount) {
-        if (
-          !suppressed &&
-          !prsOpen &&
-          prCountRef.current != null &&
-          prCount != null &&
-          prCount > prCountRef.current
-        ) {
-          setPrAnimKey((k) => k + 1);
-          setPrsPulseAt(Date.now());
-        }
-        prCountRef.current = prCount;
-      }
-
-      if (commitCountRef.current === undefined) {
-        commitCountRef.current = commitCount;
-      } else if (commitCountRef.current !== commitCount) {
-        if (
-          !suppressed &&
-          !commitsOpen &&
-          commitCountRef.current != null &&
-          commitCount != null &&
-          commitCount > commitCountRef.current
-        ) {
-          setCommitAnimKey((k) => k + 1);
-        }
-        commitCountRef.current = commitCount;
-      }
-    });
-
+    // Delta check for the digit-pulse animation and the activity chips. Each
+    // count ref is updated on every fresh stats arrival regardless of
+    // suppression, so a backgrounded tab returning to focus doesn't replay every
+    // poll's worth of accumulated deltas at once. The `=== undefined` branch
+    // handles the initial seed (no pulse on cold launch); the `!== xCount`
+    // branch is the no-op-poll guard so unchanged counts never re-bump.
+    //
+    // Deliberately not a `useEffectEvent`: on React 19.2 an effect event inside
+    // a `memo`/`forwardRef` render keeps its first render's closure
+    // (facebook/react#34818, fixed in 19.3), so it read `stats === null` on
+    // every call and neither the pulse nor the chips ever fired. The dropdown
+    // flags are real dependencies instead; re-running on a toggle is inert
+    // because both branches below key on `lastUpdated` moving.
     useEffect(() => {
+      const checkForCountIncrease = () => {
+        const next = stats;
+        if (!next) return;
+        const suppressed = document.hidden;
+
+        if (issueCountRef.current === undefined) {
+          issueCountRef.current = issueCount;
+        } else if (issueCountRef.current !== issueCount) {
+          if (
+            !suppressed &&
+            !issuesOpen &&
+            issueCountRef.current != null &&
+            issueCount != null &&
+            issueCount > issueCountRef.current
+          ) {
+            setIssueAnimKey((k) => k + 1);
+            setIssuesPulseAt(Date.now());
+          }
+          issueCountRef.current = issueCount;
+        }
+
+        if (prCountRef.current === undefined) {
+          prCountRef.current = prCount;
+        } else if (prCountRef.current !== prCount) {
+          if (
+            !suppressed &&
+            !prsOpen &&
+            prCountRef.current != null &&
+            prCount != null &&
+            prCount > prCountRef.current
+          ) {
+            setPrAnimKey((k) => k + 1);
+            setPrsPulseAt(Date.now());
+          }
+          prCountRef.current = prCount;
+        }
+
+        if (commitCountRef.current === undefined) {
+          commitCountRef.current = commitCount;
+        } else if (commitCountRef.current !== commitCount) {
+          if (
+            !suppressed &&
+            !commitsOpen &&
+            commitCountRef.current != null &&
+            commitCount != null &&
+            commitCount > commitCountRef.current
+          ) {
+            setCommitAnimKey((k) => k + 1);
+          }
+          commitCountRef.current = commitCount;
+        }
+      };
+
       if (statsLoading || statsError) {
         setStatsJustUpdated(false);
         return;
@@ -813,7 +817,18 @@ export const ForgeStatsToolbarButton = memo(
         checkForCountIncrease();
       }
       prevLastUpdatedRef.current = lastUpdated;
-    }, [lastUpdated, statsLoading, statsError]);
+    }, [
+      lastUpdated,
+      statsLoading,
+      statsError,
+      stats,
+      issueCount,
+      prCount,
+      commitCount,
+      issuesOpen,
+      prsOpen,
+      commitsOpen,
+    ]);
 
     const getForgeIndicatorStatus = useCallback((): ForgeStatusIndicatorStatus => {
       if (statsLoading) return "loading";
@@ -857,6 +872,7 @@ export const ForgeStatsToolbarButton = memo(
           // No dropdown view for this provider — route to the forge website,
           // mirroring the pill's own click handling.
           if (!DropdownView) {
+            setIssuesPulseAt(null);
             void actionService.dispatch(
               "forge.openIssues",
               { projectPath: currentProject?.path },
@@ -876,6 +892,7 @@ export const ForgeStatsToolbarButton = memo(
             return;
           }
           if (!DropdownView) {
+            setPrsPulseAt(null);
             void actionService.dispatch(
               "forge.openPRs",
               { projectPath: currentProject?.path },
@@ -899,6 +916,34 @@ export const ForgeStatsToolbarButton = memo(
     // that is about to resolve a forge provider. Once settled, a repo with no
     // provider keeps the commits-only pill — issue/PR segments are forge data
     // and render only in forgeMode.
+    // The trailing status slots are pointer-only tooltip targets, so the same
+    // facts ride on the counters' names and tooltips, which keyboard users do
+    // reach. Tooltips repeat the chip's meaning for the same reason.
+    const forgeStatusNotes = [
+      rateLimitActive && rateLimitCountdown
+        ? rateLimitKind === "secondary"
+          ? `${providerName} secondary rate limit, resuming in ${rateLimitCountdown}`
+          : `${providerName} rate limit, resets in ${rateLimitCountdown}`
+        : null,
+      // The `errored` freshness suffix already says "couldn't refresh".
+      persistentErrorActive && freshnessLevel !== "errored"
+        ? `${providerName} data unavailable`
+        : null,
+    ];
+    const statusSuffix = (notes: Array<string | null>) => {
+      const present = notes.filter((n): n is string => n !== null);
+      return present.length > 0 ? ` · ${present.join(" · ")}` : "";
+    };
+    const issuesStatusSuffix = statusSuffix([
+      showIssuesChip ? "count increased recently" : null,
+      ...forgeStatusNotes,
+    ]);
+    const prsStatusSuffix = statusSuffix([
+      showPrsChip ? "count increased recently" : null,
+      ...forgeStatusNotes,
+      prCircuitTripped ? "PR detection paused" : null,
+    ]);
+
     if (!currentProject || providerLoading) return null;
 
     // Every right-click target in the control owns its menu, the indicators
@@ -929,16 +974,14 @@ export const ForgeStatsToolbarButton = memo(
             ariaLabel={
               isTokenError
                 ? `Configure ${providerName} token to see issues`
-                : `${formatExactCount(issueDisplayCount)} open issues${
-                    showIssuesChip ? " (new since last view)" : ""
-                  }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
+                : `${formatExactCount(issueDisplayCount)} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
             }
             tooltipContent={
               isTokenError
                 ? `Configure ${providerName} token to see issues`
                 : freshnessLevel === "fresh"
-                  ? `Browse ${providerName} issues${exactSuffix(issueDisplayCount, "open")}`
-                  : `${formatExactCount(issueDisplayCount)} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
+                  ? `Browse ${providerName} issues${exactSuffix(issueDisplayCount, "open")}${issuesStatusSuffix}`
+                  : `${formatExactCount(issueDisplayCount)} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
             }
             onContextMenuOpenChange={handleStatsMenuOpenChange}
             contextMenuContent={
@@ -951,7 +994,7 @@ export const ForgeStatsToolbarButton = memo(
             }
             icon={CircleDot}
             iconClassName="text-pr-open"
-            tone={isTokenError ? "unavailable" : stats?.issueCount === 0 ? "quiet" : "default"}
+            tone={isTokenError ? "unavailable" : issueDisplayCount === 0 ? "quiet" : "default"}
             dropdownContent={
               DropdownView && providerId ? (
                 <DropdownView
@@ -984,6 +1027,7 @@ export const ForgeStatsToolbarButton = memo(
               // popover shell.
               if (!DropdownView) {
                 setIssuesOpen(false);
+                setIssuesPulseAt(null);
                 void actionService.dispatch(
                   "forge.openIssues",
                   { projectPath: currentProject.path },
@@ -1030,16 +1074,14 @@ export const ForgeStatsToolbarButton = memo(
             ariaLabel={
               isTokenError
                 ? `Configure ${providerName} token to see pull requests`
-                : `${formatExactCount(prDisplayCount)} open pull requests${
-                    showPrsChip ? " (new since last view)" : ""
-                  }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
+                : `${formatExactCount(prDisplayCount)} open pull requests${freshnessSuffix(freshnessLevel, lastUpdated, now)}${prsStatusSuffix}`
             }
             tooltipContent={
               isTokenError
                 ? `Configure ${providerName} token to see pull requests`
                 : freshnessLevel === "fresh"
-                  ? `Browse ${providerName} pull requests${exactSuffix(prDisplayCount, "open")}`
-                  : `${formatExactCount(prDisplayCount)} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
+                  ? `Browse ${providerName} pull requests${exactSuffix(prDisplayCount, "open")}${prsStatusSuffix}`
+                  : `${formatExactCount(prDisplayCount)} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}${prsStatusSuffix}`
             }
             onContextMenuOpenChange={handleStatsMenuOpenChange}
             contextMenuContent={
@@ -1052,7 +1094,7 @@ export const ForgeStatsToolbarButton = memo(
             }
             icon={GitPullRequest}
             iconClassName="text-pr-merged"
-            tone={isTokenError ? "unavailable" : stats?.prCount === 0 ? "quiet" : "default"}
+            tone={isTokenError ? "unavailable" : prDisplayCount === 0 ? "quiet" : "default"}
             dropdownContent={
               DropdownView && providerId ? (
                 <DropdownView
@@ -1082,6 +1124,7 @@ export const ForgeStatsToolbarButton = memo(
               // Same no-dropdown routing as the issues pill.
               if (!DropdownView) {
                 setPrsOpen(false);
+                setPrsPulseAt(null);
                 void actionService.dispatch(
                   "forge.openPRs",
                   { projectPath: currentProject.path },

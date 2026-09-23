@@ -65,8 +65,12 @@ describe("ForgeStatsToolbarButton digit pulse", () => {
     source = await fs.readFile(TOOLBAR_PATH, "utf-8");
   });
 
-  it("imports useEffectEvent for stale-closure-safe suppression checks", () => {
-    expect(source).toMatch(/import\s*\{[^}]*useEffectEvent[^}]*\}\s*from\s*"react"/);
+  it("does not use useEffectEvent inside this memo/forwardRef component", () => {
+    // React 19.2 keeps an effect event's first-render closure inside memo /
+    // forwardRef (facebook/react#34818), which left the check reading
+    // `stats === null` forever: no pulse, no chips.
+    expect(source).toMatch(/memo\(\s*forwardRef/);
+    expect(source).not.toMatch(/=\s*useEffectEvent\(/);
   });
 
   it("declares per-digit anim counters and per-count refs", () => {
@@ -78,14 +82,17 @@ describe("ForgeStatsToolbarButton digit pulse", () => {
     expect(source).toMatch(/commitCountRef\s*=\s*useRef</);
   });
 
-  it("uses useEffectEvent for the count-increase check", () => {
-    expect(source).toMatch(/checkForCountIncrease\s*=\s*useEffectEvent/);
+  it("runs the count-increase check inside the effect keyed on lastUpdated", () => {
+    const effect = source.slice(source.indexOf("const checkForCountIncrease = () =>"));
+    expect(effect).toMatch(
+      /^const checkForCountIncrease = \(\) =>[\s\S]*?if \(statsLoading \|\| statsError\)/
+    );
   });
 
   it("reads document.hidden and all three open-state values inside the check", () => {
-    const eventStart = source.indexOf("checkForCountIncrease = useEffectEvent");
+    const eventStart = source.indexOf("const checkForCountIncrease = () =>");
     expect(eventStart).toBeGreaterThan(0);
-    const closeBrace = source.indexOf("});", eventStart);
+    const closeBrace = source.indexOf("\n      };\n", eventStart);
     expect(closeBrace).toBeGreaterThan(eventStart);
     const slice = source.slice(eventStart, closeBrace);
     expect(slice).toContain("document.hidden");
@@ -95,8 +102,8 @@ describe("ForgeStatsToolbarButton digit pulse", () => {
   });
 
   it("only pulses on a strict positive delta, never on first mount", () => {
-    const eventStart = source.indexOf("checkForCountIncrease = useEffectEvent");
-    const closeBrace = source.indexOf("});", eventStart);
+    const eventStart = source.indexOf("const checkForCountIncrease = () =>");
+    const closeBrace = source.indexOf("\n      };\n", eventStart);
     const slice = source.slice(eventStart, closeBrace);
     expect(slice).toMatch(/issueCount\s*>\s*issueCountRef\.current/);
     expect(slice).toMatch(/prCount\s*>\s*prCountRef\.current/);
@@ -155,8 +162,8 @@ describe("ForgeStatsToolbarButton corner activity chip wiring", () => {
   });
 
   it("sets pulseAt alongside the digit-pulse increment for issues and PRs only", () => {
-    const eventStart = source.indexOf("checkForCountIncrease = useEffectEvent");
-    const closeBrace = source.indexOf("});", eventStart);
+    const eventStart = source.indexOf("const checkForCountIncrease = () =>");
+    const closeBrace = source.indexOf("\n      };\n", eventStart);
     const slice = source.slice(eventStart, closeBrace);
     expect(slice).toMatch(/setIssueAnimKey\([\s\S]{0,80}?setIssuesPulseAt\(Date\.now\(\)\)/);
     expect(slice).toMatch(/setPrAnimKey\([\s\S]{0,80}?setPrsPulseAt\(Date\.now\(\)\)/);
@@ -260,9 +267,11 @@ describe("ForgeStatsToolbarButton corner activity chip wiring", () => {
     expect(commitsSlice).not.toContain("activityChip=");
   });
 
-  it('folds "new since last view" into the issues + PRs aria-labels', () => {
-    expect(source).toMatch(/showIssuesChip\s*\?\s*" \(new since last view\)"\s*:\s*""/);
-    expect(source).toMatch(/showPrsChip\s*\?\s*" \(new since last view\)"\s*:\s*""/);
+  it("folds the recent-increase cue into the issues + PRs names and tooltips", () => {
+    // The chip is a three-minute recent-increase cue, not unread state.
+    expect(source).toMatch(/showIssuesChip \? "count increased recently"/);
+    expect(source).toMatch(/showPrsChip \? "count increased recently"/);
+    expect(source).not.toContain("new since last view");
   });
 
   it("clears both chip pulses on project switch alongside the count refs", () => {
