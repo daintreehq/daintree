@@ -19,7 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { KbdChord } from "@/components/ui/Kbd";
-import { SkeletonBone } from "@/components/ui/Skeleton";
+import { SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -81,7 +81,7 @@ type PushStatus =
  */
 function describeReadError(error: unknown, fallback: string): string {
   const reason = classifyGitError(error);
-  if (reason === "not-a-repository") return "This folder isn't a Git repository.";
+  if (reason === "not-a-repository") return "This folder isn't a Git repository";
   const hint = reason === "unknown" ? undefined : getGitRecoveryHint(reason);
   if (hint) return hint;
   const cleaned = formatErrorMessage(error, fallback)
@@ -245,11 +245,20 @@ function LocalCommitRow({
       aria-rowindex={rowIndex}
       data-active={isActive ? "true" : undefined}
       {...(hasBody ? { "aria-expanded": isExpanded } : {})}
+      // Keeps DOM focus in the search input so the arrow keys still drive the
+      // list after a click — except inside the body, where the press starts a
+      // text selection.
+      onMouseDown={(e) => {
+        if (!(e.target instanceof Element) || !e.target.closest("pre")) e.preventDefault();
+      }}
       onClick={() => {
         if (hasBody) onToggle(commit.hash);
       }}
       className={cn(
         "forge-row group relative select-none transition-colors duration-150 ease-out",
+        // Nearest-scrolling stops clear of the 32px scroll fades, so the row
+        // under the cursor is never the one being washed out.
+        "scroll-my-8",
         hasBody ? "cursor-pointer" : "cursor-default",
         // The forge rows' neutral ladder: hover is the lightest fill, the
         // keyboard cursor adds a heavier fill plus the leading rail, which is
@@ -267,7 +276,7 @@ function LocalCommitRow({
           <ChevronRight
             aria-hidden="true"
             className={cn(
-              "shrink-0 mt-0.5 size-4 text-text-secondary transition-transform duration-150 ease-[var(--ease-out-expo)] motion-reduce:transition-none",
+              "shrink-0 mt-0.5 size-4 text-text-secondary transition-transform duration-150 ease-out motion-reduce:transition-none",
               isExpanded && "rotate-90"
             )}
           />
@@ -279,10 +288,10 @@ function LocalCommitRow({
         )}
 
         <div className="flex-1 min-w-0">
-          {isExpanded ? (
-            // Expanded, the whole subject is on screen — a body under a
-            // subject that still ends in an ellipsis leaves half the message
-            // unreadable.
+          {isExpanded || isActive ? (
+            // Under the cursor or expanded, the whole subject is on screen:
+            // the tooltip is pointer-only, and a bodyless commit has no
+            // expansion to read it through.
             <p className="text-sm font-medium text-text-primary break-words">{commit.message}</p>
           ) : (
             <Tooltip autoDismiss={false}>
@@ -383,10 +392,18 @@ function PushSummary({ status }: { status: PushStatus }) {
   }
   const { preview } = status;
   const target = `${preview.destination.remote}/${preview.destination.branch}`;
+  // Main caps the returned rows; past the cap the rows below go unmarked, and
+  // the footer has to say so rather than let the boundary pass for the remote's.
+  const capped = preview.total > status.hashes.size && preview.rangeBasis !== "unverified";
   if (preview.rangeBasis === "creates") {
     return (
-      <span className="truncate">
-        <span className="font-medium text-text-primary">{target}</span> doesn't exist yet
+      <span className="inline-flex min-w-0 items-center gap-1">
+        <ArrowUp aria-hidden="true" className="size-3 shrink-0 text-text-primary" />
+        <span className="truncate">
+          <span className="font-medium text-text-primary">{preview.total} not pushed</span>
+          {" · "}
+          {target} doesn't exist yet{capped ? ` · newest ${status.hashes.size} marked` : ""}
+        </span>
       </span>
     );
   }
@@ -402,6 +419,7 @@ function PushSummary({ status }: { status: PushStatus }) {
       <span className="truncate">
         <span className="font-medium text-text-primary">{preview.total} not pushed</span> to{" "}
         {target}
+        {capped ? ` · newest ${status.hashes.size} marked` : ""}
       </span>
     </span>
   );
@@ -425,6 +443,7 @@ export function LocalCommitsDropdown({
   const [cursorIndex, setCursorIndex] = useState(-1);
   const [expandedHashes, setExpandedHashes] = useState<Set<string>>(() => new Set());
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
+  const [copyFailed, setCopyFailed] = useState(false);
   const [pushStatus, setPushStatus] = useState<PushStatus>({ kind: "idle" });
   const inputRef = useRef<HTMLInputElement>(null);
   const copyTimeoutRef = useRef<number | undefined>(undefined);
@@ -470,14 +489,25 @@ export function LocalCommitsDropdown({
   }, []);
 
   const copyHash = useCallback((commit: GitCommit) => {
-    if (!navigator.clipboard) return;
+    const settle = (copied: boolean) => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      setCopiedHash(copied ? commit.hash : null);
+      setCopyFailed(!copied);
+      copyTimeoutRef.current = window.setTimeout(() => {
+        setCopiedHash(null);
+        setCopyFailed(false);
+      }, COPY_FEEDBACK_MS);
+    };
+    if (!navigator.clipboard) {
+      settle(false);
+      return;
+    }
     navigator.clipboard.writeText(commit.hash).then(
-      () => {
-        if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-        setCopiedHash(commit.hash);
-        copyTimeoutRef.current = window.setTimeout(() => setCopiedHash(null), COPY_FEEDBACK_MS);
-      },
-      (err: unknown) => logError("Failed to copy commit hash", err)
+      () => settle(true),
+      (err: unknown) => {
+        logError("Failed to copy commit hash", err);
+        settle(false);
+      }
     );
   }, []);
 
@@ -615,11 +645,11 @@ export function LocalCommitsDropdown({
     }
   }, [hasMore, fetchData, skip]);
 
-  const handleRetry = () => {
+  const handleRetry = useCallback(() => {
     setSkip(0);
     void fetchData(0, false);
     inputRef.current?.focus();
-  };
+  }, [fetchData]);
 
   const handleClearSearch = () => {
     setSearchQuery("");
@@ -650,7 +680,9 @@ export function LocalCommitsDropdown({
         case "Enter": {
           e.preventDefault();
           e.stopPropagation();
-          if (isLoadMoreActive) {
+          if (error && !data.length) {
+            handleRetry();
+          } else if (isLoadMoreActive) {
             handleLoadMore();
           } else if (activeCommit) {
             if (!e.shiftKey && activeCommit.body?.trim()) {
@@ -669,6 +701,9 @@ export function LocalCommitsDropdown({
       }
     },
     [
+      error,
+      data.length,
+      handleRetry,
       maxCursor,
       isLoadMoreActive,
       activeCommit,
@@ -680,7 +715,10 @@ export function LocalCommitsDropdown({
   );
 
   const trimmedSearch = debouncedSearch.trim();
-  const showSkeleton = loading && !data.length && initialCount !== 0;
+  const showSkeleton = loading && !data.length;
+  // The branch-level line waits for the list it describes, and stands down
+  // when the history read failed with nothing to show.
+  const showPushSummary = !loading && data.length > 0;
 
   const renderEmpty = () =>
     trimmedSearch ? (
@@ -688,7 +726,7 @@ export function LocalCommitsDropdown({
         variant="filtered-empty"
         scale="canvas"
         title={`No commits match “${trimmedSearch}”`}
-        description="Search matches commit messages and hashes."
+        description="Search matches commit messages and hashes"
         action={
           <Button variant="ghost" size="sm" onClick={handleClearSearch}>
             Clear search
@@ -702,7 +740,7 @@ export function LocalCommitsDropdown({
         scale="canvas"
         icon={<GitCommitHorizontal />}
         title="No commits on this branch yet"
-        description="Commit your first change and its history starts here."
+        description="Commit a change and it shows up here"
         className="flex-1 justify-center"
       />
     );
@@ -758,6 +796,24 @@ export function LocalCommitsDropdown({
         </div>
       </div>
 
+      {/* Outside the grid, whose aria-busy would hold the announcement back.
+          Errors are alerts of their own, so they stay out of here. */}
+      <span role="status" aria-live="polite" className="sr-only">
+        {loading
+          ? "Loading commits…"
+          : copyFailed
+            ? "Couldn't copy hash"
+            : copiedHash
+              ? "Hash copied"
+              : !error && data.length === 0
+                ? trimmedSearch
+                  ? "No matching commits"
+                  : "No commits"
+                : loadingMore
+                  ? "Loading more commits…"
+                  : ""}
+      </span>
+
       {/* The combobox points `aria-controls` here, so it exists in every state
           — loading, empty and failed included. */}
       <div
@@ -768,22 +824,15 @@ export function LocalCommitsDropdown({
         aria-rowcount={hasMore ? -1 : data.length}
         className="flex-1 min-h-0 flex flex-col relative"
       >
-        {/* Errors are alerts of their own, so they stay out of here. */}
-        <span role="status" aria-live="polite" className="sr-only">
-          {loading
-            ? "Loading commits…"
-            : !error && data.length === 0
-              ? trimmedSearch
-                ? "No matching commits"
-                : "No commits"
-              : copiedHash
-                ? "Hash copied"
-                : ""}
-        </span>
-
         {showSkeleton ? (
-          <div className="overflow-hidden flex-1 min-h-0">
+          <div className="overflow-hidden flex-1 min-h-0 flex flex-col">
             <LocalCommitsSkeleton count={initialCount} />
+            <SkeletonHint
+              firstThreshold={UI_STILL_WORKING_MS}
+              message="Still working…"
+              onRetry={handleRetry}
+              className="px-3 py-2"
+            />
           </div>
         ) : data.length > 0 ? (
           <div className="flex-1 min-h-0 flex flex-col">
@@ -793,7 +842,9 @@ export function LocalCommitsDropdown({
                 className="px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-text-secondary bg-overlay-soft shrink-0"
               >
                 <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                <span className="text-xs truncate">Couldn't refresh commits. {error}</span>
+                <span className="text-xs truncate">
+                  Couldn&apos;t refresh commits &middot; {error}
+                </span>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -831,7 +882,16 @@ export function LocalCommitsDropdown({
                       id={LOAD_MORE_ID}
                       role="row"
                       aria-rowindex={loadMoreRowIndex}
-                      className="border-t border-[var(--border-divider)] p-2"
+                      data-active={isLoadMoreActive ? "true" : undefined}
+                      className={cn(
+                        "forge-row relative scroll-my-8 border-t border-[var(--border-divider)] p-2",
+                        // The same rail as a commit row: the fill alone can't
+                        // carry 3:1, and this is where the cursor lands last.
+                        "before:absolute before:inset-y-1.5 before:-start-px before:w-[3px] before:rounded-full",
+                        "before:bg-selection-outline before:opacity-0 before:transition-opacity before:duration-150",
+                        "before:content-[''] before:pointer-events-none",
+                        isLoadMoreActive && "before:opacity-100"
+                      )}
                     >
                       <div role="gridcell">
                         {loadMoreError ? (
@@ -842,7 +902,7 @@ export function LocalCommitsDropdown({
                               aria-hidden="true"
                             />
                             <p role="alert" className="flex-1 min-w-0 text-xs text-text-secondary">
-                              Couldn't load more commits. {loadMoreError}
+                              Couldn&apos;t load more commits &middot; {loadMoreError}
                             </p>
                             <Button
                               variant="ghost"
@@ -914,17 +974,19 @@ export function LocalCommitsDropdown({
 
       <div className="px-3 h-9 border-t border-[var(--border-divider)] flex items-center gap-3 shrink-0 text-xs text-text-secondary">
         <div className="flex-1 min-w-0 flex items-center">
-          <PushSummary status={pushStatus} />
+          {showPushSummary && <PushSummary status={pushStatus} />}
         </div>
-        {activeCommit && (
+        {copyFailed ? (
+          <span className="shrink-0 whitespace-nowrap">Couldn&apos;t copy hash</span>
+        ) : activeCommit ? (
           <span
             className="shrink-0 inline-flex items-center gap-1.5 whitespace-nowrap"
             aria-hidden="true"
           >
-            <KbdChord shortcut="Shift+Enter" density="compact" />
+            <KbdChord shortcut="Shift+Enter" />
             Copy hash
           </span>
-        )}
+        ) : null}
       </div>
     </div>
   );

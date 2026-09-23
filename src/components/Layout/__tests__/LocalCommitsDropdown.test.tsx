@@ -329,6 +329,30 @@ describe("LocalCommitsDropdown push status", () => {
     );
   });
 
+  it("says how many rows it marked when the range is longer than the read", async () => {
+    listCommitsMock.mockResolvedValue(makeResponse([makeCommit(1)]));
+    listPushCommitsMock.mockResolvedValue({ ...pushPreview(["hash-1"]), total: 140 });
+
+    const { findByText } = render(
+      <LocalCommitsDropdown cwd="/repo" branch="main" open initialCount={1} />
+    );
+
+    expect(await findByText(/newest 1 marked/)).toBeTruthy();
+  });
+
+  it("says nothing about the remote while the history read has failed", async () => {
+    listCommitsMock.mockRejectedValue(new Error("git went away"));
+    listPushCommitsMock.mockResolvedValue(pushPreview([]));
+
+    const { findByText, queryByText } = render(
+      <LocalCommitsDropdown cwd="/repo" branch="main" open initialCount={1} />
+    );
+    await findByText("git went away");
+    await waitFor(() => expect(listPushCommitsMock).toHaveBeenCalled());
+
+    expect(queryByText(/Nothing to push/)).toBeNull();
+  });
+
   it("does not read push status without a branch", async () => {
     listCommitsMock.mockResolvedValue(makeResponse([makeCommit(1)]));
 
@@ -384,6 +408,58 @@ describe("LocalCommitsDropdown grid semantics", () => {
     const target = document.getElementById(id!);
     expect(target?.getAttribute("role")).toBe("row");
     expect(target?.textContent).toContain("Load more");
+  });
+
+  it("marks whatever aria-activedescendant points at as the cursor row", async () => {
+    const firstPage = Array.from({ length: 3 }, (_, i) => makeCommit(i));
+    listCommitsMock.mockResolvedValueOnce(makeResponse(firstPage, { hasMore: true, total: 9 }));
+
+    const { getByRole, findByText } = render(
+      <LocalCommitsDropdown cwd="/repo" open initialCount={9} />
+    );
+    await findByText("Load more");
+
+    const input = getByRole("combobox");
+    for (let i = 0; i < 4; i++) {
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      const id = input.getAttribute("aria-activedescendant");
+      const marked = document.querySelectorAll('#local-commit-list [data-active="true"]');
+      expect(marked).toHaveLength(1);
+      expect(marked[0]?.id).toBe(id);
+    }
+  });
+
+  it("retries a failed read with Enter from the search field", async () => {
+    listCommitsMock.mockRejectedValueOnce(new Error("git went away"));
+    listCommitsMock.mockResolvedValueOnce(makeResponse([makeCommit(1)]));
+
+    const { getByRole, findByText, findAllByText } = render(
+      <LocalCommitsDropdown cwd="/repo" open initialCount={1} />
+    );
+    await findByText("git went away");
+
+    fireEvent.keyDown(getByRole("combobox"), { key: "Enter" });
+
+    expect((await findAllByText("commit message 1")).length).toBeGreaterThan(0);
+  });
+
+  it("says so when the hash could not be copied", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+      configurable: true,
+    });
+    listCommitsMock.mockResolvedValue(makeResponse([makeCommit(1)]));
+
+    const { getByRole, findAllByText } = render(
+      <LocalCommitsDropdown cwd="/repo" open initialCount={1} />
+    );
+    await findAllByText("commit message 1");
+
+    const input = getByRole("combobox");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+
+    expect((await findAllByText("Couldn't copy hash")).length).toBeGreaterThan(0);
   });
 
   it("copies the active commit's hash with Shift+Enter even when it has a body", async () => {

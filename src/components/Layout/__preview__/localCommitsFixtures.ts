@@ -135,13 +135,13 @@ export const COMMITS_FIXTURES: Record<string, CommitsFixture> = {
     what: "no remote to push to — push status unknown",
     commits: FEW,
     commitCount: 5,
-    push: { error: "No remote configured for branch 'develop'" },
+    push: { error: "fatal: no push destination configured for branch 'develop'" },
   },
   empty: {
     what: "a repository with no commits yet",
     commits: [],
     commitCount: 0,
-    push: { error: "No remote configured for branch 'develop'" },
+    push: { error: "fatal: no push destination configured for branch 'develop'" },
   },
   loading: {
     what: "the history read has not answered",
