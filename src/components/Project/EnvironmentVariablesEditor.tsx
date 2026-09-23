@@ -205,7 +205,7 @@ export function EnvironmentVariablesEditor({
                   key={`global-${key}`}
                   className={cn(
                     ENV_ROW_GRID,
-                    "grid-cols-[minmax(0,2fr)_auto_minmax(0,3fr)_5.5rem] px-4 py-2.5 text-sm font-mono"
+                    "grid-cols-[minmax(0,2fr)_auto_minmax(0,3fr)_5.5rem] items-baseline px-4 py-2.5 text-sm font-mono"
                   )}
                 >
                   <span

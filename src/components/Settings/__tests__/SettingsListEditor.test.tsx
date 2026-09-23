@@ -26,7 +26,7 @@ function Harness({ initial, row = false }: { initial: string[]; row?: boolean })
   );
 }
 
-const fields = () => screen.queryAllByRole("textbox") as HTMLInputElement[];
+const fields = () => screen.queryAllByRole<HTMLInputElement>("textbox");
 
 describe("SettingsListEditor focus recovery", () => {
   it.each([false, true])("puts the caret in a new item after Add (row=%s)", async (row) => {

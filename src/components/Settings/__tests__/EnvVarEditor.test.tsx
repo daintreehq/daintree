@@ -154,6 +154,23 @@ describe("EnvVarEditor", () => {
     }
   });
 
+  it("holds the commit and explains the rule when a name can't be exported", () => {
+    const { getAllByTestId, getByTestId, getByRole } = renderEditor({ FOO: "a" });
+    const keyInput = getAllByTestId("env-editor-key")[0]!;
+    onChange.mockClear();
+
+    fireEvent.change(keyInput, { target: { value: "2FOO" } });
+    fireEvent.blur(keyInput);
+
+    const message = getByTestId("env-editor-error-invalid");
+    expect(message.textContent).toMatch(/start with a letter or underscore/i);
+    expect(keyInput.getAttribute("aria-describedby")).toBe(message.id);
+    expect(getByRole("status").textContent).toMatch(/aren't saved/i);
+    for (const [committed] of onChange.mock.calls) {
+      expect(Object.keys(committed)).not.toContain("2FOO");
+    }
+  });
+
   it("entering a duplicate key flags both rows and holds the commit", () => {
     const { getAllByTestId, getAllByText } = renderEditor({ FOO: "a", BAR: "b" });
     const keyInputs = getAllByTestId("env-editor-key") as HTMLInputElement[];

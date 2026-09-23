@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsListGroup, SettingsListRow } from "@/components/Settings/SettingsListEditor";
+import { useNumberDraft } from "@/components/Settings/useNumberDraft";
 import { SettingsInput } from "@/components/Settings/SettingsInput";
 import { SettingsSelect } from "@/components/Settings/SettingsSelect";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -156,6 +157,22 @@ export function ContextTab({
   // result onto a closed/superseded tab.
   const runIdRef = useRef(0);
 
+  const maxContextDraft = useNumberDraft(
+    bytesToMbInput(copyTreeSettings.maxContextSize),
+    parseMbToBytes,
+    (maxContextSize) => setCopyTree({ maxContextSize })
+  );
+  const maxFileDraft = useNumberDraft(
+    bytesToMbInput(copyTreeSettings.maxFileSize),
+    parseMbToBytes,
+    (maxFileSize) => setCopyTree({ maxFileSize })
+  );
+  const charLimitDraft = useNumberDraft(
+    copyTreeSettings.charLimit === undefined ? "" : String(copyTreeSettings.charLimit),
+    parsePositiveInt,
+    (charLimit) => setCopyTree({ charLimit })
+  );
+
   useEffect(() => {
     if (!isOpen) {
       runIdRef.current++;
@@ -260,10 +277,14 @@ export function ContextTab({
             description="Total size of all included files · Default: 100 MB"
             controlWidth="numberWithUnit"
             suffix="MB"
-            value={bytesToMbInput(copyTreeSettings.maxContextSize)}
-            onChange={(e) => setCopyTree({ maxContextSize: parseMbToBytes(e.target.value) })}
+            value={maxContextDraft.value}
+            onChange={maxContextDraft.onChange}
+            error={maxContextDraft.invalid ? "Enter a size above 0 MB" : undefined}
             isModified={copyTreeSettings.maxContextSize !== undefined}
-            onReset={() => setCopyTree({ maxContextSize: undefined })}
+            onReset={() => {
+              maxContextDraft.clear();
+              setCopyTree({ maxContextSize: undefined });
+            }}
             min={1}
             placeholder="Default"
             className="font-mono"
@@ -274,10 +295,14 @@ export function ContextTab({
             description="Files larger than this are skipped · Default: 10 MB"
             controlWidth="numberWithUnit"
             suffix="MB"
-            value={bytesToMbInput(copyTreeSettings.maxFileSize)}
-            onChange={(e) => setCopyTree({ maxFileSize: parseMbToBytes(e.target.value) })}
+            value={maxFileDraft.value}
+            onChange={maxFileDraft.onChange}
+            error={maxFileDraft.invalid ? "Enter a size above 0 MB" : undefined}
             isModified={copyTreeSettings.maxFileSize !== undefined}
-            onReset={() => setCopyTree({ maxFileSize: undefined })}
+            onReset={() => {
+              maxFileDraft.clear();
+              setCopyTree({ maxFileSize: undefined });
+            }}
             min={1}
             placeholder="Default"
             className="font-mono"
@@ -288,10 +313,14 @@ export function ContextTab({
             description="Total characters across all files · Default: no limit"
             controlWidth="numberWithUnit"
             suffix="chars"
-            value={copyTreeSettings.charLimit ?? ""}
-            onChange={(e) => setCopyTree({ charLimit: parsePositiveInt(e.target.value) })}
+            value={charLimitDraft.value}
+            onChange={charLimitDraft.onChange}
+            error={charLimitDraft.invalid ? "Enter a whole number above 0" : undefined}
             isModified={copyTreeSettings.charLimit !== undefined}
-            onReset={() => setCopyTree({ charLimit: undefined })}
+            onReset={() => {
+              charLimitDraft.clear();
+              setCopyTree({ charLimit: undefined });
+            }}
             min={1}
             placeholder="Default"
             className="font-mono"

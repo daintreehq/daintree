@@ -481,6 +481,7 @@ export function AutomationTab({
           />
           <SettingsInput
             label="Default working directory"
+            description="Default: the worktree root"
             {...overrideInputProps(
               terminalDefaultCwd,
               onTerminalDefaultCwdChange,

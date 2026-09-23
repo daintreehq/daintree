@@ -91,7 +91,7 @@ describe("EnvVarRow", () => {
 
   it("masks a sensitive value until it is revealed", () => {
     const { rerender } = renderRow({ sensitive: true });
-    const value = screen.getByLabelText("Environment variable value") as HTMLInputElement;
+    const value = screen.getByLabelText<HTMLInputElement>("Environment variable value");
     expect(value.type).toBe("password");
     rerender(
       <EnvVarRow
@@ -105,8 +105,6 @@ describe("EnvVarRow", () => {
         onDelete={noop}
       />
     );
-    expect((screen.getByLabelText("Environment variable value") as HTMLInputElement).type).toBe(
-      "text"
-    );
+    expect(screen.getByLabelText<HTMLInputElement>("Environment variable value").type).toBe("text");
   });
 });

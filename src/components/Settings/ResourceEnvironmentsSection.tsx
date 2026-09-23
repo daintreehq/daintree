@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import {
   Plus,
   Trash2,
@@ -150,6 +150,16 @@ export function ResourceEnvironmentsSection({
   const [newEnvironmentName, setNewEnvironmentName] = useState("");
   const [addEnvironmentError, setAddEnvironmentError] = useState<string | null>(null);
   const [pendingDeleteEnvironment, setPendingDeleteEnvironment] = useState<string | null>(null);
+  // The inline add form unmounts the focused field when it closes, so say where
+  // focus goes: the selector showing the new environment, or back to Add.
+  const [returnFocus, setReturnFocus] = useState<"selector" | "add" | null>(null);
+  const selectorRef = useRef<HTMLButtonElement>(null);
+  const addButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!returnFocus) return;
+    (returnFocus === "selector" ? selectorRef : addButtonRef).current?.focus();
+    setReturnFocus(null);
+  }, [returnFocus]);
 
   const [selectedEnvName, setSelectedEnvName] = useState<string>(() => {
     if (activeResourceEnvironment && envKeys.includes(activeResourceEnvironment)) {
@@ -207,6 +217,7 @@ export function ResourceEnvironmentsSection({
     setIsAddingEnvironment(false);
     setNewEnvironmentName("");
     setAddEnvironmentError(null);
+    setReturnFocus("selector");
   };
 
   const handleRemoveEnv = (name: string) => {
@@ -228,6 +239,7 @@ export function ResourceEnvironmentsSection({
   };
 
   const cancelAddForm = () => {
+    setReturnFocus("add");
     setIsAddingEnvironment(false);
     setNewEnvironmentName("");
     setAddEnvironmentError(null);
@@ -240,7 +252,13 @@ export function ResourceEnvironmentsSection({
       description="Run worktrees somewhere other than this machine — a container, a VM, a remote host"
       action={
         envKeys.length > 0 && !isAddingEnvironment ? (
-          <Button type="button" variant="outline" size="sm" onClick={openAddForm}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={openAddForm}
+            ref={addButtonRef}
+          >
             <Plus />
             Add environment
           </Button>
@@ -251,7 +269,13 @@ export function ResourceEnvironmentsSection({
         {envKeys.length === 0 && !isAddingEnvironment && (
           <SettingsEmptyRow
             action={
-              <Button type="button" variant="outline" size="sm" onClick={openAddForm}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={openAddForm}
+                ref={addButtonRef}
+              >
                 <Plus />
                 Add environment
               </Button>
@@ -269,6 +293,7 @@ export function ResourceEnvironmentsSection({
               <div data-testid="environment-selector-bar" className="flex items-center gap-2">
                 <Select value={currentEnvName} onValueChange={handleSelectEnv}>
                   <SelectTrigger
+                    ref={selectorRef}
                     aria-labelledby={labelId}
                     aria-describedby={descriptionId}
                     className={cn(SETTINGS_CONTROL_WIDTH.select, "font-mono")}
@@ -452,7 +477,7 @@ export function ResourceEnvironmentsSection({
         <SettingsGroup className="checkbox-neutral">
           <SettingsRow
             label="Default worktree mode"
-            description="Default mode when creating new worktrees"
+            description="Where new worktrees run unless you choose otherwise when creating one"
             layout="stacked"
             control={({ labelId }) => (
               <div

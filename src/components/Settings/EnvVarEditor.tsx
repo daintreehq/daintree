@@ -16,6 +16,7 @@ import { isSensitiveEnvKey } from "../../../shared/utils/envVars";
 import { ImportEnvDialog } from "./ImportEnvDialog";
 import { Button } from "@/components/ui/button";
 import { useRowFocus } from "./useRowFocus";
+import { ENV_KEY_DUPLICATE_MESSAGE, ENV_KEY_INVALID_MESSAGE, isValidEnvKey } from "./EnvVarRow";
 
 /**
  * Inline env var CRUD editor with validation and optional inheritance.
@@ -173,6 +174,7 @@ function isValid(rows: DraftRow[]): boolean {
     if (row.isInherited) continue;
     const k = row.key.trim();
     if (!k) return false;
+    if (!isValidEnvKey(k)) return false;
     if (seen.has(k)) return false;
     seen.add(k);
   }
@@ -191,6 +193,8 @@ interface EnvVarKeyCellProps {
   disabled: boolean;
   isEmptyKey: boolean;
   isDuplicate: boolean;
+  /** The name is present but not something a shell can export. */
+  isMalformed: boolean;
   onChange: (rowId: string, newKey: string) => void;
   onBlur: (rowId: string) => void;
   /**
@@ -223,6 +227,7 @@ function EnvVarKeyCell({
   disabled,
   isEmptyKey,
   isDuplicate,
+  isMalformed,
   onChange,
   onBlur,
   onSelect,
@@ -233,7 +238,7 @@ function EnvVarKeyCell({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listboxId = `env-key-suggestions-${rowId}`;
   const messageId = `env-key-message-${rowId}`;
-  const hasError = isEmptyKey || isDuplicate;
+  const hasError = isEmptyKey || isDuplicate || isMalformed;
 
   const trimmedValue = value.trim();
   const availableSuggestions = useMemo(() => {
@@ -387,9 +392,19 @@ function EnvVarKeyCell({
         <p
           id={messageId}
           className="px-2.5 pb-2 text-xs text-status-error"
-          data-testid={isEmptyKey ? "env-editor-error-empty" : "env-editor-error-duplicate"}
+          data-testid={
+            isEmptyKey
+              ? "env-editor-error-empty"
+              : isMalformed
+                ? "env-editor-error-invalid"
+                : "env-editor-error-duplicate"
+          }
         >
-          {isEmptyKey ? "Enter a name" : "Another variable already uses this name"}
+          {isEmptyKey
+            ? "Enter a name"
+            : isMalformed
+              ? ENV_KEY_INVALID_MESSAGE
+              : ENV_KEY_DUPLICATE_MESSAGE}
         </p>
       )}
     </div>
@@ -720,7 +735,12 @@ export function EnvVarEditor({
   // also means nothing typed since is being saved — say so where it is seen.
   const hasBlockingError =
     duplicateKeys.size > 0 ||
-    rows.some((r) => !r.isInherited && touchedKeys[r.rowId] && r.key.trim() === "");
+    rows.some(
+      (r) =>
+        !r.isInherited &&
+        ((touchedKeys[r.rowId] && r.key.trim() === "") ||
+          (r.key.trim() !== "" && !isValidEnvKey(r.key.trim())))
+    );
 
   const addButton = (
     <Button
@@ -790,6 +810,7 @@ export function EnvVarEditor({
           const isEmptyKey = !row.isInherited && touched && trimmedKey === "";
           const isDuplicate =
             !row.isInherited && trimmedKey !== "" && duplicateKeys.has(trimmedKey);
+          const isMalformed = !row.isInherited && trimmedKey !== "" && !isValidEnvKey(trimmedKey);
           const hasSecretWarning = !row.isInherited && looksLikeSecret(row.value);
           const isSecret = !row.isInherited && (isSensitiveEnvKey(row.key) || hasSecretWarning);
           const isRevealed = revealedRows.has(row.rowId);
@@ -835,6 +856,7 @@ export function EnvVarEditor({
                 disabled={row.isInherited}
                 isEmptyKey={isEmptyKey}
                 isDuplicate={isDuplicate}
+                isMalformed={isMalformed}
                 onChange={handleKeyChange}
                 onBlur={handleKeyBlur}
                 onSelect={handleKeySelect}
@@ -926,7 +948,7 @@ export function EnvVarEditor({
                 )}
               </div>
               {/* Actions cell — remove / revert / override by row kind. */}
-              <div className="flex items-center justify-center w-9 border-l border-border-subtle">
+              <div className="flex items-start justify-center w-9 pt-1.5 border-l border-border-subtle">
                 {row.isInherited ? (
                   <button
                     type="button"
@@ -970,8 +992,8 @@ export function EnvVarEditor({
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2 px-2.5 py-2 border-t border-border-default bg-overlay-subtle">
         {hasBlockingError && (
-          <p className="mr-auto text-xs text-status-error" role="status">
-            Changes aren't saved until every variable has a unique name
+          <p className="w-full text-xs text-status-error" role="status">
+            Changes aren't saved until every name is valid and unique
           </p>
         )}
         {addButton}

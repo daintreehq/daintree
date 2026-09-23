@@ -231,7 +231,7 @@ export function RecipesTab({
                   </p>
                   <Button
                     variant="outline"
-                    size="xs"
+                    size="sm"
                     onClick={() => onDefaultWorktreeRecipeIdChange(undefined)}
                     className="mt-2"
                   >
@@ -448,7 +448,7 @@ export function RecipesTab({
 
         <AppDialog.Body>
           <p id={importLabelId} className="text-sm text-text-secondary mb-4">
-            Paste the JSON configuration for the recipe you want to import.
+            Paste the JSON configuration for the recipe you want to import
           </p>
           <Textarea
             value={importJson}

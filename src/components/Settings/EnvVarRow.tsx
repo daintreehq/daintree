@@ -20,6 +20,11 @@ export interface EnvVarDraft {
 
 const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+/** A name a POSIX shell can export. */
+export function isValidEnvKey(key: string): boolean {
+  return ENV_KEY_PATTERN.test(key);
+}
+
 export const ENV_KEY_INVALID_MESSAGE =
   "Start with a letter or underscore, then use only letters, digits and underscores";
 export const ENV_KEY_DUPLICATE_MESSAGE = "Another variable already uses this name";
@@ -35,7 +40,7 @@ export function validateEnvRows(rows: readonly EnvVarDraft[]): Record<string, st
   for (const row of rows) {
     const key = row.key.trim();
     if (!key) continue;
-    if (!ENV_KEY_PATTERN.test(key)) errors[row.id] = ENV_KEY_INVALID_MESSAGE;
+    if (!isValidEnvKey(key)) errors[row.id] = ENV_KEY_INVALID_MESSAGE;
     else if (seen.has(key)) errors[row.id] = ENV_KEY_DUPLICATE_MESSAGE;
     seen.add(key);
   }

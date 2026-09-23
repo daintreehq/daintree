@@ -40,7 +40,7 @@ Every settings page, global or project, is built from one grammar. Per-page desi
 - **Descriptive exclusive choice**: a group of radio rows (`RadioChoice` bare rows, or `SettingsChoicebox`). One radio contract everywhere.
 - **Explicit save**: `SettingsActions` as the group's last row — `contrast` Save, `outline` secondary actions, all `size="sm"`, Save disabled while nothing is dirty, status on the left.
 - **Empty collection**: `SettingsEmptyRow` inside the group that will hold the items — the next step in words plus the add action.
-- **Row actions**: `outline` `size="sm"` on the rail. When more than one action, or one long one, would squeeze the label column, make the row `stacked` and put the actions in a wrapping row under the description instead. **Destructive**: `ghost-danger` `size="sm"`, last in its group or page.
+- **Row actions**: `outline` `size="sm"` on the rail. Icon-only controls repeated on every item of a list (reorder, edit, export) are `ghost` `size="icon-sm"`, with delete as `ghost-danger` `Trash2` last — outlining each would put a border on every row. When more than one action, or one long one, would squeeze the label column, make the row `stacked` and put the actions in a wrapping row under the description instead. **Destructive**: `ghost-danger` `size="sm"`, last in its group or page.
 - **Units**: pass `suffix` to `SettingsNumberInput`; it sits inside the field so the rail stays aligned. Say the unit in the label or description too.
 - **Custom controls** in a `SettingsRow` take `labelId`, `descriptionId` (already the full described-by list: error, description, disabled reason) and `disabled` from the `control` render-prop — never ignore `disabled`.
 

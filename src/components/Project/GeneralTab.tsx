@@ -10,6 +10,7 @@ import type { ChoiceboxOption } from "@/components/Settings/SettingsChoicebox";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
+import { useNumberDraft } from "@/components/Settings/useNumberDraft";
 import { getProjectGradient, isValidHexColor } from "@/lib/colorUtils";
 import { cn } from "@/lib/utils";
 import { sanitizeSvg, svgToDataUrl } from "@/lib/svg";
@@ -143,6 +144,15 @@ export function GeneralTab({
   const [inRepoError, setInRepoError] = useState<string | null>(null);
   const [gitignoreCopied, setGitignoreCopied] = useState(false);
   const gitignoreCopyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const loadTimeoutDraft = useNumberDraft(
+    devServerLoadTimeout === undefined ? "" : String(devServerLoadTimeout),
+    (raw) => {
+      const seconds = Number(raw);
+      return Number.isInteger(seconds) && seconds >= 1 && seconds <= 120 ? seconds : undefined;
+    },
+    onDevServerLoadTimeoutChange
+  );
 
   const allDetectedRunners = useProjectSettingsStore((s) => s.allDetectedRunners);
   const openRelocation = useProjectRelocationStore((s) => s.open);
@@ -661,22 +671,18 @@ export function GeneralTab({
           />
           <SettingsNumberInput
             label="Load timeout"
-            description="How long to wait for the server to respond · Default: 30 seconds"
+            description="How long to wait for the server to respond, 1–120 seconds · Default: 30"
             suffix="s"
             min={1}
             max={120}
-            value={devServerLoadTimeout ?? ""}
+            value={loadTimeoutDraft.value}
+            error={loadTimeoutDraft.invalid ? "Enter a whole number from 1 to 120" : undefined}
             isModified={devServerLoadTimeout !== undefined}
-            onReset={() => onDevServerLoadTimeoutChange(undefined)}
-            onChange={(e) => {
-              const raw = e.target.value;
-              if (raw === "") {
-                onDevServerLoadTimeoutChange(undefined);
-              } else {
-                const num = Math.max(1, Math.min(120, Math.round(Number(raw))));
-                onDevServerLoadTimeoutChange(num);
-              }
+            onReset={() => {
+              loadTimeoutDraft.clear();
+              onDevServerLoadTimeoutChange(undefined);
             }}
+            onChange={loadTimeoutDraft.onChange}
             placeholder="30"
           />
           <SettingsSwitchCard
@@ -725,7 +731,7 @@ export function GeneralTab({
         <SettingsGroup>
           <SettingsSwitchCard
             title="Keep workspace resident"
-            subtitle="Keeps this project loaded so an agent's MCP session can always reach it. Other projects unload first when the cache is full; low memory can still unload this one."
+            subtitle="Prefers keeping this project loaded so an agent's MCP session stays reachable. Other projects unload first when the cache is full, though low memory can still unload this one."
             isEnabled={keepResident}
             onChange={() => void handleKeepResidentToggle()}
             disabled={keepResidentBusy}
