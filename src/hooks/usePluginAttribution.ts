@@ -15,6 +15,18 @@ export interface PluginAttribution {
 }
 
 /**
+ * A plugin's name for copy, outside React: its display name, else its manifest
+ * id — never the instance key, which for a project plugin carries a
+ * machine-local project id (#12211).
+ */
+export function resolvePluginName(instanceKey: string): string {
+  return (
+    usePluginRuntimeStore.getState().pluginMetaById.get(instanceKey)?.displayName ??
+    pluginManifestIdFromInstanceKey(instanceKey)
+  );
+}
+
+/**
  * Who is asking, for a prompt a plugin raised. `instanceKey` is the host's
  * plugin instance key, which for a project plugin is
  * `project__{projectId}__{manifestId}` — a machine-local id that must never

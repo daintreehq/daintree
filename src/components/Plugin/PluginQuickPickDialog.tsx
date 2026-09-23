@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { checkboxVariants } from "@/components/ui/checkbox";
 import { isMac } from "@/lib/platform";
 import { PluginProvenance } from "./PluginProvenance";
-import { usePluginAttribution } from "./usePluginAttribution";
+import { usePluginAttribution } from "@/hooks/usePluginAttribution";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { usePluginPromptStore } from "@/store/pluginPromptStore";

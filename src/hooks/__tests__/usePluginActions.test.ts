@@ -320,6 +320,31 @@ describe("usePluginActions", () => {
     );
   });
 
+  it("names a project plugin by its display name in the failure toast, never its instance key", async () => {
+    const { actionService } = await import("@/services/ActionService");
+    const { usePluginActions } = await import("../usePluginActions");
+    const { usePluginRuntimeStore } = await import("@/store/pluginRuntimeStore");
+
+    const instanceKey = "project__b6700c7a__acme.my-plugin";
+    usePluginRuntimeStore.setState({
+      pluginMetaById: new Map([[instanceKey, { devMode: false, displayName: "My Plugin" }]]),
+    });
+    const action = descriptor({ pluginId: instanceKey });
+    getActionsMock.mockResolvedValue([action]);
+    invokeMock.mockRejectedValue(new Error("plugin handler exploded"));
+
+    renderHook(() => usePluginActions());
+    await waitFor(() => expect(actionService.has(action.id)).toBe(true));
+    await actionService.dispatch(action.id, { x: 1 });
+
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("'My Plugin' plugin") })
+    );
+    expect(notifyMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("project__b6700c7a__") })
+    );
+  });
+
   it("does NOT surface a toast when invoke rejects after the hook unmounts (boundary 2 — #9276)", async () => {
     const { actionService } = await import("@/services/ActionService");
     const { usePluginActions } = await import("../usePluginActions");

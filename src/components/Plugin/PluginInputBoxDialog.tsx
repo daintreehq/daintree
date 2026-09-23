@@ -3,7 +3,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { Field, FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { PluginProvenance } from "./PluginProvenance";
-import { usePluginAttribution } from "./usePluginAttribution";
+import { usePluginAttribution } from "@/hooks/usePluginAttribution";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePluginPromptStore } from "@/store/pluginPromptStore";

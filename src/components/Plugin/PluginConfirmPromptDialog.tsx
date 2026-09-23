@@ -3,7 +3,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePluginPromptStore } from "@/store/pluginPromptStore";
 import { PluginProvenance } from "./PluginProvenance";
-import { usePluginAttribution } from "./usePluginAttribution";
+import { usePluginAttribution } from "@/hooks/usePluginAttribution";
 
 /**
  * Singleton dialog for `host.showConfirm` (#10522). Mounted once near the top of

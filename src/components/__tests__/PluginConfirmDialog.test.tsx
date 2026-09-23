@@ -7,6 +7,7 @@ import {
   requestPluginConfirmation,
 } from "@/store/pluginConfirmStore";
 import type { ActionDanger } from "@shared/types/actions";
+import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
 vi.mock("zustand/react/shallow", () => ({
   useShallow: (fn: unknown) => fn,
@@ -295,6 +296,27 @@ describe("PluginConfirmDialog", () => {
     render(<PluginConfirmDialog />);
 
     expect(screen.getByText("Action contributed by the 'my-plugin' plugin.")).toBeTruthy();
+  });
+
+  it("names a project plugin by its display name in the provenance fallback, never its instance key", () => {
+    const instanceKey = "project__b6700c7a__acme.my-plugin";
+    usePluginRuntimeStore.setState({
+      pluginMetaById: new Map([[instanceKey, { devMode: false, displayName: "My Plugin" }]]),
+    });
+    void requestPluginConfirmation({
+      requestId: "req-key",
+      pluginId: instanceKey,
+      actionId: "worktree.delete",
+      actionTitle: "Delete worktree",
+      actionDescription: "",
+      effectiveDanger: "confirm",
+      argsSummary: "{}",
+    });
+    render(<PluginConfirmDialog />);
+
+    expect(screen.getByText("Action contributed by the 'My Plugin' plugin.")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("project__b6700c7a__");
+    _resetPluginRuntimeStoreForTest();
   });
 
   // #12015 — the payload is offered, not shown. A raw args blob sitting open
