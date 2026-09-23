@@ -11,6 +11,7 @@ import { readGpuDisabledFlagData } from "./gpuDisabledFlag.js";
 import { getCrashLoopGuard } from "./CrashLoopGuardService.js";
 import type { HydrateResult } from "../../shared/types/ipc/app.js";
 import { inferKind } from "../../shared/utils/inferPanelKind.js";
+import { effectiveCachedProjectViews } from "../utils/cachedProjectViews.js";
 
 /**
  * Build a HydrateResult for project switch payloads.
@@ -115,9 +116,17 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
   const gpuStatus = getGpuFeatureStatus();
   const gpuWebGLHardware = isWebGLHardwareAccelerated(gpuStatus.webgl2);
 
+  // The boot copy has to report the same effective count `terminalConfig.get`
+  // does: an unset value means "the hardware default", not "unset", and the
+  // renderer has no way to resolve that tier itself before the dialog reads it.
+  const storedTerminalConfig = store.get("terminalConfig");
+
   return {
     appState: appState as import("../../shared/types/ipc/app.js").AppState,
-    terminalConfig: store.get("terminalConfig"),
+    terminalConfig: {
+      ...storedTerminalConfig,
+      cachedProjectViews: effectiveCachedProjectViews(storedTerminalConfig?.cachedProjectViews),
+    },
     project: currentProject ?? null,
     agentSettings: store.get("agentSettings"),
     gpuWebGLHardware,
