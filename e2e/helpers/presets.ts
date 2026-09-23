@@ -199,8 +199,8 @@ export async function getPresetRowByName(
       }
       await expect(listbox).not.toBeVisible({ timeout: 5000 });
 
-      // The selected scope owns the detail view; its test id survives card styling changes.
-      return window.locator(SEL.preset.section).getByTestId("scope-editor-body");
+      // The preset section holds only the selected scope's editor, so it is the detail view.
+      return window.locator(SEL.preset.section);
     },
     { box: true }
   );
