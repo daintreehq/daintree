@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Plus, Globe, Search } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePortalStore } from "@/store/portalStore";
@@ -66,9 +66,17 @@ function validateUrl(value: string): string | null {
   }
 }
 
-function validateLink(name: string, url: string): string | null {
-  if (!name.trim() || !url.trim()) return "Name and URL are required";
-  return validateUrl(url);
+/** A problem pinned to the field that has to change, or to the form when neither does. */
+interface LinkError {
+  field: "name" | "url" | "form";
+  message: string;
+}
+
+function validateLink(name: string, url: string): LinkError | null {
+  if (!name.trim()) return { field: "name", message: "Enter a name for the link" };
+  if (!url.trim()) return { field: "url", message: "Enter the link's URL" };
+  const problem = validateUrl(url);
+  return problem ? { field: "url", message: problem } : null;
 }
 
 export function PortalSettingsTab() {
@@ -79,8 +87,23 @@ export function PortalSettingsTab() {
   const [editingLinkId, setEditingLinkId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editUrl, setEditUrl] = useState("");
-  const [urlError, setUrlError] = useState("");
-  const [editError, setEditError] = useState("");
+  const [addError, setAddError] = useState<LinkError | null>(null);
+  const [editError, setEditError] = useState<LinkError | null>(null);
+  // One write at a time. While it runs the form it came from is read-only, so
+  // its completion can never clear or close something typed after submitting.
+  const [pending, setPendingState] = useState<"add" | "edit" | "custom" | null>(null);
+  // State drives the read-only rendering; the ref is the guard, because two
+  // submits in one batch would both read the stale state.
+  const pendingRef = useRef<typeof pending>(null);
+  const setPending = (next: typeof pending) => {
+    pendingRef.current = next;
+    setPendingState(next);
+  };
+  const [focusNewTabSelect, setFocusNewTabSelect] = useState(false);
+  const addNameRef = useRef<HTMLInputElement>(null);
+  const addUrlRef = useRef<HTMLInputElement>(null);
+  const editNameRef = useRef<HTMLInputElement>(null);
+  const editUrlRef = useRef<HTMLInputElement>(null);
   // The link whose Edit button gets focus back once its editor closes — the
   // editor replaced that button, so without this focus falls to the page.
   const [returnFocusTo, setReturnFocusTo] = useState<string | null>(null);
@@ -100,22 +123,33 @@ export function PortalSettingsTab() {
     setReturnFocusTo(null);
   }, [returnFocusTo]);
 
+  // The custom-URL editor sits under the select that opened it; closing it
+  // hands focus back there rather than to the page.
+  useEffect(() => {
+    if (!focusNewTabSelect) return;
+    document.querySelector<HTMLElement>('#portal-default-agent [role="combobox"]')?.focus();
+    setFocusNewTabSelect(false);
+  }, [focusNewTabSelect]);
+
   // Report validation state to sidebar
-  const hasError = Boolean(urlError || customUrlError || editError);
+  const hasError = Boolean(addError || customUrlError || editError);
   useSettingsTabValidation("portal", hasError);
 
   const systemLinks = links.filter((l) => l.type === "system");
   const userLinks = links.filter((l) => l.type === "user");
 
   const handleAddLink = async () => {
+    if (pendingRef.current) return;
     const problem = validateLink(newLinkName, newLinkUrl);
     if (problem) {
-      setUrlError(problem);
+      setAddError(problem);
+      (problem.field === "name" ? addNameRef : addUrlRef).current?.focus();
       return;
     }
 
     // The draft clears only once the link exists, so a failed add keeps what
     // was typed for the retry.
+    setPending("add");
     const result = await actionService.dispatch(
       "portal.links.add",
       {
@@ -127,21 +161,22 @@ export function PortalSettingsTab() {
       },
       { source: "user" }
     );
+    setPending(null);
     if (!result.ok) {
-      setUrlError("Couldn't add the link. Try again.");
+      setAddError({ field: "form", message: "Couldn't add the link. Try again." });
       return;
     }
 
     setNewLinkName("");
     setNewLinkUrl("");
-    setUrlError("");
+    setAddError(null);
   };
 
   const handleStartEdit = (id: string, title: string, url: string) => {
     setEditingLinkId(id);
     setEditName(title);
     setEditUrl(url);
-    setEditError("");
+    setEditError(null);
   };
 
   const closeEditor = () => {
@@ -149,24 +184,27 @@ export function PortalSettingsTab() {
     setEditingLinkId(null);
     setEditName("");
     setEditUrl("");
-    setEditError("");
+    setEditError(null);
   };
 
   const handleSaveEdit = async () => {
-    if (!editingLinkId) return;
+    if (!editingLinkId || pendingRef.current) return;
     const problem = validateLink(editName, editUrl);
     if (problem) {
       setEditError(problem);
+      (problem.field === "name" ? editNameRef : editUrlRef).current?.focus();
       return;
     }
 
+    setPending("edit");
     const result = await actionService.dispatch(
       "portal.links.update",
       { id: editingLinkId, updates: { title: editName, url: editUrl } },
       { source: "user" }
     );
+    setPending(null);
     if (!result.ok) {
-      setEditError("Couldn't save the link. Try again.");
+      setEditError({ field: "form", message: "Couldn't save the link. Try again." });
       return;
     }
     closeEditor();
@@ -196,7 +234,11 @@ export function PortalSettingsTab() {
     }
   };
 
+  const customUrlUnchanged =
+    customDefaultUrl.trim() === "" || customDefaultUrl === defaultNewTabUrl;
+
   const handleCustomUrlSave = async () => {
+    if (pendingRef.current || customDefaultUrl === defaultNewTabUrl) return;
     if (!customDefaultUrl.trim()) {
       setCustomUrlError("URL is required");
       return;
@@ -206,11 +248,13 @@ export function PortalSettingsTab() {
       setCustomUrlError(problem);
       return;
     }
+    setPending("custom");
     const result = await actionService.dispatch(
       "portal.setDefaultNewTab",
       { url: customDefaultUrl },
       { source: "user" }
     );
+    setPending(null);
     if (!result.ok) {
       setCustomUrlError("Couldn't save the URL. Try again.");
       return;
@@ -218,12 +262,14 @@ export function PortalSettingsTab() {
     setShowCustomUrlInput(false);
     setCustomDefaultUrl("");
     setCustomUrlError("");
+    setFocusNewTabSelect(true);
   };
 
   const handleCustomUrlCancel = () => {
     setShowCustomUrlInput(false);
     setCustomDefaultUrl("");
     setCustomUrlError("");
+    setFocusNewTabSelect(true);
   };
 
   const renderLinkRow = (link: (typeof links)[0], allowDelete: boolean) => {
@@ -235,15 +281,17 @@ export function PortalSettingsTab() {
           <SettingsRow
             layout="stacked"
             label={`Edit ${link.title || "link"}`}
-            error={editError ? <span id={editErrorId}>{editError}</span> : undefined}
+            error={editError ? <span id={editErrorId}>{editError.message}</span> : undefined}
             control={
               <div className="flex items-center gap-2">
                 <Input
                   type="text"
+                  ref={editNameRef}
                   value={editName}
+                  readOnly={pending === "edit"}
                   onChange={(e) => {
                     setEditName(e.target.value);
-                    setEditError("");
+                    setEditError(null);
                   }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") void handleSaveEdit();
@@ -252,16 +300,19 @@ export function PortalSettingsTab() {
                   className="w-40"
                   placeholder="Name"
                   aria-label="Link name"
-                  aria-invalid={!!editError && !editName.trim() ? true : undefined}
+                  invalid={editError?.field === "name"}
+                  aria-invalid={editError?.field === "name" || undefined}
                   aria-describedby={editError ? editErrorId : undefined}
                   autoFocus
                 />
                 <Input
                   type="text"
+                  ref={editUrlRef}
                   value={editUrl}
+                  readOnly={pending === "edit"}
                   onChange={(e) => {
                     setEditUrl(e.target.value);
-                    setEditError("");
+                    setEditError(null);
                   }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") void handleSaveEdit();
@@ -270,8 +321,8 @@ export function PortalSettingsTab() {
                   className="flex-1 min-w-0 font-mono"
                   placeholder="https://…"
                   aria-label="Link URL"
-                  invalid={!!editError}
-                  aria-invalid={!!editError || undefined}
+                  invalid={editError?.field === "url"}
+                  aria-invalid={editError?.field === "url" || undefined}
                   aria-describedby={editError ? editErrorId : undefined}
                 />
               </div>
@@ -292,7 +343,13 @@ export function PortalSettingsTab() {
               )
             }
           >
-            <Button type="button" variant="outline" size="sm" onClick={closeEditor}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={closeEditor}
+              disabled={pending === "edit"}
+            >
               Cancel
             </Button>
             <Button
@@ -300,7 +357,7 @@ export function PortalSettingsTab() {
               variant="contrast"
               size="sm"
               onClick={() => void handleSaveEdit()}
-              disabled={editName === link.title && editUrl === link.url}
+              disabled={pending !== null || (editName === link.title && editUrl === link.url)}
             >
               Save
             </Button>
@@ -386,7 +443,7 @@ export function PortalSettingsTab() {
           if (pendingRemoveId !== null) {
             if (editingLinkId === pendingRemoveId) {
               setEditingLinkId(null);
-              setEditError("");
+              setEditError(null);
             }
             void actionService.dispatch(
               "portal.links.remove",
@@ -433,6 +490,7 @@ export function PortalSettingsTab() {
                     type="text"
                     placeholder="https://…"
                     value={customDefaultUrl}
+                    readOnly={pending === "custom"}
                     onChange={(e) => {
                       setCustomDefaultUrl(e.target.value);
                       setCustomUrlError("");
@@ -451,7 +509,13 @@ export function PortalSettingsTab() {
                 )}
               />
               <SettingsActions>
-                <Button type="button" variant="outline" size="sm" onClick={handleCustomUrlCancel}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCustomUrlCancel}
+                  disabled={pending === "custom"}
+                >
                   Cancel
                 </Button>
                 <Button
@@ -459,7 +523,7 @@ export function PortalSettingsTab() {
                   variant="contrast"
                   size="sm"
                   onClick={() => void handleCustomUrlSave()}
-                  disabled={!customDefaultUrl.trim()}
+                  disabled={pending !== null || customUrlUnchanged}
                 >
                   Save
                 </Button>
@@ -480,50 +544,60 @@ export function PortalSettingsTab() {
       <SettingsSection
         id="portal-custom-links"
         title="Custom links"
-        description="Add your own links to AI services or documentation."
+        description="Add your own links to AI services or documentation"
       >
         <SettingsGroup>
           {userLinks.map((link) => renderLinkRow(link, true))}
           <SettingsRow
             layout="stacked"
             label="Add a link"
-            error={urlError ? <span id={addLinkErrorId}>{urlError}</span> : undefined}
+            error={addError ? <span id={addLinkErrorId}>{addError.message}</span> : undefined}
             control={
               <div className="flex items-center gap-2">
                 <Input
+                  ref={addNameRef}
                   type="text"
                   placeholder="Name"
                   value={newLinkName}
+                  readOnly={pending === "add"}
                   onChange={(e) => {
                     setNewLinkName(e.target.value);
-                    setUrlError("");
+                    setAddError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleAddLink();
                   }}
                   className="w-40"
                   aria-label="New link name"
+                  invalid={addError?.field === "name"}
+                  aria-invalid={addError?.field === "name" || undefined}
+                  aria-describedby={addError ? addLinkErrorId : undefined}
                 />
                 <Input
                   type="text"
                   placeholder="https://…"
+                  ref={addUrlRef}
                   value={newLinkUrl}
+                  readOnly={pending === "add"}
                   onChange={(e) => {
                     setNewLinkUrl(e.target.value);
-                    setUrlError("");
+                    setAddError(null);
                   }}
                   className="flex-1 min-w-0 font-mono"
                   onKeyDown={(e) => {
                     if (e.key === "Enter") void handleAddLink();
                   }}
                   aria-label="New link URL"
-                  invalid={!!urlError}
-                  aria-invalid={!!urlError || undefined}
-                  aria-describedby={urlError ? addLinkErrorId : undefined}
+                  invalid={addError?.field === "url"}
+                  aria-invalid={addError?.field === "url" || undefined}
+                  aria-describedby={addError ? addLinkErrorId : undefined}
                 />
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   onClick={() => void handleAddLink()}
-                  disabled={!newLinkName.trim() || !newLinkUrl.trim()}
+                  disabled={pending !== null || !newLinkName.trim() || !newLinkUrl.trim()}
                 >
                   <Plus aria-hidden="true" />
                   Add

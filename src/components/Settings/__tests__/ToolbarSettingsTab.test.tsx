@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, fireEvent, act } from "@testing-library/react";
+import { render, fireEvent, act, within } from "@testing-library/react";
 import type { AgentSettings } from "@shared/types";
 
 const setLeftButtonsMock = vi.fn();
@@ -431,7 +431,7 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     const { getByText } = render(<ToolbarSettingsTab />);
     // Left side: launcher (visible), claude (pinned, visible),
     // gemini (unpinned, not visible), terminal (not hidden, visible) => 3 / 4.
-    expect(getByText("3/4")).toBeTruthy();
+    expect(getByText("Left side · 3 of 4 shown")).toBeTruthy();
   });
 
   it("treats null agentSettings as all-unpinned without crashing", () => {
@@ -715,7 +715,8 @@ describe("ToolbarSettingsTab — drag-source vs off-row opacity", () => {
     const toggle = container.querySelector(
       `button[role="switch"][aria-label="Toggle ${label} visibility"]`
     ) as HTMLElement;
-    return toggle.parentElement!.parentElement as HTMLElement;
+    // The sortable wrapper is the one node carrying dnd-kit's inline style.
+    return toggle.closest("[style]") as HTMLElement;
   }
 
   it("applies DRAG_GHOST_OPACITY to a dragged row (not the legacy 0.5)", () => {
@@ -1030,5 +1031,68 @@ describe("ToolbarSettingsTab — launcher pins (#12217)", () => {
     fireEvent.click(getByLabelText("Show Deploy in toolbar"));
     expect(setLauncherItemOnToolbarMock).toHaveBeenCalledWith("launcher:recipe:acme.deploy", false);
     expect(setPluginButtonPromotedMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("ToolbarSettingsTab — move menu and agent inventory", () => {
+  beforeEach(() => {
+    clearStoreMocks();
+    vi.mocked(useSortable).mockImplementation(defaultSortable);
+    mockToolbarState = makeToolbarState();
+    mockAgentSettings = agentSettings({
+      claude: { pinned: true },
+      gemini: { pinned: true },
+      codex: { pinned: false },
+    });
+  });
+
+  function menuFor(label: string, getByLabelText: (text: string) => HTMLElement) {
+    return within(getByLabelText(`Move ${label}`).parentElement!);
+  }
+
+  it("moves across sides through the menu, landing at the end of the other side", () => {
+    const { getByLabelText } = render(<ToolbarSettingsTab />);
+    fireEvent.click(
+      menuFor("Gemini agent", getByLabelText).getByRole("menuitem", { name: "Move to right side" })
+    );
+
+    expect(moveButtonMock).toHaveBeenCalledWith(
+      "gemini",
+      "left",
+      "right",
+      mockToolbarState.layout.rightButtons.length
+    );
+  });
+
+  it("offers no step up out of a button's own group", () => {
+    const { getByLabelText } = render(<ToolbarSettingsTab />);
+    const up = menuFor("Claude agent", getByLabelText).getByRole("menuitem", {
+      name: "Move up",
+    }) as HTMLButtonElement;
+    expect(up.disabled).toBe(true);
+
+    fireEvent.click(
+      menuFor("Claude agent", getByLabelText).getByRole("menuitem", { name: "Move down" })
+    );
+    const written = setLeftButtonsMock.mock.calls[0]![0] as string[];
+    expect(written.indexOf("gemini")).toBeLessThan(written.indexOf("claude"));
+  });
+
+  it("keeps an agent unpinned from the collapsed list in view, switched off", () => {
+    const { getByLabelText, queryByLabelText, rerender } = render(<ToolbarSettingsTab />);
+    expect(queryByLabelText("Show Codex agent in toolbar")).toBeNull();
+
+    fireEvent.click(getByLabelText("Show Gemini agent in toolbar"));
+    mockAgentSettings = agentSettings({
+      claude: { pinned: true },
+      gemini: { pinned: false },
+      codex: { pinned: false },
+    });
+    rerender(<ToolbarSettingsTab />);
+
+    expect(getByLabelText("Show Gemini agent in toolbar").getAttribute("aria-checked")).toBe(
+      "false"
+    );
+    expect(queryByLabelText("Show Codex agent in toolbar")).toBeNull();
   });
 });

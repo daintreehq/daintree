@@ -238,6 +238,9 @@ export function WorktreeSettingsTab() {
                   value={pattern}
                   onChange={(e) => editPattern(e.target.value)}
                   disabled={disabled}
+                  // Locked while a save is in flight: the save's reply replaces the
+                  // field, and would otherwise overwrite anything typed meanwhile.
+                  readOnly={isSaving}
                   invalid={!!patternError}
                   aria-labelledby={labelId}
                   aria-invalid={!!patternError}
@@ -277,7 +280,7 @@ export function WorktreeSettingsTab() {
                         variant="outline"
                         size="sm"
                         onClick={() => editPattern(preset.pattern)}
-                        disabled={disabled}
+                        disabled={disabled || isSaving}
                       >
                         {preset.label}
                       </Button>
@@ -357,12 +360,16 @@ export function WorktreeSettingsTab() {
               routinely invalid, and each keystroke would otherwise write one. */}
           <SettingsActions
             status={
-              savedMessage && (
+              savedMessage ? (
                 <span className="flex items-center gap-1 text-status-success">
                   <Check className="w-3 h-3" aria-hidden="true" />
                   Saved
                 </span>
-              )
+              ) : hasChanges && !unavailable && validation.valid ? (
+                // The dialog flushes a valid pending pattern when it closes, so
+                // say so — otherwise Save reads as the only way it takes effect.
+                "Also saves when you close Settings"
+              ) : null
             }
           >
             {hasChanges && !unavailable && (
@@ -391,7 +398,7 @@ export function WorktreeSettingsTab() {
 
       <SettingsSection
         title="Deleted worktrees"
-        description="When a worktree is deleted while terminals are still running, its terminals stay in a temporary sidebar row until you move or close them."
+        description="When a worktree is deleted while terminals are still running, its terminals stay in a temporary sidebar row until you move or close them"
       >
         <SettingsGroup>
           <SettingsSelect

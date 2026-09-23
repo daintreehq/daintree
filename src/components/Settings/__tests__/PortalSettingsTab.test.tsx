@@ -8,6 +8,28 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: (...args: unknown[]) => dispatch(...args) },
 }));
 vi.mock("../SettingsValidationRegistry", () => ({ useSettingsTabValidation: () => {} }));
+// A native select stands in for the Radix one, which jsdom can't open.
+vi.mock("../SettingsSelect", () => ({
+  SettingsSelect: ({
+    label,
+    value,
+    options,
+    onValueChange,
+  }: {
+    label: string;
+    value: string;
+    options: Array<{ value: string; label: string }>;
+    onValueChange: (value: string) => void;
+  }) => (
+    <select aria-label={label} value={value} onChange={(e) => onValueChange(e.target.value)}>
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  ),
+}));
 
 const portal = vi.hoisted(() => ({
   links: [] as PortalLink[],
@@ -118,6 +140,59 @@ describe("PortalSettingsTab adding a link", () => {
 
     expect(name.value).toBe("Linear");
     expect(url.value).toBe("https://linear.app");
-    expect(url.getAttribute("aria-invalid")).toBe("true");
+    // A failed write is the form's problem, not a malformed field.
+    expect(describedText(url)).not.toBe("");
+    expect(url.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("flags the name, not the URL, when only the name is missing", async () => {
+    renderTab();
+    const name = screen.getByRole("textbox", { name: "New link name" });
+    const url = screen.getByRole("textbox", { name: "New link URL" });
+    fireEvent.change(url, { target: { value: "https://linear.app" } });
+    await act(async () => {
+      fireEvent.keyDown(url, { key: "Enter" });
+    });
+
+    expect(name.getAttribute("aria-invalid")).toBe("true");
+    expect(describedText(name)).not.toBe("");
+    expect(url.getAttribute("aria-invalid")).toBeNull();
+    expect(document.activeElement).toBe(name);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("ignores a second submit while the first is still saving", async () => {
+    let finish: (value: unknown) => void = () => {};
+    dispatch.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    renderTab();
+    fireEvent.change(screen.getByRole("textbox", { name: "New link name" }), {
+      target: { value: "Linear" },
+    });
+    const url = screen.getByRole("textbox", { name: "New link URL" });
+    fireEvent.change(url, { target: { value: "https://linear.app" } });
+    await act(async () => {
+      fireEvent.keyDown(url, { key: "Enter" });
+      fireEvent.keyDown(url, { key: "Enter" });
+    });
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    await act(async () => finish({ ok: true, result: undefined }));
+  });
+});
+
+describe("PortalSettingsTab custom new-tab URL", () => {
+  it("keeps Save off while the URL matches the one already saved", () => {
+    portal.defaultNewTabUrl = "https://intranet.example.com";
+    renderTab();
+    fireEvent.change(screen.getByRole("combobox", { name: "New tabs open" }), {
+      target: { value: "custom" },
+    });
+    const save = () => screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
+    expect(save().disabled).toBe(true);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Custom URL" }), {
+      target: { value: "https://intranet.example.com/home" },
+    });
+    expect(save().disabled).toBe(false);
   });
 });

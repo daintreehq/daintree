@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,6 +29,27 @@ export function FileBrowserVisibilitySettings() {
 
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Removing a chip unmounts the button that had focus; the next chip takes it,
+  // then the previous one, then the add field once the list is empty.
+  const [focusAfterRemove, setFocusAfterRemove] = useState<string | null>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (focusAfterRemove === null) return;
+    const next = listRef.current?.querySelector<HTMLButtonElement>(
+      `[data-pattern="${CSS.escape(focusAfterRemove)}"]`
+    );
+    (next ?? inputRef.current)?.focus();
+    setFocusAfterRemove(null);
+  }, [focusAfterRemove]);
+
+  const removePattern = (pattern: string) => {
+    const at = patterns.indexOf(pattern);
+    const remaining = patterns.filter((p) => p !== pattern);
+    setPatterns(remaining);
+    setFocusAfterRemove(remaining[at] ?? remaining[at - 1] ?? "");
+  };
 
   const isModified = !sameList(patterns, DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN);
 
@@ -64,7 +85,7 @@ export function FileBrowserVisibilitySettings() {
     <SettingsSection
       id="file-browser-always-hidden"
       title="Always-hidden files"
-      description="Files matching these names stay hidden in every file browser panel, whatever the dotfile toggle."
+      description="Files matching these names stay hidden in every file browser panel, whatever the dotfile toggle"
     >
       <SettingsGroup>
         <SettingsRow
@@ -80,7 +101,7 @@ export function FileBrowserVisibilitySettings() {
           error={error}
           control={({ labelId, descriptionId }) => (
             <div className="grid gap-3">
-              <ul className="flex flex-wrap gap-1.5" aria-labelledby={labelId}>
+              <ul ref={listRef} className="flex flex-wrap gap-1.5" aria-labelledby={labelId}>
                 {patterns.length === 0 && (
                   <li className="text-xs text-text-secondary">
                     Add a name or pattern to always hide it
@@ -94,8 +115,9 @@ export function FileBrowserVisibilitySettings() {
                     <span className="break-all">{pattern}</span>
                     <button
                       type="button"
-                      onClick={() => setPatterns(patterns.filter((p) => p !== pattern))}
+                      onClick={() => removePattern(pattern)}
                       aria-label={`Remove ${pattern}`}
+                      data-pattern={pattern}
                       className="flex h-4 w-4 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary"
                     >
                       <X className="h-3 w-3" aria-hidden="true" />
@@ -106,6 +128,7 @@ export function FileBrowserVisibilitySettings() {
 
               <div className="flex gap-2">
                 <Input
+                  ref={inputRef}
                   type="text"
                   value={draft}
                   onChange={(e) => {

@@ -98,4 +98,15 @@ describe("FileBrowserVisibilitySettings", () => {
     expect(patterns()).toEqual(defaults);
     expect(screen.queryByLabelText("Reset always-hidden patterns to defaults")).toBeNull();
   });
+
+  it("keeps focus in the list when a chip is removed, and falls back to the add field", () => {
+    render(<FileBrowserVisibilitySettings />);
+    const [first, second] = patterns();
+
+    fireEvent.click(screen.getByLabelText(`Remove ${first}`));
+    expect(document.activeElement).toBe(screen.getByLabelText(`Remove ${second}`));
+
+    fireEvent.click(screen.getByLabelText(`Remove ${second}`));
+    expect(document.activeElement).toBe(screen.getByLabelText("Add an always-hidden pattern"));
+  });
 });

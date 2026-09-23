@@ -553,8 +553,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 label="Cached project views"
                 description={`Project views kept loaded in memory. More keeps switching back near-instant; fewer saves memory. ${
                   defaultCachedViews !== null
-                    ? `Default on this machine: ${defaultCachedViews}`
-                    : "The default scales with your RAM"
+                    ? `Default on this machine: ${defaultCachedViews}.`
+                    : "The default scales with your RAM."
                 }`}
                 options={CACHED_VIEWS_OPTIONS}
                 value={cachedProjectViews}
@@ -684,7 +684,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             <SettingsSection
               title="Grid layout"
               id="terminal-grid-layout"
-              description="How panels arrange in the grid as you add more."
+              description="How panels arrange in the grid as you add more"
             >
               {saveError("grid-layout")}
               <SettingsGroup className="overflow-hidden">
@@ -750,7 +750,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           <SettingsSection
             title="Scrollback history"
             id="terminal-scrollback"
-            description="Background terminals may temporarily reduce scrollback under memory pressure."
+            description="Background terminals may temporarily reduce scrollback under memory pressure"
             badge="New terminals"
           >
             {saveError("scrollback")}
@@ -805,7 +805,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               <SettingsPresetGroup
                 id="terminal-screen-reader"
                 label="Screen reader mode"
-                description="Lets assistive technology read terminal output through an overlay that costs some performance. Auto turns it on only while the OS reports an active screen reader. Default: Auto"
+                description="Makes terminal output readable by screen readers, at some performance cost. Auto turns it on while the OS reports a screen reader. Default: Auto."
                 options={SCREEN_READER_OPTIONS}
                 value={screenReaderMode}
                 onChange={(mode) => void handleScreenReaderModeChange(mode)}

@@ -132,3 +132,27 @@ describe("WorktreeSettingsTab draft", () => {
     expect(screen.queryByText("Saved")).toBeNull();
   });
 });
+
+describe("WorktreeSettingsTab save in flight", () => {
+  it("locks the field until the save answers, so the reply can't overwrite newer typing", async () => {
+    await renderWithSavedPattern(CUSTOM_PATTERN);
+    let answer: (value: unknown) => void = () => {};
+    dispatch.mockImplementation((id: string) =>
+      id === "worktreeConfig.setPattern"
+        ? new Promise((resolve) => (answer = resolve))
+        : Promise.resolve({ ok: true, result: { pathPattern: CUSTOM_PATTERN } })
+    );
+    const input = screen.getByRole("textbox") as HTMLInputElement;
+    const next = "{parent-dir}/{repo-name}-{branch-slug}";
+    fireEvent.change(input, { target: { value: next } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+
+    expect(input.readOnly).toBe(true);
+
+    await act(async () => answer({ ok: true, result: { pathPattern: next } }));
+    expect(input.readOnly).toBe(false);
+    expect(input.value).toBe(next);
+  });
+});
