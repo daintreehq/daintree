@@ -669,6 +669,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
         isModified={!!accentColorOverride}
         onReset={handleAccentReset}
         resetAriaLabel="Reset accent color to the theme's"
+        resetTestId="accent-color-override-reset"
         description={
           accentColorOverride
             ? `${formatHex(effectiveAccent)} · Theme default: ${formatHex(themeDefaultAccent)}`

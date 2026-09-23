@@ -165,6 +165,7 @@ interface SettingsRowProps {
   isModified?: boolean;
   onReset?: () => void;
   resetAriaLabel?: string;
+  resetTestId?: string;
   disabled?: boolean;
   /** Why the row is disabled. Rendered under the description only while disabled. */
   disabledReason?: ReactNode;
@@ -187,6 +188,7 @@ export function SettingsRow({
   isModified,
   onReset,
   resetAriaLabel,
+  resetTestId,
   disabled: ownDisabled = false,
   disabledReason,
   error,
@@ -226,6 +228,7 @@ export function SettingsRow({
     <button
       type="button"
       aria-label={resetName}
+      data-testid={resetTestId}
       className={cn(
         "p-1 rounded-sm text-text-secondary hover:text-text-primary transition-colors",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
