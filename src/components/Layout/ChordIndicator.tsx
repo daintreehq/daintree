@@ -313,7 +313,7 @@ export function ChordIndicator() {
                         onMouseMove={() => setSelectedIndex(index)}
                         className={cn(
                           PALETTE_ROW_CLASS,
-                          "flex cursor-pointer items-center gap-3 rounded-[var(--radius-sm)] px-2 py-1 text-xs",
+                          "group flex cursor-pointer items-center gap-3 rounded-[var(--radius-sm)] px-2 py-1 text-xs",
                           "duration-150 reduce-motion:transition-none"
                         )}
                       >
@@ -336,7 +336,10 @@ export function ChordIndicator() {
                           shortcut={item.combo}
                           density="bare"
                           aria-label={item.displayKey}
-                          className="shrink-0"
+                          // The row lifts its label to primary text when
+                          // selected; the key follows, or it sits under the
+                          // 4.5:1 floor on the raised fill over bright content.
+                          className="shrink-0 group-aria-selected:[&_kbd]:text-text-primary"
                         />
                       </div>
                     );

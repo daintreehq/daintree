@@ -1,7 +1,7 @@
 {
   "generated": "2026-09-23",
-  "total": 169,
-  "files": 80,
+  "total": 167,
+  "files": 79,
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
@@ -827,36 +827,6 @@
       "decision": "keep",
       "category": "icon-affordance",
       "evidence": "<span> wraps only icons — the colour paints a glyph through currentColor"
-    },
-    {
-      "file": "src/components/Layout/ChordIndicator.tsx",
-      "ordinal": 0,
-      "line": 254,
-      "start": 9804,
-      "end": 9825,
-      "token": "text-daintree-text/20",
-      "variants": "",
-      "step": 20,
-      "group": "src/components/Layout/ChordIndicator.tsx#9792",
-      "branch": "",
-      "decision": "keep",
-      "category": "decorative-glyph",
-      "evidence": "single non-word glyph (separator, chevron, bullet)"
-    },
-    {
-      "file": "src/components/Layout/ChordIndicator.tsx",
-      "ordinal": 1,
-      "line": 258,
-      "start": 9928,
-      "end": 9949,
-      "token": "text-daintree-text/20",
-      "variants": "",
-      "step": 20,
-      "group": "src/components/Layout/ChordIndicator.tsx#9916",
-      "branch": "",
-      "decision": "keep",
-      "category": "decorative-glyph",
-      "evidence": "single non-word glyph (separator, chevron, bullet)"
     },
     {
       "file": "src/components/Layout/DockedTabGroup.tsx",

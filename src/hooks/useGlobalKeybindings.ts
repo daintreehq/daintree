@@ -12,6 +12,7 @@ import { isTerminalReservedKey } from "@/services/terminalReservedKeys";
 import { buildKeybindingWhenContext } from "@/services/keybindingWhenContext";
 import { usePaletteStore, usePanelStore } from "../store";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
 /**
  * Canonical first-step combo of every chord (they all begin `Cmd+K`). Opening
@@ -127,6 +128,32 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         e.stopPropagation();
         keybindingService.clearPendingChord();
         return;
+      }
+
+      // A direct completion (Cmd+K then Cmd+P) of a command that can't run
+      // right now keeps the HUD open and says why, the same as choosing that
+      // row with Enter — rather than closing it on a dispatch that returns
+      // DISABLED with nothing on screen to explain it.
+      if (hudPending && (e.metaKey || e.ctrlKey)) {
+        const completion = keybindingService
+          .getChordCompletions(COMMAND_HUD_PREFIX)
+          .find(
+            (entry) => entry.actionId !== "" && keybindingService.matchesEvent(e, entry.secondKey)
+          );
+        const action = completion
+          ? actionService.get(completion.actionId as Parameters<typeof actionService.get>[0])
+          : null;
+        if (action && !action.enabled) {
+          e.preventDefault();
+          e.stopPropagation();
+          useAnnouncerStore
+            .getState()
+            .announce(
+              action.disabledReason ?? `${completion!.description} isn't available`,
+              "polite"
+            );
+          return;
+        }
       }
 
       if (e.key === "Escape" && pendingChord) {

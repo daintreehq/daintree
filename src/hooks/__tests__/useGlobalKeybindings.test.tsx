@@ -24,6 +24,9 @@ const mocks = vi.hoisted(() => ({
     clearPendingChord: vi.fn(),
     popPendingChord: vi.fn(),
     getEffectiveCombo: vi.fn<(actionId: string) => string | undefined>(() => undefined),
+    getChordCompletions: vi.fn<
+      () => Array<{ actionId: string; secondKey: string; description: string }>
+    >(() => []),
     subscribe: vi.fn(() => () => {}),
     setWhenContextProvider: vi.fn(),
     // matchesEvent is invoked by the focus-region bypass. Lite mock that maps
@@ -38,6 +41,9 @@ const mocks = vi.hoisted(() => ({
     }),
   },
   actionService: {
+    get: vi.fn<(actionId: string) => { enabled: boolean; disabledReason?: string } | null>(
+      () => null
+    ),
     // Typed signature so mock.calls is a labeled tuple (not the empty tuple),
     // letting tests destructure the dispatched actionId without TS2493.
     dispatch: vi.fn<
@@ -1183,5 +1189,67 @@ describe("useGlobalKeybindings — row-menu stand-down", () => {
   it("stands down inside an already-open menu, which portals outside every marker", () => {
     const host = mount(`<div role="menu"><div id="item" role="menuitem"></div></div>`);
     expect(pressMenuKey(host.querySelector<HTMLElement>("#item")!).defaultPrevented).toBe(false);
+  });
+});
+
+describe("command HUD direct completion", () => {
+  beforeEach(() => {
+    mocks.keybindingService.getPendingChord.mockReturnValue("Cmd+K");
+    mocks.keybindingService.getChordCompletions.mockReturnValue([
+      { actionId: "git.push", secondKey: "Cmd+P", description: "Push to remote" },
+    ]);
+  });
+
+  afterEach(() => {
+    mocks.keybindingService.getChordCompletions.mockReset().mockReturnValue([]);
+    mocks.actionService.get.mockReset().mockReturnValue(null);
+    mocks.keybindingService.resolveKeybinding.mockReset();
+  });
+
+  function pressCmdP(): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", {
+      key: "p",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      document.body.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  it("keeps the chord open and skips dispatch when the completion is disabled", () => {
+    mocks.actionService.get.mockReturnValue({
+      enabled: false,
+      disabledReason: "No upstream branch",
+    });
+    render(<Host />);
+
+    const event = pressCmdP();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+    expect(mocks.keybindingService.clearPendingChord).not.toHaveBeenCalled();
+    expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("completes an enabled command through the normal resolution path", () => {
+    mocks.actionService.get.mockReturnValue({ enabled: true });
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "git.push" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+
+    pressCmdP();
+
+    expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalled();
+    expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      undefined,
+      expect.anything()
+    );
   });
 });
