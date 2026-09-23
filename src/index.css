@@ -2757,6 +2757,14 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     border: none;
   }
 
+  /* A list row whose selection target is a button beside a sibling control
+     (the plugin manager's rows: select button + enable switch). The row is the
+     frame and owns the selected outline; the blanket border drew a second box
+     round the text half and left the switch outside it. */
+  .row-select-target {
+    border: none;
+  }
+
   /* A destructive button is distinguished only by its fill, and the UA replaces
    * every fill with a system colour — so "Delete worktree" and "Cancel" render
    * as the same white pill with the same border, and nothing marks which one
@@ -3139,6 +3147,12 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
      rather than merged: the launcher's teaching link must not be framed into a
      button. Its underline carries the affordance. */
   .tip-action {
+    border-width: 0;
+  }
+
+  /* Same exemption, same reason: the row, not its inner select button, is the
+     click target's frame. */
+  .row-select-target {
     border-width: 0;
   }
 

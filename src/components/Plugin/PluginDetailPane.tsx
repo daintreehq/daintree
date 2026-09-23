@@ -10,6 +10,7 @@ import { PluginMcpServersSection } from "./PluginMcpServersSection";
 import { PluginLogsSection, usePluginLogs } from "./PluginLogsSection";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
 import { Button } from "@/components/ui/button";
+import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import {
   SettingsSubtabBar,
@@ -18,6 +19,7 @@ import {
 } from "@/components/Settings/SettingsSubtabBar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
+import { cn } from "@/lib/utils";
 import {
   usePluginRuntimeStatus,
   usePluginRuntimeStatusStore,
@@ -265,6 +267,10 @@ interface PluginDetailPaneProps {
   plugin: LoadedPluginInfo;
   checkingUpdate: boolean;
   upToDate: boolean;
+  /** The row's enable toggle is in flight. */
+  toggling?: boolean;
+  /** Renders the header's enable switch; omitted, the pane has none. */
+  onToggle?: () => void;
   onUninstall: () => void;
   onCheckForUpdate: () => void;
 }
@@ -292,6 +298,8 @@ export function PluginDetailPane({
   plugin,
   checkingUpdate,
   upToDate,
+  toggling = false,
+  onToggle,
   onUninstall,
   onCheckForUpdate,
 }: PluginDetailPaneProps) {
@@ -302,7 +310,11 @@ export function PluginDetailPane({
   const runtimeStatus = usePluginRuntimeStatus(plugin.instanceId);
   const devStatus = runtimeStatus?.dev ?? null;
   const sourceLabel = SOURCE_BADGE_LABELS[plugin.source] ?? plugin.source;
-  const categoryLabel = getPluginCategoryMeta(resolvePluginCategory(plugin.manifest)).label;
+  // "Other" is the fallback bucket, not a category anyone chose — a badge
+  // reading OTHER on most third-party plugins told the user nothing.
+  const categoryId = resolvePluginCategory(plugin.manifest);
+  const categoryLabel = categoryId === "other" ? null : getPluginCategoryMeta(categoryId).label;
+  const blocklisted = plugin.blocklisted === true;
   const hasSettings = (plugin.manifest.contributes.settings?.length ?? 0) > 0;
   const mcpServers = plugin.manifest.contributes.mcpServers ?? [];
   const hasMcpServers = mcpServers.length > 0;
@@ -382,7 +394,7 @@ export function PluginDetailPane({
               <span className="text-xs font-normal text-text-secondary">
                 v{plugin.manifest.version}
               </span>
-              <span className={BADGE_CLASS}>{categoryLabel}</span>
+              {categoryLabel && <span className={BADGE_CLASS}>{categoryLabel}</span>}
               <span className={BADGE_CLASS}>{sourceLabel}</span>
               {plugin.blocklisted === true && (
                 <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide">
@@ -440,6 +452,21 @@ export function PluginDetailPane({
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
+          {/* The same switch as the row, where the lifecycle actions are. A
+              disabled plugin's detail used to offer no way to turn it back on:
+              the only switch was back in the list, next to a row the user had
+              already moved past. */}
+          {onToggle && (
+            <label className="flex items-center gap-2 mr-2 text-xs text-text-secondary select-none">
+              Enabled
+              <SettingsSwitch
+                checked={plugin.disabled !== true && !blocklisted}
+                onCheckedChange={onToggle}
+                disabled={toggling || blocklisted}
+                aria-label={`Enable ${label}`}
+              />
+            </label>
+          )}
           {canCheckUpdate ? (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -528,6 +555,12 @@ export function PluginDetailPane({
             <p className="text-2xs text-status-danger break-words mt-0.5 select-text">
               {plugin.loadError.message}
             </p>
+            {/* Where to go from the diagnosis. Switching it off and on reloads
+                the plugin from disk, so that is the retry; an error that comes
+                back unchanged is the plugin's own bug. */}
+            <p className="text-2xs text-text-secondary mt-1.5">
+              Turn it off and on again to retry. If it fails the same way, update or reinstall it.
+            </p>
           </div>
         </div>
       )}
@@ -544,7 +577,9 @@ export function PluginDetailPane({
         </div>
       )}
 
-      <div className="mt-4">
+      {/* A tab bar with one tab is a control with nothing to switch to — and
+          most plugins without settings or permissions have exactly one. */}
+      <div className={cn("mt-4", tabs.length === 1 && "hidden")}>
         <SettingsSubtabBar
           subtabs={tabs}
           activeId={currentTab}

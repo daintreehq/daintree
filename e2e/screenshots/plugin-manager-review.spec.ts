@@ -60,6 +60,7 @@
  *   chip           a category chip filter active.
  *   empty          a query that matches nothing.
  *   project        the project-plugin section and its trust gate.
+ *   installmenu    the Install plugin menu open in the title bar.
  *   urldialog      the Install from URL dialog.
  *   uninstall      the uninstall confirm, with its delete-settings checkbox.
  *   focus          keyboard focus ring on the first row.
@@ -645,8 +646,18 @@ test("plugin manager review — provenance, states, and overflow", async () => {
     });
 
     // 16. Install from URL.
+    await step("installmenu", async () => {
+      await page.locator(`${MANAGER} button`, { hasText: "Install plugin" }).first().click();
+      await settle(page, 400);
+      await snap(page, "79-install-menu");
+      await page.keyboard.press("Escape");
+      await settle(page, 300);
+    });
+
     await step("urldialog", async () => {
-      await page.locator(`${MANAGER} button`, { hasText: "Install from URL" }).first().click();
+      await page.locator(`${MANAGER} button`, { hasText: "Install plugin" }).first().click();
+      await settle(page, 300);
+      await page.locator('[role="menuitem"]', { hasText: "Install from URL" }).first().click();
       await settle(page, 400);
       await snap(page, "80-install-url-dialog");
       await page.keyboard.press("Escape");
