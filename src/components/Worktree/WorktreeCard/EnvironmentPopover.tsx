@@ -299,14 +299,20 @@ export function EnvironmentPopover({
             {showOutput && (
               <div className="flex flex-col gap-1">
                 <span className="text-2xs text-text-secondary">Last check output</span>
-                <pre
-                  tabIndex={0}
-                  role="region"
-                  aria-label="Last check output"
-                  className="max-h-[calc(10lh+0.75rem+2px)] overflow-y-auto whitespace-pre-wrap break-words [text-indent:2ch_hanging_each-line] rounded-[var(--radius-md)] border border-border-default bg-surface-canvas px-2 py-1.5 font-mono text-2xs leading-relaxed text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-                >
-                  {output}
-                </pre>
+                {/* The vertical padding sits outside the scroller: overflowing
+                    text paints into a scroller's own padding, which would show
+                    a sliver of the eleventh line under the tenth. */}
+                <div className="rounded-[var(--radius-md)] border border-border-default bg-surface-canvas py-1.5 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent-primary">
+                  <pre
+                    tabIndex={0}
+                    role="region"
+                    aria-label="Last check output"
+                    // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- the well wrapper paints this region's focus ring via has-[:focus-visible]; a ring on the scroller would sit inside the wrapper's border and double it
+                    className="max-h-[10lh] overflow-y-auto whitespace-pre-wrap break-words [text-indent:2ch_hanging_each-line] px-2 font-mono text-2xs leading-relaxed text-text-primary outline-hidden"
+                  >
+                    {output}
+                  </pre>
+                </div>
               </div>
             )}
 
