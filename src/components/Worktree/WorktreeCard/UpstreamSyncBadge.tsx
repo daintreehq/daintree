@@ -226,10 +226,11 @@ export function UpstreamSyncBadge({
         ? "stale"
         : null;
   const StatusIcon = status ? STATUS_ICONS[status] : null;
+  const noUpstream = hasNoUpstream === true;
   // Nothing to say, and nothing wrong with saying nothing. A degraded fetch
   // still earns a mark with no counts beside it: on the main card an empty
   // line reads as "in sync", which is the one claim a failed fetch cannot make.
-  if (!showUpstreamDelta && !showBaseSegment && status === null) return null;
+  if (!showUpstreamDelta && !showBaseSegment && !noUpstream && status === null) return null;
 
   const upstreamSentence = showUpstreamDelta
     ? `Upstream: ${describeDrift(hasAhead ? aheadCount : 0, hasBehind ? behindCount : 0)}`
@@ -244,7 +245,6 @@ export function UpstreamSyncBadge({
       : showBaseResting && compareLabel
         ? `Base (${compareLabel}): in sync`
         : null;
-  const noUpstream = hasNoUpstream === true && showBaseSegment;
   const lastFetched =
     lastFetchedAt != null
       ? formatRelativeTime(lastFetchedAt, Math.max(nowMs, lastFetchedAt))
@@ -308,13 +308,16 @@ export function UpstreamSyncBadge({
           {displayedBaseBehind != null && (
             <span className="text-status-warning shrink-0">↓{displayedBaseBehind}</span>
           )}
-          {/* Same tier as the branch name it qualifies — never text-muted. */}
-          {hasNoUpstream && (
-            <span className="text-text-secondary shrink-0" data-testid="upstream-sync-unpushed">
-              · local
-            </span>
-          )}
         </>
+      )}
+      {/* Same tier as the branch name — never text-muted. Known on its own
+          (the tracking config says so), so it does not wait for a base
+          relationship to hang off; with nothing before it the separator
+          would dangle, so it goes. */}
+      {noUpstream && (
+        <span className="text-text-secondary shrink-0" data-testid="upstream-sync-unpushed">
+          {showUpstreamDelta || showBaseSegment ? "· local" : "local"}
+        </span>
       )}
       {StatusIcon && status && (
         <StatusIcon

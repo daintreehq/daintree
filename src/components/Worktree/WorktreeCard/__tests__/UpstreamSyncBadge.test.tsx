@@ -378,8 +378,19 @@ describe("UpstreamSyncBadge — resting base relationship", () => {
     expect(screen.queryByTestId("upstream-sync-unpushed")).not.toBeNull();
   });
 
-  it("renders nothing when there is no base branch and no upstream delta", () => {
+  // "No upstream" comes from the tracking config, not from the base, so a
+  // base that cannot be named does not get to erase it — and with nothing
+  // before it the marker drops its separator rather than dangling one.
+  it("still says there is no upstream when there is no base to hang it off", () => {
     renderBadge({ aheadCount: 0, behindCount: 0, hasNoUpstream: true });
+    expect(screen.getByTestId("upstream-sync-unpushed").textContent?.trim()).toBe("local");
+    expect(screen.getByTestId("upstream-sync-indicator").getAttribute("aria-label")).toContain(
+      "No upstream branch configured"
+    );
+  });
+
+  it("renders nothing when there is nothing to say", () => {
+    renderBadge({ aheadCount: 0, behindCount: 0, hasNoUpstream: false });
     expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
   });
 
