@@ -289,7 +289,7 @@ export function ProjectIdentityEditor({
               <button
                 type="button"
                 onClick={() => handleEmojiSelect(suggestion)}
-                className="-ml-1 flex items-center gap-1.5 self-start rounded-[var(--radius-md)] px-1 py-0.5 text-xs text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary"
+                className="-ml-1 flex min-h-6 items-center gap-1.5 self-start rounded-[var(--radius-md)] px-1 py-0.5 text-xs text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary"
               >
                 <span className="text-base leading-none">{suggestion}</span>
                 <span>Use suggested icon</span>

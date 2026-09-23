@@ -12,7 +12,14 @@ interface EmojiPickerProps {
   currentEmoji?: string;
 }
 
-const SKELETON_ROWS = 6;
+const SKELETON_ROWS = 7;
+
+const CATEGORY_HEADER_CLASS = cn(
+  PALETTE_SECTION_LABEL_CLASS,
+  // Opaque, since it is sticky over scrolling rows, and the panel's own solid
+  // tone so it never reads as a band.
+  "bg-[var(--overlay-surface-solid)] px-3 pt-2.5 pb-1"
+);
 const COLUMNS = 9;
 
 /**
@@ -56,15 +63,7 @@ export function EmojiPicker({ className, onEmojiSelect, currentEmoji }: EmojiPic
             className="select-none pb-1.5"
             components={{
               CategoryHeader: ({ category, ...props }) => (
-                <div
-                  className={cn(
-                    PALETTE_SECTION_LABEL_CLASS,
-                    // Opaque, since it is sticky over scrolling rows, and the
-                    // panel's own solid tone so it never reads as a band.
-                    "bg-[var(--overlay-surface-solid)] px-3 pt-2.5 pb-1"
-                  )}
-                  {...props}
-                >
+                <div className={CATEGORY_HEADER_CLASS} {...props}>
                   {category.label}
                 </div>
               ),
@@ -72,7 +71,7 @@ export function EmojiPicker({ className, onEmojiSelect, currentEmoji }: EmojiPic
                 // Leading inset on the panel's text column (the label, search
                 // icon and footer glyph all start at px-3); the trailing side is
                 // short by the scrollbar gutter frimousse reserves there.
-                <div className="scroll-my-1.5 flex pl-3 pr-1" {...props}>
+                <div className="scroll-my-1.5 flex pl-3 pr-0.5" {...props}>
                   {children}
                 </div>
               ),
@@ -112,13 +111,16 @@ export function EmojiPicker({ className, onEmojiSelect, currentEmoji }: EmojiPic
           />
         </EmojiPickerPrimitive.Viewport>
         {/* Laid out on the grid's own column so nothing moves when the data lands. */}
-        <EmojiPickerPrimitive.Loading className="absolute inset-0 flex flex-col pt-2.5">
+        <EmojiPickerPrimitive.Loading className="absolute inset-0 flex flex-col">
           <span className="sr-only">Loading emoji</span>
-          <span aria-hidden="true" className="flex h-5 items-center px-3">
+          {/* The category header's own box, holding a line of text height, so the
+              rows below start exactly where the real ones will. */}
+          <span aria-hidden="true" className={cn(CATEGORY_HEADER_CLASS, "flex items-center")}>
             <SkeletonBone className="h-2 w-24 rounded-full" />
+            {"\u00A0"}
           </span>
           {Array.from({ length: SKELETON_ROWS }, (_, row) => (
-            <span key={row} aria-hidden="true" className="flex pl-3 pr-4">
+            <span key={row} aria-hidden="true" className="flex pl-3 pr-3">
               {Array.from({ length: COLUMNS }, (_, col) => (
                 <span key={col} className="flex h-8 w-1/9 shrink-0 items-center justify-center">
                   <SkeletonBone className="size-5 rounded-full" />
