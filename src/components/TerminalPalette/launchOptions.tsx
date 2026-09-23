@@ -50,24 +50,26 @@ export function getLaunchOptions(): LaunchOption[] {
     {
       id: "terminal",
       label: "Terminal",
-      description: "Standard system shell (zsh/bash/powershell).",
+      description: "Standard system shell (zsh/bash/powershell)",
       icon: <SquareTerminal className="w-4 h-4" />,
     },
     {
       id: "browser",
       kind: "browser",
       label: "Browser",
-      description: "Embed localhost dev server preview.",
+      description: "Embed localhost dev server preview",
       icon: <Globe className="w-4 h-4 text-status-info" />,
     },
   ];
 }
 
+export const MORE_AGENTS_OPTION_ID = "more-agents";
+
 export function getMoreAgentsOption(): LaunchOption {
   return {
-    id: "more-agents",
-    label: "More agents...",
+    id: MORE_AGENTS_OPTION_ID,
+    label: "More agents…",
     description: "Configure which agents appear in this menu",
-    icon: <Settings className="w-4 h-4 text-daintree-text/50" />,
+    icon: <Settings className="w-4 h-4 text-text-secondary" />,
   };
 }

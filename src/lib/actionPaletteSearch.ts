@@ -467,3 +467,86 @@ function rankActionMatchesWithTitleRanks<T extends SearchableAction>(
 
   return scored.map((entry) => entry.item);
 }
+
+export type MatchRange = readonly [start: number, end: number];
+
+export interface ActionMatchRanges {
+  /** Which rendered field carries the evidence. */
+  readonly field: "title" | "description";
+  /** Inclusive `[start, end]` ranges, the shape `HighlightedText` takes. */
+  readonly ranges: readonly MatchRange[];
+}
+
+/**
+ * Where `lowerQuery` lands in `field`, by the same rules `scoreSubsequence`
+ * and `scoreTitle` credit, so the highlight never claims a reason the ranker
+ * didn't use. A whole-substring hit wins (it earns the substring bonus and is
+ * the reading a user expects), then an initialism when the query spells the
+ * field's acronym, then the ranker's own greedy left-to-right walk.
+ */
+function fieldMatchRanges(
+  lowerQuery: string,
+  field: string,
+  lowerField: string,
+  allowFuzzy: boolean
+): MatchRange[] | null {
+  const qLen = lowerQuery.length;
+  if (qLen === 0 || qLen > lowerField.length) return null;
+
+  const substringIdx = lowerField.indexOf(lowerQuery);
+  if (substringIdx >= 0) return [[substringIdx, substringIdx + qLen - 1]];
+
+  if (!allowFuzzy) return null;
+
+  if (qLen >= 2) {
+    const initials: MatchRange[] = [];
+    let qi = 0;
+    for (let i = 0; i < field.length && qi < qLen; i++) {
+      const code = field.charCodeAt(i);
+      const isAlnum =
+        (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+      if (!isAlnum || !isBoundary(field, i)) continue;
+      if (lowerField.charCodeAt(i) !== lowerQuery.charCodeAt(qi)) break;
+      initials.push([i, i]);
+      qi++;
+    }
+    if (qi === qLen) return initials;
+  }
+
+  const walk: MatchRange[] = [];
+  let qi = 0;
+  for (let fi = 0; fi < lowerField.length && qi < qLen; fi++) {
+    if (lowerField.charCodeAt(fi) !== lowerQuery.charCodeAt(qi)) continue;
+    const last = walk[walk.length - 1];
+    if (last && last[1] === fi - 1) walk[walk.length - 1] = [last[0], fi];
+    else walk.push([fi, fi]);
+    qi++;
+  }
+  if (qi < qLen) return null;
+  // A lone mid-word letter marks nothing a reader can see as a reason: "wt"
+  // walking "worktree" painted two one-letter slivers that read as smudges.
+  // Keep the walk only when every run is a word start or at least two
+  // characters; otherwise the row shows no emphasis rather than noise.
+  const legible = walk.every(([s, e]) => e > s || isBoundary(field, s));
+  return legible ? walk : null;
+}
+
+/**
+ * The evidence to show for a ranked row: the title when the query lands there,
+ * otherwise a whole-query hit in the description. The description never gets a
+ * fuzzy walk — across a sentence it lands on scattered letters ("Stage every
+ * change in the") that read as random bold, not as a reason. Category and keyword hits have no rendered text
+ * to mark, so they return null and the row simply shows no emphasis.
+ */
+export function getActionMatchRanges(
+  query: string,
+  item: Pick<SearchableAction, "title" | "titleLower" | "description" | "descriptionLower">
+): ActionMatchRanges | null {
+  const lowerQuery = query.trim().toLowerCase();
+  if (!lowerQuery) return null;
+  const title = fieldMatchRanges(lowerQuery, item.title, item.titleLower, true);
+  if (title) return { field: "title", ranges: title };
+  const description = fieldMatchRanges(lowerQuery, item.description, item.descriptionLower, false);
+  if (description) return { field: "description", ranges: description };
+  return null;
+}

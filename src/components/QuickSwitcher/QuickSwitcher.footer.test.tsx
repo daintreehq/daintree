@@ -81,6 +81,7 @@ function renderQuickSwitcher({ results, selectedIndex }: RenderArgs) {
       totalResults={results.length}
       selectedIndex={selectedIndex}
       isLoading={false}
+      matchesById={new Map()}
       close={() => {}}
       setQuery={() => {}}
       setSelectedIndex={() => {}}
@@ -129,6 +130,7 @@ describe("QuickSwitcher dynamic footer hint", () => {
       results: [terminalItem, worktreeItem],
       totalResults: 2,
       isLoading: false,
+      matchesById: new Map(),
       close: () => {},
       setQuery: () => {},
       setSelectedIndex: () => {},
@@ -152,6 +154,7 @@ describe("QuickSwitcher dynamic footer hint", () => {
       query: "",
       totalResults: 0,
       isLoading: false,
+      matchesById: new Map(),
       close: () => {},
       setQuery: () => {},
       setSelectedIndex: () => {},

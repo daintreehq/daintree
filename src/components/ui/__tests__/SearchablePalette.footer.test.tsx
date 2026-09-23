@@ -180,7 +180,7 @@ describe("SearchablePalette footer", () => {
       getActionLabel: (item) => (item ? `Switch to ${item.label}` : "Switch"),
     });
 
-    expect(document.body.textContent).toContain("to switch to bravo");
+    expect(document.body.textContent).toContain("to switch to Bravo");
     expect(document.body.textContent).not.toContain("to select");
   });
 
@@ -205,6 +205,7 @@ describe("SearchablePalette footer", () => {
 
     expect(fn).not.toHaveBeenCalled();
     expect(document.body.querySelector("kbd")).toBeNull();
+    expect(document.querySelector('[class*="palette-footer"]')).toBeNull();
   });
 
   it("getFooter takes precedence over getActionLabel", () => {
@@ -264,7 +265,7 @@ describe("SearchablePalette footer", () => {
         getActionLabel={fn}
       />
     );
-    expect(document.body.textContent).toContain("to switch to alpha");
+    expect(document.body.textContent).toContain("to switch to Alpha");
 
     rerender(
       <SearchablePalette<Item>
@@ -289,8 +290,8 @@ describe("SearchablePalette footer", () => {
         getActionLabel={fn}
       />
     );
-    expect(document.body.textContent).toContain("to switch to charlie");
-    expect(document.body.textContent).not.toContain("to switch to alpha");
+    expect(document.body.textContent).toContain("to switch to Charlie");
+    expect(document.body.textContent).not.toContain("to switch to Alpha");
   });
 
   it("shows no Enter hint when selectedIndex is out of range", () => {
@@ -367,11 +368,11 @@ describe("SearchablePalette footer", () => {
       const labelFn = (item: Item | null) => (item ? `Switch to ${item.label}` : "Pick");
 
       const { rerender } = render(renderWithSelectedIndex(0, labelFn));
-      expect(document.body.textContent).toContain("to switch to alpha");
+      expect(document.body.textContent).toContain("to switch to Alpha");
 
       rerender(renderWithSelectedIndex(1, labelFn));
-      expect(document.body.textContent).toContain("to switch to bravo");
-      expect(document.body.textContent).not.toContain("to switch to alpha");
+      expect(document.body.textContent).toContain("to switch to Bravo");
+      expect(document.body.textContent).not.toContain("to switch to Alpha");
     });
   });
 });

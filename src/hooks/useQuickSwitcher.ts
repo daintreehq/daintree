@@ -5,7 +5,7 @@ import { usePanelStore } from "@/store";
 import { useWorktrees } from "./useWorktrees";
 import { useWorktreeSelectionStore } from "@/store";
 import { isPtyPanel, type PanelKind } from "@shared/types/panel";
-import { useSearchablePalette } from "./useSearchablePalette";
+import { useSearchablePalette, type FuseResultMatch } from "./useSearchablePalette";
 import { usePaletteStore } from "@/store/paletteStore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 
@@ -27,6 +27,8 @@ export interface UseQuickSwitcherReturn {
   results: QuickSwitcherItem[];
   totalResults: number;
   selectedIndex: number;
+  /** Match ranges per row id for the current query, for row emphasis. */
+  matchesById: ReadonlyMap<string, readonly FuseResultMatch[]>;
   isLoading: boolean;
   open: () => void;
   close: () => void;
@@ -48,6 +50,19 @@ const FUSE_OPTIONS: IFuseOptions<QuickSwitcherItem> = {
   threshold: 0.4,
   includeScore: true,
 };
+
+/**
+ * The ranking index's options plus match ranges. Kept on a second index so
+ * ranking itself pays nothing for them, and with a two-character floor so a
+ * fuzzy hit doesn't sprinkle single-letter bands across a row.
+ */
+const FUSE_MATCH_OPTIONS: IFuseOptions<QuickSwitcherItem> = {
+  ...FUSE_OPTIONS,
+  includeMatches: true,
+  minMatchCharLength: 2,
+};
+
+const EMPTY_MATCHES: ReadonlyMap<string, readonly FuseResultMatch[]> = new Map();
 
 const MAX_RESULTS = 20;
 const MRU_BOOST_FACTOR = 0.05;
@@ -196,6 +211,16 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     paletteId: "quick-switcher",
   });
 
+  const matchFuse = useMemo(() => new Fuse(items, FUSE_MATCH_OPTIONS), [items]);
+  const matchesById = useMemo(() => {
+    if (!query.trim()) return EMPTY_MATCHES;
+    const byId = new Map<string, readonly FuseResultMatch[]>();
+    for (const r of matchFuse.search(query)) {
+      if (r.matches) byId.set(r.item.id, r.matches);
+    }
+    return byId;
+  }, [matchFuse, query]);
+
   const restoreBackgroundTerminal = usePanelStore((state) => state.restoreBackgroundTerminal);
   const activateTerminal = usePanelStore((state) => state.activateTerminal);
 
@@ -238,6 +263,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     results,
     totalResults,
     selectedIndex,
+    matchesById,
     isLoading: !worktreesInitialized && worktreeError === null,
     open,
     close,

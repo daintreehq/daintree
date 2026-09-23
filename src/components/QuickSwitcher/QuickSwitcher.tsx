@@ -1,6 +1,10 @@
 import { useCallback, useId } from "react";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
-import { KBD_CLASS, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
+import {
+  KBD_CLASS,
+  PaletteFooterHints,
+  PaletteNoMatchHint,
+} from "@/components/ui/AppPaletteDialog";
 import { QuickSwitcherItem } from "./QuickSwitcherItem";
 import { useKeybindingDisplay, useEffectiveCombo } from "@/hooks/useKeybinding";
 import type {
@@ -26,6 +30,7 @@ type QuickSwitcherProps = Pick<
   | "results"
   | "totalResults"
   | "selectedIndex"
+  | "matchesById"
   | "isLoading"
   | "close"
   | "setQuery"
@@ -42,6 +47,7 @@ export function QuickSwitcher({
   results,
   totalResults,
   selectedIndex,
+  matchesById,
   isLoading,
   close,
   setQuery,
@@ -90,7 +96,8 @@ export function QuickSwitcher({
       onClose={close}
       onHoverIndex={setSelectedIndex}
       getItemId={(item) => item.id}
-      renderItem={(item, index, isSelected, onHoverIndex) => (
+      matchesById={matchesById}
+      renderItem={(item, index, isSelected, onHoverIndex, matches) => (
         <QuickSwitcherItem
           key={item.id}
           item={item}
@@ -98,6 +105,7 @@ export function QuickSwitcher({
           onSelect={handleSelect}
           onHover={() => onHoverIndex(index)}
           ariaDescribedBy={footerHintId}
+          matches={matches}
         />
       )}
       getFooter={getFooter}
@@ -110,6 +118,7 @@ export function QuickSwitcher({
       listId="quick-switcher-list"
       itemIdPrefix="qs-option"
       emptyMessage="No panels open"
+      noMatchContent={<PaletteNoMatchHint what="everything open" />}
       totalResults={totalResults}
       emptyContent={
         <p className="mt-2 text-xs text-text-secondary">
