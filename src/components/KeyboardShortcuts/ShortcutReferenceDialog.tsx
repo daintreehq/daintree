@@ -60,7 +60,7 @@ function ShortcutRow({ entry, mac, groupScope, categoryLabel }: ShortcutRowProps
   return (
     <div
       role="listitem"
-      className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 py-1.5"
+      className="flex flex-wrap items-center justify-between gap-x-4 gap-y-0.5 py-1.5"
     >
       <span className="min-w-0 text-sm leading-5 text-text-primary">
         {entry.description}
@@ -71,7 +71,7 @@ function ShortcutRow({ entry, mac, groupScope, categoryLabel }: ShortcutRowProps
       <span className="sr-only">{spokenBinding(entry, mac, groupScope)}</span>
       <span
         aria-hidden="true"
-        className="ml-auto flex min-w-0 max-w-full flex-wrap items-baseline justify-end gap-x-2 gap-y-0.5 text-xs leading-5 text-text-secondary"
+        className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-2 gap-y-0.5 text-xs leading-5 text-text-secondary"
       >
         {entry.isCustom && <span>Custom</span>}
         {entry.alternatives.length === 0 ? (
@@ -80,7 +80,7 @@ function ShortcutRow({ entry, mac, groupScope, categoryLabel }: ShortcutRowProps
           entry.alternatives.map((alt, index) => {
             const scope = alt.scope === groupScope ? null : scopeLabel(alt.scope);
             return (
-              <span key={alt.combo} className="inline-flex flex-wrap items-baseline gap-x-2">
+              <span key={alt.combo} className="inline-flex flex-wrap items-center gap-x-2">
                 {index > 0 && <span>or</span>}
                 <KbdChord
                   shortcut={alt.combo}

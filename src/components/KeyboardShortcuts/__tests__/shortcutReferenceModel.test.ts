@@ -277,4 +277,48 @@ describe("searchShortcuts", () => {
       }
     }
   });
+
+  it("reads modifier-led words naming keys as keys", () => {
+    const cases: Array<[string, RegExp]> = [
+      ["ctrl tab", /^Ctrl\+Tab$/],
+      ["cmd shift backspace", /^Cmd\+Shift\+Backspace$/],
+    ];
+    for (const [query, combo] of cases) {
+      const results = searchShortcuts(entries, query, true)!;
+      expect(results.length, query).toBeGreaterThan(0);
+      for (const entry of results) {
+        expect(
+          entry.alternatives.some((alt) => combo.test(alt.combo)),
+          `${query}: ${entry.description}`
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("finds a binding on the plus key by its printed form, and nothing else", () => {
+    const withPlus = buildShortcutEntries(
+      [
+        ...registry(false),
+        {
+          actionId: "custom.zoom",
+          scope: "global",
+          description: "Zoom with plus",
+          category: "View",
+          effectiveCombo: "Cmd++",
+        },
+      ],
+      noOverrides
+    );
+    for (const [query, mac] of [
+      ["⌘+", true],
+      ["Ctrl++", false],
+      ["cmd++", true],
+    ] as const) {
+      const results = searchShortcuts(withPlus, query, mac)!;
+      expect(
+        results.map((e) => e.description),
+        query
+      ).toEqual(["Zoom with plus"]);
+    }
+  });
 });

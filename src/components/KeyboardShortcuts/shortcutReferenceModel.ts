@@ -310,78 +310,77 @@ function parseKeyQuery(query: string, mac: boolean): KeyStep[] | null {
   const raw = query.trim();
   if (!raw) return null;
 
-  const tokens: string[] = [];
+  // "+" is a separator between keys, except where it can only be the key
+  // itself: straight after a glyph ("⌘+", as printed on macOS), after another
+  // "+" ("Ctrl++"), or alone.
+  type Token = { text: string; kind: "glyph" | "word" | "separator" | "comma" | "key" };
+  const tokens: Token[] = [];
   let word = "";
   const flush = () => {
-    if (word) tokens.push(word);
+    if (word) tokens.push({ text: word, kind: "word" });
     word = "";
   };
   for (const char of raw) {
     if (GLYPH.test(char)) {
       flush();
-      tokens.push(char);
-    } else if (char === "+" || /\s/.test(char)) {
+      tokens.push({ text: char, kind: "glyph" });
+    } else if (char === "+") {
       flush();
-      if (char === "+") tokens.push("+");
+      const previous = tokens[tokens.length - 1];
+      const isKey =
+        !previous ||
+        previous.kind === "separator" ||
+        (previous.kind === "glyph" && MODIFIER_NAMES.has(previous.text));
+      tokens.push({ text: "+", kind: isKey ? "key" : "separator" });
+    } else if (/\s/.test(char)) {
+      flush();
     } else if (char === ",") {
       flush();
-      tokens.push(",");
+      tokens.push({ text: ",", kind: "comma" });
     } else {
       word += char;
     }
   }
   flush();
 
-  const words = tokens.filter((t) => t !== "+" && t !== ",");
-  const hasGlyph = tokens.some((t) => GLYPH.test(t));
-  const hasPlus = tokens.includes("+");
-  const firstIsModifier = words.length > 0 && MODIFIER_NAMES.has(words[0]!.toLowerCase());
-  const singleFunctionKey = words.length === 1 && FUNCTION_KEY.test(words[0]!.toLowerCase());
+  const words = tokens.filter((t) => t.kind === "word").map((t) => t.text.toLowerCase());
+  const isKeyWord = (w: string) =>
+    MODIFIER_NAMES.has(w) || KEY_NAMES.has(w) || FUNCTION_KEY.test(w) || w.length === 1;
   const looksLikeKeys =
-    hasGlyph ||
-    hasPlus ||
-    singleFunctionKey ||
-    // "cmd k", "cmd shift p", or a lone "shift": every word a modifier or one key.
-    (firstIsModifier &&
-      words.every(
-        (w) =>
-          MODIFIER_NAMES.has(w.toLowerCase()) ||
-          w.length === 1 ||
-          FUNCTION_KEY.test(w.toLowerCase())
-      ));
+    tokens.some((t) => t.kind !== "word" && t.kind !== "comma") ||
+    (words.length === 1 && FUNCTION_KEY.test(words[0]!)) ||
+    // "cmd k", "ctrl tab", "cmd shift backspace", or a lone "shift".
+    (words.length > 0 && MODIFIER_NAMES.has(words[0]!) && words.every(isKeyWord));
   if (!looksLikeKeys) return null;
   // A multi-letter word that is neither a modifier nor a named key means words.
-  if (
-    words.some(
-      (w) =>
-        w.length > 1 &&
-        !MODIFIER_NAMES.has(w.toLowerCase()) &&
-        !KEY_NAMES.has(w.toLowerCase()) &&
-        !FUNCTION_KEY.test(w.toLowerCase()) &&
-        !/^[^a-z0-9]+$/i.test(w)
-    )
-  ) {
-    return null;
-  }
+  if (words.some((w) => !isKeyWord(w) && !/^[^a-z0-9]+$/i.test(w))) return null;
 
   const steps: KeyStep[] = [{ modifiers: new Set(), key: null }];
+  const setKey = (key: string) => {
+    const step = steps[steps.length - 1]!;
+    if (step.key === null) step.key = key;
+    else steps.push({ modifiers: new Set(), key });
+  };
   for (const token of tokens) {
     const step = steps[steps.length - 1]!;
-    if (token === "+") continue;
-    if (token === ",") {
-      if (step.key === null && step.modifiers.size > 0) step.key = ",";
-      else if (step.key !== null || step.modifiers.size > 0)
-        steps.push({ modifiers: new Set(), key: null });
+    if (token.kind === "separator") continue;
+    if (token.kind === "key") {
+      setKey(token.text);
       continue;
     }
-    const canonical = canonicalKey(token, mac);
+    if (token.kind === "comma") {
+      if (step.key === null && step.modifiers.size > 0) step.key = ",";
+      else if (step.key !== null || step.modifiers.size > 0) {
+        steps.push({ modifiers: new Set(), key: null });
+      }
+      continue;
+    }
+    const canonical = canonicalKey(token.text, mac);
     if (canonical.modifier) {
       if (step.key !== null) steps.push({ modifiers: new Set([canonical.modifier]), key: null });
       else step.modifiers.add(canonical.modifier);
-    } else if (step.key === null) {
-      step.key = canonical.key ?? null;
     } else {
-      steps.push({ modifiers: new Set(), key: canonical.key ?? null });
+      setKey(canonical.key ?? token.text.toLowerCase());
     }
   }
   const filled = steps.filter((step) => step.key !== null || step.modifiers.size > 0);
@@ -463,7 +462,10 @@ export function searchShortcuts(
 
   // One character is as likely a key as the start of a word: a row bound to
   // exactly that key, unmodified (the worktree grid's X), leads.
-  const bareKey = [...trimmed].length === 1 ? parseKeyQuery(`+${trimmed}`, mac) : null;
+  const bareKeyName = [...trimmed].length === 1 ? canonicalKey(trimmed, mac).key : undefined;
+  const bareKey: KeyStep[] | null = bareKeyName
+    ? [{ modifiers: new Set<string>(), key: bareKeyName }]
+    : null;
   const keyed = bareKey
     ? entries.filter((entry) =>
         entry.alternatives.some((alt) => comboMatches(alt.combo, bareKey, mac))
