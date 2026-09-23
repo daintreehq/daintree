@@ -112,17 +112,23 @@ describe("Toolbar strip — composition invariants", () => {
     });
 
     it("the grid keeps a gutter between the side groups and the pill", () => {
-      const root = source.match(/role="toolbar"[\s\S]*?className="([^"]+)"/);
+      const root = source.match(/role="toolbar"[\s\S]*?className=\{cn\(\s*"([^"]+)"/);
       expect(root).not.toBeNull();
       expect(root![1]).toMatch(/\bgap-x-[1-9]\d*\b/);
     });
 
-    it("the strip's content is centred in its height — no top padding pushing it low", () => {
-      const root = source.match(/role="toolbar"[\s\S]*?className="([^"]+)"/);
+    it("the strip's content is centred in the surface the eye sees", () => {
+      // Unconditional top padding sat every control 2px low for months. The
+      // only offset allowed is one pixel for the macOS window-rim highlight,
+      // which covers the strip's top row everywhere but fullscreen.
+      const root = source.match(
+        /role="toolbar"[\s\S]*?className=\{cn\(\s*"([^"]+)",([\s\S]*?)\)\}/
+      );
       expect(root).not.toBeNull();
       expect(root![1]).toMatch(/\bh-12\b/);
       expect(root![1]).toMatch(/\bitems-center\b/);
-      expect(root![1]).not.toMatch(/\bp[tby]-\d/);
+      expect(root![1]).not.toMatch(/\bp[tby]-/);
+      expect(root![2]).toMatch(/isMac\(\) && !isFullscreen && "pt-px"/);
     });
 
     it("dividers never shrink to nothing under width pressure", () => {

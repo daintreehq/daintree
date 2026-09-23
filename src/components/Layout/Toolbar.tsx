@@ -2296,7 +2296,13 @@ export function Toolbar({
             aria-label="Main toolbar"
             onKeyDown={handleToolbarKeyDown}
             onFocusCapture={handleToolbarFocusCapture}
-            className="@container/toolbar relative z-[60] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-3 h-12 items-center px-4 shrink-0 app-drag-region surface-toolbar border-b border-divider"
+            className={cn(
+              "@container/toolbar relative z-[60] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-3 h-12 items-center px-4 shrink-0 app-drag-region surface-toolbar border-b border-divider",
+              // macOS paints its window-rim highlight over our top pixel row, and
+              // the eye reads it as separate from the strip; centre in what's left.
+              // Fullscreen has no rim.
+              isMac() && !isFullscreen && "pt-px"
+            )}
           >
             {!isLinux() && <div className="window-resize-strip" />}
 
