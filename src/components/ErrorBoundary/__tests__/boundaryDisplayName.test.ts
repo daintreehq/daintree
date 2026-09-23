@@ -54,7 +54,15 @@ describe("humanizeComponentName", () => {
     expect(humanizeComponentName("MCPServerList")).toBe("MCP server list");
   });
 
-  it("leaves already-human names alone", () => {
+  it("leaves already-human names alone, casing included", () => {
     expect(humanizeComponentName("Git panel")).toBe("Git panel");
+    expect(humanizeComponentName("GitHub list")).toBe("GitHub list");
+    // A plugin author's label keeps its capitals, brand or not.
+    expect(humanizeComponentName("Acme Deploy panel")).toBe("Acme Deploy panel");
+  });
+
+  it("does not split a brand name at its inner capital", () => {
+    expect(humanizeComponentName("GitHubStatsDropdown")).toBe("GitHub stats dropdown");
+    expect(humanizeComponentName("SyncGitLabIssues")).toBe("Sync GitLab issues");
   });
 });
