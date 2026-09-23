@@ -3,6 +3,7 @@ import {
   AppPaletteDialog,
   KBD_CLASS,
   PaletteFooterHints,
+  toHintPhrase,
   type PaletteSurfaceTier,
 } from "@/components/ui/AppPaletteDialog";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
@@ -139,7 +140,7 @@ export interface SearchablePaletteProps<T> {
    * Sugar for the common case of "the footer says one thing: what Enter does."
    * Returns the verb-noun action label for the current selection (e.g.
    * `"Switch terminal"`, `"Apply theme"`); the shell wraps it in a single `↵`
-   * chip and lowercases the label for mid-sentence rendering. Ignored when
+   * chip and drops the leading capital for mid-sentence rendering. Ignored when
    * `footer` or `getFooter` is also set — those win, in that order. Use a
    * stable reference (module-level fn or `useCallback`) to avoid recomputing
    * the footer node every render. Called only while a row is selected; with
@@ -379,7 +380,7 @@ export function SearchablePalette<T>({
   const actionLabelFooter = useMemo(() => {
     if (rawActionLabel == null) return null;
     const actionLabel = rawActionLabel.trim() || "Select";
-    const phrase = `to ${actionLabel.toLowerCase()}`;
+    const phrase = `to ${toHintPhrase(actionLabel)}`;
     // One chip, not three. `getActionLabel` names what Enter does for the
     // current selection, which is the only thing a footer is for now — the
     // `↑↓` and `Esc` chips this used to compose were restating conventions.

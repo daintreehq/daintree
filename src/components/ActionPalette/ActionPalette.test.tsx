@@ -269,7 +269,21 @@ describe("ActionPalette", () => {
 
   it("surfaces the projects hint when an empty-result query looks like a path", () => {
     render(<ActionPalette {...baseProps} query="src/foo" results={[]} totalResults={0} />);
-    expect(screen.getByText("search projects")).toBeTruthy();
+    expect(screen.getByText("to search projects")).toBeTruthy();
+  });
+
+  it("keeps the projects hint's promise: Enter hands a path-shaped query to the project switcher", () => {
+    render(<ActionPalette {...baseProps} query="src/foo" results={[]} totalResults={0} />);
+    fireKey("Enter");
+    expect(usePaletteStore.getState().activePaletteId).toBe("project-switcher");
+  });
+
+  it("draws no footer band over an empty result list it can't act on", () => {
+    render(<ActionPalette {...baseProps} query="qqxzv" results={[]} totalResults={0} />);
+    expect(screen.queryByText(/^to /)).toBeNull();
+    // The band itself, not just its text: an empty wrapper still draws the
+    // footer's rule and fill.
+    expect(document.querySelector('[class*="palette-footer"]')).toBeNull();
   });
 
   it("does not surface the projects hint when results exist", () => {
@@ -281,7 +295,7 @@ describe("ActionPalette", () => {
         totalResults={1}
       />
     );
-    expect(screen.queryByText("search projects")).toBeNull();
+    expect(screen.queryByText("to search projects")).toBeNull();
   });
 
   it("pops the chip on Backspace when the cursor sits at position 0", () => {
@@ -360,9 +374,9 @@ describe("ActionPalette", () => {
   ])("looksLikePath heuristic for %s", (query, shouldHint) => {
     render(<ActionPalette {...baseProps} query={query} results={[]} totalResults={0} />);
     if (shouldHint) {
-      expect(screen.getByText("search projects")).toBeTruthy();
+      expect(screen.getByText("to search projects")).toBeTruthy();
     } else {
-      expect(screen.queryByText("search projects")).toBeNull();
+      expect(screen.queryByText("to search projects")).toBeNull();
     }
   });
 

@@ -318,6 +318,7 @@ export function ModalHostLayer({
               results={quickSwitcher.results}
               totalResults={quickSwitcher.totalResults}
               selectedIndex={quickSwitcher.selectedIndex}
+              matchesById={quickSwitcher.matchesById}
               isLoading={quickSwitcher.isLoading}
               close={quickSwitcher.close}
               setQuery={quickSwitcher.setQuery}

@@ -97,23 +97,79 @@ describe("ActionPaletteItem", () => {
     expect(screen.getByRole("option").getAttribute("aria-disabled")).toBe("false");
   });
 
-  it("renders keybinding when present", () => {
-    render(
+  it("draws the binding as key chips and exposes it on the option", () => {
+    const { container } = render(
       <ActionPaletteItem
-        item={makeItem({ keybinding: "⌘K" })}
+        item={makeItem({ keybinding: "⌘+K", shortcut: "Cmd+K" })}
         index={0}
         isSelected={false}
         onSelect={onSelect}
       />
     );
 
-    expect(screen.getByText("⌘K")).toBeTruthy();
+    // The shared chord renderer, not the `+`-joined display string.
+    expect(container.querySelectorAll("kbd").length).toBeGreaterThan(0);
+    expect(screen.queryByText("⌘+K")).toBeNull();
+    // The visible chord sits in a presentational cluster, so the binding has
+    // to reach assistive technology through the option itself.
+    expect(screen.getByRole("option").getAttribute("aria-keyshortcuts")).toBeTruthy();
   });
 
-  it("renders the canonical combo as key glyphs, labelled with its display form", () => {
+  it("names the category only when asked to", () => {
+    const { rerender } = render(
+      <ActionPaletteItem item={makeItem()} index={0} isSelected={false} onSelect={onSelect} />
+    );
+    expect(screen.queryByText("terminal")).toBeTruthy();
+
+    rerender(
+      <ActionPaletteItem
+        item={makeItem()}
+        index={0}
+        isSelected={false}
+        onSelect={onSelect}
+        showCategory={false}
+      />
+    );
+    expect(screen.queryByText("terminal")).toBeNull();
+  });
+
+  it("marks the query's evidence in the title, and in the description only when the title has none", () => {
+    const { container, rerender } = render(
+      <ActionPaletteItem
+        item={makeItem({ title: "Toggle sidebar", titleLower: "toggle sidebar" })}
+        index={0}
+        isSelected={false}
+        onSelect={onSelect}
+        highlightQuery="side"
+      />
+    );
+    const marked = () =>
+      Array.from(container.querySelectorAll("span"))
+        .filter((el) => el.children.length === 0 && el.className.includes("bg-overlay-medium"))
+        .map((el) => el.textContent);
+    expect(marked()).toEqual(["side"]);
+
+    rerender(
+      <ActionPaletteItem
+        item={makeItem({
+          title: "Toggle sidebar",
+          titleLower: "toggle sidebar",
+          description: "Show or hide the navigator",
+          descriptionLower: "show or hide the navigator",
+        })}
+        index={0}
+        isSelected={false}
+        onSelect={onSelect}
+        highlightQuery="navigator"
+      />
+    );
+    expect(marked()).toEqual(["navigator"]);
+  });
+
+  it("renders a two-step chord as key glyphs rather than the display string", () => {
     render(
       <ActionPaletteItem
-        item={makeItem({ keybinding: "⌘+K ⌘+R", keybindingCombo: "Cmd+K Cmd+R" })}
+        item={makeItem({ keybinding: "⌘+K ⌘+R", shortcut: "Cmd+K Cmd+R" })}
         index={0}
         isSelected={false}
         onSelect={onSelect}
@@ -123,7 +179,7 @@ describe("ActionPaletteItem", () => {
     const keys = Array.from(screen.getByRole("option").querySelectorAll("kbd"));
     expect(keys.length).toBeGreaterThan(0);
     expect(keys.some((k) => k.textContent === "+")).toBe(false);
-    expect(screen.getByText("⌘+K ⌘+R")).toBeTruthy();
+    expect(screen.queryByText("⌘+K ⌘+R")).toBeNull();
   });
 
   it("applies selected styling with aria-selected", () => {
@@ -270,23 +326,19 @@ describe("ActionPaletteItem", () => {
       expect(onSelect).not.toHaveBeenCalled();
     });
 
-    it("surfaces a rejection message when onPin returns false (e.g., destructive action)", () => {
+    it("does not offer pin on a destructive row, since pinning one is always refused", () => {
       const onPin = vi.fn(() => false);
       render(
         <ActionPaletteItem
           item={makeItem({ danger: "confirm" })}
           index={0}
-          isSelected={false}
+          isSelected
           onSelect={onSelect}
           onPin={onPin}
         />
       );
 
-      const pinButton = screen.getByTestId("action-palette-pin");
-      fireEvent.click(pinButton);
-
-      expect(onPin).toHaveBeenCalledTimes(1);
-      expect(screen.getByText("Can't pin destructive actions")).toBeTruthy();
+      expect(screen.queryByTestId("action-palette-pin")).toBeNull();
     });
 
     it("names the keyboard chord on both controls, since nothing else teaches it", () => {
@@ -368,8 +420,22 @@ describe("ActionPaletteItem", () => {
         <ActionPaletteItem item={confirmItem()} index={0} isSelected={false} onSelect={onSelect} />
       );
 
-      expect(screen.getByText("Delete worktree …")).toBeTruthy();
+      expect(screen.getByText("Delete worktree…")).toBeTruthy();
       expect(screen.queryByText("Delete worktree")).toBeNull();
+    });
+
+    it("never doubles the ellipsis on a title that already carries one", () => {
+      render(
+        <ActionPaletteItem
+          item={confirmItem({ title: "Import configuration…" })}
+          index={0}
+          isSelected={false}
+          onSelect={onSelect}
+        />
+      );
+
+      const title = screen.getByRole("option").textContent ?? "";
+      expect(title.match(/…/g)?.length).toBe(1);
     });
 
     it("does not append the ellipsis on safe-tier titles", () => {
@@ -454,7 +520,7 @@ describe("ActionPaletteItem", () => {
       expect(button?.getAttribute("aria-describedby")).toBeNull();
       expect(container.querySelector(`#${item.id}-danger-rationale`)).toBeNull();
       // Suffix and icon still render — they gate on `danger === "confirm"`, not on rationale.
-      expect(screen.getByText("Delete worktree …")).toBeTruthy();
+      expect(screen.getByText("Delete worktree…")).toBeTruthy();
       expect(container.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
     });
   });

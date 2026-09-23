@@ -616,6 +616,11 @@ AppPaletteDialog.Body = function AppPaletteBody({
         focusIndicator === "region" || activeDescendant === undefined
           ? "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           : "focus:outline-hidden",
+        // Matches the ScrollShadow fade (`h-8`). Every palette scrolls its
+        // active row into view with `block: "nearest"`, which honours scroll
+        // padding — without it the row Enter will act on parks under the fade
+        // and reads as disabled.
+        "scroll-py-8",
         scrollClassName
       )}
     >
@@ -720,6 +725,20 @@ const SECONDARY_DROP_CLASSES = [
   "@max-[200px]/palette-footer:hidden",
 ];
 
+/**
+ * A row's title or label as it reads after "to" in a footer hint. Sentence
+ * case only drops the leading capital; a leading word that carries its own
+ * internal capitals or is an initialism ("GitHub", "CLI") is a name and keeps
+ * them. Lowercasing the whole string turned "Launch GitHub Copilot" into
+ * "launch github copilot".
+ */
+export function toHintPhrase(label: string): string {
+  const trimmed = label.trim();
+  const firstWord = trimmed.split(/\s/, 1)[0] ?? "";
+  if (/[A-Z]/.test(firstWord.slice(1))) return trimmed;
+  return trimmed.charAt(0).toLowerCase() + trimmed.slice(1);
+}
+
 export function PaletteFooterHints({ primaryHint, hints = [] }: PaletteFooterHintsProps) {
   return (
     <div className="@container/palette-footer w-full flex items-center justify-between gap-3">
@@ -778,7 +797,10 @@ AppPaletteDialog.Input = function AppPaletteInput({
     return (
       <div
         className={cn(
-          "flex w-full items-center gap-1.5 pl-2 pr-3 py-1.5",
+          // `min-h-9.5` is the plain input's own height (py-2 + a 20px line +
+          // the border), so entering a mode doesn't shrink the field and
+          // hitch the whole list up by a few pixels.
+          "flex w-full min-h-9.5 items-center gap-1.5 pl-2 pr-3 py-1",
           PALETTE_INPUT_SURFACE,
           // Neutral focus — see `PALETTE_INPUT_SURFACE`.
           "focus-within:border-selection-outline focus-within:ring-1 focus-within:ring-selection-outline/50"
@@ -948,3 +970,17 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
     </>
   );
 };
+
+/**
+ * The next step a no-match state names. Escape clears the query before it
+ * closes the palette, so the way back from "nothing matched" is one key, and
+ * saying so turns a dead end into an instruction. `what` is the population the
+ * cleared list will show ("all actions").
+ */
+export function PaletteNoMatchHint({ what }: { what: string }) {
+  return (
+    <p className="mt-2 text-xs text-text-secondary">
+      Press <kbd className={KBD_CLASS}>Esc</kbd> to see {what}
+    </p>
+  );
+}

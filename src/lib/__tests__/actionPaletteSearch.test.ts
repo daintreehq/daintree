@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ActionFrecencyEntry } from "@shared/types/actions";
 import {
   extractAcronym,
+  getActionMatchRanges,
   rankActionMatches,
   scoreAction,
   type SearchableAction,
@@ -295,5 +296,60 @@ describe("rankActionMatches title-rank cache exactness", () => {
   it("treats unicode whitespace as an acronym boundary like the \\s class", () => {
     expect(extractAcronym("Open Terminal")).toBe("ot");
     expect(extractAcronym("Open Terminal")).toBe("ot");
+  });
+});
+
+describe("getActionMatchRanges", () => {
+  const cases: Array<{ title: string; description: string; query: string }> = [
+    { title: "Toggle sidebar", description: "Toggle sidebar visibility", query: "side" },
+    { title: "Copy worktree context", description: "", query: "cwc" },
+    { title: "Reconcile worktree list", description: "", query: "wt" },
+    { title: "Focus terminal 1", description: "", query: "ftm" },
+    {
+      title: "Stage all files",
+      description: "Stage every change in the worktree",
+      query: "worktree",
+    },
+  ];
+
+  function marked(text: string, ranges: readonly (readonly [number, number])[]): string {
+    return ranges.map(([s, e]) => text.slice(s, e + 1)).join("");
+  }
+
+  it.each(cases)("marks characters that spell '$query', in order, in one field", (c) => {
+    const item = {
+      title: c.title,
+      titleLower: c.title.toLowerCase(),
+      description: c.description,
+      descriptionLower: c.description.toLowerCase(),
+    };
+    const match = getActionMatchRanges(c.query, item);
+    expect(match).not.toBeNull();
+    const text = match!.field === "title" ? c.title : c.description;
+    expect(marked(text, match!.ranges).toLowerCase()).toBe(c.query.toLowerCase());
+    // Ranges are ordered and disjoint, so the band never overlaps itself.
+    for (let i = 1; i < match!.ranges.length; i++) {
+      expect(match!.ranges[i]![0]).toBeGreaterThan(match!.ranges[i - 1]![1]);
+    }
+  });
+
+  it("prefers the title whenever the title carries the evidence", () => {
+    const match = getActionMatchRanges("side", {
+      title: "Toggle sidebar",
+      titleLower: "toggle sidebar",
+      description: "sidebar",
+      descriptionLower: "sidebar",
+    });
+    expect(match?.field).toBe("title");
+  });
+
+  it("claims nothing for a row the query reached only through keywords or category", () => {
+    const match = getActionMatchRanges("zq", {
+      title: "Toggle sidebar",
+      titleLower: "toggle sidebar",
+      description: "Toggle sidebar visibility",
+      descriptionLower: "toggle sidebar visibility",
+    });
+    expect(match).toBeNull();
   });
 });

@@ -1,6 +1,12 @@
 import { Fragment, useCallback, useEffect, useId, useRef, useState } from "react";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
-import { KBD_CLASS, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
+import {
+  KBD_CLASS,
+  PaletteFooterHints,
+  PaletteNoMatchHint,
+  toHintPhrase,
+} from "@/components/ui/AppPaletteDialog";
+import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
@@ -23,8 +29,10 @@ import {
   type UseActionPaletteReturn,
 } from "@/hooks/useActionPalette";
 
-const SECTION_HEADER_CLASS =
-  "px-3 py-1 text-3xs font-medium tracking-wider uppercase text-text-secondary select-none";
+// A band after the first opens with more air above it than below, so the
+// label reads as the head of the rows under it rather than the tail of the
+// rows above.
+const SECTION_HEADER_CLASS = `${PALETTE_SECTION_LABEL_CLASS} px-3 py-1 not-first:mt-2`;
 
 // Module-level so SearchablePalette receives a stable reference and skips
 // re-renders driven only by a freshly-created callback identity.
@@ -100,7 +108,7 @@ function PrefixDiscoverabilityRow() {
       className="@max-[420px]/palette-footer:hidden flex items-center gap-x-3 gap-y-1 flex-wrap text-2xs text-text-secondary"
       aria-label="Prefix shortcuts"
     >
-      <span className="text-daintree-text/40">Type</span>
+      <span>Type</span>
       {Object.entries(PREFIX_MAP).map(([prefix, route]) => (
         <span key={prefix} className="inline-flex items-baseline">
           <kbd className={KBD_CLASS}>{prefix}</kbd>
@@ -220,7 +228,7 @@ export function ActionPalette({
   }, [showSections, selectedIndex, results]);
 
   const renderActionRow = useCallback(
-    (item: ActionPaletteItemType, index: number, canHide: boolean) => {
+    (item: ActionPaletteItemType, index: number, canHide: boolean, showCategory: boolean) => {
       const isPinned = pinnedActionIds.includes(item.id);
       return (
         <div key={item.id} data-action-id={item.id}>
@@ -237,6 +245,7 @@ export function ActionPalette({
             footerHintId={footerHintId}
             posInSet={index + 1}
             setSize={results.length}
+            showCategory={showCategory}
           />
         </div>
       );
@@ -268,6 +277,8 @@ export function ActionPalette({
         >
           {sections.map((section) => {
             const canHide = section.id === RECENTLY_USED_SECTION_ID;
+            // A category band's header already names every row's category.
+            const showCategory = !section.id.startsWith("category:");
             return (
               <Fragment key={section.id}>
                 {/*
@@ -292,7 +303,9 @@ export function ActionPalette({
                   // Rows are indexed against `results`, not the slice, so the
                   // highlight and hover handlers keep addressing the flat list
                   // the keyboard navigates.
-                  .map((item, idx) => renderActionRow(item, section.start + idx, canHide))}
+                  .map((item, idx) =>
+                    renderActionRow(item, section.start + idx, canHide, showCategory)
+                  )}
               </Fragment>
             );
           })}
@@ -342,6 +355,10 @@ export function ActionPalette({
   );
 
   const activeItem = selectedIndex >= 0 ? results[selectedIndex] : undefined;
+  // Settled results only: mid-filter the list can be momentarily empty for a
+  // query that will match.
+  const offersProjectSearch =
+    activeMode === null && !isStale && results.length === 0 && looksLikePath(query);
   const activeIsPinned = activeItem !== undefined && pinnedActionIds.includes(activeItem.id);
 
   const handleKeyDown = useCallback(
@@ -377,6 +394,12 @@ export function ActionPalette({
           announce(`${item.title} hidden from Recently used`);
           return;
         }
+      }
+
+      if (e.key === "Enter" && offersProjectSearch) {
+        e.preventDefault();
+        usePaletteStore.getState().openPalette("project-switcher");
+        return;
       }
 
       // Backspace at position 0 (no selection) pops the active chip and
@@ -426,6 +449,7 @@ export function ActionPalette({
       unpinAction,
       hideAction,
       canHideIndex,
+      offersProjectSearch,
     ]
   );
 
@@ -463,9 +487,9 @@ export function ActionPalette({
       // presentational spans with a mouse tooltip — so the chord that reaches
       // them rides the footer, and only while the row actually offers it.
       const rowHints: { keys: string[]; label: string }[] = [];
-      if (activeItem) {
+      if (activeItem && activeItem.danger !== "confirm") {
         rowHints.push({ keys: PIN_CHORD_KEYS, label: activeIsPinned ? "unpin" : "pin" });
-        if (!activeIsPinned && activeItem.danger !== "confirm" && canHideIndex(selectedIndex)) {
+        if (!activeIsPinned && canHideIndex(selectedIndex)) {
           rowHints.push({ keys: HIDE_CHORD_KEYS, label: "hide" });
         }
       }
@@ -475,24 +499,34 @@ export function ActionPalette({
       if (activeMode === "commands") {
         body = (
           <PaletteFooterHints
-            primaryHint={{ keys: ["↵"], label: "to run command" }}
+            primaryHint={
+              activeItem
+                ? { keys: ["↵"], label: "to run command" }
+                : { keys: ["⌫"], label: "exit scope" }
+            }
             // Backspace keeps its chip: inside a mode it pops the scope rather
             // than deleting a character, which is the one thing here a user
             // can't infer from every other list they've used.
-            hints={[{ keys: ["⌫"], label: "exit scope" }, ...rowHints]}
+            hints={activeItem ? [{ keys: ["⌫"], label: "exit scope" }, ...rowHints] : []}
           />
         );
-      } else if (results.length === 0 && looksLikePath(query)) {
-        // Default empty-mode hint: surface the projects prefix when the query
-        // resembles a path or filename. Per-query-shape only — no auto-routing.
-        body = <PaletteFooterHints primaryHint={{ keys: ["/"], label: "search projects" }} />;
-      } else {
-        // Default footer mirrors SearchablePalette's getActionLabel composition
-        // so we keep that affordance while still owning the wrapper id used by
+      } else if (offersProjectSearch) {
+        // The query looks like a path or filename and matched no action, so
+        // Enter hands it to the project switcher (see `handleKeyDown`). This
+        // used to show a `/` chip, but the prefix only routes from an empty
+        // field, so pressing it here typed a slash.
+        body = <PaletteFooterHints primaryHint={{ keys: ["↵"], label: "to search projects" }} />;
+      } else if (selectedItem) {
+        // Mirrors SearchablePalette's getActionLabel composition so we keep
+        // that affordance while still owning the wrapper id used by
         // aria-describedby.
-        const phrase = `to ${(selectedItem?.title ?? "Run action").trim().toLowerCase()}`;
+        const phrase = `to ${toHintPhrase(selectedItem.title)}`;
         body = <PaletteFooterHints primaryHint={{ keys: ["↵"], label: phrase }} hints={rowHints} />;
       }
+
+      // Nothing selected and nothing to teach: no band. A "↵ to run action"
+      // over an empty list promised an Enter that does nothing.
+      if (!body && !showPrefixHints) return undefined;
 
       return (
         <div id={footerHintId} className="@container/palette-footer w-full flex flex-col gap-1.5">
@@ -503,8 +537,7 @@ export function ActionPalette({
     },
     [
       activeMode,
-      query,
-      results.length,
+      offersProjectSearch,
       footerHintId,
       showPrefixHints,
       activeItem,
@@ -554,6 +587,7 @@ export function ActionPalette({
             // whichever body rendered it.
             posInSet={index + 1}
             setSize={results.length}
+            highlightQuery={query}
           />
         );
       }}
@@ -566,6 +600,7 @@ export function ActionPalette({
       listId="action-palette-list"
       itemIdPrefix="action-option"
       emptyMessage="No actions yet"
+      noMatchContent={offersProjectSearch ? undefined : <PaletteNoMatchHint what="all actions" />}
       totalResults={totalResults}
     />
   );
