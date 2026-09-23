@@ -30,6 +30,7 @@ export {
   ClockAlert, // ahead/behind counts older than the fetch cadence says they should be — a clock that is late, distinct from Clock's plain ordering and the rate-limit wait
   CloudOff, // a remote or forge that could not be reached — the same glyph the PR and issue badges show when detection is paused
   Coffee, // Daintree keeping the machine from idle-sleeping while agents work — the long-standing keep-awake metaphor
+  FileStack, // artifacts an agent left in a terminal — the code, patches and files pulled from its output
   FileText, // view selected file path in the read-only file viewer
   FolderGit2, // git worktree (single)
   FolderOpen, // reveal in file manager (Finder / Explorer / file manager)

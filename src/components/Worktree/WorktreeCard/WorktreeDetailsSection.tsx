@@ -510,7 +510,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                                 e.stopPropagation();
                                 onResourceResume();
                               }}
-                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-status-success hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-text-secondary hover:text-text-primary hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                               aria-label="Resume resource"
                             >
                               <Play className="w-3 h-3" />

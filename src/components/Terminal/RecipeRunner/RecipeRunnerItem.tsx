@@ -104,8 +104,8 @@ export function RecipeRunnerItem({
                 <div className="flex items-center gap-2 w-full">
                   <Play
                     className={cn(
-                      "h-3.5 w-3.5 text-status-success transition-colors shrink-0",
-                      !disabled && "group-hover:text-status-success"
+                      "h-3.5 w-3.5 text-text-secondary transition-colors shrink-0",
+                      !disabled && "group-hover:text-text-primary"
                     )}
                     aria-hidden
                   />
@@ -214,7 +214,7 @@ export function RecipeRunnerItem({
           )}
         >
           <Play
-            className="h-3.5 w-3.5 text-status-success transition-colors shrink-0"
+            className="h-3.5 w-3.5 text-text-secondary transition-colors shrink-0"
             aria-hidden
           />
           <span

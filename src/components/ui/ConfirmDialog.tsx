@@ -3,6 +3,7 @@ import { useLayoutEffect, useState } from "react";
 import {
   AppDialog,
   type DialogInitialFocus,
+  type DialogSize,
   type DialogZIndex,
   type RestoreFocusTarget,
 } from "@/components/ui/AppDialog";
@@ -96,6 +97,11 @@ type ConfirmDialogBaseProps = {
    */
   hasPreview?: boolean;
   /**
+   * Forwarded to {@link AppDialog.size}. Defaults to `sm`; a preview wide
+   * enough to read (a diff) is the reason to go larger.
+   */
+  size?: DialogSize;
+  /**
    * Forwarded to {@link AppDialog.Body.resetScrollKey}: scrolls the body back
    * to the top when it changes. Queue-driven singletons pass the per-item id so
    * a freshly promoted item opens at the top rather than inheriting the
@@ -133,6 +139,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     initialFocus,
     restoreFocusTo,
     hasPreview = false,
+    size = "sm",
     hint,
     bodyResetKey,
   } = props;
@@ -234,7 +241,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     <AppDialog
       isOpen={isOpen}
       onClose={handleClose}
-      size="sm"
+      size={size}
       variant={variant}
       hasPreview={hasPreview}
       zIndex={zIndex}

@@ -875,7 +875,7 @@ export function WorktreeMenuItems({
         ),
         !isLocalEnvironment && onResourceResume && showResume && (
           <C.Item key="resume" onSelect={onResourceResume}>
-            <Play className={`${ICON} text-status-success`} />
+            <Play className={ICON} />
             Resume
           </C.Item>
         ),

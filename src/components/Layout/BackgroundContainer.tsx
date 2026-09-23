@@ -507,7 +507,7 @@ function BackgroundSingleItem({
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                variant="ghost-success"
+                variant="ghost"
                 size="icon-sm"
                 onClick={(e) => {
                   e.stopPropagation();

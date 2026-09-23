@@ -131,7 +131,7 @@ export function TrashBinItem({
           <TooltipTrigger asChild>
             <span className="inline-flex">
               <Button
-                variant="ghost-success"
+                variant="ghost"
                 size="icon-sm"
                 onClick={handleRestore}
                 disabled={!canRestore}

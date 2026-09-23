@@ -1,21 +1,25 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ReactNode } from "react";
 import type { Artifact } from "@shared/types";
 import { ArtifactOverlay } from "../ArtifactOverlay";
 
 const applyPatch = vi.fn();
+const copyToClipboard = vi.fn();
 const applyAllPatches = vi.fn();
 let mockArtifacts: Artifact[] = [];
 
-vi.mock("@/hooks/useArtifacts", () => ({
+vi.mock("@/hooks/useArtifacts", async (importOriginal) => ({
+  // The real apply ordering, so the gate is tested against the order the hook runs in.
+  orderPatchesForApply: (await importOriginal<typeof import("@/hooks/useArtifacts")>())
+    .orderPatchesForApply,
   useArtifacts: () => ({
     artifacts: mockArtifacts,
     actionInProgress: null,
     bulkProgress: null,
     hasArtifacts: mockArtifacts.length > 0,
-    copyToClipboard: vi.fn(),
+    copyToClipboard,
     saveToFile: vi.fn(),
     applyPatch,
     clearArtifacts: vi.fn(),
@@ -57,8 +61,8 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     ) : null,
 }));
 
-function makePatch(id: string, content: string): Artifact {
-  return { id, type: "patch", filename: `${id}.diff`, content, extractedAt: 1 };
+function makePatch(id: string, content: string, extractedAt = 1): Artifact {
+  return { id, type: "patch", filename: `${id}.diff`, content, extractedAt };
 }
 
 const PATCH_A = makePatch("patch-a", "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old a\n+new a");
@@ -72,9 +76,19 @@ function renderOverlay() {
   return utils;
 }
 
+function rowFor(filename: string): HTMLElement {
+  const row = screen.getByText(filename).closest<HTMLElement>("[data-artifact-item]");
+  if (!row) throw new Error(`no artifact row holds ${filename}`);
+  return row;
+}
+
 function openSingleApplyDialog(filename: string) {
   fireEvent.click(screen.getByText(filename));
-  fireEvent.click(screen.getByText("Apply Patch"));
+  fireEvent.click(within(rowFor(filename)).getByRole("button", { name: "Apply patch" }));
+}
+
+function confirmDialog(label: string) {
+  fireEvent.click(within(screen.getByRole("dialog")).getByText(label));
 }
 
 beforeEach(() => {
@@ -104,7 +118,7 @@ describe("ArtifactOverlay confirm gate (issue #10020)", () => {
     renderOverlay();
     openSingleApplyDialog("patch-a.diff");
 
-    fireEvent.click(screen.getByText("Cancel"));
+    fireEvent.click(within(screen.getByRole("dialog")).getByText("Cancel"));
 
     expect(applyPatch).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -115,7 +129,7 @@ describe("ArtifactOverlay confirm gate (issue #10020)", () => {
     openSingleApplyDialog("patch-a.diff");
 
     await act(async () => {
-      fireEvent.click(screen.getByText("Apply patch"));
+      confirmDialog("Apply patch");
     });
 
     expect(applyPatch).toHaveBeenCalledTimes(1);
@@ -125,11 +139,10 @@ describe("ArtifactOverlay confirm gate (issue #10020)", () => {
   it("re-requesting apply for another patch supersedes the first pending confirm", async () => {
     renderOverlay();
     openSingleApplyDialog("patch-a.diff");
-    fireEvent.click(screen.getByText("patch-b.diff"));
-    fireEvent.click(screen.getAllByText("Apply Patch")[1]!);
+    openSingleApplyDialog("patch-b.diff");
 
     await act(async () => {
-      fireEvent.click(screen.getByText("Apply patch"));
+      confirmDialog("Apply patch");
     });
 
     expect(applyPatch).toHaveBeenCalledTimes(1);
@@ -138,7 +151,7 @@ describe("ArtifactOverlay confirm gate (issue #10020)", () => {
 
   it("bulk dialog shows actual diff content for every patch, not just counts", () => {
     renderOverlay();
-    fireEvent.click(screen.getByText("Apply All Patches"));
+    fireEvent.click(screen.getByRole("button", { name: /^Apply 2 patches$/ }));
 
     expect(applyAllPatches).not.toHaveBeenCalled();
     const dialog = screen.getByRole("dialog");
@@ -150,23 +163,57 @@ describe("ArtifactOverlay confirm gate (issue #10020)", () => {
 
   it("bulk confirm applies the snapshot taken at request time, not later arrivals", async () => {
     const { rerender } = renderOverlay();
-    fireEvent.click(screen.getByText("Apply All Patches"));
+    fireEvent.click(screen.getByRole("button", { name: /^Apply 2 patches$/ }));
 
     // A third patch arrives while the dialog is open.
     mockArtifacts = [PATCH_A, PATCH_B, PATCH_C];
     rerender(<ArtifactOverlay terminalId="t1" worktreeId="wt1" cwd="/repo" />);
 
     await act(async () => {
-      fireEvent.click(screen.getByText("Apply 2 patches"));
+      confirmDialog("Apply 2 patches");
     });
 
     expect(applyAllPatches).toHaveBeenCalledTimes(1);
     expect(applyAllPatches).toHaveBeenCalledWith([PATCH_A, PATCH_B]);
   });
 
+  it("bulk confirm previews and applies the patches in the same order", async () => {
+    // Listed newest first, but written by the agent A-then-B: both the preview
+    // and the run must follow the order they will actually be applied in.
+    const first = makePatch("patch-a", PATCH_A.content, 1);
+    const second = makePatch("patch-b", PATCH_B.content, 2);
+    mockArtifacts = [second, first];
+    renderOverlay();
+    fireEvent.click(screen.getByRole("button", { name: /^Apply 2 patches$/ }));
+
+    const text = screen.getByRole("dialog").textContent ?? "";
+    expect(text.indexOf("+new a")).toBeLessThan(text.indexOf("+new b"));
+
+    await act(async () => {
+      confirmDialog("Apply 2 patches");
+    });
+    expect(applyAllPatches).toHaveBeenCalledWith([first, second]);
+  });
+
+  it("bulk apply leaves out a patch already applied from its own row", async () => {
+    mockArtifacts = [PATCH_A, PATCH_B, PATCH_C];
+    renderOverlay();
+    openSingleApplyDialog("patch-a.diff");
+    await act(async () => {
+      confirmDialog("Apply patch");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /^Apply 2 patches$/ }));
+    await act(async () => {
+      confirmDialog("Apply 2 patches");
+    });
+
+    expect(applyAllPatches).toHaveBeenCalledWith([PATCH_B, PATCH_C]);
+  });
+
   it("cancelling the bulk dialog never applies", () => {
     renderOverlay();
-    fireEvent.click(screen.getByText("Apply All Patches"));
+    fireEvent.click(screen.getByRole("button", { name: /^Apply 2 patches$/ }));
 
     fireEvent.click(screen.getByText("Cancel"));
 
@@ -182,5 +229,27 @@ describe("ArtifactOverlay confirm gate (issue #10020)", () => {
 
     expect(applyPatch).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("ArtifactOverlay keeps keyboard focus through its own actions", () => {
+  it("leaves focus on Copy while the copy is in flight, rather than disabling it", async () => {
+    let finish: (ok: boolean) => void = () => undefined;
+    copyToClipboard.mockReturnValue(new Promise<boolean>((resolve) => (finish = resolve)));
+    renderOverlay();
+    fireEvent.click(screen.getByText("patch-a.diff"));
+    const copy = within(rowFor("patch-a.diff")).getByRole("button", { name: "Copy" });
+    copy.focus();
+
+    await act(async () => {
+      fireEvent.click(copy);
+    });
+    expect(copy.hasAttribute("disabled")).toBe(false);
+    expect(copy.getAttribute("aria-busy")).toBe("true");
+    expect(document.activeElement).toBe(copy);
+
+    await act(async () => {
+      finish(true);
+    });
   });
 });

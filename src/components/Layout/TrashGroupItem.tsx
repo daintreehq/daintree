@@ -172,7 +172,7 @@ export function TrashGroupItem({
             <TooltipTrigger asChild>
               <span className="inline-flex">
                 <Button
-                  variant="ghost-success"
+                  variant="ghost"
                   size="icon-sm"
                   onClick={handleRestoreGroup}
                   disabled={!canRestore}
@@ -255,7 +255,7 @@ export function TrashGroupItem({
                       <TooltipTrigger asChild>
                         <span className="inline-flex">
                           <Button
-                            variant="ghost-success"
+                            variant="ghost"
                             size="icon-sm"
                             className="h-4 w-4"
                             onClick={() => {
