@@ -68,7 +68,7 @@ export function FleetDraftingPill(): ReactElement | null {
   };
 
   return (
-    <div data-testid="fleet-drafting-pill" className="flex items-center">
+    <div data-testid="fleet-drafting-pill" className="flex min-w-0 items-center">
       <Popover open={open} onOpenChange={handleOpenChange}>
         <PopoverTrigger asChild>
           <button
@@ -76,14 +76,19 @@ export function FleetDraftingPill(): ReactElement | null {
             aria-label={reachLabel}
             data-testid="fleet-drafting-pill-trigger"
             className={cn(
-              "inline-flex items-center gap-1 px-2 py-0.5 rounded-full",
+              "inline-flex min-w-0 max-w-full items-center gap-1 px-2 py-0.5 rounded-full",
               "bg-category-amber-subtle border border-category-amber-border text-category-amber-text shadow-[var(--theme-shadow-floating)]",
               "text-xs font-medium transition-colors",
               hasVariables && "cursor-pointer hover:bg-category-amber-subtle/80"
             )}
           >
-            <RadioTower className="h-3 w-3" aria-hidden="true" />
-            <span>{reachLabel}</span>
+            <RadioTower className="h-3 w-3 shrink-0" aria-hidden="true" />
+            {/* Only the lead-in gives way on a narrow pane: the peer count is the
+                part of the chip that says something. */}
+            <span className="min-w-0 truncate">Mirroring to </span>
+            <span className="shrink-0">
+              {peerCount} {peerNoun}
+            </span>
             {hasDivergence && (
               <span
                 data-testid="fleet-drafting-pill-divergence-dot"
@@ -101,7 +106,10 @@ export function FleetDraftingPill(): ReactElement | null {
             )}
             {hasVariables && (
               <ChevronDown
-                className={cn("h-3 w-3 transition-transform duration-150", open && "rotate-180")}
+                className={cn(
+                  "h-3 w-3 shrink-0 transition-transform duration-150",
+                  open && "rotate-180"
+                )}
                 aria-hidden="true"
               />
             )}
