@@ -137,10 +137,12 @@ export const PATCH_ROW_CLASS: Record<PatchLineKind, string> = {
 };
 
 // The sign column is pinned while the code scrolls sideways, so it needs an
-// opaque base under its tint or the code would show through it.
+// opaque base under its tint or the code would show through it. The sign is
+// the non-colour channel, so it takes full-contrast ink: the gutter hues sit
+// near 3:1 on their own tint, and the row already carries the colour.
 const PATCH_SIGN_CLASS: Partial<Record<PatchLineKind, string>> = {
-  add: "text-diff-gutter-insert bg-surface-canvas [background-image:linear-gradient(var(--color-diff-insert-background),var(--color-diff-insert-background))]",
-  del: "text-diff-gutter-delete bg-surface-canvas [background-image:linear-gradient(var(--color-diff-delete-background),var(--color-diff-delete-background))]",
+  add: "text-text-primary bg-surface-canvas [background-image:linear-gradient(var(--color-diff-insert-background),var(--color-diff-insert-background))]",
+  del: "text-text-primary bg-surface-canvas [background-image:linear-gradient(var(--color-diff-delete-background),var(--color-diff-delete-background))]",
   context: "bg-surface-canvas",
 };
 
@@ -291,9 +293,9 @@ export function describeApplyFailure(message: string): string {
     return "It creates a file that already exists here. It may already be applied.";
   }
   if (/patch does not apply|patch failed/i.test(message)) {
-    return "The files have changed since the agent wrote it. Ask the agent to redo it against the current files, or copy it and apply the parts that still fit.";
+    return "It doesn't match the current files. It may already be applied, or the files moved on after the agent wrote it. Check the diff, or ask the agent to regenerate it for this worktree.";
   }
-  return "Nothing was changed. git's details are below.";
+  return "Nothing was changed. Check git's details below, or ask the agent to regenerate the patch.";
 }
 
 const ARTIFACT_TYPE_ICONS: Record<Artifact["type"], LucideIcon> = {
@@ -509,13 +511,13 @@ function ArtifactItem({
                 <TooltipTrigger asChild>
                   <span className="inline-flex">
                     <Button
-                      variant="contrast"
+                      variant={applyResult?.kind === "applied" ? "subtle" : "contrast"}
                       size="sm"
                       onClick={() => void handleApplyPatch()}
                       disabled={!canApplyPatch || (isApplyLocked && !isApplying)}
                       loading={isApplying}
                     >
-                      Apply patch
+                      {applyResult?.kind === "applied" ? "Apply again" : "Apply patch"}
                     </Button>
                   </span>
                 </TooltipTrigger>
@@ -524,7 +526,9 @@ function ArtifactItem({
                     ? "This terminal isn't in a worktree, so there's nowhere to apply it"
                     : isApplyLocked && !isApplying
                       ? "Another patch is being applied"
-                      : "Preview the diff, then git apply it in this worktree"}
+                      : applyResult?.kind === "applied"
+                        ? "Already applied here, so applying it again will usually fail"
+                        : "Preview the diff, then git apply it in this worktree"}
                 </TooltipContent>
               </Tooltip>
             )}
@@ -804,8 +808,12 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     // Snapshot at request time, in the order it will run, so the dialog
     // previews exactly what confirm applies — patches detected while the
     // dialog is open are excluded.
-    setPendingBulkPatches(orderPatchesForApply(artifacts.filter((a) => a.type === "patch")));
-  }, [artifacts]);
+    setPendingBulkPatches(
+      orderPatchesForApply(
+        artifacts.filter((a) => a.type === "patch" && applyResults.get(a.id)?.kind !== "applied")
+      )
+    );
+  }, [artifacts, applyResults]);
 
   const handleCancelApplyAllPatches = useCallback(() => {
     setPendingBulkPatches(null);
@@ -883,7 +891,11 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
   const patchCount = artifacts.filter((a) => a.type === "patch").length;
   const copyTargetCount = codeOnly ? codeArtifactCount : artifacts.length;
   const showBulkBar = artifacts.length > 1;
-  const showApplyAll = patchCount > 1;
+  // Bulk apply is for what hasn't landed yet; an applied patch reruns only from its own row.
+  const unappliedPatchCount = artifacts.filter(
+    (a) => a.type === "patch" && applyResults.get(a.id)?.kind !== "applied"
+  ).length;
+  const showApplyAll = unappliedPatchCount > 1;
   const canApplyAll = showApplyAll && !!worktreeId && !!cwd;
   const isBulkActionRunning = !!bulkProgress;
   // One git apply at a time: while a single apply or a bulk run is in flight,
@@ -1019,14 +1031,21 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     </TooltipContent>
                   </Tooltip>
                 </div>
-                <Button
-                  variant="subtle"
-                  size="sm"
-                  onClick={() => void handleSaveAll()}
-                  disabled={isBulkActionRunning}
-                >
-                  Save all…
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="subtle"
+                      size="sm"
+                      onClick={() => void handleSaveAll()}
+                      disabled={isBulkActionRunning}
+                    >
+                      Save each…
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    Asks where to save each of the {artifacts.length} in turn
+                  </TooltipContent>
+                </Tooltip>
                 {showApplyAll && (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -1042,7 +1061,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                           }
                           loading={bulkProgress?.action === "apply"}
                         >
-                          Apply {plural(patchCount, "patch", "patches")}
+                          Apply {plural(unappliedPatchCount, "patch", "patches")}
                         </Button>
                       </span>
                     </TooltipTrigger>

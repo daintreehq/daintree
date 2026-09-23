@@ -194,6 +194,22 @@ describe("ArtifactOverlay confirm gate (issue #10020)", () => {
     expect(applyAllPatches).toHaveBeenCalledWith([first, second]);
   });
 
+  it("bulk apply leaves out a patch already applied from its own row", async () => {
+    mockArtifacts = [PATCH_A, PATCH_B, PATCH_C];
+    renderOverlay();
+    openSingleApplyDialog("patch-a.diff");
+    await act(async () => {
+      confirmDialog("Apply patch");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /^Apply 2 patches$/ }));
+    await act(async () => {
+      confirmDialog("Apply 2 patches");
+    });
+
+    expect(applyAllPatches).toHaveBeenCalledWith([PATCH_B, PATCH_C]);
+  });
+
   it("cancelling the bulk dialog never applies", () => {
     renderOverlay();
     fireEvent.click(screen.getByRole("button", { name: /^Apply 2 patches$/ }));
