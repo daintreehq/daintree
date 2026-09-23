@@ -23,7 +23,7 @@ import { FIELD_INPUT } from "@/components/Worktree/views";
 import { RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { Input } from "@/components/ui/input";
 import { SettingsSection } from "./SettingsSection";
-import { SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsInput } from "./SettingsInput";
 
 interface EnvironmentSettingsTabProps {
@@ -335,117 +335,110 @@ export function ResourceEnvironmentsSection({
         ) : undefined
       }
     >
-      {(envKeys.length > 0 || isAddingEnvironment) && (
-        <SettingsGroup>
-          {envKeys.length > 0 && (
-            <SettingsRow
-              label="Environment"
-              description="The environment the commands below belong to"
-              control={({ labelId, descriptionId }) => (
-                <div data-testid="environment-selector-bar" className="flex items-center gap-2">
-                  <select
-                    value={currentEnvName}
-                    onChange={(e) => handleSelectEnv(e.target.value)}
-                    aria-labelledby={labelId}
-                    aria-describedby={descriptionId}
-                    className={cn(FIELD_INPUT, "w-52 min-w-0 pr-8")}
-                  >
-                    {envKeys.map((name) => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
-                  </select>
-                  <IconPickerButton
-                    currentIcon={env.icon}
-                    onChange={(icon) => updateEnv({ icon })}
-                  />
-                  {envKeys.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => setPendingDeleteEnvironment(currentEnvName)}
-                      className="p-1 rounded-[var(--radius-sm)] text-text-secondary hover:text-status-error hover:bg-overlay-soft transition-colors"
-                      aria-label={`Remove ${currentEnvName} environment`}
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  )}
-                </div>
-              )}
-            />
-          )}
-
-          {isAddingEnvironment && (
-            <SettingsRow
-              label="New environment name"
-              layout="stacked"
-              control={({ labelId }) => (
-                <div className="space-y-1.5">
-                  <div data-testid="add-environment-form" className="flex items-center gap-2">
-                    <Input
-                      id="new-environment-name"
-                      type="text"
-                      value={newEnvironmentName}
-                      onChange={(e) => {
-                        setNewEnvironmentName(e.target.value);
-                        setAddEnvironmentError(null);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          handleAddEnv();
-                        } else if (e.key === "Escape") {
-                          cancelAddForm();
-                        }
-                      }}
-                      autoFocus
-                      spellCheck={false}
-                      placeholder="docker-local"
-                      aria-labelledby={labelId}
-                      invalid={!!addEnvironmentError}
-                      aria-invalid={!!addEnvironmentError}
-                      aria-describedby={
-                        addEnvironmentError ? "new-environment-name-error" : undefined
-                      }
-                      className="flex-1 min-w-0 font-mono"
-                    />
-                    <Button type="button" variant="contrast" size="sm" onClick={handleAddEnv}>
-                      Add
-                    </Button>
-                    <Button type="button" variant="outline" size="sm" onClick={cancelAddForm}>
-                      Cancel
-                    </Button>
-                  </div>
-                  {addEnvironmentError && (
-                    <p
-                      id="new-environment-name-error"
-                      className="text-xs text-status-error"
-                      role="alert"
-                    >
-                      {addEnvironmentError}
-                    </p>
-                  )}
-                </div>
-              )}
-            />
-          )}
-        </SettingsGroup>
-      )}
-
-      {envKeys.length === 0 && !isAddingEnvironment && (
-        <SettingsGroup>
-          <SettingsRow
-            label="No environments yet"
-            description="Add one to provision worktrees in a container, VM, or remote host"
-            control={
+      <SettingsGroup>
+        {envKeys.length === 0 && !isAddingEnvironment && (
+          <SettingsEmptyRow
+            action={
               <Button type="button" variant="outline" size="sm" onClick={openAddForm}>
                 <Plus />
                 Add environment
               </Button>
             }
+          >
+            No environments yet — add one to provision worktrees in a container, VM, or remote host
+          </SettingsEmptyRow>
+        )}
+
+        {envKeys.length > 0 && (
+          <SettingsRow
+            label="Environment"
+            description="The environment the commands below belong to"
+            control={({ labelId, descriptionId }) => (
+              <div data-testid="environment-selector-bar" className="flex items-center gap-2">
+                <select
+                  value={currentEnvName}
+                  onChange={(e) => handleSelectEnv(e.target.value)}
+                  aria-labelledby={labelId}
+                  aria-describedby={descriptionId}
+                  className={cn(FIELD_INPUT, "w-52 min-w-0 pr-8")}
+                >
+                  {envKeys.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+                <IconPickerButton currentIcon={env.icon} onChange={(icon) => updateEnv({ icon })} />
+                {envKeys.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setPendingDeleteEnvironment(currentEnvName)}
+                    className="p-1 rounded-[var(--radius-sm)] text-text-secondary hover:text-status-error hover:bg-overlay-soft transition-colors"
+                    aria-label={`Remove ${currentEnvName} environment`}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            )}
           />
-        </SettingsGroup>
-      )}
+        )}
+
+        {isAddingEnvironment && (
+          <SettingsRow
+            label="New environment name"
+            layout="stacked"
+            control={({ labelId }) => (
+              <div className="space-y-1.5">
+                <div data-testid="add-environment-form" className="flex items-center gap-2">
+                  <Input
+                    id="new-environment-name"
+                    type="text"
+                    value={newEnvironmentName}
+                    onChange={(e) => {
+                      setNewEnvironmentName(e.target.value);
+                      setAddEnvironmentError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddEnv();
+                      } else if (e.key === "Escape") {
+                        cancelAddForm();
+                      }
+                    }}
+                    autoFocus
+                    spellCheck={false}
+                    placeholder="docker-local"
+                    aria-labelledby={labelId}
+                    invalid={!!addEnvironmentError}
+                    aria-invalid={!!addEnvironmentError}
+                    aria-describedby={
+                      addEnvironmentError ? "new-environment-name-error" : undefined
+                    }
+                    className="flex-1 min-w-0 font-mono"
+                  />
+                  <Button type="button" variant="contrast" size="sm" onClick={handleAddEnv}>
+                    Add
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" onClick={cancelAddForm}>
+                    Cancel
+                  </Button>
+                </div>
+                {addEnvironmentError && (
+                  <p
+                    id="new-environment-name-error"
+                    className="text-xs text-status-error"
+                    role="alert"
+                  >
+                    {addEnvironmentError}
+                  </p>
+                )}
+              </div>
+            )}
+          />
+        )}
+      </SettingsGroup>
 
       {envKeys.length > 0 && (
         <>

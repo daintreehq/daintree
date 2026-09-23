@@ -2,7 +2,19 @@ import { useState, useEffect, useRef, useId } from "react";
 import { CheckCircle, AlertCircle, RefreshCw, ExternalLink } from "lucide-react";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import {
+  SETTINGS_CONTROL_WIDTH,
+  SettingsActions,
+  SettingsGroup,
+  SettingsRow,
+} from "@/components/Settings/SettingsGroup";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -12,6 +24,7 @@ import { KNOWN_EDITOR_IDS } from "@shared/types/editor";
 import { useProjectStore, patchCachedProjectSettings } from "@/store";
 import { invalidateProjectSettingsCache } from "@/clients/projectClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 
 const EDITOR_LABELS: Record<KnownEditorId, string> = {
@@ -146,6 +159,15 @@ export function EditorIntegrationTab() {
 
   const availabilityMap = new Map(discoveredEditors.map((d) => [d.id, d]));
 
+  // No saved preference yet counts as dirty: the auto-selected editor is only a
+  // suggestion until it is saved, and main falls back to discovery order until then.
+  const isDirty =
+    !preferredEditor ||
+    preferredEditor.id !== selectedId ||
+    (selectedId === "custom" &&
+      ((preferredEditor.customCommand ?? "") !== customCommand.trim() ||
+        (preferredEditor.customTemplate ?? "") !== customTemplate.trim()));
+
   if (!activeProjectId) {
     return (
       <div className="p-4 text-sm text-text-secondary">
@@ -163,33 +185,15 @@ export function EditorIntegrationTab() {
       <SettingsGroup>
         <SettingsRow
           label="Editor"
-          control={({ labelId }) => (
-            <div className="flex items-center gap-2">
-              <select
-                id={editorId}
-                aria-labelledby={labelId}
-                value={selectedId}
-                onChange={(e) => setSelectedId(e.target.value as KnownEditorId)}
-                className="w-72 bg-surface-input border border-border-input rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-              >
-                {KNOWN_EDITOR_IDS.map((id) => {
-                  const disc = availabilityMap.get(id);
-                  const available = id === "custom" ? true : (disc?.available ?? false);
-                  return (
-                    <option key={id} value={id}>
-                      {EDITOR_LABELS[id]}
-                      {id !== "custom" && !available ? " (not found)" : ""}
-                    </option>
-                  );
-                })}
-              </select>
+          control={({ labelId, descriptionId, disabled }) => (
+            <>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
                     size="icon-sm"
                     onClick={handleRescan}
-                    disabled={isRescanning}
+                    disabled={disabled || isRescanning}
                     aria-label="Re-scan for installed editors"
                   >
                     <SpinningIcon icon={RefreshCw} active={isRescanning} />
@@ -197,7 +201,33 @@ export function EditorIntegrationTab() {
                 </TooltipTrigger>
                 <TooltipContent side="bottom">Re-scan for installed editors</TooltipContent>
               </Tooltip>
-            </div>
+              <Select
+                value={selectedId}
+                onValueChange={(value) => setSelectedId(value as KnownEditorId)}
+                disabled={disabled}
+              >
+                <SelectTrigger
+                  id={editorId}
+                  aria-labelledby={labelId}
+                  aria-describedby={descriptionId}
+                  className={SETTINGS_CONTROL_WIDTH.wide}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {KNOWN_EDITOR_IDS.map((id) => {
+                    const disc = availabilityMap.get(id);
+                    const available = id === "custom" ? true : (disc?.available ?? false);
+                    return (
+                      <SelectItem key={id} value={id}>
+                        {EDITOR_LABELS[id]}
+                        {id !== "custom" && !available ? " (not found)" : ""}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+            </>
           )}
         />
 
@@ -208,7 +238,10 @@ export function EditorIntegrationTab() {
             control={
               <ul className="space-y-1">
                 {discoveredEditors.map((d) => (
-                  <li key={d.id} className="flex items-center gap-2 text-xs text-text-secondary">
+                  <li
+                    key={d.id}
+                    className="flex min-w-0 items-center gap-2 text-xs text-text-secondary"
+                  >
                     {d.available ? (
                       <CheckCircle
                         className="w-3.5 h-3.5 text-text-secondary shrink-0"
@@ -220,11 +253,19 @@ export function EditorIntegrationTab() {
                         aria-label="Not found"
                       />
                     )}
-                    <span className={d.available ? "text-text-primary" : "text-text-secondary"}>
+                    <span
+                      className={cn(
+                        "shrink-0 whitespace-nowrap",
+                        d.available ? "text-text-primary" : "text-text-secondary"
+                      )}
+                    >
                       {EDITOR_LABELS[d.id]}
                     </span>
                     {d.executablePath && (
-                      <span className="font-mono text-text-secondary truncate">
+                      <span
+                        className="min-w-0 truncate font-mono text-text-secondary"
+                        title={d.executablePath}
+                      >
                         {d.executablePath}
                       </span>
                     )}
@@ -278,38 +319,48 @@ export function EditorIntegrationTab() {
           </>
         )}
 
-        <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+        <SettingsActions
+          status={
+            saveError ? (
+              <span className="text-status-error">{saveError}</span>
+            ) : testResult === "ok" ? (
+              <span className="flex items-center gap-1">
+                <CheckCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" /> Open requested
+              </span>
+            ) : testResult === "error" ? (
+              <span className="flex items-center gap-1 text-status-error">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" /> Failed to open
+              </span>
+            ) : preferredEditor ? (
+              <span>
+                Saved: <span className="font-medium">{EDITOR_LABELS[preferredEditor.id]}</span>
+                {isDirty && " · Save to test this choice"}
+              </span>
+            ) : (
+              "Not saved yet — Daintree uses the first editor it finds"
+            )
+          }
+        >
+          {/* Test opens the SAVED preference (main resolves it from the project), so it
+              stays off while the draft differs rather than testing something else. */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleTest}
+            disabled={isTesting || !preferredEditor || isDirty}
+          >
+            <ExternalLink aria-hidden="true" />
+            {isTesting ? "Testing…" : "Test saved editor"}
+          </Button>
           <Button
             variant="contrast"
             size="sm"
             onClick={handleSave}
-            disabled={isSaving || !activeProjectId}
+            disabled={isSaving || !activeProjectId || !isDirty}
           >
             {isSaving ? "Saving…" : "Save"}
           </Button>
-          <Button variant="subtle" size="sm" onClick={handleTest} disabled={isTesting}>
-            <ExternalLink />
-            {isTesting ? "Testing…" : "Test"}
-          </Button>
-
-          {testResult === "ok" && (
-            <span className="flex items-center gap-1 text-xs text-text-secondary">
-              <CheckCircle className="w-3.5 h-3.5" aria-hidden="true" /> Open requested
-            </span>
-          )}
-          {testResult === "error" && (
-            <span className="flex items-center gap-1 text-xs text-status-error">
-              <AlertCircle className="w-3.5 h-3.5" aria-hidden="true" /> Failed to open
-            </span>
-          )}
-
-          {preferredEditor && (
-            <span className="ml-auto text-xs text-text-secondary">
-              Saved: <span className="font-medium">{EDITOR_LABELS[preferredEditor.id]}</span>
-            </span>
-          )}
-          {saveError && <p className="basis-full text-xs text-status-error">{saveError}</p>}
-        </div>
+        </SettingsActions>
       </SettingsGroup>
     </SettingsSection>
   );

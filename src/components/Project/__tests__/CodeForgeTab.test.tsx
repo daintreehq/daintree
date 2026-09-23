@@ -4,6 +4,30 @@ import { render, waitFor, act } from "@testing-library/react";
 import { CodeForgeTab } from "../CodeForgeTab";
 import type { RemoteInfo } from "@shared/types/ipc/forge";
 
+// Radix Select mounts lazily and portals its options; a native stand-in keeps the
+// option list inspectable.
+vi.mock("@/components/Settings/SettingsSelect", () => ({
+  SettingsSelect: ({
+    label,
+    value,
+    onValueChange,
+    options,
+  }: {
+    label: string;
+    value: string;
+    onValueChange: (v: string) => void;
+    options: Array<{ value: string; label: string }>;
+  }) => (
+    <select aria-label={label} value={value} onChange={(e) => onValueChange(e.target.value)}>
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  ),
+}));
+
 let provenanceCallbacks: Array<() => void>;
 let getForgeProvidersMock: ReturnType<typeof vi.fn>;
 let remotes: RemoteInfo[];
@@ -45,7 +69,9 @@ function makeRemote(name: string): RemoteInfo {
 }
 
 function remoteSelect(container: HTMLElement): HTMLSelectElement {
-  const select = container.querySelector("#project-code-forge-remote select");
+  const select = container.querySelector(
+    '#project-code-forge-remote select[aria-label="Forge remote"]'
+  );
   if (!select) throw new Error("remote select not rendered");
   return select as HTMLSelectElement;
 }
@@ -105,7 +131,7 @@ describe("CodeForgeTab — stale forge remote", () => {
     await waitFor(() => {
       expect(remoteSelect(container).options).toHaveLength(2);
     });
-    expect(remoteSelect(container).value).toBe("");
+    expect(remoteSelect(container).value).toBe("__auto__");
   });
 });
 

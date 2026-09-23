@@ -21,6 +21,7 @@ import { useSettingsTabValidation } from "@/components/Settings/SettingsValidati
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import {
   SettingsDependents,
+  SettingsEmptyRow,
   SettingsGroup,
   SettingsRow,
 } from "@/components/Settings/SettingsGroup";
@@ -191,16 +192,16 @@ export function AutomationTab({
       >
         <SettingsGroup>
           {runCommands.length === 0 ? (
-            <SettingsRow
-              label="No run commands yet"
-              description="Add one to launch it from the toolbar"
-              control={
+            <SettingsEmptyRow
+              action={
                 <Button variant="outline" size="sm" onClick={addRunCommand}>
                   <Plus />
                   Add command
                 </Button>
               }
-            />
+            >
+              No run commands yet — add one to launch it from the toolbar
+            </SettingsEmptyRow>
           ) : (
             runCommands.map((cmd, index) => (
               <div key={cmd.id} className="flex items-start gap-3 px-4 py-3">
@@ -360,6 +361,9 @@ export function AutomationTab({
               </>
             }
             layout="stacked"
+            isModified={worktreePathPattern !== ""}
+            onReset={() => onWorktreePathPatternChange("")}
+            resetAriaLabel="Reset path pattern to global default"
             control={({ labelId, descriptionId }) => (
               <div className="space-y-1.5">
                 <Input

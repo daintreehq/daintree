@@ -3,14 +3,13 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import type { RemoteInfo } from "@shared/types/ipc/forge";
 import type { RegisteredForgeProvider } from "@shared/types/forge";
-import { FIELD_INPUT } from "@/components/Worktree/views";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import {
-  SETTINGS_CONTROL_WIDTH,
-  SettingsGroup,
-  SettingsRow,
-} from "@/components/Settings/SettingsGroup";
-import { cn } from "@/lib/utils";
+import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import { SettingsSelect } from "@/components/Settings/SettingsSelect";
+import type { SettingsSelectOption } from "@/components/Settings/SettingsSelect";
+
+// Radix Select reserves the empty string, so "auto-detect" needs its own value.
+const AUTO_DETECT = "__auto__";
 
 interface CodeForgeTabProps {
   forgeRemote: string | undefined;
@@ -113,6 +112,33 @@ export function CodeForgeTab({
       (p) => makeForgeProviderId(p.pluginId, p.contribution.id) === forgeProviderOverride
     );
 
+  const remoteOptions: SettingsSelectOption[] = [
+    { value: AUTO_DETECT, label: "Auto-detect" },
+    ...remotes.map((r) => ({
+      value: r.name,
+      label: `${r.name}${r.parsedRepo ? ` — ${r.parsedRepo.owner}/${r.parsedRepo.repo}` : ""}`,
+    })),
+    ...(!savedRemoteKnown && forgeRemote
+      ? [{ value: forgeRemote, label: `${forgeRemote} (unavailable)` }]
+      : []),
+  ];
+
+  const providerOptions: SettingsSelectOption[] = [
+    { value: AUTO_DETECT, label: "Auto-detect" },
+    ...providers.map((p) => ({
+      value: makeForgeProviderId(p.pluginId, p.contribution.id),
+      label: p.contribution.name,
+    })),
+    ...(!savedProviderKnown && forgeProviderOverride !== null
+      ? [{ value: forgeProviderOverride, label: `${forgeProviderOverride} (unavailable)` }]
+      : []),
+  ];
+
+  const remoteDescription =
+    "Auto-detect prefers origin, then any other remote a forge provider recognizes";
+  const providerDescription =
+    "Pins this project to one provider. Auto-detects from the remote URL when unset.";
+
   return (
     <SettingsSection
       id="project-code-forge-remote"
@@ -120,75 +146,59 @@ export function CodeForgeTab({
       description="Which remote and provider this project's issues, pull requests, and pulse data come from"
     >
       <SettingsGroup>
-        <SettingsRow
-          label="Forge remote"
-          description="Auto-detect prefers origin, then any other remote a forge provider recognizes"
-          control={({ labelId, descriptionId }) =>
-            loading ? (
-              <span className="text-sm text-text-secondary">Loading remotes…</span>
-            ) : error ? (
-              <span className="text-sm text-status-error">{error}</span>
-            ) : (
-              <select
-                id="forge-remote-select"
-                value={forgeRemote || ""}
-                onChange={(e) => onForgeRemoteChange(e.target.value || undefined)}
-                aria-labelledby={labelId}
-                aria-describedby={descriptionId}
-                className={cn(FIELD_INPUT, SETTINGS_CONTROL_WIDTH.wide, "pr-8")}
-              >
-                <option value="">Auto-detect</option>
-                {remotes.map((r) => (
-                  <option key={r.name} value={r.name}>
-                    {r.name}
-                    {r.parsedRepo ? ` — ${r.parsedRepo.owner}/${r.parsedRepo.repo}` : ""}
-                  </option>
-                ))}
-                {!savedRemoteKnown && forgeRemote ? (
-                  <option value={forgeRemote}>{forgeRemote} (unavailable)</option>
-                ) : null}
-              </select>
-            )
-          }
-        />
+        {loading || error ? (
+          <SettingsRow
+            label="Forge remote"
+            description={remoteDescription}
+            control={
+              loading ? (
+                <span className="text-sm text-text-secondary">Loading remotes…</span>
+              ) : (
+                <span className="text-sm text-status-error">{error}</span>
+              )
+            }
+          />
+        ) : (
+          <SettingsSelect
+            label="Forge remote"
+            description={remoteDescription}
+            controlWidth="wide"
+            value={forgeRemote || AUTO_DETECT}
+            onValueChange={(value) =>
+              onForgeRemoteChange(value === AUTO_DETECT ? undefined : value)
+            }
+            options={remoteOptions}
+            isModified={!!forgeRemote}
+            onReset={() => onForgeRemoteChange(undefined)}
+          />
+        )}
 
-        <SettingsRow
-          label="Forge provider"
-          description="Pins this project to one provider. Auto-detects from the remote URL when unset."
-          control={({ labelId, descriptionId }) =>
-            providersLoading ? (
-              <span className="text-sm text-text-secondary">Loading providers…</span>
-            ) : providersError ? (
-              <span className="text-sm text-status-error">{providersError}</span>
-            ) : (
-              <select
-                id="forge-provider-select"
-                value={forgeProviderOverride ?? ""}
-                onChange={(e) =>
-                  onForgeProviderOverrideChange(e.target.value === "" ? null : e.target.value)
-                }
-                aria-labelledby={labelId}
-                aria-describedby={descriptionId}
-                className={cn(FIELD_INPUT, SETTINGS_CONTROL_WIDTH.wide, "pr-8")}
-              >
-                <option value="">Auto-detect</option>
-                {providers.map((p) => {
-                  const providerId = makeForgeProviderId(p.pluginId, p.contribution.id);
-                  return (
-                    <option key={providerId} value={providerId}>
-                      {p.contribution.name}
-                    </option>
-                  );
-                })}
-                {!savedProviderKnown && forgeProviderOverride !== null ? (
-                  <option value={forgeProviderOverride}>
-                    {forgeProviderOverride} (unavailable)
-                  </option>
-                ) : null}
-              </select>
-            )
-          }
-        />
+        {providersLoading || providersError ? (
+          <SettingsRow
+            label="Forge provider"
+            description={providerDescription}
+            control={
+              providersLoading ? (
+                <span className="text-sm text-text-secondary">Loading providers…</span>
+              ) : (
+                <span className="text-sm text-status-error">{providersError}</span>
+              )
+            }
+          />
+        ) : (
+          <SettingsSelect
+            label="Forge provider"
+            description={providerDescription}
+            controlWidth="wide"
+            value={forgeProviderOverride ?? AUTO_DETECT}
+            onValueChange={(value) =>
+              onForgeProviderOverrideChange(value === AUTO_DETECT ? null : value)
+            }
+            options={providerOptions}
+            isModified={forgeProviderOverride !== null}
+            onReset={() => onForgeProviderOverrideChange(null)}
+          />
+        )}
       </SettingsGroup>
     </SettingsSection>
   );

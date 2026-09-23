@@ -25,7 +25,7 @@ Every settings page, global or project, is built from one grammar. Per-page desi
 
 1. **One heading per concept.** A section whose only row carries the section's own title is one heading too many: drop the section description, or fold the row into a broader section.
 2. **Descriptions add information** — consequence, scope, default, requirement. A description that restates its label is deleted.
-3. **Control choice**: switch for an instant boolean; checkbox for "which of these" sets; `SettingsPresetGroup` / `SegmentedRadioGroup` for 2–5 short exclusive options; `SettingsSelect` for longer lists; descriptive choices as a radio list. One radio contract: one tab stop, arrows move *and* select.
+3. **Control choice**: switch for an instant boolean; checkbox for "which of these" lists and explicit-save forms; `SettingsPresetGroup` / `SegmentedRadioGroup` for 2–5 short exclusive options; `SettingsSelect` for longer lists; descriptive choices as a radio list. One radio contract: one tab stop, arrows move *and* select.
 4. **Icons** only as identity (an agent, a forge, an editor) — never decoration on a section or a switch row.
 5. **Modified from default** = the `state-modified` bar at the row's left edge + a `RotateCcw` reset on the rail. Never accent.
 6. **Sentence case** for page titles, section titles, labels, options and buttons. Proper nouns keep their case (GitLab, MCP, Claude).
@@ -33,6 +33,24 @@ Every settings page, global or project, is built from one grammar. Per-page desi
 8. **Actions** are content-width, neutral, and belong to the row or section they act on. Destructive actions go last on the page, keep their confirm tier, and are never mixed into a group of ordinary settings.
 9. **Empty collections** say what to add and offer the add action — one compact block, not a dashed box plus a separate full-width button.
 10. **Loading** renders the page structure immediately from defaults; errors sit on the affected group with a `Retry`.
+
+## Components for recurring shapes
+
+- **Short exclusive choice** (2–5 short options): `SettingsPresetGroup` inside a group — a segmented control on the rail. Never tiles or cards.
+- **Descriptive exclusive choice**: a group of radio rows (`RadioChoice` bare rows, or `SettingsChoicebox`). One radio contract everywhere.
+- **Explicit save**: `SettingsActions` as the group's last row — `contrast` Save, `outline` secondary actions, all `size="sm"`, Save disabled while nothing is dirty, status on the left.
+- **Empty collection**: `SettingsEmptyRow` inside the group that will hold the items — the next step in words plus the add action.
+- **Row actions**: `outline` `size="sm"` on the rail. **Destructive**: `ghost-danger` `size="sm"`, last in its group or page.
+- **Units**: pass `suffix` to `SettingsNumberInput`; it sits inside the field so the rail stays aligned. Say the unit in the label or description too.
+- **Custom controls** in a `SettingsRow` take `labelId`, `descriptionId` (already the full described-by list: error, description, disabled reason) and `disabled` from the `control` render-prop — never ignore `disabled`.
+
+## Dependents: hide or disable
+
+A few dependent preferences (a threshold, a sound, a sub-option) stay visible under their parent and are disabled with a reason when it is off. A whole feature's configuration (MCP server details, a voice provider's fields) may collapse behind its enable switch. Options that do not exist for the current choice (another provider's key) are not rendered.
+
+## Copy
+
+Checkboxes only for "which of these" lists and explicit-save forms; every instant boolean is a switch. A description is one sentence without a trailing period, or several sentences with them. Effective defaults and inherited values go in the description ("Using global default · On", "Default: 10 MB"), never only in a placeholder. Long explanations and inventories keep the consequence visible and move the rest behind a disclosure.
 
 ## Accent
 

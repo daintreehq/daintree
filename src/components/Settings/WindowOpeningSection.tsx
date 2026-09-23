@@ -150,6 +150,8 @@ export function WindowOpeningSection() {
               }}
               disabled={mode === null || pendingMode !== null}
               controlWidth="wide"
+              isModified={mode !== null && value !== DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW}
+              onReset={() => void save(DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW)}
             />
           </SettingsGroup>
           {saveFailure && (

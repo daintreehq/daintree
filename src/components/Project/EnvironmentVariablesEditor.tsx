@@ -5,7 +5,11 @@ import { Lock, ShieldAlert, Eye, EyeOff, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsGroup } from "@/components/Settings/SettingsGroup";
+import {
+  SettingsActions,
+  SettingsEmptyRow,
+  SettingsGroup,
+} from "@/components/Settings/SettingsGroup";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { EnvVar } from "./projectSettingsDirty";
@@ -164,9 +168,16 @@ export function EnvironmentVariablesEditor({
       return !original || original.key !== row.key || original.value !== row.value;
     });
 
-  const helperText = `Toolbar applies to "${projectLabel}" — reopening a terminal spawns with the latest values`;
+  const helperText = `Applies to new terminals in "${projectLabel}" — reopen a terminal to pick up changes`;
 
   const hasGlobals = sortedGlobalEntries.length > 0;
+
+  const addButton = (
+    <Button variant="outline" size="sm" onClick={addRow}>
+      <Plus />
+      Add variable
+    </Button>
+  );
   const insecureCount = settings?.insecureEnvironmentVariables?.length ?? 0;
 
   return (
@@ -298,38 +309,33 @@ export function EnvironmentVariablesEditor({
             );
           })}
 
-          <div className="flex items-center justify-between gap-3 px-4 py-2.5">
-            {rows.length === 0 && (
-              <p className="text-xs text-text-secondary">No project variables yet</p>
-            )}
-            <Button variant="outline" size="sm" onClick={addRow}>
-              <Plus />
-              Add variable
-            </Button>
-          </div>
+          {rows.length === 0 ? (
+            <SettingsEmptyRow action={addButton}>
+              No project variables yet — add one to set it in every new terminal
+            </SettingsEmptyRow>
+          ) : (
+            <div className="flex justify-end px-4 py-2.5">{addButton}</div>
+          )}
 
           {showSaveControls && (
-            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-              <p className="min-w-0 flex-1 text-xs text-text-secondary">{helperText}</p>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  onClick={handleDiscard}
-                  size="sm"
-                  disabled={!isDirty || isSaving}
-                >
-                  Discard
-                </Button>
-                <Button
-                  variant="contrast"
-                  onClick={handleSave}
-                  disabled={isSaving || !isDirty}
-                  size="sm"
-                >
-                  {isSaving ? "Saving…" : "Save changes"}
-                </Button>
-              </div>
-            </div>
+            <SettingsActions status={helperText}>
+              <Button
+                variant="outline"
+                onClick={handleDiscard}
+                size="sm"
+                disabled={!isDirty || isSaving}
+              >
+                Discard
+              </Button>
+              <Button
+                variant="contrast"
+                onClick={handleSave}
+                disabled={isSaving || !isDirty}
+                size="sm"
+              >
+                {isSaving ? "Saving…" : "Save changes"}
+              </Button>
+            </SettingsActions>
           )}
           {!showSaveControls && (
             <p className="px-4 py-2.5 text-xs text-text-secondary">{helperText}</p>

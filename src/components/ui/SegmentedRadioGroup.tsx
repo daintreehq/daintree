@@ -12,6 +12,8 @@ interface SegmentedRadioGroupProps<T extends string> {
   value: T;
   onChange: (value: T) => void;
   "aria-label": string;
+  /** Help text for the whole group, e.g. a settings row's description. */
+  "aria-describedby"?: string;
   disabled?: boolean;
   /** Fill the container and split it evenly between the segments. */
   fullWidth?: boolean;
@@ -40,6 +42,7 @@ export function SegmentedRadioGroup<T extends string>({
   value,
   onChange,
   "aria-label": ariaLabel,
+  "aria-describedby": ariaDescribedBy,
   disabled,
   fullWidth,
   className,
@@ -122,6 +125,7 @@ export function SegmentedRadioGroup<T extends string>({
       )}
       role="radiogroup"
       aria-label={ariaLabel}
+      aria-describedby={ariaDescribedBy}
       onKeyDown={handleKeyDown}
     >
       {thumb && (

@@ -77,17 +77,26 @@ export function SettingsInput({
         disabledReason={disabledReason}
         error={isError ? error : undefined}
         control={({ labelId, descriptionId, disabled: rowDisabled }) => (
-          <div className="flex items-center gap-2">
+          // The unit sits inside the field so every inline control still ends on the
+          // row's rail; beside it, a "MB" pushed the field's edge off the column.
+          <div className={cn("relative", rowLayout === "inline" && SETTINGS_CONTROL_WIDTH[width])}>
             <Input
               ref={ref}
               disabled={rowDisabled}
               aria-labelledby={labelId}
               aria-describedby={descriptionId}
               aria-invalid={isError ? true : undefined}
-              className={cn(rowLayout === "inline" && SETTINGS_CONTROL_WIDTH[width], className)}
+              className={cn("w-full", suffix && "pr-10", className)}
               {...props}
             />
-            {suffix && <span className="text-xs text-text-secondary">{suffix}</span>}
+            {suffix && (
+              <span
+                className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-text-secondary"
+                aria-hidden="true"
+              >
+                {suffix}
+              </span>
+            )}
           </div>
         )}
       />

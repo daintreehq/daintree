@@ -1,10 +1,12 @@
-import { LayoutGrid, Columns, Rows, ChevronDown } from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
+import { SettingsPresetGroup } from "@/components/Settings/SettingsPresetGroup";
+import type { SettingsPresetOption } from "@/components/Settings/SettingsPresetGroup";
+import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import {
   SettingsDependents,
   SettingsGroup,
@@ -36,49 +38,59 @@ import { actionService } from "@/services/ActionService";
 import { useCachedProjectViewsStore } from "@/store/cachedProjectViewsStore";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
-import { useMemoryLeakConfigStore } from "@/store/memoryLeakConfigStore";
+import {
+  useMemoryLeakConfigStore,
+  DEFAULT_AUTO_RESTART_THRESHOLD_MB,
+} from "@/store/memoryLeakConfigStore";
+import { SCROLLBACK_DEFAULT } from "@shared/config/scrollback";
 import type { HardwareInfo } from "@shared/types/ipc/system";
 
 const STRATEGIES: Array<{
   id: PanelLayoutStrategy;
   label: string;
   description: string;
-  icon: typeof LayoutGrid;
 }> = [
   {
     id: "automatic",
     label: "Automatic",
-    description: "2→3→4 cols",
-    icon: LayoutGrid,
+    description:
+      "A balanced grid that adapts to the terminal count: 1–4 terminals use 2 columns, 5 or more use up to 4",
   },
   {
     id: "fixed-columns",
     label: "Fixed columns",
-    description: "Vertical scroll",
-    icon: Columns,
+    description: "Keeps a set number of columns and adds rows as you open more terminals",
   },
   {
     id: "fixed-rows",
     label: "Fixed rows",
-    description: "Horizontal expand",
-    icon: Rows,
+    description: "Keeps a set number of rows and adds columns as you open more terminals",
   },
 ];
 
-const SCROLLBACK_OPTIONS = [
-  { value: 500, label: "500 lines", description: "Minimal" },
-  { value: 1000, label: "1,000 lines", description: "Default" },
-  { value: 2500, label: "2,500 lines", description: "Extended" },
-  { value: 5000, label: "5,000 lines", description: "Full history" },
-] as const;
+const DEFAULT_GRID_VALUE = 3;
+const DEFAULT_SPLIT_RATIO = 0.5;
 
-const CACHED_VIEWS_OPTIONS = [
-  { value: 1, label: "1 project", description: "Minimal" },
-  { value: 2, label: "2 projects", description: "Balanced" },
-  { value: 3, label: "3 projects", description: "Balanced" },
-  { value: 4, label: "4 projects", description: "More cache" },
-  { value: 5, label: "5 projects", description: "Max cache" },
-] as const;
+const SCROLLBACK_OPTIONS: readonly SettingsPresetOption<number>[] = [
+  { value: 500, label: "500" },
+  { value: 1000, label: "1,000" },
+  { value: 2500, label: "2,500" },
+  { value: 5000, label: "5,000" },
+];
+
+const CACHED_VIEWS_OPTIONS: readonly SettingsPresetOption<number>[] = [
+  { value: 1, label: "1" },
+  { value: 2, label: "2" },
+  { value: 3, label: "3" },
+  { value: 4, label: "4" },
+  { value: 5, label: "5" },
+];
+
+const SCREEN_READER_OPTIONS: readonly SettingsPresetOption<ScreenReaderMode>[] = [
+  { value: "auto", label: "Auto" },
+  { value: "on", label: "On" },
+  { value: "off", label: "Off" },
+];
 
 const TYPICAL_TERMINAL_COUNTS: { agent: number; plain: number } = {
   agent: 8,
@@ -156,8 +168,6 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         });
       });
   }, [initializeFromHardware]);
-
-  const [showMemoryDetails, setShowMemoryDetails] = useState(false);
 
   const memoryEstimate = useMemo(() => {
     const base = performanceMode ? PERFORMANCE_MODE_SCROLLBACK : scrollbackLines;
@@ -297,7 +307,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
       <div {...subtabPanelProps("terminal", effectiveSubtab)} className="space-y-8">
         {effectiveSubtab === "performance" && (
-          <SettingsSection title="Performance">
+          <SettingsSection title="Terminal resources">
             <SettingsGroup>
               <SettingsSwitchCard
                 id="terminal-performance-mode"
@@ -384,6 +394,16 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                     step={1024}
                     suffix="MB"
                     value={autoRestartThresholdMb}
+                    isModified={autoRestartThresholdMb !== DEFAULT_AUTO_RESTART_THRESHOLD_MB}
+                    onReset={() => {
+                      setAutoRestartThresholdMb(DEFAULT_AUTO_RESTART_THRESHOLD_MB);
+                      safeFireAndForget(
+                        window.electron.terminalConfig.setMemoryLeakAutoRestartThresholdMb(
+                          DEFAULT_AUTO_RESTART_THRESHOLD_MB
+                        ),
+                        { context: "Resetting memory leak auto-restart threshold" }
+                      );
+                    }}
                     onChange={(e) => {
                       const val = parseInt(e.target.value, 10);
                       if (!isNaN(val)) {
@@ -484,36 +504,17 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
         )}
 
         {effectiveSubtab === "performance" && (
-          <SettingsSection
-            title="Cached project views"
-            id="terminal-cached-project-views"
-            description="Project views kept loaded in memory. More keeps switching back near-instant; fewer saves memory. The default scales with your RAM."
-          >
-            <div
-              className="grid grid-cols-5 gap-3"
-              role="radiogroup"
-              aria-label="Cached project views"
-            >
-              {CACHED_VIEWS_OPTIONS.map(({ value, label, description }) => (
-                <button
-                  key={value}
-                  onClick={() => handleCachedProjectViewsChange(value)}
-                  role="radio"
-                  aria-checked={cachedProjectViews === value}
-                  aria-label={`${label} - ${description}`}
-                  className={cn(
-                    "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                    cachedProjectViews === value
-                      ? "bg-overlay-selected border-border-strong text-text-primary font-medium"
-                      : "border-border-default hover:bg-tint/5 text-text-secondary"
-                  )}
-                >
-                  <span className="text-xs font-medium">{label}</span>
-                  <span className="text-2xs mt-0.5 opacity-60">{description}</span>
-                </button>
-              ))}
-            </div>
+          <SettingsSection title="Project views">
+            <SettingsGroup>
+              <SettingsPresetGroup
+                id="terminal-cached-project-views"
+                label="Cached project views"
+                description="Project views kept loaded in memory. More keeps switching back near-instant; fewer saves memory. The default scales with your RAM."
+                options={CACHED_VIEWS_OPTIONS}
+                value={cachedProjectViews}
+                onChange={(value) => void handleCachedProjectViewsChange(value)}
+              />
+            </SettingsGroup>
           </SettingsSection>
         )}
 
@@ -590,7 +591,9 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   <SettingsRow
                     id="terminal-default-ratio"
                     label="Default ratio"
-                    description="Used when a worktree has no saved ratio of its own"
+                    description="Used when a worktree has no saved ratio of its own. Default: 50/50"
+                    isModified={twoPaneSplitConfig.defaultRatio !== DEFAULT_SPLIT_RATIO}
+                    onReset={() => setDefaultRatio(DEFAULT_SPLIT_RATIO)}
                     control={({ labelId, descriptionId, disabled }) => (
                       <div className="flex items-center gap-3">
                         <input
@@ -602,7 +605,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                           aria-labelledby={labelId}
                           aria-describedby={descriptionId}
                           aria-valuetext={`${Math.round(twoPaneSplitConfig.defaultRatio * 100)} percent left, ${Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)} percent right`}
-                          className="w-40 accent-accent-primary disabled:opacity-50"
+                          className="w-40 accent-[var(--color-text-primary)] disabled:opacity-50"
                           disabled={disabled}
                         />
                         <span
@@ -641,55 +644,56 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               id="terminal-grid-layout"
               description="How panels arrange in the grid as you add more."
             >
-              <div className="grid grid-cols-3 gap-3">
-                {STRATEGIES.map(({ id, label, description, icon: Icon }) => (
-                  <button
-                    key={id}
-                    onClick={() => handleStrategyChange(id)}
-                    className={cn(
-                      "flex flex-col items-center justify-center p-4 rounded-[var(--radius-md)] border transition-colors",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                      layoutConfig.strategy === id
-                        ? "bg-overlay-selected border-border-strong text-text-primary font-medium"
-                        : "border-border-default hover:bg-tint/5 text-text-secondary"
-                    )}
-                  >
-                    <Icon className="w-6 h-6 mb-2" />
-                    <span className="text-xs font-medium">{label}</span>
-                    <span className="text-2xs text-center mt-1 opacity-60">{description}</span>
-                  </button>
-                ))}
-              </div>
+              <SettingsGroup className="overflow-hidden">
+                <RadioChoiceGroup
+                  legend="Grid layout strategy"
+                  legendHidden
+                  className="space-y-0 divide-y divide-border-subtle"
+                >
+                  {STRATEGIES.map(({ id, label, description }) => (
+                    <RadioChoiceRow
+                      key={id}
+                      bare
+                      name="gridLayoutStrategy"
+                      value={id}
+                      checked={layoutConfig.strategy === id}
+                      onChange={() => handleStrategyChange(id)}
+                      label={label}
+                      description={description}
+                      className={cn(
+                        "px-4 py-3 transition-colors",
+                        "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary",
+                        layoutConfig.strategy === id
+                          ? "bg-overlay-selected"
+                          : "hover:bg-overlay-soft"
+                      )}
+                    />
+                  ))}
+                </RadioChoiceGroup>
 
-              {layoutConfig.strategy !== "automatic" && (
-                <SettingsGroup>
-                  <SettingsNumberInput
-                    label={
-                      layoutConfig.strategy === "fixed-columns"
-                        ? "Number of columns"
-                        : "Number of rows"
-                    }
-                    description={
-                      layoutConfig.strategy === "fixed-columns"
-                        ? "Terminals stack vertically once this many columns are filled"
-                        : "Terminals expand horizontally once this many rows are filled"
-                    }
-                    min={1}
-                    max={10}
-                    value={layoutConfig.value}
-                    onChange={(e) => handleValueChange(e.target.value)}
-                  />
-                </SettingsGroup>
-              )}
-
-              <p className="text-xs text-text-secondary leading-relaxed select-text">
-                {layoutConfig.strategy === "automatic" &&
-                  "Uses a balanced square grid that adapts to the number of terminals (1-4 terminals use 2 columns, 5+ use up to 4 columns)."}
-                {layoutConfig.strategy === "fixed-columns" &&
-                  `Maintains exactly ${layoutConfig.value} column${layoutConfig.value > 1 ? "s" : ""}, adding new rows as you open more terminals.`}
-                {layoutConfig.strategy === "fixed-rows" &&
-                  `Maintains exactly ${layoutConfig.value} row${layoutConfig.value > 1 ? "s" : ""}, adding new columns as you open more terminals.`}
-              </p>
+                {layoutConfig.strategy !== "automatic" && (
+                  <SettingsDependents>
+                    <SettingsNumberInput
+                      label={
+                        layoutConfig.strategy === "fixed-columns"
+                          ? "Number of columns"
+                          : "Number of rows"
+                      }
+                      description={
+                        layoutConfig.strategy === "fixed-columns"
+                          ? `Terminals stack vertically once this many columns are filled. Default: ${DEFAULT_GRID_VALUE}`
+                          : `Terminals expand horizontally once this many rows are filled. Default: ${DEFAULT_GRID_VALUE}`
+                      }
+                      min={1}
+                      max={10}
+                      value={layoutConfig.value}
+                      onChange={(e) => handleValueChange(e.target.value)}
+                      isModified={layoutConfig.value !== DEFAULT_GRID_VALUE}
+                      onReset={() => handleValueChange(String(DEFAULT_GRID_VALUE))}
+                    />
+                  </SettingsDependents>
+                )}
+              </SettingsGroup>
             </SettingsSection>
           </>
         )}
@@ -698,36 +702,22 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           <SettingsSection
             title="Scrollback history"
             id="terminal-scrollback"
-            description="Base scrollback applies to agent terminals. Shells and dev servers use reduced limits automatically. Background terminals may temporarily reduce scrollback under memory pressure."
+            description="Background terminals may temporarily reduce scrollback under memory pressure."
             badge="New terminals"
           >
-            <div
-              className="grid grid-cols-4 gap-3"
-              role="radiogroup"
-              aria-label="Scrollback presets"
-            >
-              {SCROLLBACK_OPTIONS.map(({ value, label, description }) => (
-                <button
-                  key={value}
-                  onClick={() => handleScrollbackChange(value)}
-                  disabled={performanceMode}
-                  role="radio"
-                  aria-checked={scrollbackLines === value}
-                  aria-label={`${label} - ${description}`}
-                  className={cn(
-                    "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                    performanceMode && "opacity-50 cursor-not-allowed",
-                    scrollbackLines === value
-                      ? "bg-overlay-selected border-border-strong text-text-primary font-medium"
-                      : "border-border-default hover:bg-tint/5 text-text-secondary"
-                  )}
-                >
-                  <span className="text-xs font-medium">{label}</span>
-                  <span className="text-2xs mt-0.5 opacity-60">{description}</span>
-                </button>
-              ))}
-            </div>
+            <SettingsGroup>
+              <SettingsPresetGroup
+                label="Base scrollback"
+                description={`Lines kept for agent terminals. Shells and dev servers use reduced limits automatically. Default: ${SCROLLBACK_DEFAULT.toLocaleString()} lines`}
+                options={SCROLLBACK_OPTIONS}
+                value={scrollbackLines}
+                onChange={(value) => void handleScrollbackChange(value)}
+                disabled={performanceMode}
+                disabledReason={`Performance mode caps scrollback at ${PERFORMANCE_MODE_SCROLLBACK} lines`}
+                isModified={scrollbackLines !== SCROLLBACK_DEFAULT}
+                onReset={() => void handleScrollbackChange(SCROLLBACK_DEFAULT)}
+              />
+            </SettingsGroup>
 
             <SettingsGroup
               label={`Effective limits per type${performanceMode ? " (performance mode)" : ""}`}
@@ -745,91 +735,34 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               ))}
             </SettingsGroup>
 
-            <button
-              onClick={() => setShowMemoryDetails(!showMemoryDetails)}
-              className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors"
-              aria-expanded={showMemoryDetails}
-              aria-controls="memory-details"
-            >
-              <ChevronDown
-                className={cn("w-3 h-3 transition-transform", showMemoryDetails && "rotate-180")}
+            <SettingsGroup id="memory-details">
+              <SettingsRow
+                label="Estimated memory"
+                description={`A typical session of ${TYPICAL_TERMINAL_COUNTS.agent} agents (${formatBytes(memoryEstimate.agent)}) and ${TYPICAL_TERMINAL_COUNTS.plain} terminals (${formatBytes(memoryEstimate.plain)})`}
+                control={
+                  <span className="font-mono text-xs font-medium text-text-primary">
+                    {formatBytes(memoryEstimate.total)}
+                  </span>
+                }
               />
-              <span>Estimated memory usage</span>
-            </button>
-
-            {showMemoryDetails && (
-              <SettingsGroup id="memory-details" label="Typical session (8 agents, 8 shells)">
-                <SettingsRow
-                  label="Agent terminals (8)"
-                  control={
-                    <span className="font-mono text-xs text-text-secondary">
-                      {formatBytes(memoryEstimate.agent)}
-                    </span>
-                  }
-                />
-                <SettingsRow
-                  label="Terminals (8)"
-                  control={
-                    <span className="font-mono text-xs text-text-secondary">
-                      {formatBytes(memoryEstimate.plain)}
-                    </span>
-                  }
-                />
-                <SettingsRow
-                  label="Total estimated"
-                  control={
-                    <span className="font-mono text-xs font-medium text-text-primary">
-                      {formatBytes(memoryEstimate.total)}
-                    </span>
-                  }
-                />
-              </SettingsGroup>
-            )}
+            </SettingsGroup>
           </SettingsSection>
         )}
 
         {effectiveSubtab === "accessibility" && (
-          <SettingsSection
-            title="Screen reader mode"
-            id="terminal-screen-reader"
-            description="Lets assistive technology read terminal output. Auto turns it on only while the OS reports an active screen reader."
-          >
-            <div
-              className="grid grid-cols-3 gap-3"
-              role="radiogroup"
-              aria-label="Screen reader mode"
-            >
-              {(
-                [
-                  { value: "auto", label: "Auto", description: "Follow OS" },
-                  { value: "on", label: "On", description: "Always enabled" },
-                  { value: "off", label: "Off", description: "Disabled" },
-                ] as const
-              ).map(({ value, label, description }) => (
-                <button
-                  key={value}
-                  onClick={() => handleScreenReaderModeChange(value)}
-                  role="radio"
-                  aria-checked={screenReaderMode === value}
-                  aria-label={`${label} - ${description}`}
-                  className={cn(
-                    "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                    screenReaderMode === value
-                      ? "bg-overlay-selected border-border-strong text-text-primary font-medium"
-                      : "border-border-default hover:bg-tint/5 text-text-secondary"
-                  )}
-                >
-                  <span className="text-xs font-medium">{label}</span>
-                  <span className="text-2xs mt-0.5 opacity-60">{description}</span>
-                </button>
-              ))}
-            </div>
-
-            <p className="text-xs text-text-secondary leading-relaxed select-text">
-              Screen reader mode adds an accessible DOM overlay to each terminal, which has a
-              performance cost. For best results, only enable when using a screen reader.
-            </p>
+          <SettingsSection title="Assistive technology">
+            <SettingsGroup>
+              <SettingsPresetGroup
+                id="terminal-screen-reader"
+                label="Screen reader mode"
+                description="Lets assistive technology read terminal output through an overlay that costs some performance. Auto turns it on only while the OS reports an active screen reader. Default: Auto"
+                options={SCREEN_READER_OPTIONS}
+                value={screenReaderMode}
+                onChange={(mode) => void handleScreenReaderModeChange(mode)}
+                isModified={screenReaderMode !== "auto"}
+                onReset={() => void handleScreenReaderModeChange("auto")}
+              />
+            </SettingsGroup>
           </SettingsSection>
         )}
       </div>

@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import { SettingsEmptyRow, SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { useRecipeStore } from "@/store/recipeStore";
 import { actionService } from "@/services/ActionService";
@@ -239,16 +239,16 @@ export function RecipesTab({
             </SettingsGroup>
           ) : recipes.length === 0 ? (
             <SettingsGroup>
-              <SettingsRow
-                label="No recipes yet"
-                description="A recipe opens a set of terminals with their commands in one step"
-                control={
+              <SettingsEmptyRow
+                action={
                   <Button variant="outline" size="sm" onClick={handleAddRecipe}>
                     <Plus />
                     Add recipe
                   </Button>
                 }
-              />
+              >
+                No recipes yet — a recipe opens a set of terminals with their commands in one step
+              </SettingsEmptyRow>
             </SettingsGroup>
           ) : (
             <SettingsGroup>

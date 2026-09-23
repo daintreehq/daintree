@@ -3,10 +3,12 @@ import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { SettingsPresetGroup } from "./SettingsPresetGroup";
+import type { SettingsPresetOption } from "./SettingsPresetGroup";
 import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { ANALYTICS_EVENTS } from "@shared/config/telemetry";
@@ -86,13 +88,13 @@ const TELEMETRY_DISCLOSURE: Array<{
 /** How long the "History cleared" confirmation label stays visible. */
 const CLEARED_FLASH_MS = 3000;
 
-type RetentionKey = `${LogRetention}`;
+const DEFAULT_RETENTION_DAYS: LogRetention = 30;
 
-const RETENTION_OPTIONS: Array<{ value: RetentionKey; label: string }> = [
-  { value: "7", label: "7 days" },
-  { value: "30", label: "30 days" },
-  { value: "90", label: "90 days" },
-  { value: "0", label: "Keep forever" },
+const RETENTION_OPTIONS: SettingsPresetOption<LogRetention>[] = [
+  { value: 7, label: "7 days" },
+  { value: 30, label: "30 days" },
+  { value: 90, label: "90 days" },
+  { value: 0, label: "Keep forever" },
 ];
 
 interface PrivacyDataTabProps {
@@ -104,12 +106,13 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
   const currentSubtab = activeSubtab ?? "telemetry";
 
   const [telemetryLevel, setTelemetryLevel] = useState<TelemetryLevel>("off");
-  const [logRetentionDays, setLogRetentionDays] = useState<LogRetention>(30);
+  const [logRetentionDays, setLogRetentionDays] = useState<LogRetention>(DEFAULT_RETENTION_DAYS);
   const [dataFolderPath, setDataFolderPath] = useState("");
   const [cacheClearing, setCacheClearing] = useState(false);
   const [cacheCleared, setCacheCleared] = useState(false);
   const [resetState, setResetState] = useState<"idle" | "confirming">("idle");
-  const [sessionRetentionDays, setSessionRetentionDays] = useState<LogRetention>(30);
+  const [sessionRetentionDays, setSessionRetentionDays] =
+    useState<LogRetention>(DEFAULT_RETENTION_DAYS);
   const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
   const [historyCleared, setHistoryCleared] = useState(false);
 
@@ -406,13 +409,11 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                     />
                   ))}
                 </RadioChoiceGroup>
-              </SettingsGroup>
-              <SettingsGroup>
                 <SettingsRow
                   label="Preview outbound telemetry"
                   description="Inspect every sanitized payload Daintree would send — live, for this session only, with no transmission to any server."
                   control={
-                    <Button variant="subtle" size="sm" onClick={handleOpenTelemetryPreview}>
+                    <Button variant="outline" size="sm" onClick={handleOpenTelemetryPreview}>
                       Open preview
                     </Button>
                   }
@@ -470,28 +471,25 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                   id="privacy-data-folder"
                   label="Data folder"
                   description={
-                    <code className="block truncate font-mono" title={dataFolderPath}>
-                      {dataFolderPath}
-                    </code>
+                    <TruncatedTooltip content={dataFolderPath}>
+                      <code className="block truncate font-mono">{dataFolderPath}</code>
+                    </TruncatedTooltip>
                   }
                   control={
-                    <Button variant="subtle" size="sm" onClick={handleOpenDataFolder}>
+                    <Button variant="outline" size="sm" onClick={handleOpenDataFolder}>
                       Open folder
                     </Button>
                   }
                 />
-                <SettingsRow
+                <SettingsPresetGroup
                   id="privacy-log-retention"
                   label="Log retention"
                   description="Log files older than this are pruned at startup, so a change takes effect on next launch"
-                  control={
-                    <SegmentedRadioGroup
-                      aria-label="Log retention"
-                      options={RETENTION_OPTIONS}
-                      value={String(logRetentionDays) as RetentionKey}
-                      onChange={(v) => void handleRetentionChange(Number(v) as LogRetention)}
-                    />
-                  }
+                  options={RETENTION_OPTIONS}
+                  value={logRetentionDays}
+                  onChange={(days) => void handleRetentionChange(days)}
+                  isModified={logRetentionDays !== DEFAULT_RETENTION_DAYS}
+                  onReset={() => void handleRetentionChange(DEFAULT_RETENTION_DAYS)}
                 />
                 <SettingsRow
                   id="privacy-clear-cache"
@@ -499,7 +497,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                   description="Clears the HTTP disk and code caches for the app, browser panels, portal, and dev previews. Sign-ins, site data, and settings aren't affected."
                   control={
                     <Button
-                      variant="subtle"
+                      variant="outline"
                       size="sm"
                       onClick={() => void handleClearCache()}
                       disabled={cacheClearing}
@@ -510,17 +508,20 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                 />
                 <SettingsRow
                   label="Hidden commands"
-                  description="Commands you've hidden from 'Recently used' in the action palette. Resetting restores all of them."
+                  description={
+                    hiddenActionCount === 0
+                      ? "No commands are hidden from 'Recently used' in the action palette"
+                      : `${hiddenActionCount} ${hiddenActionCount === 1 ? "command is" : "commands are"} hidden from 'Recently used' in the action palette. Resetting restores all of them.`
+                  }
                   control={
                     <Button
-                      variant="subtle"
+                      variant="outline"
                       size="sm"
                       onClick={handleResetHiddenCommands}
                       disabled={hiddenActionCount === 0}
+                      aria-label="Reset hidden commands"
                     >
-                      {hiddenActionCount === 0
-                        ? "No hidden commands"
-                        : `Reset hidden commands (${hiddenActionCount})`}
+                      Reset
                     </Button>
                   }
                 />
@@ -532,24 +533,21 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
               description="Daintree records resumable agent sessions so you can pick up where you left off."
             >
               <SettingsGroup>
-                <SettingsRow
+                <SettingsPresetGroup
                   label="Keep session history for"
                   description="Applies to every project. Shortening the window prunes older records immediately."
-                  control={
-                    <SegmentedRadioGroup
-                      aria-label="Keep session history for"
-                      options={RETENTION_OPTIONS}
-                      value={String(sessionRetentionDays) as RetentionKey}
-                      onChange={(v) => void handleSessionRetentionChange(Number(v) as LogRetention)}
-                    />
-                  }
+                  options={RETENTION_OPTIONS}
+                  value={sessionRetentionDays}
+                  onChange={(days) => void handleSessionRetentionChange(days)}
+                  isModified={sessionRetentionDays !== DEFAULT_RETENTION_DAYS}
+                  onReset={() => void handleSessionRetentionChange(DEFAULT_RETENTION_DAYS)}
                 />
                 <SettingsRow
                   label="Clear session history"
                   description="Deletes every recorded session now. Bookmarked sessions are kept."
                   control={
                     <Button
-                      variant="subtle"
+                      variant="ghost-danger"
                       size="sm"
                       onClick={() => setShowClearHistoryConfirm(true)}
                     >
@@ -587,7 +585,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                       </p>
                     </div>
                     <div className="flex gap-2">
-                      <Button variant="subtle" size="sm" onClick={() => setResetState("idle")}>
+                      <Button variant="outline" size="sm" onClick={() => setResetState("idle")}>
                         Cancel
                       </Button>
                       <Button variant="destructive" size="sm" onClick={handleResetAllData}>

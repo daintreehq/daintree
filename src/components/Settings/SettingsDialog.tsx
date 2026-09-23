@@ -1330,7 +1330,9 @@ export function NavItem({
       onFocus={onEnter}
       onBlur={onLeave}
       className={cn(
-        "relative text-left px-3 py-1.5 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full",
+        // scroll-my clears the list's 32px scroll fade, so keeping the active item in
+        // view never parks it under the fade where it reads as dimmed.
+        "relative text-left px-3 py-1.5 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full scroll-my-10",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
         "settings-nav-item",
         active ? "text-text-primary" : "text-text-secondary hover:text-text-primary"

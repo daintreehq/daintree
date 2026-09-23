@@ -28,6 +28,8 @@ const COLOR_VISION_OPTIONS: Array<{ id: ColorVisionMode; label: string; descript
   },
 ];
 
+const DEFAULT_COLOR_VISION_MODE: ColorVisionMode = "default";
+
 const isColorVisionMode = (value: string): value is ColorVisionMode =>
   COLOR_VISION_OPTIONS.some((option) => option.id === value);
 
@@ -108,19 +110,25 @@ export function ColorVisionPicker() {
     }
   };
 
-  // One divided block in the group: the swatches and any save error belong to this row,
-  // so they sit inside it rather than behind a hairline of their own.
+  // Three rows in the group: the setting, a preview of what it does, and — only after a
+  // failed save — the error with its retry. The swatches used to hang under the row's
+  // description in the left column while the select sat on the rail, so the row read as
+  // two things at once.
   return (
-    <div id="appearance-color-vision" className="scroll-mt-6">
+    <>
       <SettingsRow
+        id="appearance-color-vision"
         label="Color vision"
         description="Adjusts status indicators and the default terminal palette for color vision deficiency"
-        control={({ labelId, descriptionId }) => (
+        isModified={colorVisionMode !== DEFAULT_COLOR_VISION_MODE}
+        onReset={() => void handleChange(DEFAULT_COLOR_VISION_MODE)}
+        control={({ labelId, descriptionId, disabled }) => (
           <Select
             value={colorVisionMode}
             onValueChange={(value) => {
               if (isColorVisionMode(value)) void handleChange(value);
             }}
+            disabled={disabled}
           >
             <SelectTrigger
               aria-labelledby={labelId}
@@ -139,9 +147,13 @@ export function ColorVisionPicker() {
           </Select>
         )}
       />
-      <div className="space-y-2 px-4 pb-3">
-        <SwatchPreview />
-        {failedMode && (
+      <SettingsRow
+        label="Preview"
+        description="Status and syntax colors as the current mode draws them"
+        control={<SwatchPreview />}
+      />
+      {failedMode && (
+        <div className="px-4 py-3">
           <InlineStatusBanner
             className="rounded-[var(--radius-md)]"
             severity="error"
@@ -152,8 +164,8 @@ export function ColorVisionPicker() {
             onClose={() => setFailedMode(null)}
             closeAriaLabel="Dismiss color vision error"
           />
-        )}
-      </div>
-    </div>
+        </div>
+      )}
+    </>
   );
 }

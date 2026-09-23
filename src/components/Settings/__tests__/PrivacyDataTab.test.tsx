@@ -2,6 +2,7 @@
 import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { PrivacyDataTab } from "../PrivacyDataTab";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { ANALYTICS_EVENTS } from "@shared/config/telemetry";
 
 const mockNotify = vi.fn();
@@ -83,7 +84,9 @@ describe("PrivacyDataTab", () => {
       agentSessionHistory: createAgentSessionHistoryApi(),
     } as unknown as typeof window.electron;
 
-    render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />);
+    render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
 
     await waitFor(() => {
       expect(radio("Errors only").checked).toBe(true);
@@ -103,7 +106,9 @@ describe("PrivacyDataTab", () => {
       agentSessionHistory: createAgentSessionHistoryApi(),
     } as unknown as typeof window.electron;
 
-    render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />);
+    render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
 
     await waitFor(() => {
       expect(radio("Off").checked).toBe(true);
@@ -141,7 +146,9 @@ describe("PrivacyDataTab", () => {
       agentSessionHistory: createAgentSessionHistoryApi(),
     } as unknown as typeof window.electron;
 
-    render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />);
+    render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
 
     await waitFor(() => {
       expect(radio("Off").checked).toBe(true);
@@ -163,7 +170,9 @@ describe("PrivacyDataTab", () => {
   });
 
   it("renders telemetry disclosure listing all allowlisted analytics events", async () => {
-    render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />);
+    render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
 
     const disclosure = await waitFor(() =>
       screen.getByRole("group", { name: /What's collected at each level/i })
@@ -177,7 +186,9 @@ describe("PrivacyDataTab", () => {
   it("does not claim telemetry is sampled in the disclosure", async () => {
     // Sentry deliberately runs without `sampleRate` (#5259), so every captured
     // error is eligible for transmission. Consent copy must not suggest otherwise.
-    render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />);
+    render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
 
     const disclosure = await waitFor(() =>
       screen.getByRole("group", { name: /What's collected at each level/i })
@@ -194,7 +205,9 @@ describe("PrivacyDataTab", () => {
   });
 
   it("does not render telemetry disclosure on the storage subtab", async () => {
-    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />);
+    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
 
     await waitFor(() => {
       // Two retention pickers now live on this subtab (log retention + session
@@ -218,7 +231,9 @@ describe("PrivacyDataTab", () => {
       agentSessionHistory: createAgentSessionHistoryApi(),
     } as unknown as typeof window.electron;
 
-    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />);
+    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
 
     const logRetentionOption = (label: string) =>
       within(screen.getByRole("radiogroup", { name: "Log retention" })).getByRole("radio", {
@@ -253,7 +268,9 @@ describe("PrivacyDataTab", () => {
 
     function renderWithClearCache(clearCache: ClearCache) {
       window.electron.privacy.clearCache = clearCache;
-      render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />);
+      render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+        wrapper: TooltipProvider,
+      });
     }
 
     it("shows the cleared label only when every cache cleared", async () => {

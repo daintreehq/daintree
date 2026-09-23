@@ -5,13 +5,18 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsGroup } from "@/components/Settings/SettingsGroup";
+import { SettingsActions, SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { useProjectStore, patchCachedProjectSettings } from "@/store";
 import { projectClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 
 type ImageViewerMode = "os" | "custom";
+
+interface PersistedImageViewer {
+  mode: ImageViewerMode;
+  customCommand: string;
+}
 
 /** Options are rows of the group: the focus ring sits inside the row, the selection is a neutral lift. */
 const ROW_CLASSES =
@@ -28,6 +33,10 @@ export function ImageViewerTab() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // What is on disk, so Save means "write this change". Null while the project has
+  // no preference yet: the OS default shown then is a suggestion, and saving it is
+  // still a real first write.
+  const [persisted, setPersisted] = useState<PersistedImageViewer | null>(null);
   const isMountedRef = useRef(true);
 
   const activeProject = useProjectStore((s) => s.currentProject);
@@ -47,6 +56,7 @@ export function ImageViewerTab() {
     setMode("os");
     setCustomCommand("");
     setSaved(false);
+    setPersisted(null);
     setSaveError(null);
     setLoadError(null);
     setIsLoading(true);
@@ -67,6 +77,7 @@ export function ImageViewerTab() {
         if (pref) {
           setMode(pref.mode);
           setCustomCommand(pref.customCommand ?? "");
+          setPersisted({ mode: pref.mode, customCommand: pref.customCommand ?? "" });
         }
       })
       .catch((err) => {
@@ -118,6 +129,7 @@ export function ImageViewerTab() {
       // stale cache here is what reverts this save on dialog close (#12326).
       patchCachedProjectSettings(activeProjectId, { preferredImageViewer });
       if (!isMountedRef.current) return;
+      setPersisted({ mode, customCommand: preferredImageViewer.customCommand ?? "" });
       setSaved(true);
     } catch (err) {
       if (!isMountedRef.current) return;
@@ -126,6 +138,11 @@ export function ImageViewerTab() {
       if (isMountedRef.current) setIsSaving(false);
     }
   };
+
+  const isDirty =
+    !persisted ||
+    persisted.mode !== mode ||
+    (mode === "custom" && persisted.customCommand !== customCommand.trim());
 
   if (!activeProjectId) {
     return (
@@ -204,19 +221,28 @@ export function ImageViewerTab() {
           </div>
         </RadioChoiceGroup>
 
-        <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+        <SettingsActions
+          status={
+            loadError ? (
+              <span className="text-status-error">{loadError}</span>
+            ) : saveError ? (
+              <span className="text-status-error">{saveError}</span>
+            ) : saved && !isDirty ? (
+              "Saved"
+            ) : !persisted && !isLoading ? (
+              "Not saved yet — images open with the OS default"
+            ) : null
+          }
+        >
           <Button
             variant="contrast"
             size="sm"
             onClick={handleSave}
-            disabled={isSaving || isLoading || Boolean(loadError)}
+            disabled={isSaving || isLoading || Boolean(loadError) || !isDirty}
           >
             {isSaving ? "Saving…" : "Save"}
           </Button>
-          {saved && <span className="text-xs text-text-secondary">Saved</span>}
-          {loadError && <p className="basis-full text-xs text-status-error">{loadError}</p>}
-          {saveError && <p className="basis-full text-xs text-status-error">{saveError}</p>}
-        </div>
+        </SettingsActions>
       </SettingsGroup>
     </SettingsSection>
   );

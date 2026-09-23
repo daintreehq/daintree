@@ -613,6 +613,22 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
+  it("keeps one sentence of tier consequence visible and the full account behind the disclosure", async () => {
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Capability tier");
+
+    expect(container.textContent).toContain("Full in-app orchestration");
+    expect(container.textContent).not.toContain("Most assistance tasks need this");
+
+    fireEvent.click(screen.getByRole("button", { name: /what this tier allows/i }));
+
+    expect(container.textContent).toContain("Most assistance tasks need this");
+  });
+
   it("rotate key opens confirm dialog; confirming calls mcpServer.rotateApiKey", async () => {
     const { container } = render(
       <SettingsValidationProvider>

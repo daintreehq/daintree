@@ -131,22 +131,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Copy confirmation glyph; resets when the copy flash times out",
     },
   ],
-  "plugins/builtin/github/renderer/components/GitHubSettingsTab.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: 'validationResult === "success"',
-      expectedOccurrences: 1,
-      rationale: "Token-saved confirmation; resets on the next edit of the token field",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: 'validationResult === "test-success"',
-      expectedOccurrences: 1,
-      rationale: "Token-valid confirmation; resets on the next edit of the token field",
-    },
-  ],
   "plugins/builtin/github/renderer/utils/prCIStatus.ts": [
     {
       category: "outcome",

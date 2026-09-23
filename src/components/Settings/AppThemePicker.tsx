@@ -555,7 +555,13 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
         </div>
 
         <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-border-default bg-surface-canvas">
-          <span className="min-w-0 truncate text-xs text-text-secondary">Current theme</span>
+          <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">Current theme</span>
+          {allSchemes.length > 1 && (
+            <Button variant="outline" size="sm" onClick={handleShuffle} className="shrink-0">
+              <Shuffle aria-hidden="true" />
+              Random theme
+            </Button>
+          )}
           {onClose && (
             <Button variant="contrast" size="sm" onClick={handleChangeTheme} className="shrink-0">
               Change theme…
@@ -631,6 +637,20 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
             </>
           }
         />
+        <SettingsRow
+          label="Theme files"
+          description="Load a theme from a file, or save this one to share it"
+          control={({ disabled }) => (
+            <>
+              <Button variant="outline" size="sm" onClick={handleImport} disabled={disabled}>
+                Import…
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleExport} disabled={disabled}>
+                Export…
+              </Button>
+            </>
+          )}
+        />
       </SettingsGroup>
 
       {accentContrastFail && (
@@ -646,31 +666,6 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
           </p>
         </div>
       )}
-
-      <div className="flex items-center gap-3">
-        <button
-          onClick={handleExport}
-          className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors"
-        >
-          Export app theme...
-        </button>
-        <button
-          onClick={handleImport}
-          className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors"
-        >
-          Import app theme...
-        </button>
-        {allSchemes.length > 1 && (
-          <button
-            type="button"
-            onClick={handleShuffle}
-            className="ml-auto flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors"
-          >
-            <Shuffle className="h-3 w-3" />
-            Random theme
-          </button>
-        )}
-      </div>
 
       {importMessage && (
         <div

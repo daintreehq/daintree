@@ -3,7 +3,7 @@ import { Eye, EyeOff, Trash2, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { SettingsGroup } from "./SettingsGroup";
+import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import { SettingsSection } from "./SettingsSection";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -243,23 +243,25 @@ export function EnvironmentSettingsTab() {
     );
   }
 
+  const addButton = (
+    <Button variant="outline" size="sm" onClick={addRow} disabled={isLoading}>
+      <Plus aria-hidden="true" />
+      Add variable
+    </Button>
+  );
+
   return (
     <SettingsSection
       title={sectionTitle}
       description={sectionDescription}
       id="environment-variables"
+      action={envRows.length > 0 ? addButton : undefined}
     >
       <SettingsGroup>
         {envRows.length === 0 ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-            <p className="text-sm text-text-secondary">
-              Add a variable to set it in every new terminal
-            </p>
-            <Button variant="outline" size="sm" onClick={addRow} disabled={isLoading}>
-              <Plus aria-hidden="true" />
-              Add variable
-            </Button>
-          </div>
+          <SettingsEmptyRow action={addButton}>
+            Add a variable to set it in every new terminal
+          </SettingsEmptyRow>
         ) : (
           envRows.map((envVar, index) => {
             const isSensitive = isSensitiveEnvKey(envVar.key);
@@ -337,33 +339,28 @@ export function EnvironmentSettingsTab() {
           })
         )}
 
-        {(envRows.length > 0 || isDirty) && (
-          <div className="flex flex-wrap items-center gap-2 px-4 py-3">
-            {envRows.length > 0 && (
-              <Button variant="outline" size="sm" onClick={addRow} disabled={isLoading}>
-                <Plus aria-hidden="true" />
-                Add variable
-              </Button>
-            )}
-            {isDirty && (
-              <div className="ml-auto flex items-center gap-2">
-                <Button variant="ghost" size="sm" onClick={handleDiscard} disabled={isSaving}>
-                  Discard
-                </Button>
-                <Button variant="contrast" size="sm" onClick={handleSave} disabled={isSaving}>
-                  {isSaving ? "Saving…" : "Save"}
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
+        <SettingsActions
+          status={
+            saveError && (
+              <span role="alert" className="text-status-error">
+                {saveError}
+              </span>
+            )
+          }
+        >
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleDiscard}
+            disabled={!isDirty || isSaving}
+          >
+            Discard
+          </Button>
+          <Button variant="contrast" size="sm" onClick={handleSave} disabled={!isDirty || isSaving}>
+            {isSaving ? "Saving…" : "Save"}
+          </Button>
+        </SettingsActions>
       </SettingsGroup>
-
-      {saveError && (
-        <p role="alert" className="text-xs text-status-error">
-          {saveError}
-        </p>
-      )}
     </SettingsSection>
   );
 }

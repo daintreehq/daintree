@@ -3,7 +3,7 @@ import { Plus, Trash2, AlertTriangle, Play, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsInput } from "@/components/Settings/SettingsInput";
 import { SettingsSelect } from "@/components/Settings/SettingsSelect";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -129,6 +129,19 @@ function PatternListRow({
   itemLabel: string;
   addLabel: string;
 }) {
+  const addButton = (
+    <Button variant="outline" size="sm" onClick={() => onChange([...patterns, ""])}>
+      <Plus />
+      {addLabel}
+    </Button>
+  );
+
+  // Empty, the list is just its add action — on the rail, where a filled list's
+  // controls end, rather than a lone button under the description.
+  if (patterns.length === 0) {
+    return <SettingsRow label={label} description={description} control={addButton} />;
+  }
+
   return (
     <SettingsRow
       label={label}
@@ -161,10 +174,7 @@ function PatternListRow({
               </Button>
             </div>
           ))}
-          <Button variant="outline" size="sm" onClick={() => onChange([...patterns, ""])}>
-            <Plus />
-            {addLabel}
-          </Button>
+          <div className="flex justify-end">{addButton}</div>
         </div>
       }
     />
@@ -270,6 +280,20 @@ export function ContextTab({
     invalidateTest();
   };
 
+  const addExcludedPathButton = (
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={() => {
+        onExcludedPathsChange([...excludedPaths, ""]);
+        invalidateTest();
+      }}
+    >
+      <Plus />
+      Add path pattern
+    </Button>
+  );
+
   return (
     <div className="space-y-8">
       <SettingsSection
@@ -307,22 +331,13 @@ export function ContextTab({
               </Button>
             </div>
           ))}
-          <div className="flex items-center justify-between gap-3 px-4 py-2.5">
-            {excludedPaths.length === 0 && (
-              <p className="text-xs text-text-secondary">Nothing is excluded yet</p>
-            )}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                onExcludedPathsChange([...excludedPaths, ""]);
-                invalidateTest();
-              }}
-            >
-              <Plus />
-              Add path pattern
-            </Button>
-          </div>
+          {excludedPaths.length === 0 ? (
+            <SettingsEmptyRow action={addExcludedPathButton}>
+              Nothing is excluded yet — add a glob pattern to skip it
+            </SettingsEmptyRow>
+          ) : (
+            <div className="flex justify-end px-4 py-2.5">{addExcludedPathButton}</div>
+          )}
         </SettingsGroup>
       </SettingsSection>
 
@@ -335,40 +350,51 @@ export function ContextTab({
           <SettingsInput
             type="number"
             label="Max context size (bytes)"
-            description="Total size limit for all files"
+            description="Total size limit for all files · Default: 100 MB"
             controlWidth="select"
+            suffix="bytes"
             value={copyTreeSettings.maxContextSize ?? ""}
             onChange={(e) => setCopyTree({ maxContextSize: parsePositiveInt(e.target.value) })}
+            isModified={copyTreeSettings.maxContextSize !== undefined}
+            onReset={() => setCopyTree({ maxContextSize: undefined })}
             min={1}
-            placeholder="Default (100 MB)"
+            placeholder="Default"
             className="font-mono"
           />
           <SettingsInput
             type="number"
             label="Max file size (bytes)"
-            description="Skip files larger than this"
+            description="Skip files larger than this · Default: 10 MB"
             controlWidth="select"
+            suffix="bytes"
             value={copyTreeSettings.maxFileSize ?? ""}
             onChange={(e) => setCopyTree({ maxFileSize: parsePositiveInt(e.target.value) })}
+            isModified={copyTreeSettings.maxFileSize !== undefined}
+            onReset={() => setCopyTree({ maxFileSize: undefined })}
             min={1}
-            placeholder="Default (up to 10 MB)"
+            placeholder="Default"
             className="font-mono"
           />
           <SettingsInput
             type="number"
             label="Character budget"
-            description="Total characters across all files"
+            description="Total characters across all files · Default: no limit"
             controlWidth="select"
+            suffix="chars"
             value={copyTreeSettings.charLimit ?? ""}
             onChange={(e) => setCopyTree({ charLimit: parsePositiveInt(e.target.value) })}
+            isModified={copyTreeSettings.charLimit !== undefined}
+            onReset={() => setCopyTree({ charLimit: undefined })}
             min={1}
-            placeholder="Default (no truncation)"
+            placeholder="Default"
             className="font-mono"
           />
           <SettingsSelect
             label="File priority strategy"
             description="Which files to prioritize when truncating"
             value={copyTreeSettings.strategy ?? STRATEGY_DEFAULT}
+            isModified={copyTreeSettings.strategy !== undefined}
+            onReset={() => setCopyTree({ strategy: undefined })}
             onValueChange={(value) =>
               setCopyTree({
                 strategy: value === "modified" || value === "all" ? value : undefined,

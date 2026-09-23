@@ -181,7 +181,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Portal/PortalDock.tsx",
     "src/components/Portal/PortalToolbar.tsx",
     "src/components/Recovery/CrashRecoveryDialog.tsx",
-    "src/components/Settings/AgentSelectorDropdown.tsx",
     "src/components/Settings/PresetSelector.tsx",
     "src/components/Settings/SettingsDialog.tsx",
     "src/components/Settings/SettingsSubtabBar.tsx",

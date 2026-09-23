@@ -1,5 +1,7 @@
 import { useId, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
+import { SettingsRow, useSettingsGroup } from "./SettingsGroup";
 
 export interface SettingsPresetOption<T extends string | number> {
   value: T;
@@ -20,6 +22,9 @@ interface SettingsPresetGroupProps<T extends string | number> {
   disabled?: boolean;
   /** Help text under the row, associated with the group for assistive tech. */
   description?: string;
+  isModified?: boolean;
+  onReset?: () => void;
+  disabledReason?: string;
 }
 
 /**
@@ -40,7 +45,11 @@ export function SettingsPresetGroup<T extends string | number>({
   id,
   disabled,
   description,
+  isModified,
+  onReset,
+  disabledReason,
 }: SettingsPresetGroupProps<T>) {
+  const group = useSettingsGroup();
   const labelId = useId();
   const descriptionId = useId();
   // One element per option, keyed by value, so keyboard movement focuses the button
@@ -123,6 +132,35 @@ export function SettingsPresetGroup<T extends string | number>({
   // of buttons.
   const tabStopValue =
     value !== null && enabled.some((o) => o.value === value) ? value : (enabled[0]?.value ?? null);
+
+  // Inside a group the chips become the shared segmented control on the row's rail —
+  // the same control every other short exclusive choice in settings uses.
+  if (group) {
+    return (
+      <SettingsRow
+        id={id}
+        label={label}
+        description={description}
+        isModified={isModified}
+        onReset={onReset}
+        disabled={disabled}
+        disabledReason={disabledReason}
+        control={({ descriptionId: rowDescribedBy, disabled: rowDisabled }) => (
+          <SegmentedRadioGroup
+            aria-label={label}
+            aria-describedby={rowDescribedBy}
+            options={options.map((o) => ({ value: String(o.value), label: o.label }))}
+            value={value === null ? "" : String(value)}
+            onChange={(next) => {
+              const match = options.find((o) => String(o.value) === next);
+              if (match && !match.disabled) onChange(match.value);
+            }}
+            disabled={rowDisabled}
+          />
+        )}
+      />
+    );
+  }
 
   return (
     <div id={id} className="space-y-2 scroll-mt-12">

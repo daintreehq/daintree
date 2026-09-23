@@ -1,14 +1,5 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  useMemo,
-  Suspense,
-  type ComponentType,
-  type ReactNode,
-} from "react";
-import { GitBranch, Check, AlertCircle } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, useMemo, Suspense } from "react";
+import { Check, AlertCircle } from "lucide-react";
 import type { ForgeProviderContribution, ForgeProviderEntry } from "@shared/types";
 import type { ForgeAuditRecord, ForgeAuditStats } from "@shared/types/ipc/forge";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "@shared/types/ipc/forge";
@@ -24,15 +15,13 @@ import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import { ForgeIntegrationsTab } from "./ForgeIntegrationsTab";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { SettingsSection } from "./SettingsSection";
-import { SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { SettingsActions, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { ForgeAuditLogViewer } from "./ForgeAuditLogViewer";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
 import { appClient } from "@/clients";
 import { logError } from "@/utils/logger";
-
-type ForgeIcon = ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
 
 const GENERAL_ID = "general";
 const CREDENTIAL_RESULT_DISPLAY_MS = 5000;
@@ -279,15 +268,10 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
       )}
 
       {!isGeneral && selectedEntry && (
-        <ForgeProviderCard
-          name={selectedEntry.contribution.name}
-          iconSlotId={selectedEntry.contribution.slots?.icon}
-        >
-          <ProviderPanel
-            providerId={makeForgeProviderId(selectedEntry.pluginId, selectedEntry.contribution.id)}
-            entry={selectedEntry}
-          />
-        </ForgeProviderCard>
+        <ProviderPanel
+          providerId={makeForgeProviderId(selectedEntry.pluginId, selectedEntry.contribution.id)}
+          entry={selectedEntry}
+        />
       )}
 
       <ConfirmDialog
@@ -304,40 +288,9 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
 }
 
 /**
- * Provider brand icon resolved through the provider's `slots.icon` builtin-view
- * ref. Falls back to a neutral `GitBranch` glyph when the provider declares no
- * icon slot or the owning plugin's view is unregistered/disabled.
- */
-function ProviderIcon({ slotId, className }: { slotId?: string; className?: string }) {
-  const SlotIcon = useBuiltinView<{ className?: string; "aria-hidden"?: boolean }>(slotId ?? "");
-  const Icon: ForgeIcon = SlotIcon ?? GitBranch;
-  return <Icon className={className} aria-hidden={true} />;
-}
-
-interface ForgeProviderCardProps {
-  name: string;
-  iconSlotId?: string;
-  children: ReactNode;
-}
-
-/**
- * Identity header over the provider's own settings. No surrounding card: the provider
- * body brings its own groups, and a card around them would nest one surface in another.
- */
-function ForgeProviderCard({ name, iconSlotId, children }: ForgeProviderCardProps) {
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <ProviderIcon slotId={iconSlotId} className="w-5 h-5 text-text-primary" />
-        <h4 className="text-sm font-semibold text-text-primary">{name} settings</h4>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-/**
- * Body of a provider's settings card. A provider-owned panel contributed via
+ * Body of a provider's settings. The selector above names the provider with its icon,
+ * so the body opens straight on its sections rather than a second identity heading.
+ * A provider-owned panel contributed via
  * `slots.settingsTab` wins (the slot resolves null while the owning plugin is
  * disabled, so disabling genuinely removes the plugin's settings interface);
  * otherwise the host renders the generic credential form built from the
@@ -567,7 +520,21 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
               )}
             />
           ))}
-          <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+          <SettingsActions
+            status={
+              result === "success" ? (
+                <span className="flex items-center gap-1">
+                  <Check className="w-3 h-3" aria-hidden="true" />
+                  Credentials saved
+                </span>
+              ) : result === "error" ? (
+                <span className="flex items-center gap-1 text-status-error">
+                  <AlertCircle className="w-3 h-3" aria-hidden="true" />
+                  {errorMessage || "Couldn't save credentials"}
+                </span>
+              ) : null
+            }
+          >
             <Button
               variant="contrast"
               onClick={handleSave}
@@ -578,31 +545,26 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
             >
               Save
             </Button>
-            {result === "success" && (
-              <p className="text-xs text-text-secondary flex items-center gap-1">
-                <Check className="w-3 h-3" aria-hidden="true" />
-                Credentials saved
-              </p>
-            )}
-            {result === "error" && (
-              <p className="text-xs text-status-error flex items-center gap-1">
-                <AlertCircle className="w-3 h-3" aria-hidden="true" />
-                {errorMessage || "Couldn't save credentials"}
-              </p>
-            )}
-            {hasCredential && (
-              <Button
-                onClick={handleClear}
-                variant="ghost-danger"
-                size="sm"
-                aria-label="Clear credentials"
-                className="ml-auto"
-              >
-                Clear credentials
-              </Button>
-            )}
-          </div>
+          </SettingsActions>
         </SettingsGroup>
+        {hasCredential && (
+          <SettingsGroup>
+            <SettingsRow
+              label="Stored credentials"
+              description={`Clearing removes Daintree's copy; ${providerName} features stop until you add them again`}
+              control={
+                <Button
+                  onClick={handleClear}
+                  variant="ghost-danger"
+                  size="sm"
+                  aria-label="Clear credentials"
+                >
+                  Clear credentials
+                </Button>
+              }
+            />
+          </SettingsGroup>
+        )}
       </SettingsSection>
     </div>
   );

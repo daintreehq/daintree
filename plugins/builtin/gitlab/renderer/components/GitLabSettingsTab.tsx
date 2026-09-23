@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Key, Check, AlertCircle, FlaskConical, ExternalLink, Server } from "lucide-react";
-import { GitLabIcon } from "@/components/icons/brands";
+import { Check, AlertCircle, FlaskConical, ExternalLink } from "lucide-react";
 import { actionService } from "@/services/ActionService";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
+import { SettingsSection } from "@/components/Settings/SettingsSection";
+import { SettingsActions, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
+import { SettingsInput } from "@/components/Settings/SettingsInput";
 import { BUILTIN_GITLAB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import type { GitLabTokenValidation } from "../../shared/types.js";
 import { logError } from "@/utils/logger";
@@ -11,38 +13,6 @@ import { logError } from "@/utils/logger";
 const GITLAB_PLUGIN_ID = "daintree.gitlab";
 const INSTANCE_URL_SETTING = "instanceUrl";
 const DEFAULT_INSTANCE_URL = "https://gitlab.com";
-
-interface ForgeSettingBlockProps {
-  id?: string;
-  icon: ComponentType<{ className?: string }>;
-  title: string;
-  description: string;
-  children: ReactNode;
-}
-
-function ForgeSettingBlock({
-  id,
-  icon: Icon,
-  title,
-  description,
-  children,
-}: ForgeSettingBlockProps) {
-  return (
-    <div
-      id={id}
-      className="rounded-[var(--radius-lg)] border border-border-default bg-surface-canvas/30 p-4 space-y-3 scroll-mt-12"
-    >
-      <div>
-        <h5 className="text-sm font-medium text-text-primary flex items-center gap-2">
-          <Icon className="w-4 h-4 text-text-secondary" aria-hidden="true" />
-          {title}
-        </h5>
-        <p className="text-xs text-text-secondary mt-0.5 select-text">{description}</p>
-      </div>
-      {children}
-    </div>
-  );
-}
 
 type ValidationResult = "success" | "error" | "test-success" | "test-error" | null;
 
@@ -284,161 +254,145 @@ export function GitLabSettingsTab() {
     );
   };
 
+  const tokenStatus =
+    validationResult === "success" ? (
+      <span className="flex items-center gap-1">
+        <Check className="w-3 h-3 shrink-0" aria-hidden="true" />
+        Token saved
+      </span>
+    ) : validationResult === "test-success" ? (
+      <span className="flex items-center gap-1">
+        <Check className="w-3 h-3 shrink-0" aria-hidden="true" />
+        Token valid — click Save to store it
+      </span>
+    ) : validationResult === "error" || validationResult === "test-error" ? (
+      <span className="flex items-center gap-1 text-status-error">
+        <AlertCircle className="w-3 h-3 shrink-0" aria-hidden="true" />
+        {errorMessage || "Invalid token"}
+      </span>
+    ) : null;
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-8">
       {loadError && (
         <SettingsLoadErrorBanner message={loadError} onRetry={() => setLoadAttempt((n) => n + 1)} />
       )}
 
-      <ForgeSettingBlock
-        id="gitlab-instance"
-        icon={Server}
-        title="GitLab instance"
-        description="The instance your token authenticates against. Keep gitlab.com, or point it at a self-hosted GitLab."
-      >
-        <input
-          type="text"
-          value={instanceUrl}
-          onChange={(e) => {
-            instanceUrlDirtyRef.current = true;
-            setInstanceUrl(e.target.value);
-          }}
-          onBlur={handleInstanceUrlBlur}
-          // The blur persists the URL and can clear the credential, so it
-          // takes the same lock every other credential write does.
-          readOnly={credentialOpInFlight()}
-          placeholder={DEFAULT_INSTANCE_URL}
-          aria-label="GitLab instance URL"
-          autoComplete="off"
-          className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-hidden focus:border-accent-primary transition-colors"
-          disabled={isValidating || isTesting}
-        />
-        <p className="text-xs text-text-secondary select-text">
-          For self-hosted projects whose remote hostname isn't a known GitLab domain, also set this
-          project's forge provider to GitLab under Code forge → Active project routing.
-        </p>
-      </ForgeSettingBlock>
-
-      <ForgeSettingBlock
-        id="gitlab-token"
-        icon={Key}
-        title="Personal access token"
+      <SettingsSection
+        title="Authentication"
         description="Used for repository statistics, issue and merge request detection, and linking worktrees to GitLab"
       >
-        {hasToken && (
-          <div className="flex items-center gap-1 text-xs text-text-secondary">
-            <Check className="w-3 h-3" />
-            GitLab connected
-          </div>
-        )}
-        {notice && <p className="text-xs text-text-secondary select-text">{notice}</p>}
-
-        <div className="flex gap-2">
-          <input
+        <SettingsGroup>
+          <SettingsInput
+            rowId="gitlab-instance"
+            label="Instance URL"
+            description="The instance your token authenticates against. For a self-hosted project whose remote hostname isn't a known GitLab domain, also set the project's forge provider to GitLab under Code forge → Active project routing."
+            type="text"
+            value={instanceUrl}
+            onChange={(e) => {
+              instanceUrlDirtyRef.current = true;
+              setInstanceUrl(e.target.value);
+            }}
+            onBlur={handleInstanceUrlBlur}
+            // The blur persists the URL and can clear the credential, so it
+            // takes the same lock every other credential write does.
+            readOnly={credentialOpInFlight()}
+            placeholder={DEFAULT_INSTANCE_URL}
+            aria-label="GitLab instance URL"
+            autoComplete="off"
+            disabled={isValidating || isTesting}
+          />
+          {hasToken && (
+            <SettingsRow
+              label="Status"
+              control={
+                <span className="flex items-center gap-1 text-xs text-text-secondary">
+                  <Check className="w-3 h-3" aria-hidden="true" />
+                  GitLab connected
+                </span>
+              }
+            />
+          )}
+          <SettingsInput
+            rowId="gitlab-token"
+            label="Personal access token"
+            description={notice ?? undefined}
             type="password"
             value={token}
             onChange={(e) => setToken(e.target.value)}
             placeholder={hasToken ? "Enter new token to replace" : "glpat-…"}
             aria-label="GitLab personal access token"
             autoComplete="new-password"
-            className="flex-1 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-hidden focus:border-accent-primary transition-colors"
             disabled={isValidating || isTesting}
           />
-          <Button
-            onClick={handleTestToken}
-            disabled={credentialOpInFlight() || !settingsLoaded || !token.trim()}
-            loading={isTesting}
-            variant="outline"
-            size="sm"
-            aria-label="Test token"
-            className="min-w-[70px] text-text-primary border-border-default hover:bg-border-default"
-          >
-            <FlaskConical aria-hidden="true" />
-            Test
-          </Button>
-          <Button
-            onClick={handleSaveToken}
-            disabled={credentialOpInFlight() || !settingsLoaded || !token.trim()}
-            loading={isValidating}
-            size="sm"
-            aria-label="Save token"
-            className="min-w-[70px]"
-          >
-            Save
-          </Button>
-          {hasToken && (
+          {/* The result clears itself after 5s; the actions row's status slot is a
+              polite live region, so a screen reader still hears whether Save worked. */}
+          <SettingsActions status={tokenStatus}>
             <Button
-              onClick={handleClearToken}
+              onClick={handleTestToken}
+              disabled={credentialOpInFlight() || !settingsLoaded || !token.trim()}
+              loading={isTesting}
               variant="outline"
               size="sm"
-              aria-label="Clear token"
-              disabled={credentialOpInFlight()}
-              loading={isClearing}
-              className="text-status-error border-border-default hover:bg-status-error/10 hover:border-status-error/20"
+              aria-label="Test token"
             >
-              Clear token
+              <FlaskConical aria-hidden="true" />
+              Test
             </Button>
-          )}
-        </div>
+            <Button
+              onClick={handleSaveToken}
+              disabled={credentialOpInFlight() || !settingsLoaded || !token.trim()}
+              loading={isValidating}
+              variant="contrast"
+              size="sm"
+              aria-label="Save token"
+            >
+              Save
+            </Button>
+          </SettingsActions>
+        </SettingsGroup>
 
-        {/* The result clears itself after 5s, so a screen reader that isn't
-            told about it never learns whether Save worked. Mounted only when
-            it has something to say: an always-present empty div is still a
-            `space-y-3` child and would pad the row above it. */}
-        {validationResult !== null && (
-          <div role="status" aria-live="polite">
-            {validationResult === "success" && (
-              <p className="text-xs text-status-success flex items-center gap-1">
-                <Check className="w-3 h-3" />
-                Token saved
-              </p>
-            )}
-            {validationResult === "test-success" && (
-              <p className="text-xs text-status-success flex items-center gap-1">
-                <Check className="w-3 h-3" />
-                Token valid — click Save to store it
-              </p>
-            )}
-            {(validationResult === "error" || validationResult === "test-error") && (
-              <p className="text-xs text-status-error flex items-center gap-1">
-                <AlertCircle className="w-3 h-3" />
-                {errorMessage || "Invalid token"}
-              </p>
-            )}
-          </div>
+        <SettingsGroup>
+          <SettingsRow
+            label="Create a new token"
+            description={
+              <>
+                Opens your instance&apos;s access-token page with the scope preselected. Required
+                scope: <code className="font-mono text-text-primary">api</code> (
+                <code className="font-mono text-text-primary">read_api</code> works for read-only
+                use).
+              </>
+            }
+            control={
+              <Button onClick={openTokenPage} variant="outline" size="sm">
+                <ExternalLink aria-hidden="true" />
+                Create token on GitLab
+              </Button>
+            }
+          />
+        </SettingsGroup>
+
+        {hasToken && (
+          <SettingsGroup>
+            <SettingsRow
+              label="Stored token"
+              description="Clearing removes Daintree's copy; forge features stop until you add another token"
+              control={
+                <Button
+                  onClick={handleClearToken}
+                  variant="ghost-danger"
+                  size="sm"
+                  aria-label="Clear token"
+                  disabled={credentialOpInFlight()}
+                  loading={isClearing}
+                >
+                  Clear token
+                </Button>
+              }
+            />
+          </SettingsGroup>
         )}
-      </ForgeSettingBlock>
-
-      <ForgeSettingBlock
-        icon={GitLabIcon}
-        title="Create a new token"
-        description="Opens your GitLab instance's access-token page in the browser with the right scope preselected"
-      >
-        <Button
-          onClick={openTokenPage}
-          variant="outline"
-          size="sm"
-          className="text-text-primary border-border-default hover:bg-border-default"
-        >
-          <ExternalLink />
-          Create token on GitLab
-        </Button>
-        <div className="space-y-1">
-          <p className="text-xs text-text-secondary">Required scope:</p>
-          <ul className="text-xs text-text-secondary list-disc list-inside space-y-0.5">
-            <li>
-              <code className="text-text-secondary bg-surface-canvas px-1 rounded-[var(--radius-sm)]">
-                api
-              </code>{" "}
-              — Full API access for issues, merge requests, and repository data (
-              <code className="text-text-secondary bg-surface-canvas px-1 rounded-[var(--radius-sm)]">
-                read_api
-              </code>{" "}
-              works for read-only use)
-            </li>
-          </ul>
-        </div>
-      </ForgeSettingBlock>
+      </SettingsSection>
     </div>
   );
 }

@@ -618,154 +618,151 @@ export function McpServerSettingsTab() {
 
   return (
     <div className="space-y-8">
-      <SettingsSection title="Server">
-        <SettingsGroup>
-          <SettingsSwitchCard
-            id="mcp-server-enable"
-            title="Enable MCP server"
-            subtitle="Starts a local Model Context Protocol server so AI agents can discover and invoke Daintree actions directly"
-            isEnabled={status.enabled}
-            onChange={handleToggle}
-            // Matches the title; kept explicit because e2e selectors match the attribute.
-            ariaLabel="Enable MCP server"
-            disabled={loading}
-            lifecycleBadge={
-              status.enabled && keptAliveByAssistant
-                ? "Kept alive by Daintree Assistant"
-                : undefined
-            }
-          />
+      {/* No section heading: the page is already titled "MCP Server", so the enable
+          switch carries the concept on its own. */}
+      <SettingsGroup>
+        <SettingsSwitchCard
+          id="mcp-server-enable"
+          title="Enable MCP server"
+          subtitle="Starts a local Model Context Protocol server so AI agents can discover and invoke Daintree actions directly"
+          isEnabled={status.enabled}
+          onChange={handleToggle}
+          // Matches the title; kept explicit because e2e selectors match the attribute.
+          ariaLabel="Enable MCP server"
+          disabled={loading}
+          lifecycleBadge={
+            status.enabled && keptAliveByAssistant ? "Kept alive by Daintree Assistant" : undefined
+          }
+        />
 
-          {status.enabled && (
-            <>
-              <SettingsRow
-                id="mcp-server-port"
-                label="Port"
-                description={
-                  <>
-                    Defaults to 45454. If the port is taken, the next one is tried (45455, 45456,
-                    …).
-                    {status.port &&
-                      status.configuredPort &&
-                      status.port !== status.configuredPort && (
-                        <span className="mt-1 flex items-start gap-1.5 text-text-secondary">
-                          <AlertCircle
-                            className="w-3.5 h-3.5 mt-px shrink-0 text-status-warning"
-                            aria-hidden="true"
-                          />
-                          <span>
-                            Configured port {status.configuredPort} was in use — bound to{" "}
-                            {status.port} instead.
-                          </span>
+        {status.enabled && (
+          <>
+            <SettingsRow
+              id="mcp-server-port"
+              label="Port"
+              description={
+                <>
+                  Defaults to 45454. If the port is taken, the next one is tried (45455, 45456, …).
+                  {status.port &&
+                    status.configuredPort &&
+                    status.port !== status.configuredPort && (
+                      <span className="mt-1 flex items-start gap-1.5 text-text-secondary">
+                        <AlertCircle
+                          className="w-3.5 h-3.5 mt-px shrink-0 text-status-warning"
+                          aria-hidden="true"
+                        />
+                        <span>
+                          Configured port {status.configuredPort} was in use — bound to{" "}
+                          {status.port} instead.
                         </span>
-                      )}
-                  </>
-                }
-                control={({ disabled }) => (
-                  <>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      value={portInput}
-                      disabled={disabled}
-                      onChange={(e) => {
-                        setPortInput(e.target.value.replace(/\D/g, ""));
-                        portDirtyRef.current = true;
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") void handlePortSave();
-                      }}
-                      placeholder="45454"
-                      aria-label="MCP server port"
-                      className={cn(
-                        SETTINGS_CONTROL_WIDTH.number,
-                        "bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-text-primary placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                      )}
-                    />
+                      </span>
+                    )}
+                </>
+              }
+              control={({ disabled }) => (
+                <>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={portInput}
+                    disabled={disabled}
+                    onChange={(e) => {
+                      setPortInput(e.target.value.replace(/\D/g, ""));
+                      portDirtyRef.current = true;
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handlePortSave();
+                    }}
+                    placeholder="45454"
+                    aria-label="MCP server port"
+                    className={cn(
+                      SETTINGS_CONTROL_WIDTH.number,
+                      "bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-text-primary placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                    )}
+                  />
+                  <Button
+                    variant="subtle"
+                    size="sm"
+                    onClick={handlePortSave}
+                    disabled={portUnchanged}
+                    aria-label="Apply port"
+                  >
+                    Apply
+                  </Button>
+                </>
+              )}
+            />
+
+            <SettingsRow
+              id="mcp-server-auth"
+              label="API key"
+              layout={status.apiKey ? "stacked" : "inline"}
+              description={
+                status.apiKey
+                  ? "Every MCP connection must present this bearer token, and it persists across restarts. Rotate it if you suspect it has leaked — clients holding the old key will need the new one."
+                  : "Generated when the server starts"
+              }
+              control={
+                status.apiKey ? (
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 min-w-0 flex items-center gap-2 rounded-[var(--radius-md)] bg-surface-disabled border border-border-default px-3 py-1.5 font-mono text-xs text-text-primary select-all">
+                      <span className="flex-1 truncate">
+                        {showApiKey ? status.apiKey : MASKED_KEY}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowApiKey((v) => !v)}
+                        className="shrink-0 text-text-secondary hover:text-text-primary transition-colors"
+                        aria-label={showApiKey ? "Hide API key" : "Show API key"}
+                      >
+                        {showApiKey ? (
+                          <EyeOff className="h-3.5 w-3.5" />
+                        ) : (
+                          <Eye className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    </div>
                     <Button
                       variant="subtle"
                       size="sm"
-                      onClick={handlePortSave}
-                      disabled={portUnchanged}
-                      aria-label="Apply port"
+                      onClick={handleCopyApiKey}
+                      aria-label="Copy API key"
+                      className={cn(copiedKey && "text-status-success border-status-success/30")}
                     >
-                      Apply
+                      {copiedKey ? "Copied!" : "Copy"}
                     </Button>
-                  </>
-                )}
-              />
+                    <Button
+                      variant="subtle"
+                      size="sm"
+                      onClick={() => setShowRotateConfirm(true)}
+                      disabled={!apiKeySuffix}
+                      title={apiKeySuffix ? "Rotate API key" : "Waiting for the MCP key to load…"}
+                    >
+                      Rotate key…
+                    </Button>
+                  </div>
+                ) : undefined
+              }
+            />
 
-              <SettingsRow
-                id="mcp-server-auth"
-                label="API key"
-                layout={status.apiKey ? "stacked" : "inline"}
-                description={
-                  status.apiKey
-                    ? "Every MCP connection must present this bearer token, and it persists across restarts. Rotate it if you suspect it has leaked — clients holding the old key will need the new one."
-                    : "Generated when the server starts"
-                }
-                control={
-                  status.apiKey ? (
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 min-w-0 flex items-center gap-2 rounded-[var(--radius-md)] bg-surface-disabled border border-border-default px-3 py-1.5 font-mono text-xs text-text-primary select-all">
-                        <span className="flex-1 truncate">
-                          {showApiKey ? status.apiKey : MASKED_KEY}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setShowApiKey((v) => !v)}
-                          className="shrink-0 text-text-secondary hover:text-text-primary transition-colors"
-                          aria-label={showApiKey ? "Hide API key" : "Show API key"}
-                        >
-                          {showApiKey ? (
-                            <EyeOff className="h-3.5 w-3.5" />
-                          ) : (
-                            <Eye className="h-3.5 w-3.5" />
-                          )}
-                        </button>
-                      </div>
-                      <Button
-                        variant="subtle"
-                        size="sm"
-                        onClick={handleCopyApiKey}
-                        aria-label="Copy API key"
-                        className={cn(copiedKey && "text-status-success border-status-success/30")}
-                      >
-                        {copiedKey ? "Copied!" : "Copy"}
-                      </Button>
-                      <Button
-                        variant="subtle"
-                        size="sm"
-                        onClick={() => setShowRotateConfirm(true)}
-                        disabled={!apiKeySuffix}
-                        title={apiKeySuffix ? "Rotate API key" : "Waiting for the MCP key to load…"}
-                      >
-                        Rotate key…
-                      </Button>
-                    </div>
-                  ) : undefined
-                }
-              />
-
-              {/* Pane wakes (#12491) */}
-              <SettingsSwitchCard
-                id="mcp-server-pane-wakes"
-                title="Wake agents from terminal watches"
-                subtitle={
-                  paneWakeLoadFailed
-                    ? "Couldn't read this setting. Reopen settings to try again."
-                    : "An agent supervising other terminals can ask to hear when they change instead of polling. Daintree types one line into that agent's prompt once it's idle — never into an approval, a question, or an error, and never over your typing. A pane that may be woken shows a radar chip; use it to stop the watches."
-                }
-                isEnabled={paneWakeEnabled}
-                onChange={handlePaneWakeToggle}
-                ariaLabel="Wake agents from terminal watches"
-                disabled={!paneWakeLoaded}
-              />
-            </>
-          )}
-        </SettingsGroup>
-      </SettingsSection>
+            {/* Pane wakes (#12491) */}
+            <SettingsSwitchCard
+              id="mcp-server-pane-wakes"
+              title="Wake agents from terminal watches"
+              subtitle={
+                paneWakeLoadFailed
+                  ? "Couldn't read this setting. Reopen settings to try again."
+                  : "An agent supervising other terminals can ask to hear when they change instead of polling. Daintree types one line into that agent's prompt once it's idle — never into an approval, a question, or an error, and never over your typing. A pane that may be woken shows a radar chip; use it to stop the watches."
+              }
+              isEnabled={paneWakeEnabled}
+              onChange={handlePaneWakeToggle}
+              ariaLabel="Wake agents from terminal watches"
+              disabled={!paneWakeLoaded}
+            />
+          </>
+        )}
+      </SettingsGroup>
 
       {status.enabled && (
         <>

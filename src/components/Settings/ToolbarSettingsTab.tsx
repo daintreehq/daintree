@@ -24,7 +24,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVertical, RotateCcw } from "lucide-react";
+import { GripVertical } from "lucide-react";
 import { useToolbarPreferencesStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -212,6 +212,8 @@ interface TrayButtonRowProps {
   isVisible: boolean;
   onToggle: (buttonId: AnyToolbarButtonId) => void;
   metadata: ToolbarButtonMetadata | undefined;
+  /** Off where every description would only restate the label ("Launch Claude AI agent"). */
+  showDescription?: boolean;
 }
 
 // Tray-backed buttons toggle promotion, not visibility — they always remain
@@ -221,7 +223,13 @@ interface TrayButtonRowProps {
 // handle or takes part in cross-side movement. Reusing `SortableButtonItem`
 // would call `useSortable` outside a `SortableContext` and crash; this is a
 // plain non-sortable row.
-function TrayButtonRow({ buttonId, isVisible, onToggle, metadata }: TrayButtonRowProps) {
+function TrayButtonRow({
+  buttonId,
+  isVisible,
+  onToggle,
+  metadata,
+  showDescription = true,
+}: TrayButtonRowProps) {
   if (!metadata) return null;
   const Icon = metadata.icon;
 
@@ -234,7 +242,7 @@ function TrayButtonRow({ buttonId, isVisible, onToggle, metadata }: TrayButtonRo
         </span>
       }
       labelText={metadata.label}
-      description={metadata.description}
+      description={showDescription ? metadata.description : undefined}
       onRowClick={() => onToggle(buttonId)}
       control={({ descriptionId }) => (
         <SettingsSwitch
@@ -768,6 +776,7 @@ export function ToolbarSettingsTab() {
               isVisible={isAgentOnToolbar(buttonId)}
               onToggle={(id) => handleToggle(id, "left")}
               metadata={allMetadata[buttonId]}
+              showDescription={false}
             />
           ))}
         </SettingsGroup>
@@ -872,12 +881,25 @@ export function ToolbarSettingsTab() {
         </SettingsGroup>
       </SettingsSection>
 
-      <div id="toolbar-reset" className="flex justify-end scroll-mt-6">
-        <Button type="button" variant="outline" size="sm" onClick={reset}>
-          <RotateCcw aria-hidden="true" />
-          Reset toolbar
-        </Button>
-      </div>
+      <SettingsGroup id="toolbar-reset" className="scroll-mt-6">
+        <SettingsRow
+          label="Reset toolbar"
+          description="Restores the default buttons, order and launcher palette options"
+          control={({ labelId, descriptionId, disabled }) => (
+            <Button
+              type="button"
+              variant="ghost-danger"
+              size="sm"
+              onClick={reset}
+              disabled={disabled}
+              aria-labelledby={labelId}
+              aria-describedby={descriptionId}
+            >
+              Reset
+            </Button>
+          )}
+        />
+      </SettingsGroup>
     </div>
   );
 }

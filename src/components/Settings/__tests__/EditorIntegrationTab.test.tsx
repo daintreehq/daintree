@@ -14,6 +14,7 @@
  * `useProjectStore` and `patchCachedProjectSettings` from the same `@/store`
  * barrel, and a wholesale module mock would have to restate both halves of it.
  */
+import type React from "react";
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EditorIntegrationTab } from "../EditorIntegrationTab";
@@ -36,6 +37,30 @@ vi.mock("@/clients/editorClient", () => ({
     setConfig: setConfigMock,
     discover: discoverMock,
   },
+}));
+
+// The real Select lazy-loads Radix; a native stand-in keeps "choose an editor" a
+// plain change event while the component still owns the value and the handler.
+vi.mock("@/components/ui/select", () => ({
+  Select: ({
+    value,
+    onValueChange,
+    children,
+  }: {
+    value: string;
+    onValueChange: (value: string) => void;
+    children: React.ReactNode;
+  }) => (
+    <select aria-label="Editor" value={value} onChange={(e) => onValueChange(e.target.value)}>
+      {children}
+    </select>
+  ),
+  SelectTrigger: () => null,
+  SelectValue: () => null,
+  SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  SelectItem: ({ value, children }: { value: string; children: React.ReactNode }) => (
+    <option value={value}>{children}</option>
+  ),
 }));
 
 vi.mock("@/utils/logger", () => ({
@@ -117,7 +142,7 @@ async function renderLoadedTab() {
 /** Same render, but hands back the Test button. */
 async function renderTabForTestButton() {
   await renderLoadedTab();
-  return screen.getByRole("button", { name: "Test" });
+  return screen.getByRole("button", { name: "Test saved editor" });
 }
 
 function selectEditor(id: string) {
@@ -150,9 +175,47 @@ describe("EditorIntegrationTab", () => {
     });
   });
 
+  it("keeps Save disabled until the draft differs from the saved preference", async () => {
+    const saveButton = await renderLoadedTab();
+    expect(saveButton.disabled).toBe(true);
+
+    selectEditor("zed");
+    expect(saveButton.disabled).toBe(false);
+
+    selectEditor("vscode");
+    expect(saveButton.disabled).toBe(true);
+  });
+
+  it("treats a project with no saved preference as unsaved", async () => {
+    getConfigMock.mockResolvedValue({
+      preferredEditor: null,
+      discoveredEditors: [{ id: "zed", available: true, executablePath: "/usr/bin/zed" }],
+    });
+    useProjectStore.setState({ currentProject: TEST_PROJECT });
+    render(
+      <TooltipProvider>
+        <EditorIntegrationTab />
+      </TooltipProvider>
+    );
+    await screen.findByText(/Not saved yet/i);
+    const saveButton = screen.getByRole("button", { name: /^save$/i }) as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(false);
+    const testButton = screen.getByRole("button", {
+      name: "Test saved editor",
+    }) as HTMLButtonElement;
+    expect(testButton.disabled).toBe(true);
+  });
+
   // The Test button has to launch the editor the preference names, which the
   // main process only resolves when it is told which project to look at (#12327).
   describe("Test button", () => {
+    it("is disabled while the draft differs, since it opens the saved preference", async () => {
+      const testButton = await renderTabForTestButton();
+      expect(testButton.hasAttribute("disabled")).toBe(false);
+      selectEditor("zed");
+      expect(testButton.hasAttribute("disabled")).toBe(true);
+    });
+
     it("sends the active project id so the saved preference is the thing under test", async () => {
       const testButton = await renderTabForTestButton();
 

@@ -117,14 +117,15 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
     base: string | undefined,
     format: (value: unknown) => string
   ) => {
+    // Non-breaking around the value so a wrap never strands "Off" alone on a line.
     let origin: string;
     if (isOverridden(key)) {
       origin = globalSettings
-        ? `Set for this project · global default is ${format(globalSettings[key])}`
+        ? `Set for this project · global default\u00a0is\u00a0${format(globalSettings[key])}`
         : "Set for this project";
     } else {
       origin = globalSettings
-        ? `Using global default · ${format(globalSettings[key])}`
+        ? `Using global\u00a0default\u00a0·\u00a0${format(globalSettings[key])}`
         : "Loading global default…";
     }
     return base ? `${base}. ${origin}` : origin;

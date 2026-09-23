@@ -80,13 +80,21 @@ const TIER_OPTIONS = [
   { value: "system", label: "System — destructive and external writes" },
 ];
 
-const TIER_DESCRIPTIONS: Record<HelpAssistantTier, string> = {
+// One sentence of consequence beside the select; the rest lives in the tier's
+// disclosure with the action inventory, where it can be read in full.
+const TIER_SUMMARIES: Record<HelpAssistantTier, string> = {
+  workbench: "Reads project state but can't change it",
+  action: "Full in-app orchestration, including closing terminals and deleting worktrees",
+  system: "Adds git, forge and on-disk writes outside the app. Reserve for trusted automation.",
+};
+
+const TIER_DETAILS: Record<HelpAssistantTier, string> = {
   workbench:
     "The assistant can read project state but can't change it. Best when you're handing off observation tasks.",
   action:
-    "The assistant can spawn agents, send prompts, read terminal state, close terminals, and delete worktrees in this project or tear down their resources — full in-app orchestration. Deletions normally ask you to confirm each time, unless you have granted the assistant automation for them, and they run whatever teardown commands the project configures. Most assistance tasks need this.",
+    "The assistant can spawn agents, send prompts, read terminal state, close terminals, and delete worktrees in this project or tear down their resources. Deletions normally ask you to confirm each time, unless you have granted the assistant automation for them, and they run whatever teardown commands the project configures. Most assistance tasks need this.",
   system:
-    "Adds git staging, commits, fetches and pushes; forge issue/PR reads and writes; worktree creation at any path on disk; clipboard and CopyTree-to-disk writes; and arming terminals for automation. Reserve for trusted automation.",
+    "Adds git staging, commits, fetches and pushes; forge issue/PR reads and writes; worktree creation at any path on disk; clipboard and CopyTree-to-disk writes; and arming terminals for automation.",
 };
 
 const TIER_SHORT_LABEL: Record<HelpAssistantTier, string> = {
@@ -934,18 +942,16 @@ export function DaintreeAssistantSettingsTab() {
           <SettingsSwitchCard
             id="assistant-daintree-control"
             title="Daintree control"
-            subtitle="Let the assistant call Daintree actions through the local MCP server"
+            subtitle={
+              !loading && settings.daintreeControl
+                ? "Let the assistant call Daintree actions through the local MCP server. This starts a local HTTP server on 127.0.0.1; the MCP server tab has the connection details and API key."
+                : "Let the assistant call Daintree actions through the local MCP server"
+            }
             isEnabled={settings.daintreeControl}
             onChange={toggleDaintreeControl}
             ariaLabel="Allow the assistant to call Daintree control tools"
             disabled={loading}
           />
-          {!loading && settings.daintreeControl && (
-            <p className="py-2 pl-9 pr-4 text-xs text-text-secondary leading-relaxed select-text">
-              Enabling this starts a local HTTP server on 127.0.0.1 so the assistant can call
-              Daintree actions. The MCP server tab has the connection details and API key.
-            </p>
-          )}
         </SettingsGroup>
       </SettingsSection>
 
@@ -985,6 +991,8 @@ export function DaintreeAssistantSettingsTab() {
             onValueChange={setHibernateMinutes}
             options={HIBERNATE_OPTIONS}
             disabled={loading}
+            isModified={settings.idleHibernateMinutes !== DEFAULT_SETTINGS.idleHibernateMinutes}
+            onReset={() => setHibernateMinutes(String(DEFAULT_SETTINGS.idleHibernateMinutes))}
           />
         </SettingsGroup>
       </SettingsSection>
@@ -996,12 +1004,14 @@ export function DaintreeAssistantSettingsTab() {
         <SettingsGroup>
           <SettingsSelect
             label="Capability tier"
-            description={TIER_DESCRIPTIONS[settings.tier]}
+            description={TIER_SUMMARIES[settings.tier]}
             value={settings.tier}
             onValueChange={setTier}
             options={TIER_OPTIONS}
             controlWidth="wide"
             disabled={loading}
+            isModified={settings.tier !== DEFAULT_SETTINGS.tier}
+            onReset={() => setTier(DEFAULT_SETTINGS.tier)}
           />
 
           <BlastRadiusPreview
@@ -1067,6 +1077,8 @@ export function DaintreeAssistantSettingsTab() {
             onValueChange={setRetention}
             options={RETENTION_OPTIONS}
             disabled={loading}
+            isModified={settings.auditRetention !== DEFAULT_SETTINGS.auditRetention}
+            onReset={() => setRetention(String(DEFAULT_SETTINGS.auditRetention))}
           />
         </SettingsGroup>
         <SettingsGroup>
@@ -1308,15 +1320,14 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
             aria-hidden="true"
           />
           <span>
-            {totalCount} actions available at this tier
-            {tier !== "workbench" && (
-              <span className="text-text-secondary"> ({newAtTier} new at this tier)</span>
-            )}
+            What this tier allows · {totalCount} actions
+            {tier !== "workbench" && <span> ({newAtTier} new at this tier)</span>}
           </span>
         </span>
       </button>
       {isOpen && (
         <div className="px-4 pb-3 pt-1 space-y-2">
+          <p className="text-xs text-text-secondary select-text">{TIER_DETAILS[tier]}</p>
           {groups.map(([ns, tools]) => (
             <div key={ns} className="space-y-1">
               <div className="text-3xs uppercase tracking-wide text-text-secondary font-mono">

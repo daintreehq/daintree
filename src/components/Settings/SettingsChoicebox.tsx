@@ -2,6 +2,7 @@ import { useId, useRef, useEffect } from "react";
 import type { ComponentPropsWithoutRef, KeyboardEvent, ReactNode } from "react";
 import { Check, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useSettingsGroup } from "./SettingsGroup";
 
 export interface ChoiceboxOption<T extends string = string> {
   value: T;
@@ -53,11 +54,13 @@ export function SettingsChoicebox<T extends string = string>({
   onChange,
   options,
   columns = 1,
-  disabled,
+  disabled: ownDisabled,
   className,
   "aria-label": ariaLabel,
   ...props
 }: SettingsChoiceboxProps<T>) {
+  const group = useSettingsGroup();
+  const disabled = ownDisabled || (group?.disabled ?? false);
   const id = useId();
   const labelId = useId();
   const descriptionId = useId();

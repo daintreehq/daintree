@@ -272,8 +272,8 @@ export function PortalSettingsTab() {
           <>
             <Button
               type="button"
-              variant="ghost"
-              size="xs"
+              variant="outline"
+              size="sm"
               onClick={() => handleStartEdit(link.id, link.title, link.url)}
               aria-describedby={labelId}
             >
@@ -436,7 +436,7 @@ export function PortalSettingsTab() {
             label="Add a link"
             error={urlError ? <span id={addLinkErrorId}>{urlError}</span> : undefined}
             control={
-              <div className="flex gap-2">
+              <div className="flex items-center gap-2">
                 <Input
                   type="text"
                   placeholder="e.g. My portal"
@@ -468,6 +468,7 @@ export function PortalSettingsTab() {
                 <Button
                   type="button"
                   variant="outline"
+                  size="sm"
                   onClick={handleAddLink}
                   disabled={!newLinkName.trim() || !newLinkUrl.trim()}
                 >

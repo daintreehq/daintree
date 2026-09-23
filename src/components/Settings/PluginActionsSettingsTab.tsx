@@ -126,29 +126,27 @@ export function PluginActionsSettingsTab() {
         title="Audit log"
         description="Every action dispatched by an installed plugin. Arguments are stored as a SHA-256 hash by default; turn on plaintext args in developer mode to keep a readable copy."
       >
-        <div className="flex flex-col gap-4">
-          <SettingsGroup>
-            <SettingsSwitchCard
-              id="plugin-audit-enable"
-              title="Record plugin actions"
-              subtitle="Appends a record each time a plugin action is dispatched"
-              isEnabled={auditEnabled}
-              onChange={() => void handleEnabledToggle()}
-            />
-          </SettingsGroup>
-          <PluginActionAuditLogViewer
-            records={records}
-            loading={loading}
-            maxRecords={maxRecords}
-            onRefresh={refreshRecords}
-            onCopy={handleCopy}
-            onExport={handleExport}
-            onClear={() => setShowClearConfirm(true)}
-            copyFlashActive={copiedFlash}
-            exportFlashActive={exportedFlash}
-            developerMode={developerMode}
+        <SettingsGroup>
+          <SettingsSwitchCard
+            id="plugin-audit-enable"
+            title="Record plugin actions"
+            subtitle="Appends a record each time a plugin action is dispatched"
+            isEnabled={auditEnabled}
+            onChange={() => void handleEnabledToggle()}
           />
-        </div>
+        </SettingsGroup>
+        <PluginActionAuditLogViewer
+          records={records}
+          loading={loading}
+          maxRecords={maxRecords}
+          onRefresh={refreshRecords}
+          onCopy={handleCopy}
+          onExport={handleExport}
+          onClear={() => setShowClearConfirm(true)}
+          copyFlashActive={copiedFlash}
+          exportFlashActive={exportedFlash}
+          developerMode={developerMode}
+        />
       </SettingsSection>
 
       <ConfirmDialog

@@ -6,6 +6,8 @@ import { SettingsSwitchCard } from "../SettingsSwitchCard";
 import { SettingsInput } from "../SettingsInput";
 import { SettingsCheckbox } from "../SettingsCheckbox";
 import { SettingsChoicebox } from "../SettingsChoicebox";
+import { SettingsPresetGroup } from "../SettingsPresetGroup";
+import { SettingsSelect } from "../SettingsSelect";
 
 const noop = () => {};
 
@@ -178,5 +180,148 @@ describe("SettingsChoicebox radio contract", () => {
       />
     );
     expect(screen.getByRole("radiogroup", { name: "Integration tier" })).toBeTruthy();
+  });
+});
+
+describe("SettingsRow description wiring", () => {
+  function describedText(el: Element): string {
+    return (el.getAttribute("aria-describedby") ?? "")
+      .split(" ")
+      .filter(Boolean)
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" | ");
+  }
+
+  it("announces a grouped field's error before its description", () => {
+    render(
+      <SettingsGroup>
+        <SettingsInput
+          label="Port"
+          type="number"
+          description="Loopback only"
+          error="Port must be 1024 or higher"
+          value={80}
+          onChange={noop}
+        />
+      </SettingsGroup>
+    );
+    const field = screen.getByRole("spinbutton", { name: "Port" });
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    expect(describedText(field)).toBe("Port must be 1024 or higher | Loopback only");
+  });
+
+  it("tells a disabled control why it is disabled", () => {
+    render(
+      <SettingsGroup>
+        <SettingsDependents disabled>
+          <SettingsSelect
+            label="Sound"
+            value="a"
+            onValueChange={noop}
+            options={[{ value: "a", label: "Chime" }]}
+            disabledReason="Turn on Play sound to choose one"
+          />
+        </SettingsDependents>
+      </SettingsGroup>
+    );
+    const trigger = screen.getByRole("combobox", { name: "Sound" });
+    expect(describedText(trigger)).toContain("Turn on Play sound to choose one");
+  });
+});
+
+describe("Choices inside a group", () => {
+  const presets = [
+    { value: 7, label: "7 days" },
+    { value: 30, label: "30 days" },
+  ] as const;
+
+  it("renders a preset group as one labelled radiogroup on the row", () => {
+    const onChange = vi.fn();
+    render(
+      <SettingsGroup>
+        <SettingsPresetGroup
+          label="Log retention"
+          options={presets}
+          value={7}
+          onChange={onChange}
+        />
+      </SettingsGroup>
+    );
+    const group = screen.getByRole("radiogroup", { name: "Log retention" });
+    expect(group).toBeTruthy();
+    expect(group.getAttribute("aria-describedby")).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: "30 days" }));
+    expect(onChange).toHaveBeenLastCalledWith(30);
+  });
+
+  it("disables choiceboxes under an off parent", () => {
+    render(
+      <SettingsGroup>
+        <SettingsDependents disabled>
+          <SettingsChoicebox
+            label="Tier"
+            value="a"
+            onChange={noop}
+            options={[
+              { value: "a", label: "Alpha" },
+              { value: "b", label: "Beta" },
+            ]}
+          />
+        </SettingsDependents>
+      </SettingsGroup>
+    );
+    for (const radio of screen.getAllByRole("radio")) {
+      expect((radio as HTMLButtonElement).disabled).toBe(true);
+    }
+  });
+
+  it("offers a checkbox's reset only while it differs from default", () => {
+    const onReset = vi.fn();
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <SettingsGroup>
+        <SettingsCheckbox
+          label="Include tests"
+          description="d"
+          checked
+          onChange={onChange}
+          isModified
+          onReset={onReset}
+        />
+      </SettingsGroup>
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Reset Include tests to default" }));
+    expect(onReset).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+    rerender(
+      <SettingsGroup>
+        <SettingsCheckbox label="Include tests" description="d" checked={false} onChange={noop} />
+      </SettingsGroup>
+    );
+    expect(screen.queryByRole("button", { name: "Reset Include tests to default" })).toBeNull();
+  });
+});
+
+describe("Preset group description", () => {
+  it("describes the radiogroup with its row description", () => {
+    render(
+      <SettingsGroup>
+        <SettingsPresetGroup
+          label="Session history"
+          description="Pruned at startup"
+          options={[
+            { value: 7, label: "7 days" },
+            { value: 30, label: "30 days" },
+          ]}
+          value={7}
+          onChange={noop}
+        />
+      </SettingsGroup>
+    );
+    const group = screen.getByRole("radiogroup", { name: "Session history" });
+    const ids = (group.getAttribute("aria-describedby") ?? "").split(" ").filter(Boolean);
+    expect(ids.map((id) => document.getElementById(id)?.textContent)).toContain(
+      "Pruned at startup"
+    );
   });
 });

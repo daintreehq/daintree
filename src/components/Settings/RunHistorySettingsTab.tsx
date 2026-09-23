@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
-import { History, Radio } from "lucide-react";
+import { Radio } from "lucide-react";
 import { Workflow } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { EmptyState } from "@/components/ui/EmptyState";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsGroup } from "@/components/Settings/SettingsGroup";
+import { SettingsEmptyRow, SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { useRunHistoryStore } from "@/store/runHistoryStore";
 import { cn } from "@/lib/utils";
@@ -153,20 +152,18 @@ export function RunHistorySettingsTab() {
         description="Each recipe run and fleet broadcast, so you can review what an automation actually did. Spawned terminals and targets are snapshots, so entries stay readable after a terminal closes. Terminal output and git state aren't duplicated here."
         action={
           records.length > 0 ? (
-            <Button variant="ghost" size="sm" onClick={() => setShowClearConfirm(true)}>
+            <Button variant="ghost-danger" size="sm" onClick={() => setShowClearConfirm(true)}>
               Clear history…
             </Button>
           ) : undefined
         }
       >
         {loading ? null : records.length === 0 ? (
-          <EmptyState
-            variant="zero-data"
-            scale="canvas"
-            icon={<History aria-hidden="true" />}
-            title="No runs yet"
-            description="Run a recipe or broadcast to a fleet and the outcome shows up here."
-          />
+          <SettingsGroup>
+            <SettingsEmptyRow>
+              Run a recipe or broadcast to a fleet and the outcome shows up here
+            </SettingsEmptyRow>
+          </SettingsGroup>
         ) : (
           <SettingsGroup>
             <ul className="divide-y divide-border-subtle">

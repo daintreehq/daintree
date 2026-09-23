@@ -4,8 +4,9 @@ import { cn } from "@/lib/utils";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { SettingsSection } from "./SettingsSection";
-import { SettingsCheckbox } from "./SettingsCheckbox";
+import { SettingsSwitch } from "./SettingsSwitch";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { Button } from "@/components/ui/button";
 import type { NotificationSettings } from "@shared/types";
@@ -79,24 +80,71 @@ function joinMinutes(hour: number, minute: number): number {
 const NATIVE_SELECT_CLASS =
   "px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors disabled:opacity-50";
 
+/**
+ * A switch row whose `id` lands on the switch itself rather than the row, so the
+ * control stays addressable by the ids end-to-end specs and deep links already use.
+ */
+function SwitchRow({
+  id,
+  label,
+  description,
+  checked,
+  onChange,
+  isModified,
+  onReset,
+}: {
+  id: string;
+  label: string;
+  description: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  isModified?: boolean;
+  onReset?: () => void;
+}) {
+  return (
+    <SettingsRow
+      label={label}
+      description={description}
+      isModified={isModified}
+      onReset={onReset}
+      onRowClick={() => onChange(!checked)}
+      control={({ labelId, descriptionId, disabled }) => (
+        <SettingsSwitch
+          id={id}
+          checked={checked}
+          onCheckedChange={onChange}
+          disabled={disabled}
+          aria-labelledby={labelId}
+          aria-describedby={descriptionId}
+        />
+      )}
+    />
+  );
+}
+
 function SoundFileRow({
   label,
   value,
+  defaultValue,
   onChange,
   onPreview,
 }: {
   label: string;
   value: string;
+  defaultValue: string;
   onChange: (value: string) => void;
   onPreview: () => void;
 }) {
   return (
     <SettingsRow
       label={label}
-      control={({ labelId, disabled }) => (
+      isModified={value !== defaultValue}
+      onReset={() => onChange(defaultValue)}
+      control={({ labelId, descriptionId, disabled }) => (
         <div className="flex items-center gap-2">
           <select
             aria-labelledby={labelId}
+            aria-describedby={descriptionId}
             value={value}
             disabled={disabled}
             onChange={(e) => onChange(e.target.value)}
@@ -129,12 +177,14 @@ type LoadState = "loading" | "ready" | "error";
 export function NotificationSettingsTab() {
   const [settings, setSettings] = useState<NotificationSettings>(DEFAULT_SETTINGS);
   const [loadState, setLoadState] = useState<LoadState>("loading");
+  const [loadNonce, setLoadNonce] = useState(0);
   const loading = loadState === "loading";
   // Gate the inline "Loading…" hint past the Doherty threshold so fast IPC
   // resolutions don't flash a loading state for sub-400ms work.
   const showInlineLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
 
   useEffect(() => {
+    setLoadState("loading");
     let settled = false;
     const timer = setTimeout(() => {
       if (!settled) setLoadState("error");
@@ -155,7 +205,7 @@ export function NotificationSettingsTab() {
       });
 
     return () => clearTimeout(timer);
-  }, []);
+  }, [loadNonce]);
 
   const update = async (patch: Partial<NotificationSettings>) => {
     const prevStore = useNotificationSettingsStore.getState();
@@ -234,19 +284,21 @@ export function NotificationSettingsTab() {
     window.electron?.notification?.playSound(soundFile).catch(() => {});
   };
 
-  if (loadState === "error") {
-    return (
-      <div className="text-sm text-text-secondary">
-        Could not load notification settings. Restart Daintree and try again.
-      </div>
-    );
-  }
+  const loadFailed = loadState === "error";
+  // Until the real settings arrive every row shows a default, and editing one would
+  // save over a value the user never saw — so nothing is editable while loading or
+  // after a failed load.
+  const unavailable = loading || loadFailed;
+  const reset = <K extends keyof NotificationSettings>(key: K) => ({
+    isModified: !unavailable && settings[key] !== DEFAULT_SETTINGS[key],
+    onReset: () => void update({ [key]: DEFAULT_SETTINGS[key] } as Partial<NotificationSettings>),
+  });
 
   // The master switch gates every section below. Each row takes the disabled state
   // explicitly: a group resets the dependents context, so it can't reach across
   // sections from one wrapper.
-  const masterOff = !settings.enabled || loading;
-  const masterOffReason = loading ? undefined : "Turn on notifications to use this";
+  const masterOff = !settings.enabled || unavailable;
+  const masterOffReason = unavailable ? undefined : "Turn on notifications to use this";
 
   return (
     <div className="space-y-8">
@@ -256,6 +308,13 @@ export function NotificationSettingsTab() {
         title="Agent notifications"
         description="Suppressed while you're already viewing the relevant worktree."
       >
+        {loadFailed && (
+          <SettingsLoadErrorBanner
+            title="Notification settings didn't load"
+            message="Every setting on this page is unavailable until they do."
+            onRetry={() => setLoadNonce((n) => n + 1)}
+          />
+        )}
         <SettingsGroup>
           <SettingsSwitchCard
             title="Enable notifications"
@@ -263,23 +322,26 @@ export function NotificationSettingsTab() {
             isEnabled={settings.enabled}
             onChange={() => update({ enabled: !settings.enabled })}
             ariaLabel="Enable notifications"
-            disabled={loading}
+            disabled={unavailable}
+            {...reset("enabled")}
           />
 
           <SettingsDependents disabled={masterOff} reason={masterOffReason}>
-            <SettingsCheckbox
+            <SwitchRow
               id="notif-completed"
               label="Agent completed"
               description="Send an OS notification when an agent finishes its task"
               checked={settings.completedEnabled}
               onChange={(v) => update({ completedEnabled: v })}
+              {...reset("completedEnabled")}
             />
-            <SettingsCheckbox
+            <SwitchRow
               id="notif-waiting"
               label="Agent waiting for input"
               description="Send an OS notification as soon as an agent needs input, whatever has focus"
               checked={settings.waitingEnabled}
               onChange={(v) => update({ waitingEnabled: v })}
+              {...reset("waitingEnabled")}
             />
             <SettingsDependents
               disabled={!settings.waitingEnabled}
@@ -287,19 +349,22 @@ export function NotificationSettingsTab() {
                 masterOff ? undefined : "Turn on Agent waiting for input to escalate reminders"
               }
             >
-              <SettingsCheckbox
+              <SwitchRow
                 id="notif-waiting-escalation"
                 label="Escalate if still waiting"
                 description="Send a second OS notification if a docked agent is still waiting after the delay"
                 checked={settings.waitingEscalationEnabled}
                 onChange={(v) => update({ waitingEscalationEnabled: v })}
+                {...reset("waitingEscalationEnabled")}
               />
               {settings.waitingEscalationEnabled && (
                 <SettingsRow
                   label="Escalation delay"
-                  control={({ labelId, disabled }) => (
+                  {...reset("waitingEscalationDelayMs")}
+                  control={({ labelId, descriptionId, disabled }) => (
                     <select
                       aria-labelledby={labelId}
+                      aria-describedby={descriptionId}
                       value={settings.waitingEscalationDelayMs}
                       disabled={disabled}
                       onChange={(e) => update({ waitingEscalationDelayMs: Number(e.target.value) })}
@@ -315,12 +380,13 @@ export function NotificationSettingsTab() {
                 />
               )}
             </SettingsDependents>
-            <SettingsCheckbox
+            <SwitchRow
               id="notif-working-pulse"
               label="Working pulse"
               description="Play a quiet periodic sound while a watched or docked agent is working in the background"
               checked={settings.workingPulseEnabled}
               onChange={(v) => update({ workingPulseEnabled: v })}
+              {...reset("workingPulseEnabled")}
             />
           </SettingsDependents>
         </SettingsGroup>
@@ -337,49 +403,51 @@ export function NotificationSettingsTab() {
             ariaLabel="Play sound for notifications"
             disabled={masterOff}
             disabledReason={masterOffReason}
+            {...reset("soundEnabled")}
           />
 
           <SettingsDependents
             disabled={!settings.soundEnabled || masterOff}
             reason={
               !masterOff && !settings.soundEnabled
-                ? "Turn on Play sound to hear UI feedback sounds"
+                ? "Turn on Play sound to choose sounds and hear UI feedback"
                 : undefined
             }
           >
-            {settings.soundEnabled && (
-              <>
-                <SoundFileRow
-                  label="Completed sound"
-                  value={settings.completedSoundFile}
-                  onChange={(v) => update({ completedSoundFile: v })}
-                  onPreview={() => handlePreview(settings.completedSoundFile)}
-                />
-                <SoundFileRow
-                  label="Waiting sound"
-                  value={settings.waitingSoundFile}
-                  onChange={(v) => update({ waitingSoundFile: v })}
-                  onPreview={() => handlePreview(settings.waitingSoundFile)}
-                />
-                <SoundFileRow
-                  label="Escalation sound"
-                  value={settings.escalationSoundFile}
-                  onChange={(v) => update({ escalationSoundFile: v })}
-                  onPreview={() => handlePreview(settings.escalationSoundFile)}
-                />
-                <SoundFileRow
-                  label="Working pulse sound"
-                  value={settings.workingPulseSoundFile}
-                  onChange={(v) => update({ workingPulseSoundFile: v })}
-                  onPreview={() => handlePreview(settings.workingPulseSoundFile)}
-                />
-              </>
-            )}
+            <SoundFileRow
+              label="Completed sound"
+              value={settings.completedSoundFile}
+              defaultValue={DEFAULT_SETTINGS.completedSoundFile}
+              onChange={(v) => update({ completedSoundFile: v })}
+              onPreview={() => handlePreview(settings.completedSoundFile)}
+            />
+            <SoundFileRow
+              label="Waiting sound"
+              value={settings.waitingSoundFile}
+              defaultValue={DEFAULT_SETTINGS.waitingSoundFile}
+              onChange={(v) => update({ waitingSoundFile: v })}
+              onPreview={() => handlePreview(settings.waitingSoundFile)}
+            />
+            <SoundFileRow
+              label="Escalation sound"
+              value={settings.escalationSoundFile}
+              defaultValue={DEFAULT_SETTINGS.escalationSoundFile}
+              onChange={(v) => update({ escalationSoundFile: v })}
+              onPreview={() => handlePreview(settings.escalationSoundFile)}
+            />
+            <SoundFileRow
+              label="Working pulse sound"
+              value={settings.workingPulseSoundFile}
+              defaultValue={DEFAULT_SETTINGS.workingPulseSoundFile}
+              onChange={(v) => update({ workingPulseSoundFile: v })}
+              onPreview={() => handlePreview(settings.workingPulseSoundFile)}
+            />
             <SettingsSwitchCard
               title="UI feedback sounds"
               subtitle="Short audio cues for git commit and push, worktree create and delete, agent spawn, and context injection"
               isEnabled={settings.uiFeedbackSoundEnabled}
               onChange={() => update({ uiFeedbackSoundEnabled: !settings.uiFeedbackSoundEnabled })}
+              {...reset("uiFeedbackSoundEnabled")}
             />
           </SettingsDependents>
         </SettingsGroup>
@@ -394,6 +462,7 @@ export function NotificationSettingsTab() {
             onChange={() => update({ flashEnabled: !settings.flashEnabled })}
             disabled={masterOff}
             disabledReason={masterOffReason}
+            {...reset("flashEnabled")}
           />
         </SettingsGroup>
       </SettingsSection>
@@ -410,6 +479,7 @@ export function NotificationSettingsTab() {
             onChange={() => update({ quietHoursEnabled: !settings.quietHoursEnabled })}
             disabled={masterOff}
             disabledReason={masterOffReason}
+            {...reset("quietHoursEnabled")}
           />
 
           {settings.quietHoursEnabled && (

@@ -262,7 +262,7 @@ export function VoiceInputSettingsTab() {
         <SettingsGroup>
           <SettingsSwitchCard
             id="voice-enable"
-            title="Voice input"
+            title="Dictation"
             subtitle="Dictate commands using your microphone"
             isEnabled={settings.enabled}
             onChange={() => update({ enabled: !settings.enabled })}

@@ -208,6 +208,33 @@ describe("ImageViewerTab", () => {
     }
   });
 
+  it("disables Save once the saved preference matches the draft", async () => {
+    installElectron(async () => ({ preferredImageViewer: { mode: "os" } }));
+    setProject(TEST_PROJECT);
+    render(<ImageViewerTab />);
+    const osRadio = screen.getByRole("radio", { name: /Use OS default/i }) as HTMLInputElement;
+    await waitFor(() => expect(osRadio.disabled).toBe(false));
+    const saveButton = screen.getByRole("button", { name: /save/i }) as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("radio", { name: /Custom command/i }));
+    expect(saveButton.disabled).toBe(false);
+
+    fireEvent.click(osRadio);
+    expect(saveButton.disabled).toBe(true);
+  });
+
+  it("treats a project with no saved preference as unsaved, and clean after saving", async () => {
+    const saveButton = await renderLoadedTab();
+    expect(saveButton.disabled).toBe(false);
+    expect(screen.getByText(/Not saved yet/i)).toBeTruthy();
+
+    fireEvent.click(saveButton);
+
+    await screen.findByText("Saved");
+    expect(saveButton.disabled).toBe(true);
+  });
+
   // A save here never reaches useProjectSettingsStore on its own, so the cache
   // keeps the pre-save value and the next settings-form write reverts it (#12326).
   describe("cached settings write-through", () => {

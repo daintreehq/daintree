@@ -102,9 +102,10 @@ export function ForgeProviderSelectorDropdown({
           data-testid="forge-provider-selector-trigger"
           className={cn(
             "flex items-center gap-2 w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
-            "border border-border-default bg-surface-canvas text-text-primary",
-            "hover:border-border-strong transition-colors",
-            "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50"
+            "border border-border-strong bg-surface-canvas text-text-primary transition-colors",
+            // Radix hands focus back to the trigger when the list closes, so a `focus:`
+            // indicator stayed lit after every pick — accent only for keyboard focus.
+            "focus:outline-hidden focus-visible:border-accent-primary"
           )}
         >
           {selectedProvider ? (

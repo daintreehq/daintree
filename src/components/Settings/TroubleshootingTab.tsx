@@ -58,7 +58,7 @@ function SystemHealthSection() {
         description="Verifies that Git, Node.js, and npm are installed and available"
         error={checkError}
         control={
-          <Button variant="subtle" size="sm" onClick={() => void runCheck()} disabled={isChecking}>
+          <Button variant="outline" size="sm" onClick={() => void runCheck()} disabled={isChecking}>
             {isChecking ? "Checking…" : result ? "Run health check again" : "Run health check"}
           </Button>
         }
@@ -109,7 +109,7 @@ export function DownloadDiagnosticsSection() {
       description="A snapshot of your system environment, app state, and recent logs. You review it before anything is saved."
       error={downloadError}
       control={
-        <Button variant="subtle" size="sm" onClick={handleOpenReview} disabled={isCollecting}>
+        <Button variant="outline" size="sm" onClick={handleOpenReview} disabled={isCollecting}>
           {isCollecting && <Spinner size="sm" />}
           {isCollecting ? "Collecting…" : "Download diagnostics"}
         </Button>
@@ -193,7 +193,7 @@ function RendererCpuProfileSection() {
       error={error && <span className="select-text">{error}</span>}
       control={
         phase === "recording" ? (
-          <Button variant="subtle" size="sm" onClick={() => void handleStop()}>
+          <Button variant="outline" size="sm" onClick={() => void handleStop()}>
             Stop recording
           </Button>
         ) : (
@@ -266,24 +266,36 @@ function RowNote({ children }: { children: React.ReactNode }) {
 }
 
 export function ApplicationLogsSection() {
-  const [showClearDialog, setShowClearDialog] = useState(false);
-
   return (
     <SettingsRow
       id="troubleshooting-logs"
       label="Application logs"
-      description="Internal logs for debugging. Clearing asks for confirmation first."
+      description="Internal logs for debugging"
+      control={
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() =>
+            void actionService.dispatch("logs.openFile", undefined, { source: "user" })
+          }
+        >
+          Open log file
+        </Button>
+      }
+    />
+  );
+}
+
+/** Destructive, so it closes the logging group rather than sharing the logs row. */
+export function ClearLogsRow() {
+  const [showClearDialog, setShowClearDialog] = useState(false);
+
+  return (
+    <SettingsRow
+      label="Clear logs"
+      description="Deletes the application log files. Asks for confirmation first."
       control={
         <>
-          <Button
-            variant="subtle"
-            size="sm"
-            onClick={() =>
-              void actionService.dispatch("logs.openFile", undefined, { source: "user" })
-            }
-          >
-            Open log file
-          </Button>
           <Button variant="ghost-danger" size="sm" onClick={() => setShowClearDialog(true)}>
             Clear logs
           </Button>
@@ -502,40 +514,43 @@ export function TroubleshootingTab() {
               </code>
             }
           />
+          <ClearLogsRow />
+        </SettingsGroup>
+        <SettingsGroup label="Log levels">
           <SettingsRow
             label="Per-module log levels"
             description="Override the log level for one module, or a process-wide wildcard. Overrides persist across restarts."
             control={
-              <>
-                <Button variant="subtle" size="sm" onClick={handleOpenLogLevelPalette}>
-                  Set log level…
-                </Button>
-                {hasLogOverrides && (
-                  <Button
-                    variant="ghost-danger"
-                    size="sm"
-                    onClick={() => void handleClearLogOverrides()}
-                  >
-                    Clear all overrides
-                  </Button>
-                )}
-              </>
+              <Button variant="outline" size="sm" onClick={handleOpenLogLevelPalette}>
+                Set log level…
+              </Button>
             }
           />
           {hasLogOverrides && (
-            <div className="px-4 py-2">
-              <h5 className="text-xs font-medium text-text-secondary mb-1">Active overrides</h5>
-              <ul>
-                {Object.entries(logOverrides)
-                  .sort(([a], [b]) => a.localeCompare(b))
-                  .map(([name, level]) => (
-                    <li key={name} className="flex items-center justify-between gap-3 py-1">
-                      <span className="text-xs font-mono text-text-primary truncate">{name}</span>
-                      <span className="text-xs font-mono text-text-secondary">{level}</span>
-                    </li>
-                  ))}
-              </ul>
-            </div>
+            <SettingsRow
+              label="Active overrides"
+              description={
+                <ul>
+                  {Object.entries(logOverrides)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([name, level]) => (
+                      <li key={name} className="flex items-center justify-between gap-3 py-0.5">
+                        <span className="font-mono text-text-primary truncate">{name}</span>
+                        <span className="font-mono">{level}</span>
+                      </li>
+                    ))}
+                </ul>
+              }
+              control={
+                <Button
+                  variant="ghost-danger"
+                  size="sm"
+                  onClick={() => void handleClearLogOverrides()}
+                >
+                  Clear all overrides
+                </Button>
+              }
+            />
           )}
         </SettingsGroup>
       </SettingsSection>
@@ -562,18 +577,17 @@ export function TroubleshootingTab() {
               isEnabled={autoOpenDiagnostics}
               onChange={handleToggleAutoOpenDiagnostics}
             />
-            <SettingsDependents
-              disabled={developerMode && !autoOpenDiagnostics}
-              reason="Turn on auto-open diagnostics dock to use this"
-            >
-              <SettingsSwitchCard
-                id="troubleshooting-focus-events"
-                title="Focus events tab"
-                subtitle="Opens diagnostics on the Events tab"
-                isEnabled={focusEventsTab}
-                onChange={handleToggleFocusEventsTab}
-              />
-            </SettingsDependents>
+            <SettingsSwitchCard
+              id="troubleshooting-focus-events"
+              title="Focus events tab"
+              subtitle="Opens diagnostics on the Events tab"
+              isEnabled={focusEventsTab}
+              onChange={handleToggleFocusEventsTab}
+              disabled={!autoOpenDiagnostics}
+              disabledReason={
+                developerMode ? "Turn on auto-open diagnostics dock to use this" : undefined
+              }
+            />
           </SettingsDependents>
           {/*
             Named by route, not by chord. The dev-only Alt+Cmd+I accelerator this

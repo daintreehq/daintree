@@ -44,7 +44,9 @@ export function SettingsGroup({ children, className, label, id }: SettingsGroupP
   const surface = (
     <div
       className={cn(
-        "settings-card rounded-[var(--radius-lg)] border border-border-default",
+        // checkbox-neutral: a checked option in a settings list is membership, not the
+        // region's one accent — native radios and checkboxes paint neutral here.
+        "settings-card checkbox-neutral rounded-[var(--radius-lg)] border border-border-default",
         "divide-y divide-border-subtle",
         className
       )}
@@ -125,6 +127,11 @@ export function settingsRowFrameClass(depth: number): string {
 
 export interface SettingsRowControlIds {
   labelId: string;
+  /**
+   * Everything the control's `aria-describedby` should list, already ordered: the
+   * error first (a screen reader should reach the problem before the explanation),
+   * then the description, then the disabled reason. Undefined when there is none.
+   */
   descriptionId: string | undefined;
   disabled: boolean;
 }
@@ -182,6 +189,8 @@ export function SettingsRow({
   const group = use(GroupContext);
   const labelId = useId();
   const descriptionId = useId();
+  const errorId = useId();
+  const reasonId = useId();
   const depth = group?.depth ?? 0;
   const disabled = ownDisabled || (group?.disabled ?? false);
   const showReset = !!isModified && !!onReset && !disabled;
@@ -189,11 +198,13 @@ export function SettingsRow({
     resetAriaLabel ??
     `Reset ${labelText ?? (typeof label === "string" ? label : "setting")} to default`;
 
-  const ids: SettingsRowControlIds = {
-    labelId,
-    descriptionId: description ? descriptionId : undefined,
-    disabled,
-  };
+  const showReason = disabled && !!disabledReason;
+  const describedBy =
+    [error ? errorId : null, description ? descriptionId : null, showReason ? reasonId : null]
+      .filter(Boolean)
+      .join(" ") || undefined;
+
+  const ids: SettingsRowControlIds = { labelId, descriptionId: describedBy, disabled };
   const renderedControl = typeof control === "function" ? control(ids) : control;
 
   const resetButton = showReset ? (
@@ -233,8 +244,11 @@ export function SettingsRow({
           {description}
         </div>
       )}
-      {disabled && disabledReason && (
-        <p className="mt-1 flex items-start gap-1.5 text-xs text-text-secondary select-text">
+      {showReason && (
+        <p
+          id={reasonId}
+          className="mt-1 flex items-start gap-1.5 text-xs text-text-secondary select-text"
+        >
           <Info className="w-3.5 h-3.5 mt-px shrink-0" aria-hidden="true" />
           <span>{disabledReason}</span>
         </p>
@@ -280,10 +294,63 @@ export function SettingsRow({
         renderedControl && <div className="min-w-0">{renderedControl}</div>
       )}
       {error && (
-        <p className={cn("text-xs text-status-error", layout === "inline" && "basis-full")}>
+        <p
+          id={errorId}
+          className={cn("text-xs text-status-error", layout === "inline" && "basis-full")}
+        >
           {error}
         </p>
       )}
+    </div>
+  );
+}
+
+interface SettingsActionsProps {
+  children: ReactNode;
+  /** Status beside the actions — "Saved", a test result — on the left of the row. */
+  status?: ReactNode;
+}
+
+/**
+ * The last row of a group whose edits need an explicit commit (Save, Test, Discard).
+ * Actions end on the same right rail as every control above them; content-width,
+ * never full-width, and the primary one is the neutral `contrast` button.
+ */
+export function SettingsActions({ children, status }: SettingsActionsProps) {
+  const group = use(GroupContext);
+  return (
+    <div
+      className={cn("flex items-center gap-3 py-2.5 pr-4 min-h-12", rowInset(group?.depth ?? 0))}
+    >
+      <div className="min-w-0 flex-1 text-xs text-text-secondary" aria-live="polite">
+        {status}
+      </div>
+      <div className="flex items-center gap-2 shrink-0">{children}</div>
+    </div>
+  );
+}
+
+interface SettingsEmptyRowProps {
+  /** What to add, phrased as the next step — "Add a variable to set it in every terminal". */
+  children: ReactNode;
+  /** The add action, content-width, on the rail. */
+  action?: ReactNode;
+}
+
+/**
+ * An empty collection inside its group: one line naming the next step and the action
+ * that takes it. Not a dashed box, not a centred illustration, not a second button
+ * below it — the empty list keeps the shape the full one will have.
+ */
+export function SettingsEmptyRow({ children, action }: SettingsEmptyRowProps) {
+  const group = use(GroupContext);
+  return (
+    <div
+      className={cn("flex items-center gap-4 py-3 pr-4", rowInset(group?.depth ?? 0))}
+      data-settings-empty=""
+    >
+      <p className="min-w-0 flex-1 text-sm text-text-secondary">{children}</p>
+      {action && <div className="shrink-0">{action}</div>}
     </div>
   );
 }

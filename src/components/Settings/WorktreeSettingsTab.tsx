@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { AlertCircle, Check, RotateCcw } from "lucide-react";
 
-import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   validatePathPattern,
@@ -17,7 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FileBrowserVisibilitySettings } from "./FileBrowserVisibilitySettings";
-import { SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { SettingsActions, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
@@ -281,20 +280,15 @@ export function WorktreeSettingsTab() {
                 {PATTERN_PRESETS.map((preset) => (
                   <Tooltip key={preset.label}>
                     <TooltipTrigger asChild>
-                      <button
+                      <Button
                         type="button"
+                        variant="outline"
+                        size="sm"
                         onClick={() => handlePresetClick(preset.pattern)}
                         disabled={isLoading}
-                        aria-pressed={pattern === preset.pattern}
-                        className={cn(
-                          "px-3 py-1.5 text-xs rounded-[var(--radius-md)] border transition-colors disabled:opacity-50",
-                          pattern === preset.pattern
-                            ? "bg-overlay-selected border-border-strong text-text-primary font-medium"
-                            : "border-border-default text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
-                        )}
                       >
                         {preset.label}
-                      </button>
+                      </Button>
                     </TooltipTrigger>
                     <TooltipContent side="bottom">{preset.description}</TooltipContent>
                   </Tooltip>
@@ -323,13 +317,16 @@ export function WorktreeSettingsTab() {
 
           {/* An explicit save rather than instant apply: a half-typed pattern is
               routinely invalid, and each keystroke would otherwise write one. */}
-          <div className="flex items-center justify-end gap-3 px-4 py-3">
-            {savedMessage && (
-              <span className="flex items-center gap-1 text-xs text-status-success">
-                <Check className="w-3 h-3" aria-hidden="true" />
-                Saved
-              </span>
-            )}
+          <SettingsActions
+            status={
+              savedMessage && (
+                <span className="flex items-center gap-1 text-status-success">
+                  <Check className="w-3 h-3" aria-hidden="true" />
+                  Saved
+                </span>
+              )
+            }
+          >
             <Button
               type="button"
               variant="contrast"
@@ -337,9 +334,9 @@ export function WorktreeSettingsTab() {
               onClick={handleSave}
               disabled={isLoading || !hasChanges || !validation.valid || isSaving}
             >
-              {isSaving ? "Saving…" : "Save changes"}
+              {isSaving ? "Saving…" : "Save"}
             </Button>
-          </div>
+          </SettingsActions>
         </SettingsGroup>
       </SettingsSection>
 
@@ -350,7 +347,7 @@ export function WorktreeSettingsTab() {
         <SettingsGroup>
           <SettingsSelect
             label="Close leftover terminals"
-            description="Leftover terminals move to trash when the timer ends. The timer only counts down while the project is open, and pauses for a while during a drag, an open close confirmation, or an agent that's still working."
+            description="Leftover terminals move to trash when the timer ends. The timer only counts down while the project is open."
             controlWidth="wide"
             value={String(cleanupSeconds)}
             onValueChange={handleCleanupChange}

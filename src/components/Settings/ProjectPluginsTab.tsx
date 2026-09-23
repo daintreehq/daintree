@@ -613,29 +613,25 @@ export function ProjectPluginsTab() {
 
   return (
     <div className="space-y-8">
-      <div className="space-y-3">
-        <SettingsGroup>
-          <SettingsRow
-            label="Plugin"
-            description="Plugins this project ships, and which of your installed plugins show up in it"
-            control={
-              <div className="w-72">
-                <ProjectPluginSelectorDropdown
-                  options={options}
-                  activeId={showOverview ? PROJECT_PLUGINS_OVERVIEW_ID : selectedId}
-                  onChange={setSelectedId}
-                />
-              </div>
-            }
-          />
-        </SettingsGroup>
-
+      <SettingsSection
+        title="Plugin"
+        description="Plugins this project ships, and which of your installed plugins show up in it"
+        action={
+          <div className="w-72">
+            <ProjectPluginSelectorDropdown
+              options={options}
+              activeId={showOverview ? PROJECT_PLUGINS_OVERVIEW_ID : selectedId}
+              onChange={setSelectedId}
+            />
+          </div>
+        }
+      >
         {error && (
           <p className="text-xs text-status-danger" role="alert">
             {error}
           </p>
         )}
-      </div>
+      </SettingsSection>
 
       {showOverview && <ProjectOverviewPane projectPluginCount={projectPlugins.length} />}
 

@@ -5,6 +5,8 @@ import {
 } from "@/components/ui/SegmentedRadioGroup";
 import { SettingsRow } from "./SettingsGroup";
 
+const DEFAULT_DOCK_DENSITY: DockDensity = "normal";
+
 const DOCK_DENSITY_OPTIONS: SegmentedRadioOption<DockDensity>[] = [
   { value: "compact", label: "Compact" },
   { value: "normal", label: "Normal" },
@@ -25,6 +27,8 @@ export function DockDensityPicker() {
       id="appearance-dock-density"
       label="Dock density"
       description="Height and spacing of items in the dock — normal is the default"
+      isModified={dockDensity !== DEFAULT_DOCK_DENSITY}
+      onReset={() => setDockDensity(DEFAULT_DOCK_DENSITY)}
       control={({ disabled }) => (
         <SegmentedRadioGroup
           aria-label="Dock density"

@@ -11,7 +11,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import type { KeepAwakeConfig } from "@shared/types";
 
-/** Shown, locked, until main's state arrives — the stored defaults. */
+/** Shown, locked, until main's state arrives — the stored defaults, and what reset returns to. */
 const DEFAULT_CONFIG: KeepAwakeConfig = { enabled: true, onBattery: false };
 
 interface SaveFailure {
@@ -92,6 +92,8 @@ export function KeepAwakeSection() {
               isEnabled={config.enabled}
               onChange={() => void save({ enabled: !config.enabled })}
               disabled={locked}
+              isModified={state !== null && config.enabled !== DEFAULT_CONFIG.enabled}
+              onReset={() => void save({ enabled: DEFAULT_CONFIG.enabled })}
             />
             <SettingsDependents
               disabled={state !== null && !config.enabled}
@@ -103,6 +105,8 @@ export function KeepAwakeSection() {
                 isEnabled={config.onBattery}
                 onChange={() => void save({ onBattery: !config.onBattery })}
                 disabled={locked}
+                isModified={state !== null && config.onBattery !== DEFAULT_CONFIG.onBattery}
+                onReset={() => void save({ onBattery: DEFAULT_CONFIG.onBattery })}
               />
             </SettingsDependents>
           </SettingsGroup>

@@ -7,14 +7,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useTerminalFontStore } from "@/store";
-import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
+import { DEFAULT_TERMINAL_FONT_FAMILY, DEFAULT_TERMINAL_FONT_SIZE } from "@/config/terminalFont";
 import { actionService } from "@/services/ActionService";
 import { SettingsSection } from "./SettingsSection";
 import { SETTINGS_CONTROL_WIDTH, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsNumberInput } from "./SettingsNumberInput";
 import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
-import { ColorSchemePicker } from "./ColorSchemePicker";
+import { ColorSchemePicker, ImportColorSchemeButton } from "./ColorSchemePicker";
 import { AppThemePicker } from "./AppThemePicker";
 import { ColorVisionPicker } from "./ColorVisionPicker";
 import { DockDensityPicker } from "./DockDensityPicker";
@@ -36,6 +36,8 @@ interface TerminalAppearanceTabProps {
   onSubtabChange: (id: string) => void;
   onClose?: () => void;
 }
+
+const DEFAULT_FONT_FAMILY_ID = "jetbrains";
 
 const FONT_FAMILY_OPTIONS: Array<{ id: string; label: string; value: string }> = [
   {
@@ -99,8 +101,13 @@ export function TerminalAppearanceTab({
       return;
     }
 
+    await applyFontSize(parsed);
+  };
+
+  const applyFontSize = async (parsed: number) => {
     const previous = fontSize;
     setFontSizeError(null);
+    setFontSizeInput(String(parsed));
 
     try {
       const result = await actionService.dispatch(
@@ -171,6 +178,7 @@ export function TerminalAppearanceTab({
               title="Terminal color scheme"
               description="Colors used for terminal output and ANSI escape sequences"
               id="appearance-color-scheme"
+              action={<ImportColorSchemeButton />}
             >
               <ColorSchemePicker />
             </SettingsSection>
@@ -181,10 +189,13 @@ export function TerminalAppearanceTab({
                   id="appearance-font-family"
                   label="Font family"
                   description="JetBrains Mono ships with Daintree; if it can't load, the terminal falls back to your platform's monospace font"
-                  control={({ descriptionId }) => (
+                  isModified={selectedFontFamilyId !== DEFAULT_FONT_FAMILY_ID}
+                  onReset={() => void handleFontFamilyChange(DEFAULT_FONT_FAMILY_ID)}
+                  control={({ descriptionId, disabled }) => (
                     <Select
                       value={selectedFontFamilyId}
                       onValueChange={(v) => void handleFontFamilyChange(v)}
+                      disabled={disabled}
                     >
                       <SelectTrigger
                         aria-label="Terminal font family"
@@ -206,7 +217,9 @@ export function TerminalAppearanceTab({
                 <SettingsNumberInput
                   rowId="appearance-font-size"
                   label="Font size"
-                  description={`${MIN_FONT_SIZE}–${MAX_FONT_SIZE}px. Smaller fonts put fewer cells on screen, which can improve performance`}
+                  description={`${MIN_FONT_SIZE}–${MAX_FONT_SIZE}px. Smaller fonts put fewer cells on screen, which can improve performance.`}
+                  isModified={fontSize !== DEFAULT_TERMINAL_FONT_SIZE}
+                  onReset={() => void applyFontSize(DEFAULT_TERMINAL_FONT_SIZE)}
                   suffix="px"
                   min={MIN_FONT_SIZE}
                   max={MAX_FONT_SIZE}

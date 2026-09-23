@@ -429,7 +429,7 @@ export function GeneralTab({
                       <button
                         type="button"
                         aria-label="Change project emoji"
-                        className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-lg)] shadow-inner shrink-0 border border-transparent hover:border-border-default transition-colors cursor-pointer group"
+                        className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-lg)] shadow-inner shrink-0 border border-border-strong cursor-pointer group"
                         style={{
                           background: getProjectGradient(color),
                         }}
@@ -496,7 +496,7 @@ export function GeneralTab({
                         aria-label="Pick a custom color"
                       />
                       <div
-                        className="h-8 w-8 rounded-[var(--radius-md)] border border-border-default flex items-center justify-center cursor-pointer hover:border-border-strong transition-colors"
+                        className="h-8 w-8 rounded-[var(--radius-md)] border border-border-strong flex items-center justify-center cursor-pointer"
                         style={{
                           backgroundColor: color ?? undefined,
                         }}
@@ -569,10 +569,8 @@ export function GeneralTab({
                   ) : (
                     <div
                       className={cn(
-                        "flex items-center justify-center gap-2 px-4 py-4 rounded-[var(--radius-md)] border border-dashed transition-colors cursor-pointer",
-                        isDraggingIcon
-                          ? "border-border-strong bg-overlay-soft"
-                          : "border-border-default hover:border-border-strong hover:bg-overlay-subtle"
+                        "flex items-center justify-center gap-2 px-4 py-4 rounded-[var(--radius-md)] border border-dashed border-border-strong transition-colors cursor-pointer",
+                        isDraggingIcon ? "bg-overlay-soft" : "hover:bg-overlay-subtle"
                       )}
                       onDrop={handleIconDrop}
                       onDragOver={handleIconDragOver}
@@ -638,7 +636,7 @@ export function GeneralTab({
                         {detectedCandidate.command}
                       </code>
                     </span>
-                    <Button onClick={handleApplyDetected} variant="outline" size="xs">
+                    <Button onClick={handleApplyDetected} variant="outline" size="sm">
                       Use command
                     </Button>
                   </div>
@@ -648,11 +646,13 @@ export function GeneralTab({
           />
           <SettingsNumberInput
             label="Load timeout"
-            description="How long to wait for the server to respond. Defaults to 30 seconds."
+            description="How long to wait for the server to respond · Default: 30 seconds"
             suffix="s"
             min={1}
             max={120}
             value={devServerLoadTimeout ?? ""}
+            isModified={devServerLoadTimeout !== undefined}
+            onReset={() => onDevServerLoadTimeoutChange(undefined)}
             onChange={(e) => {
               const raw = e.target.value;
               if (raw === "") {

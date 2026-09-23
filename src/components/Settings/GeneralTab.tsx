@@ -8,8 +8,8 @@ import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadError
 import { KeepAwakeSection } from "@/components/Settings/KeepAwakeSection";
 import { WindowOpeningSection } from "@/components/Settings/WindowOpeningSection";
 import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
-import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
-import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
+import { SettingsDependents, SettingsGroup } from "./SettingsGroup";
+import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { getAgentIds } from "@/config/agents";
 import { AgentIdentityBlock, resolveIdentity } from "@/components/agents/AgentCard";
@@ -100,6 +100,13 @@ const IDLE_BACKGROUND_THRESHOLD_PRESETS = [
   { value: 120, label: "2h" },
 ] as const;
 
+// Mirrors the electron-store defaults, so a row can say when it has moved off them.
+const DEFAULT_HIBERNATION_THRESHOLD_HOURS = 24;
+const DEFAULT_IDLE_TERMINAL_THRESHOLD_MINUTES = 60;
+const DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES = 15;
+const DEFAULT_UPDATE_CHANNEL = "stable";
+const DEFAULT_SESSION_RESTORE_ENABLED = true;
+
 const UPDATE_CHECK_REFRESH_INTERVAL_MS = 60_000;
 
 const UPDATE_CHANNEL_OPTIONS = [
@@ -116,49 +123,6 @@ interface ShortcutDisplay {
 interface ShortcutCategory {
   category: string;
   shortcuts: ShortcutDisplay[];
-}
-
-interface PresetRowProps<T extends string | number> {
-  id?: string;
-  label: string;
-  description?: string;
-  options: readonly { value: T; label: string }[];
-  /** Null while the stored value is unknown: nothing is shown as selected. */
-  value: T | null;
-  onChange: (value: T) => void;
-  disabled?: boolean;
-}
-
-/** A row whose control is a short run of exclusive presets on the right rail. */
-function PresetRow<T extends string | number>({
-  id,
-  label,
-  description,
-  options,
-  value,
-  onChange,
-  disabled,
-}: PresetRowProps<T>) {
-  const segments = options.map((option) => ({ value: String(option.value), label: option.label }));
-  return (
-    <SettingsRow
-      id={id}
-      label={label}
-      description={description}
-      control={({ disabled: rowDisabled }) => (
-        <SegmentedRadioGroup
-          aria-label={label}
-          options={segments}
-          value={value === null ? "" : String(value)}
-          onChange={(next) => {
-            const match = options.find((option) => String(option.value) === next);
-            if (match) onChange(match.value);
-          }}
-          disabled={disabled || rowDisabled}
-        />
-      )}
-    />
-  );
 }
 
 export function GeneralTab({
@@ -214,18 +178,18 @@ export function GeneralTab({
    * keyed only on availability let the two disagree.
    */
   const systemStatusSummary = (() => {
-    if (cliCheckFailed) return "Which agents are installed on this machine.";
-    if (!cliAvailability) return "Checking which agents are installed on this machine.";
+    if (cliCheckFailed) return "Which agents are installed on this machine";
+    if (!cliAvailability) return "Checking which agents are installed on this machine";
     const installed = getAgentIds().filter((id) => isAgentInstalled(cliAvailability[id]));
-    if (installed.length === 0) return "Which agents are installed on this machine.";
+    if (installed.length === 0) return "Which agents are installed on this machine";
     const attention = installed.filter((id) => !isAgentReady(cliAvailability[id]));
     if (attention.length === 0) {
       return installed.length === 1
-        ? "1 agent installed and ready to use."
-        : `All ${installed.length} installed agents are ready to use.`;
+        ? "1 agent installed and ready to use"
+        : `All ${installed.length} installed agents are ready to use`;
     }
     const ready = installed.length - attention.length;
-    return `${ready} of ${installed.length} installed agents are ready — ${attention.length} need${attention.length === 1 ? "s" : ""} attention.`;
+    return `${ready} of ${installed.length} installed agents are ready — ${attention.length} need${attention.length === 1 ? "s" : ""} attention`;
   })();
   const [shortcuts, setShortcuts] = useState<ShortcutCategory[]>([]);
   const [updateChannel, setUpdateChannel] = useState<"stable" | "nightly" | null>(null);
@@ -930,10 +894,10 @@ export function GeneralTab({
                   }
 
                   return (
-                    <div className="space-y-3">
+                    <div className="rounded-[var(--radius-md)] border border-border-default overflow-hidden">
                       {/* A list, not a stack of divs: eighteen agents is a collection, and a
                         screen-reader user gets the count and the position from the role. */}
-                      <ul className="rounded-[var(--radius-md)] border border-border-default overflow-hidden">
+                      <ul>
                         {installedAgentIds.map((id, index) => {
                           const identity = resolveIdentity(id);
                           const name = identity?.name ?? id;
@@ -1021,13 +985,26 @@ export function GeneralTab({
                         })}
                       </ul>
 
+                      {/* The roster's last row rather than a loose link under it: it
+                          navigates exactly like the agent rows above, so it takes their shape. */}
                       {hiddenCount > 0 && onNavigateToAgents && (
                         <button
                           type="button"
                           onClick={() => onNavigateToAgents?.()}
-                          className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline"
+                          className={cn(
+                            "settings-list-item group flex w-full items-center gap-3 px-3 py-2 text-left",
+                            "cursor-pointer transition-colors border-t border-border-default",
+                            "hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))]",
+                            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+                          )}
                         >
-                          {`Daintree supports ${hiddenCount} more ${hiddenCount === 1 ? "agent" : "agents"} →`}
+                          <span className="flex-1 text-sm text-text-secondary group-hover:text-text-primary transition-colors">
+                            {`Daintree supports ${hiddenCount} more ${hiddenCount === 1 ? "agent" : "agents"}`}
+                          </span>
+                          <ChevronRight
+                            className="w-4 h-4 shrink-0 text-text-secondary transition-colors group-hover:text-text-primary group-focus-visible:text-text-primary"
+                            aria-hidden="true"
+                          />
                         </button>
                       )}
                     </div>
@@ -1055,6 +1032,8 @@ export function GeneralTab({
                       isEnabled={sessionRestoreConfig.enabled}
                       onChange={() => void handleSessionRestoreToggle()}
                       disabled={isSessionRestoreSaving}
+                      isModified={sessionRestoreConfig.enabled !== DEFAULT_SESSION_RESTORE_ENABLED}
+                      onReset={() => void handleSessionRestoreToggle()}
                     />
                   </SettingsGroup>
                 ) : null}
@@ -1090,7 +1069,7 @@ export function GeneralTab({
                   />
                 ) : (
                   <SettingsGroup>
-                    <PresetRow
+                    <SettingsPresetGroup<"stable" | "nightly">
                       label="Update channel"
                       description={
                         updateChannel === "nightly"
@@ -1101,6 +1080,10 @@ export function GeneralTab({
                       value={updateChannel}
                       onChange={(ch) => void handleChannelChange(ch)}
                       disabled={updateChannel === null || channelSaving}
+                      isModified={
+                        updateChannel !== null && updateChannel !== DEFAULT_UPDATE_CHANNEL
+                      }
+                      onReset={() => void handleChannelChange(DEFAULT_UPDATE_CHANNEL)}
                     />
                   </SettingsGroup>
                 )}
@@ -1224,92 +1207,131 @@ export function GeneralTab({
                       subtitle="A reminder when terminals in background projects go quiet — nothing is closed, and the active project is never flagged"
                       isEnabled={idleNotifyConfig.enabled}
                       onChange={handleIdleNotifyToggle}
+                      isModified={!idleNotifyConfig.enabled}
+                      onReset={() => void handleIdleNotifyToggle()}
                     />
-                    {idleNotifyConfig.enabled && (
-                      <SettingsDependents>
-                        <PresetRow
-                          id="general-idle-terminal-threshold"
-                          label="Idle threshold"
-                          description="How long background terminals stay quiet before the reminder, which offers to close them"
-                          options={IDLE_TERMINAL_THRESHOLD_PRESETS}
-                          value={idleNotifyConfig.thresholdMinutes}
-                          onChange={(v) => void handleIdleNotifyThresholdChange(v)}
-                          disabled={isIdleNotifySaving}
-                        />
-                      </SettingsDependents>
-                    )}
+                    <SettingsDependents
+                      disabled={!idleNotifyConfig.enabled}
+                      reason="Turn on idle terminal reminders to choose when they appear"
+                    >
+                      <SettingsPresetGroup<number>
+                        id="general-idle-terminal-threshold"
+                        label="Idle threshold"
+                        description="How long background terminals stay quiet before the reminder, which offers to close them"
+                        options={IDLE_TERMINAL_THRESHOLD_PRESETS}
+                        value={idleNotifyConfig.thresholdMinutes}
+                        onChange={(v) => void handleIdleNotifyThresholdChange(v)}
+                        disabled={isIdleNotifySaving}
+                        isModified={
+                          idleNotifyConfig.thresholdMinutes !==
+                          DEFAULT_IDLE_TERMINAL_THRESHOLD_MINUTES
+                        }
+                        onReset={() =>
+                          void handleIdleNotifyThresholdChange(
+                            DEFAULT_IDLE_TERMINAL_THRESHOLD_MINUTES
+                          )
+                        }
+                      />
+                    </SettingsDependents>
                   </SettingsGroup>
                 ) : null}
               </SettingsSection>
             )}
-            {(idleAutoCloseConfig || sectionErrors.idleAutoClose) && (
-              <SettingsSection
-                title="Auto-close idle projects"
-                id="general-idle-background-auto-close"
-              >
-                {sectionErrors.idleAutoClose ? (
+            {/* One section for the two ways Daintree frees a background project: closing
+                it outright, or keeping it open with its processes stopped. They were two
+                sections whose only row repeated the heading above it. */}
+            <SettingsSection
+              title="Background projects"
+              description="Free memory and processes from projects you haven't used in a while"
+            >
+              {sectionErrors.idleAutoClose ? (
+                <div id="general-idle-background-auto-close" className="scroll-mt-6">
                   <SettingsLoadErrorBanner
                     message={sectionErrors.idleAutoClose}
                     onRetry={() => setConfigRetryNonce((n) => n + 1)}
                   />
-                ) : idleAutoCloseConfig ? (
-                  <SettingsGroup>
-                    <SettingsSwitchCard
-                      title="Close idle projects automatically"
-                      subtitle="Frees memory from background projects with no open terminals. They stay in the switcher and reopen with their panels."
-                      isEnabled={idleAutoCloseConfig.enabled}
-                      onChange={handleIdleAutoCloseToggle}
+                </div>
+              ) : idleAutoCloseConfig ? (
+                <SettingsGroup id="general-idle-background-auto-close">
+                  <SettingsSwitchCard
+                    title="Close idle projects automatically"
+                    subtitle="Frees memory from background projects with no open terminals. They stay in the switcher and reopen with their panels."
+                    isEnabled={idleAutoCloseConfig.enabled}
+                    onChange={handleIdleAutoCloseToggle}
+                    isModified={idleAutoCloseConfig.enabled}
+                    onReset={() => void handleIdleAutoCloseToggle()}
+                  />
+                  <SettingsDependents
+                    disabled={!idleAutoCloseConfig.enabled}
+                    reason="Turn on closing idle projects to choose when it happens"
+                  >
+                    <SettingsPresetGroup<number>
+                      id="general-idle-background-threshold"
+                      label="Idle threshold"
+                      description="How long a background project sits idle before it closes — the active project is never touched"
+                      options={IDLE_BACKGROUND_THRESHOLD_PRESETS}
+                      value={idleAutoCloseConfig.thresholdMinutes}
+                      onChange={(v) => void handleIdleAutoCloseThresholdChange(v)}
+                      disabled={isIdleAutoCloseSaving}
+                      isModified={
+                        idleAutoCloseConfig.thresholdMinutes !==
+                        DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES
+                      }
+                      onReset={() =>
+                        void handleIdleAutoCloseThresholdChange(
+                          DEFAULT_IDLE_BACKGROUND_THRESHOLD_MINUTES
+                        )
+                      }
                     />
-                    {idleAutoCloseConfig.enabled && (
-                      <SettingsDependents>
-                        <PresetRow
-                          id="general-idle-background-threshold"
-                          label="Idle threshold"
-                          description="How long a background project sits idle before it closes — the active project is never touched"
-                          options={IDLE_BACKGROUND_THRESHOLD_PRESETS}
-                          value={idleAutoCloseConfig.thresholdMinutes}
-                          onChange={(v) => void handleIdleAutoCloseThresholdChange(v)}
-                          disabled={isIdleAutoCloseSaving}
-                        />
-                      </SettingsDependents>
-                    )}
-                  </SettingsGroup>
-                ) : null}
-              </SettingsSection>
-            )}
-            {configError ? (
-              <SettingsLoadErrorBanner
-                title="Couldn't load hibernation settings"
-                message={configError}
-                onRetry={() => setConfigRetryNonce((n) => n + 1)}
-              />
-            ) : hibernationConfig ? (
-              <SettingsSection title="Auto-hibernation" id="general-hibernation">
-                <SettingsGroup>
+                  </SettingsDependents>
+                </SettingsGroup>
+              ) : null}
+              {configError ? (
+                <div id="general-hibernation" className="scroll-mt-6">
+                  <SettingsLoadErrorBanner
+                    title="Couldn't load hibernation settings"
+                    message={configError}
+                    onRetry={() => setConfigRetryNonce((n) => n + 1)}
+                  />
+                </div>
+              ) : hibernationConfig ? (
+                <SettingsGroup id="general-hibernation">
                   <SettingsSwitchCard
                     title="Hibernate inactive projects"
                     subtitle="Stops their terminals and dev servers to free resources; the project reopens where you left it"
                     isEnabled={hibernationConfig.enabled}
                     onChange={handleHibernationToggle}
+                    isModified={hibernationConfig.enabled}
+                    onReset={() => void handleHibernationToggle()}
                   />
-                  {hibernationConfig.enabled && (
-                    <SettingsDependents>
-                      <PresetRow
-                        id="general-hibernation-threshold"
-                        label="Inactivity threshold"
-                        description="Projects idle longer than this have their processes stopped"
-                        options={THRESHOLD_PRESETS}
-                        value={hibernationConfig.inactiveThresholdHours}
-                        onChange={(v) => void handleThresholdChange(v)}
-                        disabled={isSaving}
-                      />
-                    </SettingsDependents>
-                  )}
+                  <SettingsDependents
+                    disabled={!hibernationConfig.enabled}
+                    reason="Turn on hibernation to choose when it happens"
+                  >
+                    <SettingsPresetGroup<number>
+                      id="general-hibernation-threshold"
+                      label="Inactivity threshold"
+                      description="Projects idle longer than this have their processes stopped"
+                      options={THRESHOLD_PRESETS}
+                      value={hibernationConfig.inactiveThresholdHours}
+                      onChange={(v) => void handleThresholdChange(v)}
+                      disabled={isSaving}
+                      isModified={
+                        hibernationConfig.inactiveThresholdHours !==
+                        DEFAULT_HIBERNATION_THRESHOLD_HOURS
+                      }
+                      onReset={() =>
+                        void handleThresholdChange(DEFAULT_HIBERNATION_THRESHOLD_HOURS)
+                      }
+                    />
+                  </SettingsDependents>
                 </SettingsGroup>
-              </SettingsSection>
-            ) : (
-              <div className="text-sm text-text-secondary">Loading hibernation settings…</div>
-            )}
+              ) : (
+                <div id="general-hibernation" className="text-sm text-text-secondary">
+                  Loading hibernation settings…
+                </div>
+              )}
+            </SettingsSection>
           </>
         )}
 
