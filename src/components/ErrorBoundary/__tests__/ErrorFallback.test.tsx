@@ -59,7 +59,9 @@ describe("ErrorFallback", () => {
     it("shows friendly message instead of raw error", () => {
       render(<ErrorFallback {...baseProps} variant="section" />);
       expect(
-        screen.getByText("This pane crashed but the rest of Daintree is still running.")
+        screen.getByText(
+          "Your terminals and agents are still running. Try again to reload this area."
+        )
       ).toBeTruthy();
     });
 
@@ -217,10 +219,10 @@ describe("ErrorFallback", () => {
   });
 
   describe("buttons", () => {
-    it("calls resetError when Reload pane is clicked", () => {
+    it("calls resetError when Try again is clicked on the section variant", () => {
       vi.stubEnv("DEV", true);
       render(<ErrorFallback {...baseProps} variant="section" />);
-      fireEvent.click(screen.getByText("Reload pane"));
+      fireEvent.click(screen.getByText("Try again"));
       expect(baseProps.resetError).toHaveBeenCalledOnce();
     });
 
@@ -355,13 +357,15 @@ describe("ErrorFallback", () => {
       });
     });
 
-    it("flips the visible label to 'Copied' after a successful copy", async () => {
+    it("confirms the copy without hiding the ID it copied", async () => {
       render(<ErrorFallback {...baseProps} variant="section" />);
       const button = screen.getByTestId("error-fallback-copy-id");
       fireEvent.click(button);
       await waitFor(() => {
-        expect(button.textContent).toBe("Copied");
+        expect(button.textContent).toContain("Copied");
       });
+      // The ID is what someone reads aloud or pastes next; feedback must not replace it.
+      expect(button.textContent).toContain(baseProps.incidentId);
     });
 
     it("keeps aria-label constant on the copy button (avoids double-announce)", async () => {
@@ -370,7 +374,7 @@ describe("ErrorFallback", () => {
       expect(button.getAttribute("aria-label")).toBe("Copy error ID");
       fireEvent.click(button);
       await waitFor(() => {
-        expect(button.textContent).toBe("Copied");
+        expect(button.textContent).toContain("Copied");
       });
       expect(button.getAttribute("aria-label")).toBe("Copy error ID");
     });
@@ -387,17 +391,20 @@ describe("ErrorFallback", () => {
       }
     });
 
-    it("applies correct size class per variant", () => {
-      vi.stubEnv("DEV", false);
-      const expected = { fullscreen: "size-16", section: "size-9", component: "size-6" } as const;
-      for (const [variant, sizeClass] of Object.entries(expected) as [
-        keyof typeof expected,
-        string,
-      ][]) {
-        const { container, unmount } = render(<ErrorFallback {...baseProps} variant={variant} />);
-        const svg = container.querySelector("svg");
-        expect(svg?.getAttribute("class")).toContain(sizeClass);
-        unmount();
+    it("keeps error red to the warning glyph alone in every variant", () => {
+      for (const dev of [false, true]) {
+        vi.stubEnv("DEV", dev);
+        for (const variant of ["fullscreen", "section", "component"] as const) {
+          const { container, unmount } = render(
+            <ErrorFallback {...baseProps} variant={variant} onReport={vi.fn()} />
+          );
+          const red = Array.from(container.querySelectorAll("[class]")).filter((el) =>
+            /status-error/.test(el.getAttribute("class") ?? "")
+          );
+          expect(red.length, `${variant} dev=${dev}`).toBe(1);
+          expect(red[0]!.tagName.toLowerCase()).toBe("svg");
+          unmount();
+        }
       }
     });
   });
@@ -414,16 +421,16 @@ describe("ErrorFallback", () => {
       expect(polite).toBeNull();
     });
 
-    it("announces component variant politely on mount with error phrasing", () => {
+    it("announces component variant politely on mount with stopped-working phrasing", () => {
       render(<ErrorFallback {...baseProps} variant="component" componentName="Recipe runner" />);
       const { polite, assertive } = useAnnouncerStore.getState();
-      expect(polite?.msg).toBe("Recipe runner error");
+      expect(polite?.msg).toBe("Recipe runner stopped working");
       expect(assertive).toBeNull();
     });
 
     it("falls back to a generic name when componentName is missing", () => {
       render(<ErrorFallback {...baseProps} variant="section" />);
-      expect(useAnnouncerStore.getState().assertive?.msg).toBe("Section stopped working");
+      expect(useAnnouncerStore.getState().assertive?.msg).toBe("This area stopped working");
     });
 
     it("does not announce for fullscreen variant (covered by role=alertdialog + autoFocus)", () => {
@@ -453,5 +460,63 @@ describe("ErrorFallback", () => {
       );
       expect(screen.queryByText(/Error ID:/)).toBeNull();
     });
+  });
+});
+
+describe("ErrorFallback description and details", () => {
+  const error = Object.assign(new Error("ENOENT: /Users/alice/secret/repo/.env"), {
+    stack: "Error: ENOENT\n    at readConfig (/Users/alice/secret/repo/src/config.ts:4:2)",
+  });
+
+  beforeEach(() => {
+    installClipboardMock();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("describes the fullscreen dialog with its explanation, not the stack", () => {
+    vi.stubEnv("DEV", false);
+    render(
+      <ErrorFallback error={error} resetError={vi.fn()} variant="fullscreen" incidentId="id-1" />
+    );
+    const dialog = screen.getByRole("alertdialog");
+    const describedBy = dialog.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    const description = document.getElementById(describedBy!);
+    expect(description?.textContent?.length).toBeGreaterThan(0);
+    expect(description?.closest("pre")).toBeNull();
+    expect(description?.textContent).not.toContain("at readConfig");
+  });
+
+  it("copies details with personal paths removed in production", async () => {
+    vi.stubEnv("DEV", false);
+    const { writeText } = installClipboardMock();
+    for (const variant of ["section", "component"] as const) {
+      writeText.mockClear();
+      const { unmount } = render(
+        <ErrorFallback error={error} resetError={vi.fn()} variant={variant} incidentId="id-1" />
+      );
+      fireEvent.click(screen.getByTestId("error-fallback-copy-details"));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+      const copied = String(writeText.mock.calls[0]![0]);
+      expect(copied, variant).toContain("id-1");
+      expect(copied, variant).toContain("readConfig");
+      expect(copied, variant).not.toContain("/Users/alice");
+      unmount();
+    }
+  });
+
+  it("says the terminals keep running wherever the copy is not the raw dev message", () => {
+    vi.stubEnv("DEV", false);
+    for (const variant of ["fullscreen", "section"] as const) {
+      const { container, unmount } = render(
+        <ErrorFallback error={error} resetError={vi.fn()} variant={variant} />
+      );
+      expect(container.textContent, variant).toMatch(/terminals and agents/);
+      unmount();
+    }
   });
 });

@@ -291,6 +291,38 @@ describe("PluginViewDiagnosticsFallback", () => {
     rerender(<PluginViewDiagnosticsFallback {...props} />);
 
     expect(announceMock).toHaveBeenCalledTimes(1);
-    expect(announceMock).toHaveBeenCalledWith("Dashboard error", "polite");
+    expect(announceMock).toHaveBeenCalledWith("Dashboard stopped working", "polite");
+  });
+});
+
+describe("recovery before diagnostics", () => {
+  const details = () => screen.getByTestId("plugin-view-diagnostics-trace").closest("details");
+
+  it("keeps the trace folded away for someone who installed the plugin", () => {
+    renderFallback({ devMode: false });
+    expect(details()?.open).toBe(false);
+  });
+
+  it("opens the trace for the plugin's own author", () => {
+    renderFallback({ devMode: true });
+    expect(details()?.open).toBe(true);
+  });
+
+  it("puts every recovery action ahead of the diagnostics in reading order", () => {
+    renderFallback({ onRequestClose: vi.fn() });
+    const disclosure = details()!;
+    for (const id of ["plugin-view-diagnostics-retry", "plugin-view-diagnostics-close"]) {
+      const button = screen.getByTestId(id);
+      expect(
+        button.compareDocumentPosition(disclosure) & Node.DOCUMENT_POSITION_FOLLOWING,
+        id
+      ).toBeTruthy();
+    }
+  });
+
+  it("does not print the manifest's raw names in the headline", () => {
+    renderFallback({ pluginDisplayName: LEAKY_MESSAGE });
+    const region = screen.getByTestId("plugin-view-diagnostics");
+    for (const secret of CAROL_SENSITIVE) expect(region.textContent).not.toContain(secret);
   });
 });

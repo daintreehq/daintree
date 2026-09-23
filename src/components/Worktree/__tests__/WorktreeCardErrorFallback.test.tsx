@@ -19,6 +19,11 @@ vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
 }));
 
+const announceMock = vi.hoisted(() => vi.fn());
+vi.mock("@/store/accessibilityAnnouncerStore", () => ({
+  useAnnouncerStore: { getState: () => ({ announce: announceMock }) },
+}));
+
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
 }));
@@ -46,7 +51,7 @@ describe("WorktreeCardErrorFallback", () => {
     render(
       wrap(<WorktreeCardErrorFallback error={new Error("Card broke")} resetError={resetError} />)
     );
-    expect(screen.getByText("Card failed to render")).toBeTruthy();
+    expect(screen.getByText("Couldn't show this worktree")).toBeTruthy();
     expect(screen.queryByText("Card broke")).toBeNull();
   });
 
@@ -85,5 +90,22 @@ describe("WorktreeCardErrorFallback", () => {
     expect(screen.getByText("Try again")).toBeTruthy();
     // Should NOT show the default ErrorFallback component variant
     expect(screen.queryByText("WorktreeCard Error")).toBeNull();
+  });
+
+  it("names the worktree it could not show, on screen and to screen readers", () => {
+    vi.stubEnv("DEV", false);
+    announceMock.mockClear();
+    render(
+      wrap(
+        <WorktreeCardErrorFallback
+          error={new Error("Card broke")}
+          resetError={vi.fn()}
+          displayName="feature/login"
+        />
+      )
+    );
+    expect(screen.getByText("Couldn't show feature/login")).toBeTruthy();
+    expect(announceMock).toHaveBeenCalledTimes(1);
+    expect(announceMock.mock.calls[0]![0]).toContain("feature/login");
   });
 });

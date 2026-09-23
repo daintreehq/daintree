@@ -48,6 +48,8 @@ interface ErrorBoundaryProps {
   resetKeys?: Array<string | number>;
   variant?: "fullscreen" | "section" | "component";
   componentName?: string;
+  /** User-facing name for the fallback. `componentName` stays the diagnostic id. */
+  displayName?: string;
   context?: {
     worktreeId?: string;
     terminalId?: string;
@@ -69,6 +71,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   // and prevents the underlying async chain from firing twice; the React
   // state drives the visible `disabled` prop on the button.
   private reportInFlight = false;
+
+  // Counts resets across fallback remounts, so a fallback that is back after a
+  // "Try again" can say so and offer the bigger hammer — a window reload —
+  // instead of the same button that just failed.
+  private retryCount = 0;
 
   constructor(props: ErrorBoundaryProps) {
     super(props);
@@ -172,6 +179,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       }
     }
 
+    this.retryCount += 1;
+
     // Reset the synchronous class-field guard alongside state so a hung
     // report from the previous error session doesn't permanently disable
     // the Report issue button after recovery.
@@ -272,7 +281,13 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   render(): ReactNode {
     const { hasError, error, errorInfo, incidentId, reportInFlight } = this.state;
-    const { children, fallback: FallbackComponent, variant, componentName } = this.props;
+    const {
+      children,
+      fallback: FallbackComponent,
+      variant,
+      componentName,
+      displayName,
+    } = this.props;
 
     if (hasError && error) {
       const Fallback = FallbackComponent || ErrorFallback;
@@ -284,9 +299,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           resetError={this.resetError}
           variant={variant}
           componentName={componentName}
+          displayName={displayName}
           incidentId={incidentId}
           onReport={variant !== "component" ? this.handleReport : undefined}
           reportInFlight={reportInFlight}
+          retryCount={this.retryCount}
         />
       );
     }
@@ -298,6 +315,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 export interface WithErrorBoundaryOptions {
   variant?: "fullscreen" | "section" | "component";
   componentName?: string;
+  displayName?: string;
   context?: {
     worktreeId?: string;
     terminalId?: string;
@@ -314,6 +332,7 @@ export function withErrorBoundary<P extends object>(
     <ErrorBoundary
       variant={options.variant || "component"}
       componentName={options.componentName || Component.displayName || Component.name}
+      displayName={options.displayName}
       context={options.context}
       onReset={options.onReset}
       resetKeys={options.resetKeys}

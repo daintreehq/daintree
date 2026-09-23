@@ -98,7 +98,7 @@ describe("ErrorBoundary", () => {
         <ThrowingChild shouldThrow={true} />
       </ErrorBoundary>
     );
-    expect(screen.getByText("Section stopped working")).toBeTruthy();
+    expect(screen.getByText("This area stopped working")).toBeTruthy();
   });
 
   it("still adds the error to the store for cross-referencing", () => {
@@ -149,13 +149,13 @@ describe("ErrorBoundary", () => {
       </ErrorBoundary>
     );
 
-    expect(screen.getByText("Section stopped working")).toBeTruthy();
+    expect(screen.getByText("This area stopped working")).toBeTruthy();
 
     shouldThrow = false;
-    fireEvent.click(screen.getByText("Reload pane"));
+    fireEvent.click(screen.getByText("Try again"));
 
     expect(screen.getByText("Recovered")).toBeTruthy();
-    expect(screen.queryByText("Section stopped working")).toBeNull();
+    expect(screen.queryByText("This area stopped working")).toBeNull();
   });
 
   it("provides onReport to section variant", () => {
@@ -212,7 +212,9 @@ describe("ErrorBoundary", () => {
     expect(copyButton.textContent).toBe("sentry-event-deadbeef");
     expect(screen.queryByText("Test render error")).toBeNull();
     expect(
-      screen.getByText("This pane crashed but the rest of Daintree is still running.")
+      screen.getByText(
+        "Your terminals and agents are still running. Try again to reload this area."
+      )
     ).toBeTruthy();
   });
 
@@ -611,7 +613,7 @@ describe("ErrorBoundary", () => {
 
     // User gives up and recovers the pane while the first report is still in flight.
     shouldThrow = false;
-    fireEvent.click(screen.getByText("Reload pane"));
+    fireEvent.click(screen.getByText("Try again"));
     expect(screen.getByText("Recovered")).toBeTruthy();
 
     // Re-arm the throw and re-render to bring the fallback back.
@@ -621,7 +623,7 @@ describe("ErrorBoundary", () => {
         <ConditionalThrow />
       </ErrorBoundary>
     );
-    expect(screen.getByText("Section stopped working")).toBeTruthy();
+    expect(screen.getByText("This area stopped working")).toBeTruthy();
 
     // Second click should now fire — the class-field guard was cleared on reset.
     fireEvent.click(screen.getByText("Report issue"));
@@ -741,11 +743,11 @@ describe("ErrorBoundary", () => {
       </ErrorBoundary>
     );
 
-    expect(screen.getByText("Section stopped working")).toBeTruthy();
+    expect(screen.getByText("This area stopped working")).toBeTruthy();
     expect(onReset).not.toHaveBeenCalled();
 
     shouldThrow = false;
-    fireEvent.click(screen.getByText("Reload pane"));
+    fireEvent.click(screen.getByText("Try again"));
 
     expect(onReset).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Recovered")).toBeTruthy();
@@ -772,10 +774,10 @@ describe("ErrorBoundary", () => {
       </ErrorBoundary>
     );
 
-    expect(screen.getByText("Section stopped working")).toBeTruthy();
+    expect(screen.getByText("This area stopped working")).toBeTruthy();
 
     events.length = 0;
-    fireEvent.click(screen.getByText("Reload pane"));
+    fireEvent.click(screen.getByText("Try again"));
 
     expect(events).toEqual(["onReset", "child-render"]);
     expect(screen.getByText("Recovered")).toBeTruthy();
@@ -798,10 +800,10 @@ describe("ErrorBoundary", () => {
       </ErrorBoundary>
     );
 
-    expect(screen.getByText("Section stopped working")).toBeTruthy();
+    expect(screen.getByText("This area stopped working")).toBeTruthy();
 
     shouldThrow = false;
-    fireEvent.click(screen.getByText("Reload pane"));
+    fireEvent.click(screen.getByText("Try again"));
 
     expect(onReset).toHaveBeenCalled();
     expect(logError).toHaveBeenCalledWith("Error in onReset handler", expect.any(Error));
@@ -866,5 +868,58 @@ describe("ErrorBoundary", () => {
 
     expect(onReset).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Recovered at key 1")).toBeTruthy();
+  });
+});
+
+describe("ErrorBoundary retry escalation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function AlwaysThrows(): React.ReactNode {
+    throw new Error("still broken");
+  }
+
+  it("offers a window reload only once Try again has failed", () => {
+    render(
+      <ErrorBoundary variant="section" componentName="ContentGrid">
+        <AlwaysThrows />
+      </ErrorBoundary>
+    );
+    expect(screen.queryByTestId("error-fallback-reload-window")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("error-fallback-restart"));
+
+    // The same fault came straight back; offering the same button again is a loop.
+    expect(screen.getByTestId("error-fallback-restart")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("error-fallback-reload-window"));
+    expect(actionService.dispatch).toHaveBeenCalledWith("window.reload", undefined, {
+      source: "user",
+    });
+  });
+
+  it("offers a window reload from the first render of the fullscreen fallback", () => {
+    render(
+      <ErrorBoundary variant="fullscreen" componentName="App">
+        <AlwaysThrows />
+      </ErrorBoundary>
+    );
+    expect(screen.getByTestId("error-fallback-reload-window")).toBeTruthy();
+  });
+
+  it("passes a display name through to the fallback in place of the code name", () => {
+    render(
+      <ErrorBoundary variant="section" componentName="ContentGrid" displayName="Workspace">
+        <AlwaysThrows />
+      </ErrorBoundary>
+    );
+    expect(screen.getByTestId("error-fallback-title").textContent).toBe(
+      "Workspace stopped working"
+    );
   });
 });

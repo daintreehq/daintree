@@ -293,10 +293,10 @@ describe("dev preview tools", () => {
     try {
       render(<Preview />);
       fireEvent.click(screen.getByRole("button", { name: "Broken" }));
-      expect(screen.getByText("Broken toolbar error")).toBeTruthy();
+      expect(screen.getByText("Broken toolbar stopped working")).toBeTruthy();
 
       fireEvent.click(screen.getByRole("button", { name: "Picker" }));
-      expect(screen.queryByText("Broken toolbar error")).toBeNull();
+      expect(screen.queryByText("Broken toolbar stopped working")).toBeNull();
       expect(screen.getByRole("toolbar", { name: "Picker strip" })).toBeTruthy();
     } finally {
       errors.mockRestore();

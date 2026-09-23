@@ -246,6 +246,7 @@ const FIXTURES: Record<string, () => ReactNode> = {
         <ErrorBoundary
           variant="component"
           componentName="WorktreeCard"
+          displayName="feature/billing-export-retry-queue"
           fallback={WorktreeCardErrorFallback}
         >
           <Thrower />

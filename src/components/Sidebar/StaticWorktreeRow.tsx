@@ -85,6 +85,7 @@ function StaticWorktreeRow({
         <ErrorBoundary
           variant="component"
           componentName="WorktreeCard"
+          displayName={worktree.branch || worktree.name}
           fallback={WorktreeCardErrorFallback}
           resetKeys={[worktreeId]}
           context={{ worktreeId }}
