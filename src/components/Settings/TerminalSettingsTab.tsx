@@ -380,7 +380,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               <SettingsSwitchCard
                 id="terminal-performance-mode"
                 title="Performance mode"
-                subtitle={`Cuts scrollback to ${PERFORMANCE_MODE_SCROLLBACK} lines and turns off animations, for low-end hardware or high-density workflows. Existing terminals keep their scrollback until respawned`}
+                subtitle={`Cuts scrollback to ${PERFORMANCE_MODE_SCROLLBACK} lines and turns off animations, for low-end hardware or high-density workflows. Existing terminals keep their scrollback until respawned.`}
                 isEnabled={performanceMode}
                 onChange={() => void setPerformanceMode(!performanceMode)}
                 ariaLabel="Performance Mode Toggle"
@@ -392,7 +392,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               <SettingsSwitchCard
                 id="terminal-resource-monitoring"
                 title="Resource monitoring"
-                subtitle="Show per-terminal CPU and memory in panel headers. Polls the process tree every 2.5 seconds"
+                subtitle="Show per-terminal CPU and memory in panel headers. Polls the process tree every 2.5 seconds."
                 isEnabled={resourceMonitoringEnabled}
                 onChange={() => setResourceMonitoring(!resourceMonitoringEnabled)}
                 ariaLabel="Resource Monitoring Toggle"
@@ -424,7 +424,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 >
                   <SettingsNumberInput
                     label="Auto-restart threshold"
-                    description="Restart a terminal automatically once its memory (RSS) passes this. 1,024–32,768 MB"
+                    description="Restart a terminal automatically once its memory (RSS) passes this. 1,024–32,768 MB."
                     min={1024}
                     max={32768}
                     step={1024}
@@ -516,7 +516,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
               <SettingsNumberInput
                 label="Hard limit"
-                description="Absolute maximum number of panels. Can't be bypassed"
+                description="Absolute maximum number of panels. Can't be bypassed."
                 min={4}
                 max={100}
                 value={panelLimits.hardLimit}
@@ -599,7 +599,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 <SettingsSwitchCard
                   id="terminal-hybrid-autofocus"
                   title="Focus the input bar first"
-                  subtitle="Agent panes start with the input bar focused instead of the terminal. Clicking either still wins, and Cmd-Opt-Arrow follows whichever you're using"
+                  subtitle="Agent panes start with the input bar focused instead of the terminal. Clicking either still wins, and Cmd-Opt-Arrow follows whichever you're using."
                   isEnabled={hybridInputAutoFocus}
                   onChange={() => void setHybridInputAutoFocus(!hybridInputAutoFocus)}
                   isModified={!hybridInputAutoFocus}
@@ -616,7 +616,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               <SettingsGroup>
                 <SettingsSwitchCard
                   title="Split two panels with a divider"
-                  subtitle="When exactly two panels are open, show a resizable divider instead of equal columns. The ratio is remembered per worktree"
+                  subtitle="When exactly two panels are open, show a resizable divider instead of equal columns. The ratio is remembered per worktree."
                   isEnabled={twoPaneSplitConfig.enabled}
                   onChange={() => setTwoPaneSplitEnabled(!twoPaneSplitConfig.enabled)}
                   isModified={!twoPaneSplitConfig.enabled}
@@ -640,7 +640,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   <SettingsRow
                     id="terminal-default-ratio"
                     label="Default ratio"
-                    description="Used when a worktree has no saved ratio of its own. Default: 50/50"
+                    description="Used when a worktree has no saved ratio of its own. Default: 50/50."
                     isModified={twoPaneSplitConfig.defaultRatio !== DEFAULT_SPLIT_RATIO}
                     onReset={() => setDefaultRatio(DEFAULT_SPLIT_RATIO)}
                     control={({ labelId, descriptionId, disabled }) => (
@@ -767,7 +767,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             <SettingsGroup>
               <SettingsPresetGroup
                 label="Base scrollback"
-                description={`Every terminal scales from this: agent terminals keep 10× it and shells 0.3×, within their own limits. Default: ${SCROLLBACK_DEFAULT.toLocaleString()}`}
+                description={`Every terminal scales from this: agent terminals keep 10× it and shells 0.3×, within their own limits. Default: ${SCROLLBACK_DEFAULT.toLocaleString()}.`}
                 options={SCROLLBACK_OPTIONS}
                 value={scrollbackLines}
                 onChange={(value) => void handleScrollbackChange(value)}

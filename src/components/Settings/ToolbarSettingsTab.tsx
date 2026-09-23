@@ -920,7 +920,7 @@ export function ToolbarSettingsTab() {
       */}
       <SettingsSection
         title="Agent buttons"
-        description={`Every agent lives in the launcher. Pin one to give it its own toolbar button too. ${pinnedAgentCount} of ${LAUNCHABLE_AGENT_IDS.length} pinned.`}
+        description={`Every agent lives in the launcher. Pin one to give it a toolbar button too; these are the same switches as its row in the lists above. ${pinnedAgentCount} of ${LAUNCHABLE_AGENT_IDS.length} pinned.`}
       >
         <SettingsGroup id={agentListId}>
           {/* The inventory rule: what is pinned stays in view, the rest behind a
@@ -979,7 +979,7 @@ export function ToolbarSettingsTab() {
       */}
       <SettingsSection
         title="Panel buttons"
-        description={`Every panel button lives in the launcher. Pin one to give it its own toolbar button too. ${LAUNCHER_PANEL_BUTTON_IDS.filter(isPanelOnToolbar).length} of ${LAUNCHER_PANEL_BUTTON_IDS.length} pinned.`}
+        description={`Every panel button lives in the launcher. Pin one to give it a toolbar button too; these are the same switches as its row in the lists above. ${LAUNCHER_PANEL_BUTTON_IDS.filter(isPanelOnToolbar).length} of ${LAUNCHER_PANEL_BUTTON_IDS.length} pinned.`}
       >
         <SettingsGroup>
           {LAUNCHER_PANEL_BUTTON_IDS.map((buttonId) => (
