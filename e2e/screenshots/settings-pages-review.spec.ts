@@ -439,13 +439,15 @@ test("settings pages review — every tab and subtab, sliced top to bottom", asy
     await setWindowSize(ctx.app, WIDE);
 
     const page = await openAndOnboardProject(ctx.app, ctx.window, repo.dir, PROJECT_NAME);
-    if (POPULATED) await populate(ctx.app, page, repo.dir);
     if (THEME) await setAppTheme(page, THEME);
     if (NOTIFICATION_SEED) {
       await page.evaluate(async (patch) => {
         await window.electron.notification.setSettings(patch);
       }, NOTIFICATION_SEED);
     }
+    // After the theme: a theme switch can leave the project-plugin view holding the
+    // trust it had before population, so the snapshot has to be the last word.
+    if (POPULATED) await populate(ctx.app, page, repo.dir);
     await page.addStyleTag({ content: POLISH_CSS });
     await dismissBlockingPalette(page);
     await settle(page, 600);
