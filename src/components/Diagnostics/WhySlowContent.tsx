@@ -80,6 +80,21 @@ export function describeSlowdowns(
   hostMemory: HostMemoryPauseSnapshot | null = null
 ): SlowdownFinding[] {
   const findings: SlowdownFinding[] = [];
+  const p = snapshot.pty;
+  // First among the warnings, so it survives the findings list's collapse
+  // behind the alerts: it's what the toolbar's memory-pause indicator opened
+  // this tab to explain.
+  const memoryPaused = hostMemory?.active ? hostMemory.paused : (p?.memoryPausedCount ?? 0) > 0;
+  if (hostMemory?.active || memoryPaused) {
+    findings.push({
+      id: "host-memory",
+      tone: "warn",
+      text: memoryPaused
+        ? HOST_MEMORY_PAUSE_COPY.whySlow.paused
+        : HOST_MEMORY_PAUSE_COPY.whySlow.monitoring,
+      suggestion: memoryPaused ? HOST_MEMORY_PAUSE_COPY.whySlow.suggestion : undefined,
+    });
+  }
   const r = snapshot.resource;
   if (r) {
     if (r.lagPressureActive) {
@@ -160,18 +175,6 @@ export function describeSlowdowns(
       tone: "warn",
       text: `${plural(terminals, "terminal is", "terminals are")} drawn without GPU acceleration`,
       suggestion: "Closing some terminals may bring it back",
-    });
-  }
-  const p = snapshot.pty;
-  const memoryPaused = hostMemory?.active ? hostMemory.paused : (p?.memoryPausedCount ?? 0) > 0;
-  if (hostMemory?.active || memoryPaused) {
-    findings.push({
-      id: "host-memory",
-      tone: "warn",
-      text: memoryPaused
-        ? HOST_MEMORY_PAUSE_COPY.whySlow.paused
-        : HOST_MEMORY_PAUSE_COPY.whySlow.monitoring,
-      suggestion: memoryPaused ? HOST_MEMORY_PAUSE_COPY.whySlow.suggestion : undefined,
     });
   }
   if (p) {

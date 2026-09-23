@@ -685,6 +685,24 @@ describe("host memory pause findings", () => {
     expect(pausedText).not.toBe(liftedText);
   });
 
+  it("leads every non-alert finding, so a crowded list never collapses it away", () => {
+    const crowded = base();
+    crowded.resource = {
+      ...makeQuietResource(),
+      currentProfile: "balanced",
+      targetProfile: "efficiency",
+      isOnBattery: true,
+      thermalState: "serious",
+      speedLimit: 70,
+    };
+    crowded.focusThrottle = { throttled: true, pollMultiplier: 4 };
+    crowded.pty = { ...crowded.pty!, pausedCount: 9, totalPendingBytes: 1024 };
+    const findings = describeSlowdowns(crowded, { active: true, paused: true, stalled: false });
+    const at = findings.findIndex((f) => f.id === "host-memory");
+    expect(findings.length).toBeGreaterThan(5);
+    expect(findings.slice(0, at).every((f) => f.tone === "alert")).toBe(true);
+  });
+
   it("is never all clear while the episode the toolbar shows is open", () => {
     const quiet = { ...base(), pty: makeQuietPty() };
     expect(isAllClear(quiet)).toBe(true);
