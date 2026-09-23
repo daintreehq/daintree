@@ -1,7 +1,9 @@
 import { useMemo, useCallback, useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { useErrorStore, type ErrorRecord, type RetryAction, RECURRENCE_THRESHOLD } from "@/store";
-import { Copy, Check, Lightbulb } from "lucide-react";
+import { Copy, Check, ChevronRight, Lightbulb, RefreshCw, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { logError } from "@/utils/logger";
@@ -12,16 +14,8 @@ const ERROR_TYPE_LABELS: Record<string, string> = {
   filesystem: "File",
   network: "Network",
   config: "Config",
+  validation: "Validation",
   unknown: "Other",
-};
-
-const ERROR_TYPE_COLORS: Record<string, string> = {
-  git: "text-status-warning",
-  process: "text-status-warning",
-  filesystem: "text-status-info",
-  network: "text-status-info",
-  config: "text-status-warning",
-  unknown: "text-status-error",
 };
 
 function formatTimestamp(timestamp: number): string {
@@ -52,7 +46,6 @@ function ErrorRow({
   onCancelRetry,
 }: ErrorRowProps) {
   const typeLabel = ERROR_TYPE_LABELS[error.type] || "Error";
-  const typeColor = ERROR_TYPE_COLORS[error.type] || "text-status-error";
   const isRetrying = !!error.retryProgress;
   const canRetry =
     error.retryability === "auto" &&
@@ -108,117 +101,153 @@ function ErrorRow({
     }
   };
 
+  const contextEntries = error.context
+    ? Object.entries(error.context).filter(([, v]) => v !== undefined)
+    : [];
+  const recurrence =
+    (error.occurrenceCount ?? 0) > 1 ? `Seen ${error.occurrenceCount} times` : undefined;
+  const retriesStopped =
+    error.retryExhausted || error.retryability === "exhausted"
+      ? "automatic retries stopped"
+      : undefined;
+  const statusLine = [recurrence, retriesStopped].filter(Boolean).join(" · ");
+  const detailsId = `error-details-${error.id}`;
+
   return (
     <>
       <tr
         className={cn(
-          "hover:bg-daintree-border/50 transition-colors",
-          isExpanded && "bg-daintree-border/30"
+          "group border-b border-divider align-top transition-colors",
+          isExpanded ? "bg-overlay-subtle" : "hover:bg-overlay-subtle"
         )}
       >
-        <td className="px-3 py-2 text-xs text-text-secondary whitespace-nowrap">
-          {formatTimestamp(error.timestamp)}
-        </td>
-        <td className={cn("px-3 py-2 text-xs whitespace-nowrap font-medium", typeColor)}>
-          {typeLabel}
-        </td>
-        <td className="px-3 py-2 text-sm text-text-primary max-w-md">
+        <td className="max-w-0 py-1.5 pl-2 pr-3">
           <button
+            type="button"
             onClick={onToggleExpand}
-            className="text-left w-full hover:text-text-primary transition-colors"
+            className="flex w-full min-w-0 items-start gap-1.5 rounded-[var(--radius-sm)] text-left text-text-primary hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
             aria-expanded={isExpanded}
-            aria-controls={`error-details-${error.id}`}
+            aria-controls={detailsId}
           >
-            <span className="truncate block">{error.message}</span>
-            {error.recoveryHint && (
-              <span className="flex items-center gap-1 mt-0.5 text-xs text-text-secondary">
-                <Lightbulb className="w-3 h-3 shrink-0" />
-                {error.recoveryHint}
+            <ChevronRight
+              aria-hidden="true"
+              className={cn(
+                "mt-0.5 h-3.5 w-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
+                isExpanded && "rotate-90"
+              )}
+            />
+            <span className="min-w-0 flex-1">
+              <span className={cn("block text-sm", !isExpanded && "truncate")}>
+                {error.message}
               </span>
-            )}
+              {isRetrying ? (
+                <span className="mt-0.5 flex items-center gap-1 text-xs text-text-secondary">
+                  <SpinningIcon icon={RefreshCw} active className="h-3 w-3 shrink-0" />
+                  Retrying automatically (attempt {error.retryProgress!.attempt} of{" "}
+                  {error.retryProgress!.maxAttempts})
+                </span>
+              ) : error.recoveryHint ? (
+                <span className="mt-0.5 flex items-start gap-1 text-xs text-text-secondary">
+                  <Lightbulb aria-hidden="true" className="mt-px h-3 w-3 shrink-0" />
+                  <span className="sr-only">Suggestion: </span>
+                  {error.recoveryHint}
+                </span>
+              ) : null}
+              {statusLine ? (
+                <span className="mt-0.5 block text-xs text-text-secondary">{statusLine}</span>
+              ) : null}
+            </span>
           </button>
         </td>
-        <td className="px-3 py-2 text-xs text-text-secondary whitespace-nowrap">
-          {error.source || "-"}
+        <td className="whitespace-nowrap px-3 py-1.5 text-xs text-text-secondary">{typeLabel}</td>
+        <td className="max-w-0 truncate px-3 py-1.5 text-xs text-text-secondary">
+          {error.source || "—"}
         </td>
-        <td className="px-3 py-2 whitespace-nowrap">
-          <div className="flex items-center gap-1">
-            {isRetrying && onCancelRetry && (
-              <>
-                <span className="text-3xs text-status-warning">
-                  Retrying {error.retryProgress!.attempt}/{error.retryProgress!.maxAttempts}...
-                </span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onCancelRetry();
-                  }}
-                  className="px-2 py-0.5 text-xs text-status-error hover:text-status-error/70 border border-status-error/50 hover:bg-status-error/10 rounded"
-                >
-                  Cancel
-                </button>
-              </>
-            )}
-            {!isRetrying && canRetry && (
-              <button
+        <td className="whitespace-nowrap px-3 py-1.5 text-xs tabular-nums text-text-secondary">
+          {formatTimestamp(error.timestamp)}
+        </td>
+        <td className="py-1 pl-1 pr-2">
+          <div className="flex items-center justify-end gap-1">
+            {isRetrying && onCancelRetry ? (
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCancelRetry();
+                }}
+              >
+                Cancel retry
+              </Button>
+            ) : null}
+            {!isRetrying && canRetry ? (
+              <Button
+                variant="subtle"
+                size="xs"
                 onClick={(e) => {
                   e.stopPropagation();
                   onRetry();
                 }}
-                className="px-2 py-0.5 text-xs text-status-success hover:text-status-success/70 border border-status-success/50 hover:bg-status-success/10 rounded"
               >
                 Retry
-              </button>
-            )}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDismiss();
-              }}
-              className="p-1 text-daintree-text/60 hover:text-text-primary"
-              aria-label="Dismiss error"
-            >
-              ×
-            </button>
+              </Button>
+            ) : null}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDismiss();
+                  }}
+                  aria-label="Dismiss problem"
+                >
+                  <X />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Dismiss</TooltipContent>
+            </Tooltip>
           </div>
         </td>
       </tr>
-      {isExpanded && error.details && (
-        <tr className="bg-daintree-sidebar/50" id={`error-details-${error.id}`}>
-          <td colSpan={5} className="px-3 py-2">
-            <div className="flex items-start justify-between gap-2">
-              <pre className="text-xs text-text-secondary whitespace-pre-wrap break-all font-mono max-h-40 overflow-y-auto flex-1 select-text">
-                {error.details}
-              </pre>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={handleCopyDetails}
-                    className="shrink-0 p-1.5 text-daintree-text/60 hover:text-text-primary hover:bg-daintree-border/50 rounded transition-colors"
-                    aria-label={copied ? "Copied to clipboard" : "Copy error details to clipboard"}
-                  >
-                    {copied ? (
-                      <Check className="w-4 h-4 text-status-success" />
-                    ) : (
-                      <Copy className="w-4 h-4" />
-                    )}
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {copied ? "Copied!" : "Copy error details"}
-                </TooltipContent>
-              </Tooltip>
-            </div>
-            {error.context && Object.keys(error.context).length > 0 && (
-              <div className="mt-2 text-xs text-text-secondary">
-                <span className="font-medium">Context: </span>
-                {Object.entries(error.context)
-                  .filter(([, v]) => v !== undefined)
-                  .map(([k, v]) => `${k}=${v}`)
-                  .join(", ")}
+      {isExpanded && (
+        <tr className="border-b border-divider bg-overlay-subtle" id={detailsId}>
+          <td colSpan={5} className="pb-2.5 pl-7 pr-3 pt-0">
+            <div className="rounded-[var(--radius-md)] border border-divider bg-surface-canvas p-2.5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  {error.details ? (
+                    <pre className="max-h-40 select-text overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs text-text-primary">
+                      {error.details}
+                    </pre>
+                  ) : (
+                    <p className="text-xs text-text-secondary">No further details were recorded</p>
+                  )}
+                  {contextEntries.length > 0 ? (
+                    <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+                      {contextEntries.map(([k, v]) => (
+                        <div key={k} className="contents">
+                          <dt className="text-text-secondary">{k}</dt>
+                          <dd className="min-w-0 break-all font-mono text-text-primary">
+                            {String(v)}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  ) : null}
+                </div>
+                <Button
+                  variant="subtle"
+                  size="xs"
+                  onClick={handleCopyDetails}
+                  aria-label={copied ? "Copied to clipboard" : "Copy error details to clipboard"}
+                >
+                  {copied ? <Check /> : <Copy />}
+                  {copied ? "Copied" : "Copy details"}
+                </Button>
               </div>
-            )}
+            </div>
           </td>
         </tr>
       )}
@@ -257,31 +286,23 @@ export function ProblemsContent({ onRetry, onCancelRetry, className }: ProblemsC
   return (
     <div className={cn("h-full overflow-auto", className)}>
       {activeErrors.length === 0 ? (
-        <div className="flex items-center justify-center h-full">
+        <div className="flex h-full items-center justify-center">
           {errors.length > 0 ? (
-            <EmptyState variant="user-cleared" scale="sidebar" title="All problems resolved" />
+            <EmptyState variant="user-cleared" scale="sidebar" title="Problems cleared" />
           ) : (
             <EmptyState variant="zero-data" scale="sidebar" title="No problems detected" />
           )}
         </div>
       ) : (
-        <table className="w-full">
-          <thead className="sticky top-0 bg-surface-sidebar border-b border-border-default">
-            <tr>
-              <th className="px-3 py-2 text-left text-xs font-medium text-text-secondary w-24">
-                Time
-              </th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-text-secondary w-20">
-                Type
-              </th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-text-secondary">
-                Message
-              </th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-text-secondary w-28">
-                Source
-              </th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-text-secondary w-24">
-                Actions
+        <table className="w-full table-fixed border-collapse">
+          <thead className="sticky top-0 z-10 bg-surface-sidebar">
+            <tr className="border-b border-divider text-left text-2xs font-medium text-text-secondary">
+              <th className="py-1 pl-7 pr-3 font-medium">Problem</th>
+              <th className="w-20 px-3 py-1 font-medium">Type</th>
+              <th className="w-36 px-3 py-1 font-medium">Source</th>
+              <th className="w-20 px-3 py-1 font-medium">Time</th>
+              <th className="w-36 py-1 pl-1 pr-2 font-medium">
+                <span className="sr-only">Actions</span>
               </th>
             </tr>
           </thead>

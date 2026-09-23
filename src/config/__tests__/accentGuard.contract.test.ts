@@ -170,7 +170,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Commands/CommandPicker.tsx",
     "src/components/DevPreview/DevPreviewEmptyStates.tsx",
     "src/components/Diagnostics/DiagnosticsDock.tsx",
-    "src/components/Diagnostics/TelemetryContent.tsx",
     "src/components/KeyboardShortcuts/SettingsShortcutCapture.tsx",
     "src/components/Layout/DockedNonPtyPanelItem.tsx",
     "src/components/Layout/DockedTabGroup.tsx",

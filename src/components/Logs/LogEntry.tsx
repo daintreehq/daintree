@@ -21,27 +21,20 @@ interface LogEntryProps {
   copyMeta?: LogEntryCopyMeta;
 }
 
-const LEVEL_COLORS: Record<LogLevel, { bg: string; text: string; border: string }> = {
-  debug: {
-    bg: "bg-daintree-border/20",
-    text: "text-text-secondary",
-    border: "border-daintree-border/30",
-  },
-  info: {
-    bg: "bg-status-info/20",
-    text: "text-status-info",
-    border: "border-status-info/30",
-  },
-  warn: {
-    bg: "bg-status-warning/20",
-    text: "text-status-warning",
-    border: "border-status-warning/30",
-  },
-  error: {
-    bg: "bg-status-error/20",
-    text: "text-status-error",
-    border: "border-status-error/30",
-  },
+// The level word carries the meaning; the tint only helps the eye group rows.
+// Text stays neutral because status-coloured text fails contrast on most themes.
+const LEVEL_CHIP: Record<LogLevel, string> = {
+  debug: "bg-overlay-soft text-text-secondary",
+  info: "bg-status-info/15 text-text-primary",
+  warn: "bg-status-warning/20 text-text-primary",
+  error: "bg-status-error/20 text-text-primary",
+};
+
+const LEVEL_EDGE: Record<LogLevel, string> = {
+  debug: "border-l-border-strong",
+  info: "border-l-status-info",
+  warn: "border-l-status-warning",
+  error: "border-l-status-error",
 };
 
 function formatTimestamp(timestamp: number): string {
@@ -76,7 +69,6 @@ function buildCopyPayload(entry: LogEntryType, meta?: LogEntryCopyMeta): string 
 }
 
 export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: LogEntryProps) {
-  const colors = LEVEL_COLORS[entry.level];
   const hasContext = entry.context && Object.keys(entry.context).length > 0;
   const contextPanelId = hasContext ? `context-${entry.id}` : undefined;
 
@@ -129,9 +121,9 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
   return (
     <div
       className={cn(
-        "group border-b border-daintree-border/50 py-1.5 px-2 relative",
-        hasContext && "cursor-pointer hover:bg-daintree-border/30",
-        isExpanded && "bg-daintree-border/20"
+        "group border-b border-divider py-1 px-3 relative",
+        hasContext && "cursor-pointer hover:bg-overlay-subtle",
+        isExpanded && "bg-overlay-subtle"
       )}
       onClick={handleClick}
       onKeyDown={handleKeyDown}
@@ -157,9 +149,8 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
 
         <span
           className={cn(
-            "text-xs font-medium px-1.5 py-0.5 rounded shrink-0 uppercase",
-            colors.bg,
-            colors.text
+            "w-11 shrink-0 rounded-[var(--radius-sm)] py-px text-center text-2xs font-medium uppercase",
+            LEVEL_CHIP[entry.level]
           )}
         >
           {entry.level}
@@ -175,7 +166,7 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
 
         {count > 1 && (
           <span
-            className="text-text-secondary text-xs font-mono shrink-0 tabular-nums bg-daintree-border/30 px-1.5 rounded"
+            className="text-text-secondary text-xs font-mono shrink-0 tabular-nums bg-overlay-soft px-1.5 rounded-[var(--radius-sm)]"
             aria-label={`Repeated ${count} times`}
           >
             ×{count}
@@ -183,7 +174,7 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
         )}
 
         {hasContext && (
-          <span className="text-daintree-text/60 shrink-0" aria-hidden>
+          <span className="text-text-secondary shrink-0" aria-hidden>
             {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
           </span>
         )}
@@ -194,6 +185,9 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
               variant="ghost"
               size="icon-sm"
               onClick={handleCopy}
+              // Enter/Space on Copy would otherwise bubble to the row and
+              // toggle its context as well as copying.
+              onKeyDown={(e) => e.stopPropagation()}
               aria-label={copied ? "Copied" : "Copy log entry"}
               className={cn(
                 "h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
@@ -211,9 +205,8 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
         <div
           id={contextPanelId}
           className={cn(
-            "mt-2 ml-[72px] p-2 rounded border text-xs font-mono overflow-x-auto",
-            colors.border,
-            "bg-daintree-sidebar/50"
+            "mt-1.5 mb-1 ml-[7.25rem] p-2 rounded-[var(--radius-md)] border border-l-2 text-xs font-mono overflow-x-auto bg-surface-canvas border-divider",
+            LEVEL_EDGE[entry.level]
           )}
           role="region"
           aria-label="Log entry context"

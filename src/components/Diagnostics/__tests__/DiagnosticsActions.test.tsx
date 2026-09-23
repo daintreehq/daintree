@@ -120,7 +120,7 @@ describe("LogsActions — clear confirmation", () => {
   it("opens a confirmation instead of clearing when Clear is clicked", async () => {
     render(<LogsActions />);
 
-    fireEvent.click(screen.getByText("Clear"));
+    fireEvent.click(screen.getByText("Clear logs"));
 
     expect(await screen.findByRole("alertdialog")).toBeTruthy();
     expect(clearDispatches()).toHaveLength(0);
@@ -129,7 +129,7 @@ describe("LogsActions — clear confirmation", () => {
   it("preserves the logs when the confirmation is cancelled", async () => {
     render(<LogsActions />);
 
-    fireEvent.click(screen.getByText("Clear"));
+    fireEvent.click(screen.getByText("Clear logs"));
     const dialog = await screen.findByRole("alertdialog");
     fireEvent.click(within(dialog).getByText("Cancel"));
 
@@ -140,7 +140,7 @@ describe("LogsActions — clear confirmation", () => {
   it("clears exactly once when confirmed, then closes", async () => {
     render(<LogsActions />);
 
-    fireEvent.click(screen.getByText("Clear"));
+    fireEvent.click(screen.getByText("Clear logs"));
     const dialog = await screen.findByRole("alertdialog");
     fireEvent.click(within(dialog).getByText("Clear logs"));
 
@@ -152,7 +152,7 @@ describe("LogsActions — clear confirmation", () => {
     mockDispatch.mockResolvedValue({ ok: false, error: { message: "buffer locked" } });
     render(<LogsActions />);
 
-    fireEvent.click(screen.getByText("Clear"));
+    fireEvent.click(screen.getByText("Clear logs"));
     const dialog = await screen.findByRole("alertdialog");
     fireEvent.click(within(dialog).getByText("Clear logs"));
 
@@ -184,19 +184,19 @@ describe("EventsActions — ConfirmDialog", () => {
   it("opens ConfirmDialog when Clear button is clicked", async () => {
     render(<EventsActions />);
 
-    fireEvent.click(screen.getByText("Clear"));
+    fireEvent.click(screen.getByText("Clear events"));
 
     expect(screen.getByText("Clear events?")).toBeTruthy();
     expect(
       screen.getByText("All captured event records will be permanently deleted.")
     ).toBeTruthy();
-    expect(screen.getByText("Clear events")).toBeTruthy();
+    expect(within(screen.getByRole("alertdialog")).getByText("Clear events")).toBeTruthy();
   });
 
   it("closes dialog without dispatching when Cancel is clicked", async () => {
     render(<EventsActions />);
 
-    fireEvent.click(screen.getByText("Clear"));
+    fireEvent.click(screen.getByText("Clear events"));
 
     fireEvent.click(screen.getByText("Cancel"));
 
@@ -207,9 +207,9 @@ describe("EventsActions — ConfirmDialog", () => {
   it("dispatches clear action and closes dialog on Confirm", async () => {
     render(<EventsActions />);
 
-    fireEvent.click(screen.getByText("Clear"));
-
     fireEvent.click(screen.getByText("Clear events"));
+
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByText("Clear events"));
 
     expect(mockDispatch).toHaveBeenCalledWith("eventInspector.clear", undefined, {
       source: "user",
@@ -230,7 +230,7 @@ describe("EventsActions — ConfirmDialog", () => {
 
     render(<EventsActions />);
 
-    fireEvent.click(screen.getByText("Clear"));
+    fireEvent.click(screen.getByText("Clear events"));
 
     expect(confirmSpy).not.toHaveBeenCalled();
     confirmSpy.mockRestore();

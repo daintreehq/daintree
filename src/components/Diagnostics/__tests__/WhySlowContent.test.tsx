@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
-import { WhySlowContent } from "../WhySlowContent";
+import { WhySlowContent, describeSlowdowns, isAllClear } from "../WhySlowContent";
 import type { WhySlowSnapshot } from "@shared/types/whySlow";
 
 const getWhySlowSnapshot = vi.fn();
@@ -100,8 +100,8 @@ describe("WhySlowContent", () => {
 
     render(<WhySlowContent />);
 
-    // One webgl + one dom view → "mixed"; counts sum across views.
-    expect(await screen.findByText("mixed")).toBeTruthy();
+    // One webgl + one dom view → mixed; counts sum across views.
+    expect(await screen.findByText("Partly GPU")).toBeTruthy();
     expect(screen.getByText("7")).toBeTruthy(); // summed terminalCount
     expect(screen.getByText("FOCUSED: 2")).toBeTruthy(); // summed tier bucket
     expect(screen.getByText("BACKGROUND: 5")).toBeTruthy();
@@ -121,7 +121,7 @@ describe("WhySlowContent", () => {
 
     render(<WhySlowContent />);
 
-    expect(await screen.findByText("Worker queue")).toBeTruthy();
+    expect(await screen.findByText("Queued jobs")).toBeTruthy();
     expect(screen.getByText("3")).toBeTruthy();
     expect(screen.getByText("degraded: copytree-worker:/proj")).toBeTruthy();
     expect(screen.getByText("degraded: analysis-worker-1")).toBeTruthy();
@@ -132,7 +132,7 @@ describe("WhySlowContent", () => {
 
     render(<WhySlowContent />);
 
-    expect(await screen.findByText("Worker queue")).toBeTruthy();
+    expect(await screen.findByText("Queued jobs")).toBeTruthy();
     expect(screen.queryByText(/^degraded:/)).toBeNull();
   });
 
@@ -220,7 +220,7 @@ describe("WhySlowContent", () => {
 
     render(<WhySlowContent />);
 
-    expect(await screen.findByText("Memory attribution unavailable.")).toBeTruthy();
+    expect(await screen.findByText("Memory breakdown unavailable")).toBeTruthy();
   });
 
   it("does not start overlapping refreshes while one is in flight", async () => {
@@ -338,8 +338,8 @@ describe("WhySlowContent", () => {
 
     render(<WhySlowContent />);
 
-    const items = await screen.findAllByRole("listitem");
-    const texts = items.map((li) => li.textContent);
+    const list = await screen.findByRole("list", { name: "Pressure contributions" });
+    const texts = Array.from(list.querySelectorAll("li")).map((li) => li.textContent);
     // fleetSize (+3) leads despite the collector emitting memory (+1) first;
     // the tied +1 reasons keep their collector order (stable sort).
     expect(texts[0]).toContain("24 active agents");
@@ -367,7 +367,7 @@ describe("WhySlowContent", () => {
 
     render(<WhySlowContent />);
 
-    expect(await screen.findByText("Resource profile unavailable.")).toBeTruthy();
+    expect(await screen.findByText("Resource mode unavailable")).toBeTruthy();
     expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
   });
 
@@ -376,7 +376,7 @@ describe("WhySlowContent", () => {
 
     render(<WhySlowContent />);
 
-    await screen.findByText("Resource profile");
+    await screen.findByText("Resource mode");
     expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
   });
 
@@ -390,7 +390,7 @@ describe("WhySlowContent", () => {
     );
 
     const { unmount } = render(<WhySlowContent />);
-    await screen.findByText("Resource profile");
+    await screen.findByText("Resource mode");
     expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
     unmount();
 
@@ -403,7 +403,7 @@ describe("WhySlowContent", () => {
     );
 
     render(<WhySlowContent />);
-    await screen.findByText("Resource profile");
+    await screen.findByText("Resource mode");
     expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
   });
 
@@ -427,5 +427,73 @@ describe("WhySlowContent", () => {
     });
     expect(screen.getByTestId("why-slow-stale-note")).toBeTruthy();
     expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
+  });
+
+  it("never claims all-clear while a reading is flagged, and every flag has a finding", () => {
+    const quiet = makeSnapshot({
+      resource: {
+        currentProfile: "performance",
+        targetProfile: "performance",
+        pressureScore: 0,
+        reasons: [],
+        lagPressureActive: false,
+        lagEscalatedActive: false,
+        thermalState: "nominal",
+        isOnBattery: false,
+        speedLimit: 100,
+      },
+      pty: {
+        totalPendingBytes: 0,
+        terminalCount: 1,
+        pausedCount: 0,
+        suspendedCount: 0,
+        maxPausedDurationMs: 0,
+        eventLoopP99Ms: 5,
+        eventLoopMaxMs: 8,
+        eventLoopUtilization: 0.1,
+      },
+      worktrees: { monitorCount: 2, fetchInFlightCount: 0 },
+      workers: { subsystemCount: 2, aliveWorkerCount: 2, totalQueueDepth: 0, degraded: [] },
+    });
+    expect(isAllClear(quiet)).toBe(true);
+    expect(describeSlowdowns(quiet)).toEqual([]);
+
+    const flagged: WhySlowSnapshot[] = [
+      { ...quiet, workers: { ...quiet.workers!, totalQueueDepth: 4 } },
+      { ...quiet, workers: { ...quiet.workers!, degraded: ["file-search"] } },
+      { ...quiet, worktrees: { monitorCount: 2, fetchInFlightCount: 1 } },
+      { ...quiet, focusThrottle: { throttled: true, pollMultiplier: 4 } },
+      { ...quiet, pty: { ...quiet.pty!, pausedCount: 2, totalPendingBytes: 2048 } },
+      { ...quiet, pty: { ...quiet.pty!, eventLoopP99Ms: 120 } },
+      { ...quiet, resource: { ...quiet.resource!, isOnBattery: true } },
+      { ...quiet, resource: { ...quiet.resource!, currentProfile: "balanced" } },
+    ];
+    for (const snapshot of flagged) {
+      expect(isAllClear(snapshot)).toBe(false);
+      expect(describeSlowdowns(snapshot).length).toBeGreaterThan(0);
+    }
+  });
+
+  it("puts alert findings ahead of warnings", () => {
+    const findings = describeSlowdowns(
+      makeSnapshot({
+        focusThrottle: { throttled: true, pollMultiplier: 4 },
+        resource: {
+          currentProfile: "efficiency",
+          targetProfile: "efficiency",
+          pressureScore: 4,
+          reasons: [],
+          lagPressureActive: true,
+          lagEscalatedActive: false,
+          thermalState: "nominal",
+          isOnBattery: true,
+          speedLimit: 100,
+        },
+      })
+    );
+    const firstWarn = findings.findIndex((f) => f.tone === "warn");
+    const lastAlert = findings.map((f) => f.tone).lastIndexOf("alert");
+    expect(lastAlert).toBeGreaterThanOrEqual(0);
+    expect(lastAlert).toBeLessThan(firstWarn);
   });
 });

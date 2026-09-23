@@ -26,7 +26,7 @@ function ContextPill({ label, value, filterKey, currentFilters, onToggle }: Cont
 
   return (
     <div className="grid grid-cols-[100px_1fr] gap-2 items-center">
-      <span className="text-muted-foreground">{label}:</span>
+      <span className="text-text-secondary">{label}:</span>
       <Tooltip>
         <TooltipTrigger asChild>
           <button
@@ -35,16 +35,16 @@ function ContextPill({ label, value, filterKey, currentFilters, onToggle }: Cont
               onToggle(filterKey, value);
             }}
             className={cn(
-              "group flex items-center gap-2 px-2 py-1 rounded text-xs font-mono text-left w-fit transition max-w-full focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+              "group flex items-center gap-2 px-2 py-1 rounded-[var(--radius-sm)] text-xs font-mono text-left w-fit transition max-w-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
               isActive
-                ? "bg-primary/15 text-primary border border-primary/30 hover:bg-primary/25"
-                : "hover:bg-muted border border-transparent hover:border-border text-foreground"
+                ? "bg-overlay-medium text-text-primary border border-border-strong hover:bg-overlay-strong"
+                : "hover:bg-overlay-soft border border-transparent hover:border-border-default text-text-primary"
             )}
             aria-pressed={isActive}
           >
             <span className="truncate">{strValue}</span>
             {isActive ? (
-              <X className="w-3 h-3 flex-shrink-0 text-text-muted" />
+              <X className="w-3 h-3 flex-shrink-0 text-text-secondary" />
             ) : (
               <Filter className="w-3 h-3 flex-shrink-0 opacity-0 group-hover:opacity-30" />
             )}
@@ -96,11 +96,11 @@ export function EventDetail({ event, className }: EventDetailProps) {
     return (
       <div
         className={cn(
-          "flex items-center justify-center text-sm text-muted-foreground h-full",
+          "flex items-center justify-center text-xs text-text-secondary h-full",
           className
         )}
       >
-        <p>Select an event to view details</p>
+        <p>Select an event to see its payload</p>
       </div>
     );
   }
@@ -151,12 +151,14 @@ export function EventDetail({ event, className }: EventDetailProps) {
   };
 
   return (
-    <div className={cn("flex flex-col h-full bg-background", className)}>
-      <div className="flex-shrink-0 p-4 border-b">
+    <div className={cn("flex flex-col h-full min-h-0", className)}>
+      <div className="flex-shrink-0 px-3 py-2 border-b border-divider">
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0 space-y-1">
-            <h3 className="font-mono text-sm font-semibold truncate">{event.type}</h3>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <h3 className="font-mono text-xs font-semibold text-text-primary truncate">
+              {event.type}
+            </h3>
+            <div className="flex items-center gap-2 text-2xs text-text-secondary">
               <span className="font-mono">{formatTimestamp(event.timestamp)}</span>
               <span>•</span>
               <span>{getTimeSince(event.timestamp)}</span>
@@ -169,12 +171,12 @@ export function EventDetail({ event, className }: EventDetailProps) {
               <button
                 onClick={copyPayload}
                 aria-label="Copy payload"
-                className="flex-shrink-0 p-2 hover:bg-muted rounded transition-colors"
+                className="flex-shrink-0 p-1.5 text-text-secondary hover:bg-overlay-soft hover:text-text-primary rounded-[var(--radius-md)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
               >
                 {copied ? (
-                  <Check className="w-4 h-4 text-status-success" />
+                  <Check className="w-3.5 h-3.5 text-status-success" />
                 ) : (
-                  <Copy className="w-4 h-4" />
+                  <Copy className="w-3.5 h-3.5" />
                 )}
               </button>
             </TooltipTrigger>
@@ -183,23 +185,23 @@ export function EventDetail({ event, className }: EventDetailProps) {
         </div>
       </div>
 
-      <div className="flex-shrink-0 border-b">
+      <div className="flex-shrink-0 border-b border-divider">
         <button
           onClick={() => toggleSection("metadata")}
           aria-expanded={expandedSections.has("metadata")}
-          className="w-full px-4 py-2 flex items-center gap-2 hover:bg-muted/50 transition-colors"
+          className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary"
         >
           {expandedSections.has("metadata") ? (
-            <ChevronDown className="w-4 h-4" />
+            <ChevronDown className="w-3.5 h-3.5" />
           ) : (
-            <ChevronRight className="w-4 h-4" />
+            <ChevronRight className="w-3.5 h-3.5" />
           )}
-          <span className="text-sm font-medium">Metadata</span>
+          <span className="text-xs font-medium">Metadata</span>
         </button>
         {expandedSections.has("metadata") && (
-          <div className="px-4 pb-3 space-y-2 text-sm">
+          <div className="px-3 pb-2.5 space-y-1.5 text-xs">
             <div className="grid grid-cols-[100px_1fr] gap-2">
-              <span className="text-muted-foreground">Event ID:</span>
+              <span className="text-text-secondary">Event ID:</span>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span className="font-mono text-xs truncate">{event.id}</span>
@@ -208,20 +210,20 @@ export function EventDetail({ event, className }: EventDetailProps) {
               </Tooltip>
             </div>
             <div className="grid grid-cols-[100px_1fr] gap-2">
-              <span className="text-muted-foreground">Type:</span>
+              <span className="text-text-secondary">Type:</span>
               <span className="font-mono text-xs">{event.type}</span>
             </div>
             <div className="grid grid-cols-[100px_1fr] gap-2">
-              <span className="text-muted-foreground">Source:</span>
+              <span className="text-text-secondary">Source:</span>
               <span className="font-mono text-xs capitalize">{event.source}</span>
             </div>
             <div className="grid grid-cols-[100px_1fr] gap-2">
-              <span className="text-muted-foreground">Timestamp:</span>
+              <span className="text-text-secondary">Timestamp:</span>
               <span className="font-mono text-xs">{event.timestamp}</span>
             </div>
             {event.payload?.traceId && (
               <div className="grid grid-cols-[100px_1fr] gap-2">
-                <span className="text-muted-foreground">Trace ID:</span>
+                <span className="text-text-secondary">Trace ID:</span>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="font-mono text-xs truncate">{event.payload.traceId}</span>
@@ -234,22 +236,22 @@ export function EventDetail({ event, className }: EventDetailProps) {
         )}
       </div>
 
-      <div className="flex-1 flex flex-col border-b">
+      <div className="flex-1 min-h-0 flex flex-col border-b border-divider">
         <button
           onClick={() => toggleSection("payload")}
           aria-expanded={expandedSections.has("payload")}
-          className="flex-shrink-0 px-4 py-2 flex items-center gap-2 hover:bg-muted/50 transition-colors"
+          className="flex-shrink-0 px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary"
         >
           {expandedSections.has("payload") ? (
-            <ChevronDown className="w-4 h-4" />
+            <ChevronDown className="w-3.5 h-3.5" />
           ) : (
-            <ChevronRight className="w-4 h-4" />
+            <ChevronRight className="w-3.5 h-3.5" />
           )}
-          <span className="text-sm font-medium">Payload</span>
+          <span className="text-xs font-medium">Payload</span>
         </button>
         {expandedSections.has("payload") && (
-          <div className="flex-1 overflow-auto px-4 pb-3">
-            <pre className="text-xs font-mono bg-muted/50 p-3 rounded overflow-x-auto select-text">
+          <div className="flex-1 min-h-0 overflow-auto px-3 pb-2.5">
+            <pre className="text-xs font-mono text-text-primary bg-surface-canvas border border-divider p-2.5 rounded-[var(--radius-md)] overflow-x-auto select-text">
               {formattedPayload}
             </pre>
           </div>
@@ -267,17 +269,17 @@ export function EventDetail({ event, className }: EventDetailProps) {
             <button
               onClick={() => toggleSection("context")}
               aria-expanded={expandedSections.has("context")}
-              className="w-full px-4 py-2 flex items-center gap-2 hover:bg-muted/50 transition-colors"
+              className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary"
             >
               {expandedSections.has("context") ? (
-                <ChevronDown className="w-4 h-4" />
+                <ChevronDown className="w-3.5 h-3.5" />
               ) : (
-                <ChevronRight className="w-4 h-4" />
+                <ChevronRight className="w-3.5 h-3.5" />
               )}
-              <span className="text-sm font-medium">Context</span>
+              <span className="text-xs font-medium">Context</span>
             </button>
             {expandedSections.has("context") && (
-              <div className="px-4 pb-3 space-y-1.5 text-sm">
+              <div className="px-3 pb-2.5 space-y-1.5 text-xs">
                 {event.payload.worktreeId !== undefined && (
                   <ContextPill
                     label="Worktree"

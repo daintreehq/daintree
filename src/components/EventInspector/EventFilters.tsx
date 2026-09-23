@@ -1,9 +1,23 @@
 import { useState, useMemo, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Search, X, Filter, Tag } from "lucide-react";
+import { PRESSED_TOGGLE } from "@/components/Diagnostics/toggleStyles";
+import { Check, ListFilter, Search, X } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { EventRecord, EventFilterOptions, EventCategory } from "@/store/eventStore";
 import { EVENT_CATEGORY_STYLES } from "@/config/categoryColors";
+
+// Dot per category as a recognition aid beside the label, from the same hue
+// family as the timeline's category chips. Never the only signal.
+const CATEGORY_DOT: Record<EventCategory, string> = {
+  system: "bg-cat-blue",
+  agent: "bg-cat-green",
+  server: "bg-cat-orange",
+  file: "bg-cat-pink",
+  ui: "bg-cat-indigo",
+  watcher: "bg-cat-cyan",
+  artifact: "bg-cat-rose",
+};
 
 const ALL_CATEGORIES: EventCategory[] = [
   "system",
@@ -27,7 +41,7 @@ interface EventFiltersProps {
 export function EventFilters({ events, filters, onFiltersChange, className }: EventFiltersProps) {
   const [searchInput, setSearchInput] = useState(filters.search || "");
   const [traceIdInput, setTraceIdInput] = useState(filters.traceId || "");
-  const [showTypeFilters, setShowTypeFilters] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
 
   useEffect(() => {
     setSearchInput(filters.search || "");
@@ -135,10 +149,6 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
     });
   };
 
-  const clearCategoryFilters = () => {
-    onFiltersChange({ ...filters, categories: undefined });
-  };
-
   const toggleTypeFilter = (type: string) => {
     const currentTypes = filters.types || [];
     const newTypes = currentTypes.includes(type)
@@ -151,183 +161,179 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
     onFiltersChange({ ...filters, types: undefined });
   };
 
-  const activeFilterCount =
-    (filters.categories?.length || 0) +
-    (filters.types?.length || 0) +
-    (filters.search ? 1 : 0) +
-    (filters.traceId ? 1 : 0);
+  const moreFilterCount = (filters.types?.length || 0) + (filters.traceId ? 1 : 0);
 
   return (
-    <div className={cn("flex-shrink-0 border-b bg-background", className)}>
-      <div className="p-3 space-y-2">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <input
-            type="search"
-            value={searchInput}
-            onChange={(e) => handleSearchChange(e.target.value)}
-            placeholder="Search events..."
-            className={cn(
-              "w-full pl-9 pr-9 py-2 text-sm rounded-[var(--radius-md)]",
-              "bg-muted/50 border border-transparent",
-              "focus:bg-background focus:border-primary focus:outline-hidden",
-              "placeholder:text-text-placeholder",
-              "[&::-webkit-search-cancel-button]:hidden"
-            )}
-          />
-          {searchInput && (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={clearSearch}
-              className="absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6"
-              aria-label="Clear search"
-            >
-              <X className="w-4 h-4" />
-            </Button>
+    <div
+      className={cn(
+        "flex shrink-0 flex-wrap items-center gap-2 border-b border-divider px-3 py-1.5",
+        className
+      )}
+    >
+      <div className="relative min-w-[150px] max-w-[260px] flex-1">
+        <Search
+          aria-hidden="true"
+          className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-text-secondary"
+        />
+        <input
+          type="search"
+          value={searchInput}
+          onChange={(e) => handleSearchChange(e.target.value)}
+          placeholder="Search events"
+          aria-label="Search events"
+          className={cn(
+            "h-6 w-full rounded-[var(--radius-md)] pl-6 pr-7 text-xs",
+            "border border-border-default bg-surface-canvas text-text-primary",
+            "placeholder:text-text-placeholder",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
+            "[&::-webkit-search-cancel-button]:hidden"
           )}
-        </div>
-
-        <div className="space-y-1">
-          <label className="text-xs text-muted-foreground px-1">
-            Trace ID (correlates related events)
-          </label>
-          <div className="relative">
-            <input
-              type="text"
-              value={traceIdInput}
-              onChange={(e) => handleTraceIdChange(e.target.value)}
-              placeholder="Filter by trace ID..."
-              className={cn(
-                "w-full pl-3 pr-9 py-2 text-sm rounded-[var(--radius-md)] font-mono",
-                "bg-muted/50 border border-transparent",
-                "focus:bg-background focus:border-primary focus:outline-hidden",
-                "placeholder:text-text-placeholder placeholder:font-sans"
-              )}
-            />
-            {traceIdInput && (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={clearTraceId}
-                className="absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6"
-                aria-label="Clear trace ID filter"
-              >
-                <X className="w-4 h-4" />
-              </Button>
-            )}
-          </div>
-        </div>
-
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground px-1">
-              <Tag className="w-3 h-3" />
-              <span>Categories</span>
-            </div>
-            {filters.categories && filters.categories.length > 0 && (
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={clearCategoryFilters}
-                className="h-auto p-0"
-              >
-                Clear
-              </Button>
-            )}
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {ALL_CATEGORIES.map((category) => {
-              const isActive = filters.categories?.includes(category) || false;
-              const count = categoryCounts.get(category) || 0;
-              const config = EVENT_CATEGORY_STYLES[category];
-
-              return (
-                <Button
-                  key={category}
-                  variant="outline"
-                  size="xs"
-                  onClick={() => toggleCategoryFilter(category)}
-                  className={cn(
-                    isActive
-                      ? config.color
-                      : "bg-muted/30 text-muted-foreground border-transparent hover:bg-muted/50"
-                  )}
-                  aria-pressed={isActive}
-                >
-                  <span>{config.label}</span>
-                  {count > 0 && (
-                    <span
-                      className={cn(
-                        "text-2xs tabular-nums",
-                        isActive ? "opacity-80" : "opacity-60"
-                      )}
-                    >
-                      {count}
-                    </span>
-                  )}
-                </Button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between">
+        />
+        {searchInput && (
           <Button
             variant="ghost"
-            size="sm"
-            onClick={() => setShowTypeFilters(!showTypeFilters)}
-            className={cn(showTypeFilters && "bg-muted")}
+            size="icon-xs"
+            onClick={clearSearch}
+            className="absolute right-0.5 top-1/2 h-5 w-5 -translate-y-1/2"
+            aria-label="Clear search"
           >
-            <Filter className="w-3.5 h-3.5" />
-            <span>Event Types</span>
-            {activeFilterCount > 0 && (
-              <span className="px-1.5 py-0.5 text-xs tabular-nums bg-primary text-primary-foreground rounded">
-                {activeFilterCount}
-              </span>
-            )}
+            <X />
           </Button>
-          {filters.types && filters.types.length > 0 && (
-            <Button variant="ghost" size="xs" onClick={clearTypeFilters} className="h-auto p-0">
-              Clear filters
-            </Button>
-          )}
-        </div>
+        )}
       </div>
 
-      {showTypeFilters && (
-        <div className="px-3 pb-3 space-y-3 max-h-64 overflow-y-auto">
-          {Object.entries(groupedTypes).map(([category, types]) => (
-            <div key={category} className="space-y-1.5">
-              <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                {category}
-              </div>
-              <div className="space-y-0.5">
+      <div
+        className="flex flex-wrap items-center gap-1"
+        role="group"
+        aria-label="Filter by category"
+      >
+        {ALL_CATEGORIES.map((category) => {
+          const isActive = filters.categories?.includes(category) || false;
+          const count = categoryCounts.get(category) || 0;
+          const config = EVENT_CATEGORY_STYLES[category];
+          return (
+            <Button
+              key={category}
+              variant="subtle"
+              size="xs"
+              onClick={() => toggleCategoryFilter(category)}
+              className={cn(
+                "gap-1.5",
+                isActive && PRESSED_TOGGLE,
+                count === 0 && !isActive && "opacity-60"
+              )}
+              aria-pressed={isActive}
+            >
+              <span
+                aria-hidden="true"
+                className={cn("h-1.5 w-1.5 rounded-full", CATEGORY_DOT[category])}
+              />
+              <span>{config.label}</span>
+              <span className="tabular-nums text-text-secondary">{count}</span>
+            </Button>
+          );
+        })}
+      </div>
+
+      <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="subtle"
+            size="xs"
+            className={cn(moreFilterCount > 0 && PRESSED_TOGGLE)}
+            aria-label={
+              moreFilterCount > 0 ? `More filters, ${moreFilterCount} active` : "More filters"
+            }
+          >
+            <ListFilter />
+            Filters
+            {moreFilterCount > 0 ? <span className="tabular-nums">{moreFilterCount}</span> : null}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" sideOffset={6} className="flex max-h-[60vh] w-80 flex-col p-0">
+          <div className="shrink-0 space-y-1 border-b border-divider p-3">
+            <label
+              htmlFor="event-trace-filter"
+              className="block text-xs font-medium text-text-primary"
+            >
+              Trace ID
+            </label>
+            <p className="text-2xs text-text-secondary">Shows every event from one operation</p>
+            <div className="relative">
+              <input
+                id="event-trace-filter"
+                type="text"
+                value={traceIdInput}
+                onChange={(e) => handleTraceIdChange(e.target.value)}
+                placeholder="Filter by trace ID..."
+                className={cn(
+                  "h-7 w-full rounded-[var(--radius-md)] pl-2 pr-7 font-mono text-xs",
+                  "border border-border-default bg-surface-canvas text-text-primary",
+                  "placeholder:font-sans placeholder:text-text-placeholder",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                )}
+              />
+              {traceIdInput && (
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={clearTraceId}
+                  className="absolute right-0.5 top-1/2 h-5 w-5 -translate-y-1/2"
+                  aria-label="Clear trace ID filter"
+                >
+                  <X />
+                </Button>
+              )}
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center justify-between px-3 pb-1 pt-2">
+            <span className="text-xs font-medium text-text-primary">Event types</span>
+            {filters.types && filters.types.length > 0 && (
+              <Button variant="ghost" size="xs" onClick={clearTypeFilters}>
+                Clear types
+              </Button>
+            )}
+          </div>
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 pb-2">
+            {Object.keys(groupedTypes).length === 0 ? (
+              <p className="px-1 pb-1 text-xs text-text-secondary">No events captured yet</p>
+            ) : null}
+            {Object.entries(groupedTypes).map(([category, types]) => (
+              <div key={category}>
+                <div className="px-1 pb-0.5 text-2xs font-medium capitalize text-text-secondary">
+                  {category}
+                </div>
                 {types.map((type) => {
                   const isChecked = filters.types?.includes(type) || false;
                   return (
-                    <label
+                    <button
                       key={type}
-                      className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/50 cursor-pointer group"
+                      type="button"
+                      aria-pressed={isChecked}
+                      onClick={() => toggleTypeFilter(type)}
+                      className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-1 py-1 text-left hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                     >
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={() => toggleTypeFilter(type)}
-                        className="w-3.5 h-3.5 rounded border-muted-foreground/50"
+                      <Check
+                        aria-hidden="true"
+                        className={cn(
+                          "h-3 w-3 shrink-0 text-text-primary",
+                          !isChecked && "invisible"
+                        )}
                       />
-                      <span className="text-sm font-mono truncate flex-1 min-w-0">{type}</span>
-                      <span className="text-xs text-muted-foreground opacity-0 group-hover:opacity-100">
+                      <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-primary">
+                        {type}
+                      </span>
+                      <span className="text-2xs tabular-nums text-text-secondary">
                         {typeCounts.get(type) || 0}
                       </span>
-                    </label>
+                    </button>
                   );
                 })}
               </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }

@@ -24,7 +24,7 @@ describe("LogFilters accessibility", () => {
 
   it("renders search input with type='search'", () => {
     render(<LogFilters {...baseProps} />);
-    const input = screen.getByPlaceholderText("Search logs...") as HTMLInputElement;
+    const input = screen.getByRole("searchbox", { name: "Search logs" }) as HTMLInputElement;
     expect(input.type).toBe("search");
   });
 
@@ -58,7 +58,7 @@ describe("LogFilters accessibility", () => {
   it("renders source items with aria-pressed when popover is open", () => {
     render(<LogFilters {...baseProps} filters={{ sources: ["renderer"] }} />);
     fireEvent.click(screen.getByText(/Sources/).closest("button")!);
-    const rendererBtn = screen.getByText(/\* renderer/).closest("button")!;
+    const rendererBtn = screen.getByText(/renderer/).closest("button")!;
     const mainBtn = screen.getByText("main").closest("button")!;
     expect(rendererBtn.getAttribute("aria-pressed")).toBe("true");
     expect(mainBtn.getAttribute("aria-pressed")).toBe("false");
@@ -74,12 +74,26 @@ describe("LogFilters accessibility", () => {
     });
   });
 
+  it("keeps what is typed into an empty search and commits it after the debounce", async () => {
+    const onFiltersChange = vi.fn();
+    render(<LogFilters {...baseProps} filters={{}} onFiltersChange={onFiltersChange} />);
+    const input = screen.getByRole("searchbox", { name: "Search logs" }) as HTMLInputElement;
+
+    fireEvent.change(input, { target: { value: "g" } });
+    expect(input.value).toBe("g");
+
+    await waitFor(() => {
+      expect(onFiltersChange).toHaveBeenCalledWith({ search: "g" });
+    });
+    expect(input.value).toBe("g");
+  });
+
   it("syncs the local search input when filters.search is cleared externally", async () => {
     const onFiltersChange = vi.fn();
     const { rerender } = render(
       <LogFilters {...baseProps} filters={{ search: "foo" }} onFiltersChange={onFiltersChange} />
     );
-    const input = screen.getByPlaceholderText("Search logs...") as HTMLInputElement;
+    const input = screen.getByRole("searchbox", { name: "Search logs" }) as HTMLInputElement;
     expect(input.value).toBe("foo");
 
     rerender(<LogFilters {...baseProps} filters={{}} onFiltersChange={onFiltersChange} />);
@@ -136,7 +150,7 @@ describe("LogFilters accessibility", () => {
       />
     );
     fireEvent.click(screen.getByText(/Sources/).closest("button")!);
-    const preloadBtn = screen.getByText(/\* preload/).closest("button")!;
+    const preloadBtn = screen.getByText(/preload/).closest("button")!;
     expect(preloadBtn.getAttribute("aria-pressed")).toBe("true");
     expect(preloadBtn.classList.contains("text-text-secondary")).toBe(false);
   });

@@ -137,6 +137,24 @@ describe("DiagnosticsDock — roving tabindex on the tab strip", () => {
     expect(document.activeElement).toBe(tabs[1]);
   });
 
+  it("reaching Problems by keyboard promotes errors exactly as a click does", () => {
+    useDiagnosticsStore.setState({ activeTab: "logs" });
+    const promoteErrors = vi.fn();
+    useErrorStore.setState({ promoteErrors });
+    const { container } = render(<DiagnosticsDock />);
+    const tablist = container.querySelector('[role="tablist"]') as HTMLDivElement;
+    const tabs = Array.from(tablist.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+    tabs.find((t) => t.dataset.tab === "logs")!.focus();
+
+    fireEvent.keyDown(tablist, { key: "ArrowLeft" });
+    expect(useDiagnosticsStore.getState().activeTab).toBe("problems");
+    expect(promoteErrors).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(tablist, { key: "ArrowRight" });
+    fireEvent.click(tabs.find((t) => t.dataset.tab === "problems")!);
+    expect(promoteErrors).toHaveBeenCalledTimes(2);
+  });
+
   it("ArrowLeft from the first tab wraps to the last", () => {
     const { container } = render(<DiagnosticsDock />);
     const tablist = container.querySelector('[role="tablist"]') as HTMLDivElement;

@@ -2,9 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { cn } from "@/lib/utils";
 import type { EventRecord, EventCategory } from "@/store/eventStore";
-import { Circle } from "lucide-react";
+import { ArrowDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { EVENT_CATEGORY_STYLES } from "@/config/categoryColors";
 
 interface EventTimelineProps {
@@ -13,12 +13,10 @@ interface EventTimelineProps {
   onSelectEvent: (id: string) => void;
   autoScroll?: boolean;
   onAutoScrollChange?: (autoScroll: boolean) => void;
+  /** Events before filtering — tells "nothing captured" apart from "nothing matches". */
+  totalCount?: number;
+  onClearFilters?: () => void;
   className?: string;
-}
-
-interface CategoryStyle {
-  label: string;
-  color: string;
 }
 
 function formatTimestamp(timestamp: number): string {
@@ -30,16 +28,15 @@ function formatTimestamp(timestamp: number): string {
   return `${hours}:${minutes}:${seconds}.${ms}`;
 }
 
-function getCategoryStyle(category: EventCategory): CategoryStyle {
-  const style = EVENT_CATEGORY_STYLES[category];
-  if (!style) {
-    return {
-      label: "???",
-      color: "bg-daintree-border/20 text-text-secondary border-daintree-border/30",
-    };
-  }
-  return { label: style.shortLabel, color: style.color };
-}
+const CATEGORY_DOT: Record<EventCategory, string> = {
+  system: "bg-cat-blue",
+  agent: "bg-cat-green",
+  server: "bg-cat-orange",
+  file: "bg-cat-pink",
+  ui: "bg-cat-indigo",
+  watcher: "bg-cat-cyan",
+  artifact: "bg-cat-rose",
+};
 
 function getPayloadSummary(event: EventRecord): string {
   const { payload } = event;
@@ -61,43 +58,40 @@ interface EventRowProps {
 }
 
 function EventRow({ event, isSelected, onSelect }: EventRowProps) {
-  const categoryStyle = getCategoryStyle(event.category);
+  const category = EVENT_CATEGORY_STYLES[event.category];
   const summary = getPayloadSummary(event);
   const handleClick = useCallback(() => onSelect(event.id), [onSelect, event.id]);
 
   return (
     <button
+      type="button"
       onClick={handleClick}
+      aria-current={isSelected ? "true" : undefined}
       className={cn(
-        "w-full text-left px-3 py-2 hover:bg-muted/50 transition-colors",
-        "border-l-2 border-transparent",
-        isSelected && "bg-muted border-l-primary"
+        "flex w-full items-center gap-2 border-l-2 px-3 py-1 text-left text-xs transition-colors",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
+        isSelected
+          ? "border-l-text-primary bg-overlay-medium"
+          : "border-l-transparent hover:bg-overlay-subtle"
       )}
     >
-      <div className="flex items-start gap-2">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span
-              className={cn(
-                "flex-shrink-0 inline-flex items-center justify-center w-8 px-1 py-0.5 rounded text-2xs font-medium border",
-                categoryStyle.color
-              )}
-            >
-              {categoryStyle.label}
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{event.category}</TooltipContent>
-        </Tooltip>
-        <div className="flex-1 min-w-0 space-y-1">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-xs text-muted-foreground">
-              {formatTimestamp(event.timestamp)}
-            </span>
-            <span className="text-xs font-mono text-foreground truncate">{event.type}</span>
-          </div>
-          {summary && <p className="text-xs text-muted-foreground font-mono truncate">{summary}</p>}
-        </div>
-      </div>
+      <span className="flex w-16 shrink-0 items-center gap-1.5 text-2xs text-text-secondary">
+        <span
+          aria-hidden="true"
+          className={cn(
+            "h-1.5 w-1.5 shrink-0 rounded-full",
+            CATEGORY_DOT[event.category] ?? "bg-text-secondary"
+          )}
+        />
+        {category?.label ?? event.category}
+      </span>
+      <span className="shrink-0 font-mono tabular-nums text-text-secondary">
+        {formatTimestamp(event.timestamp)}
+      </span>
+      <span className="shrink-0 truncate font-mono text-text-primary">{event.type}</span>
+      {summary ? (
+        <span className="min-w-0 truncate font-mono text-text-secondary">{summary}</span>
+      ) : null}
     </button>
   );
 }
@@ -108,6 +102,8 @@ export function EventTimeline({
   onSelectEvent,
   autoScroll = true,
   onAutoScrollChange,
+  totalCount,
+  onClearFilters,
   className,
 }: EventTimelineProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
@@ -115,8 +111,13 @@ export function EventTimeline({
   const [newCount, setNewCount] = useState(0);
   const pauseBoundaryTsRef = useRef<number | undefined>(undefined);
 
+  // Ignore the "not at bottom" Virtuoso reports during its first layout, before
+  // the initial scroll to the tail lands — it isn't the user scrolling away.
+  const reachedBottomRef = useRef(false);
   const handleAtBottomChange = useCallback(
     (bottom: boolean) => {
+      if (bottom) reachedBottomRef.current = true;
+      else if (!reachedBottomRef.current) return;
       setAtBottom(bottom);
       if (bottom) {
         setNewCount(0);
@@ -154,28 +155,36 @@ export function EventTimeline({
   }, [onAutoScrollChange]);
 
   if (events.length === 0) {
+    const filteredOut = (totalCount ?? 0) > 0;
     return (
-      <div
-        className={cn(
-          "flex-1 flex items-center justify-center text-sm text-muted-foreground",
-          className
+      <div className={cn("flex flex-1 items-center justify-center", className)}>
+        {filteredOut ? (
+          <EmptyState
+            variant="filtered-empty"
+            scale="sidebar"
+            title="No events match filters"
+            action={
+              onClearFilters ? (
+                <Button variant="subtle" size="xs" onClick={onClearFilters}>
+                  Clear filters
+                </Button>
+              ) : undefined
+            }
+          />
+        ) : (
+          <EmptyState variant="zero-data" scale="sidebar" title="No events captured yet" />
         )}
-      >
-        <div className="text-center space-y-2">
-          <Circle className="w-8 h-8 mx-auto text-text-muted" />
-          <p>No events captured yet</p>
-          <p className="text-xs">Events will appear here as they occur</p>
-        </div>
       </div>
     );
   }
 
   return (
-    <div className={cn("flex-1 relative", className)}>
+    <div className={cn("relative min-h-0 flex-1", className)}>
       <Virtuoso
         ref={virtuosoRef}
         data={events}
         computeItemKey={(_index, event) => event.id}
+        initialTopMostItemIndex={{ index: "LAST", align: "end" }}
         followOutput={autoScroll ? "smooth" : false}
         atBottomStateChange={handleAtBottomChange}
         itemContent={(_index, event) => (
@@ -184,18 +193,19 @@ export function EventTimeline({
         role="log"
         aria-label="Event timeline"
         aria-live="off"
-        className="h-full"
+        className="absolute inset-0"
       />
 
       {!atBottom && events.length > 0 && (
         <Button
-          variant="info"
+          variant="pill"
           size="sm"
-          className="absolute bottom-4 right-4 rounded-full shadow-[var(--theme-shadow-floating)] tabular-nums"
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 tabular-nums shadow-[var(--theme-shadow-floating)]"
           onClick={scrollToBottom}
           aria-label={newCount > 0 ? `Resume tail, ${newCount} new` : "Scroll to bottom"}
         >
-          {newCount > 0 ? `↓ ${newCount} new` : "Scroll to bottom"}
+          <ArrowDown />
+          {newCount > 0 ? `${newCount} new` : "Jump to latest"}
         </Button>
       )}
     </div>

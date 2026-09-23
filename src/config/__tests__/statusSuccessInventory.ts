@@ -211,29 +211,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Copy-all-messages confirmation; resets when the copy flash times out",
     },
   ],
-  "src/components/Diagnostics/ProblemsContent.tsx": [
-    {
-      category: "affordance",
-      signature:
-        "text-status-success hover:text-status-success/70 border-status-success/50 hover:bg-status-success/10",
-      expectedOccurrences: 4,
-      rationale: "Go-colour on the Retry control, not a claim that the problem is resolved",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Copy-details confirmation; resets when the copy flash times out",
-    },
-  ],
-  "src/components/Diagnostics/TelemetryContent.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Copy-payload confirmation; resets when the copy flash times out",
-    },
-  ],
   "src/components/EventInspector/EventDetail.tsx": [
     {
       category: "transient",
@@ -1062,5 +1039,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 127;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 147;
+export const EXPECTED_STATUS_SUCCESS_SITES = 124;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 141;

@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { useEventStore } from "@/store/eventStore";
@@ -7,6 +7,7 @@ import { EventDetail } from "../EventInspector/EventDetail";
 import { EventFilters } from "../EventInspector/EventFilters";
 import { eventInspectorClient } from "@/clients";
 import { logError } from "@/utils/logger";
+import { DiagnosticsNotice } from "./DiagnosticsNotice";
 
 export interface EventsContentProps {
   className?: string;
@@ -28,6 +29,7 @@ export function EventsContent({ className }: EventsContentProps) {
     addEvents,
     setEvents,
     setFilters,
+    clearFilters,
     setSelectedEvent,
     getFilteredEvents,
   } = useEventStore(
@@ -40,10 +42,14 @@ export function EventsContent({ className }: EventsContentProps) {
       addEvents: state.addEvents,
       setEvents: state.setEvents,
       setFilters: state.setFilters,
+      clearFilters: state.clearFilters,
       setSelectedEvent: state.setSelectedEvent,
       getFilteredEvents: state.getFilteredEvents,
     }))
   );
+
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let disposed = false;
@@ -54,10 +60,12 @@ export function EventsContent({ className }: EventsContentProps) {
       .getEvents()
       .then((existingEvents) => {
         if (disposed) return;
+        setLoadFailed(false);
         setEvents(existingEvents);
       })
       .catch((error) => {
         logError("Failed to load events", error);
+        if (!disposed) setLoadFailed(true);
       });
 
     const unsubscribe = eventInspectorClient.onEventBatch((events) => {
@@ -70,7 +78,7 @@ export function EventsContent({ className }: EventsContentProps) {
       unsubscribe();
       eventInspectorClient.unsubscribe();
     };
-  }, [addEvents, setEvents]);
+  }, [addEvents, setEvents, reloadKey]);
 
   const filteredEvents = useMemo(() => {
     void events;
@@ -86,21 +94,34 @@ export function EventsContent({ className }: EventsContentProps) {
     <div className={cn("flex flex-col h-full", className)}>
       <EventFilters events={events} filters={filters} onFiltersChange={setFilters} />
 
-      <div className="flex-1 flex min-h-0">
-        <div className="w-1/2 border-r overflow-hidden">
-          <EventTimeline
-            events={deferredFilteredEvents}
-            selectedId={selectedEventId}
-            onSelectEvent={setSelectedEvent}
-            autoScroll={autoScroll}
-            onAutoScrollChange={setAutoScroll}
+      {loadFailed && events.length === 0 ? (
+        <div className="p-3">
+          <DiagnosticsNotice
+            kind="failed"
+            title="Couldn't read captured events"
+            description="New events still appear here as they happen."
+            onRetry={() => setReloadKey((k) => k + 1)}
           />
         </div>
+      ) : (
+        <div className="flex min-h-0 flex-1">
+          <div className="flex min-h-0 w-1/2 flex-col border-r border-divider">
+            <EventTimeline
+              events={deferredFilteredEvents}
+              totalCount={events.length}
+              onClearFilters={clearFilters}
+              selectedId={selectedEventId}
+              onSelectEvent={setSelectedEvent}
+              autoScroll={autoScroll}
+              onAutoScrollChange={setAutoScroll}
+            />
+          </div>
 
-        <div className="w-1/2 overflow-hidden">
-          <EventDetail event={selectedEvent} />
+          <div className="flex min-h-0 w-1/2 flex-col">
+            <EventDetail event={selectedEvent} />
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

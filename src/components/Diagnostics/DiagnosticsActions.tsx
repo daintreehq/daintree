@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { useLogsStore, useErrorStore } from "@/store";
 import { useTelemetryPreviewStore } from "@/store/telemetryPreviewStore";
 import { usePerfMetricsStore } from "@/store/perfMetricsStore";
@@ -8,6 +9,7 @@ import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ClearLogsConfirmDialog } from "./ClearLogsConfirmDialog";
+import { PRESSED_TOGGLE } from "./toggleStyles";
 
 export function ProblemsActions() {
   const hasActiveErrors = useErrorStore((state) => state.errors.some((e) => !e.dismissed));
@@ -21,10 +23,10 @@ export function ProblemsActions() {
       <Tooltip>
         <TooltipTrigger asChild>
           <Button variant="subtle" size="xs" onClick={handleOpenLogs}>
-            Open Logs
+            Open log file
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="bottom">Open log file</TooltipContent>
+        <TooltipContent side="bottom">Open the full app log in your editor</TooltipContent>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger asChild>
@@ -37,11 +39,11 @@ export function ProblemsActions() {
               }
               disabled={!hasActiveErrors}
             >
-              Clear All
+              Dismiss all
             </Button>
           </span>
         </TooltipTrigger>
-        <TooltipContent side="bottom">Clear all errors</TooltipContent>
+        <TooltipContent side="bottom">Dismiss every problem in the list</TooltipContent>
       </Tooltip>
     </div>
   );
@@ -62,32 +64,32 @@ export function LogsActions() {
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
-              variant={autoScroll ? "info" : "subtle"}
+              variant="subtle"
               size="xs"
               onClick={() => setAutoScroll(!autoScroll)}
+              aria-pressed={autoScroll}
+              className={cn(autoScroll && PRESSED_TOGGLE)}
             >
               Auto-scroll
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {autoScroll ? "Auto-scroll enabled" : "Auto-scroll disabled"}
-          </TooltipContent>
+          <TooltipContent side="bottom">Keep the newest line in view</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="subtle" size="xs" onClick={handleOpenFile}>
-              Open File
+              Open log file
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Open log file</TooltipContent>
+          <TooltipContent side="bottom">Open the full app log in your editor</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="subtle" size="xs" onClick={() => setShowClearDialog(true)}>
-              Clear
+              Clear logs
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Clear logs</TooltipContent>
+          <TooltipContent side="bottom">Remove every entry from this view</TooltipContent>
         </Tooltip>
       </div>
       <ClearLogsConfirmDialog isOpen={showClearDialog} onOpenChange={setShowClearDialog} />
@@ -112,12 +114,13 @@ export function TelemetryActions() {
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
-            variant={active ? "info" : "subtle"}
+            variant="subtle"
             size="xs"
             onClick={handleToggle}
             aria-pressed={active}
+            className={cn(active && PRESSED_TOGGLE)}
           >
-            {active ? "Preview On" : "Preview Off"}
+            Telemetry preview
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom">
@@ -130,11 +133,11 @@ export function TelemetryActions() {
         <TooltipTrigger asChild>
           <span className="inline-flex">
             <Button variant="subtle" size="xs" onClick={handleClear} disabled={!hasEvents}>
-              Clear
+              Clear payloads
             </Button>
           </span>
         </TooltipTrigger>
-        <TooltipContent side="bottom">Clear captured events</TooltipContent>
+        <TooltipContent side="bottom">Remove the captured payloads from this view</TooltipContent>
       </Tooltip>
     </div>
   );
@@ -184,10 +187,10 @@ export function EventsActions() {
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="subtle" size="xs" onClick={() => setShowClearDialog(true)}>
-              Clear
+              Clear events
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Clear all events</TooltipContent>
+          <TooltipContent side="bottom">Delete every captured event</TooltipContent>
         </Tooltip>
       </div>
       <ConfirmDialog

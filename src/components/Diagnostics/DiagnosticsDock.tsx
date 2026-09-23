@@ -50,7 +50,7 @@ function TabButton({ tab, label, isActive, onClick, badge }: TabButtonProps) {
       onClick={onClick}
       tabIndex={isActive ? 0 : -1}
       className={cn(
-        "px-3 py-1.5 text-sm font-medium transition-colors relative rounded",
+        "px-3 py-1.5 text-sm font-medium transition-colors relative rounded-[var(--radius-md)]",
         "hover:text-text-primary hover:bg-overlay-soft",
         "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface-sidebar",
         isActive ? "text-text-primary" : "text-text-secondary"
@@ -61,11 +61,16 @@ function TabButton({ tab, label, isActive, onClick, badge }: TabButtonProps) {
     >
       {label}
       {badge !== undefined && badge > 0 && (
-        <span className="ml-1.5 px-1.5 py-0.5 text-xs tabular-nums bg-status-error/15 text-status-error rounded-full">
+        <span className="ml-1.5 rounded-full bg-status-error/25 px-1.5 py-0.5 text-xs tabular-nums text-text-primary">
           {badge > 99 ? "99+" : badge}
         </span>
       )}
-      {isActive && <div className="absolute bottom-0 left-0 right-0 h-px bg-daintree-text/30" />}
+      {isActive && (
+        <div
+          aria-hidden="true"
+          className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full bg-text-primary"
+        />
+      )}
     </button>
   );
 }
@@ -162,6 +167,18 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
     [height, maxHeight, setHeight]
   );
 
+  // Pointer and keyboard activation share one path, so promoting errors when
+  // Problems opens can't depend on how the tab was reached.
+  const selectTab = useCallback(
+    (tab: DiagnosticsTab) => {
+      if (tab === "problems" && useDiagnosticsStore.getState().activeTab !== "problems") {
+        useErrorStore.getState().promoteErrors();
+      }
+      setActiveTab(tab);
+    },
+    [setActiveTab]
+  );
+
   const handleTablistKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       const container = tablistRef.current;
@@ -194,9 +211,9 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
       if (!nextTab) return;
       nextTab.focus();
       const tabId = nextTab.dataset.tab as DiagnosticsTab | undefined;
-      if (tabId) setActiveTab(tabId);
+      if (tabId) selectTab(tabId);
     },
-    [setActiveTab]
+    [selectTab]
   );
 
   useEffect(() => {
@@ -357,12 +374,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
               tab={tab.id}
               label={tab.label}
               isActive={activeTab === tab.id}
-              onClick={() => {
-                if (tab.id === "problems" && activeTab !== "problems") {
-                  useErrorStore.getState().promoteErrors();
-                }
-                setActiveTab(tab.id);
-              }}
+              onClick={() => selectTab(tab.id)}
               badge={tab.badge}
             />
           ))}
