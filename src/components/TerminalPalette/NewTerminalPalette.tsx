@@ -87,15 +87,6 @@ export function NewTerminalPalette({
       if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
 
       switch (e.key) {
-        // Clear before close, claimed at the input because the dialog's
-        // document-level backstop would otherwise close outright (see
-        // SearchablePalette).
-        case "Escape":
-          if (query === "") break;
-          e.preventDefault();
-          e.stopPropagation();
-          onQueryChange("");
-          break;
         case "ArrowUp":
           e.preventDefault();
           e.stopPropagation();
