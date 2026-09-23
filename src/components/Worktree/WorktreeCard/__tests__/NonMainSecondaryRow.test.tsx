@@ -309,12 +309,16 @@ describe("NonMainSecondaryRow — base relationship without drift", () => {
     expect(queryByTestId("upstream-sync-badge")).not.toBeNull();
   });
 
-  it("leaves the badge unmounted when there is no base branch to name", () => {
+  // With no base to name the row still hands the badge what a status pass
+  // established — here, that no upstream is configured — and the badge
+  // decides whether that is worth a line.
+  it("still mounts the badge with no base branch once a status pass has run", () => {
     const { queryByTestId } = renderRow({
       worktree: onBase({ baseBranchName: null }),
       hasUpstreamDelta: false,
     });
-    expect(queryByTestId("upstream-sync-badge")).toBeNull();
+    expect(queryByTestId("upstream-sync-badge")).not.toBeNull();
+    expect(upstreamBadgeProps.at(-1)?.hasNoUpstream).toBe(true);
   });
 
   it("derives the no-upstream marker from the tracking ref, not from absent counts", () => {
@@ -354,5 +358,29 @@ describe("NonMainSecondaryRow — base relationship without drift", () => {
       hasAuthFailedSignIn: true,
     });
     expect(upstreamBadgeProps.at(-1)?.hasNoUpstream).toBe(false);
+  });
+});
+
+describe("NonMainSecondaryRow — a fetch mounts the sync line even with nothing to count", () => {
+  beforeEach(() => {
+    upstreamBadgeProps.length = 0;
+  });
+
+  // With no counts and no base to show, the badge's failure mark is the only
+  // thing saying the numbers are unconfirmed; gating it on the counts hid it.
+  it.each([
+    ["an unreachable remote", { fetchNetworkFailed: true }],
+    ["an auth failure with no reconnect to offer", { fetchAuthFailed: true }],
+    // The badge ages its own counts on the clock, so it has to be there to do
+    // it — a card with no base and no drift still goes stale.
+    ["a completed fetch, which can go stale", { lastFetchedAt: 1 }],
+  ])("mounts for %s", (_label, failure) => {
+    renderRow({ worktree: { ...baseWorktree, baseBranchName: null, ...failure } as WorktreeState });
+    expect(upstreamBadgeProps).not.toHaveLength(0);
+  });
+
+  it("stays unmounted with nothing to say and nothing wrong", () => {
+    renderRow({ worktree: { ...baseWorktree, baseBranchName: null } as WorktreeState });
+    expect(upstreamBadgeProps).toHaveLength(0);
   });
 });

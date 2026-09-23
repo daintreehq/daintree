@@ -11,7 +11,6 @@ interface MainWorktreeSecondaryRowProps {
   branchLabel: string;
   isActive: boolean;
   isMuted?: boolean;
-  hasUpstreamDelta: boolean;
   hasAuthFailedSignIn: boolean;
   authProviderId?: string | null;
   aheadCount: number | undefined;
@@ -27,7 +26,6 @@ export function MainWorktreeSecondaryRow({
   branchLabel,
   isActive,
   isMuted,
-  hasUpstreamDelta,
   hasAuthFailedSignIn,
   authProviderId,
   aheadCount,
@@ -52,23 +50,24 @@ export function MainWorktreeSecondaryRow({
         isMuted={isMuted}
         isMainWorktree={false}
       />
-      {(hasUpstreamDelta || hasAuthFailedSignIn) && (
-        <UpstreamSyncBadge
-          aheadCount={aheadCount}
-          behindCount={behindCount}
-          isFetchInFlight={isFetchInFlight}
-          lastFetchedAt={lastFetchedAt}
-          fetchAuthFailed={fetchAuthFailed}
-          fetchNetworkFailed={fetchNetworkFailed}
-          hasAuthFailedSignIn={hasAuthFailedSignIn}
-          authProviderId={authProviderId}
-          containerGapClass="gap-1"
-          fetchIntervalMs={fetchIntervalMs}
-        />
-      )}
+      {/* Always mounted: the badge decides whether it has anything to say, and
+          a failed or stale fetch is worth saying even with no counts — an
+          empty line beside the branch otherwise reads as "in sync". */}
+      <UpstreamSyncBadge
+        aheadCount={aheadCount}
+        behindCount={behindCount}
+        isFetchInFlight={isFetchInFlight}
+        lastFetchedAt={lastFetchedAt}
+        fetchAuthFailed={fetchAuthFailed}
+        fetchNetworkFailed={fetchNetworkFailed}
+        hasAuthFailedSignIn={hasAuthFailedSignIn}
+        authProviderId={authProviderId}
+        containerGapClass="gap-1"
+        fetchIntervalMs={fetchIntervalMs}
+      />
       {aggregateCounts && aggregateCounts.worktrees > 0 && (
         <>
-          <span className="text-text-muted/40 text-3xs" aria-hidden="true">
+          <span className="text-text-muted text-3xs" aria-hidden="true">
             ·
           </span>
           <Tooltip>

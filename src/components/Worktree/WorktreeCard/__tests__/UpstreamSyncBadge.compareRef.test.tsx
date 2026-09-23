@@ -57,7 +57,7 @@ describe("UpstreamSyncBadge — base compare ref (#11747)", () => {
     // obviously wrong.
     renderBadge({ baseCompareRef: "upstream/main" });
 
-    expect(document.body.textContent).toContain("200 behind upstream/main");
+    expect(document.body.textContent).toContain("Base (upstream/main): 200 commits behind");
   });
 
   it("keeps the compact pill on the bare branch name", () => {
@@ -73,13 +73,13 @@ describe("UpstreamSyncBadge — base compare ref (#11747)", () => {
   it("falls back to the branch name when no compare ref was resolved", () => {
     renderBadge({ baseCompareRef: null, baseBehindCount: 4 });
 
-    expect(document.body.textContent).toContain("4 behind main");
+    expect(document.body.textContent).toContain("Base (main): 4 commits behind");
   });
 
   it("names the compare ref on the ahead line too", () => {
     renderBadge({ baseBehindCount: 0, baseAheadCount: 6, baseCompareRef: "upstream/main" });
 
-    expect(document.body.textContent).toContain("6 ahead of upstream/main");
+    expect(document.body.textContent).toContain("Base (upstream/main): 6 commits ahead");
   });
 
   it("says the comparison is local when the base fell back to the local branch", () => {
@@ -89,14 +89,14 @@ describe("UpstreamSyncBadge — base compare ref (#11747)", () => {
     // a plain "200 behind main" passes a local measurement off as a remote one.
     renderBadge({ baseCompareRef: "main" });
 
-    expect(document.body.textContent).toContain("200 behind local main");
+    expect(document.body.textContent).toContain("Base (local main): 200 commits behind");
     expect(screen.getByTestId("upstream-sync-local-base")).toBeTruthy();
   });
 
   it("says nothing about a local base when the remote compare ref resolved", () => {
     renderBadge({ baseCompareRef: "origin/main" });
 
-    expect(document.body.textContent).toContain("200 behind origin/main");
+    expect(document.body.textContent).toContain("Base (origin/main): 200 commits behind");
     expect(screen.queryByTestId("upstream-sync-local-base")).toBeNull();
   });
 
@@ -111,13 +111,13 @@ describe("UpstreamSyncBadge — base compare ref (#11747)", () => {
   it("labels the ahead line as local too", () => {
     renderBadge({ baseBehindCount: 0, baseAheadCount: 6, baseCompareRef: "main" });
 
-    expect(document.body.textContent).toContain("6 ahead of local main");
+    expect(document.body.textContent).toContain("Base (local main): 6 commits ahead");
   });
 
   it("labels the resting line as local", () => {
     renderBadge({ baseBehindCount: 0, baseAheadCount: 0, baseCompareRef: "main" });
 
-    expect(document.body.textContent).toContain("In sync with local main");
+    expect(document.body.textContent).toContain("Base (local main): in sync");
   });
 
   it("does not name a specific remote in the unreachable-remote warning", () => {
@@ -192,7 +192,7 @@ describe("UpstreamSyncBadge — a branch tracking its own base", () => {
     renderBadge(mistracked);
 
     expect(screen.getByTestId("upstream-sync-indicator").textContent).not.toContain("origin/");
-    expect(document.body.textContent).toContain("4 behind origin/develop");
+    expect(document.body.textContent).toContain("Base (origin/develop): 4 commits behind");
   });
 
   it("drops the upstream tooltip line rather than leaving a bare 'upstream'", () => {
@@ -249,7 +249,7 @@ describe("UpstreamSyncBadge — the auth-failed tooltip (#12074)", () => {
       baseBranchName: longBase,
       baseCompareRef: `upstream/${longBase}`,
     });
-    expect(document.body.textContent).toContain(`Compared with upstream/${longBase}`);
+    expect(document.body.textContent).toContain(`Base (upstream/${longBase}):`);
     // Still bare in the dense row itself, same as the normal variant.
     expect(screen.getByTestId("upstream-sync-indicator").textContent).not.toContain("upstream/");
 
@@ -261,7 +261,7 @@ describe("UpstreamSyncBadge — the auth-failed tooltip (#12074)", () => {
         baseCompareRef={null}
       />
     );
-    expect(document.body.textContent).toContain(`Compared with ${longBase}`);
+    expect(document.body.textContent).toContain(`Base (${longBase}):`);
 
     rerender(
       <UpstreamSyncBadge
@@ -273,15 +273,14 @@ describe("UpstreamSyncBadge — the auth-failed tooltip (#12074)", () => {
         baseCompareRef={null}
       />
     );
-    expect(document.body.textContent).not.toContain("Compared with");
+    expect(document.body.textContent).not.toContain("Base (");
   });
 });
 
 describe("UpstreamSyncBadge — the base-divergence tooltip line (#12110)", () => {
   it("separates the two counts when a branch is both ahead of and behind its base", () => {
-    // Without the separator the ref and the next count fuse into
-    // `origin/develop82`, which parses as a branch name before it parses as
-    // two numbers.
+    // Without the separator the two counts fuse into one run that parses
+    // as a single number or a branch name before it parses as two counts.
     renderBadge({
       baseBranchName: "develop",
       baseCompareRef: "origin/develop",
@@ -290,7 +289,7 @@ describe("UpstreamSyncBadge — the base-divergence tooltip line (#12110)", () =
     });
 
     expect(document.body.textContent).toContain(
-      "8 ahead of origin/develop, 82 behind origin/develop"
+      "Base (origin/develop): 8 commits ahead, 82 behind"
     );
   });
 
@@ -302,7 +301,7 @@ describe("UpstreamSyncBadge — the base-divergence tooltip line (#12110)", () =
       baseBehindCount: 0,
     });
 
-    expect(document.body.textContent).toContain("8 ahead of origin/develop");
-    expect(document.body.textContent).not.toContain("origin/develop,");
+    expect(document.body.textContent).toContain("Base (origin/develop): 8 commits ahead");
+    expect(document.body.textContent).not.toContain("ahead,");
   });
 });

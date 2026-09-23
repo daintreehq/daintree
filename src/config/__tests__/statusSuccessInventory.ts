@@ -828,7 +828,7 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "domain",
       signature: "text-status-success",
-      anchor: "↑{baseAheadCount}",
+      anchor: "↑{displayedBaseAhead}",
       expectedOccurrences: 1,
       rationale: "Ahead-arrow count against the base branch",
     },

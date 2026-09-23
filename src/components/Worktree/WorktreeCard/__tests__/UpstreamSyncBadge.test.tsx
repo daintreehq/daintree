@@ -70,7 +70,7 @@ describe("UpstreamSyncBadge — auth-failed sign-in branch (issue #9982)", () =>
     });
     const button = screen.getByRole("button", { name: /Forge authentication failed/ });
     expect(button.getAttribute("data-fetch-auth-failed")).toBe("true");
-    expect(button.textContent).toContain("—");
+    expect(button.textContent).toContain("Reconnect");
     fireEvent.click(button);
     expect(mockRetryAuthFetch).toHaveBeenCalledTimes(1);
     expect(actionService.dispatch).toHaveBeenCalledWith(
@@ -80,15 +80,19 @@ describe("UpstreamSyncBadge — auth-failed sign-in branch (issue #9982)", () =>
     );
   });
 
-  it("does not render the sign-in branch when hasAuthFailedSignIn is false even with auth-failed fetch", () => {
+  it("keeps the auth failure visible when there is no reconnect to offer", () => {
     renderBadge({
       aheadCount: 0,
       behindCount: 0,
       fetchAuthFailed: true,
       hasAuthFailedSignIn: false,
     });
-    // No counts + no auth-failed-sign-in affordance + no base divergence → null
-    expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
+    // No provider, so no button — but the fetches are still suspended, and a
+    // line that said nothing would read as "in sync".
+    expect(screen.queryByRole("button")).toBeNull();
+    const indicator = screen.getByTestId("upstream-sync-indicator");
+    expect(screen.getByTestId("upstream-sync-status").getAttribute("data-status")).toBe("auth");
+    expect(indicator.getAttribute("aria-label")).toMatch(/authentication failed/i);
   });
 });
 
@@ -374,8 +378,19 @@ describe("UpstreamSyncBadge — resting base relationship", () => {
     expect(screen.queryByTestId("upstream-sync-unpushed")).not.toBeNull();
   });
 
-  it("renders nothing when there is no base branch and no upstream delta", () => {
+  // "No upstream" comes from the tracking config, not from the base, so a
+  // base that cannot be named does not get to erase it — and with nothing
+  // before it the marker drops its separator rather than dangling one.
+  it("still says there is no upstream when there is no base to hang it off", () => {
     renderBadge({ aheadCount: 0, behindCount: 0, hasNoUpstream: true });
+    expect(screen.getByTestId("upstream-sync-unpushed").textContent?.trim()).toBe("local");
+    expect(screen.getByTestId("upstream-sync-indicator").getAttribute("aria-label")).toContain(
+      "No upstream branch configured"
+    );
+  });
+
+  it("renders nothing when there is nothing to say", () => {
+    renderBadge({ aheadCount: 0, behindCount: 0, hasNoUpstream: false });
     expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
   });
 
@@ -446,7 +461,15 @@ describe("UpstreamSyncBadge — a base branch longer than the card (#12074)", ()
 
     // The counts and the marker are the state the line exists to carry, so
     // they are what has to survive beside the name that yielded.
-    const rendered = children.filter((el) => el !== label).map((el) => el.textContent);
+    // A status mark is a glyph, so it is named by its status rather than its
+    // (empty) text.
+    const rendered = children
+      .filter((el) => el !== label)
+      .map((el) =>
+        el.getAttribute("data-testid") === "upstream-sync-status"
+          ? `[${el.getAttribute("data-status")}]`
+          : el.textContent
+      );
     expect(rendered).toEqual(tokens);
 
     // Nothing caps the name on the way in — this is presentation-only, so the
@@ -467,11 +490,148 @@ describe("UpstreamSyncBadge — a base branch longer than the card (#12074)", ()
       fetchAuthFailed: true,
       hasAuthFailedSignIn: true,
     });
-    assertOnlyTheNameYields("Δ", ["↑12", "↓3", "↑7", "↓5", "· local"]);
+    assertOnlyTheNameYields("Δ", ["↑12", "↓3", "↑7", "↓5", "· local", "[auth]", "Reconnect"]);
   });
 
   it("yields a long name on the resting line too, where there are no base counts", () => {
     renderBadge({ ...crowded, baseAheadCount: 0, baseBehindCount: 0 });
     assertOnlyTheNameYields("≡", ["↑12", "↓3", "· local"]);
+  });
+});
+
+describe("UpstreamSyncBadge — staleness follows the clock", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ now: new Date("2026-09-01T00:00:00Z") });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // A fetch that keeps failing leaves `lastFetchedAt` where it was, so the
+  // props never change — the line has to age on the clock alone, or the card
+  // that most needs to look stale is the one that never does.
+  it("turns stale while mounted as the last fetch ages, with no prop change", () => {
+    const interval = 20_000;
+    renderBadge({ lastFetchedAt: Date.now(), fetchIntervalMs: interval });
+    expect(screen.getByTestId("upstream-sync-indicator").getAttribute("data-stale")).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(interval * 3);
+    });
+
+    expect(screen.getByTestId("upstream-sync-indicator").getAttribute("data-stale")).toBe("true");
+  });
+
+  it("does not call a fetch stale before it has aged past the threshold", () => {
+    const interval = 60_000;
+    renderBadge({ lastFetchedAt: Date.now(), fetchIntervalMs: interval });
+
+    act(() => {
+      vi.advanceTimersByTime(interval);
+    });
+
+    expect(screen.getByTestId("upstream-sync-indicator").getAttribute("data-stale")).toBeNull();
+  });
+});
+
+describe("UpstreamSyncBadge — degraded states qualify the counts, never erase them", () => {
+  beforeEach(() => {
+    vi.stubGlobal("electron", { worktree: { retryAuthFetch: vi.fn() } });
+  });
+
+  const drifted: Partial<Props> = {
+    aheadCount: 3,
+    behindCount: 5,
+    baseBranchName: "develop",
+    baseAheadCount: 7,
+    baseBehindCount: 11,
+    baseMatchesUpstream: false,
+  };
+  const states: Record<string, Partial<Props>> = {
+    auth: { fetchAuthFailed: true, hasAuthFailedSignIn: true },
+    unreachable: { fetchNetworkFailed: true },
+    stale: { lastFetchedAt: Date.now() - 60 * 60_000, fetchIntervalMs: 60_000 },
+  };
+
+  function countClasses(): string[] {
+    const root = screen.getByTestId("upstream-sync-indicator");
+    return Array.from(root.querySelectorAll("span"))
+      .filter((el) => /^[↑↓]\d+$/.test(el.textContent ?? ""))
+      .map((el) => `${el.textContent}:${el.className}`);
+  }
+
+  it("colours the counts the same way in every state", () => {
+    renderBadge(drifted);
+    const healthy = countClasses();
+    expect(healthy).toHaveLength(4);
+    cleanup();
+    for (const extra of Object.values(states)) {
+      renderBadge({ ...drifted, ...extra });
+      expect(countClasses()).toEqual(healthy);
+      cleanup();
+    }
+  });
+
+  it("gives each state exactly one mark, a different one each, and no fade", () => {
+    const seen = new Set<string>();
+    for (const [name, extra] of Object.entries(states)) {
+      renderBadge({ ...drifted, ...extra });
+      const root = screen.getByTestId("upstream-sync-indicator");
+      const marks = root.querySelectorAll('[data-testid="upstream-sync-status"]');
+      expect(marks, name).toHaveLength(1);
+      seen.add(marks[0]?.getAttribute("data-status") ?? "");
+      for (let el: Element | null = root; el; el = el.parentElement) {
+        expect(el.className.toString(), name).not.toMatch(/(^|\s)opacity-/);
+      }
+      cleanup();
+    }
+    expect(seen.size).toBe(Object.keys(states).length);
+  });
+
+  it("keeps a healthy line unmarked", () => {
+    renderBadge(drifted);
+    expect(screen.queryByTestId("upstream-sync-status")).toBeNull();
+  });
+
+  it("does not let a fetch in flight clear staleness before its answer lands", () => {
+    renderBadge({ ...drifted, ...states.stale, isFetchInFlight: true });
+    expect(screen.getByTestId("upstream-sync-status").getAttribute("data-status")).toBe("stale");
+  });
+});
+
+describe("UpstreamSyncBadge — keyboard and assistive-technology reach", () => {
+  it("is a tab stop whose name carries what the tooltip says", () => {
+    renderBadge({
+      aheadCount: 1,
+      behindCount: 3,
+      baseBranchName: "develop",
+      baseCompareRef: "origin/develop",
+      baseAheadCount: 2,
+      baseBehindCount: 0,
+      baseMatchesUpstream: false,
+      hasNoUpstream: true,
+      fetchNetworkFailed: true,
+    });
+    const root = screen.getByTestId("upstream-sync-indicator");
+    expect(root.tabIndex).toBe(0);
+    const name = root.getAttribute("aria-label") ?? "";
+    // What the tooltip says the pointer can read, the name has to say too.
+    for (const fact of [
+      "origin/develop",
+      "No upstream branch configured",
+      "Couldn't reach the remote",
+    ]) {
+      expect(name).toContain(fact);
+    }
+    expect(name).not.toMatch(/[↑↓Δ≡]/);
+  });
+});
+
+describe("UpstreamSyncBadge — the tooltip keeps the age of the counts", () => {
+  it("names how old the counts are while a fetch is in flight, and says it is fetching", () => {
+    renderBadge({ aheadCount: 2, isFetchInFlight: true, lastFetchedAt: Date.now() });
+    const name = screen.getByTestId("upstream-sync-indicator").getAttribute("aria-label") ?? "";
+    expect(name).toContain("Fetching now");
+    expect(name).toContain("Last fetched");
   });
 });

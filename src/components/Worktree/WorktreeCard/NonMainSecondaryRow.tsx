@@ -80,8 +80,18 @@ export function NonMainSecondaryRow({
   // has genuinely drifted still shows the counts — that path mounts on
   // `hasUpstreamDelta` and is unchanged.
   const isDetached = Boolean(worktree.isDetached);
+  // Any status pass or fetch mounts it too: with no counts and no base to
+  // show, the badge's own marks (stale, failed, no upstream) are the only
+  // thing saying what the numbers are worth, and it returns nothing when there
+  // is nothing to say.
   const showUpstreamBadge =
-    hasUpstreamDelta || hasAuthFailedSignIn || (worktree.baseBranchName != null && !isDetached);
+    hasUpstreamDelta ||
+    hasAuthFailedSignIn ||
+    Boolean(worktree.fetchAuthFailed || worktree.fetchNetworkFailed) ||
+    (!isDetached &&
+      (worktree.baseBranchName != null ||
+        worktree.lastFetchedAt != null ||
+        worktree.worktreeChanges != null));
 
   // `tracking` is normalised to a string or null on every status pass, so a
   // null one with a snapshot present is a positive "no upstream configured",
@@ -151,7 +161,10 @@ export function NonMainSecondaryRow({
     // wells' inset on purpose: headline flush, its supporting lines stepped in
     // slightly, wells stepped in further. A progression down the card, rather
     // than one tier that missed the memo.
-    <div className="flex flex-col gap-0.5 mt-2.5 px-1">
+    // empty:hidden — the header mounts this row whenever the sync line might
+    // have something to say, and the badge decides whether it does; a row
+    // whose every child rendered nothing must not leave its margin behind.
+    <div className="flex flex-col gap-0.5 mt-2.5 px-1 empty:hidden">
       {worktree.issueNumber && (isPrOriginated || !hasDisplayTitle) && (
         <IssueBadge
           issueNumber={worktree.issueNumber}

@@ -229,6 +229,13 @@ export function WorktreeHeader({
   // about a branch, so it does not mount without one; the drift row still does,
   // via `hasUpstreamDelta`.
   const hasBaseRelationship = hasBaseName && !worktree.isDetached;
+  // The sync line has something to say beyond counts and a base — a failed
+  // fetch, an age the clock can outgrow, a missing upstream — once a fetch or
+  // a status pass has run. Whether it actually says anything is the badge's
+  // call; the row collapses when nothing in it renders.
+  const hasSyncFacts =
+    Boolean(worktree.fetchAuthFailed || worktree.fetchNetworkFailed) ||
+    (!worktree.isDetached && (worktree.lastFetchedAt != null || worktree.worktreeChanges != null));
   const hasUpstreamDelta =
     (worktree.aheadCount ?? 0) > 0 ||
     (worktree.behindCount ?? 0) > 0 ||
@@ -484,7 +491,6 @@ export function WorktreeHeader({
           branchLabel={branchLabel}
           isActive={isActive}
           isMuted={isMuted}
-          hasUpstreamDelta={hasUpstreamDelta}
           hasAuthFailedSignIn={hasAuthFailedSignIn}
           authProviderId={worktree.matchedForgeProviderId ?? worktree.linked?.providerId ?? null}
           aheadCount={worktree.aheadCount}
@@ -507,6 +513,7 @@ export function WorktreeHeader({
           hasUpstreamDelta ||
           hasBaseRelationship ||
           hasAuthFailedSignIn ||
+          hasSyncFacts ||
           hasPlanFile) && (
           <NonMainSecondaryRow
             worktree={worktree}
