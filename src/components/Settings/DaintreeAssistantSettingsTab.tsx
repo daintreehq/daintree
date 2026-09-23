@@ -323,7 +323,10 @@ export function DaintreeAssistantSettingsTab() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Failures of one-off actions stay on the section they belong to, not at the page foot.
-  const [privacyError, setPrivacyError] = useState<string | null>(null);
+  const [privacyError, setPrivacyError] = useState<{ message: string; retry?: () => void } | null>(
+    null
+  );
+  const [clearAuditError, setClearAuditError] = useState<string | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [rotateError, setRotateError] = useState<string | null>(null);
   // A failed read must not pass for an empty history.
@@ -654,7 +657,10 @@ export function DaintreeAssistantSettingsTab() {
       const cfg = await window.electron.mcpServer.setAuditEnabled(next);
       setAuditEnabled(cfg.enabled);
     } catch (err) {
-      setPrivacyError(formatErrorMessage(err, "Couldn't update audit recording"));
+      setPrivacyError({
+        message: formatErrorMessage(err, "Couldn't update audit recording"),
+        retry: () => void handleAuditEnabledToggle(),
+      });
       logError("Failed to toggle MCP audit log from assistant tab", err);
     } finally {
       setIsTogglingAudit(false);
@@ -664,6 +670,7 @@ export function DaintreeAssistantSettingsTab() {
   const handleCopyAuditAsJson = async (records: McpLogRecord[]) => {
     try {
       await navigator.clipboard.writeText(JSON.stringify(records, null, 2));
+      setPrivacyError(null);
       setAuditCopied(true);
       if (auditCopyTimeoutRef.current) clearTimeout(auditCopyTimeoutRef.current);
       auditCopyTimeoutRef.current = setTimeout(() => setAuditCopied(false), COPY_RESET_DELAY_MS);
@@ -673,7 +680,10 @@ export function DaintreeAssistantSettingsTab() {
         clearTimeout(auditCopyTimeoutRef.current);
         auditCopyTimeoutRef.current = null;
       }
-      setPrivacyError(formatErrorMessage(err, "Couldn't copy audit log"));
+      setPrivacyError({
+        message: formatErrorMessage(err, "Couldn't copy audit log"),
+        retry: () => void handleCopyAuditAsJson(records),
+      });
       logError("Failed to copy MCP audit log from assistant tab", err);
     }
   };
@@ -698,7 +708,10 @@ export function DaintreeAssistantSettingsTab() {
         clearTimeout(auditExportTimeoutRef.current);
         auditExportTimeoutRef.current = null;
       }
-      setPrivacyError(formatErrorMessage(err, "Couldn't export audit log"));
+      setPrivacyError({
+        message: formatErrorMessage(err, "Couldn't export audit log"),
+        retry: () => void handleExportAuditAsNdjson(records),
+      });
       logError("Failed to export MCP audit log from assistant tab", err);
     } finally {
       setIsExportingAudit(false);
@@ -709,12 +722,12 @@ export function DaintreeAssistantSettingsTab() {
     if (isClearingAudit) return;
     setIsClearingAudit(true);
     try {
-      setPrivacyError(null);
+      setClearAuditError(null);
       await window.electron.mcpServer.clearAuditLog();
       setAuditRecords([]);
       setShowClearAuditConfirm(false);
     } catch (err) {
-      setPrivacyError(formatErrorMessage(err, "Couldn't clear audit log"));
+      setClearAuditError(formatErrorMessage(err, "Couldn't clear audit log"));
       logError("Failed to clear MCP audit log from assistant tab", err);
     } finally {
       setIsClearingAudit(false);
@@ -723,6 +736,7 @@ export function DaintreeAssistantSettingsTab() {
 
   const handleCancelClearAudit = () => {
     if (isClearingAudit) return;
+    setClearAuditError(null);
     setShowClearAuditConfirm(false);
   };
 
@@ -902,6 +916,7 @@ export function DaintreeAssistantSettingsTab() {
     try {
       const snippet = await window.electron.mcpServer.getConfigSnippet();
       await navigator.clipboard.writeText(snippet);
+      setConnectionError(null);
       setCopied(true);
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
       copyTimeoutRef.current = setTimeout(() => setCopied(false), COPY_RESET_DELAY_MS);
@@ -909,6 +924,15 @@ export function DaintreeAssistantSettingsTab() {
       setConnectionError(formatErrorMessage(err, "Couldn't copy config"));
       logError("Failed to copy MCP config", err);
     }
+  };
+
+  const retryMcpStatus = () => {
+    window.electron.mcpServer
+      .getStatus()
+      .then((status) =>
+        setMcpStatus({ enabled: status.enabled, port: status.port, apiKey: status.apiKey })
+      )
+      .catch((err) => logError("Failed to reload MCP status for assistant tab", err));
   };
 
   // Controls stay inert for the whole retry and only unlock once real values land.
@@ -1135,7 +1159,9 @@ export function DaintreeAssistantSettingsTab() {
         description="Help-session activity is logged locally so you can review what the assistant did"
       >
         {saveError("privacy")}
-        {privacyError && <InlineError>{privacyError}</InlineError>}
+        {privacyError && (
+          <InlineError onRetry={privacyError.retry}>{privacyError.message}</InlineError>
+        )}
         {(auditReadFailed || auditConfigFailed) && (
           <InlineError onRetry={() => void refreshAuditRecords()}>
             {auditConfigFailed
@@ -1147,7 +1173,13 @@ export function DaintreeAssistantSettingsTab() {
           <SettingsSwitchCard
             title="Capture audit log"
             subtitle={
-              auditEnabled ? "Recording every dispatch" : "New dispatches will not be recorded"
+              auditConfigFailed
+                ? "Recording status unavailable"
+                : auditLoading
+                  ? "Checking…"
+                  : auditEnabled
+                    ? "Recording every dispatch"
+                    : "New dispatches will not be recorded"
             }
             isEnabled={auditEnabled}
             onChange={handleAuditEnabledToggle}
@@ -1320,7 +1352,15 @@ export function DaintreeAssistantSettingsTab() {
           </SettingsGroup>
         ) : !mcpStatus ? (
           <SettingsGroup>
-            <SettingsRow label="MCP server" description="Couldn't load MCP status." />
+            <SettingsRow
+              label="MCP server"
+              description="Couldn't load MCP status."
+              control={
+                <Button variant="outline" size="sm" onClick={retryMcpStatus}>
+                  Retry
+                </Button>
+              }
+            />
           </SettingsGroup>
         ) : (
           <SettingsGroup>
@@ -1363,13 +1403,15 @@ export function DaintreeAssistantSettingsTab() {
         onClose={isClearingAudit ? undefined : handleCancelClearAudit}
         title="Clear audit log?"
         description="All recorded tool dispatches will be permanently deleted — including those from external MCP clients."
-        confirmLabel="Clear log"
+        confirmLabel={clearAuditError ? "Try again" : "Clear log"}
         cancelLabel="Cancel"
         onConfirm={confirmClearAuditLog}
         isConfirmLoading={isClearingAudit}
         variant="destructive"
         zIndex="nested"
-      />
+      >
+        {clearAuditError && <InlineError>{clearAuditError}</InlineError>}
+      </ConfirmDialog>
 
       <ConfirmDialog
         isOpen={showRotateConfirm}
@@ -1642,13 +1684,14 @@ function NativeGrantsSection({
                 <span className="font-mono text-text-secondary break-all">
                   {(grant.allowedTools ?? []).join(", ") || "no tools"}
                 </span>
-                <button
-                  type="button"
+                <Button
+                  variant="ghost-danger"
+                  size="xs"
+                  className="shrink-0"
                   onClick={() => grant.grantId && revoke(grant.grantId)}
-                  className="shrink-0 text-3xs text-text-secondary hover:text-status-danger transition-colors"
                 >
                   Revoke
-                </button>
+                </Button>
               </div>
               <div className="flex items-center justify-between gap-2 text-3xs text-text-secondary">
                 <span className="tabular-nums">
@@ -1761,7 +1804,7 @@ function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
                         key={grant.toolId}
                         className="flex items-center justify-between gap-2 text-2xs"
                       >
-                        <span className="font-mono text-text-secondary truncate">
+                        <span className="font-mono text-text-secondary break-all">
                           {grant.toolId}
                         </span>
                         <GrantCountdown expiresAt={grant.expiresAt} />

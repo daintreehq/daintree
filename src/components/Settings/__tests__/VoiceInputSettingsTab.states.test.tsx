@@ -265,3 +265,24 @@ describe("VoiceInputSettingsTab key removal", () => {
     expect(container.textContent).toContain(maskApiKey(key));
   });
 });
+
+describe("VoiceInputSettingsTab key state honesty", () => {
+  it("keeps showing the key as saved until its removal has persisted", async () => {
+    const key = "sk-proj-abcdefghijklmnop6789";
+    let finish: (() => void) | undefined;
+    const pending = new Promise<void>((r) => {
+      finish = r;
+    });
+    install({ openaiApiKey: key }, { setSettings: vi.fn().mockReturnValue(pending) });
+    const { container } = render(<VoiceInputSettingsTab />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Remove key" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(container.textContent).toContain(maskApiKey(key));
+    expect(container.textContent).not.toContain("Not set");
+
+    finish?.();
+    await waitFor(() => expect(container.textContent).toContain("Key removed"));
+    expect(container.textContent).toContain("Not set");
+  });
+});

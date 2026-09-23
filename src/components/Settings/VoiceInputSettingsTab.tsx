@@ -269,20 +269,25 @@ export function VoiceInputSettingsTab() {
   const update = async (patch: Partial<VoiceInputSettings>): Promise<boolean> => {
     const previous = settings;
     const group = saveGroupOf(patch);
-    setSettings((current) => ({ ...current, ...patch }));
+    // A key only counts as saved (or removed) once it has persisted: the row's chip
+    // must never claim a state the store doesn't have.
+    const optimistic = group !== "credentials";
+    if (optimistic) setSettings((current) => ({ ...current, ...patch }));
     try {
       await window.electron?.voiceInput?.setSettings(patch);
+      if (!optimistic) setSettings((current) => ({ ...current, ...patch }));
       dispatchVoiceInputSettingsChanged({ ...previous, ...patch });
       setSaveFailure((current) => (current?.group === group ? null : current));
       return true;
     } catch (err) {
-      setSettings((current) => {
-        const reverted: VoiceInputSettings = { ...current };
-        for (const key of patchedKeys(patch)) {
-          if (current[key] === patch[key]) copySetting(reverted, previous, key);
-        }
-        return reverted;
-      });
+      if (optimistic)
+        setSettings((current) => {
+          const reverted: VoiceInputSettings = { ...current };
+          for (const key of patchedKeys(patch)) {
+            if (current[key] === patch[key]) copySetting(reverted, previous, key);
+          }
+          return reverted;
+        });
       setSaveFailure({ group, patch });
       logWarn("Failed to save voice input settings", {
         error: formatErrorMessage(err, "Voice input save failed"),
@@ -747,6 +752,7 @@ type KeyStatus =
   | { kind: "invalid"; message: string }
   | { kind: "save-failed" }
   | { kind: "removing" }
+  | { kind: "removed" }
   | { kind: "remove-failed" };
 
 interface ApiKeyRowProps {
@@ -821,7 +827,7 @@ function ApiKeyRow({
 
   const handleRemove = async () => {
     setStatus({ kind: "removing" });
-    setStatus((await onSave("")) ? { kind: "idle" } : { kind: "remove-failed" });
+    setStatus((await onSave("")) ? { kind: "removed" } : { kind: "remove-failed" });
   };
 
   const statusLine =
@@ -836,6 +842,11 @@ function ApiKeyRow({
       <>
         <AlertCircle className="w-3.5 h-3.5 shrink-0 text-status-error" aria-hidden="true" />
         {status.message}
+      </>
+    ) : status.kind === "removed" ? (
+      <>
+        <Check className="w-3.5 h-3.5 shrink-0 text-status-success" aria-hidden="true" />
+        Key removed
       </>
     ) : status.kind === "remove-failed" ? (
       <>
