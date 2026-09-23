@@ -281,11 +281,19 @@ describe("ForgeStatsToolbarButton corner activity chip wiring", () => {
     // A total the user has seen in the list must not re-arm the chip when the
     // next poll confirms it; a paginated lower bound is not a total.
     expect(source).toMatch(
-      /if \(!hasMore && issueCountRef\.current !== undefined\) issueCountRef\.current = count;/
+      /if \(!hasMore && issueCountRef\.current !== undefined\) \{\s*issueCountRef\.current = count;\s*issueBaselineAtRef\.current = Date\.now\(\);/
     );
     expect(source).toMatch(
-      /if \(!hasMore && prCountRef\.current !== undefined\) prCountRef\.current = count;/
+      /if \(!hasMore && prCountRef\.current !== undefined\) \{\s*prCountRef\.current = count;\s*prBaselineAtRef\.current = Date\.now\(\);/
     );
+  });
+
+  it("never lets an observation older than the baseline roll it back", () => {
+    expect(source).toMatch(
+      /issueStale = olderThanBaseline\(issueCountRefreshedAt, issueBaselineAtRef\.current\)/
+    );
+    expect(source).toMatch(/!issueStale && issueCountRef\.current !== issueCount/);
+    expect(source).toMatch(/!prStale && prCountRef\.current !== prCount/);
   });
 
   it("clears both chip pulses on project switch alongside the count refs", () => {

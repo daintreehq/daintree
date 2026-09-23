@@ -197,6 +197,13 @@ export const ForgeStatsToolbarButton = memo(
     const [commitAnimKey, setCommitAnimKey] = useState(0);
     const issueCountRef = useRef<number | null | undefined>(undefined);
     const prCountRef = useRef<number | null | undefined>(undefined);
+    // When each activity baseline was observed (the per-count refreshed-at, or
+    // the moment an exact list total was seen). An older observation arriving
+    // later — a poll re-serving a cached count under a fresh `lastUpdated` —
+    // must not roll the baseline back, or the next fresh poll re-arms a chip
+    // for an increase the user already saw.
+    const issueBaselineAtRef = useRef<number | null>(null);
+    const prBaselineAtRef = useRef<number | null>(null);
     const commitCountRef = useRef<number | null | undefined>(undefined);
 
     // Local count derivations — read once per render so aria-labels, tooltip
@@ -247,13 +254,19 @@ export const ForgeStatsToolbarButton = memo(
     // same total reads as an increase and re-arms the chip. A paginated `N+` is
     // only a lower bound and never seeds an exact baseline.
     const handleIssueListCountUpdate = useCallback((count: number, hasMore: boolean) => {
-      if (!hasMore && issueCountRef.current !== undefined) issueCountRef.current = count;
+      if (!hasMore && issueCountRef.current !== undefined) {
+        issueCountRef.current = count;
+        issueBaselineAtRef.current = Date.now();
+      }
       setIssueListTimestamp(Date.now());
       setIssueListCount(count);
       setIssueListHasMore(hasMore);
     }, []);
     const handlePrListCountUpdate = useCallback((count: number, hasMore: boolean) => {
-      if (!hasMore && prCountRef.current !== undefined) prCountRef.current = count;
+      if (!hasMore && prCountRef.current !== undefined) {
+        prCountRef.current = count;
+        prBaselineAtRef.current = Date.now();
+      }
       setPrListTimestamp(Date.now());
       setPrListCount(count);
       setPrListHasMore(hasMore);
@@ -740,10 +753,15 @@ export const ForgeStatsToolbarButton = memo(
         const next = stats;
         if (!next) return;
         const suppressed = document.hidden;
+        const olderThanBaseline = (observedAt: number | null, baselineAt: number | null) =>
+          observedAt != null && baselineAt != null && observedAt < baselineAt;
+        const issueStale = olderThanBaseline(issueCountRefreshedAt, issueBaselineAtRef.current);
+        const prStale = olderThanBaseline(prCountRefreshedAt, prBaselineAtRef.current);
 
-        if (issueCountRef.current === undefined) {
+        if (!issueStale && issueCountRef.current === undefined) {
           issueCountRef.current = issueCount;
-        } else if (issueCountRef.current !== issueCount) {
+          issueBaselineAtRef.current = issueCountRefreshedAt;
+        } else if (!issueStale && issueCountRef.current !== issueCount) {
           if (
             !suppressed &&
             !issuesOpen &&
@@ -755,11 +773,13 @@ export const ForgeStatsToolbarButton = memo(
             setIssuesPulseAt(Date.now());
           }
           issueCountRef.current = issueCount;
+          issueBaselineAtRef.current = issueCountRefreshedAt;
         }
 
-        if (prCountRef.current === undefined) {
+        if (!prStale && prCountRef.current === undefined) {
           prCountRef.current = prCount;
-        } else if (prCountRef.current !== prCount) {
+          prBaselineAtRef.current = prCountRefreshedAt;
+        } else if (!prStale && prCountRef.current !== prCount) {
           if (
             !suppressed &&
             !prsOpen &&
@@ -771,6 +791,7 @@ export const ForgeStatsToolbarButton = memo(
             setPrsPulseAt(Date.now());
           }
           prCountRef.current = prCount;
+          prBaselineAtRef.current = prCountRefreshedAt;
         }
 
         if (commitCountRef.current === undefined) {
@@ -804,6 +825,8 @@ export const ForgeStatsToolbarButton = memo(
         // not linger after switching to project B.
         issueCountRef.current = undefined;
         prCountRef.current = undefined;
+        issueBaselineAtRef.current = null;
+        prBaselineAtRef.current = null;
         commitCountRef.current = undefined;
         prevLastUpdatedRef.current = null;
         setIssuesPulseAt(null);
@@ -833,6 +856,8 @@ export const ForgeStatsToolbarButton = memo(
       issueCount,
       prCount,
       commitCount,
+      issueCountRefreshedAt,
+      prCountRefreshedAt,
       issuesOpen,
       prsOpen,
       commitsOpen,
