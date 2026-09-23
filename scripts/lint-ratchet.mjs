@@ -142,7 +142,7 @@ function main() {
         // approaches Node's default ~2 GB old-space ceiling and OOMs on the macOS
         // nightly runner. Bump headroom so JSON formatter has room for the full
         // result graph. Appended so any caller-provided NODE_OPTIONS wins on tie.
-        NODE_OPTIONS: `--max-old-space-size=4096 ${process.env.NODE_OPTIONS ?? ""}`.trim(),
+        NODE_OPTIONS: `--max-old-space-size=5120 ${process.env.NODE_OPTIONS ?? ""}`.trim(),
       },
     });
   } catch (error) {

@@ -222,10 +222,11 @@ test.describe.serial("Core: Review Hub Git Confirm Dialogs", () => {
 
     await hub.locator(SEL.reviewHub.pushErrorCta).click();
 
-    const dialog = window.getByRole("alertdialog").filter({ hasText: "Pull and rebase" });
+    const dialog = window.getByRole("dialog", { name: "Pull and rebase local commits?" });
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
-    await expect(dialog).toContainText("1 local commit");
-    await expect(dialog).toContainText("1 incoming commit");
+    await expect(dialog).toContainText("Commits to replay");
+    await expect(dialog).toContainText("test: review hub push confirm flow");
+    await expect(dialog).toContainText("1 incoming");
 
     // Cancel — confirming would rewrite local history. The banner stays so the
     // user can still choose force-push.

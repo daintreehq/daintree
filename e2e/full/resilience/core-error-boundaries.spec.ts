@@ -34,7 +34,7 @@ test.describe.serial("Core: Error Boundaries", () => {
     // Verify fullscreen variant content
     await expect(fallback).toHaveAttribute("data-variant", "fullscreen");
     await expect(window.locator(SEL.errorBoundary.title)).toContainText(
-      "Daintree hit an unrecoverable error"
+      "Daintree couldn't display this window"
     );
     await expect(window.locator(SEL.errorBoundary.restartButton)).toContainText("Try again");
     await expect(window.locator(SEL.errorBoundary.reportButton)).toBeVisible();

@@ -157,14 +157,14 @@ test.describe.serial("Full: Resource Settings Persistence", () => {
     // Add "e2e-docker" environment via GUI (matches config.json resources key)
     await addEnvironmentViaGUI(window, "e2e-docker");
 
-    // Verify it appears in the dropdown immediately after adding
+    // Verify the selected environment immediately after adding.
     const panel = window.locator("#settings-panel-project\\:automation");
     const selectorBar = panel.locator('[data-testid="environment-selector-bar"]');
     await expect(selectorBar).toBeVisible({ timeout: T_SHORT });
 
-    const selectElBefore = selectorBar.locator("select");
-    const optionBefore = selectElBefore.locator('option[value="e2e-docker"]');
-    await expect(optionBefore).toBeAttached({ timeout: T_SHORT });
+    await expect(selectorBar.getByRole("combobox")).toContainText("e2e-docker", {
+      timeout: T_SHORT,
+    });
 
     // Close settings via the close button — this calls flush() which persists immediately.
     const closeBtn = window.locator(SEL.settings.closeButton);
@@ -178,13 +178,13 @@ test.describe.serial("Full: Resource Settings Persistence", () => {
 
     await navigateToResourcesTab(window);
 
-    // The "e2e-docker" environment should still be visible in the dropdown
+    // The selected environment should survive closing and reopening Settings.
     const panel2 = window.locator("#settings-panel-project\\:automation");
     const selectorBar2 = panel2.locator('[data-testid="environment-selector-bar"]');
     await expect(selectorBar2).toBeVisible({ timeout: T_SHORT });
-    const selectEl = selectorBar2.locator("select");
-    const dockerOption = selectEl.locator('option[value="e2e-docker"]');
-    await expect(dockerOption).toBeAttached({ timeout: T_SHORT });
+    await expect(selectorBar2.getByRole("combobox")).toContainText("e2e-docker", {
+      timeout: T_SHORT,
+    });
 
     await window.keyboard.press("Escape");
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
@@ -287,37 +287,46 @@ test.describe.serial("Full: Resource Settings Persistence", () => {
 
     const panel = window.locator("#settings-panel-project\\:automation");
     const selectorBar = panel.locator('[data-testid="environment-selector-bar"]');
-    const selectEl = selectorBar.locator("select");
+    const environmentSelect = selectorBar.getByRole("combobox");
 
     // Both environments should be in the dropdown
-    await expect(selectEl.locator('option[value="e2e-docker"]')).toBeAttached({ timeout: T_SHORT });
-    await expect(selectEl.locator('option[value="e2e-fly"]')).toBeAttached({ timeout: T_SHORT });
+    await environmentSelect.click();
+    await expect(window.getByRole("option", { name: "e2e-docker" })).toBeVisible();
+    await expect(window.getByRole("option", { name: "e2e-fly" })).toBeVisible();
 
     // Select "e2e-fly" and verify it's a distinct, empty environment
-    await selectEl.selectOption("e2e-fly");
+    await window.getByRole("option", { name: "e2e-fly" }).click();
+    await expect(environmentSelect).toContainText("e2e-fly");
     await window.waitForTimeout(T_SETTLE);
 
     // Switch back to "e2e-docker" — it should still be intact
-    await selectEl.selectOption("e2e-docker");
+    await environmentSelect.click();
+    await window.getByRole("option", { name: "e2e-docker" }).click();
+    await expect(environmentSelect).toContainText("e2e-docker");
     await window.waitForTimeout(T_SETTLE);
 
     // Both should still be present after switching — no cross-contamination
-    await expect(selectEl.locator('option[value="e2e-docker"]')).toBeAttached({ timeout: T_SHORT });
-    await expect(selectEl.locator('option[value="e2e-fly"]')).toBeAttached({ timeout: T_SHORT });
+    await environmentSelect.click();
+    await expect(window.getByRole("option", { name: "e2e-docker" })).toBeVisible();
+    await expect(window.getByRole("option", { name: "e2e-fly" })).toBeVisible();
 
     // Remove the second environment to clean up
-    await selectEl.selectOption("e2e-fly");
+    await window.getByRole("option", { name: "e2e-fly" }).click();
     await window.waitForTimeout(T_SETTLE);
-    const removeBtn = panel.locator('[aria-label="Remove e2e-fly environment"]');
+    const removeBtn = panel.getByRole("button", { name: "Delete e2e-fly environment" });
     await expect(removeBtn).toBeVisible({ timeout: T_SHORT });
     await removeBtn.click();
     // Confirm removal in the destructive ConfirmDialog
-    const confirmBtn = window.locator('button:has-text("Remove environment")');
+    const confirmBtn = window.getByRole("alertdialog").getByRole("button", {
+      name: "Remove environment",
+    });
     await expect(confirmBtn).toBeVisible({ timeout: T_SHORT });
     await confirmBtn.click();
-    await expect(selectEl.locator('option[value="e2e-fly"]')).not.toBeAttached({
-      timeout: T_SHORT,
-    });
+    await expect(environmentSelect).toContainText("e2e-docker", { timeout: T_SHORT });
+    await environmentSelect.click();
+    await expect(window.getByRole("option", { name: "e2e-fly" })).not.toBeVisible();
+    await window.keyboard.press("Escape");
+    await expect(environmentSelect).toHaveAttribute("aria-expanded", "false");
 
     await window.keyboard.press("Escape");
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });

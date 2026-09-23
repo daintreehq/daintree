@@ -302,7 +302,9 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(listbox).not.toBeVisible({ timeout: T_SHORT });
 
     // Verify General content rendered
-    await expect(window.locator("text=Global Agent Settings")).toBeVisible({
+    await expect(
+      window.locator("#agents-general").getByRole("heading", { name: "All agents" })
+    ).toBeVisible({
       timeout: T_SHORT,
     });
 
@@ -332,12 +334,15 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(offRadio).toBeVisible({ timeout: T_SHORT });
     await expect(errorsRadio).toBeVisible({ timeout: T_SHORT });
     await expect(fullRadio).toBeVisible({ timeout: T_SHORT });
-    await expect(offRadio.locator("..").getByText("No data is collected or sent.")).toBeVisible();
+    const collectionDetails = window.getByRole("group", { name: "What's collected at each level" });
+    await expect(collectionDetails.getByText("No data is collected or transmitted.")).toBeVisible();
     await expect(
-      errorsRadio.locator("..").getByText("Crash reports and error details are sent")
+      collectionDetails.getByText("Crash reports and error details are sent to Sentry", {
+        exact: false,
+      })
     ).toBeVisible();
     await expect(
-      fullRadio.locator("..").getByText("anonymous usage analytics are sent")
+      collectionDetails.getByText("anonymous usage analytics events", { exact: false })
     ).toBeVisible();
 
     await errorsRadio.check();
@@ -490,8 +495,8 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     // "staging" should appear in the environment dropdown
     const selectorBar = panel.locator('[data-testid="environment-selector-bar"]');
     await expect(selectorBar).toBeVisible({ timeout: T_SHORT });
-    const selectEl = selectorBar.locator("select");
-    await expect(selectEl.locator('option[value="staging"]')).toBeAttached({ timeout: T_SHORT });
+    const environmentSelect = selectorBar.getByRole("combobox");
+    await expect(environmentSelect).toContainText("staging", { timeout: T_SHORT });
 
     // Add a second environment
     await panel.getByRole("button", { name: "Add environment" }).click();
@@ -506,15 +511,14 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await window.waitForTimeout(T_SETTLE);
 
     // "production" should appear in the dropdown
-    await expect(selectEl.locator('option[value="production"]')).toBeAttached({
-      timeout: T_SHORT,
-    });
+    await expect(environmentSelect).toContainText("production", { timeout: T_SHORT });
 
     // Select "staging" in dropdown, then remove it via the X button
-    await selectEl.selectOption("staging");
+    await environmentSelect.click();
+    await window.getByRole("option", { name: "staging" }).click();
     await window.waitForTimeout(T_SETTLE);
 
-    const removeButton = panel.locator('[aria-label="Remove staging environment"]');
+    const removeButton = panel.getByRole("button", { name: "Delete staging environment" });
     await removeButton.click();
 
     // ConfirmDialog should appear (rendered via portal, so use window scope)
@@ -525,14 +529,14 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await window.waitForTimeout(T_SETTLE);
 
     // "staging" should be gone from dropdown, "production" should remain
-    await expect(selectEl.locator('option[value="staging"]')).not.toBeAttached({
-      timeout: T_SHORT,
-    });
-    await expect(selectEl.locator('option[value="production"]')).toBeAttached({
-      timeout: T_SHORT,
-    });
-
+    await expect(environmentSelect).toContainText("production", { timeout: T_SHORT });
+    await environmentSelect.click();
+    await expect(window.getByRole("option", { name: "staging" })).not.toBeVisible();
+    await expect(window.getByRole("option", { name: "production" })).toBeVisible();
     await window.keyboard.press("Escape");
+    await expect(environmentSelect).toHaveAttribute("aria-expanded", "false");
+
+    await window.locator(SEL.settings.closeButton).click();
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
   });
 
@@ -564,10 +568,8 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     // "production" should still be in the dropdown (persisted from previous test)
     const selectorBar = panel.locator('[data-testid="environment-selector-bar"]');
     await expect(selectorBar).toBeVisible({ timeout: T_MEDIUM });
-    const selectEl = selectorBar.locator("select");
-    await expect(selectEl.locator('option[value="production"]')).toBeAttached({
-      timeout: T_MEDIUM,
-    });
+    const environmentSelect = selectorBar.getByRole("combobox");
+    await expect(environmentSelect).toContainText("production", { timeout: T_MEDIUM });
 
     await window.keyboard.press("Escape");
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
@@ -673,12 +675,12 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
         .click();
     }
     // A populated selector bar is the precondition for duplicate detection —
-    // gate on it so we don't read a degenerate name from an empty <select>.
+    // gate on it so we don't read a degenerate name from an empty selector.
     await expect(selectorBar).toBeVisible({ timeout: T_MEDIUM });
 
     // Get the name of the first existing environment from the dropdown
-    const selectEl = panel.locator('[data-testid="environment-selector-bar"] select');
-    const existingName = await selectEl.inputValue();
+    const environmentSelect = selectorBar.getByRole("combobox");
+    const existingName = (await environmentSelect.textContent())?.trim() ?? "";
     expect(existingName).not.toBe("");
 
     // Click "+" to start adding a new environment
@@ -744,7 +746,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(emptyState).not.toBeVisible({ timeout: T_SHORT });
 
     // Delete the variable
-    await window.locator('button[aria-label="Delete environment variable"]').click();
+    await window.getByRole("button", { name: "Delete TEST_API_KEY (row 1)" }).click();
 
     // Empty state returns
     await expect(emptyState).toBeVisible({ timeout: T_SHORT });
@@ -783,20 +785,23 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     // Clicking it runs validate(), which flags the duplicate key.
     const saveButton = window
       .getByRole("tabpanel", { name: "Variables" })
-      .getByRole("button", { name: "Save changes", exact: true });
+      .getByRole("button", { name: "Save", exact: true });
     await expect(saveButton).toBeVisible({ timeout: T_SHORT });
     await saveButton.click();
 
     // Should show duplicate error
-    await expect(window.locator("text=Duplicate variable name")).toBeVisible({
+    await expect(keyInputs.nth(1)).toHaveAttribute("aria-invalid", "true");
+    await expect(window.getByText("Another variable already uses this name")).toBeVisible({
       timeout: T_SHORT,
     });
 
     // Clean up — delete both rows one at a time with settle time
-    const deleteButtons = window.locator('button[aria-label="Delete environment variable"]');
+    const deleteButtons = window.getByRole("button", {
+      name: /^Delete DUPLICATE_KEY \(row \d+\)$/,
+    });
     const deleteCount = await deleteButtons.count();
     for (let i = deleteCount - 1; i >= 0; i--) {
-      await deleteButtons.nth(i).click();
+      await deleteButtons.last().click();
       await window.waitForTimeout(T_SETTLE);
     }
 

@@ -291,6 +291,7 @@ test.describe.serial("Presets: Custom Delete (45–52)", () => {
     expect(customBefore).toBeGreaterThan(0);
 
     await ctx.window.locator(SEL.preset.section).locator(SEL.preset.deleteButton).first().click();
+    await confirmPresetDelete(ctx.window);
     await ctx.window.waitForTimeout(T_SETTLE);
 
     await ctx.window.locator(SEL.settings.closeButton).click();

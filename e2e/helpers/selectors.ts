@@ -97,7 +97,7 @@ export const SEL = {
     searchCaseToggle: '[aria-label="Toggle case sensitivity"]',
     searchRegexToggle: '[aria-label="Toggle regex mode"]',
     searchStatus: "[data-terminal-search-status]",
-    scrollIndicator: '[aria-label="Scroll to latest output"]',
+    scrollIndicator: '[aria-label="New output below, scroll to latest output"]',
     agentStateChip: '[role="status"][aria-label^="Agent state:"]',
     restartBannerAction: '[aria-label="Restart session"]',
     reconnectRetryAction: '[aria-label="Retry reconnecting"]',
@@ -459,7 +459,7 @@ export const SEL = {
     tabOverview: '[role="tab"][data-tab="overview"]',
     tabSettings: '[role="tab"][data-tab="settings"]',
     tabPermissions: '[role="tab"][data-tab="capabilities"]',
-    installFromUrlButton: 'button:has-text("Install from URL")',
+    installFromUrlButton: '[role="menuitem"]:has-text("Install from URL")',
     urlDialog: '[role="dialog"]:has-text("Install from URL")',
     httpWarningDialog:
       '[role="dialog"]:has-text("Install over HTTP?"), [role="alertdialog"]:has-text("Install over HTTP?")',

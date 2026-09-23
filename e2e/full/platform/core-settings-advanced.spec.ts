@@ -377,7 +377,9 @@ test.describe.serial("Core: Settings Advanced", () => {
         await soundToggle.click();
       }
 
-      const previewButton = window.locator(SEL.settings.soundPreviewButton).first();
+      const previewButton = window
+        .getByRole("tabpanel", { name: "Notifications" })
+        .getByRole("button", { name: "Preview completed sound" });
       await expect(previewButton).toBeVisible({ timeout: T_SHORT });
       await previewButton.click();
 

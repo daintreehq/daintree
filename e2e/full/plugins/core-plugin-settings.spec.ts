@@ -148,10 +148,9 @@ test.describe.serial("Core: Plugin settings form", () => {
     const { window } = ctx;
     await openRichSettings(window);
 
-    const select = window.getByRole("combobox", { name: "Log level", exact: true });
-    await expect(select).toBeEnabled({ timeout: T_MEDIUM });
-    await select.click();
-    await window.getByRole("option", { name: "warn", exact: true }).click();
+    const choices = window.getByRole("radiogroup", { name: "Log level", exact: true });
+    await expect(choices).toBeVisible({ timeout: T_MEDIUM });
+    await choices.getByRole("radio", { name: "warn", exact: true }).click();
 
     await expect.poll(() => userValues(window)).toMatchObject({ level: "warn" });
 

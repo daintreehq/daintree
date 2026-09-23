@@ -396,10 +396,13 @@ test.describe.serial("Core: Settings Pages Load", () => {
         }
       );
 
-      // Default worktree mode section should be visible (scoped to automation panel)
-      await expect(automationPanel.locator("text=Default worktree mode")).toBeVisible({
+      // The empty state offers the first environment; mode choices appear after one exists.
+      await expect(
+        automationPanel.getByText("Add an environment to run worktrees off this machine")
+      ).toBeVisible({
         timeout: T_SHORT,
       });
+      await expect(automationPanel.getByText("Default worktree mode")).toHaveCount(0);
     });
 
     await test.step("Close settings dialog", async () => {

@@ -35,6 +35,7 @@ test.describe.serial("Core: Plugin install-from-URL dialog", () => {
     const { window } = ctx;
     await openPluginManager(window);
 
+    await window.getByRole("button", { name: "Install plugin" }).click();
     await window.locator(SEL.plugin.installFromUrlButton).click();
 
     const urlDialog = window.locator(SEL.plugin.urlDialog);
@@ -60,6 +61,7 @@ test.describe.serial("Core: Plugin install-from-URL dialog", () => {
     const { window } = ctx;
     await openPluginManager(window);
 
+    await window.getByRole("button", { name: "Install plugin" }).click();
     await window.locator(SEL.plugin.installFromUrlButton).click();
 
     const urlDialog = window.locator(SEL.plugin.urlDialog);

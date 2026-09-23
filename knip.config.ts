@@ -68,6 +68,7 @@ const config: KnipConfig = {
     "src/components/Fleet/__preview__/preview.tsx",
     "src/components/DevPreview/__preview__/preview.tsx",
     "src/components/Diagnostics/__preview__/preview.tsx",
+    "src/components/ErrorBoundary/__preview__/preview.tsx",
     "src/components/FileViewer/__preview__/preview.tsx",
     "src/components/HelpPanel/__preview__/preview.tsx",
     "src/components/HelpPanel/__preview__/footerPreview.tsx",
@@ -78,14 +79,25 @@ const config: KnipConfig = {
     "src/components/Layout/__preview__/projectPill.tsx",
     "src/components/Layout/__preview__/toolbar.tsx",
     "src/components/Layout/__preview__/sidebarFooter.tsx",
+    "src/components/Layout/__preview__/commandHud.tsx",
+    "src/components/Layout/__preview__/rateLimitDetails.tsx",
     "src/components/Onboarding/__preview__/preview.tsx",
     "src/components/Plugin/__preview__/preview.tsx",
+    "src/components/Plugin/__preview__/promptPreview.tsx",
     "src/components/Terminal/__preview__/preview.tsx",
     "src/components/Terminal/__preview__/hybridInput.tsx",
+    "src/components/Terminal/__preview__/artifactOverlay.tsx",
+    "src/components/Terminal/__preview__/banners.tsx",
+    "src/components/Terminal/__preview__/panelLimitPreview.tsx",
+    "src/components/Terminal/__preview__/promptHistory.tsx",
+    "src/components/Terminal/__preview__/scrollPill.tsx",
     "src/components/Worktree/__preview__/preview.tsx",
     "src/components/Worktree/__preview__/quickStateFilter.tsx",
     "src/components/Worktree/__preview__/sessions.tsx",
+    "src/components/Worktree/__preview__/alarmPill.tsx",
+    "src/components/Worktree/__preview__/forgeBadges.tsx",
     "src/components/Project/__preview__/preview.tsx",
+    "src/components/Project/__preview__/projectIdentityEditor.tsx",
     "src/components/TerminalRecipe/__preview__/recipes.tsx",
     "src/components/Panel/__preview__/preview.tsx",
     "src/components/DragDrop/__preview__/preview.tsx",
@@ -179,6 +191,7 @@ const config: KnipConfig = {
     "create-daintree-plugin",
     "daintree-plugin",
     "ffmpeg",
+    "sqlite3",
     // why: Host OS commands invoked directly by platform-specific runtime,
     // installer, and E2E paths. They are not npm-provided binaries and must
     // not be declared as package dependencies.
@@ -199,6 +212,8 @@ const config: KnipConfig = {
     // The macOS Focus probe invokes an absolute system executable. On Linux,
     // Knip cannot resolve that platform-only path and reports it as an import.
     "electron/services/OsDndService.ts": ["unresolved"],
+    // Vite resolves this browser-only absolute module URL in the screenshot harness.
+    "e2e/screenshots/host-pause-indicator-review.spec.ts": ["unresolved"],
   },
 
   // why: these packages are consumed via mechanisms Knip can't trace:
