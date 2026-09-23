@@ -832,7 +832,7 @@ function RowOptionsMenu({
                     <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                     Snooze
                   </DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>{durationItems} </DropdownMenuSubContent>
+                  <DropdownMenuSubContent>{durationItems}</DropdownMenuSubContent>
                 </DropdownMenuSub>
               ))}
             {supportsSnooze && hasDiagnosticsActions && <DropdownMenuSeparator />}

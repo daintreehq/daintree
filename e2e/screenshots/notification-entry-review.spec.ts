@@ -483,7 +483,7 @@ test("notification entry review — trailing rail, actions, and time", async () 
       const row = page.locator(SEL.notifications.centerList).locator(SEL.notifications.centerRow);
       await row.first().hover();
       await settle(page, 250);
-      await page.locator('button[aria-label="Notification options"]').first().click();
+      await page.locator('button[aria-label^="Options for "]').first().click();
       await settle(page, 500);
       await snap(page, "40-menu-open-window");
 
@@ -507,7 +507,7 @@ test("notification entry review — trailing rail, actions, and time", async () 
           .first();
         await bareRow.hover();
         await settle(page, 250);
-        await bareRow.locator('button[aria-label="Notification options"]').click();
+        await bareRow.locator('button[aria-label^="Options for "]').click();
         await settle(page, 500);
         // The capture is only evidence if the menu really did reduce to one
         // item — otherwise a fixture drift that restores Snooze would leave a
