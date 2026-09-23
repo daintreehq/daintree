@@ -42,6 +42,7 @@ const { useCommandHistoryStore } = await import("@/store/commandHistoryStore");
 const { usePaletteStore } = await import("@/store/paletteStore");
 const { useProjectStore } = await import("@/store/projectStore");
 const { useAnnouncerStore } = await import("@/store/accessibilityAnnouncerStore");
+const { useGlobalEscapeDispatcher } = await import("@/hooks/useGlobalEscapeDispatcher");
 
 const PROJECT = "proj-a";
 const OTHER = "proj-b";
@@ -179,5 +180,29 @@ describe("PromptHistoryPalette", () => {
     expect(describe()).not.toBe(before);
     expect(announce).toHaveBeenCalledTimes(1);
     announce.mockRestore();
+  });
+
+  it("clears the query on the first Escape and closes on the second", async () => {
+    function EscapeDispatcher() {
+      useGlobalEscapeDispatcher();
+      return null;
+    }
+    seed({ [PROJECT]: [entry("a", "summarise the diff", 1)] });
+    render(<EscapeDispatcher />);
+    const input = renderPalette();
+    await type(input, "diff");
+    const escape = () =>
+      act(async () => {
+        input.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })
+        );
+      });
+
+    await escape();
+    expect(input.value).toBe("");
+    expect(usePaletteStore.getState().activePaletteId).toBe("prompt-history");
+
+    await escape();
+    expect(usePaletteStore.getState().activePaletteId).toBeNull();
   });
 });

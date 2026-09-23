@@ -311,6 +311,18 @@ export function SearchablePalette<T>({
         if (e.defaultPrevented) return;
       }
 
+      // A query clears before the palette closes. The escape-stack entry below
+      // says the same thing, but it never gets the chance: the dialog's
+      // document-level Escape backstop runs first, closes the palette and marks
+      // the key consumed. Stopping the event here keeps it from reaching that
+      // backstop; an empty field lets Escape through to close as before.
+      if (e.key === "Escape" && query !== "") {
+        e.preventDefault();
+        e.stopPropagation();
+        onQueryChange("");
+        return;
+      }
+
       // Tab stays input-only: on the results region it must keep its native
       // traversal so controls rendered after the list stay reachable.
       if (e.key === "Tab") {
@@ -326,7 +338,7 @@ export function SearchablePalette<T>({
 
       handleNavigationKeyDown(e);
     },
-    [onKeyDown, onSelectPrevious, onSelectNext, handleNavigationKeyDown]
+    [onKeyDown, onSelectPrevious, onSelectNext, handleNavigationKeyDown, query, onQueryChange]
   );
 
   const activeDescendant =
