@@ -414,7 +414,7 @@ function EnvVarKeyCell({
 /** A borderless field filling its table cell; the ring is inset so it stays inside the cell. */
 const ENV_CELL_INPUT = cn(
   "w-full bg-transparent border-0 outline-hidden py-2 font-mono text-xs leading-[inherit]",
-  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
+  "focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
   "disabled:cursor-default"
 );
 

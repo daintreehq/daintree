@@ -501,18 +501,19 @@ export function GeneralTab({
                     ))}
                   </div>
                   <div className="flex items-center gap-2">
-                    <div className="relative">
+                    {/* The native input is invisible, so the ring is drawn on the swatch
+                        it covers — the same has-focus shell RadioChoice uses. */}
+                    <div className="relative rounded-[var(--radius-md)] has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent-primary">
                       <input
                         ref={colorInputRef}
                         type="color"
                         value={color ?? "#6366f1"}
                         onChange={(e) => onColorChange(e.target.value.toLowerCase())}
-                        className="peer absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                         aria-label="Pick a custom color"
                       />
-                      {/* The native input is invisible, so its keyboard ring is drawn here. */}
                       <div
-                        className="h-8 w-8 rounded-[var(--radius-md)] border border-border-strong flex items-center justify-center cursor-pointer peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-accent-primary"
+                        className="h-8 w-8 rounded-[var(--radius-md)] border border-border-strong flex items-center justify-center cursor-pointer"
                         style={{
                           backgroundColor: color ?? undefined,
                         }}
