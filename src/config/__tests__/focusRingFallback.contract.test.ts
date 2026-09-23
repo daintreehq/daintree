@@ -592,6 +592,12 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "Parent shows focus: wrapper at line 397 has `focus-within:border-daintree-accent/35 focus-within:ring-1`",
   },
   {
+    file: "src/components/Worktree/WorktreeCard/EnvironmentPopover.tsx",
+    fragment: "leading-relaxed text-text-primary outline-hidden",
+    reason:
+      "Parent shows focus: the output well wrapper carries `has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent-primary`; the scroller has no vertical padding of its own, so a ring on it would sit inside the wrapper's border.",
+  },
+  {
     file: "src/components/ui/AppPaletteDialog.tsx",
     fragment: "focus:outline-hidden focus:border-transparent focus:ring-0",
     reason:
