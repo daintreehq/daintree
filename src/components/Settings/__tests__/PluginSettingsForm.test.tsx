@@ -236,7 +236,14 @@ describe("PluginSettingsForm", () => {
   it("closes an open enum list, and only the list, on Escape", async () => {
     render(
       <PluginSettingsForm
-        plugin={makePlugin([{ id: "mode", type: "enum", label: "Mode", options: ["Only the essentials", "Everything"] }])}
+        plugin={makePlugin([
+          {
+            id: "mode",
+            type: "enum",
+            label: "Mode",
+            options: ["Only the essentials", "Everything"],
+          },
+        ])}
       />
     );
     const select = (await screen.findByRole("combobox", { name: "Mode" })) as HTMLButtonElement;
@@ -264,7 +271,14 @@ describe("PluginSettingsForm", () => {
     );
     render(
       <PluginSettingsForm
-        plugin={makePlugin([{ id: "mode", type: "enum", label: "Mode", options: ["Only the essentials", "Everything"] }])}
+        plugin={makePlugin([
+          {
+            id: "mode",
+            type: "enum",
+            label: "Mode",
+            options: ["Only the essentials", "Everything"],
+          },
+        ])}
       />
     );
     const select = (await screen.findByRole("combobox", { name: "Mode" })) as HTMLButtonElement;
@@ -272,7 +286,9 @@ describe("PluginSettingsForm", () => {
     fireEvent.click(select);
     await waitFor(() => expect(select.getAttribute("aria-expanded")).toBe("true"));
     // Picking an option starts a save, which disables the field.
-    fireEvent.click(within(screen.getByRole("listbox")).getByRole("option", { name: "Everything" }));
+    fireEvent.click(
+      within(screen.getByRole("listbox")).getByRole("option", { name: "Everything" })
+    );
     await waitFor(() => expect(select.disabled).toBe(true));
     expect(select.getAttribute("aria-expanded")).toBe("false");
     const outer = vi.fn();
