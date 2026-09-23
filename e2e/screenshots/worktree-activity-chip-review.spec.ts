@@ -192,7 +192,10 @@ function createFixtureRepo(): FixtureRepo {
   }
 
   const freshFile = path.join(worktreeRoot, WORKTREES.fresh.slug, "src", "retry.ts");
-  writeFileSync(freshFile, "export const ATTEMPTS = 5;\nexport const RESPECT_RETRY_AFTER = true;\n");
+  writeFileSync(
+    freshFile,
+    "export const ATTEMPTS = 5;\nexport const RESPECT_RETRY_AFTER = true;\n"
+  );
 
   return {
     dir,
@@ -345,6 +348,10 @@ async function refreshFresh(page: Page, file: string): Promise<void> {
 }
 
 test("worktree activity chip review — states and themes", async () => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "DAINTREE_SHOT_ACTIVITY_CHIP is required for the activity chip capture",
+  });
   test.skip(!ENABLED, "Set DAINTREE_SHOT_ACTIVITY_CHIP to run the activity chip capture");
 
   mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -440,7 +447,10 @@ test("worktree activity chip review — states and themes", async () => {
         const chip = chipOf(rows.stale);
         await chip.evaluate((el) => {
           for (let n = el.parentElement; n; n = n.parentElement) {
-            if (n.scrollHeight > n.clientHeight + 4 && getComputedStyle(n).overflowY !== "visible") {
+            if (
+              n.scrollHeight > n.clientHeight + 4 &&
+              getComputedStyle(n).overflowY !== "visible"
+            ) {
               n.scrollTop = 0;
             }
           }
