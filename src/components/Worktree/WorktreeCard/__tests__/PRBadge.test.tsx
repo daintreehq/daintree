@@ -131,7 +131,7 @@ describe("PRBadge freshness glyphs", () => {
     renderBadge();
 
     expect(document.querySelector(".lucide-clock")).toBeTruthy();
-    expect(screen.getAllByText(/rate limited/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Rate limited/).length).toBeGreaterThan(0);
   });
 
   it("surfaces the circuit-breaker freshness with a PauseCircle, not a Clock", () => {
@@ -162,7 +162,7 @@ describe("PRBadge freshness glyphs", () => {
     mockFreshnessCause = "circuit-breaker";
     renderBadge();
 
-    expect(screen.getAllByText(/data may be stale/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/PR detection paused/).length).toBeGreaterThan(0);
   });
 
   it("uses rate-limit aria label when freshnessCause is rate-limit", () => {

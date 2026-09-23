@@ -3,7 +3,6 @@ import { CloudOff, CornerDownRight } from "lucide-react";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import type { CIStatus } from "@shared/types/forge";
 import type { NormalizedPRState } from "@shared/types/forge";
-import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { usePRTooltip } from "@/hooks/useForgeTooltip";
 import { useForgeBadgeTooltip } from "./hooks/useForgeBadgeTooltip";
@@ -11,9 +10,9 @@ import { useColdNumberGap } from "./hooks/useColdNumberGap";
 import { useForgeBadgeFreshness } from "./hooks/useForgeBadgeFreshness";
 import {
   PRTooltipContent,
-  TooltipLoading,
   TokenMissingTooltip,
-  FreshnessMetaItem,
+  describePRTooltip,
+  TooltipFallback,
   type TooltipFreshness,
 } from "./ForgeTooltipContent";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
@@ -59,9 +58,7 @@ export function PRBadge({
   // Mirror IssueBadge: when a freshly-set PR number has no title yet, suppress
   // the raw "#NNN" fallback for the first 400ms (Doherty) rather than flashing
   // the number while the title fetch is in-flight.
-  const isColdTitleGap = useColdNumberGap(prNumber, prTitle, isHeadline === true);
-  const showColdFallback = useDohertyGate(isColdTitleGap);
-  const showTooltipLoading = useDohertyGate(loading);
+  const hideColdNumber = useColdNumberGap(prNumber, prTitle, isHeadline === true);
 
   const { isOpen, handleOpenChange, handleClick } = useForgeBadgeTooltip({
     fetchTooltip,
@@ -96,11 +93,9 @@ export function PRBadge({
 
   const ariaLabel = missingCredential
     ? "Add a forge access token to see PR details"
-    : (isHeadline && prTitle
-        ? `Open pull request #${prNumber}: ${prTitle}`
-        : ciVisual
-          ? `Open ${prStateLabel} pull request #${prNumber} — ${ciVisual.ariaLabel}`
-          : `Open ${prStateLabel} pull request #${prNumber}`) +
+    : `Open ${prStateLabel} pull request #${prNumber}` +
+      (isHeadline && prTitle ? `: ${prTitle}` : "") +
+      (ciVisual ? ` — ${ciVisual.ariaLabel}` : "") +
       (freshnessCause === "rate-limit"
         ? " — forge rate limited"
         : freshnessCause === "circuit-breaker" || (prDetectionPaused ?? false)
@@ -118,6 +113,10 @@ export function PRBadge({
       // Rich hover card whose body IS the content — exempt from the global
       // dialog-transition dismissal (issue #11030).
       dismissOnDialogTransition={false}
+      // The app-wide provider makes tooltip content pass-through. A card this
+      // size must stay up while the pointer crosses onto it to read it (WCAG
+      // SC 1.4.13, hoverable), so this one opts back in.
+      disableHoverableContent={false}
     >
       <TooltipTrigger asChild>
         <button
@@ -132,10 +131,7 @@ export function PRBadge({
           aria-label={ariaLabel}
         >
           {isSubordinate && (
-            <CornerDownRight
-              className={cn("w-3 h-3 shrink-0 text-text-muted")}
-              aria-hidden="true"
-            />
+            <CornerDownRight className="w-3 h-3 shrink-0 text-text-secondary" aria-hidden="true" />
           )}
           <PrStateGlyph
             className={cn(
@@ -151,18 +147,18 @@ export function PRBadge({
                 "truncate flex-1 min-w-0",
                 underlineOnHover && "hover:underline",
                 missingCredential
-                  ? "text-text-muted"
+                  ? "text-text-secondary"
                   : isActive
                     ? "text-text-primary font-medium"
                     : "text-text-secondary font-medium"
               )}
             >
               {prTitle ||
-                (isColdTitleGap && !showColdFallback ? null : (
+                (hideColdNumber ? null : (
                   <span
                     className={cn(
                       "font-mono",
-                      missingCredential ? "text-text-muted" : prStateColor
+                      missingCredential ? "text-text-secondary" : prStateColor
                     )}
                   >
                     #{prNumber}
@@ -174,7 +170,7 @@ export function PRBadge({
               className={cn(
                 "font-mono",
                 underlineOnHover && "hover:underline",
-                missingCredential ? "text-text-muted" : prStateColor
+                missingCredential ? "text-text-secondary" : prStateColor
               )}
             >
               #{prNumber}
@@ -195,24 +191,31 @@ export function PRBadge({
             </span>
           )}
           {showPausedGlyph && (
-            <CloudOff className="w-3 h-3 shrink-0 text-text-muted" aria-hidden="true" />
+            <CloudOff className="w-3 h-3 shrink-0 text-text-secondary" aria-hidden="true" />
           )}
         </button>
       </TooltipTrigger>
-      <TooltipContent side="right" align="start" className="p-3">
+      <TooltipContent
+        side="right"
+        align="start"
+        className="p-3"
+        aria-label={
+          data && !missingCredential ? describePRTooltip(data, freshness, prCiStatus) : undefined
+        }
+      >
         {missingCredential ? (
           <TokenMissingTooltip type="pr" />
-        ) : showTooltipLoading ? (
-          <TooltipLoading />
         ) : data ? (
-          <PRTooltipContent data={data} freshness={freshness} />
-        ) : error ? (
-          <span className="text-xs text-text-secondary">Failed to load PR details</span>
+          <PRTooltipContent data={data} freshness={freshness} ciStatus={prCiStatus} />
         ) : (
-          <span className="text-xs text-text-secondary">PR #{prNumber}</span>
-        )}
-        {!data && (
-          <FreshnessMetaItem freshness={freshness} className="text-2xs text-text-muted mt-1" />
+          <TooltipFallback
+            type="pr"
+            number={prNumber}
+            title={prTitle}
+            prState={prState}
+            status={loading ? "loading" : error ? "failed" : "idle"}
+            freshness={freshness}
+          />
         )}
       </TooltipContent>
     </Tooltip>

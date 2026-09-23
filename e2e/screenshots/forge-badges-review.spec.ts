@@ -193,7 +193,9 @@ async function open(
       await expect(shell).toBeAttached({ timeout: attempt === 0 ? 15_000 : 30_000 });
       break;
     } catch (error) {
-      if (attempt >= 2) throw new Error(`fixture "${fixture}" rendered no shell: ${String(error)}`);
+      if (attempt >= 2) {
+        throw new Error(`fixture "${fixture}" rendered no shell`, { cause: error });
+      }
     }
   }
   await expect(shell.locator('[data-shot="headline"] button')).toBeVisible();

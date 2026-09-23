@@ -1,22 +1,28 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 
-// Detects the cold-title gap by comparing the forge number to its
-// previous-render value via a ref; the lag (ref written in effect, no
-// re-render) is what keeps the gap true across the 400ms suppression window
-// (#8079). Replacing the ref with state breaks that lag and flashes the #NNN
-// fallback. Isolated here so the render-time ref read doesn't force the badge
-// components themselves out of compiler memoization; the compiler never
-// caches values derived from ref.current, so the lag survives compilation.
+/**
+ * True for the first 400ms (Doherty) after a badge's number arrives with no
+ * title, so the card shows its glyph alone rather than flashing a raw `#NNN`
+ * that the in-flight title fetch replaces a moment later (#8079). After the
+ * window the number is the honest fallback and shows.
+ *
+ * The window closes on a timer and nothing else. The previous version compared
+ * the number against a ref written in an effect, which held only until the badge
+ * next re-rendered — and it always does inside 400ms (the credential and
+ * provider reads settle), so the number flashed in exactly the case the gap was
+ * written for. Keying the reveal to the number means a later number change opens
+ * a fresh window, while a re-render of the same number can't close one early.
+ */
 export function useColdNumberGap(num: number, title: string | undefined, enabled = true): boolean {
-  // The render-time `prev.current` read below is intentional (it's the whole
-  // mechanism). Opt this hook out of the React Compiler so the read is a
-  // deliberate non-reactive value rather than a "Cannot access refs during
-  // render" compile error.
-  "use no memo";
-  const prev = useRef<number | undefined>(undefined);
-  const gap = enabled && !title && num !== prev.current;
+  const [revealedFor, setRevealedFor] = useState<number | null>(null);
+  const waiting = enabled && !title && revealedFor !== num;
+
   useEffect(() => {
-    prev.current = num;
-  }, [num]);
-  return gap;
+    if (!waiting) return;
+    const timer = setTimeout(() => setRevealedFor(num), UI_DOHERTY_THRESHOLD);
+    return () => clearTimeout(timer);
+  }, [waiting, num]);
+
+  return waiting;
 }

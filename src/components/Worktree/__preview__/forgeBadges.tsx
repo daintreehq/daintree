@@ -89,6 +89,8 @@ const ISSUE_CROWDED: IssueTooltipData = {
   rawState: "CLOSED",
   title:
     "Collapse the inspector panel when the window narrows below the medium breakpoint and restore it on widen",
+  bodyExcerpt:
+    "Below 1100px the inspector squeezes the editor to an unusable width. Collapse it to its rail, and bring it back at the width it had when the window widens again.",
   assignees: ["gregpriday", "avery-l", "sam-okafor", "priya-n", "jo-lee"].map(user),
   labels: [
     L("enhancement", "a2eeef"),
@@ -170,7 +172,13 @@ export const FIXTURES: Record<string, Fixture> = {
     issue: "error",
   },
   "pr-paused": { layout: "issue-headline", active: true, ci: "success", prPaused: true },
-  "issue-crowded": { layout: "issue-headline", active: true, ci: "neutral", issue: ISSUE_CROWDED },
+  "issue-crowded": {
+    layout: "issue-headline",
+    headlineTitle: ISSUE_CROWDED.title,
+    active: true,
+    ci: "neutral",
+    issue: ISSUE_CROWDED,
+  },
   loading: {
     layout: "issue-headline",
     active: true,
@@ -186,10 +194,11 @@ export const FIXTURE_NAMES = Object.keys(FIXTURES);
 const params = new URLSearchParams(window.location.search);
 const themeId = params.get("theme") ?? "daintree";
 const fixtureName = params.get("fixture") ?? "issue-card";
-const fixture = FIXTURES[fixtureName];
-if (!fixture) {
+const requested = FIXTURES[fixtureName];
+if (!requested) {
   throw new Error(`unknown fixture "${fixtureName}" — one of ${FIXTURE_NAMES.join(", ")}`);
 }
+const fixture: Fixture = requested;
 
 function inert(): unknown {
   const settled = Promise.resolve(undefined);
@@ -270,7 +279,10 @@ function Card() {
   const active = fixture.active ?? true;
   const prState = fixture.prState ?? "open";
   const isPrCard = fixture.layout === "pr-headline";
-  const title = fixture.headlineTitle === null ? undefined : isPrCard ? PR.title : ISSUE.title;
+  const title =
+    fixture.headlineTitle === null
+      ? undefined
+      : (fixture.headlineTitle ?? (isPrCard ? PR.title : ISSUE.title));
 
   return (
     <div
@@ -305,7 +317,7 @@ function Card() {
         </div>
         <div className="flex flex-col gap-0.5 mt-2.5 px-1">
           {isPrCard && (
-            <div data-shot="secondary-issue">
+            <div data-shot="secondary-issue" className="contents">
               <IssueBadge
                 issueNumber={ISSUE.number}
                 issueTitle={ISSUE.title}
@@ -318,7 +330,7 @@ function Card() {
             branch={isPrCard ? "fix/upload-retry-after" : "feature/issue-4821-stream-upload-retry"}
           />
           {!isPrCard && prState !== "closed" && (
-            <div data-shot="secondary-pr">
+            <div data-shot="secondary-pr" className="contents">
               <PRBadge
                 prNumber={PR.number}
                 prState={prState}
