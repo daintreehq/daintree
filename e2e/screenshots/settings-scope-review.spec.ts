@@ -579,6 +579,26 @@ const STATES: ScopeState[] = [
     expectText: ["only appears when"],
   },
   {
+    // Filed under Global, writes per project: the header has to say which.
+    slug: "28-integrations-scope",
+    target: { tab: "integrations" },
+    expectSelected: "integrations",
+    sweep: true,
+  },
+  {
+    // The same tab's settings in search: the chip names the scope they write to.
+    slug: "29-search-integrations",
+    target: { tab: "general" },
+    arrange: async (page) => {
+      await page.locator(SEARCH).fill("image viewer");
+      await page.waitForTimeout(500);
+    },
+    expectText: ["result"],
+    restore: async (page) => {
+      await page.locator(SEARCH).fill("");
+    },
+  },
+  {
     // Keyboard on the page-level subtab bar, nested inside the sidebar's tabpanel.
     slug: "27-subtab-focus",
     target: { tab: "general" },
