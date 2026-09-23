@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useState } from "react";
 import { act, render, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { BrowserToolbar } from "../BrowserToolbar";
@@ -42,7 +43,10 @@ vi.mock("@/store/urlHistoryStore", () => ({
   getFrecencySuggestions: vi.fn((entries: typeof STABLE_ENTRIES) => entries),
 }));
 
-const rowWidth = vi.hoisted(() => ({ current: 1000 }));
+const rowWidth = vi.hoisted(() => ({
+  current: 1000,
+  resize: null as null | ((width: number) => void),
+}));
 vi.mock("@/hooks/useResizeObserverRaf", async () => {
   const { useLayoutEffect } = await import("react");
   return {
@@ -51,7 +55,9 @@ vi.mock("@/hooks/useResizeObserverRaf", async () => {
       onResize: (entry: { contentRect: { width: number } }) => void
     ) => {
       useLayoutEffect(() => {
-        if (element) onResize({ contentRect: { width: rowWidth.current } });
+        if (!element) return;
+        rowWidth.resize = (width) => onResize({ contentRect: { width } });
+        onResize({ contentRect: { width: rowWidth.current } });
       }, [element]);
     },
   };
@@ -1103,19 +1109,36 @@ describe("BrowserToolbar zoom", () => {
 });
 
 describe("BrowserToolbar history on a mapped address", () => {
+  async function useRealFrecency() {
+    const store = await import("@/store/urlHistoryStore");
+    const actual =
+      await vi.importActual<typeof import("@/store/urlHistoryStore")>("@/store/urlHistoryStore");
+    vi.mocked(store.getFrecencySuggestions).mockImplementation(actual.getFrecencySuggestions);
+    return () => vi.mocked(store.getFrecencySuggestions).mockImplementation((entries) => entries);
+  }
+
   it("matches what was typed against the shown address, and rows keep the stored URL", async () => {
-    const { getFrecencySuggestions } = await import("@/store/urlHistoryStore");
-    const spy = vi.mocked(getFrecencySuggestions);
+    const restore = await useRealFrecency();
+    const onNavigate = vi.fn();
     const toAddress = (url: string) => url.replace("localhost:3000", "shown.test:1");
-    const { getByTestId } = renderToolbar({ toAddress });
+    const { getByTestId, getAllByRole } = renderToolbar({ toAddress, onNavigate });
     const input = openDropdown(getByTestId("browser-address-bar"));
     fireEvent.change(input, { target: { value: "shown.test" } });
-    const searched = spy.mock.calls.at(-1)![0].map((e: { url: string }) => e.url);
-    expect(searched).toContain("http://shown.test:1/");
-    expect(searched).not.toContain("http://localhost:3000/");
-    const onNavigate = defaultProps.onNavigate;
-    fireEvent.mouseDown(document.querySelectorAll('[role="option"]')[0]!);
+
+    const rows = getAllByRole("option");
+    expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining("shown.test:1")]);
+    fireEvent.mouseDown(rows[0]!);
     expect(onNavigate).toHaveBeenCalledWith("http://localhost:3000/");
+    restore();
+  });
+
+  it("shows one row per address when two stored URLs map to the same one", async () => {
+    const restore = await useRealFrecency();
+    const toAddress = () => "http://shown.test:1/";
+    const { getByTestId, getAllByRole } = renderToolbar({ toAddress });
+    openDropdown(getByTestId("browser-address-bar"));
+    expect(getAllByRole("option")).toHaveLength(1);
+    restore();
   });
 });
 
@@ -1127,11 +1150,10 @@ describe("BrowserToolbar at compact widths", () => {
     rowWidth.current = 1000;
   });
 
-  it("confirms a copy from More on the More trigger, since the in-field check is gone", async () => {
-    const { getByLabelText } = renderToolbar();
-    const more = getByLabelText("More page actions");
-    const glyphBefore = more.innerHTML;
-    fireEvent.pointerDown(more, { button: 0, ctrlKey: false });
+  it("confirms a copy from More on the More trigger, then settles back", async () => {
+    const { getByLabelText, getByText } = renderToolbar();
+    const glyphBefore = getByLabelText("More page actions").innerHTML;
+    fireEvent.pointerDown(getByLabelText("More page actions"), { button: 0, ctrlKey: false });
     await waitFor(() => expect(document.querySelector('[role="menu"]')).toBeTruthy());
     const copyItem = Array.from(document.querySelectorAll('[role="menuitem"]')).find(
       (i) => i.textContent?.trim() === "Copy URL"
@@ -1140,7 +1162,25 @@ describe("BrowserToolbar at compact widths", () => {
     await waitFor(() =>
       expect(getByLabelText("More page actions").innerHTML).not.toBe(glyphBefore)
     );
-    expect(getByLabelText("More page actions").querySelector(".text-status-success")).toBeTruthy();
+    expect(getByText("Copied to clipboard")).toBeTruthy();
+    await waitFor(() => expect(getByLabelText("More page actions").innerHTML).toBe(glyphBefore), {
+      timeout: 3000,
+    });
+  });
+
+  it("moves controls in and out of More as a mounted toolbar is resized", () => {
+    rowWidth.current = 1000;
+    const { queryByLabelText } = renderToolbar({
+      onToggleConsole: vi.fn(),
+      canToggleConsole: true,
+    });
+    expect(queryByLabelText("Copy URL")).toBeTruthy();
+    act(() => rowWidth.resize?.(500));
+    expect(queryByLabelText("Copy URL")).toBeNull();
+    expect(queryByLabelText("Toggle console")).toBeNull();
+    act(() => rowWidth.resize?.(900));
+    expect(queryByLabelText("Copy URL")).toBeTruthy();
+    expect(queryByLabelText("Toggle console")).toBeTruthy();
   });
 
   it("keeps the route by moving Copy URL and the console toggle into More", async () => {
@@ -1172,5 +1212,48 @@ describe("BrowserToolbar after a commit", () => {
     expect(queryByTestId("browser-address-display")).toBeNull();
     expect(input.className).not.toContain("text-transparent");
     expect(input.value).toBe("localhost:5173/c");
+  });
+});
+
+describe("BrowserToolbar zoom popover focus", () => {
+  function ZoomHarness() {
+    const [zoom, setZoom] = useState(0.75);
+    return <BrowserToolbar {...defaultProps} zoomFactor={zoom} onZoomChange={setZoom} />;
+  }
+
+  it("keeps its controls through 100%, and a keyboard close lands on Copy URL", async () => {
+    const { getByTestId, getByLabelText, queryByTestId } = render(<ZoomHarness />);
+    fireEvent.click(getByTestId("browser-zoom-indicator"));
+    await waitFor(() => expect(getByLabelText("Reset zoom")).toBeTruthy());
+
+    fireEvent.click(getByLabelText("Reset zoom"));
+    // Back at 100% while open: the chip and its controls stay put.
+    expect(queryByTestId("browser-zoom-indicator")).toBeTruthy();
+    expect(getByLabelText("Zoom in")).toBeTruthy();
+
+    fireEvent.keyDown(getByLabelText("Zoom in"), { key: "Escape" });
+    await waitFor(() => expect(queryByTestId("browser-zoom-indicator")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(getByLabelText("Copy URL")));
+  });
+});
+
+describe("BrowserToolbar device picker keyboard", () => {
+  it("opens from the keyboard and selects with the arrow keys and Enter", async () => {
+    const onViewportPresetChange = vi.fn();
+    renderToolbar({ onViewportPresetChange, viewportPreset: "iphone" });
+    const trigger = document.querySelector('[aria-label^="Device:"]') as HTMLElement;
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    await waitFor(() => expect(document.querySelector('[role="menu"]')).toBeTruthy());
+
+    const items = Array.from(document.querySelectorAll('[role="menuitemradio"]')) as HTMLElement[];
+    const target = items.find((i) => i.getAttribute("aria-checked") !== "true")!;
+    target.focus();
+    fireEvent.keyDown(target, { key: "Enter" });
+    await waitFor(() =>
+      expect(onViewportPresetChange).toHaveBeenCalledWith(
+        target.getAttribute("data-viewport-preset-id")
+      )
+    );
   });
 });

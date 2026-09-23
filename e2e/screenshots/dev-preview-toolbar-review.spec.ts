@@ -28,6 +28,7 @@ import { BUILT_IN_THEME_SOURCES } from "@shared/theme/builtInThemeSources";
 import {
   FIXTURES,
   FIXTURE_NAMES,
+  type DevPreviewChromeFixture,
   type FixtureName,
 } from "../../src/components/DevPreview/__preview__/fixtures";
 import {
@@ -85,7 +86,7 @@ test.afterAll(async () => {
 });
 
 async function open(page: Page, fixture: FixtureName, theme: string): Promise<Locator> {
-  await page.setViewportSize({ width: FIXTURES[fixture].width + 80, height: 560 });
+  await page.setViewportSize({ width: FIXTURES[fixture].width + 80, height: 720 });
   await stubViteHmrClient(page);
   // The pointer survives navigation: a hover drive would otherwise leave every
   // later capture showing a hover state nobody asked for.
@@ -188,6 +189,13 @@ test("Dev preview chrome — states and themes", async ({ page }) => {
   test.skip(!ENABLED, "set DAINTREE_SHOT_DEVPREVIEW=1 to run the capture");
   test.setTimeout(15 * 60_000);
 
+  const unknown = THEMES.filter((theme) => !ALL_THEMES.includes(theme));
+  if (unknown.length > 0) {
+    // The preview falls back to the default theme for a name it does not know,
+    // which would write a correctly named PNG of the wrong theme.
+    throw new Error(`Unknown theme(s) in DAINTREE_SHOT_THEMES: ${unknown.join(", ")}`);
+  }
+
   const snap = makeSnap(OUT_DIR);
   const written: string[] = [];
 
@@ -195,6 +203,7 @@ test("Dev preview chrome — states and themes", async ({ page }) => {
     for (const name of FIXTURE_NAMES) {
       await open(page, name, theme);
       await drive(page, name);
+      await expectFixtureState(page, name);
       // Page-region shot: open listboxes and tooltips spill past the frame.
       const out = path.join(OUT_DIR, `${name}--${theme}.png`);
       await page.screenshot({ path: out, clip: await clipFor(page) });
@@ -215,11 +224,55 @@ test("Dev preview chrome — states and themes", async ({ page }) => {
   console.log(`[dev-preview-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });
 
-/** The frame plus room below it for a dropdown or tooltip; refuses an empty frame. */
+/**
+ * What each fixture is supposed to show, checked on screen before its PNG is
+ * written: a prop that failed to reach the toolbar would otherwise produce a
+ * correctly named picture of the resting state.
+ */
+async function expectFixtureState(page: Page, name: FixtureName): Promise<void> {
+  const fixture: DevPreviewChromeFixture = FIXTURES[name];
+  const viewportBar = page.getByTestId("browser-viewport-controls");
+  if (fixture.viewportPreset) await expect(viewportBar).toBeVisible();
+  else await expect(viewportBar).toHaveCount(0);
+  if (fixture.isLoading) {
+    await expect(page.getByRole("button", { name: "Stop loading" })).toBeVisible();
+  }
+  const zoomChip = page.getByTestId("browser-zoom-indicator");
+  if (fixture.zoomFactor !== undefined && fixture.zoomFactor !== 1) {
+    await expect(zoomChip).toContainText(`${Math.round(fixture.zoomFactor * 100)}%`);
+  } else if (!fixture.drive) {
+    await expect(zoomChip).toHaveCount(0);
+  }
+  if (fixture.width >= 700) {
+    const consoleToggle = page.getByRole("button", { name: "Toggle console" });
+    if (fixture.canToggleConsole === false) await expect(consoleToggle).toBeDisabled();
+    if (fixture.consoleOpen) await expect(consoleToggle).toHaveAttribute("aria-pressed", "true");
+  }
+}
+
+/** The frame plus any open menu, popover or tooltip that spills past it. */
 async function clipFor(page: Page) {
   const box = await page.locator(FRAME).first().boundingBox();
   if (!box || box.width < 8 || box.height < 8) {
     throw new Error(`frame has no real box (${JSON.stringify(box)}) — refusing to write`);
   }
-  return { x: box.x, y: box.y, width: box.width, height: box.height };
+  let { x, y } = box;
+  let right = box.x + box.width;
+  let bottom = box.y + box.height;
+  const overlays = page.locator(
+    '[role="menu"], [role="listbox"], [role="tooltip"], [data-radix-popper-content-wrapper]'
+  );
+  for (const overlay of await overlays.all()) {
+    const o = await overlay.boundingBox();
+    if (!o) continue;
+    x = Math.min(x, o.x);
+    y = Math.min(y, o.y);
+    right = Math.max(right, o.x + o.width);
+    bottom = Math.max(bottom, o.y + o.height);
+  }
+  const viewport = page.viewportSize();
+  if (viewport && (right > viewport.width + 1 || bottom > viewport.height + 1)) {
+    throw new Error(`an overlay runs past the page (${right}×${bottom}) — refusing to write`);
+  }
+  return { x, y, width: right - x, height: bottom - y };
 }

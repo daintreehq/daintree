@@ -88,9 +88,13 @@ test.describe.serial("Core: Dev preview promote to portal", () => {
     await expect(addressBar).toHaveValue(DEV_PREVIEW_ADDRESS_BAR_RE, {
       timeout: DEV_PREVIEW_READY_TIMEOUT,
     });
-    const displayUrl = (await addressBar.inputValue()).trim();
-    const portalUrlHost = new URL(displayUrl.includes("://") ? displayUrl : `http://${displayUrl}`)
-      .host;
+    // The address bar shows the dev server's own address; the guest (and the
+    // portal tab promoted from it) sits on the panel's stable proxy origin.
+    const guestUrl = await window
+      .locator("webview")
+      .first()
+      .evaluate((wv) => (wv as Electron.WebviewTag).getURL());
+    const portalUrlHost = new URL(guestUrl).host;
 
     const readPreviewCookieState = async (): Promise<{ cookie: string; href: string } | null> => {
       try {

@@ -138,6 +138,12 @@ test.describe.serial("Core: Dev Preview", () => {
       await window.locator(SEL.browser.zoomIndicator).click();
       await window.locator(SEL.browser.zoomReset).click();
 
+      // The chip stays while its popover is open, so the controls do not vanish
+      // under the pointer at 100%; closing it is what takes the chip away.
+      await expect(window.locator(SEL.browser.zoomIndicator)).toContainText("100%", {
+        timeout: T_MEDIUM,
+      });
+      await window.keyboard.press("Escape");
       await expect(window.locator(SEL.browser.zoomIndicator)).toHaveCount(0, {
         timeout: T_MEDIUM,
       });

@@ -36,6 +36,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ViewportControls } from "./ViewportControls";
 import type { ViewportPresetId } from "@shared/types/panel";
+import type { UrlHistoryEntry } from "@shared/types/browser";
 import type {
   BrowserNavigationHistoryEntry,
   BrowserNavigationHistorySnapshot,
@@ -57,7 +58,7 @@ const ZOOM_PRESETS = [
   { value: 2.0, label: "200%" },
 ];
 const ZOOM_VALUES = ZOOM_PRESETS.map((preset) => preset.value);
-const EMPTY_ENTRIES: import("@shared/types/browser").UrlHistoryEntry[] = [];
+const EMPTY_ENTRIES: UrlHistoryEntry[] = [];
 
 interface BrowserToolbarProps {
   terminalId?: string;
@@ -265,6 +266,7 @@ export function BrowserToolbar({
   const [isZoomPopoverOpen, setIsZoomPopoverOpen] = useState(false);
   const copyButtonRef = useRef<HTMLButtonElement>(null);
   const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const zoomClosedOutsideRef = useRef(false);
   const errorId = useId();
   const listboxId = useId();
 
@@ -278,11 +280,20 @@ export function BrowserToolbar({
   const suggestions = useMemo(() => {
     if (!isEditing || !projectId) return [];
     if (!toAddress) return getFrecencySuggestions(projectEntries, inputValue);
-    const byAddress = new Map(projectEntries.map((entry) => [toAddress(entry.url), entry]));
-    const shown = projectEntries.map((entry) => ({ ...entry, url: toAddress(entry.url) }));
-    return getFrecencySuggestions(shown, inputValue).flatMap(
-      (entry) => byAddress.get(entry.url) ?? []
-    );
+    // Keyed by the projected object, not its address: a proxy URL and the
+    // upstream URL it stands for project to the same address, and reversing
+    // through that string would hand back the wrong stored entry.
+    const stored = new Map<UrlHistoryEntry, UrlHistoryEntry>();
+    for (const entry of projectEntries) {
+      stored.set({ ...entry, url: toAddress(entry.url) }, entry);
+    }
+    const seen = new Set<string>();
+    return getFrecencySuggestions([...stored.keys()], inputValue).flatMap((shown) => {
+      const entry = stored.get(shown);
+      if (!entry || seen.has(shown.url)) return [];
+      seen.add(shown.url);
+      return [entry];
+    });
   }, [isEditing, projectId, projectEntries, inputValue, toAddress]);
   const addressOf = useCallback(
     (target: string) => getDisplayUrl(toAddress ? toAddress(target) : target),
@@ -816,13 +827,18 @@ export function BrowserToolbar({
                     <PopoverContent
                       align="end"
                       className="w-auto p-1"
-                      onCloseAutoFocus={(event) => {
-                        // Back at 100% the chip unmounts with the popover, so a
-                        // keyboard close has nothing to restore to. The shared policy
-                        // decides first; a pointer close it claimed is left alone.
-                        if (isNonDefaultZoom) return;
+                      onInteractOutside={() => {
+                        zoomClosedOutsideRef.current = true;
+                      }}
+                      onCloseAutoFocus={() => {
+                        // Back at 100% the chip unmounts with the popover, so the
+                        // restore aims at nothing and focus falls to the body. A
+                        // press outside owns focus itself and is left alone; any
+                        // other close lands on the chip's neighbour instead.
+                        const closedOutside = zoomClosedOutsideRef.current;
+                        zoomClosedOutsideRef.current = false;
+                        if (isNonDefaultZoom || closedOutside) return;
                         requestAnimationFrame(() => {
-                          if (event.defaultPrevented) return;
                           if (document.activeElement !== document.body) return;
                           const fallback = copyButtonRef.current ?? moreButtonRef.current;
                           fallback?.focus({ preventScroll: true });
