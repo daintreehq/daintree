@@ -375,11 +375,14 @@ function GitPushConfirmDialogInner() {
         )}
       </PreviewFrame>
       {/* The quietest tier on the surface, and last, and only where a push is
-          actually about to happen. Ordinarily it answers the one question a push
-          raises that nothing else here does. Under a warning, the warning already
-          answers that, so it carries the consequence the description would have. */}
+          actually about to happen — not under a divergence warning, which says
+          the push will be refused. Ordinarily it answers the one question a push
+          raises that nothing else here does. Under the unverified warning, which
+          already answers that, it carries the consequence the description would
+          have. */}
       {hasOutgoing &&
-        (hasWarning ? (
+        behind === 0 &&
+        (isUnverified ? (
           <p className="text-2xs text-text-secondary">
             Once published, taking these back needs a force-push.
           </p>

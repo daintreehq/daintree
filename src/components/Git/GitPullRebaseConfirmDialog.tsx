@@ -445,7 +445,7 @@ function GitPullRebaseConfirmDialogInner() {
           the last fetch, and the pull fetches again before it replays, so this is
           the one thing about the preview that can change after approval. Then the
           conflict caution, only where there is a replay for it to be about. */}
-      {isMeasured && (
+      {isMeasured && !isDirty && (
         <p className="text-2xs text-text-secondary">
           The pull fetches first, so anything pushed to the upstream since the last fetch comes in
           too.
