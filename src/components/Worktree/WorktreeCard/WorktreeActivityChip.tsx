@@ -44,11 +44,13 @@ export function WorktreeActivityChip({
   if (activityTimestamp === null) return null;
 
   return (
-    <Tooltip autoDismiss={false}>
+    <Tooltip autoDismiss={false} dismissOnDialogTransition={false}>
       <TooltipTrigger asChild>
         <div
-          // The ring gets 2px of air so it frames the dot and the label
-          // instead of cutting through them.
+          // Secondary, not muted: the age is the chip's whole answer, and
+          // muted has no contrast floor on the dark themes. The ring gets 2px
+          // of air so it frames the dot and the label instead of cutting
+          // through them.
           className={cn(
             "relative z-10 ml-3 flex shrink-0 items-center gap-1.5 rounded-[var(--radius-sm)] text-xs text-text-secondary",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"

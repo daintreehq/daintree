@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreeActivityChip, type WorktreeActivityChipProps } from "../WorktreeActivityChip";
 import { LiveTimeAgo } from "../../LiveTimeAgo";
+import { dismissAllTooltips } from "@/lib/tooltipDismissRegistry";
 
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
@@ -133,6 +134,19 @@ describe("WorktreeActivityChip", () => {
       vi.advanceTimersByTime(30_000);
     });
     expect(screen.getAllByText("feat: long read").length).toBeGreaterThan(0);
+  });
+
+  it("keeps the commit card open through a dialog transition, like the other rich cards", () => {
+    renderChip({
+      lastCommitTimestampMs: NOW - 60_000,
+      author: human,
+      commitMessage: "feat: pinned",
+    });
+    act(() => {
+      fireEvent.focus(chip()!);
+    });
+    act(() => dismissAllTooltips());
+    expect(screen.getAllByText("feat: pinned").length).toBeGreaterThan(0);
   });
 
   it("shows the no-author header when the commit has no author", () => {

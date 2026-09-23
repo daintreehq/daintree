@@ -365,7 +365,7 @@ export function WorktreeDetails({
         </div>
 
         {showLastActive && (
-          <Tooltip autoDismiss={false}>
+          <Tooltip autoDismiss={false} dismissOnDialogTransition={false}>
             <TooltipTrigger asChild>{lastActiveLine}</TooltipTrigger>
             <TooltipContent side="bottom" className="p-3">
               <CommitInfoTooltip
