@@ -215,8 +215,12 @@ function useSecondClock(): number {
 
 function PanelPreview({ f }: { f: PanelFixture }) {
   const now = useSecondClock();
-  const details: RateLimitDetails | null =
-    f.details === "pending" || f.details === null ? null : { buckets: f.details, fetchedAt: NOW };
+  const details: RateLimitDetails | null | undefined =
+    f.details === "pending"
+      ? undefined
+      : f.details === null
+        ? null
+        : { buckets: f.details, fetchedAt: NOW };
   return (
     <div
       data-preview-shell
@@ -234,6 +238,7 @@ function PanelPreview({ f }: { f: PanelFixture }) {
         </TooltipTrigger>
         <TooltipContent side="bottom" className="px-0 py-0" data-preview-panel="">
           <RateLimitDetailsPanel
+            providerName={f.providerName}
             kind={f.limitKind}
             details={details}
             now={now}
@@ -257,7 +262,7 @@ function BannerPreview({ f }: { f: BannerFixture }) {
           <Clock className="h-3.5 w-3.5 shrink-0" />
           <span className="text-xs truncate">GitHub requests are paused.</span>
           <span className="text-xs text-text-secondary shrink-0 whitespace-nowrap tabular-nums">
-            · Resumes in <LiveRateLimitCountdown resetAt={NOW + offset} />
+            · Resumes <LiveRateLimitCountdown resetAt={NOW + offset} />
           </span>
         </div>
       ))}

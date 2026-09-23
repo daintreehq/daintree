@@ -57,10 +57,10 @@ const FIXTURES: Record<string, RegExp> = {
   "kind-unknown": /\d+h/,
   "details-pending": /\d+m/,
   "details-missing": /./,
-  gitlab: /REST|Rest/,
+  gitlab: /REST/,
   "reset-due": /GraphQL/,
   "countdown-ladder": /59m 59s|59m/,
-  "banner-ladder": /Resumes in/,
+  "banner-ladder": /Resumes/,
 };
 
 test.use({ deviceScaleFactor: 3 });

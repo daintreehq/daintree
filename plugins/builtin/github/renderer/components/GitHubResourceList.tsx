@@ -1557,7 +1557,7 @@ export function GitHubResourceList({
                 </span>
                 {rateLimitResetAt != null && rateLimitResetAt > Date.now() && (
                   <span className="text-xs text-text-secondary shrink-0 whitespace-nowrap tabular-nums">
-                    · Resumes in <LiveRateLimitCountdown resetAt={rateLimitResetAt} />
+                    · Resumes <LiveRateLimitCountdown resetAt={rateLimitResetAt} />
                   </span>
                 )}
                 {lastUpdatedAt != null && !debouncedSearch && (
@@ -1701,9 +1701,7 @@ export function GitHubResourceList({
                 <>
                   GitHub is holding new requests. This list resumes{" "}
                   {rateLimitResetAt != null && rateLimitResetAt > Date.now() ? (
-                    <>
-                      in <LiveRateLimitCountdown resetAt={rateLimitResetAt} />
-                    </>
+                    <LiveRateLimitCountdown resetAt={rateLimitResetAt} />
                   ) : (
                     "on its own once they're allowed again"
                   )}

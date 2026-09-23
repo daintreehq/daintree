@@ -1,19 +1,35 @@
 import { cn } from "@/lib/utils";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import type { RateLimitBucket, RateLimitDetails } from "@shared/types/forge";
 
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/**
+ * Second-resolution countdown for surfaces that re-render every second (the
+ * toolbar panel and its trigger). Two units above a minute, and the smaller one
+ * always two digits, so a ticking label keeps one shape: `42s`, `14m 05s`, `2h 05m`.
+ */
 export function formatRateLimitCountdown(remainingMs: number): string {
   const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
-  const pad2 = (n: number) => String(n).padStart(2, "0");
-  if (totalSeconds < 60) return `${pad2(totalSeconds)}s`;
+  if (totalSeconds < 60) return `${totalSeconds}s`;
   const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes < 60) {
-    return seconds > 0 ? `${minutes}m ${pad2(seconds)}s` : `${minutes}m`;
-  }
-  const hours = Math.floor(minutes / 60);
-  const remMinutes = minutes % 60;
-  return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
+  if (minutes < 60) return `${minutes}m ${pad2(totalSeconds % 60)}s`;
+  return `${Math.floor(minutes / 60)}h ${pad2(minutes % 60)}m`;
+}
+
+/**
+ * Minute-resolution countdown for surfaces on the shared 30-second ticker,
+ * which would otherwise show seconds that sit still for half a minute. Rounds
+ * up so the label never promises an earlier resume than the provider reported.
+ */
+export function formatRateLimitCountdownCoarse(remainingMs: number): string {
+  if (remainingMs < 60_000) return "less than a minute";
+  const minutes = Math.ceil(remainingMs / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const rem = minutes % 60;
+  return rem > 0 ? `${Math.floor(minutes / 60)}h ${rem}m` : `${Math.floor(minutes / 60)}h`;
 }
 
 export function msUntilNextLabelChange(remainingMs: number): number {
@@ -26,16 +42,32 @@ export function msUntilNextLabelChange(remainingMs: number): number {
   return remainingMs - (60_000 * minutes - 1000);
 }
 
+function formatClockTime(epochMs: number): string {
+  return new Date(epochMs).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
 /**
- * Live rate-limit reset countdown for in-panel banners (e.g. the issues/PRs
- * dropdown). Re-evaluates on the shared minute ticker — minute granularity is
- * intentional for a passive banner; the per-second readout lives in the
- * toolbar {@link RateLimitDetailsPanel} tooltip.
+ * The time phrase that completes "Resumes …" in passive banners: `in 14m`,
+ * `in less than a minute`, or `shortly` once the reported time has passed.
+ * It owns the preposition so the sentence stays grammatical when the deadline
+ * crosses between parent renders.
+ *
+ * Re-evaluates on the shared minute ticker, so it counts in minutes; the
+ * per-second readout lives in {@link RateLimitDetailsPanel}. The ticking text
+ * is hidden from assistive tech — its callers sit in `role="status"` regions,
+ * which would otherwise re-announce every minute — and a fixed clock time is
+ * read instead.
  */
 export function LiveRateLimitCountdown({ resetAt }: { resetAt: number }) {
   useGlobalMinuteTicker();
   const remaining = resetAt - Date.now();
-  return <>{remaining <= 0 ? "any moment now" : formatRateLimitCountdown(remaining)}</>;
+  if (remaining <= 0) return <>shortly</>;
+  return (
+    <>
+      <span aria-hidden="true">in {formatRateLimitCountdownCoarse(remaining)}</span>
+      <span className="sr-only">at {formatClockTime(resetAt)}</span>
+    </>
+  );
 }
 
 // Display names for bucket identifiers common across providers. Unknown
@@ -43,103 +75,138 @@ export function LiveRateLimitCountdown({ resetAt }: { resetAt: number }) {
 const BUCKET_LABELS: Record<string, string> = {
   graphql: "GraphQL",
   core: "REST core",
+  rest: "REST",
   search: "Search",
 };
 
-function bucketLabel(name: string): string {
+export function bucketLabel(name: string): string {
   return BUCKET_LABELS[name] ?? (name ? name[0]!.toUpperCase() + name.slice(1) : name);
 }
 
+const CAUSE_COPY: Record<"primary" | "secondary" | "unknown", { title: string; body: string }> = {
+  primary: {
+    title: "rate limit reached",
+    body: "A request quota ran out. Updates resume on their own.",
+  },
+  secondary: {
+    title: "secondary rate limit",
+    body: "Paused for abuse protection, not quota. Updates resume on their own.",
+  },
+  unknown: {
+    title: "requests paused",
+    body: "No reason was reported. Updates resume on their own.",
+  },
+};
+
 interface RateLimitDetailsPanelProps {
+  providerName: string;
   kind: "primary" | "secondary" | null;
-  details: RateLimitDetails | null;
+  /** `undefined` while the read is in flight; `null` once it answered with nothing. */
+  details: RateLimitDetails | null | undefined;
   now: number;
+  /** When the stats push says requests resume — the time that governs the pause. */
   fallbackResetAt: number | null;
 }
 
 export function RateLimitDetailsPanel({
+  providerName,
   kind,
   details,
   now,
   fallbackResetAt,
 }: RateLimitDetailsPanelProps) {
-  const heading =
-    kind === "secondary"
-      ? "Secondary rate limit"
-      : kind === "primary"
-        ? "Rate limit reached"
-        : "API quota";
-  const subheading =
-    kind === "secondary"
-      ? "Requests are paused for abuse protection. Polling resumes automatically."
-      : "Polling resumes when the bucket resets.";
+  const copy = CAUSE_COPY[kind ?? "unknown"];
+  const provider = providerName ? providerName[0]!.toUpperCase() + providerName.slice(1) : "";
+  const showPending = useDeferredLoading(details === undefined, UI_DOHERTY_THRESHOLD);
+  const buckets = details?.buckets ?? [];
 
   return (
-    <div className="w-[260px] px-3.5 py-3.5">
-      <div className="pb-5">
-        <div className="text-text-primary text-sm font-semibold leading-tight">{heading}</div>
-        <div className="text-muted-foreground mt-1 text-2xs leading-snug">{subheading}</div>
+    <div className="flex w-[260px] flex-col gap-3 p-3.5">
+      <div>
+        <div className="text-text-primary text-sm font-semibold leading-tight">
+          {provider} {copy.title}
+        </div>
+        <div className="text-text-secondary mt-1 text-xs leading-snug">{copy.body}</div>
       </div>
-      {details ? (
-        <div className="flex flex-col gap-4">
-          {details.buckets.map((bucket) => (
-            <RateLimitBucketRow
-              key={bucket.name}
-              label={bucketLabel(bucket.name)}
-              bucket={bucket}
-              now={now}
-            />
+      <ResumeSummary resumeAt={fallbackResetAt} now={now} />
+      {buckets.length > 0 ? (
+        <div className="flex flex-col gap-3">
+          {buckets.map((bucket) => (
+            <RateLimitBucketRow key={bucket.name} bucket={bucket} now={now} />
           ))}
         </div>
-      ) : (
-        <div className="text-muted-foreground text-2xs tabular-nums">
-          {fallbackResetAt && fallbackResetAt > now
-            ? formatRateLimitCountdown(fallbackResetAt - now)
-            : "Loading…"}
+      ) : details === null ? (
+        <div className="text-text-secondary text-2xs">
+          {provider} didn’t report per-quota details
         </div>
+      ) : showPending ? (
+        <div className="text-text-secondary text-2xs">Checking quotas…</div>
+      ) : null}
+    </div>
+  );
+}
+
+function ResumeSummary({ resumeAt, now }: { resumeAt: number | null; now: number }) {
+  const remainingMs = resumeAt === null ? null : resumeAt - now;
+  return (
+    <div className="bg-overlay-soft flex items-baseline justify-between gap-3 rounded-[var(--radius-md)] px-2.5 py-2">
+      {remainingMs === null ? (
+        <span className="text-text-secondary text-xs">Resume time not reported</span>
+      ) : remainingMs <= 0 ? (
+        <span className="text-text-secondary text-xs">Resume time passed</span>
+      ) : (
+        <>
+          <span className="text-text-secondary text-xs">Resumes in</span>
+          <span className="text-text-primary text-sm font-semibold leading-none tabular-nums">
+            {formatRateLimitCountdown(remainingMs)}
+          </span>
+        </>
       )}
     </div>
   );
 }
 
-interface RateLimitBucketRowProps {
-  label: string;
-  bucket: RateLimitBucket;
-  now: number;
-}
-
-function RateLimitBucketRow({ label, bucket, now }: RateLimitBucketRowProps) {
-  const remainingMs = Math.max(0, bucket.resetAt - now);
-  const exhausted = bucket.remaining <= 0;
-  const ratio = bucket.limit > 0 ? Math.min(1, bucket.used / bucket.limit) : 0;
-  const timeLabel = remainingMs > 0 ? formatRateLimitCountdown(remainingMs) : "Reset due";
-  const aria = `${label}: ${Math.max(0, bucket.remaining).toLocaleString()} of ${bucket.limit.toLocaleString()} remaining. ${
-    remainingMs > 0 ? `Resets in ${timeLabel}` : "Reset available"
-  }.`;
+function RateLimitBucketRow({ bucket, now }: { bucket: RateLimitBucket; now: number }) {
+  const label = bucketLabel(bucket.name);
+  const remaining = Math.max(0, bucket.remaining);
+  const exhausted = remaining <= 0;
+  const used = Math.min(bucket.limit, Math.max(0, bucket.used));
+  const ratio = bucket.limit > 0 ? used / bucket.limit : 0;
+  const remainingMs = bucket.resetAt - now;
+  const counts = `${remaining.toLocaleString()} / ${bucket.limit.toLocaleString()} left`;
 
   return (
-    <div className="flex flex-col gap-2" aria-label={aria}>
+    <div className="flex flex-col gap-1.5">
       <div className="flex items-baseline justify-between gap-3">
-        <span
-          className={cn(
-            "text-sm font-medium leading-none",
-            exhausted ? "text-text-primary" : "text-text-secondary"
-          )}
-        >
-          {label}
-        </span>
-        <span className="text-muted-foreground text-2xs leading-none tabular-nums">
-          {timeLabel}
-        </span>
+        <span className="text-text-primary text-xs font-medium">{label}</span>
+        <span className="text-text-secondary text-2xs tabular-nums">{counts}</span>
       </div>
-      <div className="bg-overlay-subtle h-1.5 overflow-hidden rounded-full">
+      <div
+        role="meter"
+        aria-label={`${label} quota used`}
+        aria-valuemin={0}
+        aria-valuemax={bucket.limit}
+        aria-valuenow={used}
+        aria-valuetext={`${remaining.toLocaleString()} of ${bucket.limit.toLocaleString()} left`}
+        className="bg-overlay-strong h-1.5 overflow-hidden rounded-full"
+      >
         <div
           className={cn(
-            "h-full rounded-full transition-[width] duration-300 ease-out",
-            exhausted ? "bg-pr-closed" : "bg-daintree-text/60"
+            "h-full rounded-full",
+            exhausted ? "bg-status-danger" : "bg-text-secondary"
           )}
           style={{ width: `${ratio * 100}%` }}
         />
+      </div>
+      <div className="text-text-secondary flex items-baseline justify-between gap-3 text-2xs tabular-nums">
+        <span className={cn(exhausted && "text-text-primary font-medium")}>
+          {exhausted ? "Limit reached" : null}
+        </span>
+        <span>
+          {remainingMs > 0
+            ? `Resets in ${formatRateLimitCountdown(remainingMs)}`
+            : "Reset time passed"}
+        </span>
       </div>
     </div>
   );
