@@ -1,10 +1,13 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useId, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
+import { Field, FieldError } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { PluginProvenance } from "./PluginProvenance";
+import { usePluginAttribution } from "@/hooks/usePluginAttribution";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePluginPromptStore } from "@/store/pluginPromptStore";
-import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import type { PluginInputBoxOptions } from "@shared/types/plugin";
-import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 
 /**
  * Compile a plugin-supplied validation pattern. A malformed pattern is ignored
@@ -29,19 +32,25 @@ interface InputBoxFormProps {
 
 function InputBoxForm({ options, pluginId, onSubmit, onCancel }: InputBoxFormProps) {
   const [value, setValue] = useState(options.value ?? "");
-  const [showError, setShowError] = useState(false);
+  // Set by the first rejected submit and never cleared: from then on the field
+  // is judged live, so the error stays while the value is still wrong and goes
+  // the moment it is right — not on the first keystroke of an edit that may not
+  // have fixed anything.
+  const [attempted, setAttempted] = useState(false);
   const pattern = compilePattern(options.validationPattern);
   const isValid = pattern ? pattern.test(value) : true;
-  // Provenance copy names the plugin, and `pluginId` is the host's instance key
-  // — raw, a project-owned plugin would attribute the prompt to
-  // `project__{projectId}__{manifestId}`. Fallback is the manifest id (#12211).
-  const pluginName = usePluginRuntimeStore(
-    (s) => s.pluginMetaById.get(pluginId)?.displayName ?? pluginManifestIdFromInstanceKey(pluginId)
-  );
+  const showError = attempted && !isValid;
+  const errorMessage = options.validationMessage || "The value doesn't match the required format";
+  const provenanceId = useId();
+  const attribution = usePluginAttribution(pluginId);
 
   const handleSubmit = () => {
     if (!isValid) {
-      setShowError(true);
+      // `FieldError` is deliberately not a live region (it renders per
+      // keystroke in settings). A rejected submit is a discrete event the user
+      // caused, so each one is announced — never the keystrokes in between.
+      useAnnouncerStore.getState().announce(errorMessage, "assertive");
+      setAttempted(true);
       return;
     }
     onSubmit(value);
@@ -56,36 +65,37 @@ function InputBoxForm({ options, pluginId, onSubmit, onCancel }: InputBoxFormPro
 
       <AppDialog.Body className="space-y-3">
         {options.prompt && <AppDialog.Description>{options.prompt}</AppDialog.Description>}
-        <input
-          type={options.password ? "password" : "text"}
-          value={value}
-          autoFocus
-          placeholder={options.placeholder}
-          aria-label={options.prompt || options.title || "Value"}
-          aria-invalid={showError && !isValid}
-          onChange={(e) => {
-            setValue(e.target.value);
-            if (showError) setShowError(false);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              handleSubmit();
-            }
-          }}
-          className="w-full rounded-md bg-overlay-subtle px-3 py-2 text-sm text-text-primary placeholder:text-daintree-text/40"
-        />
-        {showError && !isValid && (
-          <p className="text-xs text-status-error">
-            {options.validationMessage || "The value doesn't match the required format"}
-          </p>
-        )}
-        <p className="text-xs text-text-secondary">Requested by the '{pluginName}' plugin</p>
+        <Field>
+          <Input
+            type={options.password ? "password" : "text"}
+            value={value}
+            // The dialog opens with `initialFocus="none"` and leaves focus to
+            // this: its default lands on the header's close button, and a
+            // promoted prompt remounts the form without reopening the dialog.
+            autoFocus
+            placeholder={options.placeholder}
+            aria-label={options.prompt || options.title || "Value"}
+            aria-describedby={provenanceId}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter that commits an IME composition is not a submit.
+              if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+              if (e.key === "Enter") {
+                e.preventDefault();
+                handleSubmit();
+              }
+            }}
+          />
+          {showError && <FieldError>{errorMessage}</FieldError>}
+        </Field>
       </AppDialog.Body>
 
       <AppDialog.Footer
+        // The one line in this dialog the plugin did not write, so it sits in
+        // the host's footer band rather than beside the plugin's own copy.
+        hint={<PluginProvenance id={provenanceId} attribution={attribution} />}
         secondaryAction={{ label: "Cancel", onClick: onCancel }}
-        primaryAction={{ label: "Submit", onClick: handleSubmit, disabled: showError && !isValid }}
+        primaryAction={{ label: "Submit", onClick: handleSubmit, disabled: showError }}
       />
     </>
   );
@@ -134,7 +144,7 @@ export function PluginInputBoxDialog() {
           if (inputBox) resolveOnce(inputBox.promptId, undefined);
         }}
         size="sm"
-        initialFocus="first"
+        initialFocus="none"
       >
         {inputBox && (
           <InputBoxForm

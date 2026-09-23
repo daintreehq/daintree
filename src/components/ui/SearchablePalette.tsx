@@ -79,6 +79,13 @@ export interface SearchablePaletteProps<T> {
   /** Prefix for item IDs used in aria-activedescendant */
   itemIdPrefix?: string;
 
+  /**
+   * The list allows more than one option to be chosen. Semantic only: sets
+   * `aria-multiselectable` on the listbox, which the options' own checked state
+   * does not replace. The row treatment stays the caller's.
+   */
+  multiselectable?: boolean;
+
   /** Message when no items exist */
   emptyMessage?: string;
   /**
@@ -192,6 +199,7 @@ export function SearchablePalette<T>({
   searchAriaDescribedBy,
   listId = "searchable-palette-list",
   itemIdPrefix = "palette-option",
+  multiselectable = false,
   emptyMessage = "No items available",
   noMatchMessage,
   emptyContent,
@@ -455,6 +463,7 @@ export function SearchablePalette<T>({
                 id={listId}
                 role="listbox"
                 aria-label={label}
+                aria-multiselectable={multiselectable || undefined}
                 className={isFiltering ? "palette-results-stale" : undefined}
                 data-stale={isFiltering ? "true" : undefined}
                 aria-busy={isFiltering || undefined}

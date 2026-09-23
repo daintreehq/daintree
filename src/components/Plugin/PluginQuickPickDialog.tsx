@@ -3,13 +3,16 @@ import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
-import { PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
+import { KBD_CLASS } from "@/components/ui/Kbd";
+import { Button } from "@/components/ui/button";
+import { checkboxVariants } from "@/components/ui/checkbox";
+import { isMac } from "@/lib/platform";
+import { PluginProvenance } from "./PluginProvenance";
+import { usePluginAttribution } from "@/hooks/usePluginAttribution";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { usePluginPromptStore } from "@/store/pluginPromptStore";
-import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import type { PluginQuickPickItem } from "@shared/types/plugin";
-import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 
 const EMPTY_ITEMS: PluginQuickPickItem[] = [];
 
@@ -47,13 +50,7 @@ export function PluginQuickPickDialog() {
   const items = quickPick ? quickPick.items : EMPTY_ITEMS;
   const canSelectMany = options?.canSelectMany ?? false;
 
-  // The prompt carries the host's plugin *instance* key, which for a
-  // project-owned plugin is `project__{projectId}__{manifestId}` — never copy a
-  // person reads. Resolved through the runtime store like every other surface
-  // that names a plugin; the fallback is the manifest id, never the raw key.
-  const pluginName = usePluginRuntimeStore(
-    (s) => s.pluginMetaById.get(pluginId)?.displayName ?? pluginManifestIdFromInstanceKey(pluginId)
-  );
+  const attribution = usePluginAttribution(pluginId);
 
   const fuseOptions = useMemo(
     () => ({
@@ -111,7 +108,10 @@ export function PluginQuickPickDialog() {
       if (item) toggle(item.id);
       return;
     }
-    resolveOnce(promptId, item ?? undefined);
+    // Nothing under the cursor (empty list, or a query that matched nothing):
+    // Enter is a no-op, not a silent cancel — the user is mid-search, and
+    // dismissing stays one Escape away.
+    if (item) resolveOnce(promptId, item);
   }, [promptId, results, selectedIndex, canSelectMany, toggle, resolveOnce]);
 
   const handleClose = useCallback(() => {
@@ -143,7 +143,13 @@ export function PluginQuickPickDialog() {
           id={`plugin-quick-pick-${item.id}`}
           tabIndex={-1}
           role="option"
-          aria-selected={isSelected}
+          // Multi-select splits the two meanings a single-select row folds
+          // together: `aria-checked` carries membership, and the cursor rides
+          // `data-selected`, which draws the same rail and fill. Putting both on
+          // `aria-selected` would light every checked row as if Enter acted on it.
+          aria-selected={canSelectMany ? undefined : isSelected}
+          aria-checked={canSelectMany ? isChecked : undefined}
+          data-selected={canSelectMany && isSelected ? "true" : undefined}
           onPointerDown={(e) => e.preventDefault()}
           onPointerMove={() => onHoverIndex(index)}
           onClick={() => {
@@ -153,31 +159,33 @@ export function PluginQuickPickDialog() {
           }}
           className={cn(
             PALETTE_ROW_CLASS,
-            "w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
+            "w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
             "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
           )}
         >
           {canSelectMany && (
+            // Presentational: the option already owns the checked state, and a
+            // real checkbox (a <button>) cannot nest inside it. Same classes as
+            // the shared control so the two cannot drift apart.
             <span
-              className={cn(
-                "shrink-0 size-4 rounded border flex items-center justify-center",
-                isChecked
-                  ? "bg-overlay-raised border-overlay text-text-primary"
-                  : "border-overlay text-transparent"
-              )}
               aria-hidden="true"
+              data-state={isChecked ? "checked" : "unchecked"}
+              className={cn(checkboxVariants({ size: "md" }), "mt-0.5 text-text-inverse")}
             >
-              {isChecked && <Check size={12} />}
+              {isChecked && <Check />}
             </span>
           )}
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium text-text-primary truncate">{item.label}</div>
-            {item.description && (
-              <div className="text-xs text-text-secondary truncate">{item.description}</div>
-            )}
-            {item.detail && (
-              <div className="text-xs text-daintree-text/40 truncate">{item.detail}</div>
-            )}
+          {/* Everything here is the plugin's, and a plugin label is often the
+              only thing telling two rows apart (two pipeline files sharing a
+              long prefix), so it wraps rather than truncating. */}
+          <div className="flex-1 min-w-0 [overflow-wrap:anywhere]">
+            <div className="flex flex-wrap items-baseline gap-x-2">
+              <span className="text-sm font-medium text-text-primary">{item.label}</span>
+              {item.description && (
+                <span className="text-xs text-text-secondary">{item.description}</span>
+              )}
+            </div>
+            {item.detail && <div className="mt-0.5 text-xs text-text-secondary">{item.detail}</div>}
           </div>
         </button>
       );
@@ -185,15 +193,43 @@ export function PluginQuickPickDialog() {
     [checkedIds, canSelectMany, toggle, promptId, resolveOnce, setSelectedIndex]
   );
 
-  const footer = canSelectMany ? (
-    <PaletteFooterHints
-      primaryHint={{ keys: ["⌘", "↵"], label: `confirm ${checkedIds.size} selected` }}
-      // Enter earns its chip here and only here: in a multi-select list it
-      // toggles the row instead of confirming, so the palette's usual primary
-      // key does something else. Navigation and close stay unstated.
-      hints={[{ keys: ["↵"], label: "toggle" }]}
-    />
-  ) : undefined;
+  // Always present: the footer band is host chrome, and the attribution is the
+  // one line on this palette the plugin did not write.
+  const footer = (
+    <div className="flex w-full items-center justify-between gap-3">
+      <PluginProvenance attribution={attribution} className="flex-1" />
+      {canSelectMany && (
+        <div className="flex shrink-0 items-center gap-3">
+          {/* Enter earns its chip here and only here: in a multi-select list
+              it toggles the row instead of confirming. */}
+          <span className="inline-flex items-baseline">
+            <kbd className={KBD_CLASS}>↵</kbd>
+            <span className="ml-1.5">toggle</span>
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            {/* The palette's own ↵ glyph, not `KbdChord`'s ⏎, so the two chips
+                beside each other spell Enter the same way. */}
+            <span className="inline-flex items-center gap-1" aria-hidden="true">
+              <kbd className={KBD_CLASS}>{isMac() ? "⌘" : "Ctrl"}</kbd>
+              <kbd className={KBD_CLASS}>↵</kbd>
+            </span>
+            <Button
+              size="xs"
+              variant="contrast"
+              // Kept off the tab order: Tab walks the list from the search
+              // field, and the chord beside it is the keyboard path.
+              tabIndex={-1}
+              aria-keyshortcuts={isMac() ? "Meta+Enter" : "Control+Enter"}
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={submitMulti}
+            >
+              Confirm {checkedIds.size} selected
+            </Button>
+          </span>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <ErrorBoundary
@@ -217,11 +253,14 @@ export function PluginQuickPickDialog() {
         getItemId={(item) => item.id}
         renderItem={renderItem}
         label={options?.title || "Select an option"}
-        ariaLabel={options?.title || "Plugin quick pick"}
+        // The visible attribution sits in the footer, which a screen reader
+        // never reaches before answering; the dialog's name carries it instead.
+        ariaLabel={`${options?.title || "Plugin quick pick"}. ${attribution.text}`}
         searchPlaceholder={options?.placeholder || "Search"}
         itemIdPrefix="plugin-quick-pick"
-        emptyMessage={`No options provided by the '${pluginName}' plugin`}
+        emptyMessage={`No options provided by the '${attribution.name}' plugin`}
         footer={footer}
+        multiselectable={canSelectMany}
       />
     </ErrorBoundary>
   );
