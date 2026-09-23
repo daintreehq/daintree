@@ -587,7 +587,16 @@ test("plugin manager review — provenance, states, and overflow", async () => {
     await step("selectescape", async () => {
       await select(page, "Markdown Studio");
       await openTab(page, "Settings");
-      await page.locator('[role="combobox"]').first().click();
+      // The trigger is a plain stand-in button until Radix loads, so find it
+      // by its value rather than by role.
+      await page
+        .locator('[aria-label="Details for Markdown Studio"] button', { hasText: "github" })
+        .first()
+        .click();
+      await page
+        .locator('[role="listbox"]')
+        .first()
+        .waitFor({ state: "visible", timeout: T_MEDIUM });
       await settle(page, 300);
       await page.keyboard.press("Escape");
       await settle(page, 300);
