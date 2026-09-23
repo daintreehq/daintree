@@ -51,6 +51,13 @@ export function EditorIntegrationTab() {
   const [isTesting, setIsTesting] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<"ok" | "error" | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // Until the saved preference is read, the selection shown is a placeholder: nothing
+  // edits or saves it, and nothing claims it isn't saved yet.
+  const [isLoadingConfig, setIsLoadingConfig] = useState(true);
+  const [rescanFailed, setRescanFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [commandError, setCommandError] = useState<string | null>(null);
   const [showDetected, setShowDetected] = useState(false);
   const isMountedRef = useRef(true);
   const editorId = useId();
@@ -60,6 +67,7 @@ export function EditorIntegrationTab() {
 
   const activeProjectId = useProjectStore((s) => s.currentProject?.id);
   const activeProjectPath = useProjectStore((s) => s.currentProject?.path);
+  const activeProjectName = useProjectStore((s) => s.currentProject?.name);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -71,10 +79,13 @@ export function EditorIntegrationTab() {
   useEffect(() => {
     if (!activeProjectId) return;
     let cancelled = false;
+    setLoadError(null);
+    setIsLoadingConfig(true);
     editorClient
       .getConfig(activeProjectId)
       .then(({ preferredEditor: pref, discoveredEditors: discovered }) => {
         if (cancelled || !isMountedRef.current) return;
+        setIsLoadingConfig(false);
         setDiscoveredEditors(discovered);
         if (pref) {
           setPreferredEditor(pref);
@@ -92,27 +103,42 @@ export function EditorIntegrationTab() {
       .catch((err) => {
         if (cancelled || !isMountedRef.current) return;
         logError("[EditorIntegrationTab] Failed to load config", err);
+        setIsLoadingConfig(false);
+        setLoadError(formatErrorMessage(err, "Couldn't read the saved editor"));
       });
     return () => {
       cancelled = true;
     };
-  }, [activeProjectId]);
+  }, [activeProjectId, loadAttempt]);
+
+  // Any edit makes the last test result about a different choice.
+  const editDraft = () => {
+    setTestResult(null);
+    setSaveError(null);
+  };
 
   const handleRescan = async () => {
     setIsRescanning(true);
+    setRescanFailed(false);
     try {
       const editors = await editorClient.discover();
       if (!isMountedRef.current) return;
       setDiscoveredEditors(editors);
     } catch (err) {
       logError("[EditorIntegrationTab] Rescan failed", err);
+      // The list below is the previous scan; say so rather than let it pass as fresh.
+      if (isMountedRef.current) setRescanFailed(true);
     } finally {
       if (isMountedRef.current) setIsRescanning(false);
     }
   };
 
   const handleSave = async () => {
-    if (!activeProjectId || isSaving) return;
+    if (!activeProjectId || isSaving || isLoadingConfig || loadError) return;
+    if (selectedId === "custom" && !customCommand.trim()) {
+      setCommandError("Enter the command that opens your editor");
+      return;
+    }
     setIsSaving(true);
     setSaveError(null);
     try {
@@ -216,7 +242,7 @@ export function EditorIntegrationTab() {
     <SettingsSection
       id="editor-external"
       title="External editor"
-      description="The editor that opens when you click 'Open in editor' in the diff viewer or worktree cards"
+      description={`For ${activeProjectName ?? "this project"} only. The editor that "Open in editor" launches from the diff viewer and worktree cards.`}
     >
       <SettingsGroup>
         <SettingsRow
@@ -239,8 +265,12 @@ export function EditorIntegrationTab() {
               </Tooltip>
               <Select
                 value={selectedId}
-                onValueChange={(value) => setSelectedId(value as KnownEditorId)}
-                disabled={disabled}
+                onValueChange={(value) => {
+                  setSelectedId(value as KnownEditorId);
+                  setCommandError(null);
+                  editDraft();
+                }}
+                disabled={disabled || isLoadingConfig}
               >
                 <SelectTrigger
                   id={editorId}
@@ -271,7 +301,16 @@ export function EditorIntegrationTab() {
           <>
             <SettingsRow
               label="Detected editors"
-              description={`${foundCount} of ${discoveredEditors.length} found on this machine`}
+              description={
+                rescanFailed ? (
+                  <span className="text-status-error">
+                    Couldn&apos;t re-scan — showing the previous scan. Use the re-scan button to try
+                    again.
+                  </span>
+                ) : (
+                  `${foundCount} of ${discoveredEditors.length} found on this machine`
+                )
+              }
               layout="stacked"
               control={
                 <div className="space-y-1">
@@ -312,8 +351,8 @@ export function EditorIntegrationTab() {
                     aria-hidden="true"
                   />
                   {showDetected
-                    ? "Hide detected editors"
-                    : `Show detected editors (${otherFoundEditors.length})`}
+                    ? "Hide other found editors"
+                    : `Show ${otherFoundEditors.length} other found editor${otherFoundEditors.length === 1 ? "" : "s"}`}
                 </button>
                 <div id={detectedRegionId}>
                   {showDetected && (
@@ -332,14 +371,21 @@ export function EditorIntegrationTab() {
             <SettingsRow
               label="Command"
               layout="stacked"
-              control={({ labelId }) => (
+              error={commandError ?? undefined}
+              control={({ labelId, descriptionId }) => (
                 <Input
                   id={commandId}
                   type="text"
                   value={customCommand}
-                  onChange={(e) => setCustomCommand(e.target.value)}
-                  placeholder="e.g. code, nvim, subl"
+                  onChange={(e) => {
+                    setCustomCommand(e.target.value);
+                    setCommandError(null);
+                    editDraft();
+                  }}
+                  placeholder="code, nvim, subl"
                   aria-labelledby={labelId}
+                  aria-describedby={descriptionId}
+                  aria-invalid={commandError ? true : undefined}
                   className="font-mono"
                 />
               )}
@@ -359,7 +405,10 @@ export function EditorIntegrationTab() {
                   id={argsId}
                   type="text"
                   value={customTemplate}
-                  onChange={(e) => setCustomTemplate(e.target.value)}
+                  onChange={(e) => {
+                    setCustomTemplate(e.target.value);
+                    editDraft();
+                  }}
                   placeholder="{file}:{line}:{col}"
                   aria-labelledby={labelId}
                   aria-describedby={descriptionId}
@@ -372,7 +421,9 @@ export function EditorIntegrationTab() {
 
         <SettingsActions
           status={
-            saveError ? (
+            loadError ? (
+              <span className="text-status-error">{loadError}</span>
+            ) : saveError ? (
               <span className="text-status-error">{saveError}</span>
             ) : testResult === "ok" ? (
               <span className="flex items-center gap-1">
@@ -382,16 +433,26 @@ export function EditorIntegrationTab() {
               <span className="flex items-center gap-1 text-status-error">
                 <AlertCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" /> Failed to open
               </span>
-            ) : preferredEditor ? (
+            ) : isLoadingConfig ? null : preferredEditor ? (
               <span>
-                Saved: <span className="font-medium">{EDITOR_LABELS[preferredEditor.id]}</span>
-                {isDirty && " · Save to test this choice"}
+                Saved:{" "}
+                <span className="font-medium">
+                  {preferredEditor.id === "custom"
+                    ? `Custom (${preferredEditor.customCommand ?? "no command"})`
+                    : EDITOR_LABELS[preferredEditor.id]}
+                </span>
+                {isDirty && " · Unsaved changes"}
               </span>
             ) : (
               "Not saved yet — Daintree uses the first editor it finds"
             )
           }
         >
+          {loadError && (
+            <Button variant="outline" size="sm" onClick={() => setLoadAttempt((n) => n + 1)}>
+              Retry
+            </Button>
+          )}
           {/* Test opens the SAVED preference (main resolves it from the project), so it
               stays off while the draft differs rather than testing something else. */}
           <Button
@@ -407,7 +468,9 @@ export function EditorIntegrationTab() {
             variant="contrast"
             size="sm"
             onClick={handleSave}
-            disabled={isSaving || !activeProjectId || !isDirty}
+            disabled={
+              isSaving || isLoadingConfig || !activeProjectId || !isDirty || Boolean(loadError)
+            }
           >
             {isSaving ? "Saving…" : "Save"}
           </Button>

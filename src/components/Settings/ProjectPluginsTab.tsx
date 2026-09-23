@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { AlertCircle, FolderOpen, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import {
   SETTINGS_CONTROL_WIDTH,
+  SettingsEmptyRow,
   SettingsGroup,
   SettingsRow,
 } from "@/components/Settings/SettingsGroup";
+import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import {
   Select,
   SelectContent,
@@ -33,6 +35,9 @@ import {
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { useProjectStore } from "@/store/projectStore";
 import { systemClient } from "@/clients";
+import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
+import { actionService } from "@/services/ActionService";
+import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import {
   BUILT_IN_PLUGIN_CAPABILITIES,
@@ -68,8 +73,13 @@ const STATE_LABEL: Record<ProjectPluginState, string> = {
 const PROJECT_OPTION_PREFIX = "project:";
 const INSTALLED_OPTION_PREFIX = "installed:";
 
-function projectPluginStatus(plugin: ProjectPluginInfo): string {
-  if (plugin.muted && plugin.state !== "invalid") return "Off";
+/**
+ * One status for the picker, the badge and the pane. A plugin in a folder that is
+ * turned off is off whatever its own state says, so the folder decides first.
+ */
+export function projectPluginStatus(plugin: ProjectPluginInfo, folderTrusted: boolean): string {
+  if (plugin.state === "invalid") return STATE_LABEL.invalid;
+  if (plugin.muted || !folderTrusted) return "Off";
   return STATE_LABEL[plugin.state];
 }
 
@@ -190,8 +200,8 @@ function ProjectOverviewPane({ projectPluginCount }: { projectPluginCount: numbe
         title="This project's plugins"
         description={
           projectPluginCount === 0
-            ? "No plugins found in .daintree/plugins."
-            : `${projectPluginCount} plugin${projectPluginCount === 1 ? "" : "s"} in .daintree/plugins.`
+            ? "None found in .daintree/plugins"
+            : `${projectPluginCount} plugin${projectPluginCount === 1 ? "" : "s"} in .daintree/plugins`
         }
       >
         <SettingsGroup>
@@ -261,6 +271,9 @@ function ProjectOverviewPane({ projectPluginCount }: { projectPluginCount: numbe
   );
 }
 
+/** Longer than this and a manifest description is clamped behind "Show more". */
+const LONG_DESCRIPTION = 160;
+
 /** Whether a loaded plugin contributes settings, so its section is worth a heading. */
 function hasPluginSettings(plugin: LoadedPluginInfo | undefined): plugin is LoadedPluginInfo {
   return (plugin?.manifest.contributes.settings?.length ?? 0) > 0;
@@ -272,10 +285,28 @@ function hasPluginSettings(plugin: LoadedPluginInfo | undefined): plugin is Load
  * `collidesWithGlobal` case is exactly two plugins sharing an id.
  */
 function PluginIdentityDescription({ description, id }: { description?: string; id: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const textId = useId();
+  const long = (description?.length ?? 0) > LONG_DESCRIPTION;
   return (
     <>
-      {description && <span className="block break-words">{description}</span>}
-      <span className="block font-mono break-all">{id}</span>
+      {description && (
+        <span id={textId} className={cn("block break-words", long && !expanded && "line-clamp-2")}>
+          {description}
+        </span>
+      )}
+      {long && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={textId}
+          onClick={() => setExpanded((v) => !v)}
+          className="text-text-primary underline-offset-2 hover:underline rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+      <span className="mt-1 block font-mono break-all">{id}</span>
     </>
   );
 }
@@ -285,10 +316,12 @@ function ProjectPluginPane({
   plugin,
   loaded,
   projectPath,
+  onShowOverview,
 }: {
   plugin: ProjectPluginInfo;
   loaded: LoadedPluginInfo | undefined;
   projectPath: string | undefined;
+  onShowOverview: () => void;
 }) {
   const trust = useProjectPluginStore((s) => s.trust);
   const muting = useProjectPluginStore((s) => s.muting);
@@ -319,16 +352,22 @@ function ProjectPluginPane({
       .catch((err: unknown) => logError("Failed to reveal project plugin folder", err));
   };
 
-  const runStatus = plugin.muted
-    ? "Switched off on its own. The project's other plugins are unaffected, and the folder still has whatever trust you gave it — turning this back on runs it again without asking."
-    : !folderTrusted && plugin.state !== "invalid"
-      ? "Not running because this project's plugins are turned off as a folder. Enable them under “This project”."
-      : undefined;
+  const folderOff = !folderTrusted && plugin.state !== "invalid";
+  const awaitingActivation = plugin.state === "staged" && !plugin.muted && folderTrusted;
+  const runStatus = folderOff
+    ? undefined
+    : plugin.muted
+      ? "Switched off on its own. The project's other plugins are unaffected, and turning this back on runs it again without asking."
+      : plugin.state === "staged"
+        ? undefined
+        : plugin.state === "active"
+          ? "Running in this project. Switching it off stops only this plugin."
+          : undefined;
 
   const badges = (
     <>
       <Badge size="xs">Project</Badge>
-      <Badge size="xs">{projectPluginStatus(plugin)}</Badge>
+      <Badge size="xs">{projectPluginStatus(plugin, folderTrusted)}</Badge>
       {plugin.version && <Badge size="xs">v{plugin.version}</Badge>}
     </>
   );
@@ -340,11 +379,42 @@ function ProjectPluginPane({
         description={<PluginIdentityDescription description={plugin.description} id={plugin.id} />}
       >
         <SettingsGroup>
-          {canMute ? (
+          {folderOff && (
+            <SettingsRow
+              label="This project's plugins are turned off"
+              description="Nothing in .daintree/plugins runs until the folder is allowed, this plugin included"
+              control={
+                <Button variant="outline" size="sm" onClick={onShowOverview}>
+                  Review folder
+                </Button>
+              }
+            />
+          )}
+          {awaitingActivation ? (
+            // Staged and allowed: the one thing left is to start it, so the row is that
+            // step rather than a switch that reads "on" for a plugin that has never run.
+            <SettingsRow
+              label="Run here"
+              accessory={badges}
+              description="New to this project, so it was read but never run. Activating starts it now and on every future open."
+              control={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void activateStaged(plugin.id)}
+                  loading={activating.has(plugin.id)}
+                >
+                  Activate plugin
+                </Button>
+              }
+            />
+          ) : canMute ? (
             <SettingsRow
               label="Run here"
               accessory={badges}
               description={runStatus}
+              disabled={folderOff}
+              disabledReason="Not running because this project's plugins are turned off"
               control={({ descriptionId, disabled }) => (
                 <SettingsSwitch
                   checked={!plugin.muted}
@@ -402,23 +472,6 @@ function ProjectPluginPane({
             />
           )}
 
-          {plugin.state === "staged" && !plugin.muted && (
-            <SettingsRow
-              label="Staged"
-              description="New to this project, so it was read but never run. Activating starts it now and on every future open."
-              control={
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void activateStaged(plugin.id)}
-                  loading={activating.has(plugin.id)}
-                >
-                  Activate plugin
-                </Button>
-              }
-            />
-          )}
-
           <SettingsRow
             label="Plugin folder"
             layout="stacked"
@@ -466,6 +519,12 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
   const setVisibilityDefault = useProjectPluginStore((s) => s.setVisibilityDefault);
 
   const hiddenByDefault = visibility.defaultHiddenPluginIds.includes(pluginId);
+  // A forge provider that ships its own settings tab owns its settings there: editing
+  // them here as well would skip the checks that page runs (a GitLab instance change
+  // that has to clear the saved token first).
+  const forgeSettingsProvider = plugin.manifest.contributes.forgeProviders?.find(
+    (provider) => provider.slots?.settingsTab
+  );
   const override = visibility.overrides[pluginId];
   const visible = override ?? !hiddenByDefault;
   const name = plugin.manifest.displayName ?? pluginId;
@@ -488,16 +547,15 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
       >
         <SettingsGroup>
           <SettingsRow
-            label="Show here"
+            label="Show in this project"
             accessory={
               <>
                 <Badge size="xs">{plugin.isBuiltin ? "Built-in" : "Installed"}</Badge>
                 {plugin.manifest.version && <Badge size="xs">v{plugin.manifest.version}</Badge>}
               </>
             }
-            description="Hiding keeps this plugin out of this project's panels, commands, toolbar buttons, keyboard shortcuts and context menus. It stays installed and keeps running, so anything it contributes elsewhere — agents, recipes, forge providers, file decorations — carries on here regardless. This is which projects see it, not whether it is loaded."
+            description="Hiding removes its panels, commands, buttons and shortcuts from this project. It stays installed and running, so background features such as agents, forge providers and file decorations carry on."
             disabled={plugin.disabled}
-            disabledReason="Turned off everywhere in Settings → Plugins, so there is nothing for this project to show or hide"
             control={({ descriptionId, disabled }) => (
               <SettingsSwitch
                 checked={visible}
@@ -509,13 +567,31 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
               />
             )}
           />
+          {plugin.disabled && (
+            <SettingsRow
+              label="Turned off everywhere"
+              description="It isn't running in any project, so there's nothing to show or hide here"
+              control={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    void actionService.dispatch("app.pluginManager", undefined, { source: "user" })
+                  }
+                >
+                  Open plugin manager
+                </Button>
+              }
+            />
+          )}
           {!plugin.disabled && (
             <SettingsRow
-              label="Where it shows up"
+              label="Default for all projects"
+
               description={
                 hiddenByDefault
-                  ? "Hidden in projects you haven't decided about, including ones you open later. The switch above is this project's answer."
-                  : "Shown everywhere unless a project says otherwise. The switch above is this project's answer."
+                  ? "Hidden in every project that hasn't chosen, including new ones. Changing this affects other projects; the switch above is only this one."
+                  : "Shown in every project that hasn't chosen, including new ones. Changing this affects other projects; the switch above is only this one."
               }
               control={({ descriptionId, disabled }) => (
                 <Select
@@ -545,11 +621,39 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
         </SettingsGroup>
       </SettingsSection>
 
-      {hasPluginSettings(plugin) && (
-        <SettingsSection title="Settings">
-          <PluginSettingsForm plugin={plugin} />
-        </SettingsSection>
-      )}
+      {hasPluginSettings(plugin) &&
+        (forgeSettingsProvider ? (
+          <SettingsSection title="Settings">
+            <SettingsGroup>
+              <SettingsRow
+                label={`Configured in Code forge → ${forgeSettingsProvider.name}`}
+                description="Its settings sit beside its credentials there, so a change that affects the saved token is checked first"
+                control={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      window.dispatchEvent(
+                        new CustomEvent("daintree:open-settings-tab", {
+                          detail: {
+                            tab: "code-forge",
+                            subtab: makeForgeProviderId(pluginId, forgeSettingsProvider.id),
+                          },
+                        })
+                      )
+                    }
+                  >
+                    Open Code forge
+                  </Button>
+                }
+              />
+            </SettingsGroup>
+          </SettingsSection>
+        ) : (
+          <SettingsSection title="Settings">
+            <PluginSettingsForm plugin={plugin} />
+          </SettingsSection>
+        ))}
     </div>
   );
 }
@@ -570,9 +674,12 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
 export function ProjectPluginsTab() {
   const projectPlugins = useProjectPluginStore((s) => s.plugins);
   const error = useProjectPluginStore((s) => s.error);
+  const folderTrusted = useProjectPluginStore((s) => s.trust?.enabled === true);
   const projectPath = useProjectStore((s) => s.currentProject?.path);
 
   const [installed, setInstalled] = useState<LoadedPluginInfo[] | null>(null);
+  const [installedFailed, setInstalledFailed] = useState(false);
+  const [installedAttempt, setInstalledAttempt] = useState(0);
   const [selectedId, setSelectedId] = useState<string>(PROJECT_PLUGINS_OVERVIEW_ID);
 
   // Same pull-and-resubscribe shape as the global Plugins tab: `list()` is the
@@ -584,11 +691,14 @@ export function ProjectPluginsTab() {
       window.electron.plugin
         .list()
         .then((list) => {
-          if (!cancelled) setInstalled(list);
+          if (cancelled) return;
+          setInstalled(list);
+          setInstalledFailed(false);
         })
         .catch((err) => {
           if (cancelled) return;
-          setInstalled([]);
+          // Keep whatever list we had: an empty one would claim nothing is installed.
+          setInstalledFailed(true);
           logError("Failed to load installed plugins for the project plugins tab", err);
         });
     };
@@ -598,7 +708,7 @@ export function ProjectPluginsTab() {
       cancelled = true;
       unsubscribe();
     };
-  }, []);
+  }, [installedAttempt]);
 
   // A project plugin loads under an instance key, so it appears in `list()`
   // alongside the installed ones. Split on `instanceId`, NOT on `manifest.name`
@@ -620,8 +730,8 @@ export function ProjectPluginsTab() {
         pluginId: p.id,
         name: p.displayName,
         origin: "project" as const,
-        status: projectPluginStatus(p),
-        active: p.state === "active",
+        status: projectPluginStatus(p, folderTrusted),
+        active: folderTrusted && !p.muted && p.state === "active",
       })),
       ...installedOnly.map((p) => ({
         id: `${INSTALLED_OPTION_PREFIX}${p.instanceId}`,
@@ -632,7 +742,7 @@ export function ProjectPluginsTab() {
         active: !p.disabled,
       })),
     ],
-    [projectPlugins, installedOnly]
+    [projectPlugins, installedOnly, folderTrusted]
   );
 
   // A selection that has gone away — the folder changed, a plugin was
@@ -648,25 +758,26 @@ export function ProjectPluginsTab() {
 
   return (
     <div className="space-y-8">
-      <SettingsSection
-        title="Plugin"
-        description="Plugins this project ships, and which of your installed plugins show up in it"
-        action={
-          <div className="w-72">
-            <ProjectPluginSelectorDropdown
-              options={options}
-              activeId={showOverview ? PROJECT_PLUGINS_OVERVIEW_ID : selectedId}
-              onChange={setSelectedId}
-            />
-          </div>
-        }
-      >
+      {/* The picker leads the page bare, the way the agent and forge pages open: it
+          chooses what the rest of the page is about, so it is not a setting in a section. */}
+      <div className="space-y-2">
+        <ProjectPluginSelectorDropdown
+          options={options}
+          activeId={showOverview ? PROJECT_PLUGINS_OVERVIEW_ID : selectedId}
+          onChange={setSelectedId}
+        />
         {error && (
-          <p className="text-xs text-status-danger" role="alert">
+          <p className="text-xs text-status-error" role="alert">
             {error}
           </p>
         )}
-      </SettingsSection>
+        {installedFailed && (
+          <SettingsLoadErrorBanner
+            message="Couldn't read your installed plugins, so they're missing from this list"
+            onRetry={() => setInstalledAttempt((n) => n + 1)}
+          />
+        )}
+      </div>
 
       {showOverview && <ProjectOverviewPane projectPluginCount={projectPlugins.length} />}
 
@@ -680,6 +791,7 @@ export function ProjectPluginsTab() {
               : undefined
           }
           projectPath={projectPath}
+          onShowOverview={() => setSelectedId(PROJECT_PLUGINS_OVERVIEW_ID)}
         />
       )}
 
@@ -687,9 +799,29 @@ export function ProjectPluginsTab() {
         <InstalledPluginPane key={selectedInstalled.instanceId} plugin={selectedInstalled} />
       )}
 
-      {showOverview && projectPlugins.length === 0 && installedOnly.length === 0 && (
-        <p className="text-xs text-text-secondary">No plugins to configure yet.</p>
-      )}
+      {showOverview &&
+        !installedFailed &&
+        installed !== null &&
+        projectPlugins.length === 0 &&
+        installedOnly.length === 0 && (
+          <SettingsGroup>
+            <SettingsEmptyRow
+              action={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    void actionService.dispatch("app.pluginManager", undefined, { source: "user" })
+                  }
+                >
+                  Open plugin manager
+                </Button>
+              }
+            >
+              Install a plugin, or add one to .daintree/plugins, to configure it here
+            </SettingsEmptyRow>
+          </SettingsGroup>
+        )}
     </div>
   );
 }

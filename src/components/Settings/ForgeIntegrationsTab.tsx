@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
   ForgeProviderEntry,
   ForgeProviderResolutionVia,
@@ -6,9 +6,11 @@ import type {
 } from "@shared/types";
 import type { RemoteInfo } from "@shared/types/ipc/forge";
 import { SettingsSection } from "./SettingsSection";
-import { SettingsGroup } from "./SettingsGroup";
+import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { SettingsSelect, type SettingsSelectOption } from "./SettingsSelect";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { useProjectStore } from "@/store";
 import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -21,7 +23,7 @@ import { logError } from "@/utils/logger";
 // (it reserves `""` to clear the selection and show the placeholder). Mapped
 // to `null` at the IPC boundary in `handleChange`.
 const AUTO_DETECT_VALUE = "__auto-detect__";
-const AUTO_DETECT_LABEL = "No global default (auto-detect from hostname)";
+const AUTO_DETECT_LABEL = "Auto-detect";
 
 interface ForgeSettings {
   defaultProviderId: string | null;
@@ -32,6 +34,8 @@ const DEFAULT_SETTINGS: ForgeSettings = { defaultProviderId: null };
 interface RemoteRouting {
   remote: RemoteInfo;
   resolved: ResolvedForgeProvider;
+  /** The resolution call itself failed — not the same answer as "no provider matches". */
+  failed?: boolean;
 }
 
 /**
@@ -62,16 +66,11 @@ function findLiveRemoteName(
   return remote?.name ?? null;
 }
 
-const TOOLTIP_COPY: Record<ForgeProviderResolutionVia, string> = {
-  override: "Resolved from this project's provider override.",
-  default: "Resolved by the global default provider.",
-  hostname: "Resolved by matching the remote hostname.",
-};
-
-const BADGE_LABEL: Record<ForgeProviderResolutionVia, string> = {
-  override: "Override",
-  default: "Default",
-  hostname: "Hostname",
+/** Why a remote resolved the way it did, in the words of the precedence it follows. */
+const VIA_LABEL: Record<ForgeProviderResolutionVia, string> = {
+  override: "project setting",
+  default: "default provider",
+  hostname: "hostname",
 };
 
 export function ForgeIntegrationsTab() {
@@ -79,6 +78,10 @@ export function ForgeIntegrationsTab() {
   const [providers, setProviders] = useState<ForgeProviderEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // The initial read, separate from a failed save: only this one leaves the select
+  // showing a default nobody read, so only this one blocks it and offers Retry.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const writeSeqRef = useRef(0);
 
   const activeProject = useProjectStore((s) => s.currentProject);
@@ -89,6 +92,10 @@ export function ForgeIntegrationsTab() {
   const [forgeRemote, setForgeRemote] = useState<string | null>(null);
   const [remotesLoading, setRemotesLoading] = useState(false);
   const [remotesError, setRemotesError] = useState<string | null>(null);
+  const [remotesAttempt, setRemotesAttempt] = useState(0);
+  // Null when the project's forge-remote setting couldn't be read: which remote is in
+  // use is then unknown, and the list says nothing rather than guess auto-detect.
+  const [forgeRemoteKnown, setForgeRemoteKnown] = useState(true);
   // Mirror project id + remotes into refs so a `reresolveRemotes` call that was
   // dispatched on project A doesn't run with A's id against B's remotes after
   // an active-project switch lands between the settings write and its reply.
@@ -127,10 +134,11 @@ export function ForgeIntegrationsTab() {
         if (cancelled) return;
         setSettings(loadedSettings);
         setProviders(loadedProviders);
+        setLoadFailed(false);
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(formatErrorMessage(err, "Couldn't load forge integrations"));
+        setLoadFailed(true);
         logError("Failed to load forge integration settings", err);
       })
       .finally(() => {
@@ -139,7 +147,7 @@ export function ForgeIntegrationsTab() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadAttempt]);
 
   // Load remotes + per-remote resolution whenever the active project changes.
   // Single effect keyed on [activeProjectId, activeProjectPath] avoids the
@@ -174,6 +182,7 @@ export function ForgeIntegrationsTab() {
           .getSettings(activeProjectId)
           .catch(() => null);
         if (cancelled) return;
+        setForgeRemoteKnown(projectSettings !== null);
         setForgeRemote(projectSettings?.forgeRemote ?? projectSettings?.githubRemote ?? null);
         const resolutions = await Promise.allSettled(
           loadedRemotes.map((remote) =>
@@ -186,7 +195,7 @@ export function ForgeIntegrationsTab() {
           if (result?.status === "fulfilled") {
             return { remote, resolved: result.value };
           }
-          return { remote, resolved: { entry: null, resolvedVia: null } };
+          return { remote, resolved: { entry: null, resolvedVia: null }, failed: true };
         });
         setRemotes(next);
       } catch (err) {
@@ -201,7 +210,7 @@ export function ForgeIntegrationsTab() {
     return () => {
       cancelled = true;
     };
-  }, [activeProjectId, activeProjectPath]);
+  }, [activeProjectId, activeProjectPath, remotesAttempt]);
 
   const selectValue = settings.defaultProviderId ?? AUTO_DETECT_VALUE;
 
@@ -210,8 +219,7 @@ export function ForgeIntegrationsTab() {
       {
         value: AUTO_DETECT_VALUE,
         label: AUTO_DETECT_LABEL,
-        description:
-          "Pick the first installed provider whose hostname matches the project's git remote.",
+        description: "The first installed provider whose hostname matches the remote",
       },
       ...providers.map((entry) => {
         const matches = entry.contribution.matches.join(", ");
@@ -263,7 +271,7 @@ export function ForgeIntegrationsTab() {
         if (result?.status === "fulfilled") {
           return { remote, resolved: result.value };
         }
-        return { remote, resolved: { entry: null, resolvedVia: null } };
+        return { remote, resolved: { entry: null, resolvedVia: null }, failed: true };
       })
     );
   }, []);
@@ -296,38 +304,42 @@ export function ForgeIntegrationsTab() {
 
   return (
     <div className="space-y-8">
-      <SettingsSection title="Default forge provider" id="forge-default-provider">
-        <SettingsGroup>
+      <SettingsSection
+        title="Provider routing"
+        description="A project uses its own provider setting first, then the default below, then whichever provider recognizes the remote's hostname"
+      >
+        {loadFailed && (
+          <SettingsLoadErrorBanner
+            message="Couldn't read the forge providers or the saved default"
+            onRetry={() => setLoadAttempt((n) => n + 1)}
+          />
+        )}
+        <SettingsGroup id="forge-default-provider">
           <SettingsSelect
-            label="Global default"
+            label="Default provider"
             description={
-              providers.length === 0 && !loading
-                ? "No forge plugins are installed yet. Install a plugin that contributes a forge provider to choose a default"
-                : "Used for newly opened projects. A project's own setting still wins; otherwise the remote's hostname decides"
+              providers.length === 0 && !loading && !loadFailed
+                ? "No forge plugins are installed yet. Install one that contributes a forge provider to choose a default"
+                : "For every project without its own provider setting"
             }
-            scope="global"
             value={selectValue}
             onValueChange={(value) => {
               void handleChange(value);
             }}
             options={options}
-            controlWidth="wide"
-            disabled={loading}
+            disabled={loading || loadFailed}
+            disabledReason={loadFailed ? "Couldn't read the saved default" : undefined}
+            isModified={settings.defaultProviderId !== null}
+            onReset={() => void handleChange(AUTO_DETECT_VALUE)}
+            resetAriaLabel="Reset default provider to auto-detect"
             placeholder={loading ? "Loading…" : AUTO_DETECT_LABEL}
             error={error ?? undefined}
           />
         </SettingsGroup>
-      </SettingsSection>
-
-      <SettingsSection
-        title="Active project routing"
-        description="Which forge provider each git remote of the active project resolves to, and why"
-        id="forge-active-project-routing"
-      >
         <ProjectRoutingPanel
           activeProjectName={activeProject?.name}
           activeProjectId={activeProjectId}
-          providersInstalled={providers.length}
+          providersInstalled={loadFailed && providers.length === 0 ? null : providers.length}
           providers={providers}
           providersLoading={loading}
           remotes={remotes}
@@ -335,6 +347,8 @@ export function ForgeIntegrationsTab() {
           loading={showRemotesLoading}
           pending={remotesPending}
           error={remotesError}
+          forgeRemoteKnown={forgeRemoteKnown}
+          onRetry={() => setRemotesAttempt((n) => n + 1)}
         />
       </SettingsSection>
     </div>
@@ -344,7 +358,8 @@ export function ForgeIntegrationsTab() {
 interface ProjectRoutingPanelProps {
   activeProjectName: string | undefined;
   activeProjectId: string | undefined;
-  providersInstalled: number;
+  /** Null when the provider list failed to load, so "none installed" can't be claimed. */
+  providersInstalled: number | null;
   /** Registered providers, used to replay main's hostname-match test. */
   providers: ForgeProviderEntry[];
   // Whether the top-level provider/settings load is still in flight. Used to
@@ -360,6 +375,8 @@ interface ProjectRoutingPanelProps {
   // which would otherwise flash the "no remotes" empty state on every load.
   pending: boolean;
   error: string | null;
+  forgeRemoteKnown: boolean;
+  onRetry: () => void;
 }
 
 function ProjectRoutingPanel({
@@ -373,9 +390,20 @@ function ProjectRoutingPanel({
   loading,
   pending,
   error,
+  forgeRemoteKnown,
+  onRetry,
 }: ProjectRoutingPanelProps) {
+  const groupLabel = activeProjectName ? `${activeProjectName} remotes` : "Active project remotes";
+  const shell = (children: ReactNode) => (
+    <SettingsGroup label={groupLabel} id="forge-active-project-routing">
+      {children}
+    </SettingsGroup>
+  );
+
   if (!activeProjectId) {
-    return <p className="text-xs text-text-secondary">Open a project to view its forge routing.</p>;
+    return shell(
+      <SettingsEmptyRow>Open a project to see which provider each remote uses</SettingsEmptyRow>
+    );
   }
 
   // Sub-400ms in-flight window: a load is running but the Doherty gate hasn't
@@ -387,105 +415,100 @@ function ProjectRoutingPanel({
   }
 
   if (loading) {
-    return <p className="text-xs text-text-secondary">Loading remotes…</p>;
+    return shell(<SettingsEmptyRow>Loading remotes…</SettingsEmptyRow>);
   }
 
   if (error) {
-    return <p className="text-xs text-status-error">{error}</p>;
+    return shell(
+      <SettingsEmptyRow
+        action={
+          <Button variant="outline" size="sm" onClick={onRetry}>
+            Retry
+          </Button>
+        }
+      >
+        <span className="text-status-error">{error}</span>
+      </SettingsEmptyRow>
+    );
   }
 
   if (remotes.length === 0) {
-    return (
-      <p className="text-xs text-text-secondary">
-        {activeProjectName ?? "This project"} has no git remotes configured.
-      </p>
+    return shell(
+      <SettingsEmptyRow>
+        Add a git remote to {activeProjectName ?? "this project"} to route its issues and pull
+        requests
+      </SettingsEmptyRow>
     );
   }
 
-  const liveRemoteName = findLiveRemoteName(remotes, forgeRemote, providers);
+  const liveRemoteName = forgeRemoteKnown
+    ? findLiveRemoteName(remotes, forgeRemote, providers)
+    : null;
+  const noProviders = providersInstalled === 0 && !providersLoading;
 
-  return (
-    <div className="space-y-2">
-      {providersInstalled === 0 && !providersLoading && (
-        <p className="text-xs text-text-secondary">
-          No forge plugins are installed. Each remote shows as unmatched until a provider plugin is
-          installed.
-        </p>
+  const anyFailed = remotes.some((r) => r.failed);
+
+  return shell(
+    <>
+      {remotes.map(({ remote, resolved, failed }) => (
+        <SettingsRow
+          key={remote.name}
+          label={remote.name}
+          accessory={
+            remote.name === liveRemoteName ? (
+              <Badge size="xs">{forgeRemote ? "In use" : "In use · auto-detected"}</Badge>
+            ) : undefined
+          }
+          description={
+            <span className="block font-mono truncate" title={remote.fetchUrl}>
+              {remote.fetchUrl}
+            </span>
+          }
+          control={<RoutingResult resolved={resolved} failed={failed} noProviders={noProviders} />}
+        />
+      ))}
+      {anyFailed && (
+        <SettingsEmptyRow
+          action={
+            <Button variant="outline" size="sm" onClick={onRetry}>
+              Retry
+            </Button>
+          }
+        >
+          Some remotes couldn&apos;t be resolved
+        </SettingsEmptyRow>
       )}
-      <SettingsGroup>
-        <ul className="divide-y divide-border-subtle">
-          {remotes.map(({ remote, resolved }) => (
-            <li key={remote.name} className="flex items-center gap-3 justify-between px-4 py-3">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-sm font-medium text-text-primary">{remote.name}</span>
-                  {remote.name === liveRemoteName && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span
-                          className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium border border-border-default text-text-secondary cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent-primary"
-                          tabIndex={0}
-                        >
-                          Active
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent side="top">
-                        {forgeRemote
-                          ? "This project is set to use this remote for issues, PRs, and pulse data."
-                          : "Auto-detected as this project's forge remote for issues, PRs, and pulse data."}
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                </div>
-                <p
-                  className="text-xs text-text-secondary font-mono truncate"
-                  title={remote.fetchUrl}
-                >
-                  {remote.fetchUrl}
-                </p>
-              </div>
-              <RoutingBadge resolved={resolved} />
-            </li>
-          ))}
-        </ul>
-      </SettingsGroup>
-    </div>
+    </>
   );
 }
 
-function RoutingBadge({ resolved }: { resolved: ResolvedForgeProvider }) {
+/** The provider a remote routes to and why, as plain text on the row's rail. */
+function RoutingResult({
+  resolved,
+  failed,
+  noProviders,
+}: {
+  resolved: ResolvedForgeProvider;
+  failed?: boolean;
+  noProviders: boolean;
+}) {
+  if (failed) {
+    return <span className="text-xs text-status-error">Couldn&apos;t resolve</span>;
+  }
   if (resolved.entry === null || resolved.resolvedVia === null) {
     return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span
-            className="inline-flex items-center px-2 py-0.5 rounded-sm text-3xs font-medium border border-border-default text-text-secondary cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
-            tabIndex={0}
-          >
-            No match
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="left">
-          No provider matches this remote. Install a plugin or pick a global default that covers
-          this hostname.
-        </TooltipContent>
-      </Tooltip>
+      <span className="text-right text-xs">
+        <span className="block text-text-primary">No provider</span>
+        <span className="block text-text-secondary">
+          {noProviders ? "Install a forge plugin" : "Set one in Project settings"}
+        </span>
+      </span>
     );
   }
-  const providerName = resolved.entry.contribution.name;
-  const via = resolved.resolvedVia;
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm text-3xs font-medium border border-border-default bg-status-info/10 text-text-primary cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
-          tabIndex={0}
-        >
-          <span>{providerName}</span>
-          <span className="text-text-secondary uppercase tracking-wide">{BADGE_LABEL[via]}</span>
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="left">{TOOLTIP_COPY[via]}</TooltipContent>
-    </Tooltip>
+    <span className="text-right text-xs">
+      <span className="block text-sm text-text-primary">{resolved.entry.contribution.name}</span>
+      <span className="block text-text-secondary">by {VIA_LABEL[resolved.resolvedVia]}</span>
+    </span>
   );
 }

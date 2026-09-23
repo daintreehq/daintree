@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Check, AlertCircle, FlaskConical, ExternalLink } from "lucide-react";
+import { Check, FlaskConical, ExternalLink } from "lucide-react";
 import { actionService } from "@/services/ActionService";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsActions, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
@@ -16,6 +17,17 @@ const DEFAULT_INSTANCE_URL = "https://gitlab.com";
 
 type ValidationResult = "success" | "error" | "test-success" | "test-error" | null;
 
+/** A credential write that would re-point the instance and so drop the saved token. */
+type PendingSwitch = "save" | "test" | null;
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
 function normalizeInstanceUrl(raw: string): string {
   const trimmed = raw.trim().replace(/\/+$/, "");
   if (trimmed.length === 0) return DEFAULT_INSTANCE_URL;
@@ -28,6 +40,10 @@ export function GitLabSettingsTab() {
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [token, setToken] = useState("");
   const [hasToken, setHasToken] = useState(false);
+  // False until the stored-token status has been read: an unknown status is not "no
+  // token", and every write that could remove one waits for it.
+  const [credentialKnown, setCredentialKnown] = useState(false);
+  const [urlError, setUrlError] = useState<string | null>(null);
   const [isValidating, setIsValidating] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
@@ -42,6 +58,8 @@ export function GitLabSettingsTab() {
   const [validationResult, setValidationResult] = useState<ValidationResult>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [pendingSwitch, setPendingSwitch] = useState<PendingSwitch>(null);
+  const [confirmingClear, setConfirmingClear] = useState(false);
   // Set the moment the user types in the URL field so a slow settings load
   // resolving afterwards can't clobber their edit.
   const instanceUrlDirtyRef = useRef(false);
@@ -83,6 +101,7 @@ export function GitLabSettingsTab() {
       .then((status) => {
         if (cancelled) return;
         setHasToken(status.hasCredential);
+        setCredentialKnown(true);
         setCredentialLoadError(null);
       })
       .catch((err) => {
@@ -96,14 +115,23 @@ export function GitLabSettingsTab() {
     };
   }, [loadAttempt]);
 
+  // Only a success fades. An error carries the fix, so it stays until the input changes.
   useEffect(() => {
-    if (!validationResult) return;
-    const timer = setTimeout(() => {
-      setValidationResult(null);
-      setErrorMessage(null);
-    }, 5000);
+    if (validationResult !== "success" && validationResult !== "test-success") return;
+    const timer = setTimeout(() => setValidationResult(null), 5000);
     return () => clearTimeout(timer);
   }, [validationResult]);
+
+  const clearStaleResult = () => {
+    if (validationResult === null) return;
+    setValidationResult(null);
+    setErrorMessage(null);
+  };
+
+  // Re-pointing the instance drops the saved token (it was validated against the old
+  // host), so with a token stored the switch waits for Save or Test and asks first.
+  const switchesInstanceWithToken = () =>
+    hasToken && normalizeInstanceUrl(instanceUrl) !== savedInstanceUrl;
 
   /**
    * Persist the instance URL when it changed. Token validation runs in the
@@ -113,9 +141,14 @@ export function GitLabSettingsTab() {
    *
    * An instance SWITCH also clears any stored token: the credential is scoped
    * to the instance it was validated against, and re-pointing the URL must
-   * not silently re-scope the old token to the new host.
+   * not silently re-scope the old token to the new host. That removal only
+   * happens with `allowTokenRemoval` — the user confirmed it. Otherwise a token
+   * found at write time (loaded late, or saved from another window) stops the
+   * switch before anything is written, and the caller asks first.
    */
-  const persistInstanceUrlIfDirty = async (): Promise<void> => {
+  const persistInstanceUrlIfDirty = async (
+    allowTokenRemoval: boolean
+  ): Promise<"done" | "needs-confirm"> => {
     const normalized = normalizeInstanceUrl(instanceUrl);
     // Compared against a fresh read, not this tab's load-time snapshot. The
     // setting is shared across windows, and main validates against whatever is
@@ -130,7 +163,13 @@ export function GitLabSettingsTab() {
         : DEFAULT_INSTANCE_URL;
     if (normalized === stored) {
       if (stored !== savedInstanceUrl) setSavedInstanceUrl(stored);
-      return;
+      return "done";
+    }
+    const status = await window.electron.forge.getCredentialStatus(BUILTIN_GITLAB_PROVIDER_ID);
+    if (status.hasCredential && !allowTokenRemoval) {
+      setHasToken(true);
+      setCredentialKnown(true);
+      return "needs-confirm";
     }
     await window.electron.plugin.setSettingValue(
       GITLAB_PLUGIN_ID,
@@ -144,21 +183,28 @@ export function GitLabSettingsTab() {
     instanceUrlDirtyRef.current = false;
     // Same reason for the credential: a token the other window saved for its
     // instance is exactly the one that must not be re-scoped to this one.
-    const status = await window.electron.forge.getCredentialStatus(BUILTIN_GITLAB_PROVIDER_ID);
     if (status.hasCredential || hasToken) {
       await window.electron.forge.clearCredential(BUILTIN_GITLAB_PROVIDER_ID);
       setHasToken(false);
       setNotice("Instance changed — enter a token for the new instance");
     }
+    return "done";
   };
 
-  const handleSaveToken = async () => {
+  const handleSaveToken = async (confirmed = false) => {
     if (!token.trim() || credentialOpInFlight()) return;
+    if (!confirmed && switchesInstanceWithToken()) {
+      setPendingSwitch("save");
+      return;
+    }
     setIsValidating(true);
     setValidationResult(null);
     setErrorMessage(null);
     try {
-      await persistInstanceUrlIfDirty();
+      if ((await persistInstanceUrlIfDirty(confirmed)) === "needs-confirm") {
+        setPendingSwitch("save");
+        return;
+      }
       // The host's forge credential surface validates against GitLab before
       // persisting and delivers the token to the live provider impl.
       const validation = await window.electron.forge.setCredential(BUILTIN_GITLAB_PROVIDER_ID, {
@@ -183,13 +229,20 @@ export function GitLabSettingsTab() {
     }
   };
 
-  const handleTestToken = async () => {
+  const handleTestToken = async (confirmed = false) => {
     if (!token.trim() || credentialOpInFlight()) return;
+    if (!confirmed && switchesInstanceWithToken()) {
+      setPendingSwitch("test");
+      return;
+    }
     setIsTesting(true);
     setValidationResult(null);
     setErrorMessage(null);
     try {
-      await persistInstanceUrlIfDirty();
+      if ((await persistInstanceUrlIfDirty(confirmed)) === "needs-confirm") {
+        setPendingSwitch("test");
+        return;
+      }
       const result = await actionService.dispatch<GitLabTokenValidation>(
         "forge.validateToken",
         // The GitLab tab is GitLab-pinned by design, so the test always
@@ -215,6 +268,7 @@ export function GitLabSettingsTab() {
   };
 
   const handleClearToken = async () => {
+    setConfirmingClear(false);
     // Guarded rather than merely disabled, so a keyboard-queued activation
     // can't slip past the disabled attribute.
     if (credentialOpInFlight()) return;
@@ -235,12 +289,16 @@ export function GitLabSettingsTab() {
 
   const handleInstanceUrlBlur = () => {
     if (credentialOpInFlight()) return;
+    // Leaving the field never deletes a token: with one saved, the new instance is
+    // committed by the Save or Test that brings a token for it.
+    if (switchesInstanceWithToken()) return;
     setIsPersistingUrl(true);
-    void persistInstanceUrlIfDirty()
+    setUrlError(null);
+    // Never allowed to remove a token: if one turns up, the switch waits for Save.
+    void persistInstanceUrlIfDirty(false)
       .catch((err) => {
         logError("Failed to save GitLab instance URL", err);
-        setValidationResult("error");
-        setErrorMessage("Couldn't save instance URL");
+        setUrlError("Couldn't save the instance URL");
       })
       .finally(() => setIsPersistingUrl(false));
   };
@@ -254,22 +312,26 @@ export function GitLabSettingsTab() {
     );
   };
 
+  const tokenError =
+    validationResult === "error" || validationResult === "test-error"
+      ? errorMessage || "Invalid token"
+      : undefined;
+  const instancePending = switchesInstanceWithToken();
+
   const tokenStatus =
     validationResult === "success" ? (
       <span className="flex items-center gap-1">
         <Check className="w-3 h-3 shrink-0" aria-hidden="true" />
-        Token saved
+        Checked and saved
       </span>
     ) : validationResult === "test-success" ? (
       <span className="flex items-center gap-1">
         <Check className="w-3 h-3 shrink-0" aria-hidden="true" />
-        Token valid — click Save to store it
+        Token works — not saved yet
       </span>
-    ) : validationResult === "error" || validationResult === "test-error" ? (
-      <span className="flex items-center gap-1 text-status-error">
-        <AlertCircle className="w-3 h-3 shrink-0" aria-hidden="true" />
-        {errorMessage || "Invalid token"}
-      </span>
+    ) : tokenError ? (
+      // Shown on the field; repeated here only so the live region announces it.
+      <span className="sr-only">{tokenError}</span>
     ) : null;
 
   return (
@@ -286,14 +348,21 @@ export function GitLabSettingsTab() {
           <SettingsInput
             rowId="gitlab-instance"
             label="Instance URL"
-            description="The instance your token authenticates against. For a self-hosted project whose remote hostname isn't a known GitLab domain, also set the project's forge provider to GitLab under Code forge → Active project routing."
+            description={
+              instancePending
+                ? `Not switched yet. Save a token for ${hostOf(normalizeInstanceUrl(instanceUrl))} to switch; that replaces the saved token for ${hostOf(savedInstanceUrl)}.`
+                : "The instance your token authenticates against. A self-hosted project whose hostname isn't a known GitLab domain also needs its forge provider set to GitLab in Project settings → Code forge."
+            }
             type="text"
             value={instanceUrl}
             onChange={(e) => {
               instanceUrlDirtyRef.current = true;
               setInstanceUrl(e.target.value);
+              setUrlError(null);
+              clearStaleResult();
             }}
             onBlur={handleInstanceUrlBlur}
+            error={urlError ?? undefined}
             // The blur persists the URL and can clear the credential, so it
             // takes the same lock every other credential write does.
             readOnly={credentialOpInFlight()}
@@ -302,13 +371,13 @@ export function GitLabSettingsTab() {
             autoComplete="off"
             disabled={isValidating || isTesting}
           />
-          {hasToken && (
+          {credentialKnown && (
             <SettingsRow
               label="Status"
               control={
                 <span className="flex items-center gap-1 text-xs text-text-secondary">
-                  <Check className="w-3 h-3" aria-hidden="true" />
-                  GitLab connected
+                  {hasToken && <Check className="w-3 h-3" aria-hidden="true" />}
+                  {hasToken ? `Token saved for ${hostOf(savedInstanceUrl)}` : "No token saved"}
                 </span>
               }
             />
@@ -316,10 +385,16 @@ export function GitLabSettingsTab() {
           <SettingsInput
             rowId="gitlab-token"
             label="Personal access token"
-            description={notice ?? undefined}
+            description={
+              notice ?? "Test checks a token without saving it; Save checks it, then stores it"
+            }
+            error={tokenError}
             type="password"
             value={token}
-            onChange={(e) => setToken(e.target.value)}
+            onChange={(e) => {
+              setToken(e.target.value);
+              clearStaleResult();
+            }}
             placeholder={hasToken ? "Enter new token to replace" : "glpat-…"}
             aria-label="GitLab personal access token"
             autoComplete="new-password"
@@ -329,8 +404,10 @@ export function GitLabSettingsTab() {
               polite live region, so a screen reader still hears whether Save worked. */}
           <SettingsActions status={tokenStatus}>
             <Button
-              onClick={handleTestToken}
-              disabled={credentialOpInFlight() || !settingsLoaded || !token.trim()}
+              onClick={() => void handleTestToken()}
+              disabled={
+                credentialOpInFlight() || !settingsLoaded || !credentialKnown || !token.trim()
+              }
               loading={isTesting}
               variant="outline"
               size="sm"
@@ -340,8 +417,10 @@ export function GitLabSettingsTab() {
               Test
             </Button>
             <Button
-              onClick={handleSaveToken}
-              disabled={credentialOpInFlight() || !settingsLoaded || !token.trim()}
+              onClick={() => void handleSaveToken()}
+              disabled={
+                credentialOpInFlight() || !settingsLoaded || !credentialKnown || !token.trim()
+              }
               loading={isValidating}
               variant="contrast"
               size="sm"
@@ -354,7 +433,7 @@ export function GitLabSettingsTab() {
 
         <SettingsGroup>
           <SettingsRow
-            label="Create a new token"
+            label="Get a token"
             description={
               <>
                 Opens your instance&apos;s access-token page with the scope preselected. Required
@@ -382,7 +461,7 @@ export function GitLabSettingsTab() {
               description="Clearing removes Daintree's copy; forge features stop until you add another token"
               control={
                 <Button
-                  onClick={handleClearToken}
+                  onClick={() => setConfirmingClear(true)}
                   variant="ghost-danger"
                   size="sm"
                   aria-label="Clear token"
@@ -396,6 +475,37 @@ export function GitLabSettingsTab() {
           </SettingsGroup>
         )}
       </SettingsSection>
+
+      <ConfirmDialog
+        isOpen={pendingSwitch !== null}
+        variant="destructive"
+        onConfirm={() => {
+          const action = pendingSwitch;
+          setPendingSwitch(null);
+          if (action === "save") void handleSaveToken(true);
+          else if (action === "test") void handleTestToken(true);
+        }}
+        onClose={() => setPendingSwitch(null)}
+        title={`Switch to ${hostOf(normalizeInstanceUrl(instanceUrl))}?`}
+        description={`The saved token for ${hostOf(savedInstanceUrl)} is removed, because it only works on that instance. ${
+          pendingSwitch === "test"
+            ? "The new token is then tested but not saved."
+            : "The new token is then checked and saved."
+        }`}
+        confirmLabel="Switch instance"
+        zIndex="nested"
+      />
+
+      <ConfirmDialog
+        isOpen={confirmingClear}
+        variant="destructive"
+        onConfirm={() => void handleClearToken()}
+        onClose={() => setConfirmingClear(false)}
+        title="Clear the GitLab token?"
+        description={`Daintree's copy is deleted. GitLab issues, merge requests and repository stats stop until you add a token again.`}
+        confirmLabel="Clear token"
+        zIndex="nested"
+      />
     </div>
   );
 }

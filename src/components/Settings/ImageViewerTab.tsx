@@ -24,6 +24,10 @@ const ROW_CLASSES =
 const ROW_SELECTED = "bg-overlay-selected";
 const ROW_UNSELECTED = "hover:bg-overlay-soft";
 
+function describeViewer(viewer: PersistedImageViewer): string {
+  return viewer.mode === "os" ? "OS default" : `Custom (${viewer.customCommand})`;
+}
+
 export function ImageViewerTab() {
   const commandFieldId = useId();
   const [mode, setMode] = useState<ImageViewerMode>("os");
@@ -32,7 +36,8 @@ export function ImageViewerTab() {
   const [isSaving, setIsSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [commandError, setCommandError] = useState<string | null>(null);
   // What is on disk, so Save means "write this change". Null while the project has
   // no preference yet: the OS default shown then is a suggestion, and saving it is
   // still a real first write.
@@ -55,7 +60,6 @@ export function ImageViewerTab() {
     if (!activeProjectId) return;
     setMode("os");
     setCustomCommand("");
-    setSaved(false);
     setPersisted(null);
     setSaveError(null);
     setLoadError(null);
@@ -65,7 +69,7 @@ export function ImageViewerTab() {
     const timer = setTimeout(() => {
       timedOut = true;
       if (!cancelled && isMountedRef.current) {
-        setLoadError("Settings took too long to load. Reopen the tab to retry.");
+        setLoadError("The saved image viewer took too long to load");
         setIsLoading(false);
       }
     }, 10_000);
@@ -93,27 +97,25 @@ export function ImageViewerTab() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [activeProjectId]);
+  }, [activeProjectId, loadAttempt]);
 
   const handleModeChange = (newMode: ImageViewerMode) => {
     setMode(newMode);
-    setSaved(false);
   };
 
   const handleCommandChange = (value: string) => {
     setCustomCommand(value);
-    setSaved(false);
+    setCommandError(null);
   };
 
   const handleSave = async () => {
     if (!activeProjectId || isSaving || isLoading || loadError) return;
     if (mode === "custom" && !customCommand.trim()) {
-      setSaveError("Custom command cannot be empty");
+      setCommandError("Enter the command that opens images");
       return;
     }
     setIsSaving(true);
     setSaveError(null);
-    setSaved(false);
     try {
       // Routed through projectClient so the per-projectId getSettings cache
       // is invalidated on save. Bypassing it left other readers reading
@@ -130,7 +132,6 @@ export function ImageViewerTab() {
       patchCachedProjectSettings(activeProjectId, { preferredImageViewer });
       if (!isMountedRef.current) return;
       setPersisted({ mode, customCommand: preferredImageViewer.customCommand ?? "" });
-      setSaved(true);
     } catch (err) {
       if (!isMountedRef.current) return;
       setSaveError(formatErrorMessage(err, "Failed to save image viewer preference"));
@@ -156,7 +157,7 @@ export function ImageViewerTab() {
     <SettingsSection
       id="image-viewer"
       title="Image viewer"
-      description="Choose the application that opens when you click 'Open in image viewer' in the file viewer"
+      description={`For ${activeProject?.name ?? "this project"} only. The app "Open in image viewer" launches from the file viewer.`}
     >
       <SettingsGroup className="overflow-hidden">
         <RadioChoiceGroup
@@ -210,10 +211,20 @@ export function ImageViewerTab() {
                   value={customCommand}
                   onChange={(e) => handleCommandChange(e.target.value)}
                   disabled={controlsDisabled}
-                  placeholder="e.g. open -a Photoshop, gimp"
+                  placeholder="open -a Photoshop, gimp"
+                  aria-describedby={`${commandFieldId}-help${commandError ? ` ${commandFieldId}-error` : ""}`}
+                  aria-invalid={commandError ? true : undefined}
                   className="font-mono"
                 />
-                <p className="text-xs text-text-secondary select-text">
+                {commandError && (
+                  <p id={`${commandFieldId}-error`} className="text-xs text-status-error">
+                    {commandError}
+                  </p>
+                )}
+                <p
+                  id={`${commandFieldId}-help`}
+                  className="text-xs text-text-secondary select-text"
+                >
                   The file path is appended as the last argument
                 </p>
               </div>
@@ -227,13 +238,23 @@ export function ImageViewerTab() {
               <span className="text-status-error">{loadError}</span>
             ) : saveError ? (
               <span className="text-status-error">{saveError}</span>
-            ) : saved && !isDirty ? (
-              "Saved"
-            ) : !persisted && !isLoading ? (
-              "Not saved yet — images open with the OS default"
-            ) : null
+            ) : !persisted ? (
+              isLoading ? null : (
+                "Not saved yet — images open with the OS default"
+              )
+            ) : (
+              <span>
+                Saved: <span className="font-medium">{describeViewer(persisted)}</span>
+                {isDirty && " · Unsaved changes"}
+              </span>
+            )
           }
         >
+          {loadError && (
+            <Button variant="outline" size="sm" onClick={() => setLoadAttempt((n) => n + 1)}>
+              Retry
+            </Button>
+          )}
           <Button
             variant="contrast"
             size="sm"

@@ -215,9 +215,12 @@ describe("PluginSettingsForm", () => {
   });
 
   it("writes an enum on change", async () => {
+    // Six options: past the segmented-control limit, so this is the select path.
     render(
       <PluginSettingsForm
-        plugin={makePlugin([{ id: "mode", type: "enum", label: "Mode", options: ["a", "b"] }])}
+        plugin={makePlugin([
+          { id: "mode", type: "enum", label: "Mode", options: ["a", "b", "c", "d", "e", "f"] },
+        ])}
       />
     );
     const select = (await screen.findByRole("combobox", { name: "Mode" })) as HTMLButtonElement;
@@ -233,7 +236,14 @@ describe("PluginSettingsForm", () => {
   it("closes an open enum list, and only the list, on Escape", async () => {
     render(
       <PluginSettingsForm
-        plugin={makePlugin([{ id: "mode", type: "enum", label: "Mode", options: ["a", "b"] }])}
+        plugin={makePlugin([
+          {
+            id: "mode",
+            type: "enum",
+            label: "Mode",
+            options: ["Only the essentials", "Everything"],
+          },
+        ])}
       />
     );
     const select = (await screen.findByRole("combobox", { name: "Mode" })) as HTMLButtonElement;
@@ -261,7 +271,14 @@ describe("PluginSettingsForm", () => {
     );
     render(
       <PluginSettingsForm
-        plugin={makePlugin([{ id: "mode", type: "enum", label: "Mode", options: ["a", "b"] }])}
+        plugin={makePlugin([
+          {
+            id: "mode",
+            type: "enum",
+            label: "Mode",
+            options: ["Only the essentials", "Everything"],
+          },
+        ])}
       />
     );
     const select = (await screen.findByRole("combobox", { name: "Mode" })) as HTMLButtonElement;
@@ -269,7 +286,9 @@ describe("PluginSettingsForm", () => {
     fireEvent.click(select);
     await waitFor(() => expect(select.getAttribute("aria-expanded")).toBe("true"));
     // Picking an option starts a save, which disables the field.
-    fireEvent.click(within(screen.getByRole("listbox")).getByRole("option", { name: "b" }));
+    fireEvent.click(
+      within(screen.getByRole("listbox")).getByRole("option", { name: "Everything" })
+    );
     await waitFor(() => expect(select.disabled).toBe(true));
     expect(select.getAttribute("aria-expanded")).toBe("false");
     const outer = vi.fn();
@@ -285,6 +304,79 @@ describe("PluginSettingsForm", () => {
     }
   });
 
+  it("renders a short enum as a segmented control, and a long one as a select", async () => {
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([
+          { id: "size", type: "enum", label: "Size", options: ["Small", "Large"] },
+          {
+            id: "level",
+            type: "enum",
+            label: "Level",
+            options: ["Only the essentials", "Everything"],
+          },
+        ])}
+      />
+    );
+    // The rule, not a fixed option count: few options with short labels fit a rail as
+    // segments; a long label anywhere forces the select.
+    expect(await screen.findByRole("radiogroup", { name: "Size" })).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "Size" })).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Level" })).toBeTruthy();
+    expect(screen.queryByRole("radiogroup", { name: "Level" })).toBeNull();
+  });
+
+  it("puts a switch back when its write fails", async () => {
+    pluginApi.setSettingValue.mockRejectedValue(new Error("disk full"));
+    render(
+      <PluginSettingsForm plugin={makePlugin([{ id: "flag", type: "boolean", label: "Flag" }])} />
+    );
+    const toggle = (await screen.findByRole("switch", { name: "Flag" })) as HTMLButtonElement;
+    await waitFor(() => expect(toggle.disabled).toBe(false));
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    // Showing the value it couldn't save would read as applied.
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+    expect(await screen.findByText("disk full")).toBeTruthy();
+  });
+
+  it("puts an enum back when its write fails", async () => {
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ values: { size: "Small" } }));
+    pluginApi.setSettingValue.mockRejectedValue(new Error("disk full"));
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([
+          { id: "size", type: "enum", label: "Size", options: ["Small", "Large"] },
+        ])}
+      />
+    );
+    const large = (await screen.findByRole("radio", { name: "Large" })) as HTMLButtonElement;
+    await waitFor(() => expect(large.disabled).toBe(false));
+    fireEvent.click(large);
+    await screen.findByText("disk full");
+    expect(screen.getByRole("radio", { name: "Small" }).getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("keeps fields uneditable after a failed read, and Retry reads again", async () => {
+    pluginApi.getSettingValues.mockRejectedValueOnce(new Error("EACCES"));
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([{ id: "host", type: "string", label: "Host", default: "localhost" }])}
+      />
+    );
+    // A failed read must not look like "nothing stored": no default filled in, no edit.
+    const alert = await screen.findByRole("alert");
+    const input = screen.getByLabelText("Host") as HTMLInputElement;
+    expect(input.disabled).toBe(true);
+    expect(input.value).toBe("");
+
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ values: { host: "example.test" } }));
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(input.value).toBe("example.test"));
+    expect(input.disabled).toBe(false);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("surfaces an inline error for invalid JSON and does not write", async () => {
     render(
       <PluginSettingsForm plugin={makePlugin([{ id: "cfg", type: "json", label: "Config" }])} />
@@ -295,6 +387,26 @@ describe("PluginSettingsForm", () => {
     fireEvent.blur(textarea);
     expect(await screen.findByText("Enter valid JSON")).toBeTruthy();
     expect(pluginApi.setSettingValue).not.toHaveBeenCalled();
+  });
+
+  it("keeps a typed replacement secret through Reveal and Hide", async () => {
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ secretsSet: ["token"] }));
+    pluginApi.revealSecretSetting.mockResolvedValue("old-secret");
+    render(
+      <PluginSettingsForm plugin={makePlugin([{ id: "token", type: "secret", label: "Token" }])} />
+    );
+    const input = (await screen.findByLabelText("Token")) as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.change(input, { target: { value: "new-secret" } });
+
+    // The toggle only changes masking of what was typed; it never swaps in the stored value.
+    fireEvent.click(screen.getByRole("button", { name: "Reveal Token" }));
+    expect(input.type).toBe("text");
+    expect(input.value).toBe("new-secret");
+    fireEvent.click(screen.getByRole("button", { name: "Hide Token" }));
+    expect(input.type).toBe("password");
+    expect(input.value).toBe("new-secret");
+    expect(pluginApi.revealSecretSetting).not.toHaveBeenCalled();
   });
 
   it("never shows a secret value until revealed, then re-masks on blur", async () => {
@@ -436,10 +548,17 @@ describe("PluginSettingsForm", () => {
   it("renders a scope badge per field", async () => {
     render(
       <PluginSettingsForm
-        plugin={makePlugin([{ id: "p", type: "string", label: "P", scope: "project" }])}
+        plugin={makePlugin([
+          { id: "u", type: "string", label: "U" },
+          { id: "p", type: "string", label: "P", scope: "project" },
+          { id: "l", type: "string", label: "L", scope: "local" },
+        ])}
       />
     );
-    expect(await screen.findByText("Project")).toBeTruthy();
+    // Named for what a change reaches: one project, or every project.
+    expect(await screen.findByText("All projects")).toBeTruthy();
+    expect(screen.getByText("This project")).toBeTruthy();
+    expect(screen.getByText("This project, this machine")).toBeTruthy();
   });
 
   it("disables project-scoped fields when no project is active", async () => {

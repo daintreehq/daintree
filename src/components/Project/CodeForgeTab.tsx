@@ -3,6 +3,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import type { RemoteInfo } from "@shared/types/ipc/forge";
 import type { RegisteredForgeProvider } from "@shared/types/forge";
+import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsSelect } from "@/components/Settings/SettingsSelect";
@@ -29,6 +30,8 @@ export function CodeForgeTab({
   const [remotes, setRemotes] = useState<RemoteInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [remotesAttempt, setRemotesAttempt] = useState(0);
+  const [providersAttempt, setProvidersAttempt] = useState(0);
 
   const [providers, setProviders] = useState<RegisteredForgeProvider[]>([]);
   const [providersLoading, setProvidersLoading] = useState(false);
@@ -59,7 +62,7 @@ export function CodeForgeTab({
     return () => {
       cancelled = true;
     };
-  }, [projectPath]);
+  }, [projectPath, remotesAttempt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -100,7 +103,7 @@ export function CodeForgeTab({
       cancelled = true;
       unsubscribe();
     };
-  }, []);
+  }, [providersAttempt]);
 
   if (!projectPath) return null;
 
@@ -137,7 +140,7 @@ export function CodeForgeTab({
   const remoteDescription =
     "Auto-detect prefers origin, then any other remote a forge provider recognizes";
   const providerDescription =
-    "Pins this project to one provider. Auto-detects from the remote URL when unset.";
+    "Overrides the default provider for this project. Auto-detect uses the default provider from global Code forge settings, then the remote's hostname";
 
   return (
     <SettingsSection
@@ -154,7 +157,16 @@ export function CodeForgeTab({
               loading ? (
                 <span className="text-sm text-text-secondary">Loading remotes…</span>
               ) : (
-                <span className="text-sm text-status-error">{error}</span>
+                <span className="flex items-center gap-3">
+                  <span className="text-sm text-status-error">{error}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setRemotesAttempt((n) => n + 1)}
+                  >
+                    Retry
+                  </Button>
+                </span>
               )
             }
           />
@@ -181,7 +193,16 @@ export function CodeForgeTab({
               providersLoading ? (
                 <span className="text-sm text-text-secondary">Loading providers…</span>
               ) : (
-                <span className="text-sm text-status-error">{providersError}</span>
+                <span className="flex items-center gap-3">
+                  <span className="text-sm text-status-error">{providersError}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setProvidersAttempt((n) => n + 1)}
+                  >
+                    Retry
+                  </Button>
+                </span>
               )
             }
           />

@@ -62,6 +62,15 @@ vi.mock("@/components/ui/select", () => {
 });
 
 const showItemInFolder = vi.fn().mockResolvedValue(undefined);
+const dispatch = vi.fn();
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: (...args: unknown[]) => dispatch(...args) },
+}));
+
+// The generated form's secret-clear confirm pulls the app dialog stack (and the panel
+// store behind it) into this suite; nothing here opens it.
+vi.mock("@/components/ui/ConfirmDialog", () => ({ ConfirmDialog: () => null }));
+
 vi.mock("@/clients", () => ({
   systemClient: { showItemInFolder: (p: string) => showItemInFolder(p) },
 }));
@@ -382,6 +391,17 @@ describe("ProjectPluginsTab", () => {
     expect(pane.textContent).not.toContain("turned off as a folder");
   });
 
+  it("offers a staged plugin's activation in place of a switch that would read as on", async () => {
+    seed([projectPlugin({ state: "staged", muted: false })]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    await select("Acme Dashboard");
+    await screen.findByTestId("project-plugin-detail");
+    expect(screen.queryByTestId("project-plugin-mute-switch")).toBeNull();
+    expect(screen.getByRole("button", { name: "Activate plugin" })).toBeTruthy();
+  });
+
   it("hides Activate for a muted staged plugin, so the switch is the only way back", async () => {
     seed([projectPlugin({ state: "staged", muted: true })]);
     render(<ProjectPluginsTab />);
@@ -420,6 +440,48 @@ describe("ProjectPluginsTab", () => {
     await waitFor(() =>
       expect(pluginApi.setProjectPluginVisibility).toHaveBeenCalledWith("acme.tools", false)
     );
+  });
+
+  it("sends a forge plugin's settings to its own Code forge page instead of editing them here", async () => {
+    const settings = [{ id: "instanceUrl", type: "string" as const, label: "Instance URL" }];
+    pluginApi.list.mockResolvedValue([
+      installed({
+        manifest: {
+          name: "acme.forge",
+          version: "1.0.0",
+          displayName: "Acme Forge",
+          contributes: {
+            ...EMPTY_CONTRIBUTES,
+            settings,
+            forgeProviders: [
+              {
+                id: "acme",
+                name: "Acme",
+                matches: ["acme.test"],
+                slots: { settingsTab: "acme.settingsTab" },
+              },
+            ],
+          },
+        } as LoadedPluginInfo["manifest"],
+        instanceId: "acme.forge",
+      }),
+    ]);
+    seed([]);
+    const opened = vi.fn();
+    window.addEventListener("daintree:open-settings-tab", opened);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    await select("Acme Forge");
+    // Its own page guards changes this generic form can't (a token tied to the value).
+    expect(screen.queryByRole("textbox", { name: "Instance URL" })).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Open Code forge" }));
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect((opened.mock.calls[0]![0] as CustomEvent).detail).toEqual({
+      tab: "code-forge",
+      subtab: "acme.forge.acme",
+    });
+    window.removeEventListener("daintree:open-settings-tab", opened);
   });
 
   it("clears the override rather than storing an explicit allow when re-enabling", async () => {

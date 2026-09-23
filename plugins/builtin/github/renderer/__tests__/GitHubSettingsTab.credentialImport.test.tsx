@@ -141,7 +141,7 @@ describe("GitHubSettingsTab — import from GitHub CLI", () => {
     renderTab();
     await waitFor(() => expect(systemMock.checkTool).toHaveBeenCalledWith(GH_SPEC));
     expect(screen.queryByRole("button", { name: "Import from GitHub CLI" })).toBeNull();
-    expect(screen.getByText("Create a new token")).toBeTruthy();
+    expect(screen.getByText("Get a token")).toBeTruthy();
   });
 
   it("detects gh from the baseline prerequisites only", async () => {
@@ -266,8 +266,8 @@ describe("GitHubSettingsTab — import from GitHub CLI", () => {
       undefined,
       expect.objectContaining({ source: "user" })
     );
-    expect(await screen.findByText("Token saved")).toBeTruthy();
-    expect(await screen.findByText("GitHub connected as @octocat")).toBeTruthy();
+    expect(await screen.findByText("Checked and saved")).toBeTruthy();
+    expect(await screen.findByText("Token saved for @octocat")).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
@@ -340,13 +340,13 @@ describe("GitHubSettingsTab — connected account", () => {
   it("names the connected account when one is known", async () => {
     setupStore({ hasToken: true, username: "octocat" });
     renderTab();
-    expect(await screen.findByText("GitHub connected as @octocat")).toBeTruthy();
+    expect(await screen.findByText("Token saved for @octocat")).toBeTruthy();
   });
 
   it("keeps the plain label when the account is unknown", async () => {
     setupStore({ hasToken: true });
     renderTab();
-    expect(await screen.findByText("GitHub connected")).toBeTruthy();
+    expect(await screen.findByText("Token saved")).toBeTruthy();
   });
 
   it("records the account a pasted token validated as", async () => {

@@ -419,7 +419,10 @@ export const SEL = {
     tokenInput: '[aria-label="GitHub personal access token"]',
     testButton: '[aria-label="Test token"]',
     saveButton: '[aria-label="Save token"]',
-    connectedBadge: 'text="GitHub connected"',
+    // Status row: "Token saved" / "Token saved for @user" once a token is
+    // stored, "No token saved" otherwise.
+    tokenSavedStatus: "#github-token >> text=/^Token saved( for @\\S+)?$/",
+    noTokenStatus: '#github-token >> text="No token saved"',
     // Toolbar stat pills (open the issue/PR dropdowns; commits renders even
     // with no forge provider — local git data)
     statPillIssues: '[data-testid="forge-stat-pill-issues"]',

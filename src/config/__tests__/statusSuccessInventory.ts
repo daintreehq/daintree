@@ -355,22 +355,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Diff insertion count against the base branch",
     },
   ],
-  "src/components/Settings/ForgeAuditLogViewer.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      anchor: "copyFlashActive",
-      expectedOccurrences: 2,
-      rationale: "Copy confirmation; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success border-status-success/30",
-      anchor: "exportFlashActive",
-      expectedOccurrences: 2,
-      rationale: "Export confirmation; resets when the export flash times out",
-    },
-  ],
   "src/components/Settings/McpAuditLogViewer.tsx": [
     {
       category: "transient",
@@ -836,5 +820,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 99;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 113;
+export const EXPECTED_STATUS_SUCCESS_SITES = 97;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 109;

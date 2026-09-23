@@ -77,10 +77,15 @@ export function ProjectPluginSelectorDropdown({
     ];
   }, [options, filterQuery]);
 
+  const filtering = filterQuery.trim().length > 0;
+  // The overview stays listed as a destination, but it is never a search result:
+  // with a query and nothing matching, Enter has nothing to pick.
+  const noMatches = filtering && items.length === 1;
+
   useEffect(() => {
     // Land on the first real match when filtering, and on the overview when not.
-    setActiveIndex(filterQuery.trim() && items.length > 1 ? 1 : 0);
-  }, [filterQuery, items]);
+    setActiveIndex(filtering ? (items.length > 1 ? 1 : -1) : 0);
+  }, [filtering, items]);
 
   useEffect(() => {
     activeItemRef.current?.scrollIntoView({ block: "nearest" });
@@ -106,7 +111,7 @@ export function ProjectPluginSelectorDropdown({
         setActiveIndex((prev) => Math.max(prev - 1, 0));
         break;
       case "Enter": {
-        const item = items[activeIndex];
+        const item = activeIndex >= 0 ? items[activeIndex] : undefined;
         if (item) {
           e.preventDefault();
           handleSelect(item.id);
@@ -128,13 +133,11 @@ export function ProjectPluginSelectorDropdown({
           data-testid="project-plugin-selector-trigger"
           className={cn(
             "flex items-center gap-2 w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
-            "border border-border-default bg-surface-canvas text-text-primary",
-            // Hover is neutral on purpose. Accent is at most one load-bearing
-            // signal per focus region, and here that one is the focus ring
-            // below — spending it on a hover border as well would make the
-            // colour mean "you could click this" and "this is focused" at once.
-            "hover:border-border-strong transition-colors",
-            "focus:outline-hidden focus:ring-2 focus:ring-accent-primary/50"
+            "border border-border-strong bg-surface-canvas text-text-primary transition-colors",
+            // Radix hands focus back to the trigger when the list closes, so a `focus:`
+            // indicator stayed lit after every pick — accent only for keyboard focus,
+            // the same contract as the agent and forge pickers.
+            "focus:outline-hidden focus-visible:border-accent-primary"
           )}
         >
           {selected ? (
@@ -187,7 +190,7 @@ export function ProjectPluginSelectorDropdown({
             aria-autocomplete="list"
             aria-controls="project-plugin-selector-list"
             aria-activedescendant={
-              items[activeIndex]
+              activeIndex >= 0 && items[activeIndex]
                 ? `project-plugin-selector-item-${items[activeIndex].id}`
                 : undefined
             }
@@ -271,6 +274,11 @@ export function ProjectPluginSelectorDropdown({
               </div>
             );
           })}
+          {noMatches && (
+            <div role="status" className="px-2 py-3 text-xs text-text-secondary">
+              No plugins match &ldquo;{filterQuery.trim()}&rdquo;
+            </div>
+          )}
         </div>
       </PopoverContent>
     </Popover>
