@@ -305,8 +305,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
     <div
       data-task-row={terminal.id}
       className={cn(
-        // Ligatures off: a command's `--flag` is two hyphens, not an em dash.
-        "flex items-center gap-1.5 px-2 rounded-[var(--radius-sm)] text-2xs font-mono [font-variant-ligatures:none] group",
+        "flex items-center gap-1.5 px-2 rounded-[var(--radius-sm)] text-2xs font-mono group",
         "hover:bg-tint/[0.04] transition-colors"
       )}
     >

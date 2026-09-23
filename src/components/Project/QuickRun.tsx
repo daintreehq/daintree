@@ -77,12 +77,8 @@ const SECTION_ORDER: readonly SuggestionSection[] = ["saved", "script", "history
 const PIN_KEY_LABEL = isMac() ? "⌥P" : "Alt+P";
 const SUMMARY_ID = "quick-run-summary";
 
-/**
- * Commands are read character by character — `--watch` is two hyphens, not an
- * em dash — so the mono face's programming ligatures stay off wherever one is
- * shown.
- */
-const COMMAND_TEXT_CLASS = "font-mono [font-variant-ligatures:none]";
+/** Commands are set in the mono face, which draws them without ligatures. */
+const COMMAND_TEXT_CLASS = "font-mono";
 
 /** The keyboard routes for the lit row, for sighted users. */
 function PinHint({
