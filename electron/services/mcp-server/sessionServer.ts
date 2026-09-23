@@ -2017,7 +2017,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // Anything short of an explicit approval is a refusal. The renderer's
         // own error is kept when it sent one — it says whether the user
         // declined or the dialog timed out.
-        const error = approval.result.ok
+        const error: import("../../../shared/types/actions.js").ActionError = approval.result.ok
           ? {
               code: USER_REJECTED_CODE,
               message: `The user did not approve '${actionId}'. The action was not run.`,
@@ -2033,9 +2033,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       if (sessionStore.getTier(sessionId) === null) throw sessionGoneError();
       if (approval.approvalScope === "session") mintSessionApproval();
       // The approval covers the ordinary confirmation too — one ask, not two —
-      // except for a tool whose dialog is also where the user picks targets,
-      // which still raises that dialog to get the pick.
-      if (isGenericNativeGrantEligible(actionId)) {
+      // except where that dialog carries something this one could not. A
+      // target-picking tool still needs the pick. An owned tool was approved
+      // under its wrapper id, which the preview does not recognise, so the
+      // delegate's own dialog is the first to show what it destroys. And a
+      // recipe dispatch's dialog is what binds the run to the recipe the user
+      // read (#12263); preconfirming would drop that binding and run whatever
+      // the recipe says by then.
+      if (
+        isGenericNativeGrantEligible(actionId) &&
+        ownedResource === undefined &&
+        !dispatchCarriesRecipeId(args)
+      ) {
         dispatchConfirmed = true;
         dispatchAuthorization = "user";
       }

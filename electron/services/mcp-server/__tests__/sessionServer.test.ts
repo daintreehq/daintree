@@ -9706,19 +9706,33 @@ describe("agent-pane approval (#12692)", () => {
     pane.sessionStore.grantCache.dispose();
   });
 
-  it("does not mint a session approval for a session that ended while the user decided", async () => {
+  it("neither runs nor remembers an approval for a session that ended while the user decided", async () => {
+    let approve!: (
+      envelope: Awaited<ReturnType<NonNullable<SessionServerDeps["requestApproval"]>>>
+    ) => void;
     const pane = paneServer("action", {
-      requestApproval: vi.fn().mockResolvedValue({
-        result: { ok: true, result: null },
-        confirmationDecision: "approved",
-        approvalScope: "session",
-      }),
+      requestApproval: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            approve = resolve;
+          })
+      ),
     });
-    pane.sessionStore.sessions.clear();
     await pane.server.connect(makeMockTransport());
 
-    await callTool(pane.server, { name: "git.push", arguments: {} });
+    const call = callTool(pane.server, { name: "git.push", arguments: {} }).catch((err) => err);
+    await vi.waitFor(() => expect(pane.requestApproval).toHaveBeenCalled());
+    // Revoked mid-dialog.
+    pane.sessionStore.sessions.clear();
+    vi.mocked(pane.sessionStore.getTier).mockReturnValue(null);
+    approve({
+      result: { ok: true, result: null },
+      confirmationDecision: "approved",
+      approvalScope: "session",
+    });
+    await call;
 
+    expect(pane.dispatchAction).not.toHaveBeenCalled();
     expect(pane.sessionStore.grantCache.check("pane-s", "git.push").granted).toBe(false);
     pane.sessionStore.grantCache.dispose();
   });
@@ -9756,6 +9770,20 @@ describe("agent-pane approval (#12692)", () => {
       expect.any(Object),
       false
     );
+    pane.sessionStore.grantCache.dispose();
+  });
+
+  it("leaves a recipe dispatch's own dialog to bind the run after an approval", async () => {
+    // `recipe.run` is an `action` tool. Its dialog is what ties the run to the
+    // recipe the user read (#12263), so the above-tier approval must not stand
+    // in for it.
+    const pane = paneServer("workbench");
+    await pane.server.connect(makeMockTransport());
+
+    await callTool(pane.server, { name: "recipe.run", arguments: { recipeId: "r-1" } });
+
+    expect(pane.requestApproval).toHaveBeenCalledTimes(1);
+    expect(pane.dispatchAction).toHaveBeenCalledWith("recipe.run", expect.any(Object), false);
     pane.sessionStore.grantCache.dispose();
   });
 

@@ -660,7 +660,7 @@ describe("useMcpBridge", () => {
   });
 
   it("refuses an approval-only request for an action this view does not know", async () => {
-    mocks.get.mockReturnValue(undefined);
+    mocks.get.mockReturnValue(null);
 
     renderHook(() => useMcpBridge());
 
@@ -676,6 +676,22 @@ describe("useMcpBridge", () => {
       requestId: "req-ask-unknown",
       result: { ok: false, error: expect.objectContaining({ code: "NOT_FOUND" }) },
     });
+  });
+
+  it("does not offer the session scope for a tool whose dialog picks its targets", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry({ id: "terminal.killBatch" }));
+
+    renderHook(() => useMcpBridge());
+
+    void dispatchHandler?.({
+      requestId: "req-no-offer",
+      actionId: "terminal.killBatch",
+      args: { terminalIds: ["t1"] },
+      offerSessionApproval: true,
+    });
+
+    await Promise.resolve();
+    expect(useMcpConfirmStore.getState().current?.offerSessionApproval).toBeUndefined();
   });
 
   it("reports a session-scoped approval of an ordinary confirm dialog back to main", async () => {

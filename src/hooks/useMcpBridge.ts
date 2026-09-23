@@ -67,6 +67,7 @@ import type { TerminalSpawnSource } from "@shared/types/panel";
 import { TerminalKillBatchIdsSchema } from "@shared/types/terminalKillBatch";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
+import { isGenericNativeGrantEligible } from "@shared/config/nativeGrantUsePolicies";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { withReplayedWorktreeDetails } from "@/services/actions/replayedContextWorktree";
 
@@ -1170,7 +1171,7 @@ export function useMcpBridge(): void {
             // tier — so it raises the dialog whatever the action's danger, and
             // never dispatches. Unknown here means there is nothing honest to
             // show the approver, so it is refused rather than asked about.
-            if (approvalOnly === true && definition === undefined) {
+            if (approvalOnly === true && !definition) {
               window.electron.mcpBridge.sendDispatchActionResponse({
                 requestId,
                 result: {
@@ -1258,7 +1259,12 @@ export function useMcpBridge(): void {
                   // requester positively instead of inferring one from an
                   // absence that has two very different causes.
                   sessionOrigin,
-                  ...(offerSessionApproval === true ? { offerSessionApproval: true } : {}),
+                  // Only where "Allow for this session" can deliver what it says.
+                  // A target-picking tool's dialog is raised again on every
+                  // call, so offering to stop asking would be untrue (#12692).
+                  ...(offerSessionApproval === true && isGenericNativeGrantEligible(actionId)
+                    ? { offerSessionApproval: true }
+                    : {}),
                   ...(approvalOnly === true ? { approvalReason: "above-tier" as const } : {}),
                   previewPending,
                   ...(hasAsyncPreview && previewTarget
