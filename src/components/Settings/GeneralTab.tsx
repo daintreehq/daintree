@@ -186,8 +186,13 @@ export function GeneralTab({
    * landed. The failure stays on the group it belongs to, with a Retry that resends the
    * attempted value, until a save there succeeds.
    */
-  const [saveFailures, setSaveFailures] = useState<Partial<Record<SaveTarget, () => void>>>({});
-  const recordSaveFailure = (target: SaveTarget, retry: () => void) =>
+  const [saveFailures, setSaveFailures] = useState<
+    Partial<Record<SaveTarget, () => Promise<void>>>
+  >({});
+  // A retry in flight per group: the banner clears on the first click, but a second
+  // click can land before it re-renders, and two resends race each other's rollback.
+  const retryingRef = useRef(new Set<SaveTarget>());
+  const recordSaveFailure = (target: SaveTarget, retry: () => Promise<void>) =>
     setSaveFailures((failures) => ({ ...failures, [target]: retry }));
   const clearSaveFailure = (target: SaveTarget) =>
     setSaveFailures((failures) => {
@@ -202,7 +207,12 @@ export function GeneralTab({
       <SettingsLoadErrorBanner
         title="Couldn't save that change"
         message="The setting is back to its previous value."
-        onRetry={retry}
+        onRetry={() => {
+          if (retryingRef.current.has(target)) return;
+          retryingRef.current.add(target);
+          clearSaveFailure(target);
+          void retry().finally(() => retryingRef.current.delete(target));
+        }}
       />
     ) : null;
   };
@@ -344,7 +354,7 @@ export function GeneralTab({
     } catch (error) {
       logError("Failed to set store update notification settings", error);
       if (isMountedRef.current) setStoreUpdateNotificationsEnabled(prev);
-      recordSaveFailure("updates", () => void handleStoreUpdateNotificationsToggle());
+      recordSaveFailure("updates", () => handleStoreUpdateNotificationsToggle());
     } finally {
       if (isMountedRef.current) setStoreUpdateSettingsSaving(false);
     }
@@ -363,7 +373,7 @@ export function GeneralTab({
     } catch (error) {
       logError("Failed to set update channel", error);
       if (isMountedRef.current) setUpdateChannel(prev);
-      recordSaveFailure("updates", () => void handleChannelChange(channel));
+      recordSaveFailure("updates", () => handleChannelChange(channel));
     } finally {
       if (isMountedRef.current) setChannelSaving(false);
     }
@@ -577,7 +587,7 @@ export function GeneralTab({
       if (!isMountedRef.current) return;
       setHibernationConfig(prev);
       logError("Failed to update hibernation config", error);
-      recordSaveFailure("hibernation", () => void handleHibernationToggle());
+      recordSaveFailure("hibernation", () => handleHibernationToggle());
     } finally {
       if (isMountedRef.current) {
         setIsSaving(false);
@@ -606,7 +616,7 @@ export function GeneralTab({
       if (!isMountedRef.current) return;
       setSessionRestoreConfig(prev);
       logError("Failed to update session restore config", error);
-      recordSaveFailure("sessionRestore", () => void handleSessionRestoreToggle());
+      recordSaveFailure("sessionRestore", () => handleSessionRestoreToggle());
     } finally {
       if (isMountedRef.current) {
         setIsSessionRestoreSaving(false);
@@ -635,7 +645,7 @@ export function GeneralTab({
       if (!isMountedRef.current) return;
       setIdleNotifyConfig(prev);
       logError("Failed to update idle terminal notify config", error);
-      recordSaveFailure("idleNotify", () => void handleIdleNotifyToggle());
+      recordSaveFailure("idleNotify", () => handleIdleNotifyToggle());
     } finally {
       if (isMountedRef.current) {
         setIsIdleNotifySaving(false);
@@ -664,7 +674,7 @@ export function GeneralTab({
       if (!isMountedRef.current) return;
       setIdleNotifyConfig(prev);
       logError("Failed to update idle terminal notify threshold", error);
-      recordSaveFailure("idleNotify", () => void handleIdleNotifyThresholdChange(value));
+      recordSaveFailure("idleNotify", () => handleIdleNotifyThresholdChange(value));
     } finally {
       if (isMountedRef.current) {
         setIsIdleNotifySaving(false);
@@ -693,7 +703,7 @@ export function GeneralTab({
       if (!isMountedRef.current) return;
       setIdleAutoCloseConfig(prev);
       logError("Failed to update idle background auto-close config", error);
-      recordSaveFailure("idleAutoClose", () => void handleIdleAutoCloseToggle());
+      recordSaveFailure("idleAutoClose", () => handleIdleAutoCloseToggle());
     } finally {
       if (isMountedRef.current) {
         setIsIdleAutoCloseSaving(false);
@@ -722,7 +732,7 @@ export function GeneralTab({
       if (!isMountedRef.current) return;
       setIdleAutoCloseConfig(prev);
       logError("Failed to update idle background auto-close threshold", error);
-      recordSaveFailure("idleAutoClose", () => void handleIdleAutoCloseThresholdChange(value));
+      recordSaveFailure("idleAutoClose", () => handleIdleAutoCloseThresholdChange(value));
     } finally {
       if (isMountedRef.current) {
         setIsIdleAutoCloseSaving(false);
@@ -751,7 +761,7 @@ export function GeneralTab({
       if (!isMountedRef.current) return;
       setHibernationConfig(prev);
       logError("Failed to update hibernation threshold", error);
-      recordSaveFailure("hibernation", () => void handleThresholdChange(value));
+      recordSaveFailure("hibernation", () => handleThresholdChange(value));
     } finally {
       if (isMountedRef.current) {
         setIsSaving(false);

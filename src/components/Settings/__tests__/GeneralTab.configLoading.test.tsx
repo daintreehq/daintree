@@ -223,4 +223,43 @@ describe("GeneralTab — config groups render before their data", () => {
     );
     await waitFor(() => expect(within(startup).queryByRole("alert")).toBeNull());
   });
+
+  it("sends one retry however fast Retry is clicked", async () => {
+    await renderGeneralTab("overview");
+    await act(async () => {
+      pending.get("sessionRestore.getConfig")?.resolve({ ok: true, result: { enabled: true } });
+    });
+    await waitFor(() => expect(switchDisabled("Restore live projects")).toBe(false));
+
+    mockDispatch.mockImplementationOnce(() =>
+      Promise.resolve({ ok: false, error: { message: "disk full" } })
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("switch", { name: "Restore live projects" }));
+    });
+    const startup = screen.getByTestId("section-Startup");
+    const retry = await within(startup).findByRole("button", { name: "Retry" });
+
+    let finish: (v: unknown) => void = () => {};
+    mockDispatch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    const before = mockDispatch.mock.calls.filter(
+      ([id]) => id === "sessionRestore.updateConfig"
+    ).length;
+    act(() => {
+      fireEvent.click(retry);
+      fireEvent.click(retry);
+    });
+    await act(async () => {
+      finish({ ok: true, result: { enabled: false } });
+    });
+    const after = mockDispatch.mock.calls.filter(
+      ([id]) => id === "sessionRestore.updateConfig"
+    ).length;
+    expect(after - before).toBe(1);
+  });
 });

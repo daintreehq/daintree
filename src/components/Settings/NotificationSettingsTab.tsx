@@ -218,6 +218,9 @@ export function NotificationSettingsTab() {
   // last value main confirmed — never to whatever the screen showed when it was sent.
   const confirmedRef = useRef<NotificationSettings>(DEFAULT_SETTINGS);
   const revisionRef = useRef(new Map<string, number>());
+  const confirmedRevisionRef = useRef(new Map<string, number>());
+  // The revision of the newest edit per key that failed and hasn't been superseded.
+  const failedRevisionRef = useRef(new Map<string, number>());
 
   useEffect(() => {
     setLoadState("loading");
@@ -267,18 +270,45 @@ export function NotificationSettingsTab() {
     window.electron?.notification
       ?.setSettings(patch)
       .then(() => {
-        confirmedRef.current = { ...confirmedRef.current, ...patch };
-        // A success supersedes any failed value for the same keys, so Retry never
-        // resends them over this newer one.
-        setSaveFailures((failures) => withoutKeys(failures, keys));
+        const confirmedRevisions = confirmedRevisionRef.current;
+        const failedRevisions = failedRevisionRef.current;
+        const confirmedNow: string[] = [];
+        const retired: string[] = [];
+        for (const key of keys) {
+          const revision = mine.get(key) ?? 0;
+          if (revision > (confirmedRevisions.get(key) ?? 0)) {
+            confirmedRevisions.set(key, revision);
+            confirmedRef.current = { ...confirmedRef.current, [key]: Reflect.get(patch, key) };
+            confirmedNow.push(key);
+          }
+          const failed = failedRevisions.get(key);
+          if (failed !== undefined && revision > failed) {
+            failedRevisions.delete(key);
+            retired.push(key);
+          }
+        }
+        // An older write landed after the newest one had already failed and rolled the
+        // screen back: main now holds this value, so the screen follows it.
+        const landedBehindFailure = confirmedNow.filter(
+          (key) => failedRevisions.get(key) === revisions.get(key)
+        );
+        if (landedBehindFailure.length > 0) {
+          const landed = restoredPatch(confirmedRef.current, landedBehindFailure);
+          setSettings((current) => ({ ...current, ...landed }));
+          const landedStore = storeSlice(landed, landedBehindFailure);
+          if (Object.keys(landedStore).length > 0) {
+            useNotificationSettingsStore.setState(landedStore);
+          }
+        }
+        // Only a newer success supersedes a failed value, so Retry never resends it
+        // over something the user changed since — and an older success never hides it.
+        if (retired.length > 0) setSaveFailures((failures) => withoutKeys(failures, retired));
       })
       .catch(() => {
         const stale = keys.filter(isNewest);
         if (stale.length === 0) return;
-        const restored: Partial<NotificationSettings> = {};
-        for (const key of stale) {
-          Object.assign(restored, { [key]: Reflect.get(confirmedRef.current, key) });
-        }
+        for (const key of stale) failedRevisionRef.current.set(key, mine.get(key) ?? 0);
+        const restored = restoredPatch(confirmedRef.current, stale);
         setSettings((current) => ({ ...current, ...restored }));
         const restoredStore = storeSlice(restored, stale);
         if (Object.keys(restoredStore).length > 0) {

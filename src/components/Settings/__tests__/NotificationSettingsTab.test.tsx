@@ -295,4 +295,44 @@ describe("NotificationSettingsTab", () => {
     });
     expect(setSettings).toHaveBeenLastCalledWith({ quietHoursEndMin: 480 });
   });
+
+  it("an older save that lands after a newer one failed shows what main holds and keeps the failure", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...BASE,
+      quietHoursEnabled: true,
+      quietHoursStartMin: 21 * 60,
+    });
+    const settle: Array<{ resolve: () => void; reject: (e: Error) => void }> = [];
+    setSettings.mockImplementation(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          settle.push({ resolve, reject });
+        })
+    );
+    render(<NotificationSettingsTab />);
+
+    const pick = async (time: string) => {
+      const start = await screen.findByRole("combobox", { name: "Starts at" });
+      await waitFor(() => expect(start.hasAttribute("disabled")).toBe(false));
+      fireEvent.keyDown(start, { key: "ArrowDown" });
+      fireEvent.click(await screen.findByRole("option", { name: time }));
+    };
+    await pick("22:00");
+    await pick("23:00");
+
+    await act(async () => {
+      settle[1]?.reject(new Error("disk full"));
+    });
+    await act(async () => {
+      settle[0]?.resolve();
+    });
+
+    expect(screen.getByRole("combobox", { name: "Starts at" }).textContent).toContain("22:00");
+    expect(screen.getByText("Couldn't save that change")).toBeTruthy();
+    setSettings.mockResolvedValue(undefined);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(setSettings).toHaveBeenLastCalledWith({ quietHoursStartMin: 23 * 60 });
+  });
 });
