@@ -688,12 +688,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
     reason: "PRE-EXISTING #8940: command picker trigger button has no focus indicator — follow-up",
   },
   {
-    file: "plugins/builtin/github/renderer/components/CommitList.tsx",
-    fragment:
-      "flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-muted-foreground focus:outline-hidden",
-    reason: "PRE-EXISTING #8940: autoFocus commit search input lacks a focus indicator — follow-up",
-  },
-  {
     file: "plugins/builtin/github/renderer/components/GitHubResourceList.tsx",
     fragment:
       "flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden",

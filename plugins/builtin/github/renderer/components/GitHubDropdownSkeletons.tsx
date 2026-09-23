@@ -310,14 +310,16 @@ export function CommitListSkeleton({ count, immediate }: SkeletonProps) {
             className={`px-3 py-2.5 ${pulseClass} box-border`}
             style={{ height: `${COMMIT_ITEM_HEIGHT_PX}px` }}
           >
+            {/* The same bones as the commits list it stands in for (the host's
+                LocalCommitsDropdown skeleton), so the swap is one shape. */}
             <div className="flex items-start gap-2 h-full">
-              <div className="w-4 h-4 rounded-full bg-muted mt-0.5 shrink-0" />
+              <div className="w-4 h-4 rounded-full bg-tint/[0.08] mt-0.5 shrink-0" />
               <div className="flex-1 min-w-0">
-                <div className="h-5 bg-muted rounded w-3/4" />
+                <div className="h-5 bg-tint/[0.08] rounded-[var(--radius-sm)] w-3/4" />
                 <div className="mt-0.5 flex items-center gap-1.5">
-                  <div className="h-4 bg-muted rounded w-16" />
-                  <div className="h-4 bg-muted rounded w-20" />
-                  <div className="h-4 bg-muted rounded w-12" />
+                  <div className="h-4 bg-tint/[0.08] rounded-[var(--radius-sm)] w-20" />
+                  <div className="h-4 bg-tint/[0.08] rounded-[var(--radius-sm)] w-12" />
+                  <div className="ml-auto h-4 bg-tint/[0.08] rounded-[var(--radius-sm)] w-14" />
                 </div>
               </div>
             </div>

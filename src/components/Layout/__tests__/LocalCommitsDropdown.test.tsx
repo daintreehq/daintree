@@ -539,6 +539,37 @@ describe("LocalCommitsDropdown grid semantics", () => {
     expect((await findAllByText("commit message 1")).length).toBeGreaterThan(0);
   });
 
+  it("copies from a hash click without toggling the row, and the confirmation expires", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      listCommitsMock.mockResolvedValue(makeResponse([makeCommit(1, "has a body")]));
+
+      const { getByRole, findAllByText, queryAllByText } = render(
+        <LocalCommitsDropdown cwd="/repo" open initialCount={1} />
+      );
+      await findAllByText("commit message 1");
+
+      await act(async () => {
+        fireEvent.click(getByRole("button", { name: "Copy hash sh1" }));
+      });
+
+      expect(writeText).toHaveBeenCalledWith("hash-1");
+      expect(
+        document.getElementById("local-commit-row-hash-1")?.getAttribute("aria-expanded")
+      ).toBe("false");
+      expect(queryAllByText("Hash copied").length).toBeGreaterThan(0);
+
+      await act(async () => {
+        vi.advanceTimersByTime(2_100);
+      });
+      expect(queryAllByText("Hash copied")).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("says so when the hash could not be copied", async () => {
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },

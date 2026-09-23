@@ -5,6 +5,7 @@ import {
   useRef,
   type KeyboardEvent,
   type MouseEvent,
+  type ReactNode,
 } from "react";
 import {
   Search,
@@ -36,11 +37,12 @@ import { classifyGitError, getGitRecoveryHint } from "@shared/utils/gitOperation
 import { logError } from "@/utils/logger";
 import type { GitCommit, GitPushCommitPreview } from "@shared/types/git";
 
-// Local-git fallback for the commits pill dropdown (issue #10414). Commit
-// history is local git data, not forge data, so the pill can open a list even
-// when no forge provider supplies a stats dropdown view. Self-contained: owns
-// its fetch, search, pagination, and keyboard navigation; FixedDropdown (via
-// ForgeStatPill) owns the portal, positioning, and dismiss behavior.
+// The commits pill's list (issue #10414). Commit history is local git data, not
+// forge data, so the host renders it when no forge provider supplies a stats
+// dropdown view, and forge plugins render it too, adding their own footer
+// action. Self-contained: owns its fetch, search, pagination, and keyboard
+// navigation; FixedDropdown (via ForgeStatPill) owns the portal, positioning,
+// and dismiss behavior.
 //
 // Chrome follows the forge issue/PR dropdowns: a fixed
 // 450×500 panel, the search shell as the region's one accent, a grid popup so
@@ -52,6 +54,8 @@ interface LocalCommitsDropdownProps {
   open: boolean;
   initialCount?: number | null;
   onClose?: () => void;
+  /** A forge's way out to its own commit view, set at the footer's trailing edge. */
+  footerAction?: ReactNode;
 }
 
 const PAGE_SIZE = 30;
@@ -460,6 +464,7 @@ export function LocalCommitsDropdown({
   open,
   initialCount,
   onClose,
+  footerAction,
 }: LocalCommitsDropdownProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [data, setData] = useState<GitCommit[]>([]);
@@ -1094,7 +1099,11 @@ export function LocalCommitsDropdown({
 
       {/* Only while it has something to say: an empty bordered band under an
           empty or failed list reads as a missing line. */}
-      {(pushLine || (showPushSummary && showCheckingPush) || copyFailed || activeCommit) && (
+      {(pushLine ||
+        (showPushSummary && showCheckingPush) ||
+        copyFailed ||
+        activeCommit ||
+        footerAction) && (
         <div className="px-3 h-9 border-t border-[var(--border-divider)] flex items-center gap-3 shrink-0 text-xs text-text-secondary">
           <div className="flex-1 min-w-0 flex items-center gap-2">
             {pushLine ? (
@@ -1118,7 +1127,10 @@ export function LocalCommitsDropdown({
           </div>
           {copyFailed ? (
             <span className="shrink-0 whitespace-nowrap">Couldn&apos;t copy hash</span>
-          ) : activeCommit ? (
+          ) : activeCommit && !pushLine?.caveat ? (
+            // The key hint yields to the marking caveat: count, caveat, hint and a
+            // forge's footer action can't all hold their width in 450px, and the
+            // caveat is what keeps the marks from reading as the remote's edge.
             <span
               className="shrink-0 inline-flex items-center gap-1.5 whitespace-nowrap"
               aria-hidden="true"
@@ -1127,6 +1139,7 @@ export function LocalCommitsDropdown({
               Copy hash
             </span>
           ) : null}
+          {footerAction && <div className="shrink-0 -me-1.5">{footerAction}</div>}
         </div>
       )}
     </div>
