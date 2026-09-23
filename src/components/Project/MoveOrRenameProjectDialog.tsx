@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -88,8 +88,10 @@ const CONTINUITY_PRESENTATION: Record<
 /**
  * A full path that wraps only at its separators. `break-all` split folder
  * names mid-token — "helios-dashboa / rd" — which is exactly the part a user
- * reads to check the destination. A segment wider than the whole line still
- * breaks, as a last resort, rather than overflowing the dialog.
+ * reads to check the destination, and a plain `<wbr>` still leaves the
+ * browser's own breaks at hyphens and spaces inside a name. So each segment is
+ * an atomic inline box: it moves to the next line whole, and only a segment
+ * wider than the entire line breaks inside itself.
  */
 function WrappingPath({
   path,
@@ -104,13 +106,24 @@ function WrappingPath({
   return (
     <p className={cn("text-xs font-mono break-words", className)} title={path} data-testid={testId}>
       {segments.map((segment, i) => (
-        <Fragment key={i}>
+        <span key={i} className="inline-block max-w-full break-all whitespace-pre-wrap">
           {segment}
-          {i < segments.length - 1 && <wbr />}
-        </Fragment>
+        </span>
       ))}
     </p>
   );
+}
+
+/**
+ * The preview reads the destination from disk, so its failures arrive as raw
+ * filesystem errors. A permission failure is the one a user can act on, and
+ * "EACCES" tells them nothing about what to do; the raw text still rides along
+ * as the diagnostic line.
+ */
+function describePreviewFailure(detail: string): string {
+  return /\b(EACCES|EPERM)\b|permission denied/i.test(detail)
+    ? "Daintree can't read the destination. Check its permissions, then retry."
+    : detail;
 }
 
 function MoveOrRenameProjectDialogInner({
@@ -311,6 +324,15 @@ function MoveOrRenameProjectDialogInner({
       ? false
       : !destinationChanged || preview === null || Boolean(loadError) || hasBlockers);
 
+  // Enter commits from any text field, but only through the same gate as the
+  // button — never a preview-less, blocked or doubled commit.
+  const handleFieldKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Enter that confirms an IME candidate is composition, not submission.
+    if (e.nativeEvent.isComposing || e.key !== "Enter") return;
+    e.preventDefault();
+    if (!confirmDisabled && !isApplying) void handleConfirm();
+  };
+
   const title = isReattach ? "Locate moved project" : "Move or rename project";
   const confirmLabel = isMetadataOnly
     ? "Rename project"
@@ -335,22 +357,27 @@ function MoveOrRenameProjectDialogInner({
     ) : (
       "Moving the project…"
     )
+  ) : applyError ? (
+    `${failureTitle} — details above`
   ) : folderNameError ? (
     "Fix the folder name to continue"
   ) : !isReattach && !trimmedFolder ? (
     "Name the folder to continue"
+  ) : isReattach && !reattachPath ? (
+    // Ahead of any name change: a reattach can't commit without a folder, and
+    // a name edit alone would otherwise read as a check that never starts.
+    "Choose where the folder is now to continue"
   ) : nothingToDo ? (
-    isReattach ? (
-      "Choose where the folder is now to continue"
-    ) : (
-      "Change the name or location to continue"
-    )
+    "Change the name or location to continue"
   ) : isMetadataOnly ? (
     "Updates the display name only"
   ) : loadError ? (
-    "Couldn't check what will change"
+    "Retry the check to continue"
   ) : preview === null ? (
-    "Checking what will change…"
+    <>
+      {showLoading && <Spinner className="h-3.5 w-3.5 shrink-0" />}
+      <span className="truncate">Checking what will change…</span>
+    </>
   ) : hasBlockers ? (
     isReattach ? (
       "This folder can't be reattached"
@@ -391,7 +418,9 @@ function MoveOrRenameProjectDialogInner({
         {!isApplying && <AppDialog.CloseButton />}
       </AppDialog.Header>
 
-      <AppDialog.Body className="space-y-5">
+      {/* A failure lands as a banner at the top of the body; after a long
+          preview the body is scrolled well past it, so bring it into view. */}
+      <AppDialog.Body className="space-y-5" resetScrollKey={applyError ?? undefined}>
         <div className="space-y-5" data-testid="move-or-rename-project-dialog">
           {/* Outcome first, above the fields it is about: a failed commit
               returns the user to the form with everything intact, and at the
@@ -420,6 +449,7 @@ function MoveOrRenameProjectDialogInner({
                 }}
                 // Frozen for the length of the commit: an edit made now would
                 // describe an operation other than the one already running.
+                onKeyDown={handleFieldKeyDown}
                 disabled={isApplying}
                 spellCheck={false}
                 autoComplete="off"
@@ -434,7 +464,8 @@ function MoveOrRenameProjectDialogInner({
             {isReattach ? (
               <>
                 <FormRow label="Last seen at">
-                  <PathCaption path={pending.oldPath} className="min-w-0" />
+                  {/* Inset to the fields' text, so the old and new paths share a column. */}
+                  <PathCaption path={pending.oldPath} className="min-w-0 px-2.5" />
                 </FormRow>
                 <FormRow label="Now at" htmlFor="relocate-existing">
                   <DirectoryPickerField
@@ -481,6 +512,7 @@ function MoveOrRenameProjectDialogInner({
                       setFolderName(e.target.value);
                       setApplyError(null);
                     }}
+                    onKeyDown={handleFieldKeyDown}
                     disabled={isApplying}
                     aria-invalid={folderNameError != null || undefined}
                     aria-describedby={folderNameError ? folderErrorId : undefined}
@@ -500,7 +532,6 @@ function MoveOrRenameProjectDialogInner({
             {destinationChanged && (
               <RelocationPreviewSection
                 preview={preview}
-                showLoading={showLoading}
                 loadError={loadError}
                 oldPath={pending.oldPath}
                 onRetry={() => setPreviewAttempt((n) => n + 1)}
@@ -535,13 +566,11 @@ function MoveOrRenameProjectDialogInner({
 
 function RelocationPreviewSection({
   preview,
-  showLoading,
   loadError,
   oldPath,
   onRetry,
 }: {
   preview: RelocationPreview | null;
-  showLoading: boolean;
   loadError: string | null;
   oldPath: string;
   onRetry: () => void;
@@ -552,7 +581,8 @@ function RelocationPreviewSection({
         <InlineStatusBanner
           severity="error"
           title="Couldn't check what will change"
-          description={loadError}
+          description={describePreviewFailure(loadError)}
+          {...(describePreviewFailure(loadError) !== loadError ? { contextLine: loadError } : {})}
           action={{ id: "retry", label: "Retry", icon: RotateCcw, onClick: onRetry }}
           className="rounded-[var(--radius-md)]"
         />
@@ -560,17 +590,9 @@ function RelocationPreviewSection({
     );
   }
 
-  if (preview === null) {
-    return showLoading ? (
-      <div
-        className="col-span-2 mt-4 flex items-center gap-2 text-xs text-text-secondary"
-        data-testid="relocate-preview-loading"
-      >
-        <Spinner className="h-3.5 w-3.5" />
-        Checking what will change…
-      </div>
-    ) : null;
-  }
+  // The wait is reported once, in the footer status beside the button it is
+  // holding back; a second copy here only repeated it.
+  if (preview === null) return null;
 
   const nothingAffected =
     preview.runningTerminalCount === 0 &&
@@ -591,7 +613,7 @@ function RelocationPreviewSection({
       </FormRow>
 
       {preview.blockers.length > 0 ? (
-        <ul className="col-span-2 space-y-2" data-testid="relocate-blockers">
+        <ul className="col-start-2 space-y-2" data-testid="relocate-blockers">
           {preview.blockers.map((blocker, i) => (
             <li
               key={`${blocker.reason}-${i}`}
@@ -612,7 +634,7 @@ function RelocationPreviewSection({
                     ? "1 terminal will be gracefully stopped"
                     : `${preview.runningTerminalCount} terminals will be gracefully stopped`}
                 </span>
-                <span className="text-text-secondary"> They restart at the new location</span>
+                <span className="block text-text-secondary"> They restart at the new location</span>
               </p>
             </FormRow>
           )}
@@ -680,7 +702,7 @@ function RelocationPreviewSection({
             </FormRow>
           )}
           {nothingAffected && (
-            <p className="col-span-2 text-xs text-text-secondary">
+            <p className="col-start-2 text-xs text-text-secondary">
               No running terminals, worktrees, or panels affected
             </p>
           )}
