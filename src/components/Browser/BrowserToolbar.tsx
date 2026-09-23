@@ -732,6 +732,9 @@ export function BrowserToolbar({
                 aria-describedby={error ? errorId : undefined}
                 value={inputValue}
                 onChange={(e) => {
+                  // A commit leaves the field focused but out of editing, so typing
+                  // again has to bring editing back or it lands under the overlay.
+                  setIsEditing(true);
                   setInputValue(e.target.value);
                   setError(null);
                 }}
@@ -758,7 +761,9 @@ export function BrowserToolbar({
                   aria-hidden="true"
                   data-testid="browser-address-display"
                   className={cn(
-                    "pointer-events-none absolute inset-y-0 left-7 flex items-center min-w-0 text-xs",
+                    // One pixel down to sit on the input's own text line, so focusing the
+                    // field swaps the overlay for the value without a visible jump.
+                    "pointer-events-none absolute inset-y-0 left-7 flex items-center min-w-0 text-xs translate-y-px",
                     showZoomChip
                       ? isCompact
                         ? "right-16"
@@ -811,12 +816,13 @@ export function BrowserToolbar({
                     <PopoverContent
                       align="end"
                       className="w-auto p-1"
-                      onCloseAutoFocus={() => {
+                      onCloseAutoFocus={(event) => {
                         // Back at 100% the chip unmounts with the popover, so a
-                        // restore aimed at it lands on the body. The shared policy
-                        // still decides first; only a stranded focus is rescued.
+                        // keyboard close has nothing to restore to. The shared policy
+                        // decides first; a pointer close it claimed is left alone.
                         if (isNonDefaultZoom) return;
                         requestAnimationFrame(() => {
+                          if (event.defaultPrevented) return;
                           if (document.activeElement !== document.body) return;
                           const fallback = copyButtonRef.current ?? moreButtonRef.current;
                           fallback?.focus({ preventScroll: true });

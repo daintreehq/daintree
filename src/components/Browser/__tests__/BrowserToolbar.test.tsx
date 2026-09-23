@@ -1160,3 +1160,17 @@ describe("BrowserToolbar at compact widths", () => {
     expect(onToggleConsole).toHaveBeenCalledOnce();
   });
 });
+
+describe("BrowserToolbar after a commit", () => {
+  it("typing again in a still-focused field shows the text, not the resting overlay", () => {
+    const { getByTestId, queryByTestId } = renderToolbar({ url: "http://localhost:5173/a" });
+    const input = getByTestId("browser-address-bar") as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: "localhost:5173/b" } });
+    fireEvent.submit(input.closest("form")!);
+    fireEvent.change(input, { target: { value: "localhost:5173/c" } });
+    expect(queryByTestId("browser-address-display")).toBeNull();
+    expect(input.className).not.toContain("text-transparent");
+    expect(input.value).toBe("localhost:5173/c");
+  });
+});
