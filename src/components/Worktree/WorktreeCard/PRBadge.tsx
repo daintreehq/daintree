@@ -113,10 +113,6 @@ export function PRBadge({
       // Rich hover card whose body IS the content — exempt from the global
       // dialog-transition dismissal (issue #11030).
       dismissOnDialogTransition={false}
-      // The app-wide provider makes tooltip content pass-through. A card this
-      // size must stay up while the pointer crosses onto it to read it (WCAG
-      // SC 1.4.13, hoverable), so this one opts back in.
-      disableHoverableContent={false}
     >
       <TooltipTrigger asChild>
         <button

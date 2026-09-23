@@ -39,7 +39,8 @@ type TooltipRootProps = React.ComponentProps<typeof TooltipPrimitiveType.Root>;
 // Controlled consumers are closed through their onOpenChange; a pinned
 // `open` with no handler (validation/drag hints) deliberately ignores the
 // dismiss. Tooltips whose body IS the content (rich hover cards, full-text
-// reveals) opt out via `autoDismiss={false}`.
+// reveals) opt out via `autoDismiss={false}` — and that same flag makes their
+// content hoverable, see `Tooltip` below.
 const TOOLTIP_AUTO_DISMISS_MS = 2500;
 
 type TooltipProps = TooltipRootProps & {
@@ -77,6 +78,7 @@ const Tooltip = ({
   onOpenChange,
   autoDismiss = true,
   dismissOnDialogTransition = true,
+  disableHoverableContent,
   ...props
 }: TooltipProps) => {
   const radix = useRadixPrimitives();
@@ -190,6 +192,12 @@ const Tooltip = ({
     <Root
       key={dropdownVisible ? "visible" : "hidden"}
       {...props}
+      // The app's providers make tooltip content pass-through, which suits a
+      // two-word hint. A tooltip whose body IS the content has to stay up while
+      // the pointer crosses onto it to read it (WCAG SC 1.4.13, hoverable), so
+      // `autoDismiss={false}` — the flag that already marks that kind — opts it
+      // back in. An explicit prop still wins either way.
+      disableHoverableContent={disableHoverableContent ?? (autoDismiss ? undefined : false)}
       open={effectiveOpen}
       onOpenChange={handleOpenChange}
     >
