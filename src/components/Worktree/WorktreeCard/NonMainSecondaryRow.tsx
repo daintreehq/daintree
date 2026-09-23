@@ -161,7 +161,10 @@ export function NonMainSecondaryRow({
     // wells' inset on purpose: headline flush, its supporting lines stepped in
     // slightly, wells stepped in further. A progression down the card, rather
     // than one tier that missed the memo.
-    <div className="flex flex-col gap-0.5 mt-2.5 px-1">
+    // empty:hidden — the header mounts this row whenever the sync line might
+    // have something to say, and the badge decides whether it does; a row
+    // whose every child rendered nothing must not leave its margin behind.
+    <div className="flex flex-col gap-0.5 mt-2.5 px-1 empty:hidden">
       {worktree.issueNumber && (isPrOriginated || !hasDisplayTitle) && (
         <IssueBadge
           issueNumber={worktree.issueNumber}

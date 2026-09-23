@@ -591,7 +591,12 @@ test("upstream sync badge review — states and themes", async () => {
       await snap(page, "B0-stale", cardOf(row(page, B.both)), "↓3");
       await snap(page, "B1-sidebar-stale", sidebar);
       await snap(page, "B4-in-flight", cardOf(row(page, B.ahead)), /↑\d/);
-      await snap(page, "B5-local-no-base", cardOf(row(page, B.localResting)), "local");
+      // Assert on the line itself: the card's own name contains "local".
+      await expect(
+        badgeIn(row(page, B.localResting)),
+        "no-base marker never rendered"
+      ).toContainText("local", { timeout: T_LONG });
+      await snap(page, "B5-local-no-base", cardOf(row(page, B.localResting)));
       await snapTooltip(page, "B2-tip-stale", badge, /stale|out of date/i);
       await snapTooltip(
         page,
