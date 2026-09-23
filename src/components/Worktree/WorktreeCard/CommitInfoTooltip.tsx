@@ -54,6 +54,37 @@ function joinNames(names: string[]): string {
   return `${names[0]} and ${names.length - 1} others`;
 }
 
+let timeOnlyFormatter: Intl.DateTimeFormat | undefined;
+let sameYearFormatter: Intl.DateTimeFormat | undefined;
+let fullFormatter: Intl.DateTimeFormat | undefined;
+
+/**
+ * The exact moment, as short as it can be while staying unambiguous: the time
+ * alone for today, no year for this year, everything otherwise. The user's own
+ * clock, so no zone.
+ */
+export function exactTimePhrase(timestamp: number, now: number): string {
+  const date = new Date(timestamp);
+  const today = new Date(now);
+  if (date.toDateString() === today.toDateString()) {
+    return (timeOnlyFormatter ??= new Intl.DateTimeFormat(undefined, {
+      timeStyle: "short",
+    })).format(date);
+  }
+  if (date.getFullYear() === today.getFullYear()) {
+    return (sameYearFormatter ??= new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    })).format(date);
+  }
+  return (fullFormatter ??= new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  })).format(date);
+}
+
 /**
  * Detailed commit card shown on hover of a worktree row's activity chip and
  * the Details footer. Leads with what the commit did; who and when follow in
@@ -79,9 +110,11 @@ export function CommitInfoTooltip({
   const committed = hasCommit
     ? relativeTimePhrase(now - lastCommitTimestampMs, lastCommitTimestampMs)
     : null;
+  const committedExact = hasCommit ? exactTimePhrase(lastCommitTimestampMs, now) : null;
   const activityPhrase = hasActivity
     ? relativeTimePhrase(now - lastActivityTimestamp, lastActivityTimestamp)
     : null;
+  const activityExact = hasActivity ? exactTimePhrase(lastActivityTimestamp, now) : null;
   // Only activity *after* the commit is news; an older activity stamp would
   // read as the branch going quiet before its own latest commit.
   const showActivity = hasActivity && (!hasCommit || lastActivityTimestamp > lastCommitTimestampMs);
@@ -115,7 +148,9 @@ export function CommitInfoTooltip({
             <CommitAuthorAvatar author={author} forgeAvatarUrl={forgeAvatarUrl} size={24} />
           )}
           <div className="flex min-w-0 flex-col gap-0.5">
-            <span className="truncate text-xs font-medium text-text-primary">
+            {/* Wraps rather than truncates: this card is where the full name
+                is supposed to be readable. */}
+            <span className="break-words text-xs font-medium text-text-primary">
               {author ? author.name : "Last commit"}
             </span>
             {coAuthorLine && (
@@ -127,13 +162,7 @@ export function CommitInfoTooltip({
               </span>
             )}
             <span className="flex min-w-0 items-center gap-1.5 text-2xs text-text-secondary">
-              <time
-                dateTime={new Date(lastCommitTimestampMs).toISOString()}
-                title={new Date(lastCommitTimestampMs).toLocaleString()}
-                className="shrink-0"
-              >
-                Committed {committed}
-              </time>
+              <span className="shrink-0">Committed {committed}</span>
               {shortSha && (
                 <>
                   <span aria-hidden="true">·</span>
@@ -143,6 +172,12 @@ export function CommitInfoTooltip({
                 </>
               )}
             </span>
+            <time
+              dateTime={new Date(lastCommitTimestampMs).toISOString()}
+              className="text-2xs tabular-nums text-text-secondary"
+            >
+              {committedExact}
+            </time>
           </div>
         </div>
       )}
@@ -151,12 +186,15 @@ export function CommitInfoTooltip({
         <div className={hasCommit ? "mt-2.5 border-t border-border-divider pt-2.5" : undefined}>
           <div className="flex items-center gap-1.5 text-2xs text-text-secondary">
             <ActivityLight lastActivityTimestamp={lastActivityTimestamp} className="h-1.5 w-1.5" />
-            <time
-              dateTime={new Date(lastActivityTimestamp).toISOString()}
-              title={new Date(lastActivityTimestamp).toLocaleString()}
-            >
-              Last active {activityPhrase}
-            </time>
+            <span>
+              Last active {activityPhrase} ·{" "}
+              <time
+                dateTime={new Date(lastActivityTimestamp).toISOString()}
+                className="tabular-nums"
+              >
+                {activityExact}
+              </time>
+            </span>
           </div>
         </div>
       )}

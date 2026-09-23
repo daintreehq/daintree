@@ -1,4 +1,5 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import { isValidPastTimestamp } from "@/utils/timestamps";
 import { ActivityLight } from "../ActivityLight";
 import { LiveTimeAgo } from "../LiveTimeAgo";
@@ -46,7 +47,12 @@ export function WorktreeActivityChip({
     <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>
         <div
-          className="relative z-10 ml-3 flex shrink-0 items-center gap-1.5 text-xs text-text-secondary"
+          // The ring gets 2px of air so it frames the dot and the label
+          // instead of cutting through them.
+          className={cn(
+            "relative z-10 ml-3 flex shrink-0 items-center gap-1.5 rounded-[var(--radius-sm)] text-xs text-text-secondary",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+          )}
           role="group"
           aria-label="Last activity"
           tabIndex={0}

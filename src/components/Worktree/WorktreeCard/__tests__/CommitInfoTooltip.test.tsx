@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { CommitInfoTooltip } from "../CommitInfoTooltip";
+import { CommitInfoTooltip, exactTimePhrase, relativeTimePhrase } from "../CommitInfoTooltip";
 
 const human = { name: "Jane Doe", email: "jane@example.com" };
 
@@ -47,6 +47,17 @@ describe("CommitInfoTooltip", () => {
     fireEvent.error(container.querySelector("img")!);
     expect(container.querySelector("img")).toBeNull();
     expect(screen.getByText("JD")).toBeDefined();
+  });
+
+  it("holds the avatar slot with initials until the picture has loaded", () => {
+    const { container } = render(
+      <CommitInfoTooltip lastCommitTimestampMs={Date.now()} author={human} />
+    );
+    const img = container.querySelector("img")!;
+    expect(screen.queryByText("JD")).not.toBeNull();
+    fireEvent.load(img);
+    expect(screen.queryByText("JD")).toBeNull();
+    expect(container.querySelector("img")).not.toBeNull();
   });
 
   it("renders a branded agent icon for an agent committer", () => {
@@ -115,7 +126,7 @@ describe("CommitInfoTooltip", () => {
         lastActivityTimestamp={Date.now() - 120_000}
       />
     );
-    expect(screen.getByText("Last active 2 minutes ago")).toBeDefined();
+    expect(screen.getByText(/^Last active 2 minutes ago ·/)).toBeDefined();
   });
 
   it("renders activity detail when the repository has no commit", () => {
@@ -123,7 +134,7 @@ describe("CommitInfoTooltip", () => {
       <CommitInfoTooltip lastActivityTimestamp={Date.now() - 120_000} />
     );
 
-    expect(screen.getByText("Last active 2 minutes ago")).toBeDefined();
+    expect(screen.getByText(/^Last active 2 minutes ago ·/)).toBeDefined();
     expect(screen.queryByText("Last commit")).toBeNull();
     expect(container.querySelector("img")).toBeNull();
   });
@@ -141,7 +152,7 @@ describe("CommitInfoTooltip", () => {
     expect(screen.getByText("Jane Doe")).toBeDefined();
     expect(screen.getByText("Committed 1 hour ago")).toBeDefined();
     expect(screen.getByText("fix: preserve commit context")).toBeDefined();
-    expect(screen.getByText("Last active 2 minutes ago")).toBeDefined();
+    expect(screen.getByText(/^Last active 2 minutes ago ·/)).toBeDefined();
   });
 
   it("does not repeat activity detail when the commit is the activity source", () => {
@@ -240,5 +251,93 @@ describe("CommitInfoTooltip", () => {
       />
     );
     expect(container.firstChild).toBeNull();
+  });
+  it("shows the exact commit time as visible text, not only a hover title", () => {
+    const committedAt = Date.now() - 3 * 3_600_000;
+    const { container } = render(
+      <CommitInfoTooltip lastCommitTimestampMs={committedAt} author={human} />
+    );
+    const times = [...container.querySelectorAll("time")];
+    const commitTime = times.find(
+      (t) => t.getAttribute("dateTime") === new Date(committedAt).toISOString()
+    );
+    expect(commitTime?.textContent).toBe(exactTimePhrase(committedAt, Date.now()));
+    expect(container.querySelector("[title]")).toBeNull();
+  });
+
+  it("shows the exact time of later activity beside its relative phrase", () => {
+    const activeAt = Date.now() - 120_000;
+    const { container } = render(
+      <CommitInfoTooltip
+        lastCommitTimestampMs={Date.now() - 3_600_000}
+        author={human}
+        lastActivityTimestamp={activeAt}
+      />
+    );
+    const activityTime = [...container.querySelectorAll("time")].find(
+      (t) => t.getAttribute("dateTime") === new Date(activeAt).toISOString()
+    );
+    expect(activityTime?.textContent).toBe(exactTimePhrase(activeAt, Date.now()));
+  });
+
+  it("does not truncate a long author name", () => {
+    const longName = "Priya Raman-Oyelaran Castellanos-Whitfield";
+    render(
+      <CommitInfoTooltip
+        lastCommitTimestampMs={Date.now() - 60_000}
+        author={{ name: longName, email: "priya@example.com" }}
+      />
+    );
+    expect(screen.getByText(longName).className).not.toContain("truncate");
+  });
+});
+
+describe("relativeTimePhrase", () => {
+  const DAY = 86_400_000;
+
+  it("keeps the count in each unit below the size of the next unit up", () => {
+    const limits: Record<string, number> = {
+      minute: 60,
+      hour: 24,
+      day: 7,
+      week: 5,
+      month: 13,
+    };
+    for (let d = 0; d < 3 * 365; d += 1) {
+      const phrase = relativeTimePhrase(d * DAY + 1_000);
+      const match = /^(\d+) (minute|hour|day|week|month|year)s? ago$/.exec(phrase);
+      if (!match) continue;
+      const limit = limits[match[2]!];
+      if (limit !== undefined) expect(Number(match[1])).toBeLessThan(limit);
+    }
+  });
+
+  it("never goes backwards as the age grows", () => {
+    const order = ["just", "minute", "hour", "day", "week", "month", "year"];
+    const rank = (p: string) => order.findIndex((u) => p.includes(u));
+    let previous = -1;
+    for (let d = 0; d < 3 * 365; d += 3) {
+      const r = rank(relativeTimePhrase(d * DAY + 5 * 3_600_000));
+      expect(r).toBeGreaterThanOrEqual(previous);
+      previous = r;
+    }
+  });
+});
+
+describe("exactTimePhrase", () => {
+  const now = new Date("2025-06-15T12:00:00Z").getTime();
+  const year = (t: number) => String(new Date(t).getFullYear());
+
+  it("names the year only when it differs from the current one", () => {
+    const thisYear = new Date(2025, 2, 3, 9, 14).getTime();
+    const lastYear = new Date(2024, 10, 3, 9, 14).getTime();
+    expect(exactTimePhrase(thisYear, now)).not.toContain(year(thisYear));
+    expect(exactTimePhrase(lastYear, now)).toContain(year(lastYear));
+  });
+
+  it("is shorter for today than for an earlier day", () => {
+    const today = new Date(now).setHours(9, 14, 0, 0);
+    const earlier = today - 3 * 86_400_000;
+    expect(exactTimePhrase(today, now).length).toBeLessThan(exactTimePhrase(earlier, now).length);
   });
 });

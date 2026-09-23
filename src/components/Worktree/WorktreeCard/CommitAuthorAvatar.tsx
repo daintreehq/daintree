@@ -107,9 +107,11 @@ export function CommitAuthorAvatar({
   }
 
   const [srcIndex, setSrcIndex] = useState(0);
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
   const identityKey = `${author.email}|${author.name}|${forgeAvatarUrl ?? ""}`;
   useEffect(() => {
     setSrcIndex(0);
+    setLoadedSrc(null);
   }, [identityKey]);
 
   if (AgentIcon) {
@@ -140,34 +142,42 @@ export function CommitAuthorAvatar({
       </span>
     );
   }
-  if (src == null) {
-    const key = (author.email.trim() || author.name.trim()).toLowerCase();
-    const color = CAT_COLOR_CLASSES[Math.abs(djb2(key)) % CAT_COLOR_CLASSES.length]!;
-    return (
-      <span
-        aria-hidden="true"
-        className={cn(
-          "flex shrink-0 items-center justify-center font-semibold leading-none",
-          radius,
-          color,
-          className
-        )}
-        style={{ ...box, fontSize: Math.round(size * 0.5) }}
-      >
-        {initialsOf(author.name)}
-      </span>
-    );
-  }
-
-  return (
-    <img
-      key={src}
-      src={src}
-      alt=""
+  const key = (author.email.trim() || author.name.trim()).toLowerCase();
+  const color = CAT_COLOR_CLASSES[Math.abs(djb2(key)) % CAT_COLOR_CLASSES.length]!;
+  const initials = (
+    <span
       aria-hidden="true"
-      onError={() => setSrcIndex((i) => i + 1)}
-      className={cn("shrink-0 object-cover", radius, className)}
-      style={box}
-    />
+      className={cn(
+        "flex shrink-0 items-center justify-center font-semibold leading-none",
+        radius,
+        color,
+        src != null && "absolute inset-0",
+        src == null && className
+      )}
+      style={{ ...box, fontSize: Math.round(size * 0.5) }}
+    >
+      {initialsOf(author.name)}
+    </span>
+  );
+  if (src == null) return initials;
+
+  // The initials hold the slot while the picture is in flight, so a slow or
+  // hung request never shows as an empty hole. The picture covers them once
+  // it has actually loaded.
+  const loaded = loadedSrc === src;
+  return (
+    <span aria-hidden="true" className={cn("relative shrink-0", className)} style={box}>
+      {!loaded && initials}
+      <img
+        key={src}
+        src={src}
+        alt=""
+        aria-hidden="true"
+        onLoad={() => setLoadedSrc(src)}
+        onError={() => setSrcIndex((i) => i + 1)}
+        className={cn("absolute inset-0 object-cover", radius, !loaded && "opacity-0")}
+        style={box}
+      />
+    </span>
   );
 }
