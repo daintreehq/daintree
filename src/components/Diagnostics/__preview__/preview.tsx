@@ -4,6 +4,7 @@ import { resolveAppTheme } from "@shared/theme/themes";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { installPreviewShims } from "@/components/HelpPanel/__preview__/previewShims";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { primeRadix } from "@/components/ui/radix-loader";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useErrorStore } from "@/store/errorStore";
 import { useLogsStore } from "@/store/logsStore";
@@ -165,6 +166,10 @@ function seed(f: DiagnosticsFixture) {
 
 seed(fixture);
 
+// The provider and each tooltip load Radix independently, so on a cold page a
+// tooltip can receive Radix a render before the provider does and throw. The
+// app primes Radix long before the dock can open; do the same here.
+await primeRadix();
 const { DiagnosticsDock } = await import("../DiagnosticsDock");
 
 // The dock caps itself at half its parent's height, so the stand-in grid above

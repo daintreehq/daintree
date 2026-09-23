@@ -78,7 +78,7 @@ const FIXTURES: Array<{ name: string; ready: (page: Page) => Locator; settleMs?:
   { name: "problems-expanded", ready: (p) => p.getByText(/could not read Username/).first() },
   { name: "problems-crowded", ready: (p) => p.getByText(/git status timed out/).first() },
   { name: "logs-empty", ready: (p) => p.getByRole("tabpanel").getByText(/log/i).first() },
-  { name: "logs-populated", ready: (p) => p.getByText(/Project view created/).first() },
+  { name: "logs-populated", ready: (p) => p.getByText(/ResizeObserver loop/).first() },
   { name: "logs-filtered", ready: (p) => p.getByText(/git fetch failed/).first() },
   {
     name: "logs-filtered-empty",
@@ -167,20 +167,36 @@ test.afterAll(async () => {
   await server?.close();
 });
 
-/** Hold one page open until Vite's optimizer stops force-reloading it. */
+/**
+ * Hold a page open on every tab until Vite's optimizer stops force-reloading.
+ * Some primitives load lazily (Radix pieces behind the deferred loader), so a
+ * warm-up on one tab leaves later tabs to discover a dependency mid-sweep —
+ * the re-bundle then serves two copies of a module, and a Radix context from
+ * one copy can't see the provider from the other.
+ */
 async function settleDevServer(context: BrowserContext) {
-  const page = await context.newPage();
-  await stubViteHmrClient(page);
-  let navigations = 0;
-  page.on("framenavigated", () => navigations++);
-  await page.goto(`${server!.baseURL}/diagnostics-preview.html?fixture=problems-populated`);
-  for (let attempt = 0; attempt < 8; attempt++) {
-    const before = navigations;
-    await page.waitForTimeout(2_500);
-    const docks = await page.locator(".diagnostics-dock").count();
-    if (navigations === before && docks === 1) break;
+  const warmups = [
+    "problems-expanded",
+    "logs-filtered",
+    "events-populated",
+    "telemetry-populated",
+    "perf-populated",
+    "whyslow-pressure",
+  ];
+  for (const fixture of warmups) {
+    const page = await context.newPage();
+    await stubViteHmrClient(page);
+    let navigations = 0;
+    page.on("framenavigated", () => navigations++);
+    await page.goto(`${server!.baseURL}/diagnostics-preview.html?fixture=${fixture}`);
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const before = navigations;
+      await page.waitForTimeout(2_000);
+      const docks = await page.locator(".diagnostics-dock").count();
+      if (navigations === before && docks === 1) break;
+    }
+    await page.close();
   }
-  await page.close();
 }
 
 async function withPage<T>(
