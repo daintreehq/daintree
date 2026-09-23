@@ -836,7 +836,14 @@ function ApiKeyRow({
   const statusLine =
     status.kind === "saved" ? (
       <>
-        <Check className="w-3.5 h-3.5 shrink-0 text-status-success" aria-hidden="true" />
+        <Check
+          className={cn(
+            "w-3.5 h-3.5 shrink-0",
+            // Green only for a key the provider actually accepted.
+            status.verified ? "text-status-success" : "text-text-secondary"
+          )}
+          aria-hidden="true"
+        />
         {status.verified
           ? "Key checked and saved"
           : "Key saved. It's checked the first time you dictate."}
@@ -848,7 +855,7 @@ function ApiKeyRow({
       </>
     ) : status.kind === "removed" ? (
       <>
-        <Check className="w-3.5 h-3.5 shrink-0 text-status-success" aria-hidden="true" />
+        <Check className="w-3.5 h-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
         Key removed
       </>
     ) : status.kind === "remove-failed" ? (
