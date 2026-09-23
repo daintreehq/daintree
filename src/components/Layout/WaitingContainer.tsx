@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { ChevronDown, ChevronRight, Layers, OctagonX } from "lucide-react";
+import { ChevronDown, ChevronRight, OctagonX } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import {
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
 import type { TabGroup } from "@/types";
@@ -290,16 +291,21 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
               </span>
             </div>
 
-            <div className="flex flex-col max-h-[360px] overflow-y-auto">
+            <div className="p-1 flex flex-col gap-1 max-h-[360px] overflow-y-auto">
               {[
                 { key: "here", label: "This worktree", items: hereItems },
                 { key: "elsewhere", label: "Other worktrees", items: elsewhereItems },
               ].map(
                 (section) =>
                   section.items.length > 0 && (
-                    <div key={section.key} role="group" aria-label={section.label}>
+                    <div
+                      key={section.key}
+                      role="group"
+                      aria-label={section.label}
+                      className="flex shrink-0 flex-col gap-px"
+                    >
                       <div
-                        className="px-3 pt-2 pb-1 text-3xs font-medium text-text-secondary"
+                        className="flex h-5 items-center px-2 text-3xs font-medium text-text-secondary"
                         aria-hidden="true"
                       >
                         {section.label}
@@ -362,8 +368,13 @@ interface WaitingSingleItemProps {
   worktreeName: string | undefined;
   onActivate: (terminal: PtyPanelData, groupId: string | null) => void;
   onKill: (terminalId: string) => void;
-  compact?: boolean;
 }
+
+const ROW_SURFACE_CLASS =
+  "rounded-[var(--radius-sm)] transition-colors duration-150 ease-out hover:bg-overlay-subtle";
+
+const ROW_TARGET_CLASS =
+  "flex w-full min-w-0 items-center gap-2 h-7 px-2 text-left rounded-[var(--radius-sm)] outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2 cursor-pointer select-none";
 
 function WaitingSingleItem({
   terminal,
@@ -371,103 +382,84 @@ function WaitingSingleItem({
   worktreeName,
   onActivate,
   onKill,
-  compact = false,
 }: WaitingSingleItemProps) {
   const agentState = terminal.agentState;
   const title = terminal.title || "Terminal";
+  // The observed task is what tells three "Claude" rows apart; it goes through
+  // the shared title rules so an identity echo never renders as a task here.
+  const task = getTerminalTaskTitle(terminal);
   // Only classifier-backed reasons earn a chip — the `prompt` fallback stays
   // an unlabeled row so the list doesn't overclaim.
   const reason = actionableWaitingReason(terminal.waitingReason);
+  const context = [worktreeName, task].filter(Boolean).join(" · ");
 
   return (
-    // The row is a div + role="button" rather than a native <button>
-    // because the kill icon-button is a sibling target inside this row;
-    // nesting <button> inside <button> is invalid HTML and breaks
-    // keyboard / screen-reader semantics.
-    <div
-      data-testid="waiting-single-item"
-      data-agent-state={agentState ?? "unknown"}
-      data-waiting-reason={terminal.waitingReason ?? "unknown"}
-      role="button"
-      tabIndex={0}
-      onClick={() => onActivate(terminal, groupId)}
-      onKeyDown={(e) => {
-        // Ignore Enter / Space bubbled from the inner kill button.
-        if (e.target !== e.currentTarget) return;
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onActivate(terminal, groupId);
-        }
-      }}
-      className={cn(
-        "flex items-center gap-2 px-3 py-2.5 hover:bg-muted/50 focus:bg-muted/50 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary outline-hidden transition-colors group/row cursor-pointer w-full select-none",
-        compact && "py-1.5 pl-1.5"
-      )}
-      aria-label={`Focus ${title}${worktreeName ? ` in ${worktreeName}` : ""}${reason ? ` — ${waitingHeadline(reason).toLowerCase()}` : ""}`}
-    >
-      <div className="shrink-0 opacity-70 group-hover/row:opacity-100 transition-opacity">
+    // The activation target and the kill button are siblings, never nested:
+    // the wrapper only owns the shared hover surface and the reveal group.
+    <div className={cn("group/row relative", ROW_SURFACE_CLASS)}>
+      <button
+        type="button"
+        data-testid="waiting-single-item"
+        data-agent-state={agentState ?? "unknown"}
+        data-waiting-reason={terminal.waitingReason ?? "unknown"}
+        onClick={() => onActivate(terminal, groupId)}
+        className={ROW_TARGET_CLASS}
+        aria-label={`Focus ${title}${task ? `: ${task}` : ""}${worktreeName ? ` in ${worktreeName}` : ""}${reason ? ` — ${waitingHeadline(reason).toLowerCase()}` : ""}`}
+      >
         <TerminalIcon
           kind={terminal.kind}
           chrome={deriveTerminalChrome(terminal)}
-          className={compact ? "h-2.5 w-2.5" : "h-3 w-3"}
+          className="h-3 w-3 shrink-0"
         />
-      </div>
 
-      <div className="flex-1 flex items-center gap-1.5 min-w-0">
-        <span
-          className={cn(
-            "min-w-0 truncate font-medium text-text-primary transition-colors",
-            compact ? "text-2xs" : "text-xs"
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          <span className="shrink-0 truncate text-xs font-medium text-text-primary">{title}</span>
+          {(context || terminal.activityHeadline) && (
+            <span className="min-w-0 truncate text-2xs text-text-secondary">
+              {context}
+              {context && terminal.activityHeadline && " · "}
+              {terminal.activityHeadline && (
+                <span className="italic">{terminal.activityHeadline}</span>
+              )}
+            </span>
           )}
-        >
-          {title}
         </span>
-        {(worktreeName || terminal.activityHeadline) && (
-          <span className="flex items-center gap-1 min-w-0 truncate text-3xs text-text-secondary">
-            {worktreeName && <span className="truncate">{worktreeName}</span>}
-            {worktreeName && terminal.activityHeadline && <span aria-hidden="true">·</span>}
-            {terminal.activityHeadline && (
-              <span className="truncate italic text-text-secondary">
-                {terminal.activityHeadline}
-              </span>
+
+        {reason && (
+          <span
+            className={cn(
+              "shrink-0 rounded-[var(--radius-sm)] px-1.5 py-px text-3xs font-medium",
+              reason === "error"
+                ? "bg-status-error/15 text-text-primary"
+                : "bg-state-waiting/15 text-text-primary"
             )}
+            data-testid={`waiting-reason-badge-${terminal.id}`}
+          >
+            {WAITING_REASON_BADGE_LABEL[reason]}
           </span>
         )}
-      </div>
 
-      {reason && (
-        <span
-          className={cn(
-            "shrink-0 rounded-[var(--radius-sm)] px-1.5 py-0.5 text-3xs font-medium",
-            reason === "error"
-              ? "bg-status-error/15 text-text-primary"
-              : "bg-state-waiting/15 text-text-primary"
+        {/* The age holds the trailing slot at rest and yields it to the kill
+            button on hover/focus, so no row reserves an empty action column. */}
+        <span className="min-w-6 shrink-0 text-right text-3xs leading-none transition-opacity duration-150 ease-out motion-reduce:transition-none group-hover/row:opacity-0 group-focus-within/row:opacity-0">
+          {terminal.lastStateChange != null && (
+            <LiveTimeAgo
+              timestamp={terminal.lastStateChange}
+              noTooltip
+              className="text-3xs text-text-secondary tabular-nums"
+            />
           )}
-          data-testid={`waiting-reason-badge-${terminal.id}`}
-        >
-          {WAITING_REASON_BADGE_LABEL[reason]}
         </span>
-      )}
+      </button>
 
-      {terminal.lastStateChange != null && (
-        <LiveTimeAgo
-          timestamp={terminal.lastStateChange}
-          noTooltip
-          className="text-3xs text-text-secondary shrink-0"
-        />
-      )}
-
-      <div className="flex gap-0.5 shrink-0 invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 delay-75 motion-reduce:transition-none group-hover/row:visible group-hover/row:opacity-100 group-hover/row:pointer-events-auto group-focus-within/row:visible group-focus-within/row:opacity-100 group-focus-within/row:pointer-events-auto">
+      <div className="absolute inset-y-0 right-0.5 flex items-center invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 ease-out motion-reduce:transition-none group-hover/row:visible group-hover/row:opacity-100 group-hover/row:pointer-events-auto group-focus-within/row:visible group-focus-within/row:opacity-100 group-focus-within/row:pointer-events-auto">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
               variant="ghost-danger"
-              size="icon-sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                onKill(terminal.id);
-              }}
-              aria-label={`Kill ${title}`}
+              size="icon-xs"
+              onClick={() => onKill(terminal.id)}
+              aria-label={`Kill ${title}${task ? `: ${task}` : ""}`}
               data-testid="waiting-kill-button"
             >
               <OctagonX aria-hidden="true" />
@@ -499,36 +491,33 @@ function WaitingGroupItem({
 }: WaitingGroupItemProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const tabCount = waitingTerminals.length;
-  const groupName = `Tab group (${tabCount} waiting)`;
+  const groupWorktreeId = group.worktreeId ?? waitingTerminals[0]?.worktreeId;
+  const groupWorktreeName =
+    showWorktree && groupWorktreeId ? worktreeMap.get(groupWorktreeId)?.name : undefined;
+  const Chevron = isExpanded ? ChevronDown : ChevronRight;
 
   return (
-    <div className="bg-transparent transition-colors">
-      <div className="flex items-center gap-2 px-3 py-2.5 hover:bg-muted/50 transition-colors group">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="shrink-0 h-4 w-4 p-0 hover:bg-transparent"
+    <div className="flex flex-col gap-px">
+      <div className={ROW_SURFACE_CLASS}>
+        <button
+          type="button"
+          className={ROW_TARGET_CLASS}
           onClick={() => setIsExpanded(!isExpanded)}
-          aria-label={isExpanded ? "Collapse group" : "Expand group"}
           aria-expanded={isExpanded}
           aria-controls={`waiting-group-${group.id}`}
         >
-          {isExpanded ? (
-            <ChevronDown className="w-3 h-3 text-text-secondary" />
-          ) : (
-            <ChevronRight className="w-3 h-3 text-text-secondary" />
-          )}
-        </Button>
-
-        <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
-          <Layers className="w-3 h-3 text-text-secondary" />
-        </div>
-
-        <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-text-secondary group-hover:text-text-primary truncate transition-colors">
-            {groupName}
-          </div>
-        </div>
+          <Chevron className="h-3 w-3 shrink-0 text-text-secondary" aria-hidden="true" />
+          <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+            <span className="shrink-0 text-xs font-medium text-text-secondary">
+              {`Tab group (${tabCount} waiting)`}
+            </span>
+            {groupWorktreeName && (
+              <span className="min-w-0 truncate text-2xs text-text-secondary">
+                {groupWorktreeName}
+              </span>
+            )}
+          </span>
+        </button>
       </div>
 
       {isExpanded && (
@@ -536,28 +525,22 @@ function WaitingGroupItem({
           id={`waiting-group-${group.id}`}
           role="region"
           aria-label="Group panels"
-          className="pl-5 pb-1"
+          className="ml-3.5 flex flex-col gap-px border-l border-divider pl-1"
         >
           {/* Members arrive attention-sorted from displayItems — rendering
               them as-is keeps the expanded group consistent with the triage
-              order that promoted the group in the first place. */}
-          {waitingTerminals.map((terminal) => {
-            const worktreeName =
-              showWorktree && terminal.worktreeId
-                ? worktreeMap.get(terminal.worktreeId)?.name
-                : undefined;
-            return (
-              <WaitingSingleItem
-                key={terminal.id}
-                terminal={terminal}
-                groupId={group.id}
-                worktreeName={worktreeName}
-                onActivate={onActivate}
-                onKill={onKill}
-                compact
-              />
-            );
-          })}
+              order that promoted the group in the first place. The group
+              header already names the worktree, so members don't repeat it. */}
+          {waitingTerminals.map((terminal) => (
+            <WaitingSingleItem
+              key={terminal.id}
+              terminal={terminal}
+              groupId={group.id}
+              worktreeName={undefined}
+              onActivate={onActivate}
+              onKill={onKill}
+            />
+          ))}
         </div>
       )}
     </div>

@@ -286,7 +286,9 @@ const FIXTURES: Record<string, Fixture> = {
           lastObservedTitle: "Generate thumbnails for the project switcher",
         })
       ),
-      fromAgent(agent("e-3", "claude", { ...waiting(72), worktreeId: "wt-main", location: "grid" })),
+      fromAgent(
+        agent("e-3", "claude", { ...waiting(72), worktreeId: "wt-main", location: "grid" })
+      ),
     ],
   },
   "waiting-group": {
