@@ -18,9 +18,9 @@ const OUTCOME_LABEL: Record<TurnOutcomeClass, string> = {
   "docs-empty": "Docs empty",
   "tier-rejected": "Tier rejected",
   "mcp-not-ready": "MCP not ready",
-  "agent-stuck": "Agent stuck",
+  "agent-stuck": "Went quiet",
   "tool-error": "Tool error",
-  "reasoning-loop": "Reasoning loop",
+  "reasoning-loop": "Repeated tool call",
   "hibernate-resume-stale": "Resume stale",
   unknown: "Unknown",
 };

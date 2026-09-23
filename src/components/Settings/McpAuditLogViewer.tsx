@@ -131,8 +131,9 @@ const OUTCOME_LABEL: Record<string, string> = {
   "docs-empty": "No docs found",
   "tier-rejected": "Tier rejected",
   "mcp-not-ready": "MCP not ready",
-  "agent-stuck": "Agent stuck",
+  "agent-stuck": "Went quiet",
   "tool-error": "Tool error",
+  "reasoning-loop": "Repeated tool call",
   "hibernate-resume-stale": "Resume stale",
   unknown: "Unknown",
 };
