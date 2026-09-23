@@ -254,7 +254,7 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
 
     it("reserves the loaded GitHub stats width before counts arrive", () => {
       expect(source).toContain("w-[13rem] shrink-0");
-      expect(source).toContain('<div className="h-8 flex-1" />');
+      expect(source.match(/<div data-stat-segment="" className="h-8 flex-1" \/>/g)).toHaveLength(3);
     });
 
     it("marks the whole project switcher grid cell as no-drag", () => {

@@ -322,28 +322,32 @@ describe("ForgeStatsToolbarButton list-count badge wiring", () => {
       /prCountRefreshedAt\s*=\s*stats\?\.prCountRefreshedAt\s*\?\?\s*statsRecencyFallback/
     );
     expect(source).toMatch(
-      /issueDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*issueCount,\s*issueCountRefreshedAt,\s*issueListCount,\s*issueListHasMore,\s*issueListTimestampRef\.current/
+      /issueDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*issueCount,\s*issueCountRefreshedAt,\s*issueListCount,\s*issueListHasMore,\s*issueListTimestamp\b/
     );
     expect(source).toMatch(
-      /prDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*prCount,\s*prCountRefreshedAt,\s*prListCount,\s*prListHasMore,\s*prListTimestampRef\.current/
+      /prDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*prCount,\s*prCountRefreshedAt,\s*prListCount,\s*prListHasMore,\s*prListTimestamp\b/
     );
   });
 
   it("stamps a recency timestamp when each list count updates (issue #9741)", () => {
-    expect(source).toMatch(/issueListTimestampRef\s*=\s*useRef<number\s*\|\s*null>\(null\)/);
-    expect(source).toMatch(/prListTimestampRef\s*=\s*useRef<number\s*\|\s*null>\(null\)/);
+    expect(source).toMatch(
+      /\[issueListTimestamp, setIssueListTimestamp\]\s*=\s*useState<number\s*\|\s*null>\(null\)/
+    );
+    expect(source).toMatch(
+      /\[prListTimestamp, setPrListTimestamp\]\s*=\s*useState<number\s*\|\s*null>\(null\)/
+    );
     // Each handler must record Date.now() so the resolver can compare it to the
     // stats poll's lastUpdated.
     const issueHandler = source.slice(
       source.indexOf("handleIssueListCountUpdate = useCallback"),
       source.indexOf("handlePrListCountUpdate = useCallback")
     );
-    expect(issueHandler).toContain("issueListTimestampRef.current = Date.now()");
+    expect(issueHandler).toContain("setIssueListTimestamp(Date.now())");
     const prHandler = source.slice(
       source.indexOf("handlePrListCountUpdate = useCallback"),
       source.indexOf("handlePrListCountUpdate = useCallback") + 300
     );
-    expect(prHandler).toContain("prListTimestampRef.current = Date.now()");
+    expect(prHandler).toContain("setPrListTimestamp(Date.now())");
   });
 
   it("passes displayCount to the issue and PR pills", () => {
@@ -365,10 +369,11 @@ describe("ForgeStatsToolbarButton list-count badge wiring", () => {
     expect(source).toContain("count={prCount}");
   });
 
-  it("uses the display count in the issue + PR aria-labels and tooltips", () => {
-    expect(source).toContain('${issueDisplayCount ?? "—"} open issues');
-    expect(source).toContain('${prDisplayCount ?? "—"} open pull requests');
-    expect(source).toContain('${prDisplayCount ?? "—"} open PRs');
+  it("uses the exact display count in the issue + PR aria-labels and tooltips", () => {
+    // The badge is compacted; names and tooltips carry the exact figure.
+    expect(source).toContain("${formatExactCount(issueDisplayCount)} open issues");
+    expect(source).toContain("${formatExactCount(prDisplayCount)} open pull requests");
+    expect(source).toContain("${formatExactCount(prDisplayCount)} open PRs");
   });
 
   it("resets the list counts + timestamps via a project-path effect (issue #9741)", () => {
@@ -386,7 +391,7 @@ describe("ForgeStatsToolbarButton list-count badge wiring", () => {
     expect(slice).toContain("setPrListHasMore(false)");
     // Recency timestamps must clear too or project A's timestamp would suppress
     // project B's first stats poll.
-    expect(slice).toContain("issueListTimestampRef.current = null");
-    expect(slice).toContain("prListTimestampRef.current = null");
+    expect(slice).toContain("setIssueListTimestamp(null)");
+    expect(slice).toContain("setPrListTimestamp(null)");
   });
 });

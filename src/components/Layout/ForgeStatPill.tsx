@@ -5,6 +5,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/component
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { formatForgeBadgeCount } from "./forgeStatsCountDisplay";
 
 export interface ForgeStatPillProps {
   buttonRef: React.RefObject<HTMLButtonElement | null>;
@@ -31,7 +32,14 @@ export interface ForgeStatPillProps {
 
   icon: React.ComponentType<{ className?: string }>;
   iconClassName?: string;
-  openRingClassName: string;
+  /**
+   * `quiet` — a genuine zero: the numeral steps down to secondary text while
+   * the icon keeps its forge colour. `unavailable` — no count to show (token
+   * missing): icon and dash both secondary. Never whole-button opacity, which
+   * dimmed the focus ring and hover with it and made the token-repair click
+   * look disabled.
+   */
+  tone?: "default" | "quiet" | "unavailable";
   className?: string;
 
   dropdownContent: React.ReactNode;
@@ -59,7 +67,7 @@ export function ForgeStatPill({
   onContextMenuOpenChange,
   icon: Icon,
   iconClassName,
-  openRingClassName,
+  tone = "default",
   className,
   dropdownContent,
   persistThroughChildOverlays,
@@ -89,6 +97,7 @@ export function ForgeStatPill({
                 ref={buttonRef}
                 variant="ghost"
                 data-toolbar-item=""
+                data-stat-segment=""
                 onPointerEnter={onPointerEnter}
                 onPointerLeave={onPointerLeave}
                 onClick={onClick}
@@ -98,14 +107,15 @@ export function ForgeStatPill({
                   // act on — a bare `transition-opacity` here replaces the cva's
                   // `transition` outright under tailwind-merge, which left both the
                   // hover tint and the press scale uninterpolated.
-                  "toolbar-stat-pill h-full flex-1 justify-center gap-2 rounded-none px-2 text-text-primary transition-[opacity,background-color,scale] hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
+                  // `bg-clip-padding` keeps the hover and open tints off the
+                  // segment's divider, which would otherwise brighten on one
+                  // side of the lit segment only. The ring is inset: the
+                  // container's overflow-hidden clips an outward one. The open
+                  // state's inset edge is drawn in toolbar.css.
+                  "toolbar-stat-pill h-full flex-1 justify-center gap-1.5 rounded-none bg-clip-padding px-2 text-text-primary transition-[opacity,background-color,scale] hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary focus-visible:-outline-offset-2",
                   activityChip != null && "relative",
                   className,
-                  open &&
-                    cn(
-                      "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary",
-                      openRingClassName
-                    )
+                  open && "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))]"
                 )}
                 id={triggerId}
                 aria-label={ariaLabel}
@@ -113,15 +123,21 @@ export function ForgeStatPill({
                 aria-controls={open ? dropdownId : undefined}
                 data-testid={testId}
               >
-                <Icon className={cn("h-4 w-4", iconClassName)} />
+                <Icon
+                  className={cn(
+                    "h-4 w-4",
+                    tone === "unavailable" ? "text-text-secondary" : iconClassName
+                  )}
+                />
                 <span
                   key={animKey}
                   className={cn(
                     "min-w-[2ch] text-center text-xs font-medium tabular-nums",
+                    tone !== "default" && "text-text-secondary",
                     animKey > 0 && "animate-badge-bump"
                   )}
                 >
-                  {displayCount ?? count ?? "—"}
+                  {formatForgeBadgeCount(displayCount ?? count) ?? "—"}
                 </span>
                 {activityChip}
               </Button>

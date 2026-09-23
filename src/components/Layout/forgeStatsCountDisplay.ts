@@ -50,3 +50,50 @@ export function resolveForgeDisplayCount(
   }
   return statsCount;
 }
+
+const COMPACT_UNITS: ReadonlyArray<readonly [number, string]> = [
+  [1_000_000_000, "B"],
+  [1_000_000, "M"],
+  [1_000, "k"],
+];
+
+/**
+ * Glance form of a toolbar count: exact below 1,000, then `1.2k`, `23k`,
+ * `1.2M`. Never wider than four characters, so a six-digit commit history
+ * cannot stretch the pill row. Truncates rather than rounds — a badge that
+ * reads `24k` for 23,645 commits claims history that does not exist, and the
+ * digit should only tick over once the real count gets there. The exact
+ * number belongs in the accessible name and the tooltip.
+ */
+export function formatCompactCount(count: number): string {
+  if (!Number.isFinite(count) || count < 1_000) return String(count);
+  for (const [size, suffix] of COMPACT_UNITS) {
+    if (count < size) continue;
+    // Integer arithmetic: `count / size * 10` drifts (1.3 * 10 = 13.000…02).
+    const tenths = Math.floor((count * 10) / size);
+    if (tenths < 100) {
+      return `${tenths / 10}${suffix}`;
+    }
+    return `${Math.floor(count / size)}${suffix}`;
+  }
+  return String(count);
+}
+
+/**
+ * The badge text for a resolved display count: numbers compacted, the list's
+ * approximate `N+` form compacted on its numeric part, anything else as-is.
+ */
+export function formatForgeBadgeCount(display: number | string | null): string | null {
+  if (display === null) return null;
+  if (typeof display === "number") return formatCompactCount(display);
+  const approximate = /^(\d+)\+$/.exec(display);
+  return approximate ? `${formatCompactCount(Number(approximate[1]))}+` : display;
+}
+
+/** The exact form for accessible names and tooltips: `23,645`. */
+export function formatExactCount(display: number | string | null): string {
+  if (display === null) return "—";
+  if (typeof display === "number") return display.toLocaleString("en-US");
+  const approximate = /^(\d+)\+$/.exec(display);
+  return approximate ? `${Number(approximate[1]).toLocaleString("en-US")}+` : display;
+}

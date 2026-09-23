@@ -9,9 +9,8 @@ import {
   memo,
   forwardRef,
 } from "react";
-import { CircleDot, GitPullRequest, GitCommit, Clock } from "lucide-react";
+import { CircleDot, GitPullRequest, GitCommit, Clock, TriangleAlert } from "lucide-react";
 import { PRDetectionPausedIndicator } from "./PRDetectionPausedIndicator";
-import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { actionService } from "@/services/ActionService";
@@ -32,7 +31,11 @@ import type { RateLimitDetails } from "@shared/types/forge";
 import type { ForgeRepositoryStats } from "@shared/types/ipc/forge";
 import type { ForgeStatsDropdownProps } from "./forgeStatsDropdownContract";
 import { freshnessSuffix } from "./FreshnessUtils";
-import { resolveForgeDisplayCount } from "./forgeStatsCountDisplay";
+import {
+  formatExactCount,
+  formatForgeBadgeCount,
+  resolveForgeDisplayCount,
+} from "./forgeStatsCountDisplay";
 import {
   formatRateLimitCountdown,
   msUntilNextLabelChange,
@@ -79,15 +82,20 @@ const ACTIVITY_CHIP_TTL_MS = 3 * 60 * 1000;
 
 // Each flex-1 pill's share of the 13rem budget (~4.33rem) leaves room for
 // about 4 characters of text-xs tabular numerals after the icon + gap + px-2
-// chrome (~2.5rem). Counts wider than that (5+ digit commit totals) were
-// silently clipped by the container's overflow-hidden; widths past the budget
-// grow at 0.55rem per character — a text-xs tabular digit (~0.45rem) plus
-// slack.
+// chrome (~2.5rem). Badges are compacted (`formatCompactCount`) so a count
+// never renders wider than that; only the list's approximate `1.2k+` form can
+// overflow, and widths past the budget grow at 0.55rem per character — a
+// text-xs tabular digit (~0.45rem) plus slack.
 const PILL_CHAR_BUDGET = 4;
 const PILL_EXTRA_CHAR_REM = 0.55;
 
 const pillOverflowChars = (display: number | string | null) =>
-  Math.max(0, String(display ?? "—").length - PILL_CHAR_BUDGET);
+  Math.max(0, (formatForgeBadgeCount(display) ?? "—").length - PILL_CHAR_BUDGET);
+
+// The badge is compacted (`23k`), so the fresh-state tooltip carries the exact
+// figure: `Browse git commits (23,645)`.
+const exactSuffix = (display: number | string | null, noun?: string) =>
+  display === null ? "" : ` (${formatExactCount(display)}${noun ? ` ${noun}` : ""})`;
 
 // Re-exported for external consumers (tests, rate-limit math)
 export { msUntilNextLabelChange } from "./RateLimitDetails";
@@ -227,21 +235,21 @@ export const ForgeStatsToolbarButton = memo(
 
     // Epoch-ms timestamp of the most recent `onCountUpdate` for each kind, used
     // to arbitrate recency against the stats poll's `lastUpdated` (issue #9741).
-    // A ref, not state — the timestamp only feeds the display derivation below,
-    // which already re-renders whenever the count state or `lastUpdated` change,
-    // so it needs no re-render of its own. Cleared on project switch alongside
-    // the count state so the previous project's timestamp can't suppress the
-    // new project's first list load.
-    const issueListTimestampRef = useRef<number | null>(null);
-    const prListTimestampRef = useRef<number | null>(null);
+    // State rather than a ref because the display derivation reads it during
+    // render, which the React Compiler rejects for refs; it is set in the same
+    // batch as the count, so it costs no extra render. Cleared on project switch
+    // alongside the count state so the previous project's timestamp can't
+    // suppress the new project's first list load.
+    const [issueListTimestamp, setIssueListTimestamp] = useState<number | null>(null);
+    const [prListTimestamp, setPrListTimestamp] = useState<number | null>(null);
 
     const handleIssueListCountUpdate = useCallback((count: number, hasMore: boolean) => {
-      issueListTimestampRef.current = Date.now();
+      setIssueListTimestamp(Date.now());
       setIssueListCount(count);
       setIssueListHasMore(hasMore);
     }, []);
     const handlePrListCountUpdate = useCallback((count: number, hasMore: boolean) => {
-      prListTimestampRef.current = Date.now();
+      setPrListTimestamp(Date.now());
       setPrListCount(count);
       setPrListHasMore(hasMore);
     }, []);
@@ -260,8 +268,8 @@ export const ForgeStatsToolbarButton = memo(
       setIssueListHasMore(false);
       setPrListCount(null);
       setPrListHasMore(false);
-      issueListTimestampRef.current = null;
-      prListTimestampRef.current = null;
+      setIssueListTimestamp(null);
+      setPrListTimestamp(null);
     }, [currentProject?.path]);
 
     // Badge display value: whichever of the list-loaded count (suffixed with
@@ -270,21 +278,20 @@ export const ForgeStatsToolbarButton = memo(
     // unconditionally once set, freezing the badge until the dropdown reopened
     // even when a fresher poll had landed. Stays separate from the numeric
     // `issueCount` / `prCount` so the digit-pulse delta detection keeps
-    // comparing raw totals. Reads the timestamp refs during render (a ref read
-    // in render is fine — they're only written from event callbacks).
+    // comparing raw totals.
     const issueDisplayCount: number | string | null = resolveForgeDisplayCount(
       issueCount,
       issueCountRefreshedAt,
       issueListCount,
       issueListHasMore,
-      issueListTimestampRef.current
+      issueListTimestamp
     );
     const prDisplayCount: number | string | null = resolveForgeDisplayCount(
       prCount,
       prCountRefreshedAt,
       prListCount,
       prListHasMore,
-      prListTimestampRef.current
+      prListTimestamp
     );
 
     useEffect(() => {
@@ -343,7 +350,13 @@ export const ForgeStatsToolbarButton = memo(
     // clipped any indicator off the right edge — and a clipped element can't
     // receive pointer events, which is why the rate-limit details tooltip
     // stopped opening on hover.
-    const trailingIndicatorCount = (rateLimitActive ? 1 : 0) + (prCircuitTripped ? 1 : 0);
+    // Same condition as the stripe's error state (`getForgeIndicatorStatus`):
+    // the stripe alone said "failing" in colour only, so a persistent failure
+    // also gets a glyph slot carrying the message in its tooltip.
+    const persistentErrorActive =
+      errorSeverity === "persistent" && !isTokenError && !rateLimitActive && !statsLoading;
+    const trailingIndicatorCount =
+      (rateLimitActive ? 1 : 0) + (prCircuitTripped ? 1 : 0) + (persistentErrorActive ? 1 : 0);
     // Commits-only mode keeps a single pill at its usual one-third share so
     // the segment doesn't stretch to the full three-pill budget. When the
     // widest displayed count exceeds the per-pill character budget, every
@@ -902,12 +915,8 @@ export const ForgeStatsToolbarButton = memo(
 
     return (
       <div
-        className="toolbar-stats app-no-drag relative mr-2 flex h-8 shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,var(--radius-md))] border divide-x divide-[var(--toolbar-stats-divider,var(--theme-border-subtle))] transition-[width] duration-150 ease-out"
-        style={{
-          width: statsContainerWidth,
-          ["--toolbar-stats-divider" as string]:
-            "var(--toolbar-stats-divider,var(--theme-border-subtle))",
-        }}
+        className="toolbar-stats app-no-drag relative mr-2 flex h-8 shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,var(--radius-md))] border transition-[width] duration-150 ease-out"
+        style={{ width: statsContainerWidth }}
       >
         {forgeMode ? (
           <ForgeStatPill
@@ -920,7 +929,7 @@ export const ForgeStatsToolbarButton = memo(
             ariaLabel={
               isTokenError
                 ? `Configure ${providerName} token to see issues`
-                : `${issueDisplayCount ?? "—"} open issues${
+                : `${formatExactCount(issueDisplayCount)} open issues${
                     showIssuesChip ? " (new since last view)" : ""
                   }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
             }
@@ -928,8 +937,8 @@ export const ForgeStatsToolbarButton = memo(
               isTokenError
                 ? `Configure ${providerName} token to see issues`
                 : freshnessLevel === "fresh"
-                  ? `Browse ${providerName} issues`
-                  : `${issueDisplayCount ?? "—"} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
+                  ? `Browse ${providerName} issues${exactSuffix(issueDisplayCount, "open")}`
+                  : `${formatExactCount(issueDisplayCount)} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
             }
             onContextMenuOpenChange={handleStatsMenuOpenChange}
             contextMenuContent={
@@ -941,12 +950,8 @@ export const ForgeStatsToolbarButton = memo(
               />
             }
             icon={CircleDot}
-            iconClassName={isTokenError ? "text-muted-foreground" : "text-pr-open"}
-            openRingClassName="ring-1 ring-pr-open/20"
-            className={cn(
-              isTokenError && "opacity-40",
-              !isTokenError && stats?.issueCount === 0 && "opacity-50"
-            )}
+            iconClassName="text-pr-open"
+            tone={isTokenError ? "unavailable" : stats?.issueCount === 0 ? "quiet" : "default"}
             dropdownContent={
               DropdownView && providerId ? (
                 <DropdownView
@@ -1025,7 +1030,7 @@ export const ForgeStatsToolbarButton = memo(
             ariaLabel={
               isTokenError
                 ? `Configure ${providerName} token to see pull requests`
-                : `${prDisplayCount ?? "—"} open pull requests${
+                : `${formatExactCount(prDisplayCount)} open pull requests${
                     showPrsChip ? " (new since last view)" : ""
                   }${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
             }
@@ -1033,8 +1038,8 @@ export const ForgeStatsToolbarButton = memo(
               isTokenError
                 ? `Configure ${providerName} token to see pull requests`
                 : freshnessLevel === "fresh"
-                  ? `Browse ${providerName} pull requests`
-                  : `${prDisplayCount ?? "—"} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
+                  ? `Browse ${providerName} pull requests${exactSuffix(prDisplayCount, "open")}`
+                  : `${formatExactCount(prDisplayCount)} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}`
             }
             onContextMenuOpenChange={handleStatsMenuOpenChange}
             contextMenuContent={
@@ -1046,12 +1051,8 @@ export const ForgeStatsToolbarButton = memo(
               />
             }
             icon={GitPullRequest}
-            iconClassName={isTokenError ? "text-muted-foreground" : "text-pr-merged"}
-            openRingClassName="ring-1 ring-pr-merged/20"
-            className={cn(
-              isTokenError && "opacity-40",
-              !isTokenError && stats?.prCount === 0 && "opacity-50"
-            )}
+            iconClassName="text-pr-merged"
+            tone={isTokenError ? "unavailable" : stats?.prCount === 0 ? "quiet" : "default"}
             dropdownContent={
               DropdownView && providerId ? (
                 <DropdownView
@@ -1122,11 +1123,11 @@ export const ForgeStatsToolbarButton = memo(
           count={commitCount}
           animKey={commitAnimKey}
           testId="forge-stat-pill-commits"
-          ariaLabel={`${commitCount ?? "—"} commits${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`}
+          ariaLabel={`${formatExactCount(commitCount)} commits${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`}
           tooltipContent={
             commitFreshnessLevel === "fresh"
-              ? "Browse git commits"
-              : `${commitCount ?? "—"} commits${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`
+              ? `Browse git commits${exactSuffix(commitCount)}`
+              : `${formatExactCount(commitCount)} commits${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`
           }
           onContextMenuOpenChange={handleStatsMenuOpenChange}
           contextMenuContent={
@@ -1140,8 +1141,7 @@ export const ForgeStatsToolbarButton = memo(
             />
           }
           icon={GitCommit}
-          openRingClassName="ring-1 ring-border-strong"
-          className={cn(stats?.commitCount === 0 && "opacity-50")}
+          tone={stats?.commitCount === 0 ? "quiet" : "default"}
           dropdownContent={
             DropdownView && providerId ? (
               <DropdownView
@@ -1198,6 +1198,7 @@ export const ForgeStatsToolbarButton = memo(
               <ContextMenuTrigger asChild>
                 <TooltipTrigger asChild>
                   <div
+                    data-stat-segment=""
                     role="status"
                     aria-live="polite"
                     aria-label={
@@ -1205,9 +1206,9 @@ export const ForgeStatsToolbarButton = memo(
                         ? `${providerName} secondary rate limit — resuming in ${rateLimitCountdown}`
                         : `${providerName} rate limit — resets in ${rateLimitCountdown}`
                     }
-                    className="flex h-full w-7 shrink-0 items-center justify-center text-muted-foreground"
+                    className="flex h-full w-7 shrink-0 items-center justify-center"
                   >
-                    <Clock className="h-3.5 w-3.5 text-text-muted" aria-hidden />
+                    <Clock className="h-3.5 w-3.5 text-text-secondary" aria-hidden />
                   </div>
                 </TooltipTrigger>
               </ContextMenuTrigger>
@@ -1222,6 +1223,31 @@ export const ForgeStatsToolbarButton = memo(
                 now={rateLimitNow}
                 fallbackResetAt={rateLimitResetAt}
               />
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
+        {persistentErrorActive ? (
+          <Tooltip>
+            <ContextMenu onOpenChange={handleStatsMenuOpenChange}>
+              <ContextMenuTrigger asChild>
+                <TooltipTrigger asChild>
+                  {/* Not a live region: the stripe's status already announces
+                      the error, and two would read it twice. */}
+                  <div
+                    data-stat-segment=""
+                    aria-hidden="true"
+                    className="flex h-full w-7 shrink-0 items-center justify-center"
+                  >
+                    <TriangleAlert className="h-3.5 w-3.5 text-text-secondary" />
+                  </div>
+                </TooltipTrigger>
+              </ContextMenuTrigger>
+              <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+                {chromeMenuContent}
+              </ContextMenuContent>
+            </ContextMenu>
+            <TooltipContent side="bottom">
+              {`${providerName} data unavailable${statsError ? `: ${statsError}` : ""}`}
             </TooltipContent>
           </Tooltip>
         ) : null}

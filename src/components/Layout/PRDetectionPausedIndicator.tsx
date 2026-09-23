@@ -22,12 +22,13 @@ export function PRDetectionPausedIndicator({
   const trigger = (
     <TooltipTrigger asChild>
       <div
+        data-stat-segment=""
         role="status"
         aria-live="polite"
         aria-label="PR detection paused — retrying"
-        className="flex h-full w-7 shrink-0 items-center justify-center text-muted-foreground"
+        className="flex h-full w-7 shrink-0 items-center justify-center"
       >
-        <CloudOff className="h-3.5 w-3.5 text-text-muted" aria-hidden />
+        <CloudOff className="h-3.5 w-3.5 text-text-secondary" aria-hidden />
       </div>
     </TooltipTrigger>
   );
