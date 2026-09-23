@@ -211,14 +211,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Copy-all-messages confirmation; resets when the copy flash times out",
     },
   ],
-  "src/components/EventInspector/EventDetail.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Copy-payload confirmation; resets when the copy flash times out",
-    },
-  ],
   "src/components/FileViewer/DiffFileSidebar.tsx": [
     {
       category: "domain",

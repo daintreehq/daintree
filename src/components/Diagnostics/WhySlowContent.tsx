@@ -120,6 +120,7 @@ export function describeSlowdowns(snapshot: WhySlowSnapshot): SlowdownFinding[] 
         id: "thermal",
         tone: r.thermalState === "critical" ? "alert" : "warn",
         text: `The system is running hot (thermal state: ${r.thermalState})`,
+        suggestion: "Pausing heavy agent work may help it cool down",
       });
     }
     if (r.speedLimit < 100) {
@@ -334,6 +335,8 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
       !snapshot.pty ||
       !snapshot.memory ||
       !snapshot.memory.terminalWorkloads.available);
+  // Present but old: the verdict can't speak for "right now" either.
+  const readingsStale = !!snapshot?.memory?.terminalWorkloads.stale;
   const memoryWorkloads = memory?.terminalWorkloads ?? null;
   // "Has data" = a live measurement, or retained nonzero values from a prior
   // successful sweep. A never-sampled slice must render as "—", not a fake 0.
@@ -352,6 +355,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
           findings={findings}
           allClear={allClear}
           incomplete={readingsIncomplete}
+          stale={readingsStale}
         />
         <div className="flex shrink-0 items-center gap-2">
           {snapshot && !error ? (
@@ -392,7 +396,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
         <DiagnosticsNotice
           kind="stale"
           className="mb-2.5"
-          title="Couldn't refresh"
+          title="Showing older data"
           description={
             <span data-testid="why-slow-stale-note">
               Refresh failed · data from {formatSnapshotAge(snapshotAgeMs)}
@@ -408,15 +412,17 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
       {snapshot ? (
         <div className="flex flex-col gap-3">
           {sortedReasons.length > 0 ? (
-            <p className="text-xs text-text-secondary">
-              <span className="font-medium text-text-primary">Biggest factors: </span>
-              {sortedReasons.slice(0, 3).map((r, index) => (
-                <span key={r.signal}>
-                  {index > 0 ? " · " : ""}
-                  {r.detail} <span className="tabular-nums">(+{r.contribution})</span>
-                </span>
-              ))}
-            </p>
+            <div className="flex flex-wrap items-baseline gap-x-1 text-xs text-text-secondary">
+              <span className="font-medium text-text-primary">Biggest factors:</span>
+              <ul aria-label="Pressure contributions" className="contents">
+                {sortedReasons.map((r, index) => (
+                  <li key={r.signal}>
+                    {index > 0 ? "· " : ""}
+                    {r.detail} <span className="tabular-nums">(+{r.contribution})</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : null}
           {findings.length > 0 ? <FindingsList findings={findings} /> : null}
 
@@ -456,21 +462,6 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
                     tone={resource.speedLimit < 100 ? "warn" : "default"}
                   />
                 </div>
-                {sortedReasons.length > 0 ? (
-                  <ul className="flex flex-col gap-0.5" aria-label="Pressure contributions">
-                    {sortedReasons.map((r) => (
-                      <li
-                        key={r.signal}
-                        className="flex items-baseline gap-2 text-xs text-text-secondary"
-                      >
-                        <span className="w-6 shrink-0 text-right tabular-nums">
-                          +{r.contribution}
-                        </span>
-                        <span className="text-text-primary">{r.detail}</span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
               </div>
             ) : (
               <p className="text-xs text-text-secondary">Resource mode unavailable</p>
@@ -612,12 +603,14 @@ function Verdict({
   findings,
   allClear,
   incomplete,
+  stale,
 }: {
   snapshot: WhySlowSnapshot | null;
   error: boolean;
   findings: SlowdownFinding[];
   allClear: boolean;
   incomplete: boolean;
+  stale: boolean;
 }) {
   const problems = findings.filter((f) => f.tone !== "info").length;
   let text: string;
@@ -635,6 +628,8 @@ function Verdict({
       : "Nothing was slowing Daintree down at the last reading";
   } else if (incomplete) {
     text = "No slowdowns found, but some readings are unavailable";
+  } else if (stale) {
+    text = "No slowdowns found, but some readings are out of date";
   } else if (allClear) {
     text = "";
   } else {
@@ -665,7 +660,19 @@ const FINDINGS_VISIBLE = 4;
 function FindingsList({ findings }: { findings: SlowdownFinding[] }) {
   const [showAll, setShowAll] = useState(false);
   const hidden = findings.length - FINDINGS_VISIBLE;
-  const visible = showAll || hidden <= 1 ? findings : findings.slice(0, FINDINGS_VISIBLE);
+  const collapsible = hidden > 1;
+  const visible = showAll || !collapsible ? findings : findings.slice(0, FINDINGS_VISIBLE);
+  // The verdict counts slowdowns, not notes, so the disclosure says which it hides.
+  const hiddenNotes = collapsible
+    ? findings.slice(FINDINGS_VISIBLE).filter((f) => f.tone === "info").length
+    : 0;
+  const hiddenProblems = hidden - hiddenNotes;
+  const moreLabel = [
+    hiddenProblems > 0 ? `${hiddenProblems} more` : null,
+    hiddenNotes > 0 ? plural(hiddenNotes, "note", "notes") : null,
+  ]
+    .filter(Boolean)
+    .join(" and ");
   return (
     <div className="flex flex-col gap-1">
       <ul
@@ -677,16 +684,16 @@ function FindingsList({ findings }: { findings: SlowdownFinding[] }) {
           <FindingRow key={finding.id} finding={finding} />
         ))}
       </ul>
-      {hidden > 1 ? (
+      {collapsible ? (
         <Button
           variant="ghost"
           size="xs"
-          className="self-start"
+          className="self-start text-text-primary underline decoration-text-secondary underline-offset-2"
           aria-expanded={showAll}
           aria-controls="why-slow-findings"
           onClick={() => setShowAll((v) => !v)}
         >
-          {showAll ? "Show fewer" : `Show ${hidden} more`}
+          {showAll ? "Show fewer" : `Show ${moreLabel}`}
         </Button>
       ) : null}
     </div>

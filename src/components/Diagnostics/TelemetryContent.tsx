@@ -10,6 +10,10 @@ import { actionService } from "@/services/ActionService";
 import type { SanitizedTelemetryEvent } from "@shared/types";
 import { logError } from "@/utils/logger";
 import { DiagnosticsNotice } from "./DiagnosticsNotice";
+import { ListSkeleton } from "./ListSkeleton";
+
+// The design contract's "Still working…" point for waits past five seconds.
+const STILL_WORKING_MS = 5_000;
 
 export interface TelemetryContentProps {
   className?: string;
@@ -197,22 +201,41 @@ function TelemetryEmptyState({ active }: { active: boolean }) {
 }
 
 export function TelemetryContent({ className }: TelemetryContentProps) {
-  const { active, events, selectedEventId, setActive, appendEvents, setSelectedEvent } =
-    useTelemetryPreviewStore(
-      useShallow((state) => ({
-        active: state.active,
-        events: state.events,
-        selectedEventId: state.selectedEventId,
-        setActive: state.setActive,
-        appendEvents: state.appendEvents,
-        setSelectedEvent: state.setSelectedEvent,
-      }))
-    );
+  const {
+    active,
+    stateRead,
+    events,
+    selectedEventId,
+    setActive,
+    setStateRead,
+    appendEvents,
+    setSelectedEvent,
+  } = useTelemetryPreviewStore(
+    useShallow((state) => ({
+      active: state.active,
+      stateRead: state.stateRead,
+      setStateRead: state.setStateRead,
+      events: state.events,
+      selectedEventId: state.selectedEventId,
+      setActive: state.setActive,
+      appendEvents: state.appendEvents,
+      setSelectedEvent: state.setSelectedEvent,
+    }))
+  );
 
   // Whether preview is on is unknown until the first read lands — and if that
   // read fails, "off" would be a guess, so the tab says it couldn't tell.
-  const [stateRead, setStateRead] = useState<"pending" | "done" | "failed">("pending");
   const [reloadKey, setReloadKey] = useState(0);
+  const [slowRead, setSlowRead] = useState(false);
+
+  useEffect(() => {
+    if (stateRead !== "pending") {
+      setSlowRead(false);
+      return;
+    }
+    const timer = setTimeout(() => setSlowRead(true), STILL_WORKING_MS);
+    return () => clearTimeout(timer);
+  }, [stateRead]);
 
   useEffect(() => {
     let disposed = false;
@@ -223,7 +246,7 @@ export function TelemetryContent({ className }: TelemetryContentProps) {
       .then((state) => {
         if (disposed) return;
         setActive(state.active);
-        setStateRead("done");
+        setStateRead("known");
       })
       .catch((err) => {
         logError("Failed to read telemetry preview state", err);
@@ -237,6 +260,7 @@ export function TelemetryContent({ className }: TelemetryContentProps) {
     const unsubscribeState = telemetryPreviewClient.onStateChanged((state) => {
       if (disposed) return;
       setActive(state.active);
+      setStateRead("known");
     });
 
     return () => {
@@ -245,7 +269,7 @@ export function TelemetryContent({ className }: TelemetryContentProps) {
       unsubscribeState();
       telemetryPreviewClient.unsubscribe();
     };
-  }, [appendEvents, setActive, reloadKey]);
+  }, [appendEvents, setActive, setStateRead, reloadKey]);
 
   const deferredEvents = useDeferredValue(events);
   const selectedEvent = useMemo(() => {
@@ -253,20 +277,26 @@ export function TelemetryContent({ className }: TelemetryContentProps) {
     return events.find((e) => e.id === selectedEventId) ?? null;
   }, [events, selectedEventId]);
 
+  const stateNotice =
+    stateRead === "failed" ? (
+      <DiagnosticsNotice
+        kind="failed"
+        title="Couldn't check whether telemetry preview is on"
+        description="Preview only mirrors payloads here. It never sends anything."
+        onRetry={() => setReloadKey((k) => k + 1)}
+      />
+    ) : null;
+
   if (events.length === 0) {
-    if (stateRead === "pending") return <div className={cn("h-full", className)} />;
-    if (stateRead === "failed") {
+    if (stateRead === "pending") {
       return (
-        <div className={cn("h-full p-3", className)}>
-          <DiagnosticsNotice
-            kind="failed"
-            title="Couldn't check whether telemetry preview is on"
-            description="Preview only mirrors payloads here. It never sends anything."
-            onRetry={() => setReloadKey((k) => k + 1)}
-          />
+        <div className={cn("h-full", className)}>
+          <ListSkeleton label="Checking telemetry preview" />
+          {slowRead ? <p className="px-3 text-xs text-text-secondary">Still working…</p> : null}
         </div>
       );
     }
+    if (stateNotice) return <div className={cn("h-full p-3", className)}>{stateNotice}</div>;
     return (
       <div className={cn("h-full flex items-center justify-center", className)}>
         <TelemetryEmptyState active={active} />
@@ -275,22 +305,25 @@ export function TelemetryContent({ className }: TelemetryContentProps) {
   }
 
   return (
-    <div className={cn("flex h-full min-h-0", className)}>
-      <div className="w-1/2 border-r border-divider overflow-y-auto">
-        {deferredEvents
-          .slice()
-          .reverse()
-          .map((event) => (
-            <TelemetryRow
-              key={event.id}
-              event={event}
-              isSelected={event.id === selectedEventId}
-              onSelect={setSelectedEvent}
-            />
-          ))}
-      </div>
-      <div className="w-1/2 overflow-hidden">
-        <TelemetryDetail event={selectedEvent} />
+    <div className={cn("flex h-full min-h-0 flex-col", className)}>
+      {stateNotice ? <div className="shrink-0 px-3 pt-2">{stateNotice}</div> : null}
+      <div className="flex min-h-0 flex-1">
+        <div className="w-1/2 border-r border-divider overflow-y-auto">
+          {deferredEvents
+            .slice()
+            .reverse()
+            .map((event) => (
+              <TelemetryRow
+                key={event.id}
+                event={event}
+                isSelected={event.id === selectedEventId}
+                onSelect={setSelectedEvent}
+              />
+            ))}
+        </div>
+        <div className="w-1/2 overflow-hidden">
+          <TelemetryDetail event={selectedEvent} />
+        </div>
       </div>
     </div>
   );

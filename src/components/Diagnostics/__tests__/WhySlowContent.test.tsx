@@ -529,6 +529,27 @@ describe("WhySlowContent", () => {
     expect(lastAlert).toBeLessThan(firstWarn);
   });
 
+  it("qualifies a quiet verdict when a reading is present but out of date", async () => {
+    getWhySlowSnapshot.mockResolvedValue(
+      makeSnapshot({
+        resource: makeQuietResource(),
+        pty: makeQuietPty(),
+        worktrees: quietWorktrees,
+        memory: {
+          ...quietMemory!,
+          terminalWorkloads: { ...quietMemory!.terminalWorkloads, stale: true },
+        },
+      })
+    );
+
+    render(<WhySlowContent />);
+
+    expect(
+      await screen.findByText("No slowdowns found, but some readings are out of date")
+    ).toBeTruthy();
+    expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
+  });
+
   it("says which way a pending profile switch is heading", () => {
     const base = makeQuietResource();
     const easing = describeSlowdowns(

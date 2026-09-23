@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { useEventStore, type EventRecord, type EventFilterOptions } from "@/store/eventStore";
 import { Copy, Check, ChevronDown, ChevronRight, Filter, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
 import { logError } from "@/utils/logger";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { sanitizeErrorText } from "@/utils/errorText";
@@ -174,22 +175,15 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
               <span className="capitalize">{event.source}</span>
             </div>
           </div>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={copyPayload}
-                aria-label="Copy payload"
-                className="flex-shrink-0 p-1.5 text-text-secondary hover:bg-overlay-soft hover:text-text-primary rounded-[var(--radius-md)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
-              >
-                {copied ? (
-                  <Check className="w-3.5 h-3.5 text-status-success" />
-                ) : (
-                  <Copy className="w-3.5 h-3.5" />
-                )}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Copy payload</TooltipContent>
-          </Tooltip>
+          <Button
+            variant="subtle"
+            size="xs"
+            onClick={copyPayload}
+            aria-label={copied ? "Copied payload" : "Copy payload JSON"}
+          >
+            {copied ? <Check /> : <Copy />}
+            {copied ? "Copied" : "Copy JSON"}
+          </Button>
         </div>
       </div>
 
@@ -299,56 +293,56 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
               )}
             </div>
           )}
-      </div>
-      <div className="border-b border-divider">
-        <button
-          onClick={() => toggleSection("metadata")}
-          aria-expanded={expandedSections.has("metadata")}
-          className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary"
-        >
-          {expandedSections.has("metadata") ? (
-            <ChevronDown className="w-3.5 h-3.5" />
-          ) : (
-            <ChevronRight className="w-3.5 h-3.5" />
-          )}
-          <span className="text-xs font-medium">Metadata</span>
-        </button>
-        {expandedSections.has("metadata") && (
-          <div className="px-3 pb-2.5 space-y-1.5 text-xs">
-            <div className="grid grid-cols-[100px_1fr] gap-2">
-              <span className="text-text-secondary">Event ID:</span>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="font-mono text-xs truncate">{event.id}</span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{event.id}</TooltipContent>
-              </Tooltip>
-            </div>
-            <div className="grid grid-cols-[100px_1fr] gap-2">
-              <span className="text-text-secondary">Type:</span>
-              <span className="font-mono text-xs">{event.type}</span>
-            </div>
-            <div className="grid grid-cols-[100px_1fr] gap-2">
-              <span className="text-text-secondary">Source:</span>
-              <span className="font-mono text-xs capitalize">{event.source}</span>
-            </div>
-            <div className="grid grid-cols-[100px_1fr] gap-2">
-              <span className="text-text-secondary">Timestamp:</span>
-              <span className="font-mono text-xs">{event.timestamp}</span>
-            </div>
-            {event.payload?.traceId && (
+        <div className="border-b border-divider">
+          <button
+            onClick={() => toggleSection("metadata")}
+            aria-expanded={expandedSections.has("metadata")}
+            className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary"
+          >
+            {expandedSections.has("metadata") ? (
+              <ChevronDown className="w-3.5 h-3.5" />
+            ) : (
+              <ChevronRight className="w-3.5 h-3.5" />
+            )}
+            <span className="text-xs font-medium">Metadata</span>
+          </button>
+          {expandedSections.has("metadata") && (
+            <div className="px-3 pb-2.5 space-y-1.5 text-xs">
               <div className="grid grid-cols-[100px_1fr] gap-2">
-                <span className="text-text-secondary">Trace ID:</span>
+                <span className="text-text-secondary">Event ID:</span>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <span className="font-mono text-xs truncate">{event.payload.traceId}</span>
+                    <span className="font-mono text-xs truncate">{event.id}</span>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">{event.payload.traceId}</TooltipContent>
+                  <TooltipContent side="bottom">{event.id}</TooltipContent>
                 </Tooltip>
               </div>
-            )}
-          </div>
-        )}
+              <div className="grid grid-cols-[100px_1fr] gap-2">
+                <span className="text-text-secondary">Type:</span>
+                <span className="font-mono text-xs">{event.type}</span>
+              </div>
+              <div className="grid grid-cols-[100px_1fr] gap-2">
+                <span className="text-text-secondary">Source:</span>
+                <span className="font-mono text-xs capitalize">{event.source}</span>
+              </div>
+              <div className="grid grid-cols-[100px_1fr] gap-2">
+                <span className="text-text-secondary">Timestamp:</span>
+                <span className="font-mono text-xs">{event.timestamp}</span>
+              </div>
+              {event.payload?.traceId && (
+                <div className="grid grid-cols-[100px_1fr] gap-2">
+                  <span className="text-text-secondary">Trace ID:</span>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="font-mono text-xs truncate">{event.payload.traceId}</span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{event.payload.traceId}</TooltipContent>
+                  </Tooltip>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

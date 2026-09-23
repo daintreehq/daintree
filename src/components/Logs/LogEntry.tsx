@@ -84,25 +84,8 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
     };
   }, []);
 
-  const handleClick = useCallback(() => {
-    if (hasContext) {
-      onToggle();
-    }
-  }, [hasContext, onToggle]);
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (hasContext && (e.key === "Enter" || e.key === " ")) {
-        e.preventDefault();
-        onToggle();
-      }
-    },
-    [hasContext, onToggle]
-  );
-
   const handleCopy = useCallback(
-    async (e: React.MouseEvent) => {
-      e.stopPropagation();
+    async () => {
       try {
         await navigator.clipboard.writeText(buildCopyPayload(entry, copyMeta));
         setCopied(true);
@@ -118,65 +101,81 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
     [entry, copyMeta]
   );
 
+  const summary = (
+    <>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="text-text-secondary text-xs font-mono shrink-0">
+            {formatTimestamp(entry.timestamp)}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{new Date(entry.timestamp).toISOString()}</TooltipContent>
+      </Tooltip>
+
+      <span
+        className={cn(
+          "w-11 shrink-0 rounded-[var(--radius-sm)] py-px text-center text-2xs font-medium uppercase",
+          LEVEL_CHIP[entry.level]
+        )}
+      >
+        {entry.level}
+      </span>
+
+      {entry.source && (
+        <span className="text-text-secondary text-xs font-mono shrink-0">[{entry.source}]</span>
+      )}
+
+      <span className="text-text-primary text-xs font-mono break-words min-w-0 flex-1">
+        {entry.message}
+      </span>
+
+      {count > 1 && (
+        <span className="text-text-secondary text-xs font-mono shrink-0 tabular-nums bg-overlay-soft px-1.5 rounded-[var(--radius-sm)]">
+          ×{count}
+        </span>
+      )}
+
+      {hasContext && (
+        <span className="text-text-secondary shrink-0" aria-hidden>
+          {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        </span>
+      )}
+    </>
+  );
+
+  // Level, source and repeat count belong in the name: they're what a
+  // sighted reader scans the row for.
+  const accessibleName = [
+    entry.level.toUpperCase(),
+    entry.source ? `from ${entry.source}:` : null,
+    entry.message,
+    count > 1 ? `(repeated ${count} times)` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
     <div
       className={cn(
         "group border-b border-divider py-1 px-3 relative",
-        hasContext && "cursor-pointer hover:bg-overlay-subtle",
+        hasContext && "hover:bg-overlay-subtle",
         isExpanded && "bg-overlay-subtle"
       )}
-      onClick={handleClick}
-      onKeyDown={handleKeyDown}
-      role={hasContext ? "button" : undefined}
-      tabIndex={hasContext ? 0 : undefined}
-      aria-expanded={hasContext ? isExpanded : undefined}
-      aria-controls={contextPanelId}
-      aria-label={
-        hasContext
-          ? `Log entry: ${entry.message}. Press to ${isExpanded ? "collapse" : "expand"} context.`
-          : undefined
-      }
     >
       <div className="flex items-start gap-2 min-w-0">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="text-text-secondary text-xs font-mono shrink-0">
-              {formatTimestamp(entry.timestamp)}
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{new Date(entry.timestamp).toISOString()}</TooltipContent>
-        </Tooltip>
-
-        <span
-          className={cn(
-            "w-11 shrink-0 rounded-[var(--radius-sm)] py-px text-center text-2xs font-medium uppercase",
-            LEVEL_CHIP[entry.level]
-          )}
-        >
-          {entry.level}
-        </span>
-
-        {entry.source && (
-          <span className="text-text-secondary text-xs font-mono shrink-0">[{entry.source}]</span>
-        )}
-
-        <span className="text-text-primary text-xs font-mono break-words min-w-0 flex-1">
-          {entry.message}
-        </span>
-
-        {count > 1 && (
-          <span
-            className="text-text-secondary text-xs font-mono shrink-0 tabular-nums bg-overlay-soft px-1.5 rounded-[var(--radius-sm)]"
-            aria-label={`Repeated ${count} times`}
+        {hasContext ? (
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={isExpanded}
+            aria-controls={contextPanelId}
+            aria-label={accessibleName}
+            className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 rounded-[var(--radius-sm)] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
           >
-            ×{count}
-          </span>
-        )}
-
-        {hasContext && (
-          <span className="text-text-secondary shrink-0" aria-hidden>
-            {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-          </span>
+            {summary}
+          </button>
+        ) : (
+          <div className="flex min-w-0 flex-1 items-start gap-2">{summary}</div>
         )}
 
         <Tooltip>
@@ -185,9 +184,6 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
               variant="ghost"
               size="icon-sm"
               onClick={handleCopy}
-              // Enter/Space on Copy would otherwise bubble to the row and
-              // toggle its context as well as copying.
-              onKeyDown={(e) => e.stopPropagation()}
               aria-label={copied ? "Copied" : "Copy log entry"}
               className={cn(
                 "h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100",

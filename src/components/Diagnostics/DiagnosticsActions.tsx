@@ -97,6 +97,8 @@ export function LogsActions() {
 
 export function TelemetryActions() {
   const active = useTelemetryPreviewStore((state) => state.active);
+  // Flipping a setting whose current value is unknown would be a guess.
+  const stateKnown = useTelemetryPreviewStore((state) => state.stateRead === "known");
   const hasEvents = useTelemetryPreviewStore((state) => state.events.length > 0);
 
   const handleToggle = useCallback(() => {
@@ -111,20 +113,25 @@ export function TelemetryActions() {
     <div className="flex items-center gap-2">
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button
-            variant="subtle"
-            size="xs"
-            onClick={handleToggle}
-            aria-pressed={active}
-            className={cn(active && PRESSED_TOGGLE)}
-          >
-            Telemetry preview
-          </Button>
+          <span className="inline-flex">
+            <Button
+              variant="subtle"
+              size="xs"
+              onClick={handleToggle}
+              disabled={!stateKnown}
+              aria-pressed={stateKnown ? active : undefined}
+              className={cn(stateKnown && active && PRESSED_TOGGLE)}
+            >
+              Telemetry preview
+            </Button>
+          </span>
         </TooltipTrigger>
         <TooltipContent side="bottom">
-          {active
-            ? "Stop mirroring outbound telemetry payloads"
-            : "Start mirroring outbound telemetry payloads"}
+          {!stateKnown
+            ? "Checking whether preview is on"
+            : active
+              ? "Stop mirroring outbound telemetry payloads"
+              : "Start mirroring outbound telemetry payloads"}
         </TooltipContent>
       </Tooltip>
       <Tooltip>
