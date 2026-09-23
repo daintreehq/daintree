@@ -31,6 +31,7 @@ import {
   type PendingProjectRelocation,
 } from "@/store/projectRelocationStore";
 import { DirectoryPickerField, PathCaption } from "./projectDialogFields";
+import { PathSegments } from "@/components/ui/PathSegments";
 
 /** Typing pause before the preview is requested, so a folder name isn't checked per keystroke. */
 const PREVIEW_DEBOUNCE_MS = 250;
@@ -85,14 +86,7 @@ const CONTINUITY_PRESENTATION: Record<
   },
 };
 
-/**
- * A full path that wraps only at its separators. `break-all` split folder
- * names mid-token — "helios-dashboa / rd" — which is exactly the part a user
- * reads to check the destination, and a plain `<wbr>` still leaves the
- * browser's own breaks at hyphens and spaces inside a name. So each segment is
- * an atomic inline box: it moves to the next line whole, and only a segment
- * wider than the entire line breaks inside itself.
- */
+/** A full path for the From/To rows, wrapping only between folders. */
 function WrappingPath({
   path,
   className,
@@ -102,14 +96,9 @@ function WrappingPath({
   className?: string;
   testId?: string;
 }) {
-  const segments = normalize(path).split(/(?<=[/\\])/);
   return (
-    <p className={cn("text-xs font-mono break-words", className)} title={path} data-testid={testId}>
-      {segments.map((segment, i) => (
-        <span key={i} className="inline-block max-w-full break-all whitespace-pre-wrap">
-          {segment}
-        </span>
-      ))}
+    <p className={cn("text-xs font-mono", className)} title={path} data-testid={testId}>
+      <PathSegments path={normalize(path)} />
     </p>
   );
 }

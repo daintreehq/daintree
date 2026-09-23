@@ -104,6 +104,7 @@ import {
   SCRATCH_CLEANUP_TTL_MS,
   SCRATCH_CLEANUP_COUNTDOWN_VISIBLE_DAYS,
 } from "@shared/config/scratchCleanup";
+import { PathSegments } from "@/components/ui/PathSegments";
 
 export interface ProjectSwitcherPaletteProps {
   isOpen: boolean;
@@ -2756,7 +2757,9 @@ function DeleteScratchConfirmDialog({
         <div className="text-sm text-text-secondary">
           Its terminals will be closed and its folder deleted from disk.
         </div>
-        <div className="text-xs text-text-secondary font-mono break-all">{target.path}</div>
+        <div className="text-xs text-text-secondary font-mono">
+          <PathSegments path={target.path} />
+        </div>
         {/*
          * Raw `isDeleting` decides whether the live region exists; the Doherty
          * gate only decides whether it has anything to say, so a scratch that
@@ -3151,8 +3154,8 @@ export function ProjectSwitcherPalette({
               Saved as <span className="font-medium">{saveAsProjectConfirm.project.name}</span>. The
               original scratch folder is no longer needed.
             </div>
-            <div className="text-xs text-text-secondary font-mono break-all">
-              {saveAsProjectConfirm.scratch.path}
+            <div className="text-xs text-text-secondary font-mono">
+              <PathSegments path={saveAsProjectConfirm.scratch.path} />
             </div>
           </div>
         </ConfirmDialog>
