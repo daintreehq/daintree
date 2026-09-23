@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { ChevronRight, CircleHelp, CircleStop, Ellipsis, RotateCcw } from "lucide-react";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import {
@@ -8,6 +9,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { useEscapeStack } from "@/hooks/useEscapeStack";
 import type { AgentState } from "@/types";
 
 /** What the active lane's state is called when it is spoken rather than drawn. */
@@ -68,6 +70,12 @@ export function HelpPanelHeader({
   onClose,
   isFocused = false,
 }: HelpPanelHeaderProps) {
+  // The panel closes on Escape through the escape stack, which the global
+  // keybinding layer pops at window capture — before Radix's menu sees the key.
+  // An open overflow menu registers above the panel so Escape closes the menu
+  // first, not the whole assistant.
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  useEscapeStack(isMenuOpen, () => setIsMenuOpen(false));
   return (
     <div
       className={cn(
@@ -99,7 +107,7 @@ export function HelpPanelHeader({
           another session — two plus-shaped affordances a few pixels apart doing
           different things, and only the destructive one was visible. Restarting
           is now a named overflow item, and the strip owns the only `+`. */}
-      <DropdownMenu>
+      <DropdownMenu open={isMenuOpen} onOpenChange={setIsMenuOpen}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"

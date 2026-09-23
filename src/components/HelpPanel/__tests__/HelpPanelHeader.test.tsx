@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import type { ComponentProps, ReactNode } from "react";
-import { render, fireEvent } from "@testing-library/react";
+import { act, render, fireEvent } from "@testing-library/react";
+import { dispatchEscape, registerEscape } from "@/lib/escapeStack";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
@@ -9,7 +10,20 @@ vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean)
 // lazily loaded (radix-loader) and irrelevant here; these tests cover the
 // header's own wiring (which items render, what they invoke), not Radix.
 vi.mock("@/components/ui/dropdown-menu", () => ({
-  DropdownMenu: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DropdownMenu: ({
+    children,
+    open,
+    onOpenChange,
+  }: {
+    children: ReactNode;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+  }) => (
+    <div data-testid="menu-root" data-open={open ? "true" : "false"}>
+      <button type="button" data-testid="menu-open" onClick={() => onOpenChange?.(true)} />
+      {children}
+    </div>
+  ),
   DropdownMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
   DropdownMenuContent: ({ children }: { children: ReactNode; className?: string }) => (
     <div data-testid="overflow-menu">{children}</div>
@@ -51,6 +65,24 @@ function renderHeader(overrides: Partial<ComponentProps<typeof HelpPanelHeader>>
 }
 
 describe("HelpPanelHeader", () => {
+  it("closes an open overflow menu, not the panel beneath it, on Escape", () => {
+    const { getByTestId } = renderHeader();
+    // The assistant panel registers its own close on the stack first.
+    const closePanel = vi.fn();
+    const panelEntry = registerEscape(closePanel);
+    try {
+      fireEvent.click(getByTestId("menu-open"));
+      expect(getByTestId("menu-root").getAttribute("data-open")).toBe("true");
+      act(() => {
+        dispatchEscape();
+      });
+      expect(getByTestId("menu-root").getAttribute("data-open")).toBe("false");
+      expect(closePanel).not.toHaveBeenCalled();
+    } finally {
+      panelEntry.unregister();
+    }
+  });
+
   it("renders identically when unfocused and when isFocused is omitted", () => {
     const { container: a } = renderHeader({ isFocused: false });
     const { container: b } = renderHeader({ isFocused: undefined });
