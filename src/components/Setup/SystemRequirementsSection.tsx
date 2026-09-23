@@ -67,42 +67,46 @@ export function SystemRequirementsSection({
   // Warning state: has any warnings (warn severity tools not meeting version or missing)
   const hasWarning = allDone && warningTools.length > 0;
 
+  const headerSummary = (
+    <>
+      <span className="text-sm font-medium text-text-primary">System requirements</span>
+
+      {isChecking && (
+        <span className="flex items-center gap-1.5 ml-auto text-2xs text-text-secondary">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          Checking...
+        </span>
+      )}
+
+      {allDone && !hasFatalFailure && !hasWarning && !error && (
+        <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-success">
+          <CircleCheck className="w-3.5 h-3.5" />
+          All system tools ready
+        </span>
+      )}
+
+      {allDone && hasFatalFailure && (
+        <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-error">
+          <CircleX className="w-3.5 h-3.5" />
+          Action required: {readyCount} of {totalCount} tools ready
+        </span>
+      )}
+
+      {allDone && !hasFatalFailure && hasWarning && (
+        <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-warning">
+          <AlertTriangle className="w-3.5 h-3.5" />
+          Warning: {readyCount} of {totalCount} tools ready
+        </span>
+      )}
+    </>
+  );
+
   return (
     <div className="rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/30">
       {/* While a required tool is missing the panel cannot fold, so the row is
           a heading rather than a disclosure that would do nothing. */}
       {hasFatalFailure ? (
-        <div className="flex items-center gap-2.5 w-full px-3 py-2.5">
-          <span className="text-sm font-medium text-text-primary">System requirements</span>
-
-          {isChecking && (
-            <span className="flex items-center gap-1.5 ml-auto text-2xs text-text-secondary">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              Checking...
-            </span>
-          )}
-
-          {allDone && !hasFatalFailure && !hasWarning && !error && (
-            <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-success">
-              <CircleCheck className="w-3.5 h-3.5" />
-              All system tools ready
-            </span>
-          )}
-
-          {allDone && hasFatalFailure && (
-            <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-error">
-              <CircleX className="w-3.5 h-3.5" />
-              Action required: {readyCount} of {totalCount} tools ready
-            </span>
-          )}
-
-          {allDone && !hasFatalFailure && hasWarning && (
-            <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-warning">
-              <AlertTriangle className="w-3.5 h-3.5" />
-              Warning: {readyCount} of {totalCount} tools ready
-            </span>
-          )}
-        </div>
+        <div className="flex items-center gap-2.5 w-full px-3 py-2.5">{headerSummary}</div>
       ) : (
         <button
           type="button"
@@ -114,35 +118,7 @@ export function SystemRequirementsSection({
           <ChevronDown
             className={`w-3.5 h-3.5 text-text-secondary shrink-0 transition-transform ${isExpanded ? "" : "-rotate-90"}`}
           />
-          <span className="text-sm font-medium text-text-primary">System requirements</span>
-
-          {isChecking && (
-            <span className="flex items-center gap-1.5 ml-auto text-2xs text-text-secondary">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              Checking...
-            </span>
-          )}
-
-          {allDone && !hasFatalFailure && !hasWarning && !error && (
-            <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-success">
-              <CircleCheck className="w-3.5 h-3.5" />
-              All system tools ready
-            </span>
-          )}
-
-          {allDone && hasFatalFailure && (
-            <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-error">
-              <CircleX className="w-3.5 h-3.5" />
-              Action required: {readyCount} of {totalCount} tools ready
-            </span>
-          )}
-
-          {allDone && !hasFatalFailure && hasWarning && (
-            <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-warning">
-              <AlertTriangle className="w-3.5 h-3.5" />
-              Warning: {readyCount} of {totalCount} tools ready
-            </span>
-          )}
+          {headerSummary}
         </button>
       )}
 
