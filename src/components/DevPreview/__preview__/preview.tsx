@@ -107,7 +107,7 @@ function DevScriptSwitcherStandIn() {
 
 function StandInPage() {
   const block = (width: string, height: number, color: string) => (
-    <div style={{ width, height, background: color, borderRadius: 4 }} />
+    <div style={{ width, height, background: color, borderRadius: "var(--radius-sm)" }} />
   );
   return (
     <div
