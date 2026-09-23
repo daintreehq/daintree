@@ -345,13 +345,15 @@ function MetaRow({
         </span>
       )}
 
-      {assignees.length > 0 && <AssigneeMeta assignees={assignees} />}
-
       <span className="flex items-center gap-1">
         <Calendar className="w-3 h-3 shrink-0" aria-hidden="true" />
         <span className="sr-only">Opened </span>
         {formatDate(createdAt)}
       </span>
+
+      {/* After the date: several assignees take a line of their own, and here
+          that line doesn't strand the author alone on the one above it. */}
+      {assignees.length > 0 && <AssigneeMeta assignees={assignees} />}
 
       <FreshnessMetaItem freshness={freshness} />
     </div>
