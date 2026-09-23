@@ -77,12 +77,24 @@ export function KbdChord({
   const keyClass = bare ? KBD_BARE_CLASS : compact ? KBD_COMPACT_CLASS : KBD_CLASS;
 
   return (
-    <span className={cn("inline-flex items-center", compact ? "gap-0.5" : "gap-1", className)}>
+    <span
+      className={cn(
+        "inline-flex items-center",
+        bare ? "gap-0" : compact ? "gap-0.5" : "gap-1",
+        className
+      )}
+    >
       <span className="sr-only">{ariaLabel ?? shortcut}</span>
       {steps.map((tokens, stepIndex) => (
         <Fragment key={stepIndex}>
+          {/* In `bare` the comma reads as punctuation — attached to the step
+              before it and set at the glyphs' own size — so a chord prints
+              "⌘K, ⌘S" rather than floating a small mark between two gaps. */}
           {stepIndex > 0 && (
-            <span className="text-text-secondary text-3xs select-none" aria-hidden>
+            <span
+              className={cn("text-text-secondary select-none", bare ? "mr-1" : "text-3xs")}
+              aria-hidden
+            >
               ,
             </span>
           )}
