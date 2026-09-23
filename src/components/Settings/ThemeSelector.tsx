@@ -172,7 +172,9 @@ export function ThemeSelector<T extends { id: string }>({
         next = Math.max(current - 1, 0);
         break;
       case "ArrowDown":
-        next = Math.min(current + columns, last);
+        // Straight down or not at all: clamping to the last option would slide the
+        // selection sideways off the bottom row.
+        next = current + columns <= last ? current + columns : current;
         break;
       case "ArrowUp":
         next = current - columns >= 0 ? current - columns : current;
@@ -299,8 +301,9 @@ export function ThemeSelector<T extends { id: string }>({
         </div>
       )}
 
+      {/* Always mounted, so a filter that empties the list is heard as well as seen. */}
       <div aria-live="polite" aria-atomic="true" className="sr-only">
-        {previewAnnouncement ?? ""}
+        {isEmpty ? emptyMessage : (previewAnnouncement ?? "")}
       </div>
     </div>
   );

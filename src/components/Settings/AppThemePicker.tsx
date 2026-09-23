@@ -1,4 +1,5 @@
 import {
+  useId,
   useMemo,
   useRef,
   useState,
@@ -6,7 +7,7 @@ import {
   type FormEvent,
   type MouseEvent,
 } from "react";
-import { AlertCircle, AlertTriangle, Shuffle } from "lucide-react";
+import { AlertCircle, Shuffle } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -15,7 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
+import { BUILT_IN_APP_SCHEMES, DEFAULT_APP_SCHEME_ID } from "@/config/appColorSchemes";
 import { injectSchemeToDOM, useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { runThemeReveal } from "@/lib/appThemeViewTransition";
@@ -88,22 +89,33 @@ function shuffleArray<T>(arr: T[]): T[] {
   return a;
 }
 
+/** One casing for every hex on the row: the picker reports lowercase, themes uppercase. */
+function formatHex(color: string | undefined): string {
+  return (color ?? "").toUpperCase();
+}
+
 async function persistCustomSchemes() {
   const { customSchemes } = useAppThemeStore.getState();
   await appThemeClient.setCustomSchemes(customSchemes);
 }
 
 /**
- * A theme's canvas colour as a chip. The frame is text-secondary so a near-black swatch
- * on a dark card, or a cream one on a light card, still has an edge at 3:1.
+ * A theme as a chip: its canvas with its accent set in it. Canvas alone told the dark
+ * themes apart from nothing — they are all near-black. The frame is text-secondary so
+ * the chip keeps a 3:1 edge on either card.
  */
 function ThemeSwatch({ scheme }: { scheme: AppColorScheme }) {
   return (
     <span
-      className="inline-block w-3 h-3 shrink-0 rounded-sm border border-text-secondary"
+      className="inline-flex w-3.5 h-3.5 shrink-0 items-center justify-center rounded-sm border border-text-secondary"
       style={{ backgroundColor: scheme.tokens[APP_THEME_PREVIEW_KEYS.background] }}
       aria-hidden="true"
-    />
+    >
+      <span
+        className="w-1.5 h-1.5 rounded-full"
+        style={{ backgroundColor: scheme.tokens["accent-primary"] }}
+      />
+    </span>
   );
 }
 
@@ -161,6 +173,10 @@ interface AppThemePickerProps {
 
 type EpochKey = "scheme" | "accent" | "followSystem" | "preferredDark" | "preferredLight";
 
+type FileResult =
+  | { kind: "imported"; message: string; warnings: AppThemeValidationWarning[] }
+  | { kind: "error"; title: string; description: string; retry: () => void };
+
 interface SaveError {
   domain: EpochKey;
   title: string;
@@ -183,11 +199,11 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
   const setAccentColorOverride = useAppThemeStore((s) => s.setAccentColorOverride);
   const setRecentSchemeIds = useAppThemeStore((s) => s.setRecentSchemeIds);
   const recentSchemeIds = useAppThemeStore((s) => s.recentSchemeIds);
-  const [importWarnings, setImportWarnings] = useState<AppThemeValidationWarning[]>([]);
-  const [importMessage, setImportMessage] = useState<string | null>(null);
+  const [fileResult, setFileResult] = useState<FileResult | null>(null);
   const [saveError, setSaveError] = useState<SaveError | null>(null);
 
   const shuffleQueueRef = useRef<string[]>([]);
+  const accentWarningId = useId();
 
   // What each field currently looks like on disk. Seeded from the hydrated store
   // on mount and advanced only as writes land, so a rollback restores durable
@@ -461,24 +477,30 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
       }
     );
 
-  // The import result block mounts after an async resolve, so screen-reader users
-  // get no announcement from it appearing. Route the summary through the shared
-  // announcer (AppDialog mounts AccessibilityAnnouncer in-subtree, handling the
-  // Chromium aria-modal filter and document.ariaNotify).
-  const announceImportResult = (message: string) => {
-    setImportMessage(message);
-    useAnnouncerStore.getState().announce(message);
+  // Results mount after an async resolve, so screen-reader users get no announcement
+  // from them appearing. Route the summary through the shared announcer (AppDialog
+  // mounts AccessibilityAnnouncer in-subtree, handling the Chromium aria-modal filter
+  // and document.ariaNotify).
+  const showFileResult = (result: FileResult) => {
+    setFileResult(result);
+    useAnnouncerStore
+      .getState()
+      .announce(result.kind === "error" ? result.description : result.message);
   };
 
   const handleImport = async () => {
-    setImportMessage(null);
-    setImportWarnings([]);
+    setFileResult(null);
 
     try {
       const result = await appThemeClient.importTheme();
       if (!result.ok) {
         if (!result.errors.includes("Import cancelled")) {
-          announceImportResult(result.errors[0] ?? "Failed to import app theme.");
+          showFileResult({
+            kind: "error",
+            title: "Couldn't import theme",
+            description: result.errors[0] ?? "The file isn't a theme Daintree can read.",
+            retry: () => void handleImport(),
+          });
         }
         return;
       }
@@ -487,32 +509,43 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
       await persistCustomSchemes();
       await handleSelect(result.scheme.id);
 
-      if (result.warnings.length > 0) {
-        setImportWarnings(result.warnings);
-        // Count the deduplicated kind rows the user actually sees, not the raw
-        // diagnostic count (those live under "Technical details") — otherwise
-        // "12 warnings" next to 2 visible rows reads as missing content.
-        const warningCount = groupWarningsByKind(result.warnings).length;
-        announceImportResult(
-          `Imported "${result.scheme.name}" with ${warningCount} warning${warningCount === 1 ? "" : "s"}.`
-        );
-      } else {
-        announceImportResult(`Imported "${result.scheme.name}".`);
-      }
+      // Count the deduplicated kind rows the user actually sees, not the raw
+      // diagnostic count (those live under "Technical details") — otherwise
+      // "12 warnings" next to 2 visible rows reads as missing content.
+      const warningCount = groupWarningsByKind(result.warnings).length;
+      showFileResult({
+        kind: "imported",
+        warnings: result.warnings,
+        message:
+          warningCount > 0
+            ? `Imported "${result.scheme.name}" with ${warningCount} warning${warningCount === 1 ? "" : "s"}.`
+            : `Imported "${result.scheme.name}".`,
+      });
     } catch (error) {
       logError("Failed to import app theme", error);
-      announceImportResult("Failed to import app theme.");
+      showFileResult({
+        kind: "error",
+        title: "Couldn't import theme",
+        description: "Something went wrong reading the file.",
+        retry: () => void handleImport(),
+      });
     }
   };
 
   const handleExport = async () => {
     if (!selectedScheme) return;
+    setFileResult(null);
     try {
       const effectiveScheme = applyAccentOverrideToScheme(selectedScheme, accentColorOverride);
       await appThemeClient.exportTheme(effectiveScheme);
     } catch (error) {
       logError("Failed to export app theme", error);
-      announceImportResult("Failed to export app theme.");
+      showFileResult({
+        kind: "error",
+        title: "Couldn't export theme",
+        description: "The theme file wasn't written.",
+        retry: () => void handleExport(),
+      });
     }
   };
 
@@ -535,6 +568,8 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
   };
 
   const themeDefaultAccent = selectedScheme.tokens["accent-primary"];
+  const defaultSchemeName =
+    allSchemes.find((scheme) => scheme.id === DEFAULT_APP_SCHEME_ID)?.name ?? "the default";
 
   return (
     <SettingsGroup>
@@ -578,9 +613,12 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
         label="Theme"
         description={
           followSystem
-            ? "Following your OS appearance. Picking a theme turns that off"
+            ? "Follows system appearance; choosing a theme turns this off"
             : `${allSchemes.length} themes to browse, each with a live preview`
         }
+        isModified={!followSystem && selectedSchemeId !== DEFAULT_APP_SCHEME_ID}
+        onReset={() => void handleSelect(DEFAULT_APP_SCHEME_ID)}
+        resetAriaLabel={`Reset app theme to ${defaultSchemeName}`}
         control={
           <>
             {allSchemes.length > 1 && (
@@ -633,10 +671,10 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
         resetAriaLabel="Reset accent color to the theme's"
         description={
           accentColorOverride
-            ? `${effectiveAccent} · Theme default: ${themeDefaultAccent}`
-            : `The theme's own, ${themeDefaultAccent}. Pick a color to override it`
+            ? `${formatHex(effectiveAccent)} · Theme default: ${formatHex(themeDefaultAccent)}`
+            : `The theme's own, ${formatHex(themeDefaultAccent)}. Pick a color to override it.`
         }
-        control={
+        control={({ labelId, descriptionId }) => (
           <label
             htmlFor="accent-color-override-input"
             className={cn(
@@ -661,13 +699,18 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
               onInput={handleAccentInput}
               onChange={handleAccentCommit}
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-              aria-label="Accent color"
+              aria-labelledby={labelId}
+              aria-describedby={
+                [descriptionId, accentContrastFail ? accentWarningId : null]
+                  .filter(Boolean)
+                  .join(" ") || undefined
+              }
             />
           </label>
-        }
+        )}
       />
       {accentContrastFail && (
-        <div className="px-4 py-3" data-testid="accent-contrast-warning">
+        <div className="px-4 py-3" id={accentWarningId}>
           <InlineStatusBanner
             className="rounded-[var(--radius-md)]"
             severity="warning"
@@ -697,45 +740,53 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
         )}
       />
 
-      {importMessage && (
+      {fileResult?.kind === "error" && (
         <div className="px-4 py-3">
-          <div
+          <InlineStatusBanner
+            className="rounded-[var(--radius-md)]"
+            severity="error"
+            icon={AlertCircle}
+            title={fileResult.title}
+            description={fileResult.description}
+            action={{ id: "retry", label: "Retry", onClick: fileResult.retry }}
+            onClose={() => setFileResult(null)}
+            closeAriaLabel="Dismiss theme file error"
+          />
+        </div>
+      )}
+      {fileResult?.kind === "imported" && (
+        <div className="px-4 py-3">
+          <InlineStatusBanner
+            className="rounded-[var(--radius-md)]"
+            severity={fileResult.warnings.length > 0 ? "warning" : "info"}
             role="status"
-            className="rounded-[var(--radius-md)] border border-border-default bg-surface-panel px-3 py-2"
-          >
-            <div className="flex items-start gap-2">
-              <AlertTriangle
-                className={cn(
-                  "mt-0.5 h-3.5 w-3.5 shrink-0",
-                  importWarnings.length > 0 ? "text-status-warning" : "text-status-info"
-                )}
-              />
-              <div className="min-w-0">
-                <p className="text-xs text-text-primary">{importMessage}</p>
-                {importWarnings.length > 0 && (
-                  <ul className="mt-1 space-y-1.5">
-                    {groupWarningsByKind(importWarnings).map(({ kind, messages }) => (
-                      <li key={kind} className="text-2xs text-text-secondary">
-                        {WARNING_KIND_COPY[kind] ?? "Some theme values may need attention"}
-                        <details className="mt-0.5">
-                          <summary className="cursor-pointer text-text-secondary transition-colors hover:text-text-primary">
-                            Technical details
-                          </summary>
-                          <ul className="mt-1 space-y-0.5 pl-3">
-                            {messages.map((message, index) => (
-                              <li key={index} className="break-words text-text-secondary">
-                                {message}
-                              </li>
-                            ))}
-                          </ul>
-                        </details>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-          </div>
+            title={fileResult.message}
+            onClose={() => setFileResult(null)}
+            closeAriaLabel="Dismiss import result"
+            descriptionExtras={
+              fileResult.warnings.length > 0 ? (
+                <ul className="mt-1 space-y-1.5">
+                  {groupWarningsByKind(fileResult.warnings).map(({ kind, messages }) => (
+                    <li key={kind} className="text-xs text-text-secondary">
+                      {WARNING_KIND_COPY[kind] ?? "Some theme values may need attention"}
+                      <details className="mt-0.5">
+                        <summary className="cursor-pointer text-text-secondary transition-colors hover:text-text-primary">
+                          Technical details
+                        </summary>
+                        <ul className="mt-1 space-y-0.5 pl-3">
+                          {messages.map((message, index) => (
+                            <li key={index} className="break-words text-text-secondary">
+                              {message}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    </li>
+                  ))}
+                </ul>
+              ) : undefined
+            }
+          />
         </div>
       )}
 

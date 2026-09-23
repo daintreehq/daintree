@@ -67,7 +67,8 @@ describe("ThemeSelector", () => {
     const input = screen.getByPlaceholderText("Filter themes...");
     fireEvent.change(input, { target: { value: "nonexistent" } });
 
-    expect(screen.getByText("No themes match your search.")).toBeTruthy();
+    // Shown in place of the list, and repeated in the live region so it is heard too.
+    expect(screen.getAllByText("No themes match your search.").length).toBeGreaterThan(0);
   });
 
   it("clears search on Escape key", () => {

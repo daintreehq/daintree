@@ -191,11 +191,16 @@ const STATES: ShotState[] = [
     scroll: "#appearance-theme",
     enter: async (page) => {
       await page.locator('[data-testid="accent-color-override-input"]').fill("#d9822b");
-      await expect(page.locator('[data-testid="accent-color-override-reset"]')).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Reset accent color to the theme's" })
+      ).toBeVisible();
       await page.locator(`${PANEL} [role="radio"]`, { hasText: "Compact" }).click();
-      await page.locator("#appearance-color-vision button[role='combobox']").click();
-      await page.getByRole("option", { name: /Red-green/ }).click();
-      await expect(page.locator("#appearance-color-vision")).toContainText("Red-green");
+      await page
+        .locator('#appearance-color-vision [role="radio"]', { hasText: "Red-green" })
+        .click();
+      await expect(
+        page.locator('#appearance-color-vision [role="radio"][aria-checked="true"]')
+      ).toHaveText("Red-green");
     },
     leave: async (page) => {
       await page.locator(`${PANEL} [role="radio"]`, { hasText: "Normal" }).click();
@@ -216,12 +221,15 @@ const STATES: ShotState[] = [
     },
   },
   {
-    id: "app-color-vision-open",
+    id: "app-dark-theme-open",
     subtab: "app",
-    scroll: "#appearance-color-vision",
+    scroll: "#appearance-theme",
     enter: async (page) => {
-      await page.locator("#appearance-color-vision button[role='combobox']").click();
-      await expect(page.getByRole("option", { name: /Blue-yellow/ })).toBeVisible();
+      const sw = page.locator(`${PANEL} [role="switch"]`).first();
+      await sw.click();
+      await expect(sw).toHaveAttribute("aria-checked", "true");
+      await page.locator(`${PANEL} button[role="combobox"]`).first().click();
+      await expect(page.getByRole("option").first()).toBeVisible();
     },
     leave: async (page) => {
       await page.keyboard.press("Escape");
@@ -229,6 +237,48 @@ const STATES: ShotState[] = [
   },
   { id: "terminal-rest", subtab: "terminal", scroll: null },
   { id: "terminal-rest-lower", subtab: "terminal", scroll: "#appearance-font-family" },
+  {
+    id: "terminal-modified",
+    subtab: "terminal",
+    scroll: "#appearance-font-family",
+    enter: async (page) => {
+      await page.locator(`${PANEL} [role="option"][aria-label="Dracula"]`).click();
+      await page
+        .locator('[aria-label="Terminal font family"] [role="radio"]', { hasText: "System" })
+        .click();
+      const input = page.locator("#appearance-font-size input");
+      await input.fill("16");
+      await input.blur();
+      await expect(page.locator(PANEL)).toContainText("Dracula at 16 px");
+    },
+    leave: async (page) => {
+      await page.evaluate(async () => {
+        const run = window.__daintreeDispatchAction;
+        await run?.("terminalConfig.setFontSize", { fontSize: 12 }, { source: "test" });
+        await run?.(
+          "terminalConfig.setFontFamily",
+          {
+            fontFamily:
+              '"JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+          },
+          { source: "test" }
+        );
+        await window.electron.terminalConfig.setColorScheme("match-app-theme");
+      });
+    },
+  },
+  {
+    id: "terminal-scheme-focus",
+    subtab: "terminal",
+    scroll: null,
+    enter: async (page) => {
+      await page.getByLabel("Filter color schemes").focus();
+      // Tab past the filter and the tone switch lands on the grid's single stop.
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Tab");
+      await expect(page.locator(`${PANEL} [role="option"]:focus`)).toHaveCount(1);
+    },
+  },
   {
     id: "terminal-light-filter",
     subtab: "terminal",

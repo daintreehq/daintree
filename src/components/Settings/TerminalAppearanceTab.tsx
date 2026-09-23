@@ -194,7 +194,7 @@ export function TerminalAppearanceTab({
                 <SettingsRow
                   id="appearance-font-family"
                   label="Font family"
-                  description="JetBrains Mono ships with Daintree. System uses Menlo, Monaco or Consolas"
+                  description="Default: JetBrains Mono, which ships with Daintree. System uses Menlo, Monaco or Consolas."
                   isModified={selectedFontFamilyId !== DEFAULT_FONT_FAMILY_ID}
                   onReset={() => void handleFontFamilyChange(DEFAULT_FONT_FAMILY_ID)}
                   control={({ descriptionId, disabled }) => (

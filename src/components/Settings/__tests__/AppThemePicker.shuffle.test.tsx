@@ -68,6 +68,7 @@ vi.mock("@/config/appColorSchemes", () => {
     },
   });
   return {
+    DEFAULT_APP_SCHEME_ID: "theme-a",
     BUILT_IN_APP_SCHEMES: [
       mkTheme("theme-a", "Theme A", "#f00"),
       mkTheme("theme-b", "Theme B", "#00f"),

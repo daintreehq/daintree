@@ -73,6 +73,16 @@ describe("ThemeSelector keyboard contract", () => {
     expect(onSelect).toHaveBeenLastCalledWith("g");
   });
 
+  it("moves straight down or not at all from the last row", () => {
+    // 7 options in 3 columns: e (index 4) sits above nothing, so Down must not slide to g.
+    const { onSelect } = renderSelector("e", vi.fn(), 3);
+    const listbox = screen.getByRole("listbox");
+    options()[4]!.focus();
+    fireEvent.keyDown(listbox, { key: "ArrowDown" });
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(options()[4]);
+  });
+
   it("stays on the grid's edges instead of wrapping", () => {
     const { onSelect } = renderSelector("a");
     const listbox = screen.getByRole("listbox");

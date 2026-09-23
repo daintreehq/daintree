@@ -87,26 +87,33 @@ async function persistCustomSchemes() {
   await terminalConfigClient.setCustomSchemes(customSchemes);
 }
 
+// What is on disk, and which write is the newest. Module state because the selection
+// lives in a global store and the picker can unmount mid-write; a failure only rolls
+// back while it is still the latest intent, and only to a value that actually saved.
+let confirmedSchemeId: string | null = null;
+let schemeEpoch = 0;
+
 /**
  * Select, persist, and put the selection back on failure. The MRU list rides along but
  * is invisible here, so only the scheme write itself is worth a banner.
  */
 async function selectScheme(id: string, onError: (error: ColorSchemeError | null) => void) {
   const store = useTerminalColorSchemeStore.getState();
-  const previous = store.selectedSchemeId;
+  confirmedSchemeId ??= store.selectedSchemeId;
+  const epoch = ++schemeEpoch;
   onError(null);
   store.setSelectedSchemeId(id);
   store.setPreviewSchemeId(null);
   try {
     await terminalConfigClient.setColorScheme(id);
+    confirmedSchemeId = id;
   } catch (error) {
     logError("Failed to persist color scheme", error);
-    if (useTerminalColorSchemeStore.getState().selectedSchemeId === id) {
-      useTerminalColorSchemeStore.getState().setSelectedSchemeId(previous);
-    }
+    if (epoch !== schemeEpoch) return;
+    useTerminalColorSchemeStore.getState().setSelectedSchemeId(confirmedSchemeId);
     onError({
       title: "Couldn't save color scheme",
-      description: "The previous scheme was restored, so it won't change on restart.",
+      description: "The last saved scheme was restored, so it won't change on restart.",
       retry: () => void selectScheme(id, onError),
     });
     return;
@@ -118,6 +125,12 @@ async function selectScheme(id: string, onError: (error: ColorSchemeError | null
   } catch (error) {
     logError("Failed to persist recent color schemes", error);
   }
+}
+
+/** Test seam: forget what the module believes is on disk. */
+export function __resetSchemePersistenceForTests(): void {
+  confirmedSchemeId = null;
+  schemeEpoch = 0;
 }
 
 async function importScheme(onError: (error: ColorSchemeError | null) => void) {
@@ -253,38 +266,40 @@ export function ColorSchemePicker({
         description={
           isModified
             ? `${selectedScheme.name} · Default: Match app theme`
-            : "Match app theme — follows the app theme's own terminal colors"
+            : "Match app theme, the app theme's own terminal colors"
         }
-        layout="stacked"
         isModified={isModified}
         onReset={() => void selectScheme(DEFAULT_SCHEME_ID, onError)}
         resetAriaLabel="Reset terminal color scheme to Match app theme"
-        control={({ labelId }) => (
-          <ThemeSelector
-            items={visibleSchemes}
-            selectedId={selectedSchemeId}
-            onSelect={(id) => void selectScheme(id, onError)}
-            columns={3}
-            getName={(s) => s.name}
-            renderPreview={(s) => <SchemePreview scheme={s} />}
-            onPreviewItem={handlePreviewItem}
-            onPreviewEnd={handlePreviewEnd}
-            previewAnnouncement={previewAnnouncement}
-            listLabelledBy={labelId}
-            searchPlaceholder="Filter schemes..."
-            searchLabel="Filter color schemes"
-            emptyMessage="No schemes match your search."
-            toolbar={
-              <SegmentedRadioGroup
-                aria-label="Scheme tone"
-                options={TONE_OPTIONS}
-                value={tone}
-                onChange={setTone}
-              />
-            }
-          />
-        )}
       />
+      {/* The collection is the group's body rather than a row: it has no label of its
+          own to give, and a row around it would stretch the modified bar down its full
+          height. The listbox takes its name from the Scheme row above. */}
+      <div className="px-4 py-3">
+        <ThemeSelector
+          items={visibleSchemes}
+          selectedId={selectedSchemeId}
+          onSelect={(id) => void selectScheme(id, onError)}
+          columns={3}
+          getName={(s) => s.name}
+          renderPreview={(s) => <SchemePreview scheme={s} />}
+          onPreviewItem={handlePreviewItem}
+          onPreviewEnd={handlePreviewEnd}
+          previewAnnouncement={previewAnnouncement}
+          listLabel="Terminal color schemes"
+          searchPlaceholder="Filter schemes..."
+          searchLabel="Filter color schemes"
+          emptyMessage="No schemes match your search."
+          toolbar={
+            <SegmentedRadioGroup
+              aria-label="Show dark or light schemes"
+              options={TONE_OPTIONS}
+              value={tone}
+              onChange={setTone}
+            />
+          }
+        />
+      </div>
       {error && (
         <div className="px-4 py-3">
           <InlineStatusBanner
