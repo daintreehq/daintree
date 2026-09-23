@@ -7,7 +7,7 @@ import {
   SearchResults,
   MODIFIED_TRACKED_IDS,
   landOnSettingByText,
-  modifiedCoverageSentence,
+  modifiedCoverageNote,
   modifiedTabsFor,
   resultBreadcrumb,
   scrollAndHighlightSettingsSection,
@@ -89,7 +89,7 @@ describe("@modified", () => {
   });
 
   it("names the pages it covers instead of claiming nothing changed anywhere", () => {
-    const sentence = modifiedCoverageSentence();
+    const sentence = modifiedCoverageNote();
     const covered = new Set(
       MODIFIED_TRACKED_IDS.map((id) => SETTINGS_SEARCH_INDEX.find((e) => e.id === id)!.tabLabel)
     );
@@ -98,6 +98,21 @@ describe("@modified", () => {
 });
 
 describe("search results", () => {
+  it("discloses @modified's coverage when it has results, not only when it has none", () => {
+    const [first] = SETTINGS_SEARCH_INDEX.filter((e) => e.kind === "section");
+    const { container } = render(
+      <SearchResults
+        results={[first!]}
+        query="@modified"
+        cleanQuery=""
+        onResultClick={() => {}}
+        activeScope="global"
+        projectLabel={null}
+      />
+    );
+    expect(container.textContent).toContain(modifiedCoverageNote());
+  });
+
   const results = SETTINGS_SEARCH_INDEX.filter((e) => e.kind === "section").slice(0, 2);
   const renderResults = (projectLabel: string | null) =>
     render(

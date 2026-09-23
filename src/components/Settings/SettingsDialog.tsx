@@ -128,8 +128,12 @@ export const MODIFIED_TRACKED_IDS = [
 ] as const;
 type TrackedSettingId = (typeof MODIFIED_TRACKED_IDS)[number];
 
-/** "General, Panel grid and Appearance" — the pages `@modified` can report on. */
-export function modifiedCoverageSentence(): string {
+/**
+ * What `@modified` can see, said wherever its results are: "tracks selected settings in
+ * General, Panel grid and Appearance — not project settings". A bare "2 results" read as
+ * an exhaustive audit when it is a sample.
+ */
+export function modifiedCoverageNote(): string {
   const labels = [
     ...new Set(
       MODIFIED_TRACKED_IDS.map((id) => SEARCH_ENTRY_BY_ID.get(id)?.tabLabel).filter(
@@ -137,8 +141,11 @@ export function modifiedCoverageSentence(): string {
       )
     ),
   ];
-  if (labels.length <= 1) return labels.join("");
-  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+  const pages =
+    labels.length <= 1
+      ? labels.join("")
+      : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+  return `@modified tracks selected settings in ${pages} — not project settings`;
 }
 
 /** The tabs holding at least one of `settingIds` — what the sidebar's modified dot marks. */
@@ -731,7 +738,9 @@ function SettingsDialogInner({
           <div
             className={cn(
               "flex items-center gap-1.5 px-2 py-1.5 mb-3 rounded-[var(--radius-md)]",
-              "settings-search border border-border-strong",
+              // The same boundary token as every text field (`Input`), so a theme that tunes its
+              // field edge tunes this one too; the magnifier and placeholder identify it.
+              "settings-search border border-border-input",
               // Neutral, the palette input's own focus lift: the sidebar's active marker is
               // this region's accent, and a second accent edge beside it split the eye.
               "focus-within:border-selection-outline focus-within:ring-1 focus-within:ring-selection-outline/50"
@@ -1773,14 +1782,15 @@ export function SearchResults({
       <EmptyState
         variant="zero-data"
         scale="canvas"
-        title="No modified settings"
-        description={`@modified covers ${modifiedCoverageSentence()}. Anything else that changed is marked on its own row.`}
+        title="No tracked changes"
+        description={`${modifiedCoverageNote()}. Other changes are marked on their own rows.`}
       />
     );
   }
 
   // One scope exists without a project, so a chip on every row would say nothing.
   const showScope = projectLabel !== null;
+  const filteringModified = parseQuery(query).filterModified;
 
   return (
     <div>
@@ -1788,6 +1798,7 @@ export function SearchResults({
         <p className="text-xs text-text-secondary">
           <span className="tabular-nums">{results.length}</span> result
           {results.length === 1 ? "" : "s"}
+          {filteringModified && <span> · {modifiedCoverageNote()}</span>}
         </p>
         {/* Real instructions, not a placeholder — they take the secondary ramp. */}
         <p className="text-3xs text-text-secondary">
