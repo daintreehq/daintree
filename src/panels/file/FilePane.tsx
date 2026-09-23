@@ -1175,7 +1175,7 @@ export function FilePane({
         // the file's name keep their room, the icon row gives way first. A
         // row with a mode toggle folds earlier, because the toggle alone
         // takes ~120px.
-        compactBelow={availableModes.length > 1 ? 600 : 440}
+        compactBelow={availableModes.length > 1 ? 500 : 360}
       >
         {availableModes.length > 1 && (
           <div ref={modeToggleRef} className="contents">
