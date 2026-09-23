@@ -206,6 +206,21 @@ describe("LocalCommitsDropdown", () => {
     expect(bodyAfter?.getAttribute("aria-hidden")).toBe("false");
   });
 
+  it("keeps a body open when the click lands inside it", async () => {
+    listCommitsMock.mockResolvedValue(makeResponse([makeCommit(1, "Selectable body")]));
+
+    const { findAllByText, findByText } = render(
+      <LocalCommitsDropdown cwd="/repo" open initialCount={1} />
+    );
+    const row = (await findAllByText("commit message 1"))[0]?.closest('[role="row"]');
+    fireEvent.click(row!);
+    await waitFor(() => expect(row?.getAttribute("aria-expanded")).toBe("true"));
+
+    fireEvent.click(await findByText("Selectable body"));
+
+    expect(row?.getAttribute("aria-expanded")).toBe("true");
+  });
+
   it("reflows a hard-wrapped commit body so prose has no mid-paragraph breaks", async () => {
     const wrappedBody =
       "This is the first wrapped line of the body\nand this is its continuation line.";
@@ -322,7 +337,7 @@ describe("LocalCommitsDropdown push status", () => {
       <LocalCommitsDropdown cwd="/repo" branch="main" open initialCount={1} />
     );
     await findAllByText("commit message 1");
-    await findByText(/Couldn't verify what origin\/main has/);
+    await findAllByText(/Couldn't verify what origin\/main has/);
 
     expect(document.getElementById("local-commit-row-hash-1")?.textContent).not.toContain(
       "Not pushed"
@@ -333,11 +348,11 @@ describe("LocalCommitsDropdown push status", () => {
     listCommitsMock.mockResolvedValue(makeResponse([makeCommit(1)]));
     listPushCommitsMock.mockResolvedValue({ ...pushPreview(["hash-1"]), total: 140 });
 
-    const { findByText } = render(
+    const { findAllByText } = render(
       <LocalCommitsDropdown cwd="/repo" branch="main" open initialCount={1} />
     );
 
-    expect(await findByText(/newest 1 marked/)).toBeTruthy();
+    expect((await findAllByText(/newest 1 marked/)).length).toBeGreaterThan(0);
   });
 
   it("says nothing about the remote while the history read has failed", async () => {
@@ -351,6 +366,22 @@ describe("LocalCommitsDropdown push status", () => {
     await waitFor(() => expect(listPushCommitsMock).toHaveBeenCalled());
 
     expect(queryByText(/Nothing to push/)).toBeNull();
+  });
+
+  it("retries a failed push-status read from the footer", async () => {
+    listCommitsMock.mockResolvedValue(makeResponse([makeCommit(1)]));
+    listPushCommitsMock.mockRejectedValueOnce(new Error("git exploded"));
+    listPushCommitsMock.mockResolvedValueOnce(pushPreview(["hash-1"]));
+
+    const { findByText, findAllByText, getByRole } = render(
+      <LocalCommitsDropdown cwd="/repo" branch="main" open initialCount={1} />
+    );
+    await findAllByText("Couldn't read push status");
+
+    fireEvent.click(getByRole("button", { name: "Retry" }));
+
+    expect(await findByText("1 not pushed")).toBeTruthy();
+    expect(listPushCommitsMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not read push status without a branch", async () => {

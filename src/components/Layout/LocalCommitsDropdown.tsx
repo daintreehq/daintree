@@ -251,7 +251,9 @@ function LocalCommitRow({
       onMouseDown={(e) => {
         if (!(e.target instanceof Element) || !e.target.closest("pre")) e.preventDefault();
       }}
-      onClick={() => {
+      onClick={(e) => {
+        // A click in the body is reading or selecting it, not collapsing it.
+        if (e.target instanceof Element && e.target.closest("pre")) return;
         if (hasBody) onToggle(commit.hash);
       }}
       className={cn(
@@ -378,49 +380,68 @@ function LocalCommitRow({
   );
 }
 
+interface PushLine {
+  /** The count, the part of the line worth reading first. */
+  lead?: string;
+  /** Carries the destination, so it is the part that truncates. */
+  detail: string;
+  /** Must survive a narrow footer: without it the marks read as the remote's boundary. */
+  caveat?: string;
+  outgoing: boolean;
+}
+
 /**
  * The footer's one line about the remote, worded as what git reported. It
  * never says "up to date": a tracking ref is only as fresh as the last fetch.
  */
-function PushSummary({ status }: { status: PushStatus }) {
+function describePush(status: PushStatus): PushLine | null {
   if (status.kind === "idle" || status.kind === "loading") return null;
   if (status.kind === "no-destination") {
-    return <span className="truncate">No push destination for this branch</span>;
+    return { detail: "No push destination for this branch", outgoing: false };
   }
   if (status.kind === "failed") {
-    return <span className="truncate">Couldn't read push status</span>;
+    return { detail: "Couldn't read push status", outgoing: false };
   }
   const { preview } = status;
   const target = `${preview.destination.remote}/${preview.destination.branch}`;
-  // Main caps the returned rows; past the cap the rows below go unmarked, and
-  // the footer has to say so rather than let the boundary pass for the remote's.
-  const capped = preview.total > status.hashes.size && preview.rangeBasis !== "unverified";
-  if (preview.rangeBasis === "creates") {
-    return (
-      <span className="inline-flex min-w-0 items-center gap-1">
-        <ArrowUp aria-hidden="true" className="size-3 shrink-0 text-text-primary" />
-        <span className="truncate">
-          <span className="font-medium text-text-primary">{preview.total} not pushed</span>
-          {" · "}
-          {target} doesn't exist yet{capped ? ` · newest ${status.hashes.size} marked` : ""}
-        </span>
-      </span>
-    );
-  }
   if (preview.rangeBasis === "unverified") {
-    return <span className="truncate">Couldn't verify what {target} has</span>;
+    return { detail: `Couldn't verify what ${target} has`, outgoing: false };
   }
   if (preview.total === 0) {
-    return <span className="truncate">Nothing to push to {target}</span>;
+    return { detail: `Nothing to push to ${target}`, outgoing: false };
   }
+  // Main caps the returned rows; past the cap the rows below go unmarked, and
+  // the footer has to say so rather than let the boundary pass for the remote's.
+  const caveat =
+    preview.total > status.hashes.size ? `newest ${status.hashes.size} marked` : undefined;
+  return {
+    lead: `${preview.total} not pushed`,
+    detail: preview.rangeBasis === "creates" ? `${target} doesn't exist yet` : `to ${target}`,
+    caveat,
+    outgoing: true,
+  };
+}
+
+function pushLineText(line: PushLine): string {
+  return [line.lead ? `${line.lead} ${line.detail}` : line.detail, line.caveat]
+    .filter(Boolean)
+    .join(", ");
+}
+
+function PushSummary({ line }: { line: PushLine }) {
   return (
-    <span className="inline-flex min-w-0 items-center gap-1">
-      <ArrowUp aria-hidden="true" className="size-3 shrink-0 text-text-primary" />
-      <span className="truncate">
-        <span className="font-medium text-text-primary">{preview.total} not pushed</span> to{" "}
-        {target}
-        {capped ? ` · newest ${status.hashes.size} marked` : ""}
-      </span>
+    <span className="inline-flex min-w-0 items-center gap-1" title={pushLineText(line)}>
+      {line.outgoing && (
+        <ArrowUp aria-hidden="true" className="size-3 shrink-0 text-text-primary" />
+      )}
+      {line.lead && (
+        <span className="shrink-0 font-medium text-text-primary">
+          {line.lead}
+          {line.detail.startsWith("to ") ? "" : " ·"}
+        </span>
+      )}
+      <span className="truncate">{line.detail}</span>
+      {line.caveat && <span className="shrink-0">&middot; {line.caveat}</span>}
     </span>
   );
 }
@@ -458,7 +479,10 @@ export function LocalCommitsDropdown({
   const debouncedSearch = useDebounce(searchQuery, 300);
   const showLoadingMore = useDeferredLoading(loadingMore, UI_DOHERTY_THRESHOLD);
   const isSlowLoadingMore = useDeferredLoading(loadingMore, UI_STILL_WORKING_MS);
-  const { ref: scrollShadowRef, topShadow, bottomShadow } = useScrollShadowOverlays();
+  const scrollerRef = useRef<HTMLElement | null>(null);
+  const { ref: scrollShadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(scrollerRef);
+  const revealHashRef = useRef<string | null>(null);
+  const showCheckingPush = useDeferredLoading(pushStatus.kind === "loading", UI_DOHERTY_THRESHOLD);
 
   const maxCursor = data.length - 1 + (hasMore ? 1 : 0);
   const activeCommit = cursorIndex >= 0 && cursorIndex < data.length ? data[cursorIndex] : null;
@@ -483,10 +507,24 @@ export function LocalCommitsDropdown({
         next.delete(hash);
       } else {
         next.add(hash);
+        revealHashRef.current = hash;
       }
       return next;
     });
   }, []);
+
+  // Enter doesn't move the cursor, so nothing else scrolls an opening body
+  // into view: a row near the bottom would expand below the fold. Waits out
+  // the 150ms row-height transition so it scrolls to the final size.
+  useEffect(() => {
+    const hash = revealHashRef.current;
+    if (!hash || !expandedHashes.has(hash)) return;
+    revealHashRef.current = null;
+    const timer = window.setTimeout(() => {
+      document.getElementById(optionIdFor(hash))?.scrollIntoView({ block: "nearest" });
+    }, 160);
+    return () => clearTimeout(timer);
+  }, [expandedHashes]);
 
   const copyHash = useCallback((commit: GitCommit) => {
     const settle = (copied: boolean) => {
@@ -648,8 +686,14 @@ export function LocalCommitsDropdown({
   const handleRetry = useCallback(() => {
     setSkip(0);
     void fetchData(0, false);
+    if (pushStatus.kind === "failed") void fetchPushStatus();
     inputRef.current?.focus();
-  }, [fetchData]);
+  }, [fetchData, fetchPushStatus, pushStatus.kind]);
+
+  const handleRetryPush = () => {
+    void fetchPushStatus();
+    inputRef.current?.focus();
+  };
 
   const handleClearSearch = () => {
     setSearchQuery("");
@@ -693,6 +737,17 @@ export function LocalCommitsDropdown({
           }
           break;
         }
+        case "PageDown":
+        case "PageUp": {
+          // A body taller than the list is still readable without leaving search.
+          const scroller = scrollerRef.current;
+          if (!scroller) break;
+          e.preventDefault();
+          e.stopPropagation();
+          const step = scroller.clientHeight * 0.8;
+          scroller.scrollTop += e.key === "PageDown" ? step : -step;
+          break;
+        }
         case "Escape":
           e.preventDefault();
           e.stopPropagation();
@@ -719,6 +774,7 @@ export function LocalCommitsDropdown({
   // The branch-level line waits for the list it describes, and stands down
   // when the history read failed with nothing to show.
   const showPushSummary = !loading && data.length > 0;
+  const pushLine = showPushSummary ? describePush(pushStatus) : null;
 
   const renderEmpty = () =>
     trimmedSearch ? (
@@ -779,7 +835,7 @@ export function LocalCommitsDropdown({
             aria-controls={LIST_ID}
             aria-activedescendant={activeDescendantId}
             aria-label="Search commits"
-            aria-keyshortcuts="ArrowDown ArrowUp Enter Shift+Enter Escape"
+            aria-keyshortcuts="ArrowDown ArrowUp Enter Shift+Enter PageDown PageUp Escape"
             className="flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden"
           />
           {searchQuery && (
@@ -811,7 +867,9 @@ export function LocalCommitsDropdown({
                   : "No commits"
                 : loadingMore
                   ? "Loading more commits…"
-                  : ""}
+                  : pushLine
+                    ? pushLineText(pushLine)
+                    : ""}
       </span>
 
       {/* The combobox points `aria-controls` here, so it exists in every state
@@ -825,13 +883,15 @@ export function LocalCommitsDropdown({
         className="flex-1 min-h-0 flex flex-col relative"
       >
         {showSkeleton ? (
-          <div className="overflow-hidden flex-1 min-h-0 flex flex-col">
-            <LocalCommitsSkeleton count={initialCount} />
+          <div className="flex-1 min-h-0 flex flex-col">
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <LocalCommitsSkeleton count={initialCount} />
+            </div>
             <SkeletonHint
               firstThreshold={UI_STILL_WORKING_MS}
               message="Still working…"
               onRetry={handleRetry}
-              className="px-3 py-2"
+              className="shrink-0 px-3 py-2 border-t border-[var(--border-divider)]"
             />
           </div>
         ) : data.length > 0 ? (
@@ -972,22 +1032,41 @@ export function LocalCommitsDropdown({
         {!loading && !error && !data.length && renderEmpty()}
       </div>
 
-      <div className="px-3 h-9 border-t border-[var(--border-divider)] flex items-center gap-3 shrink-0 text-xs text-text-secondary">
-        <div className="flex-1 min-w-0 flex items-center">
-          {showPushSummary && <PushSummary status={pushStatus} />}
+      {/* Only while it has something to say: an empty bordered band under an
+          empty or failed list reads as a missing line. */}
+      {(pushLine || (showPushSummary && showCheckingPush) || copyFailed || activeCommit) && (
+        <div className="px-3 h-9 border-t border-[var(--border-divider)] flex items-center gap-3 shrink-0 text-xs text-text-secondary">
+          <div className="flex-1 min-w-0 flex items-center gap-2">
+            {pushLine ? (
+              <PushSummary line={pushLine} />
+            ) : showPushSummary && showCheckingPush ? (
+              <span className="truncate">Checking push status…</span>
+            ) : null}
+            {showPushSummary && pushStatus.kind === "failed" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={handleRetryPush}
+                className="h-6 text-xs shrink-0"
+              >
+                Retry
+              </Button>
+            )}
+          </div>
+          {copyFailed ? (
+            <span className="shrink-0 whitespace-nowrap">Couldn&apos;t copy hash</span>
+          ) : activeCommit ? (
+            <span
+              className="shrink-0 inline-flex items-center gap-1.5 whitespace-nowrap"
+              aria-hidden="true"
+            >
+              <KbdChord shortcut="Shift+Enter" />
+              Copy hash
+            </span>
+          ) : null}
         </div>
-        {copyFailed ? (
-          <span className="shrink-0 whitespace-nowrap">Couldn&apos;t copy hash</span>
-        ) : activeCommit ? (
-          <span
-            className="shrink-0 inline-flex items-center gap-1.5 whitespace-nowrap"
-            aria-hidden="true"
-          >
-            <KbdChord shortcut="Shift+Enter" />
-            Copy hash
-          </span>
-        ) : null}
-      </div>
+      )}
     </div>
   );
 }
