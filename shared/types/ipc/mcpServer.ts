@@ -57,6 +57,26 @@ export type McpAuditResult =
 export type McpConfirmationDecision = "approved" | "rejected" | "timeout";
 
 /**
+ * How far an approval in the MCP confirm dialog reaches (#12692). `once`
+ * covers the call on screen; `session` also mints a time-bounded per-tool grant
+ * for the agent pane that asked, so its next calls to the same tool run without
+ * asking. Only offered to agent panes.
+ */
+export type McpApprovalScope = "once" | "session";
+
+/**
+ * What authorized an agent pane's dispatch past the ordinary confirmation
+ * (#12692), stamped on its audit record so an automatic run can be told apart
+ * from one a person approved.
+ *
+ * - `tier`: the project's `system` tier pre-authorized it.
+ * - `user`: the user approved this call in the dialog.
+ * - `session-grant`: an earlier "Allow for this session" covered it.
+ * - `native-grant`: a native automation grant covered it (#10648).
+ */
+export type McpDispatchAuthorization = "tier" | "user" | "session-grant" | "native-grant";
+
+/**
  * Audit-record severity tier. Derived from the dispatch result at record-write
  * time so readers can triage without re-deriving from errorCode + result.
  *
@@ -187,6 +207,13 @@ export interface McpAuditRecord {
    * in the audit panel even when no banner fired. See #8442.
    */
   bannerSuppressed?: boolean;
+  /**
+   * What authorized the dispatch past its confirmation, when something other
+   * than the ordinary dialog did (#12692). Absent on dispatches that needed no
+   * confirmation, on those confirmed in the ordinary dialog, and on records
+   * written before the field existed.
+   */
+  authorization?: McpDispatchAuthorization;
   /**
    * Stable correlation ID for the assistant turn this dispatch belongs to.
    * Minted at the `active` FSM transition boundary in `TurnOutcomeService`

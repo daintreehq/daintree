@@ -295,6 +295,7 @@ export class AuditService {
     confirmationDecision?: McpConfirmationDecision;
     argsSummary: string;
     bannerSuppressed?: boolean;
+    authorization?: McpAuditRecord["authorization"];
     turnId?: string;
     helpSessionId?: string;
     resultSummary?: string;
@@ -337,6 +338,9 @@ export class AuditService {
       if (input.bannerSuppressed) {
         record.bannerSuppressed = true;
       }
+    }
+    if (input.authorization !== undefined) {
+      record.authorization = input.authorization;
     }
     if (input.turnId !== undefined) {
       record.turnId = input.turnId;

@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { AlertTriangle, ChevronRight, Plug, ShieldAlert, Sparkles } from "lucide-react";
-import type { McpConfirmationDecision } from "@shared/types/ipc/mcpServer";
+import {
+  AlertTriangle,
+  ChevronRight,
+  Plug,
+  ShieldAlert,
+  Sparkles,
+  SquareTerminal,
+} from "lucide-react";
+import type { McpApprovalScope, McpConfirmationDecision } from "@shared/types/ipc/mcpServer";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -124,11 +131,12 @@ export function McpConfirmDialog() {
     (
       requestId: string,
       decision: McpConfirmationDecision,
-      selectedTargetIds?: readonly string[]
+      selectedTargetIds?: readonly string[],
+      scope?: McpApprovalScope
     ) => {
       if (handledRequestIdRef.current === requestId) return;
       handledRequestIdRef.current = requestId;
-      resolveCurrent(decision, selectedTargetIds);
+      resolveCurrent(decision, selectedTargetIds, scope);
     },
     [resolveCurrent]
   );
@@ -148,6 +156,14 @@ export function McpConfirmDialog() {
   useLayoutEffect(() => {
     setSelectedIds(new Set(selectableTargets?.map((target) => target.id) ?? []));
   }, [resetKey, selectableTargets]);
+
+  // "Allow for this session" (#12692). Unchecked on every promotion, for the
+  // same reason the target selection resets above: the singleton stays open
+  // across queue items, and one approval's reach must never carry into the next.
+  const [allowForSession, setAllowForSession] = useState(false);
+  useLayoutEffect(() => {
+    setAllowForSession(false);
+  }, [resetKey]);
 
   const toggleTarget = useCallback((id: string) => {
     setSelectedIds((previous) => {
@@ -234,7 +250,13 @@ export function McpConfirmDialog() {
     description: current.actionDescription,
     confirmLabel: selectionConfirmLabel(current, selectedCount),
     cancelLabel: "Cancel",
-    onConfirm: () => resolveOnce(current.requestId, "approved", approvedTargetIds),
+    onConfirm: () =>
+      resolveOnce(
+        current.requestId,
+        "approved",
+        approvedTargetIds,
+        current.offerSessionApproval === true && allowForSession ? "session" : undefined
+      ),
     hasPreview: hasScrollableContent,
     // An empty selection is the same outcome as Cancel with an extra dispatch in
     // between, so it is not offered as an approval.
@@ -254,6 +276,13 @@ export function McpConfirmDialog() {
   const body = (
     <div className="space-y-3">
       <RequesterRow current={current} />
+
+      {current.approvalReason === "above-tier" && (
+        <p className="text-xs text-text-secondary leading-relaxed select-text">
+          This is beyond what this project&apos;s MCP tier lets agents do on their own, so it needs
+          your approval to run.
+        </p>
+      )}
 
       {current.dangerRationale && (
         <ConsequenceNote isDestructive={isDestructive}>{current.dangerRationale}</ConsequenceNote>
@@ -276,6 +305,14 @@ export function McpConfirmDialog() {
       )}
 
       {hasArgs && <ArgumentsDisclosure argsSummary={current.argsSummary} />}
+
+      {current.offerSessionApproval === true && (
+        <SessionApprovalOption
+          actionTitle={current.actionTitle}
+          checked={allowForSession}
+          onCheckedChange={setAllowForSession}
+        />
+      )}
     </div>
   );
 
@@ -363,7 +400,13 @@ function RequesterRow({ current }: { current: PendingMcpConfirm }) {
   let name = "Unidentified client";
   let detail: string | null = null;
 
-  if (callerInfo) {
+  // Only main sets `offerSessionApproval`, and only for a session it
+  // authenticated with a per-pane bearer — so this is a positive
+  // identification, not an inference from missing fields (#12692).
+  if (current.offerSessionApproval === true) {
+    Icon = SquareTerminal;
+    name = "Agent in a terminal pane";
+  } else if (callerInfo) {
     Icon = Plug;
     name = truncateUserAgent(callerInfo.userAgent);
     detail = `…${callerInfo.token4LastChars}`;
@@ -386,6 +429,48 @@ function RequesterRow({ current }: { current: PendingMcpConfirm }) {
         {detail && (
           <span className="shrink-0 font-mono text-2xs text-text-secondary">{detail}</span>
         )}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The "keep allowing this" choice offered to an agent pane (#12692).
+ *
+ * Spells out the reach, because it is wider than the call on screen: later
+ * calls to the same tool run with whatever arguments the agent sends. The
+ * lifetime is the grant cache's hard ceiling, not its sliding window, so it is
+ * the most the approval can ever last.
+ */
+function SessionApprovalOption({
+  actionTitle,
+  checked,
+  onCheckedChange,
+}: {
+  actionTitle: string;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}) {
+  const labelId = useId();
+  const detailId = useId();
+  return (
+    <div className="relative flex items-start gap-2">
+      <Checkbox
+        size="sm"
+        checked={checked}
+        onCheckedChange={(value) => onCheckedChange(value === true)}
+        aria-labelledby={labelId}
+        aria-describedby={detailId}
+        className="static mt-0.5 before:absolute before:inset-0 before:content-['']"
+      />
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span id={labelId} className="text-xs text-text-primary">
+          Allow for the rest of this session
+        </span>
+        <span id={detailId} className="text-2xs text-text-secondary">
+          This agent&apos;s later {actionTitle} calls run without asking, with any arguments, for up
+          to 30 minutes.
+        </span>
       </span>
     </div>
   );

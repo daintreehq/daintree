@@ -3191,6 +3191,8 @@ function buildElectronApi(): ElectronAPI {
           context?: ActionContext;
           callerInfo?: McpBearerIdentity;
           sessionOrigin?: McpSessionOrigin;
+          offerSessionApproval?: boolean;
+          approvalOnly?: boolean;
         }) => void
       ) => _typedOn(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, callback),
 
@@ -3198,6 +3200,7 @@ function buildElectronApi(): ElectronAPI {
         requestId: string;
         result: unknown;
         confirmationDecision?: "approved" | "rejected" | "timeout";
+        approvalScope?: "once" | "session";
       }) => {
         ipcRenderer.send(CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE, payload);
       },

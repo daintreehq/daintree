@@ -7,6 +7,7 @@ import type {
 } from "../../../shared/types/actions.js";
 import type {
   McpAuditRecord,
+  McpApprovalScope,
   McpAuditResult,
   McpConfirmationDecision,
   McpRuntimeSnapshot,
@@ -150,6 +151,18 @@ export interface WorkspaceDispatchOptions {
   contextOverride?: ActionContext;
   /** The pane's launch view, preferred while it still shows the workspace. */
   preferredWebContentsId?: number;
+  /**
+   * Offer "Allow for this session" in any dialog this dispatch raises
+   * (#12692). Only an agent pane can hold the grant that button mints.
+   */
+  offerSessionApproval?: boolean;
+  /**
+   * Raise the approval dialog and report the decision without dispatching
+   * (#12692). How main asks the user about a pane call above its tier before
+   * running it — including one that executes in main and never reaches a
+   * renderer.
+   */
+  approvalOnly?: boolean;
 }
 export type { HelpAssistantTier };
 
@@ -684,7 +697,7 @@ export const MCP_SERVER_INSTRUCTIONS = [
 
   'Resolve the target worktree and terminal ids before scoped actions. A terminal submission returns once the text is queued, not when the work finishes — prefer `terminal.waitUntilIdle` or `terminal.waitUntilIdleBatch` over tight polling, then read `idleReason`, `waitingReason`, and `exitCode` before your next turn or any irreversible step. Those waits track agent panes: a terminal with no tracked agent returns `idleReason: "unknown"` at once, which is not proof a shell command finished.',
 
-  "Authorization is tiered: in-app `workbench`, `action`, and `system` progressively widen access, while `external` is an independently curated allowlist; a call outside the current authorized surface returns `TIER_NOT_PERMITTED`. Honor `retriable` on errors — retry a `false` only once arguments, context, or authorization have changed.",
+  "Authorization is tiered: in-app `workbench`, `action`, and `system` widen access; `external` is a separate allowlist. A call outside the authorized surface returns `TIER_NOT_PERMITTED`, or from an agent pane asks the user first; `USER_REJECTED` means they declined. Honor `retriable`: retry a `false` only once arguments, context, or authorization change.",
 ].join("\n\n");
 
 /**
@@ -1110,6 +1123,11 @@ export interface DispatchEnvelope {
   result: ActionDispatchResult;
   confirmationDecision?: McpConfirmationDecision;
   /**
+   * How far an `approved` decision reaches (#12692). Only ever `session` when
+   * the dispatch offered it; absent otherwise.
+   */
+  approvalScope?: McpApprovalScope;
+  /**
    * Absent when identity could not be resolved (view torn down between
    * dispatch and response, or a webContents with no registered workspace).
    * Deliberately optional rather than nullable: "unknown" must not be
@@ -1237,6 +1255,7 @@ export function readStringField(value: unknown, keys: readonly string[]): string
 }
 
 export type {
+  McpApprovalScope,
   McpAuditRecord,
   McpAuditResult,
   McpConfirmationDecision,

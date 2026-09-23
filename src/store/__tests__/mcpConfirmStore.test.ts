@@ -187,6 +187,30 @@ describe("mcpConfirmStore", () => {
     expect(await timedOut).toEqual({ decision: "timeout" });
   });
 
+  // #12692: "Allow for this session" reaches wider than the call on screen, so
+  // it only survives an approval of a dialog that actually offered it.
+  it("carries the session scope back only from a dialog that offered it", async () => {
+    const offered = requestMcpConfirmation({
+      ...pendingFixture({ requestId: "a" }),
+      offerSessionApproval: true,
+    });
+    const notOffered = requestMcpConfirmation(pendingFixture({ requestId: "b" }));
+
+    useMcpConfirmStore.getState().resolveCurrent("approved", undefined, "session");
+    useMcpConfirmStore.getState().resolveCurrent("approved", undefined, "session");
+
+    expect(await offered).toEqual({ decision: "approved", scope: "session" });
+    expect(await notOffered).toEqual({ decision: "approved" });
+  });
+
+  it("drops the session scope handed to a rejection", async () => {
+    const pending = requestMcpConfirmation({ ...pendingFixture(), offerSessionApproval: true });
+
+    useMcpConfirmStore.getState().resolveCurrent("rejected", undefined, "session");
+
+    expect(await pending).toEqual({ decision: "rejected" });
+  });
+
   it("reset clears state and the resolver map without resolving outstanding promises", async () => {
     const first = requestMcpConfirmation(pendingFixture({ requestId: "a" }));
     void requestMcpConfirmation(pendingFixture({ requestId: "b" }));

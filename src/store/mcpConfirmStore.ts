@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { ActionDanger } from "@shared/types/actions";
 import type {
+  McpApprovalScope,
   McpBearerIdentity,
   McpConfirmationDecision,
   McpSessionOrigin,
@@ -139,6 +140,19 @@ export interface PendingMcpConfirm {
    * {@link selectableTargets} is present.
    */
   selectionConfirmLabel?: { verb: string; one: string; many: string };
+  /**
+   * Offer "Allow for this session" beside the ordinary approval (#12692). Set
+   * only by main, and only for an agent pane — the one session that can hold
+   * the per-tool grant the choice mints.
+   */
+  offerSessionApproval?: boolean;
+  /**
+   * Why this dialog is asking (#12692). `above-tier` is an agent pane calling
+   * something its project's MCP tier does not cover on its own, which the
+   * dialog says in so many words — the action may well be harmless, and the
+   * approver needs to know the question is about reach, not danger.
+   */
+  approvalReason?: "above-tier";
   enqueuedAt: number;
 }
 
@@ -182,6 +196,11 @@ export interface McpConfirmSelectableTarget {
 export interface McpConfirmResolution {
   decision: McpConfirmationDecision;
   selectedTargetIds?: readonly string[];
+  /**
+   * Present only on an approval of a dialog that offered the session scope
+   * (#12692), and `session` only when the user chose it.
+   */
+  scope?: McpApprovalScope;
 }
 
 interface McpConfirmState {
@@ -194,7 +213,8 @@ interface McpConfirmActions {
   setPreview: (requestId: string, preview: string[], typedNameTarget?: string) => void;
   resolveCurrent: (
     decision: McpConfirmationDecision,
-    selectedTargetIds?: readonly string[]
+    selectedTargetIds?: readonly string[],
+    scope?: McpApprovalScope
   ) => void;
   drop: (requestId: string) => void;
   reset: () => void;
@@ -263,19 +283,25 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
     set({ queue: next });
   },
 
-  resolveCurrent: (decision, selectedTargetIds) => {
+  resolveCurrent: (decision, selectedTargetIds, scope) => {
     const { current, queue } = get();
     if (current === null) return;
     const resolve = resolvers.get(current.requestId);
     resolvers.delete(current.requestId);
     // Only an approval carries a selection. A rejection or timeout resolved
     // nothing about individual targets, and handing back a stale checkbox state
-    // there would let the bridge stamp per-target approvals nobody gave.
-    resolve?.(
-      decision === "approved" && selectedTargetIds !== undefined
-        ? { decision, selectedTargetIds }
-        : { decision }
-    );
+    // there would let the bridge stamp per-target approvals nobody gave. The
+    // session scope is held to the same rule, and additionally to the item
+    // having offered it: a caller cannot widen an approval the dialog never
+    // put to the user.
+    const approved = decision === "approved";
+    resolve?.({
+      decision,
+      ...(approved && selectedTargetIds !== undefined ? { selectedTargetIds } : {}),
+      ...(approved && current.offerSessionApproval === true && scope === "session"
+        ? { scope: "session" as const }
+        : {}),
+    });
     advance(set, queue);
   },
 

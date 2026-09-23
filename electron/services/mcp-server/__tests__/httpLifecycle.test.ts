@@ -2871,7 +2871,11 @@ describe("HttpLifecycle", () => {
           {},
           false,
           "external",
-          { contextOverride: LAUNCH_CONTEXT, preferredWebContentsId: 42 }
+          {
+            contextOverride: LAUNCH_CONTEXT,
+            preferredWebContentsId: 42,
+            offerSessionApproval: true,
+          }
         );
         expect(deps.getCachedManifestForWorkspace).toHaveBeenCalledWith(WS_A, 42);
         expect(deps.dispatchAction).not.toHaveBeenCalled();
@@ -2901,7 +2905,11 @@ describe("HttpLifecycle", () => {
           {},
           false,
           "external",
-          { contextOverride: LAUNCH_CONTEXT, preferredWebContentsId: 42 }
+          {
+            contextOverride: LAUNCH_CONTEXT,
+            preferredWebContentsId: 42,
+            offerSessionApproval: true,
+          }
         );
       });
 
@@ -2924,6 +2932,45 @@ describe("HttpLifecycle", () => {
           "external",
           42
         );
+      });
+
+      // #12692: a pane's tier is where auto-approval stops, not a ceiling. The
+      // ask for an above-tier call rides the pane's own route — same workspace,
+      // same launch context and view — flagged so the renderer only asks.
+      it("hands a pane an approval route that asks in its own view without dispatching", async () => {
+        const deps = bindingDeps({
+          dispatchActionForWorkspace: vi.fn().mockResolvedValue({
+            result: { ok: true, result: null },
+            confirmationDecision: "approved",
+          }),
+        });
+        const { lc } = paneLifecycle(deps);
+        const { sessionDeps } = await openSseWithDeps(lc, deps, PANE_AUTH);
+
+        expect(sessionDeps.requestApproval).toBeTypeOf("function");
+        await sessionDeps.requestApproval!("git.push", { remote: "origin" });
+
+        expect(deps.dispatchActionForWorkspace).toHaveBeenCalledWith(
+          WS_A,
+          "git.push",
+          { remote: "origin" },
+          false,
+          "external",
+          {
+            contextOverride: LAUNCH_CONTEXT,
+            preferredWebContentsId: 42,
+            offerSessionApproval: true,
+            approvalOnly: true,
+          }
+        );
+      });
+
+      it("gives a bound external session no approval route, so its tier stays a ceiling", async () => {
+        const deps = bindingDeps();
+        const lc = new HttpLifecycle(deps);
+
+        expect(sessionDepsFor(lc, "bound", { workspaceId: WS_A }).requestApproval).toBeUndefined();
+        expect(sessionDepsFor(lc, "unbound").requestApproval).toBeUndefined();
       });
 
       it("binds identity-only when the launch workspace has no live view at handshake", async () => {
