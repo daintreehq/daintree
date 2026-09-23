@@ -2,8 +2,8 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
-import { CollapsedAlarmPill } from "../CollapsedAlarmPill";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { CollapsedAlarmPill, collapsedAlarmDescriptionId } from "../CollapsedAlarmPill";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { AlarmDescriptor } from "@/lib/worktreeAlarmTier";
 
@@ -163,5 +163,109 @@ describe("CollapsedAlarmPill", () => {
   it("does not use transition-all", () => {
     const { pill } = renderPill(ciFailed);
     expect(pill.className).not.toContain("transition-all");
+  });
+});
+
+describe("CollapsedAlarmPill keyboard reach", () => {
+  // The mark is not focusable, so a keyboard user meets it through the card's
+  // select button: that button is described by `descriptionId`, and it passes
+  // `revealed` while it shows :focus-visible. These pin both halves at the
+  // mark's end; WorktreeCardInteraction pins the button's end.
+
+  function renderWith(
+    alarm: AlarmDescriptor,
+    props: { detail?: string; descriptionId?: string; revealed?: boolean } = {}
+  ) {
+    const ui = (revealed: boolean | undefined) => (
+      <TooltipProvider delayDuration={0}>
+        <CollapsedAlarmPill alarm={alarm} {...props} revealed={revealed} />
+      </TooltipProvider>
+    );
+    const result = render(ui(props.revealed));
+    return { ...result, setRevealed: (next: boolean) => result.rerender(ui(next)) };
+  }
+
+  it("describes the row with the same words the mark's own name speaks", () => {
+    const id = "worktree-alarm-test";
+    renderWith(ciFailed, { detail: "2 of 7 checks failing", descriptionId: id });
+    const pill = screen.getByTestId("collapsed-alarm-pill");
+    const description = document.getElementById(id);
+    expect(description, "the describedby target never rendered").not.toBeNull();
+    expect(description!.textContent).toBe(pill.getAttribute("aria-label"));
+  });
+
+  it("keeps the description out of the reading order and off the badge", () => {
+    // Hidden, so a virtual cursor does not read the alarm twice; outside the
+    // badge, so the mark still carries no words of its own.
+    const id = "worktree-alarm-test";
+    renderWith(behind, { detail: "Upstream: 3 commits behind", descriptionId: id });
+    const description = document.getElementById(id)!;
+    expect(description.hidden).toBe(true);
+    expect(screen.getByTestId("collapsed-alarm-pill").contains(description)).toBe(false);
+    expect(screen.getByTestId("collapsed-alarm-pill").textContent).toBe("");
+  });
+
+  it("leaves the reference resolvable when there is no alarm", () => {
+    // The card points aria-describedby at this id whenever it is collapsed,
+    // without knowing the tier; a dangling IDREF is an invalid attribute.
+    const id = "worktree-alarm-test";
+    renderWith(none, { descriptionId: id });
+    const description = document.getElementById(id);
+    expect(description, "no node for a quiet row's reference").not.toBeNull();
+    expect(description!.textContent).toBe("");
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
+  });
+
+  it("opens the tooltip from keyboard focus on the row, with no hover", async () => {
+    renderWith(ciFailed, { detail: "2 of 7 checks failing", revealed: true });
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toContain("CI failed");
+    expect(tip.textContent).toContain("2 of 7 checks failing");
+  });
+
+  it("stays closed until the row is focused", async () => {
+    const { setRevealed } = renderWith(ciFailed, { revealed: false });
+    const pill = screen.getByTestId("collapsed-alarm-pill");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(pill.getAttribute("data-state")).toBe("closed");
+    // The same render then opens on focus, so the closed read above is not an
+    // artefact of a trigger that never opens at all.
+    setRevealed(true);
+    await waitFor(() => expect(pill.getAttribute("data-state")).not.toBe("closed"));
+  });
+
+  it("lets a revealed tooltip be dismissed, and reveals again on the next visit", async () => {
+    // Without the latch, `revealed` would re-assert the open straight after
+    // Escape and the tooltip could never be put away while the row is focused.
+    // Read off the trigger's `data-state`, which Radix keeps in step with the
+    // root: the role query stops matching the content after its first paint
+    // here, so it cannot see a close.
+    const { setRevealed } = renderWith(authFailed, { detail: "Expand the card", revealed: true });
+    const pill = screen.getByTestId("collapsed-alarm-pill");
+    const isOpen = () => pill.getAttribute("data-state") !== "closed";
+    await waitFor(() => expect(isOpen(), "never revealed").toBe(true));
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    await waitFor(() => expect(isOpen(), "Escape did not close the reveal").toBe(false));
+
+    setRevealed(true);
+    expect(isOpen(), "re-opened while the row is still focused").toBe(false);
+
+    setRevealed(false);
+    setRevealed(true);
+    await waitFor(() => expect(isOpen(), "the next visit did not reveal").toBe(true));
+  });
+});
+
+describe("collapsedAlarmDescriptionId", () => {
+  it("makes one IDREF of a worktree path, spaces and all", () => {
+    // aria-describedby is a space-separated list, so a raw path with a space
+    // would point at two ids, neither of them this one.
+    const id = collapsedAlarmDescriptionId("/Users/dev/My Projects/helios");
+    expect(id).not.toMatch(/\s/);
+  });
+
+  it("gives two worktrees two ids", () => {
+    expect(collapsedAlarmDescriptionId("/a/b c")).not.toBe(collapsedAlarmDescriptionId("/a/b-c"));
   });
 });

@@ -382,3 +382,45 @@ describe("worktree error banner stacking (issue #12087)", () => {
     }
   );
 });
+
+// The collapsed alarm mark is a non-focusable span, so the select overlay is
+// where a keyboard user meets it. WorktreeHeader.test proves the header puts
+// the alarm's words at `collapsedAlarmDescriptionId(worktree.id)` and opens the
+// tooltip from `isKeyboardFocused`; this is the card's half of each contract.
+describe("collapsed alarm reaches the select overlay", () => {
+  it("describes the overlay by every mounted row mark", () => {
+    // Each part is gated on the same condition that mounts its node:
+    // `selectButtonDescribedBy` drops the unmounted ones, so a wrong gate here
+    // is a dangling IDREF or a silent mark.
+    const tag = openingTagWith(cardSource, "button", 'data-card-select-overlay=""');
+    const call = tag.match(
+      /aria-describedby=\{selectButtonDescribedBy\(worktree\.id, \{([^}]*)\}\)\}/
+    );
+    expect(
+      call,
+      "the overlay's aria-describedby is not built by selectButtonDescribedBy"
+    ).not.toBeNull();
+    const gates = call![1]!;
+    expect(gates).toMatch(/lifecycle:\s*chipState !== null/);
+    expect(gates).toMatch(/alarm:\s*!!effectiveIsCollapsed/);
+    expect(gates).toMatch(/external:\s*isExternal/);
+  });
+
+  it("mounts the lifecycle description beside the tick, sidebar only", () => {
+    expect(cardSource).toMatch(
+      /\{chipState !== null && variant === "sidebar" && \([\s\S]{0,400}<span id=\{worktreeRowDescriptionId\(worktree\.id, "lifecycle"\)\} hidden>\s*\{CHIP_LABELS\[chipState\]\}/
+    );
+  });
+
+  it("tracks the overlay's keyboard focus and hands it to the header", () => {
+    const tag = openingTagWith(cardSource, "button", 'data-card-select-overlay=""');
+    expect(tag).toMatch(/onFocus=\{handleSelectFocus\}/);
+    expect(tag).toMatch(/onBlur=\{handleSelectBlur\}/);
+    // Focus-visible only: a pointer click focuses the overlay too, and a click
+    // that selected the row should not also pop the alarm open under it.
+    expect(cardSource).toMatch(/handleSelectFocus[\s\S]{0,200}matches\(":focus-visible"\)/);
+    expect(openingTagWith(cardSource, "WorktreeHeader", "isKeyboardFocused=")).toMatch(
+      /isKeyboardFocused=\{isSelectFocusVisible\}/
+    );
+  });
+});

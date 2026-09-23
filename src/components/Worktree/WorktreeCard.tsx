@@ -39,6 +39,9 @@ import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import { FocusedSubLine } from "./WorktreeCard/FocusedSubLine";
+import { selectButtonDescribedBy, worktreeRowDescriptionId } from "./WorktreeCard/rowDescriptions";
+import { isTooltipFocusOpenSuppressed } from "@/lib/tooltipDismissRegistry";
+import { isTooltipSuppressedForElement } from "@/lib/tooltipFocusSuppression";
 import {
   WorktreeDetailsSection,
   WorktreeDeleteErrorBanner,
@@ -273,6 +276,17 @@ export function WorktreeCard({
   // animation rather than dropping silently.
   const prevAgentStateRef = useRef(dominantAgentState);
   const [flashKey, setFlashKey] = useState(0);
+  const [isSelectFocusVisible, setIsSelectFocusVisible] = useState(false);
+  // A focus handed back by a closing overlay is not a visit, so the same
+  // suppression the tooltip wrapper applies to its own focus opens applies here.
+  const handleSelectFocus = useCallback((e: React.FocusEvent<HTMLButtonElement>) => {
+    setIsSelectFocusVisible(
+      e.currentTarget.matches(":focus-visible") &&
+        !isTooltipFocusOpenSuppressed() &&
+        !isTooltipSuppressedForElement(e.currentTarget)
+    );
+  }, []);
+  const handleSelectBlur = useCallback(() => setIsSelectFocusVisible(false), []);
 
   useEffect(() => {
     const prev = prevAgentStateRef.current;
@@ -1085,6 +1099,14 @@ export function WorktreeCard({
               </TooltipContent>
             </Tooltip>
           )}
+          {chipState !== null && variant === "sidebar" && (
+            // For the select button to be described by; see rowDescriptions.
+            // Sidebar only, like the button: the overview grid renders the same
+            // worktree while the sidebar is mounted, and ids must be unique.
+            <span id={worktreeRowDescriptionId(worktree.id, "lifecycle")} hidden>
+              {CHIP_LABELS[chipState]}
+            </span>
+          )}
 
           {/* Sidebar only. This is a real keyboard target there: it is
               tabbable, sidebar.css paints its focus ring via
@@ -1108,6 +1130,16 @@ export function WorktreeCard({
                 (isDraggingSort || isWorktreeSortDragging) && "pointer-events-none"
               )}
               aria-label={`Select worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}`}
+              // The row's marks are non-focusable, so this button is where a
+              // keyboard user meets them: described by each mark's words, and,
+              // collapsed, revealing the alarm's tooltip while ringed.
+              aria-describedby={selectButtonDescribedBy(worktree.id, {
+                lifecycle: chipState !== null,
+                alarm: !!effectiveIsCollapsed,
+                external: isExternal,
+              })}
+              onFocus={handleSelectFocus}
+              onBlur={handleSelectBlur}
             />
           )}
           {flashKey > 0 && (
@@ -1324,6 +1356,7 @@ export function WorktreeCard({
                   isMainOnStandardBranch={isMainOnStandardBranch}
                   isPinned={isPinned}
                   isCollapsed={effectiveIsCollapsed}
+                  isKeyboardFocused={isSelectFocusVisible}
                   canCollapse={canCollapse}
                   onToggleCollapse={handleToggleCollapse}
                   contentId={`worktree-body-${worktree.id}`}

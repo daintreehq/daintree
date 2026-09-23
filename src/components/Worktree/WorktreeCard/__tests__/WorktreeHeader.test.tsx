@@ -5,6 +5,8 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vite
 import { render, screen, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { WorktreeHeader, type WorktreeHeaderProps } from "../WorktreeHeader";
+import { collapsedAlarmDescriptionId } from "../CollapsedAlarmPill";
+import { worktreeRowDescriptionId } from "../rowDescriptions";
 import type { WorktreeState } from "@shared/types";
 import type { NormalizedPRState } from "@shared/types/forge";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -1712,5 +1714,63 @@ describe("WorktreeHeader base relationship row", () => {
   it("keeps the row unmounted once the branch name it described is gone", () => {
     renderHeader({ worktree: { ...onBase, isDetached: true } });
     expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
+  });
+});
+
+describe("WorktreeHeader collapsed alarm keyboard reach", () => {
+  // The card's select button points aria-describedby at
+  // `collapsedAlarmDescriptionId(worktree.id)` whenever the row is collapsed;
+  // this is the half that proves the header puts something at that id.
+
+  it("describes a collapsed row's alarm under the id the card points at", () => {
+    renderHeader({ isCollapsed: true, worktree: { ...baseWorktree, behindCount: 3 } });
+    const description = document.getElementById(collapsedAlarmDescriptionId(baseWorktree.id));
+    expect(description, "no node at the card's aria-describedby target").not.toBeNull();
+    expect(description!.textContent).toBe(
+      screen.getByTestId("collapsed-alarm-pill").getAttribute("aria-label")
+    );
+  });
+
+  it("keeps the id resolvable on a collapsed row with nothing to report", () => {
+    renderHeader({ isCollapsed: true });
+    const description = document.getElementById(collapsedAlarmDescriptionId(baseWorktree.id));
+    expect(description).not.toBeNull();
+    expect(description!.textContent).toBe("");
+  });
+
+  it("opens the alarm tooltip while the card's select button is keyboard-focused", async () => {
+    renderHeader({
+      isCollapsed: true,
+      isKeyboardFocused: true,
+      worktree: { ...baseWorktree, behindCount: 3 },
+    });
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toContain("Behind");
+    expect(tip.textContent).toContain("Upstream: 3 commits behind");
+  });
+});
+
+describe("WorktreeHeader external worktree description", () => {
+  // The card's select button points aria-describedby at this node whenever the
+  // worktree is external; the icon itself is not focusable.
+  const external = {
+    ...baseWorktree,
+    isExternal: true,
+    path: "/Volumes/scratch/My Worktrees/helios",
+  };
+
+  it("describes an external sidebar row by the icon's own words", () => {
+    renderHeader({ worktree: external });
+    const node = document.getElementById(worktreeRowDescriptionId(external.id, "external"));
+    expect(node, "no node at the select button's external reference").not.toBeNull();
+    expect(node!.hidden).toBe(true);
+    expect(node!.textContent).toBe(
+      screen.getByRole("img", { name: /^External worktree at / }).getAttribute("aria-label")
+    );
+  });
+
+  it("renders no node in the grid, which has no select button and may share the document", () => {
+    renderHeader({ worktree: external, variant: "grid" });
+    expect(document.getElementById(worktreeRowDescriptionId(external.id, "external"))).toBeNull();
   });
 });
