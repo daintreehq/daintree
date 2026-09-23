@@ -15,7 +15,7 @@ import {
   Code,
   Smartphone,
   PanelRight,
-  EllipsisVertical,
+  Ellipsis,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -1048,7 +1048,7 @@ export function BrowserToolbar({
                       {copied && isCompact ? (
                         <Check className="w-4 h-4 text-status-success" />
                       ) : (
-                        <EllipsisVertical className="w-4 h-4" />
+                        <Ellipsis className="w-4 h-4" />
                       )}
                     </button>
                   </DropdownMenuTrigger>
