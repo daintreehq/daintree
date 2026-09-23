@@ -49,15 +49,28 @@ interface RowFixture {
   active?: boolean;
 }
 
-const pr = (state: "failure" | "success", failed: number, total: number) => ({
+const pr = (failed: number, total: number): Partial<WorktreeState> => ({
   linked: {
     providerId: "github",
     pr: {
-      number: 4821,
+      ref: {
+        providerId: "github",
+        owner: "helios",
+        repo: "dashboard",
+        number: 4821,
+        rawData: null,
+      },
       title: "Honour Retry-After on 429 responses",
       url: "https://github.com/helios/dashboard/pull/4821",
       state: "open",
-      ciStatus: { state, failed, total },
+      ciStatus: {
+        state: "failure",
+        total,
+        passed: total - failed,
+        failed,
+        pending: 0,
+        rawData: null,
+      },
     },
   },
 });
@@ -89,7 +102,7 @@ const ROWS: RowFixture[] = [
   {
     id: "ci-failed",
     branch: "feature/collapse-inspector-panel",
-    fields: pr("failure", 3, 12),
+    fields: pr(3, 12),
   },
   {
     id: "behind-sessions",
@@ -100,7 +113,7 @@ const ROWS: RowFixture[] = [
   {
     id: "ci-failed-sessions-long",
     branch: "feature/collapse-the-inspector-panel-when-the-window-narrows-below-the-breakpoint",
-    fields: pr("failure", 1, 4),
+    fields: pr(1, 4),
     sessions: { waiting: 1 },
   },
   {
