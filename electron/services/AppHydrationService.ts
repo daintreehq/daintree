@@ -25,6 +25,20 @@ import { effectiveCachedProjectViews } from "../utils/cachedProjectViews.js";
  *     on first app load, not on project switches
  *   - always returns safeMode: false — safe mode is a startup-only condition
  */
+/**
+ * The terminal config every hydrate payload carries. It has to report the same
+ * effective cached-view count `terminalConfig.get` does: an unset value means
+ * "the hardware default", and the renderer can't resolve that tier itself
+ * before Settings reads it.
+ */
+export function readHydrateTerminalConfig(): HydrateResult["terminalConfig"] {
+  const stored = store.get("terminalConfig");
+  return {
+    ...stored,
+    cachedProjectViews: effectiveCachedProjectViews(stored?.cachedProjectViews),
+  };
+}
+
 export async function buildSwitchHydrateResult(projectId: string): Promise<HydrateResult> {
   const currentProject = projectStore.getProjectById(projectId);
   // In-repo presets ride along in the payload; kicked off first so the disk
@@ -116,17 +130,9 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
   const gpuStatus = getGpuFeatureStatus();
   const gpuWebGLHardware = isWebGLHardwareAccelerated(gpuStatus.webgl2);
 
-  // The boot copy has to report the same effective count `terminalConfig.get`
-  // does: an unset value means "the hardware default", not "unset", and the
-  // renderer has no way to resolve that tier itself before the dialog reads it.
-  const storedTerminalConfig = store.get("terminalConfig");
-
   return {
     appState: appState as import("../../shared/types/ipc/app.js").AppState,
-    terminalConfig: {
-      ...storedTerminalConfig,
-      cachedProjectViews: effectiveCachedProjectViews(storedTerminalConfig?.cachedProjectViews),
-    },
+    terminalConfig: readHydrateTerminalConfig(),
     project: currentProject ?? null,
     agentSettings: store.get("agentSettings"),
     gpuWebGLHardware,

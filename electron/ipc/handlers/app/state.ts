@@ -40,6 +40,7 @@ import { typedHandle, typedHandleWithContext } from "../../utils.js";
 import { signalFirstInteractive } from "../../../window/deferredInitQueue.js";
 import { markPerformance } from "../../../utils/performance.js";
 import { PERF_MARKS } from "../../../../shared/perf/marks.js";
+import { readHydrateTerminalConfig } from "../../../services/AppHydrationService.js";
 import { consumePrefetchedHydrateResult } from "../../../services/prefetchHydrateCache.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { notifyAppViewPainted } from "../../../setup/deepLinkInstall.js";
@@ -558,7 +559,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
 
     return {
       appState: appState as import("../../../../shared/types/ipc/app.js").AppState,
-      terminalConfig: store.get("terminalConfig"),
+      terminalConfig: readHydrateTerminalConfig(),
       project: currentProject,
       workspaceId,
       agentSettings: store.get("agentSettings"),

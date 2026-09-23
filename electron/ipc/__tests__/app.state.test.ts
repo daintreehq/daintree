@@ -402,6 +402,12 @@ describe("app:boot handler", () => {
     });
   });
 
+  it("boots with the effective cached-view count when none is stored, as terminalConfig.get reports it", async () => {
+    const { effectiveCachedProjectViews } = await import("../../utils/cachedProjectViews.js");
+    const result = (await invokeBoot()) as { terminalConfig: { cachedProjectViews?: number } };
+    expect(result.terminalConfig.cachedProjectViews).toBe(effectiveCachedProjectViews(undefined));
+  });
+
   it("returns a BootResult with crashPending=null and the live crashConfig when no crash is pending", async () => {
     const result = await invokeBoot();
     expect(result).toHaveProperty("appState");
