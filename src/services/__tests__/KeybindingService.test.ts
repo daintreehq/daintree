@@ -634,6 +634,23 @@ describe("KeybindingService", () => {
   });
 
   describe("getChordCompletions", () => {
+    it("offers a second binding only in the scope it fires in", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      service.registerBinding({
+        actionId: "terminal.redraw",
+        combo: "Cmd+K Cmd+F12",
+        scope: "portal",
+        priority: 0,
+      });
+      const offersF12 = () =>
+        service.getChordCompletions("Cmd+K").some((c) => /F12/.test(c.secondKey));
+
+      expect(offersF12()).toBe(false);
+      service.setScope("portal");
+      expect(offersF12()).toBe(true);
+    });
+
     it("returns completions with category and isPrefix fields", () => {
       setPlatform("MacIntel");
       const service = new KeybindingService();

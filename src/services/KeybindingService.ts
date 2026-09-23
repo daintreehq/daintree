@@ -695,7 +695,12 @@ class KeybindingService {
       isPrefix: boolean;
     }> = [];
 
-    const allBindings = this.getAllBindingsWithEffectiveCombos();
+    // Only bindings live in the current scope: an action's second binding in
+    // another scope (a portal-only chord) would otherwise be offered where it
+    // can't fire.
+    const allBindings = this.getAllBindingsWithEffectiveCombos().filter((binding) =>
+      this.scopeAllows(binding.scope)
+    );
 
     // Track which second keys lead to deeper chords (3+ part combos)
     const deeperPrefixes = new Map<string, { key: string; category: string }>();
