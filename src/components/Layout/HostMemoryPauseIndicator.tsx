@@ -10,9 +10,11 @@ import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
  * governor pauses every terminal on a host at once, so this stands in for what
  * used to be an identical pill on every affected pane.
  *
- * Tier-1 ambient: a neutral icon carrying the toolbar's warning pip, no accent.
- * Fixed chrome rather than a registry button — it only exists while a pause
- * does, so there is nothing to pin, hide, or overflow.
+ * Tier-1 ambient, no accent. The icon's presence says an episode is open; the
+ * warning pip says output is held right now, so a lifted pause reads as the
+ * same icon without its pip rather than an identical twin. Fixed chrome
+ * rather than a registry button — it only exists while an episode does, so
+ * there is nothing to pin, hide, or overflow.
  */
 export function HostMemoryPauseIndicator() {
   const visible = useHostMemoryPauseStore((s) => s.visible);
@@ -23,7 +25,9 @@ export function HostMemoryPauseIndicator() {
   const copy = paused ? HOST_MEMORY_PAUSE_COPY.paused : HOST_MEMORY_PAUSE_COPY.monitoring;
 
   return (
-    <Tooltip>
+    // The body is the explanation, not a hint, so it stays while hovered or
+    // focused rather than timing out mid-read.
+    <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>
         <Button
           variant="ghost"
@@ -33,21 +37,27 @@ export function HostMemoryPauseIndicator() {
           onClick={() =>
             void actionService.dispatch("diagnostics.openWhySlow", undefined, { source: "user" })
           }
-          className="toolbar-icon-button relative text-text-secondary"
+          className="toolbar-icon-button relative text-text-primary"
           aria-label={copy.ariaLabel}
         >
-          <MemoryStick aria-hidden="true" />
-          <span
-            aria-hidden="true"
-            data-visible="true"
-            className="toolbar-badge absolute bottom-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-status-warning ring-1 ring-surface-sidebar"
-          />
+          {/* Anchored to the glyph with the shared pip geometry, like the
+              notification and agent pips beside it. */}
+          <span className="relative inline-flex">
+            <MemoryStick aria-hidden="true" />
+            <span
+              aria-hidden="true"
+              data-testid="host-memory-pause-pip"
+              data-visible={paused}
+              className="toolbar-pip toolbar-badge bg-status-warning"
+            />
+          </span>
         </Button>
       </TooltipTrigger>
       <TooltipContent side="bottom" className="max-w-xs">
         <div className="flex flex-col gap-0.5">
           <span className="font-medium">{copy.title}</span>
           <span>{copy.body}</span>
+          <span className="mt-0.5 text-text-secondary">{HOST_MEMORY_PAUSE_COPY.detailsHint}</span>
         </div>
       </TooltipContent>
     </Tooltip>

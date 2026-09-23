@@ -93,6 +93,11 @@ export interface WhySlowPtySummary {
   terminalCount: number;
   /** Terminals currently paused by backpressure or the resource governor. */
   pausedCount: number;
+  /**
+   * The subset of `pausedCount` held only by a terminal host's memory governor,
+   * so a memory pause isn't reported as output outrunning the renderer.
+   */
+  memoryPausedCount: number;
   /** Terminals in a suspended flow state. */
   suspendedCount: number;
   /** Longest current pause duration across terminals, in ms. */

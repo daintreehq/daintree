@@ -383,6 +383,7 @@ function snapshot(overrides: Partial<WhySlowSnapshot> = {}): WhySlowSnapshot {
       totalPendingBytes: 0,
       terminalCount: 6,
       pausedCount: 0,
+      memoryPausedCount: 0,
       suspendedCount: 0,
       maxPausedDurationMs: 0,
       eventLoopP99Ms: 12,
@@ -452,6 +453,7 @@ export const WHY_SLOW_PRESSURE = snapshot({
     totalPendingBytes: 3_400_000,
     terminalCount: 17,
     pausedCount: 3,
+    memoryPausedCount: 0,
     suspendedCount: 0,
     maxPausedDurationMs: 8200,
     eventLoopP99Ms: 186,
@@ -476,6 +478,21 @@ export const WHY_SLOW_PRESSURE = snapshot({
       terminalCount: 17,
       topProjects: [],
     },
+  },
+});
+
+/** A terminal host's memory governor has paused every terminal on it; nothing is backlogged. */
+export const WHY_SLOW_MEMORY_PAUSE = snapshot({
+  pty: {
+    totalPendingBytes: 0,
+    terminalCount: 6,
+    pausedCount: 6,
+    memoryPausedCount: 6,
+    suspendedCount: 0,
+    maxPausedDurationMs: 4200,
+    eventLoopP99Ms: 14,
+    eventLoopMaxMs: 22,
+    eventLoopUtilization: 0.1,
   },
 });
 
@@ -563,6 +580,11 @@ export const DIAGNOSTICS_FIXTURES: Record<string, DiagnosticsFixture> = {
     tab: "whySlow",
     what: "heavy pressure",
     whySlow: { kind: "ok", snapshot: WHY_SLOW_PRESSURE },
+  },
+  "whyslow-memory-pause": {
+    tab: "whySlow",
+    what: "terminal host paused output for memory",
+    whySlow: { kind: "ok", snapshot: WHY_SLOW_MEMORY_PAUSE },
   },
   "whyslow-failed": { tab: "whySlow", what: "snapshot never loaded", whySlow: { kind: "fail" } },
   "whyslow-stale": {
