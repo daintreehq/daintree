@@ -26,6 +26,7 @@ import type {
   Worktree,
   WorktreeSetupStatus,
   WorktreeSetupState,
+  WorktreeTeardownPreview,
   WslGitEligibility,
 } from "../../shared/types/worktree.js";
 
@@ -2982,6 +2983,14 @@ export class WorkspaceService {
    *
    * `null` when no monitor exists for the id (already removed).
    */
+  async getDeleteTeardownPreview(worktreeId: string): Promise<WorktreeTeardownPreview | null> {
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor) return null;
+    const ctx = this.getLifecycleContext();
+    if (!ctx) return { phases: [] };
+    return this.lifecycleService.previewLifecycleTeardown(monitor, ctx);
+  }
+
   async getSubmoduleDeleteRisk(worktreeId: string): Promise<SubmoduleDeleteRisk | null> {
     const monitor = this.monitors.get(worktreeId);
     if (!monitor) return null;

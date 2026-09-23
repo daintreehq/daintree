@@ -678,7 +678,11 @@ export async function buildSubmoduleDeleteRisk(
     const seenAtRiskOids = new Set<string>();
     let collectedFiles = 0;
 
-    const collectAtRisk = async (gitDir: string, label: string): Promise<void> => {
+    const collectAtRisk = async (
+      gitDir: string,
+      label: string,
+      submodulePath?: string
+    ): Promise<void> => {
       const walk = await readAtRiskCommits(gitDir, opts.signal, timeoutMs, maxAtRiskCommits);
       if (!walk) {
         markIncomplete(`${label}: rev walk failed`);
@@ -695,7 +699,7 @@ export async function buildSubmoduleDeleteRisk(
       for (const commit of walk.commits) {
         if (seenAtRiskOids.has(commit.oid)) continue;
         seenAtRiskOids.add(commit.oid);
-        atRiskCommits.push(commit);
+        atRiskCommits.push(submodulePath === undefined ? commit : { ...commit, submodulePath });
       }
     };
 
@@ -784,7 +788,7 @@ export async function buildSubmoduleDeleteRisk(
         }
         // Skipped without a HEAD: an unborn module has no commits to strand,
         // and the failed read above has already flagged the inventory.
-        await collectAtRisk(candidate, submodulePath);
+        await collectAtRisk(candidate, submodulePath, submodulePath);
       }
 
       let state: SubmoduleState;

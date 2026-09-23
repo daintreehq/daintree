@@ -17,7 +17,7 @@ import type {
   WorktreeEventVersion,
 } from "./workspace-host.js";
 import type { WorktreeChanges } from "./git.js";
-import type { LifecycleCommandReview } from "./worktree.js";
+import type { LifecycleCommandReview, WorktreeTeardownPreview } from "./worktree.js";
 import type { SubmoduleDeleteRisk } from "./submodule.js";
 
 export type WorktreePortResourceAction = "provision" | "teardown" | "resume" | "pause" | "status";
@@ -175,6 +175,14 @@ export interface WorktreePortProtocol {
   "get-submodule-delete-risk": {
     payload: { worktreeId: string };
     result: { risk: SubmoduleDeleteRisk | null };
+  };
+  // The teardown a delete of this worktree would run first — resolved by the
+  // same code path the delete uses, so the confirm surface names the commands
+  // that will actually run and the ones it will skip for want of approval.
+  // `null` when no monitor exists for the id.
+  "get-delete-teardown-preview": {
+    payload: { worktreeId: string };
+    result: { preview: WorktreeTeardownPreview | null };
   };
   // The switched-to view reporting when every worktree in its store carried a
   // status (`appliedAt`), or that its deadline passed first (`appliedAt: null`).

@@ -1233,6 +1233,53 @@ describe("WorktreeLifecycleService", () => {
       expect(finalStatus.logPath).toMatch(/\d+\.log$/);
     });
 
+    it("previews the teardown a delete would run, in order, without running it", async () => {
+      // The delete-confirm dialog names these commands before the user
+      // consents, so the preview must come from the same resolution the run
+      // uses — and must never itself execute anything.
+      const config = {
+        resource: { teardown: ["terraform destroy"] },
+        teardown: ["docker compose down", "rm -rf .cache"],
+      };
+      mockAccess.mockImplementation(async (p: unknown) => {
+        if (n(p as string).endsWith("/projects/my-app/.daintree/config.json")) return undefined;
+        throw new Error("ENOENT");
+      });
+      mockReadFile.mockResolvedValue(JSON.stringify(config) as never);
+
+      const monitor = makeTeardownMonitor({ hasResourceConfig: true });
+      const preview = await service.previewLifecycleTeardown(monitor as never, makeCtx(monitor));
+
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(preview.phases.map((p) => [p.phase, p.commands])).toEqual([
+        ["resource-teardown", ["terraform destroy"]],
+        ["teardown", ["docker compose down", "rm -rf .cache"]],
+      ]);
+
+      // Approval as the run sees it: a phase the preview calls approved is one
+      // the run executes rather than skipping for approval.
+      mockSpawn.mockImplementation(makeSpawnChild(0));
+      await service.runLifecycleTeardown("wt-1", monitor as never, false, makeCtx(monitor));
+      for (const phase of preview.phases) {
+        const result = monitor.lifecyclePhaseResults.find((r) => r.phase === phase.phase);
+        expect(result?.state === "needs-approval").toBe(!phase.approved);
+      }
+    });
+
+    it("previews no resource phase when the monitor carries no resource config", async () => {
+      mockAccess.mockImplementation(async (p: unknown) => {
+        if (n(p as string).endsWith("/projects/my-app/.daintree/config.json")) return undefined;
+        throw new Error("ENOENT");
+      });
+      mockReadFile.mockResolvedValue(
+        JSON.stringify({ resource: { teardown: ["terraform destroy"] } }) as never
+      );
+
+      const monitor = makeTeardownMonitor({ hasResourceConfig: false });
+      const preview = await service.previewLifecycleTeardown(monitor as never, makeCtx(monitor));
+      expect(preview.phases).toEqual([]);
+    });
+
     it("propagates logPath into the resource-teardown lifecycle status", async () => {
       const config = {
         resource: { teardown: ["terraform destroy"] },
