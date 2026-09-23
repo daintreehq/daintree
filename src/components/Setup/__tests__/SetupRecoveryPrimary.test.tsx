@@ -93,6 +93,11 @@ describe("missing required tool", () => {
     expect(panel!.hidden).toBe(false);
   });
 
+  it("offers no disclosure for steps that cannot be folded", () => {
+    render(<PrerequisiteCard spec={spec} state={missing} />);
+    expect(screen.queryByRole("button", { name: /how to install/i })).toBeNull();
+  });
+
   it("keeps an optional tool's steps folded until asked for", () => {
     render(
       <PrerequisiteCard

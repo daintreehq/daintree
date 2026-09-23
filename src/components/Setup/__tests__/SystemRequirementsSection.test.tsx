@@ -110,7 +110,10 @@ describe("SystemRequirementsSection collapsed panel inert", () => {
       <SystemRequirementsSection onFatalFailureChange={vi.fn()} onCheckingChange={vi.fn()} />
     );
     expect(getPanel().hasAttribute("inert")).toBe(false);
-    expect(getToggle(container).getAttribute("aria-expanded")).toBe("true");
+    // The panel cannot fold while a required tool is missing, so there is no
+    // disclosure to offer — a toggle here would be a control that does nothing.
+    expect(container.querySelector('button[aria-controls="system-requirements-panel"]')).toBeNull();
+    expect(container.textContent).toContain("System requirements");
   });
 
   it("restores inert when a fatal failure clears and the user never expanded", () => {

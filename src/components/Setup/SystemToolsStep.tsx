@@ -55,7 +55,9 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
                 v{check.version} → v{check.minVersion}+
               </span>
             )}
-            {installBlocks && (
+            {/* No disclosure while the steps are mandatory: a toggle that
+                cannot fold them would be a control that does nothing. */}
+            {installBlocks && !blocking && (
               <button
                 type="button"
                 onClick={() => setExpanded(!showSteps)}
