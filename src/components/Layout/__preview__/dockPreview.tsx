@@ -241,6 +241,92 @@ const FIXTURES: Record<string, Fixture> = {
     what: "the single waiting agent is the local chip itself — pill and chip name the same thing",
     panels: [filesChip, claudeWaitingHere, shell],
   },
+  // The Waiting popover's own states — `waiting-popover-review` opens each one.
+  "waiting-three-here": {
+    what: "three identical agents waiting in this worktree, nothing elsewhere",
+    panels: [
+      fromAgent(agent("h-1", "claude", { ...waiting(0.45), location: "grid" })),
+      fromAgent(agent("h-2", "claude", { ...waiting(0.45), location: "grid" })),
+      fromAgent(agent("h-3", "claude", { ...waiting(0.45), location: "grid" })),
+    ],
+  },
+  "waiting-split": {
+    what: "one here, three in another worktree",
+    panels: [
+      fromAgent(agent("h-1", "claude", { ...waiting(0.2), location: "grid" })),
+      fromAgent(agent("e-1", "claude", { ...waiting(1), worktreeId: "wt-main", location: "grid" })),
+      fromAgent(agent("e-2", "claude", { ...waiting(1), worktreeId: "wt-main", location: "grid" })),
+      fromAgent(agent("e-3", "claude", { ...waiting(1), worktreeId: "wt-main", location: "grid" })),
+    ],
+  },
+  "waiting-reasons": {
+    what: "every reason chip, task titles, a long worktree name and an activity headline",
+    panels: [
+      fromAgent(
+        agent("h-1", "claude", {
+          ...waiting(2, "approval"),
+          location: "grid",
+          lastObservedTitle: "Tighten the waiting popover rows",
+        })
+      ),
+      fromAgent(agent("h-2", "codex", { ...waiting(14), location: "grid" })),
+      fromAgent(
+        agent("e-1", "codex", {
+          ...waiting(9, "error"),
+          worktreeId: "wt-12383",
+          location: "grid",
+          activityHeadline: "npm test failed in 4 files",
+        })
+      ),
+      fromAgent(
+        agent("e-2", "gemini", {
+          ...waiting(6, "question"),
+          worktreeId: "wt-thumbs",
+          location: "grid",
+          lastObservedTitle: "Generate thumbnails for the project switcher",
+        })
+      ),
+      fromAgent(
+        agent("e-3", "claude", {
+          ...waiting(72),
+          worktreeId: "wt-main",
+          location: "grid",
+          title: "Refactor the worktree dashboard's stale-branch sort order",
+          titleMode: "user",
+        })
+      ),
+    ],
+  },
+  "waiting-group": {
+    what: "a tab group with two waiting members beside single rows",
+    panels: [
+      fromAgent(agent("g-1", "claude", { ...waiting(3, "question"), location: "dock" })),
+      fromAgent(agent("g-2", "codex", { ...waiting(1), location: "dock" })),
+      fromAgent(agent("h-1", "gemini", { ...waiting(5), location: "grid" })),
+      fromAgent(agent("e-1", "claude", { ...waiting(2), worktreeId: "wt-main", location: "grid" })),
+    ],
+    tabGroups: [
+      {
+        id: "g-waiting",
+        panelIds: ["g-1", "g-2"],
+        activeTabId: "g-1",
+        location: "dock",
+        worktreeId: ACTIVE,
+      } as TabGroup,
+    ],
+  },
+  "waiting-many": {
+    what: "twelve waiting across four worktrees — the list scrolls",
+    panels: Array.from({ length: 12 }, (_, i) =>
+      fromAgent(
+        agent(`m-${i}`, (["claude", "codex", "gemini"] as const)[i % 3]!, {
+          ...waiting(i * 3 + 1, i === 0 ? "approval" : "prompt"),
+          worktreeId: WORKTREES[i % 4]!.id,
+          location: "grid",
+        })
+      )
+    ),
+  },
 };
 
 export const DOCK_FIXTURE_NAMES = Object.keys(FIXTURES);
