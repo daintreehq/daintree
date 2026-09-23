@@ -290,7 +290,7 @@ describe("AppHydrationService adversarial", () => {
     expect(result.appState.terminals).toEqual([]);
     expect(result.appState.focusMode).toBe(false);
     expect(result.appState.activeWorktreeId).toBe("wt-project");
-    expect(result.terminalConfig).toBe(mockState.terminalConfig);
+    expect(result.terminalConfig).toMatchObject(mockState.terminalConfig);
     expect(result.agentSettings).toBe(mockState.agentSettings);
     expect(result.project).toEqual(mockState.project);
     expect(result.safeMode).toBe(true);
@@ -527,8 +527,26 @@ describe("AppHydrationService adversarial", () => {
     expect(result.appState.mruList).toBeUndefined();
     // App-global preferences still ride along unchanged.
     expect(result.appState.sidebarWidth).toBe(mockState.appState.sidebarWidth);
-    expect(result.terminalConfig).toBe(mockState.terminalConfig);
+    expect(result.terminalConfig).toMatchObject(mockState.terminalConfig);
     expect(result.agentSettings).toBe(mockState.agentSettings);
     expect(result.gpuWebGLHardware).toBe(true);
+  });
+});
+
+describe("buildSwitchHydrateResult — terminal config", () => {
+  it("reports the effective cached-view count, the same one terminalConfig.get returns", async () => {
+    const { effectiveCachedProjectViews } = await import("../../utils/cachedProjectViews.js");
+    const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
+
+    mockState.terminalConfig = { scrollback: 5000 };
+    const unset = await buildSwitchHydrateResult("project-1");
+    expect(unset.terminalConfig?.cachedProjectViews).toBe(effectiveCachedProjectViews(undefined));
+
+    mockState.terminalConfig = {
+      scrollback: 5000,
+      cachedProjectViews: 2,
+    } as typeof mockState.terminalConfig;
+    const stored = await buildSwitchHydrateResult("project-1");
+    expect(stored.terminalConfig?.cachedProjectViews).toBe(effectiveCachedProjectViews(2));
   });
 });

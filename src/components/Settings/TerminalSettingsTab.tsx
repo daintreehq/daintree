@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { Fragment, useState, useMemo, useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
@@ -174,6 +174,10 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const cachedProjectViews = useCachedProjectViewsStore((s) => s.cachedProjectViews);
 
   const [hardwareInfo, setHardwareInfo] = useState<HardwareInfo | null>(null);
+  // What the user is typing into the threshold while it is out of range. The
+  // store keeps the value in effect; the field shows the draft and says why it
+  // isn't applied, and leaving the field puts the effective value back.
+  const [thresholdDraft, setThresholdDraft] = useState<string | null>(null);
 
   useEffect(() => {
     void initializeFromHardware();
@@ -376,11 +380,10 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               <SettingsSwitchCard
                 id="terminal-performance-mode"
                 title="Performance mode"
-                subtitle={`Cuts scrollback to ${PERFORMANCE_MODE_SCROLLBACK} lines and turns off animations, for low-end hardware or high-density workflows. Existing terminals keep their scrollback until respawned`}
+                subtitle={`Cuts scrollback to ${PERFORMANCE_MODE_SCROLLBACK} lines and turns off animations, for low-end hardware or high-density workflows. Existing terminals keep their scrollback until respawned.`}
                 isEnabled={performanceMode}
                 onChange={() => void setPerformanceMode(!performanceMode)}
                 ariaLabel="Performance Mode Toggle"
-                colorScheme="amber"
                 isModified={performanceMode}
                 onReset={() => void setPerformanceMode(false)}
                 lifecycleBadge="New terminals"
@@ -389,7 +392,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               <SettingsSwitchCard
                 id="terminal-resource-monitoring"
                 title="Resource monitoring"
-                subtitle="Show per-terminal CPU and memory in panel headers. Polls the process tree every 2.5 seconds"
+                subtitle="Show per-terminal CPU and memory in panel headers. Polls the process tree every 2.5 seconds."
                 isEnabled={resourceMonitoringEnabled}
                 onChange={() => setResourceMonitoring(!resourceMonitoringEnabled)}
                 ariaLabel="Resource Monitoring Toggle"
@@ -421,28 +424,31 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 >
                   <SettingsNumberInput
                     label="Auto-restart threshold"
-                    description="Restart a terminal automatically once its memory (RSS) passes this. 1,024–32,768 MB"
+                    description="Restart a terminal automatically once its memory (RSS) passes this. 1,024–32,768 MB."
                     min={1024}
                     max={32768}
                     step={1024}
                     suffix="MB"
-                    value={autoRestartThresholdMb}
+                    value={thresholdDraft ?? autoRestartThresholdMb}
+                    error={
+                      thresholdDraft !== null ? "Enter a value from 1,024 to 32,768 MB" : undefined
+                    }
+                    onBlur={() => setThresholdDraft(null)}
                     isModified={autoRestartThresholdMb !== DEFAULT_AUTO_RESTART_THRESHOLD_MB}
-                    onReset={() =>
+                    onReset={() => {
+                      setThresholdDraft(null);
                       saveAutoRestartThreshold(
                         DEFAULT_AUTO_RESTART_THRESHOLD_MB,
                         autoRestartThresholdMb
-                      )
-                    }
+                      );
+                    }}
                     onChange={(e) => {
                       const val = parseInt(e.target.value, 10);
-                      if (!isNaN(val)) {
-                        const previous = autoRestartThresholdMb;
-                        if (val >= 1024 && val <= 32768) {
-                          saveAutoRestartThreshold(val, previous);
-                        } else {
-                          setAutoRestartThresholdMb(val);
-                        }
+                      if (!isNaN(val) && val >= 1024 && val <= 32768) {
+                        setThresholdDraft(null);
+                        saveAutoRestartThreshold(val, autoRestartThresholdMb);
+                      } else {
+                        setThresholdDraft(e.target.value);
                       }
                     }}
                   />
@@ -510,7 +516,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
               <SettingsNumberInput
                 label="Hard limit"
-                description="Absolute maximum number of panels. Can't be bypassed"
+                description="Absolute maximum number of panels. Can't be bypassed."
                 min={4}
                 max={100}
                 value={panelLimits.hardLimit}
@@ -552,7 +558,11 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               <SettingsPresetGroup
                 id="terminal-cached-project-views"
                 label="Cached project views"
-                description="Project views kept loaded in memory. More keeps switching back near-instant; fewer saves memory. The default scales with your RAM."
+                description={`Project views kept loaded in memory. More keeps switching back near-instant; fewer saves memory. ${
+                  defaultCachedViews !== null
+                    ? `Default on this machine: ${defaultCachedViews}.`
+                    : "The default scales with your RAM."
+                }`}
                 options={CACHED_VIEWS_OPTIONS}
                 value={cachedProjectViews}
                 onChange={(value) => void handleCachedProjectViewsChange(value)}
@@ -589,7 +599,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 <SettingsSwitchCard
                   id="terminal-hybrid-autofocus"
                   title="Focus the input bar first"
-                  subtitle="Agent panes start with the input bar focused instead of the terminal. Clicking either still wins, and Cmd-Opt-Arrow follows whichever you're using"
+                  subtitle="Agent panes start with the input bar focused instead of the terminal. Clicking either still wins, and Cmd-Opt-Arrow follows whichever you're using."
                   isEnabled={hybridInputAutoFocus}
                   onChange={() => void setHybridInputAutoFocus(!hybridInputAutoFocus)}
                   isModified={!hybridInputAutoFocus}
@@ -606,7 +616,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               <SettingsGroup>
                 <SettingsSwitchCard
                   title="Split two panels with a divider"
-                  subtitle="When exactly two panels are open, show a resizable divider instead of equal columns. The ratio is remembered per worktree"
+                  subtitle="When exactly two panels are open, show a resizable divider instead of equal columns. The ratio is remembered per worktree."
                   isEnabled={twoPaneSplitConfig.enabled}
                   onChange={() => setTwoPaneSplitEnabled(!twoPaneSplitConfig.enabled)}
                   isModified={!twoPaneSplitConfig.enabled}
@@ -630,7 +640,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   <SettingsRow
                     id="terminal-default-ratio"
                     label="Default ratio"
-                    description="Used when a worktree has no saved ratio of its own. Default: 50/50"
+                    description="Used when a worktree has no saved ratio of its own. Default: 50/50."
                     isModified={twoPaneSplitConfig.defaultRatio !== DEFAULT_SPLIT_RATIO}
                     onReset={() => setDefaultRatio(DEFAULT_SPLIT_RATIO)}
                     control={({ labelId, descriptionId, disabled }) => (
@@ -648,7 +658,10 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                           disabled={disabled}
                         />
                         <span
-                          className="text-xs text-text-secondary font-mono w-12 text-right"
+                          className={cn(
+                            "text-xs text-text-secondary font-mono w-12 text-right",
+                            disabled && "opacity-50"
+                          )}
                           aria-hidden="true"
                         >
                           {Math.round(twoPaneSplitConfig.defaultRatio * 100)}/
@@ -679,9 +692,9 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             </SettingsSection>
 
             <SettingsSection
-              title="Grid layout strategy"
+              title="Grid layout"
               id="terminal-grid-layout"
-              description="How panels arrange in the grid as you add more."
+              description="How panels arrange in the grid as you add more"
             >
               {saveError("grid-layout")}
               <SettingsGroup className="overflow-hidden">
@@ -697,49 +710,47 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   legendHidden
                   className="space-y-0 divide-y divide-border-subtle"
                 >
+                  {/* A fixed strategy's count sits directly under the choice it
+                      configures, so the consequence and its setting read together. */}
                   {STRATEGIES.map(({ id, label, description }) => (
-                    <RadioChoiceRow
-                      key={id}
-                      bare
-                      name="gridLayoutStrategy"
-                      value={id}
-                      checked={layoutConfig.strategy === id}
-                      onChange={() => handleStrategyChange(id)}
-                      label={label}
-                      description={description}
-                      className={cn(
-                        "px-4 py-3 transition-colors",
-                        "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary",
-                        layoutConfig.strategy === id
-                          ? "bg-overlay-selected"
-                          : "hover:bg-overlay-soft"
+                    <Fragment key={id}>
+                      <RadioChoiceRow
+                        bare
+                        name="gridLayoutStrategy"
+                        value={id}
+                        checked={layoutConfig.strategy === id}
+                        onChange={() => handleStrategyChange(id)}
+                        label={label}
+                        description={description}
+                        className={cn(
+                          "px-4 py-3 transition-colors",
+                          "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary",
+                          layoutConfig.strategy === id
+                            ? "bg-overlay-selected"
+                            : "hover:bg-overlay-soft"
+                        )}
+                      />
+                      {id !== "automatic" && layoutConfig.strategy === id && (
+                        <SettingsDependents>
+                          <SettingsNumberInput
+                            label={id === "fixed-columns" ? "Number of columns" : "Number of rows"}
+                            description={
+                              id === "fixed-columns"
+                                ? `Terminals stack vertically once this many columns are filled. Default: ${DEFAULT_GRID_VALUE}`
+                                : `Terminals expand horizontally once this many rows are filled. Default: ${DEFAULT_GRID_VALUE}`
+                            }
+                            min={1}
+                            max={10}
+                            value={layoutConfig.value}
+                            onChange={(e) => handleValueChange(e.target.value)}
+                            isModified={layoutConfig.value !== DEFAULT_GRID_VALUE}
+                            onReset={() => handleValueChange(String(DEFAULT_GRID_VALUE))}
+                          />
+                        </SettingsDependents>
                       )}
-                    />
+                    </Fragment>
                   ))}
                 </RadioChoiceGroup>
-
-                {layoutConfig.strategy !== "automatic" && (
-                  <SettingsDependents>
-                    <SettingsNumberInput
-                      label={
-                        layoutConfig.strategy === "fixed-columns"
-                          ? "Number of columns"
-                          : "Number of rows"
-                      }
-                      description={
-                        layoutConfig.strategy === "fixed-columns"
-                          ? `Terminals stack vertically once this many columns are filled. Default: ${DEFAULT_GRID_VALUE}`
-                          : `Terminals expand horizontally once this many rows are filled. Default: ${DEFAULT_GRID_VALUE}`
-                      }
-                      min={1}
-                      max={10}
-                      value={layoutConfig.value}
-                      onChange={(e) => handleValueChange(e.target.value)}
-                      isModified={layoutConfig.value !== DEFAULT_GRID_VALUE}
-                      onReset={() => handleValueChange(String(DEFAULT_GRID_VALUE))}
-                    />
-                  </SettingsDependents>
-                )}
               </SettingsGroup>
             </SettingsSection>
           </>
@@ -749,14 +760,14 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           <SettingsSection
             title="Scrollback history"
             id="terminal-scrollback"
-            description="Background terminals may temporarily reduce scrollback under memory pressure."
+            description="Background terminals may temporarily reduce scrollback under memory pressure"
             badge="New terminals"
           >
             {saveError("scrollback")}
             <SettingsGroup>
               <SettingsPresetGroup
                 label="Base scrollback"
-                description={`The base every terminal's history scales from: agent terminals keep 10× it and shells and dev servers 0.3×, each within its own floor and ceiling. Default: ${SCROLLBACK_DEFAULT.toLocaleString()}`}
+                description={`Every terminal scales from this: agent terminals keep 10× it and shells 0.3×, within their own limits. Default: ${SCROLLBACK_DEFAULT.toLocaleString()}.`}
                 options={SCROLLBACK_OPTIONS}
                 value={scrollbackLines}
                 onChange={(value) => void handleScrollbackChange(value)}
@@ -785,7 +796,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
             <SettingsGroup id="memory-details">
               <SettingsRow
-                label="Estimated memory"
+                label="Estimated scrollback memory"
                 description={`A typical session of ${TYPICAL_TERMINAL_COUNTS.agent} agents (${formatBytes(memoryEstimate.agent)}) and ${TYPICAL_TERMINAL_COUNTS.plain} terminals (${formatBytes(memoryEstimate.plain)})`}
                 control={
                   <span className="font-mono text-xs font-medium text-text-primary">
@@ -804,7 +815,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               <SettingsPresetGroup
                 id="terminal-screen-reader"
                 label="Screen reader mode"
-                description="Lets assistive technology read terminal output through an overlay that costs some performance. Auto turns it on only while the OS reports an active screen reader. Default: Auto"
+                description="Makes terminal output readable by screen readers, at some performance cost. Auto turns it on while the OS reports a screen reader. Default: Auto."
                 options={SCREEN_READER_OPTIONS}
                 value={screenReaderMode}
                 onChange={(mode) => void handleScreenReaderModeChange(mode)}

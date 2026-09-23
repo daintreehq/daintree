@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -24,7 +24,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVertical } from "lucide-react";
+import { ChevronRight, Ellipsis, GripVertical } from "lucide-react";
 import { useToolbarPreferencesStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -63,6 +63,7 @@ import {
 import {
   getGroupedInsertionIndex,
   orderToolbarButtonsByGroup,
+  stepToolbarButton,
 } from "@/components/Layout/toolbarButtonGrouping";
 import { getAgentConfig } from "@/config/agents";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
@@ -77,7 +78,13 @@ import {
 } from "@/lib/toolbarVisibilityDispatch";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
 import { Button } from "@/components/ui/button";
-import { SettingsGroup, SettingsRow } from "./SettingsGroup";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitch } from "./SettingsSwitch";
@@ -99,67 +106,120 @@ function toButtonId(id: UniqueIdentifier): AnyToolbarButtonId {
 }
 
 interface ToolbarButtonCardProps {
+  buttonId: AnyToolbarButtonId;
+  /** Only on the live row — the drag overlay renders the same card and must not repeat the id. */
+  switchId?: string;
   metadata: ToolbarButtonMetadata;
   isVisible: boolean;
   onToggle?: () => void;
   /** Spread onto the grip handle — attributes + listeners from `useSortable`. */
   gripProps?: Record<string, unknown>;
   draggable: boolean;
-  /** Rendered inside `DragOverlay` — drops the live opacity/transition chrome. */
-  isOverlay?: boolean;
+  /** The non-drag route to the same moves the grip offers (WCAG 2.2 SC 2.5.7). */
+  moves?: ButtonMoves;
 }
 
-// Presentational chip shared by the sortable rows and the drag overlay. It
+interface ButtonMoves {
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+  onMoveAcross: () => void;
+  acrossLabel: string;
+}
+
+function ToolbarButtonMoveMenu({
+  buttonId,
+  label,
+  moves,
+}: {
+  buttonId: string;
+  label: string;
+  moves: ButtonMoves;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Move ${label}`}
+          data-move-trigger={buttonId}
+          className={cn(
+            "flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)]",
+            "text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors",
+            "data-[state=open]:bg-overlay-soft data-[state=open]:text-text-primary",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+          )}
+        >
+          <Ellipsis className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[180px]">
+        <DropdownMenuItem disabled={!moves.onMoveUp} onSelect={() => moves.onMoveUp?.()}>
+          Move up
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={!moves.onMoveDown} onSelect={() => moves.onMoveDown?.()}>
+          Move down
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={moves.onMoveAcross}>{moves.acrossLabel}</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// Presentational row shared by the sortable list and the drag overlay. It
 // never calls `useSortable` so it is safe to render inside `DragOverlay`
 // (which mounts outside any `SortableContext`).
 function ToolbarButtonCard({
+  buttonId,
+  switchId,
   metadata,
   isVisible,
   onToggle,
   gripProps,
   draggable,
-  isOverlay,
+  moves,
 }: ToolbarButtonCardProps) {
   const Icon = metadata.icon;
 
   return (
-    <div
-      className={cn(
-        "flex items-center gap-2.5 px-3 py-2",
-        isOverlay &&
-          "settings-card rounded-[var(--radius-md)] border border-border-default shadow-md cursor-grabbing"
-      )}
-    >
-      {/* When draggable, gripProps carries dnd-kit's role/tabIndex/describedby —
-          the grip must stay in the accessibility tree (aria-hidden on a
-          focusable element is an axe violation) and needs an accessible name. */}
-      <div
-        {...(draggable && gripProps ? gripProps : {})}
-        className={cn(
-          draggable ? "cursor-grab active:cursor-grabbing" : "cursor-default",
-          "shrink-0"
-        )}
-        aria-hidden={draggable && gripProps ? undefined : true}
-        aria-label={draggable && gripProps ? `Reorder ${metadata.label}` : undefined}
-      >
-        <GripVertical
-          aria-hidden="true"
-          className={cn("h-4 w-4", draggable ? "text-text-secondary" : "text-text-muted")}
-        />
-      </div>
-      <div className="text-text-primary shrink-0">
-        <Icon className="h-4 w-4" aria-hidden="true" />
-      </div>
-      <span className="text-sm font-medium text-text-primary truncate min-w-0 flex-1">
-        {metadata.label}
-      </span>
-      <SettingsSwitch
-        checked={isVisible}
-        onCheckedChange={() => onToggle?.()}
-        aria-label={`Toggle ${metadata.label} visibility`}
-        className="shrink-0"
-      />
-    </div>
+    <SettingsRow
+      label={
+        <span className="flex min-w-0 items-center gap-2.5">
+          {/* When draggable, gripProps carries dnd-kit's role/tabIndex/describedby —
+              the grip must stay in the accessibility tree (aria-hidden on a
+              focusable element is an axe violation) and needs an accessible name. */}
+          <span
+            {...(draggable && gripProps ? gripProps : {})}
+            className={cn(
+              draggable ? "cursor-grab active:cursor-grabbing" : "cursor-default",
+              "shrink-0"
+            )}
+            aria-hidden={draggable && gripProps ? undefined : true}
+            aria-label={draggable && gripProps ? `Reorder ${metadata.label}` : undefined}
+          >
+            <GripVertical
+              aria-hidden="true"
+              className={cn("h-4 w-4", draggable ? "text-text-secondary" : "text-text-muted")}
+            />
+          </span>
+          <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <span className="truncate">{metadata.label}</span>
+        </span>
+      }
+      labelText={metadata.label}
+      control={
+        <>
+          {moves && (
+            <ToolbarButtonMoveMenu buttonId={buttonId} label={metadata.label} moves={moves} />
+          )}
+          <SettingsSwitch
+            id={switchId}
+            checked={isVisible}
+            onCheckedChange={() => onToggle?.()}
+            aria-label={`Toggle ${metadata.label} visibility`}
+          />
+        </>
+      }
+    />
   );
 }
 
@@ -168,6 +228,7 @@ interface SortableButtonItemProps {
   isVisible: boolean;
   onToggle: (buttonId: AnyToolbarButtonId) => void;
   allMetadata: AllMetadata;
+  moves?: ButtonMoves;
 }
 
 function SortableButtonItem({
@@ -175,6 +236,7 @@ function SortableButtonItem({
   isVisible,
   onToggle,
   allMetadata,
+  moves,
 }: SortableButtonItemProps) {
   const metadata = allMetadata[buttonId];
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -197,11 +259,15 @@ function SortableButtonItem({
   return (
     <div ref={setNodeRef} style={style}>
       <ToolbarButtonCard
+        buttonId={buttonId}
+        switchId={columnSwitchId(buttonId)}
         metadata={metadata}
         isVisible={isVisible}
         onToggle={() => onToggle(buttonId)}
         gripProps={{ ...attributes, ...listeners }}
         draggable={isVisible}
+        // Off buttons don't drag either — the menu offers exactly what the grip does.
+        moves={isVisible ? moves : undefined}
       />
     </div>
   );
@@ -214,6 +280,7 @@ interface TrayButtonRowProps {
   metadata: ToolbarButtonMetadata | undefined;
   /** Off where every description would only restate the label ("Launch Claude AI agent"). */
   showDescription?: boolean;
+  switchId?: string;
 }
 
 // Tray-backed buttons toggle promotion, not visibility — they always remain
@@ -229,6 +296,7 @@ function TrayButtonRow({
   onToggle,
   metadata,
   showDescription = true,
+  switchId,
 }: TrayButtonRowProps) {
   if (!metadata) return null;
   const Icon = metadata.icon;
@@ -246,6 +314,7 @@ function TrayButtonRow({
       onRowClick={() => onToggle(buttonId)}
       control={({ descriptionId }) => (
         <SettingsSwitch
+          id={switchId}
           checked={isVisible}
           onCheckedChange={() => onToggle(buttonId)}
           aria-label={`Show ${metadata.label} in toolbar`}
@@ -264,6 +333,7 @@ interface ToolbarSideColumnProps {
   allMetadata: AllMetadata;
   isVisible: (id: AnyToolbarButtonId) => boolean;
   onToggle: (buttonId: AnyToolbarButtonId, side: ToolbarSide) => void;
+  getMoves: (buttonId: AnyToolbarButtonId, side: ToolbarSide) => ButtonMoves;
 }
 
 function ToolbarSideColumn({
@@ -274,6 +344,7 @@ function ToolbarSideColumn({
   allMetadata,
   isVisible,
   onToggle,
+  getMoves,
 }: ToolbarSideColumnProps) {
   // The column id doubles as a droppable target so an empty side still accepts
   // a cross-side drop (a `SortableContext` registers no droppable of its own
@@ -290,25 +361,14 @@ function ToolbarSideColumn({
   const visibleCount = renderableIds.filter(isVisible).length;
 
   return (
-    <div id={id} className="flex-1 min-w-0 scroll-mt-6">
-      <div className="mb-2 flex items-baseline justify-between gap-2">
-        <span className="text-xs font-medium text-text-secondary">{label}</span>
-        <span className="text-xs text-text-secondary tabular-nums">
-          {visibleCount}/{renderableIds.length}
-        </span>
-      </div>
+    <div id={id} ref={setNodeRef} className="flex-1 min-w-0 scroll-mt-6">
       <SortableContext items={buttonIds} strategy={rectSortingStrategy}>
-        <div
-          ref={setNodeRef}
-          className={cn(
-            "settings-card rounded-[var(--radius-lg)] border border-border-default divide-y divide-border-subtle min-h-[3rem] transition-colors",
-            isOver && "ring-1 ring-inset ring-border-strong"
-          )}
+        <SettingsGroup
+          label={`${label} · ${visibleCount} of ${renderableIds.length} shown`}
+          className={cn("min-h-12", isOver && "ring-1 ring-inset ring-border-strong")}
         >
           {renderableIds.length === 0 ? (
-            <div className="flex w-full items-center justify-center py-3 text-xs text-text-secondary">
-              Drop a button here
-            </div>
+            <SettingsEmptyRow>Drag a button here, or use Move in its menu</SettingsEmptyRow>
           ) : (
             buttonIds.map((buttonId) => (
               <SortableButtonItem
@@ -317,13 +377,22 @@ function ToolbarSideColumn({
                 isVisible={isVisible(buttonId)}
                 onToggle={(id) => onToggle(id, side)}
                 allMetadata={allMetadata}
+                moves={getMoves(buttonId, side)}
               />
             ))
           )}
-        </div>
+        </SettingsGroup>
       </SortableContext>
     </div>
   );
+}
+
+function launcherItemSwitchId(id: AnyToolbarButtonId): string {
+  return `toolbar-launcher-item-${id}`;
+}
+
+function columnSwitchId(id: AnyToolbarButtonId): string {
+  return `toolbar-column-${id}`;
 }
 
 // Radix Select reserves the empty string for "no value", so "no default" needs its own token.
@@ -358,6 +427,28 @@ export function ToolbarSettingsTab() {
   // speculative placement that drives the gap animation.
   const [dragState, setDragState] = useState<SideLists | null>(null);
   const [activeId, setActiveId] = useState<AnyToolbarButtonId | null>(null);
+  const [showAllAgents, setShowAllAgents] = useState(false);
+  // An agent toggled from the collapsed list stays listed (switch off) until the
+  // page is left, so the switch the user just pressed never disappears under them.
+  const [touchedAgents, setTouchedAgents] = useState<ReadonlySet<AnyToolbarButtonId>>(
+    () => new Set()
+  );
+  // Where focus goes once a change unmounts the control that had it: a move
+  // across sides remounts the row under the other column, and unpinning a
+  // launcher item removes its row. Focus follows instead of falling to the page.
+  const [focusTarget, setFocusTarget] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (focusTarget === null) return;
+    // After the menu's own close, which tries to restore focus to a trigger
+    // that no longer exists.
+    const frame = requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(focusTarget)?.focus();
+      setFocusTarget(null);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusTarget]);
+  const agentListId = useId();
 
   const liveRight = dragState?.right ?? layout.rightButtons;
 
@@ -695,7 +786,66 @@ export function ToolbarSettingsTab() {
     );
   };
 
+  // The same moves a drag can make, as menu items: up and down step past the
+  // neighbouring rendered row (on the left only within the button's own group,
+  // which is all a drag can achieve there either), and across lands at the end of
+  // the other side — grouped on the left, exactly as a drop there would be.
+  const getMoves = (buttonId: AnyToolbarButtonId, side: ToolbarSide): ButtonMoves => {
+    const list = side === "left" ? groupedLeft : layout.rightButtons;
+    const isRendered = (id: AnyToolbarButtonId) => allMetadata[id] !== undefined;
+    const stepTo = (offset: -1 | 1) => {
+      const next = stepToolbarButton(
+        list,
+        buttonId,
+        offset,
+        isRendered,
+        side === "left" ? resolveGroup : undefined
+      );
+      if (!next) return undefined;
+      return () => (side === "left" ? setLeftButtons(next) : setRightButtons(next));
+    };
+
+    return {
+      onMoveUp: stepTo(-1),
+      onMoveDown: stepTo(1),
+      acrossLabel: side === "left" ? "Move to right side" : "Move to left side",
+      onMoveAcross: () => {
+        setFocusTarget(`[data-move-trigger="${window.CSS.escape(buttonId)}"]`);
+        if (side === "left") {
+          moveButton(buttonId, "left", "right", layout.rightButtons.length);
+          return;
+        }
+        const projected = orderToolbarButtonsByGroup([...groupedLeft, buttonId], resolveGroup);
+        moveButton(
+          buttonId,
+          "right",
+          "left",
+          getGroupedInsertionIndex(layout.leftButtons, projected, buttonId, resolveGroup)
+        );
+      },
+    };
+  };
+
+  // Unpinning a launcher item removes its row from the column too (repinning is
+  // the launcher's job), so focus moves to the row that takes its place.
+  const handleColumnToggle = (buttonId: AnyToolbarButtonId, side: ToolbarSide) => {
+    if (isLauncherItemToolbarButtonId(buttonId) && isLauncherItemOn(buttonId)) {
+      const list = side === "left" ? groupedLeft : layout.rightButtons;
+      const rendered = list.filter((id) => allMetadata[id] !== undefined);
+      const at = rendered.indexOf(buttonId);
+      const neighbour = rendered[at + 1] ?? rendered[at - 1];
+      setFocusTarget(
+        neighbour
+          ? `#${window.CSS.escape(columnSwitchId(neighbour))}`
+          : '#toolbar-left-buttons [role="switch"], #toolbar-right-buttons [role="switch"]'
+      );
+    }
+    handleToggle(buttonId, side);
+  };
+
   const activeMetadata = activeId ? allMetadata[activeId] : undefined;
+
+  const pinnedAgentCount = LAUNCHABLE_AGENT_IDS.filter(isAgentOnToolbar).length;
 
   const defaultSelectionOptions = [
     { value: NO_DEFAULT_SELECTION, label: "None (first available)" },
@@ -709,7 +859,7 @@ export function ToolbarSettingsTab() {
     <div className="space-y-8">
       <SettingsSection
         title="Toolbar buttons"
-        description="Drag to reorder within a side or move a button between the left and right groups. Left-side buttons stay grouped as launcher, agents, panels, then everything else, so dragging one across a boundary snaps it back into its own group. Toggle to show or hide."
+        description="Drag a button, or use its menu, to reorder it or move it to the other side. The left side keeps its groups in order: launcher, agents, panels, then the rest."
       >
         <DndContext
           sensors={sensors}
@@ -728,7 +878,8 @@ export function ToolbarSettingsTab() {
               buttonIds={liveLeft}
               allMetadata={allMetadata}
               isVisible={isVisible}
-              onToggle={handleToggle}
+              onToggle={handleColumnToggle}
+              getMoves={getMoves}
             />
             <ToolbarSideColumn
               id="toolbar-right-buttons"
@@ -737,17 +888,20 @@ export function ToolbarSettingsTab() {
               buttonIds={liveRight}
               allMetadata={allMetadata}
               isVisible={isVisible}
-              onToggle={handleToggle}
+              onToggle={handleColumnToggle}
+              getMoves={getMoves}
             />
           </div>
           <DragOverlay dropAnimation={dropAnimation}>
             {activeId && activeMetadata ? (
-              <ToolbarButtonCard
-                metadata={activeMetadata}
-                isVisible={isVisible(activeId)}
-                draggable
-                isOverlay
-              />
+              <SettingsGroup className="shadow-md cursor-grabbing">
+                <ToolbarButtonCard
+                  buttonId={activeId}
+                  metadata={activeMetadata}
+                  isVisible={isVisible(activeId)}
+                  draggable
+                />
+              </SettingsGroup>
             ) : null}
           </DragOverlay>
         </DndContext>
@@ -766,19 +920,53 @@ export function ToolbarSettingsTab() {
       */}
       <SettingsSection
         title="Agent buttons"
-        description={`Every agent lives in the launcher. Pin one to give it its own toolbar button too. ${LAUNCHABLE_AGENT_IDS.filter(isAgentOnToolbar).length} of ${LAUNCHABLE_AGENT_IDS.length} pinned.`}
+        description={`Every agent lives in the launcher. Pin one to give it a toolbar button too; these are the same switches as its row in the lists above. ${pinnedAgentCount} of ${LAUNCHABLE_AGENT_IDS.length} pinned.`}
       >
-        <SettingsGroup>
-          {LAUNCHABLE_AGENT_IDS.map((buttonId) => (
+        <SettingsGroup id={agentListId}>
+          {/* The inventory rule: what is pinned stays in view, the rest behind a
+              disclosure. Expanded, it lists every agent in one fixed order, so a
+              row never jumps sections under the pointer that just toggled it. */}
+          {LAUNCHABLE_AGENT_IDS.filter(
+            (id) => showAllAgents || isAgentOnToolbar(id) || touchedAgents.has(id)
+          ).map((buttonId) => (
             <TrayButtonRow
               key={buttonId}
               buttonId={buttonId}
               isVisible={isAgentOnToolbar(buttonId)}
-              onToggle={(id) => handleToggle(id, "left")}
+              onToggle={(id) => {
+                setTouchedAgents((prev) => new Set(prev).add(id));
+                handleToggle(id, "left");
+              }}
               metadata={allMetadata[buttonId]}
               showDescription={false}
             />
           ))}
+          {pinnedAgentCount < LAUNCHABLE_AGENT_IDS.length && (
+            <div>
+              <button
+                type="button"
+                aria-expanded={showAllAgents}
+                aria-controls={agentListId}
+                onClick={() => setShowAllAgents((v) => !v)}
+                className={cn(
+                  "group flex w-full items-center gap-2 py-2.5 pl-4 pr-4 text-left",
+                  "text-sm text-text-secondary hover:text-text-primary transition-colors",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+                )}
+              >
+                <ChevronRight
+                  className={cn(
+                    "w-3.5 h-3.5 shrink-0 transition-transform duration-150",
+                    showAllAgents ? "rotate-90" : "rotate-0"
+                  )}
+                  aria-hidden="true"
+                />
+                {showAllAgents
+                  ? "Show pinned agents only"
+                  : `Show all ${LAUNCHABLE_AGENT_IDS.length} agents`}
+              </button>
+            </div>
+          )}
         </SettingsGroup>
       </SettingsSection>
 
@@ -791,7 +979,7 @@ export function ToolbarSettingsTab() {
       */}
       <SettingsSection
         title="Panel buttons"
-        description={`Every panel button lives in the launcher. Pin one to give it its own toolbar button too. ${LAUNCHER_PANEL_BUTTON_IDS.filter(isPanelOnToolbar).length} of ${LAUNCHER_PANEL_BUTTON_IDS.length} pinned.`}
+        description={`Every panel button lives in the launcher. Pin one to give it a toolbar button too; these are the same switches as its row in the lists above. ${LAUNCHER_PANEL_BUTTON_IDS.filter(isPanelOnToolbar).length} of ${LAUNCHER_PANEL_BUTTON_IDS.length} pinned.`}
       >
         <SettingsGroup>
           {LAUNCHER_PANEL_BUTTON_IDS.map((buttonId) => (
@@ -821,12 +1009,24 @@ export function ToolbarSettingsTab() {
           description={`Recipes, plugin agents and panels you pinned in the launcher. ${launcherItemRows.length} pinned.`}
         >
           <SettingsGroup>
-            {launcherItemRows.map((row) => (
+            {launcherItemRows.map((row, index) => (
               <TrayButtonRow
                 key={row.id}
                 buttonId={row.id}
+                switchId={launcherItemSwitchId(row.id)}
                 isVisible={isLauncherItemOn(row.id)}
-                onToggle={(id) => handleToggle(id, "left")}
+                onToggle={(id) => {
+                  // Unpinning drops the row (repinning belongs to the launcher),
+                  // so hand focus to the next row, the previous, or the section
+                  // below once this one was the last.
+                  const neighbour = launcherItemRows[index + 1] ?? launcherItemRows[index - 1];
+                  setFocusTarget(
+                    neighbour
+                      ? `#${window.CSS.escape(launcherItemSwitchId(neighbour.id))}`
+                      : '#toolbar-launcher [role="switch"]'
+                  );
+                  handleToggle(id, "left");
+                }}
                 metadata={row.metadata}
               />
             ))}
@@ -853,17 +1053,15 @@ export function ToolbarSettingsTab() {
         </SettingsSection>
       )}
 
-      <SettingsSection
-        id="toolbar-launcher"
-        title="Launcher palette"
-        description="Defaults for the panel launcher palette."
-      >
+      <SettingsSection id="toolbar-launcher" title="Launcher palette">
         <SettingsGroup>
           <SettingsSwitchCard
             title="Always show dev server in launcher"
             subtitle="Show dev server option even if no command is configured in project settings"
             isEnabled={launcher.alwaysShowDevServer}
             onChange={() => setAlwaysShowDevServer(!launcher.alwaysShowDevServer)}
+            isModified={launcher.alwaysShowDevServer}
+            onReset={() => setAlwaysShowDevServer(false)}
           />
           <SettingsSelect
             label="Default selection"
@@ -877,6 +1075,8 @@ export function ToolbarSettingsTab() {
               )
             }
             options={defaultSelectionOptions}
+            isModified={launcher.defaultSelection !== undefined}
+            onReset={() => setDefaultSelection(undefined)}
           />
         </SettingsGroup>
       </SettingsSection>

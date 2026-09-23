@@ -462,14 +462,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Export confirmation; resets when the export flash times out",
     },
   ],
-  "src/components/Settings/PortalSettingsTab.tsx": [
-    {
-      category: "affordance",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Go-colour on the confirm half of a confirm/cancel edit pair",
-    },
-  ],
   "src/components/Settings/RunHistorySettingsTab.tsx": [
     {
       category: "outcome",

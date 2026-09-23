@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo, useRef } from "react";
-import { AlertCircle, Check } from "lucide-react";
+import { useState, useEffect, useId, useMemo, useRef } from "react";
+import { cn } from "@/lib/utils";
+import { AlertCircle, Check, ChevronRight } from "lucide-react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -24,21 +25,23 @@ import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { useSettingsTabFlush } from "./SettingsFlushRegistry";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
+// Named for where the worktree lands, since all three sit beside the repository —
+// "Subdirectory" read as inside it.
 const PATTERN_PRESETS = [
   {
-    label: "Subdirectory",
+    label: "Grouped by repository",
     pattern: "{parent-dir}/{base-folder}-worktrees/{branch-slug}",
-    description: "Creates worktrees in a sibling -worktrees folder",
+    description: "One -worktrees folder beside the repository, a folder per branch inside it",
   },
   {
-    label: "Sibling folder",
+    label: "Repository + branch",
     pattern: "{parent-dir}/{base-folder}-{branch-slug}",
-    description: "Creates worktrees as siblings with branch suffix",
+    description: "A folder beside the repository named after it and the branch",
   },
   {
-    label: "Flat sibling",
+    label: "Branch only",
     pattern: "{parent-dir}/{branch-slug}",
-    description: "Creates worktrees as siblings named by branch",
+    description: "A folder beside the repository named after the branch",
   },
 ] as const;
 
@@ -68,6 +71,8 @@ export function WorktreeSettingsTab() {
   const [error, setError] = useState<string | null>(null);
   const [savedMessage, setSavedMessage] = useState(false);
   const [savedMessageTimeout, setSavedMessageTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [showVariables, setShowVariables] = useState(false);
+  const variablesId = useId();
 
   const sampleRootPath = "/Users/name/Projects/my-project";
 
@@ -184,14 +189,12 @@ export function WorktreeSettingsTab() {
 
   const patternError = !unavailable && !validation.valid ? validation.error : undefined;
 
-  const handleReset = () => {
-    setPattern(DEFAULT_WORKTREE_PATH_PATTERN);
+  // Every edit goes through here: a "Saved" from the last commit must not sit
+  // beside a value that is no longer the saved one.
+  const editPattern = (next: string) => {
+    setPattern(next);
     setError(null);
-  };
-
-  const handlePresetClick = (presetPattern: string) => {
-    setPattern(presetPattern);
-    setError(null);
+    setSavedMessage(false);
   };
 
   // Persist a pending pattern change before the dialog dismisses (X click) or
@@ -225,7 +228,7 @@ export function WorktreeSettingsTab() {
             // Measured against the field, not the saved value: reset fills in the
             // default and the explicit Save below still commits it.
             isModified={!unavailable && pattern !== DEFAULT_WORKTREE_PATH_PATTERN}
-            onReset={handleReset}
+            onReset={isSaving ? undefined : () => editPattern(DEFAULT_WORKTREE_PATH_PATTERN)}
             resetAriaLabel="Reset path pattern to default"
             control={({ labelId, disabled }) => (
               <div className="grid gap-2">
@@ -233,11 +236,11 @@ export function WorktreeSettingsTab() {
                   id="path-pattern"
                   type="text"
                   value={pattern}
-                  onChange={(e) => {
-                    setPattern(e.target.value);
-                    setError(null);
-                  }}
+                  onChange={(e) => editPattern(e.target.value)}
                   disabled={disabled}
+                  // Locked while a save is in flight: the save's reply replaces the
+                  // field, and would otherwise overwrite anything typed meanwhile.
+                  readOnly={isSaving}
                   invalid={!!patternError}
                   aria-labelledby={labelId}
                   aria-invalid={!!patternError}
@@ -266,23 +269,6 @@ export function WorktreeSettingsTab() {
 
           <SettingsRow
             layout="stacked"
-            label="Variables"
-            control={
-              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-xs">
-                {PATTERN_VARIABLES.map((variable) => (
-                  <div key={variable.token} className="contents">
-                    <dt>
-                      <code className="font-mono text-text-primary">{variable.token}</code>
-                    </dt>
-                    <dd className="text-text-secondary">{variable.description}</dd>
-                  </div>
-                ))}
-              </dl>
-            }
-          />
-
-          <SettingsRow
-            layout="stacked"
             label="Presets"
             disabled={unavailable}
             control={({ labelId, disabled }) => (
@@ -294,8 +280,8 @@ export function WorktreeSettingsTab() {
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={() => handlePresetClick(preset.pattern)}
-                        disabled={disabled}
+                        onClick={() => editPattern(preset.pattern)}
+                        disabled={disabled || isSaving}
                       >
                         {preset.label}
                       </Button>
@@ -307,36 +293,97 @@ export function WorktreeSettingsTab() {
             )}
           />
 
-          {validation.valid && preview && (
-            <SettingsRow
-              layout="stacked"
-              label="Preview"
-              description={
-                <>
-                  <code className="font-mono">{SAMPLE_BRANCH}</code> in{" "}
-                  <code className="font-mono">{sampleRootPath}</code> becomes
-                </>
-              }
-              control={
+          <SettingsRow
+            layout="stacked"
+            label="Preview"
+            disabled={unavailable}
+            description={
+              <>
+                <code className="font-mono">{SAMPLE_BRANCH}</code> in{" "}
+                <code className="font-mono">{sampleRootPath}</code> becomes
+              </>
+            }
+            control={
+              preview ? (
                 <code className="block font-mono text-xs text-text-primary break-all select-text">
                   {preview}
                 </code>
-              }
-            />
-          )}
+              ) : (
+                <p className="text-xs text-text-secondary">
+                  {unavailable
+                    ? "Waiting for the saved pattern"
+                    : "Fix the pattern to see a preview"}
+                </p>
+              )
+            }
+          />
+
+          <div>
+            <button
+              type="button"
+              aria-expanded={showVariables}
+              aria-controls={variablesId}
+              onClick={() => setShowVariables((v) => !v)}
+              className={cn(
+                "group flex w-full items-center gap-2 py-2.5 pl-4 pr-4 text-left",
+                "text-sm text-text-secondary hover:text-text-primary transition-colors",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+              )}
+            >
+              <ChevronRight
+                className={cn(
+                  "w-3.5 h-3.5 shrink-0 transition-transform duration-150",
+                  showVariables ? "rotate-90" : "rotate-0"
+                )}
+                aria-hidden="true"
+              />
+              {showVariables ? "Hide variables" : `Show variables (${PATTERN_VARIABLES.length})`}
+            </button>
+            <div id={variablesId}>
+              {showVariables && (
+                <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 pb-3 pl-9 pr-4 text-xs">
+                  {PATTERN_VARIABLES.map((variable) => (
+                    <div key={variable.token} className="contents">
+                      <dt>
+                        <code className="font-mono text-text-primary select-text">
+                          {variable.token}
+                        </code>
+                      </dt>
+                      <dd className="text-text-secondary">{variable.description}</dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+            </div>
+          </div>
 
           {/* An explicit save rather than instant apply: a half-typed pattern is
               routinely invalid, and each keystroke would otherwise write one. */}
           <SettingsActions
             status={
-              savedMessage && (
+              savedMessage ? (
                 <span className="flex items-center gap-1 text-status-success">
                   <Check className="w-3 h-3" aria-hidden="true" />
                   Saved
                 </span>
-              )
+              ) : hasChanges && !unavailable && validation.valid ? (
+                // The dialog flushes a valid pending pattern when it closes, so
+                // say so — otherwise Save reads as the only way it takes effect.
+                "Also saves when you close Settings"
+              ) : null
             }
           >
+            {hasChanges && !unavailable && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => editPattern(originalPattern)}
+                disabled={isSaving}
+              >
+                Discard
+              </Button>
+            )}
             <Button
               type="button"
               variant="contrast"
@@ -352,7 +399,7 @@ export function WorktreeSettingsTab() {
 
       <SettingsSection
         title="Deleted worktrees"
-        description="When a worktree is deleted while terminals are still running, its terminals stay in a temporary sidebar row until you move or close them."
+        description="When a worktree is deleted while terminals are still running, its terminals stay in a temporary sidebar row until you move or close them"
       >
         <SettingsGroup>
           <SettingsSelect

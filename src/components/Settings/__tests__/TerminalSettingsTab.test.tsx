@@ -12,6 +12,7 @@ import { useLayoutConfigStore } from "@/store";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { useCachedProjectViewsStore } from "@/store/cachedProjectViewsStore";
+import { useMemoryLeakConfigStore } from "@/store/memoryLeakConfigStore";
 
 const getHardwareInfo = vi.fn();
 const setResourceMonitoring = vi.fn();
@@ -53,7 +54,7 @@ describe("TerminalSettingsTab", () => {
       { source: "user" }
     );
     // The memory estimate is a plain row, not an empty disclosure.
-    expect(screen.getByText("Estimated memory")).toBeTruthy();
+    expect(screen.getByText("Estimated scrollback memory")).toBeTruthy();
     expect(screen.queryByRole("button", { expanded: false })).toBeNull();
   });
 
@@ -229,5 +230,26 @@ describe("TerminalSettingsTab panel limits", () => {
     expect(
       screen.getByRole("button", { name: "Reset to hardware-recommended defaults" })
     ).toBeTruthy();
+  });
+});
+
+describe("TerminalSettingsTab auto-restart threshold", () => {
+  it("keeps an out-of-range draft out of the store and puts the effective value back on blur", () => {
+    useResourceMonitoringStore.getState().setEnabled(true);
+    useMemoryLeakConfigStore.getState().setEnabled(true);
+    const effective = useMemoryLeakConfigStore.getState().autoRestartThresholdMb;
+    renderSubtab("performance");
+    const input = screen.getByRole("spinbutton", {
+      name: "Auto-restart threshold",
+    }) as HTMLInputElement;
+
+    fireEvent.change(input, { target: { value: String(Math.floor(effective / 10)) } });
+
+    expect(useMemoryLeakConfigStore.getState().autoRestartThresholdMb).toBe(effective);
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+
+    fireEvent.blur(input);
+    expect(input.value).toBe(String(effective));
+    expect(input.getAttribute("aria-invalid")).not.toBe("true");
   });
 });
