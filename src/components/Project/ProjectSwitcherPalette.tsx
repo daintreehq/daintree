@@ -2302,6 +2302,8 @@ function ProjectPaletteInner({
           }
           break;
         case "Escape":
+          // An IME spends Escape cancelling its candidate; leave the query alone.
+          if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) break;
           // Anchored mode leaves Escape entirely to the shell, which spends the
           // first press clearing the query. Closing here would beat that: this
           // runs on bubble, after Radix's capture-phase dismissal has already

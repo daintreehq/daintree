@@ -80,6 +80,8 @@ export function PanelPalette({
           onConfirm();
           break;
         case "Escape":
+          // An IME spends Escape cancelling its candidate; leave the query alone.
+          if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) break;
           e.preventDefault();
           // A query clears before the palette closes, as in every SearchablePalette.
           // Stopped so the dialog's document-level Escape backstop cannot close it.
