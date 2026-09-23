@@ -25,7 +25,7 @@ export function PluginProvenance({ pluginName, id, className }: PluginProvenance
       className={cn("flex min-w-0 items-start gap-1.5 text-xs text-text-secondary", className)}
     >
       <Package className="mt-px size-3.5 shrink-0" aria-hidden="true" />
-      <span className="min-w-0 [overflow-wrap:anywhere]">
+      <span className="min-w-0 text-pretty [overflow-wrap:anywhere]">
         Requested by the &apos;<span className="font-medium text-text-primary">{pluginName}</span>
         &apos; plugin
       </span>

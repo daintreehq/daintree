@@ -260,11 +260,14 @@ export function PluginQuickPickDialog() {
         getItemId={(item) => item.id}
         renderItem={renderItem}
         label={options?.title || "Select an option"}
-        ariaLabel={options?.title || "Plugin quick pick"}
+        // The visible attribution sits in the footer, which a screen reader
+        // never reaches before answering; the dialog's name carries it instead.
+        ariaLabel={`${options?.title || "Plugin quick pick"}, requested by the '${pluginName}' plugin`}
         searchPlaceholder={options?.placeholder || "Search"}
         itemIdPrefix="plugin-quick-pick"
         emptyMessage={`No options provided by the '${pluginName}' plugin`}
         footer={footer}
+        multiselectable={canSelectMany}
       />
     </ErrorBoundary>
   );

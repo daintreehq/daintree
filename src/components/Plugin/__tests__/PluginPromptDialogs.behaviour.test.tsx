@@ -49,6 +49,7 @@ import { PluginInputBoxDialog } from "../PluginInputBoxDialog";
 import { PluginQuickPickDialog } from "../PluginQuickPickDialog";
 import { PluginConfirmPromptDialog } from "../PluginConfirmPromptDialog";
 import { usePluginPromptStore } from "@/store/pluginPromptStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import type { PluginUiPromptParams, PluginUiPromptResultValue } from "@shared/types/pluginUiPrompt";
 
@@ -293,5 +294,71 @@ describe("PluginQuickPickDialog — single-select", () => {
 
     expect(resolve).not.toHaveBeenCalled();
     expect(usePluginPromptStore.getState().current).not.toBeNull();
+  });
+});
+
+describe("plugin prompts — attribution reaches assistive tech", () => {
+  // The visible line lives in a footer a screen reader reaches last, if at
+  // all, so each prompt's own name has to say who is asking.
+  it("names the plugin in the quick pick dialog's accessible name", () => {
+    seed({ kind: "quickPick", items: CHECKS, options: { title: "Pick one" } });
+    render(<PluginQuickPickDialog />);
+
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog?.getAttribute("aria-label")).toContain("Release Helper");
+  });
+
+  it("names the plugin in the confirm dialog's accessible name", () => {
+    seed({ kind: "confirm", options: { title: "Publish release?" } });
+    render(<PluginConfirmPromptDialog />);
+
+    const dialog = document.querySelector('[aria-modal="true"][aria-labelledby]');
+    const titleId = dialog?.getAttribute("aria-labelledby") ?? "";
+    expect(document.getElementById(titleId)?.textContent).toContain("Release Helper");
+  });
+});
+
+describe("PluginInputBoxDialog — keyboard and announcements", () => {
+  it("does not submit on the Enter that commits an IME composition", () => {
+    const resolve = seed({ kind: "inputBox", options: { title: "Name it" } });
+    render(<PluginInputBoxDialog />);
+
+    type("にほん");
+    fireEvent.keyDown(field(), { key: "Enter", isComposing: true });
+    expect(resolve).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(resolve).toHaveBeenCalledWith("にほん");
+  });
+
+  it("announces every rejected submit, not only the first", () => {
+    const announce = vi.spyOn(useAnnouncerStore.getState(), "announce");
+    seed({
+      kind: "inputBox",
+      options: { validationPattern: "^\\d+$", validationMessage: "Digits" },
+    });
+    render(<PluginInputBoxDialog />);
+
+    type("abc");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    type("12");
+    type("12x");
+    fireEvent.keyDown(field(), { key: "Enter" });
+
+    expect(announce.mock.calls.filter(([msg]) => msg === "Digits")).toHaveLength(2);
+    announce.mockRestore();
+  });
+});
+
+describe("PluginQuickPickDialog — listbox semantics", () => {
+  it.each([
+    [true, "true"],
+    [false, null],
+  ])("marks the listbox multiselectable only when canSelectMany is %s", (many, expected) => {
+    seed({ kind: "quickPick", items: CHECKS, options: { canSelectMany: many } });
+    render(<PluginQuickPickDialog />);
+
+    const listbox = document.querySelector('[role="listbox"]');
+    expect(listbox?.getAttribute("aria-multiselectable")).toBe(expected);
   });
 });

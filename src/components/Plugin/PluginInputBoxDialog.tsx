@@ -53,9 +53,9 @@ function InputBoxForm({ options, pluginId, onSubmit, onCancel }: InputBoxFormPro
   const handleSubmit = () => {
     if (!isValid) {
       // `FieldError` is deliberately not a live region (it renders per
-      // keystroke in settings); here it appears once, on a submit that did
-      // nothing, so the rejection is announced by the caller.
-      if (!attempted) useAnnouncerStore.getState().announce(errorMessage, "assertive");
+      // keystroke in settings). A rejected submit is a discrete event the user
+      // caused, so each one is announced — never the keystrokes in between.
+      useAnnouncerStore.getState().announce(errorMessage, "assertive");
       setAttempted(true);
       return;
     }
@@ -84,6 +84,8 @@ function InputBoxForm({ options, pluginId, onSubmit, onCancel }: InputBoxFormPro
             aria-describedby={provenanceId}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => {
+              // Enter that commits an IME composition is not a submit.
+              if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
               if (e.key === "Enter") {
                 e.preventDefault();
                 handleSubmit();

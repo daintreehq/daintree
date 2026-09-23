@@ -79,7 +79,15 @@ export function PluginConfirmPromptDialog() {
       <ConfirmDialog
         isOpen={true}
         onClose={() => resolveOnce(confirm.promptId, false)}
-        title={options.title}
+        title={
+          <>
+            {options.title}
+            {/* The footer attribution is outside the dialog's name and
+                description, so assistive tech would announce the plugin's
+                question without saying whose it is. */}
+            <span className="sr-only"> Requested by the &apos;{pluginName}&apos; plugin</span>
+          </>
+        }
         description={options.message}
         confirmLabel={options.confirmLabel || "Confirm"}
         cancelLabel={options.cancelLabel || "Cancel"}
