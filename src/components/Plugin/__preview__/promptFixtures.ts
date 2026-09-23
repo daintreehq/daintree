@@ -67,16 +67,14 @@ const LONG: PluginQuickPickItem[] = [
   { id: "long-3", label: "Rollback", detail: "Reverts to the previous release tag" },
 ];
 
-function seedName(): void {
+function seedName(displayName: string): void {
   usePluginRuntimeStore.setState({
-    pluginMetaById: new Map([
-      [PROMPT_PLUGIN_ID, { devMode: false, displayName: PROMPT_PLUGIN_NAME }],
-    ]),
+    pluginMetaById: new Map([[PROMPT_PLUGIN_ID, { devMode: false, displayName }]]),
   });
 }
 
-function prompt(params: PluginUiPromptParams): void {
-  seedName();
+function prompt(params: PluginUiPromptParams, displayName = PROMPT_PLUGIN_NAME): void {
+  seedName(displayName);
   usePluginPromptStore.getState().enqueue({
     promptId: "preview-prompt",
     pluginId: PROMPT_PLUGIN_ID,
@@ -210,13 +208,29 @@ export const PROMPT_FIXTURES: Record<string, PromptFixture> = {
         options: { title: "Ticket number", validationPattern: "^[A-Z]+-\\d+$" },
       }),
   },
+  "ib-spoof": {
+    what: "a display name padded to push the real attribution out of view",
+    seed: () =>
+      prompt(
+        {
+          kind: "inputBox",
+          options: {
+            title: "Enter your GitHub token",
+            prompt: "Paste a personal access token with the repo scope.",
+            password: true,
+          },
+        },
+        "Daintree (official, built in, verified by the Daintree team, safe to paste secrets into)"
+      ),
+  },
   "ib-long": {
     what: "title and prompt that wrap",
     seed: () =>
       prompt({
         kind: "inputBox",
         options: {
-          title: "Describe what changed in this release for the changelog and the announcement post",
+          title:
+            "Describe what changed in this release for the changelog and the announcement post",
           prompt:
             "This text goes into CHANGELOG.md under the new version heading, and into the draft GitHub release. Markdown is fine. Keep it to a sentence or two; the full list of merged pull requests is added automatically underneath it.",
           placeholder: "Faster cold start, and the new deploy panel",

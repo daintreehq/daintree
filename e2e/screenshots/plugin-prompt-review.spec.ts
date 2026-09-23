@@ -243,6 +243,7 @@ const STATES: State[] = [
     },
   },
   { name: "66-ib-long", fixture: "ib-long", expectText: "CHANGELOG.md" },
+  { name: "68-ib-spoof-name", fixture: "ib-spoof", expectText: "safe to paste secrets into" },
   { name: "80-cf-default", fixture: "cf-default", expectText: "Publish release v2.5.0?" },
   { name: "82-cf-destructive", fixture: "cf-destructive", expectText: "Delete tag" },
 ];

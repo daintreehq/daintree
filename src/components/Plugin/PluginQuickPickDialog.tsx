@@ -8,12 +8,11 @@ import { Button } from "@/components/ui/button";
 import { checkboxVariants } from "@/components/ui/checkbox";
 import { isMac } from "@/lib/platform";
 import { PluginProvenance } from "./PluginProvenance";
+import { usePluginAttribution } from "./usePluginAttribution";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { usePluginPromptStore } from "@/store/pluginPromptStore";
-import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import type { PluginQuickPickItem } from "@shared/types/plugin";
-import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 
 const EMPTY_ITEMS: PluginQuickPickItem[] = [];
 
@@ -51,13 +50,7 @@ export function PluginQuickPickDialog() {
   const items = quickPick ? quickPick.items : EMPTY_ITEMS;
   const canSelectMany = options?.canSelectMany ?? false;
 
-  // The prompt carries the host's plugin *instance* key, which for a
-  // project-owned plugin is `project__{projectId}__{manifestId}` — never copy a
-  // person reads. Resolved through the runtime store like every other surface
-  // that names a plugin; the fallback is the manifest id, never the raw key.
-  const pluginName = usePluginRuntimeStore(
-    (s) => s.pluginMetaById.get(pluginId)?.displayName ?? pluginManifestIdFromInstanceKey(pluginId)
-  );
+  const attribution = usePluginAttribution(pluginId);
 
   const fuseOptions = useMemo(
     () => ({
@@ -204,7 +197,7 @@ export function PluginQuickPickDialog() {
   // one line on this palette the plugin did not write.
   const footer = (
     <div className="flex w-full items-center justify-between gap-3">
-      <PluginProvenance pluginName={pluginName} className="flex-1" />
+      <PluginProvenance attribution={attribution} className="flex-1" />
       {canSelectMany && (
         <div className="flex shrink-0 items-center gap-3">
           {/* Enter earns its chip here and only here: in a multi-select list
@@ -262,10 +255,10 @@ export function PluginQuickPickDialog() {
         label={options?.title || "Select an option"}
         // The visible attribution sits in the footer, which a screen reader
         // never reaches before answering; the dialog's name carries it instead.
-        ariaLabel={`${options?.title || "Plugin quick pick"}, requested by the '${pluginName}' plugin`}
+        ariaLabel={`${options?.title || "Plugin quick pick"}. ${attribution.text}`}
         searchPlaceholder={options?.placeholder || "Search"}
         itemIdPrefix="plugin-quick-pick"
-        emptyMessage={`No options provided by the '${pluginName}' plugin`}
+        emptyMessage={`No options provided by the '${attribution.name}' plugin`}
         footer={footer}
         multiselectable={canSelectMany}
       />

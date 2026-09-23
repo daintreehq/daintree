@@ -3,12 +3,11 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { Field, FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { PluginProvenance } from "./PluginProvenance";
+import { usePluginAttribution } from "./usePluginAttribution";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePluginPromptStore } from "@/store/pluginPromptStore";
-import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import type { PluginInputBoxOptions } from "@shared/types/plugin";
-import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 
 /**
  * Compile a plugin-supplied validation pattern. A malformed pattern is ignored
@@ -43,12 +42,7 @@ function InputBoxForm({ options, pluginId, onSubmit, onCancel }: InputBoxFormPro
   const showError = attempted && !isValid;
   const errorMessage = options.validationMessage || "The value doesn't match the required format";
   const provenanceId = useId();
-  // Provenance copy names the plugin, and `pluginId` is the host's instance key
-  // — raw, a project-owned plugin would attribute the prompt to
-  // `project__{projectId}__{manifestId}`. Fallback is the manifest id (#12211).
-  const pluginName = usePluginRuntimeStore(
-    (s) => s.pluginMetaById.get(pluginId)?.displayName ?? pluginManifestIdFromInstanceKey(pluginId)
-  );
+  const attribution = usePluginAttribution(pluginId);
 
   const handleSubmit = () => {
     if (!isValid) {
@@ -99,7 +93,7 @@ function InputBoxForm({ options, pluginId, onSubmit, onCancel }: InputBoxFormPro
       <AppDialog.Footer
         // The one line in this dialog the plugin did not write, so it sits in
         // the host's footer band rather than beside the plugin's own copy.
-        hint={<PluginProvenance id={provenanceId} pluginName={pluginName} />}
+        hint={<PluginProvenance id={provenanceId} attribution={attribution} />}
         secondaryAction={{ label: "Cancel", onClick: onCancel }}
         primaryAction={{ label: "Submit", onClick: handleSubmit, disabled: showError }}
       />
