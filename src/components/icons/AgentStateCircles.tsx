@@ -24,9 +24,19 @@ export function SpinnerCircle({ className, ...props }: HTMLAttributes<HTMLSpanEl
   );
 }
 
+// `data-agent-state-glyph` is the forced-colors hook (index.css): these are
+// stroked in `currentColor`, and without a system colour the state hue survives
+// onto the forced white canvas — an amber ring there is 1.7:1.
 export function HollowCircle({ className, ...props }: CircleProps) {
   return (
-    <svg viewBox="0 0 16 16" fill="none" className={className} aria-hidden="true" {...props}>
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      className={className}
+      aria-hidden="true"
+      data-agent-state-glyph=""
+      {...props}
+    >
       <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.333" />
     </svg>
   );
@@ -34,7 +44,14 @@ export function HollowCircle({ className, ...props }: CircleProps) {
 
 export function InteractingCircle({ className, ...props }: CircleProps) {
   return (
-    <svg viewBox="0 0 16 16" fill="none" className={className} aria-hidden="true" {...props}>
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      className={className}
+      aria-hidden="true"
+      data-agent-state-glyph=""
+      {...props}
+    >
       <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.333" />
       <line
         x1="8"
@@ -60,7 +77,14 @@ export function InteractingCircle({ className, ...props }: CircleProps) {
 
 export function ExitedCircle({ className, ...props }: CircleProps) {
   return (
-    <svg viewBox="0 0 16 16" fill="none" className={className} aria-hidden="true" {...props}>
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      className={className}
+      aria-hidden="true"
+      data-agent-state-glyph=""
+      {...props}
+    >
       <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.333" />
       <line
         x1="5"

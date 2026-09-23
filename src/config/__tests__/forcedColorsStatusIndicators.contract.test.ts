@@ -213,3 +213,23 @@ describe("forced-colors destructive button distinction (#11981)", () => {
     expect(button).not.toMatch(/focus-visible:outline-destructive/);
   });
 });
+
+describe("forced-colors stroked agent-state glyphs", () => {
+  // Inherit, not a named system colour: the parent's forced ink is the pair
+  // the UA already matched to that surface, which a role cannot tell us.
+  it("hands the stroked state circles their parent's forced ink, not their state hue", () => {
+    const block = readForcedColorsBlocks(INDEX_CSS);
+    expect(block).toMatch(/\[data-agent-state-glyph\]\s*\{[^}]*color:\s*inherit/);
+    expect(block).not.toMatch(/\[data-agent-state-glyph\][^{]*\{[^}]*(CanvasText|ButtonText)/);
+  });
+
+  it("is actually emitted by every stroked circle", () => {
+    const source = fs.readFileSync(
+      path.join(REPO_ROOT, "src/components/icons/AgentStateCircles.tsx"),
+      "utf8"
+    );
+    const svgs = source.match(/<svg\s[\s\S]*?>/g) ?? [];
+    expect(svgs.length).toBeGreaterThan(0);
+    for (const svg of svgs) expect(svg).toContain("data-agent-state-glyph");
+  });
+});

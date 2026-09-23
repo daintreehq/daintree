@@ -2958,6 +2958,18 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     background: ButtonText;
   }
 
+  /* The stroked state circles (waiting ring, interacting, exited) paint in
+     `currentColor` from a state-hue class, and an SVG keeps a colour it was
+     given outright — so the hue survived onto the forced canvas, where an
+     amber ring on white is 1.7:1. Inheriting instead hands the glyph whatever
+     ink the UA forced onto its parent: CanvasText on the canvas, ButtonText on
+     a real button, HighlightText on a selected row. Naming a system colour
+     here would guess that pairing from the role, and roles do not change it.
+     Their shape is the state in this mode, as with the spinner. */
+  [data-agent-state-glyph] {
+    color: inherit;
+  }
+
   /* The one mark whose emptiness IS the state.
      The sidebar footer's readout says working with a filled dot and idle with a
      hollow ring, so the shape carries the distinction where colour cannot — and
