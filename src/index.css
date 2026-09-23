@@ -1527,13 +1527,16 @@ body,
 
 /* Terminal Selection State.
    panel-focus-border / panel-focus-shadow / panel-selected-bg are OPTIONAL
-   extension keys; the fallbacks are the pre-extension recipes verbatim. The
-   high-contrast `prefers-contrast: more` and `forced-colors: active` blocks
-   below keep their own hardcoded recipes and continue to win. */
+   extension keys. The border fallback is mixed to clear 3:1 against the pane's
+   own body and header and against the grid canvas (WCAG 1.4.11): at the old 92%
+   border-strong it measured under 2:1 on the default theme, and the focused
+   pane only read as focused once you went looking. The high-contrast
+   `prefers-contrast: more` and `forced-colors: active` blocks below keep their
+   own hardcoded recipes and continue to win. */
 .terminal-selected {
   border-color: var(
     --panel-focus-border,
-    color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+    color-mix(in oklab, var(--theme-border-strong) 68%, var(--theme-text-primary))
   );
   background-color: var(--panel-selected-bg, var(--color-surface-highlight));
   box-shadow: var(
@@ -1541,6 +1544,24 @@ body,
     inset 0 0 0 1px var(--theme-overlay-soft),
     0 0 0 1px var(--theme-overlay-strong)
   );
+}
+
+/* A non-PTY pane's root takes real DOM focus when it becomes the focused pane
+   (usePanelRootFocus), and after a keyboard move Chromium rings it in its own
+   blue — a second, louder focus language that terminals, whose focus lives in
+   xterm, never show. The ring it gets instead is the selected edge itself,
+   drawn over the border in the same ink, so the pane looks the same however
+   its focus arrived. The border steps aside while the ring shows: the ink is
+   translucent on most themes, and two layers of it composite into a visibly
+   stronger edge than the terminal next door. */
+.terminal-selected:focus-visible {
+  border-color: transparent;
+  outline: 1px solid
+    var(
+      --panel-focus-border,
+      color-mix(in oklab, var(--theme-border-strong) 68%, var(--theme-text-primary))
+    );
+  outline-offset: -1px;
 }
 
 /* Ensure header separator uses overlay token for consistency */
@@ -1569,12 +1590,12 @@ body,
 .terminal-selected-quiet {
   border-color: var(
     --panel-focus-border,
-    color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+    color-mix(in oklab, var(--theme-border-strong) 68%, var(--theme-text-primary))
   );
   outline: 1px solid
     var(
       --panel-focus-border,
-      color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+      color-mix(in oklab, var(--theme-border-strong) 68%, var(--theme-text-primary))
     );
   outline-offset: -1px;
 }
@@ -1588,7 +1609,7 @@ body,
 .assistant-focused {
   border-left-color: var(
     --panel-focus-border,
-    color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+    color-mix(in oklab, var(--theme-border-strong) 68%, var(--theme-text-primary))
   );
   box-shadow: var(
     --panel-focus-shadow,
@@ -1886,7 +1907,7 @@ label:focus-within .brand-mark,
     background-color: var(--panel-selected-bg, var(--color-surface-highlight));
     border-color: var(
       --panel-focus-border,
-      color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+      color-mix(in oklab, var(--theme-border-strong) 68%, var(--theme-text-primary))
     );
     box-shadow: var(
       --panel-focus-shadow,
@@ -2540,10 +2561,18 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     opacity: 1 !important;
   }
 
-  .terminal-selected {
+  .terminal-selected,
+  .terminal-selected:focus-visible {
     outline: 2px solid Highlight;
     outline-offset: -2px;
     border-color: Highlight;
+  }
+
+  /* The global forced-colors ring above pushes every focus outline 2px out
+     with !important; a focused root's ring is its pane edge, so it stays in
+     where a terminal's does. */
+  .terminal-selected:focus-visible {
+    outline-offset: -2px !important;
   }
 
   .terminal-focused {
@@ -3081,6 +3110,13 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
   .terminal-selected-quiet,
   .terminal-focused {
     border-width: 2px;
+  }
+
+  /* The focused root's ring stands in for the border, so it takes the
+     border's widened stroke. */
+  .terminal-selected:focus-visible {
+    outline-width: 2px;
+    outline-offset: -2px;
   }
 
   /* Inbox filter segments. This mode outlines the unselected chips but leaves

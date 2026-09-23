@@ -794,8 +794,9 @@ export const ContentPanel = forwardRef<HTMLDivElement, ContentPanelProps>(
         showTask: showAgentTaskTitles,
       });
     });
-    // The task alone, for a header with no room for the identity prefix. Only
-    // the grid composes tasks, and only when the compact form actually differs.
+    // The task alone, which is what the header paints: the brand mark beside it
+    // already names the agent. Only the grid composes tasks, and only when the
+    // compact form actually differs.
     const compactTitle = usePanelStore((s) => {
       const panel = s.panelsById[props.id];
       if (!panel || !isPtyPanel(panel) || panel.title !== propsTitle) return undefined;
