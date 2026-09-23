@@ -129,6 +129,11 @@ vi.mock("@/services/KeybindingService", () => ({
       if (actionId === "voiceInput.toggleAssistant") return "Cmd+Shift+Alt+V";
       return undefined;
     }),
+    getEffectiveCombos: vi.fn((actionId: string) => {
+      if (actionId === "voiceInput.toggle") return ["Cmd+Shift+V"];
+      if (actionId === "voiceInput.toggleAssistant") return ["Cmd+Shift+Alt+V"];
+      return [];
+    }),
     matchesEvent: vi.fn(),
   },
 }));
@@ -1428,6 +1433,36 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     // Simulate the keyup of the same key.
     const upEvent = { code: "KeyV" } as unknown as KeyboardEvent;
     for (const listener of keyupListeners) listener(upEvent);
+
+    expect(stopSpy).toHaveBeenCalledWith(
+      "Dictation stopped.",
+      expect.objectContaining({ preserveLiveText: true })
+    );
+  });
+
+  it("a second override combo for the voice shortcut arms the release like the first", async () => {
+    const electron = buildPttElectronStub();
+    const { windowListeners } = setupGlobals(electron);
+
+    const { keybindingService } = await import("@/services/KeybindingService");
+    vi.mocked(keybindingService.getEffectiveCombos).mockImplementation((actionId: string) =>
+      actionId === "voiceInput.toggle" ? ["Cmd+Shift+V", "Cmd+Shift+U"] : []
+    );
+    vi.mocked(keybindingService.matchesEvent).mockImplementation(
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+Shift+U" && e.code === "KeyU"
+    );
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const down = { code: "KeyU", key: "U", repeat: false, metaKey: true, shiftKey: true };
+    for (const listener of windowListeners["keydown"] ?? []) listener(down);
+    for (const listener of windowListeners["keyup"] ?? []) listener({ code: "KeyU" });
 
     expect(stopSpy).toHaveBeenCalledWith(
       "Dictation stopped.",

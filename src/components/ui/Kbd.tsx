@@ -82,10 +82,13 @@ export function KbdChord({
   if (steps.length === 0) return null;
   const compact = density === "compact";
   const bare = density === "bare";
-  const keyClass = cn(
-    bare ? KBD_BARE_CLASS : compact ? KBD_COMPACT_CLASS : KBD_CLASS,
-    foreground === "primary" && "text-text-primary"
-  );
+  const baseKeyClass = bare ? KBD_BARE_CLASS : compact ? KBD_COMPACT_CLASS : KBD_CLASS;
+  // A straight swap rather than cn(): tailwind-merge reads `text-xs` as setting
+  // line-height and would drop the classes' `leading-none`.
+  const keyClass =
+    foreground === "primary"
+      ? baseKeyClass.replace("text-text-secondary", "text-text-primary")
+      : baseKeyClass;
 
   return (
     <span

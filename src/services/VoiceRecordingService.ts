@@ -364,11 +364,12 @@ class VoiceRecordingService {
     const handlePttKeyDown = (e: KeyboardEvent) => {
       if (this.recordingMode !== "push-to-talk") return;
       if (e.repeat) return;
-      const focusedCombo = keybindingService.getEffectiveCombo("voiceInput.toggle");
-      const assistantCombo = keybindingService.getEffectiveCombo("voiceInput.toggleAssistant");
-      const matches =
-        (focusedCombo && keybindingService.matchesEvent(e, focusedCombo)) ||
-        (assistantCombo && keybindingService.matchesEvent(e, assistantCombo));
+      // Every combo that starts recording has to arm the release, or a second
+      // override combo would start push-to-talk that its keyup can't stop.
+      const matches = [
+        ...keybindingService.getEffectiveCombos("voiceInput.toggle"),
+        ...keybindingService.getEffectiveCombos("voiceInput.toggleAssistant"),
+      ].some((combo) => keybindingService.matchesEvent(e, combo));
       if (!matches) return;
       this.pttActiveKeyCode = e.code;
     };

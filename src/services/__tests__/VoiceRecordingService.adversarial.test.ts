@@ -351,6 +351,7 @@ vi.mock("@/lib/voiceInputSettingsEvents", () => ({
 vi.mock("@/services/KeybindingService", () => ({
   keybindingService: {
     getEffectiveCombo: vi.fn(() => undefined),
+    getEffectiveCombos: vi.fn(() => []),
     matchesEvent: vi.fn(() => false),
   },
 }));

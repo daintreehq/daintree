@@ -161,6 +161,14 @@ class KeybindingService {
     return this.getBinding(actionId)?.combo;
   }
 
+  /** Every combo that triggers the action: all of an override's, else its default. */
+  getEffectiveCombos(actionId: string): string[] {
+    const override = this.overrides.get(actionId);
+    if (override) return override.filter(Boolean);
+    const combo = this.getBinding(actionId)?.combo;
+    return combo ? [combo] : [];
+  }
+
   // Detects clashes for a candidate `combo` against currently registered bindings.
   // Two clash kinds:
   //   "conflict" — same combo string in an overlapping scope.
@@ -750,6 +758,9 @@ class KeybindingService {
     // First pass: detect deeper chord prefixes (scope-filtered)
     for (const binding of allBindings) {
       if (!this.canExecute(binding.actionId)) continue;
+      // Per-registration keys now reach this list, so a registration for a scope
+      // that isn't active must not be advertised as a completion.
+      if (!this.scopeAllows(binding.scope)) continue;
       if (!binding.effectiveCombo) continue;
       const parts = binding.effectiveCombo.trim().split(" ");
       if (parts.length < 3) continue;
@@ -769,6 +780,9 @@ class KeybindingService {
     // Second pass: build results for 2-part chords matching prefix
     for (const binding of allBindings) {
       if (!this.canExecute(binding.actionId)) continue;
+      // Per-registration keys now reach this list, so a registration for a scope
+      // that isn't active must not be advertised as a completion.
+      if (!this.scopeAllows(binding.scope)) continue;
 
       const combo = binding.effectiveCombo.trim();
       const parts = combo.split(" ");
