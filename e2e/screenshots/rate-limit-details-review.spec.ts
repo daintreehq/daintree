@@ -59,6 +59,7 @@ const FIXTURES: Record<string, RegExp> = {
   "details-missing": /./,
   gitlab: /REST/,
   "reset-due": /GraphQL/,
+  "resume-passed": /next check/,
   "countdown-ladder": /59m 59s|59m/,
   "banner-ladder": /Resumes/,
 };

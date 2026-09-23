@@ -156,6 +156,14 @@ export const FIXTURES: Record<string, Fixture> = {
     ]),
     resetInMs: 9 * minute,
   },
+  "resume-passed": {
+    kind: "panel",
+    what: "the provider's resume time has passed but no clearing push has landed yet",
+    providerName: "GitHub",
+    limitKind: "primary",
+    details: toBuckets([bucket("core", 5_000, 0, -4 * second)]),
+    resetInMs: -4 * second,
+  },
   "countdown-ladder": {
     kind: "panel",
     what: "the countdown label either side of each boundary (h, m, s)",
