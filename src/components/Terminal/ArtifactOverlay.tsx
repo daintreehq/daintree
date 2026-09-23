@@ -153,6 +153,7 @@ function ArtifactItem({
 
   return (
     <div
+      data-artifact-item={artifact.id}
       className={cn("border rounded-[var(--radius-md)] overflow-hidden", colorClass.split(" ")[0])}
     >
       <button
@@ -426,6 +427,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     <div className={cn("absolute bottom-4 right-4 z-10", className)}>
       {!isExpanded ? (
         <button
+          data-artifact-trigger
           onClick={() => setIsExpanded(true)}
           className={cn(
             "px-3 py-2 rounded-[var(--radius-md)] bg-surface-canvas shadow-[var(--theme-shadow-floating)]",
@@ -441,6 +443,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
         </button>
       ) : (
         <div
+          data-artifact-panel
           className={cn(
             "bg-surface-sidebar border border-border-default rounded-[var(--radius-lg)] shadow-[var(--theme-shadow-floating)]",
             "w-96 max-h-96 flex flex-col overflow-hidden"
