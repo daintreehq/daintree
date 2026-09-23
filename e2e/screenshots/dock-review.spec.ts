@@ -147,7 +147,7 @@ async function load(
   options: LoadOptions = {}
 ): Promise<Locator> {
   const width = options.width ?? 1440;
-  await page.setViewportSize({ width, height: 520 });
+  await page.setViewportSize({ width, height: 700 });
   await page.goto(
     `${server!.baseURL}/dock-preview.html?theme=${theme}&fixture=${fixture}&width=${width}&density=${options.density ?? "normal"}`
   );

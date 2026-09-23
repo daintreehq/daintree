@@ -12,7 +12,6 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
-import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useExitLaggedCount } from "@/hooks/useExitLaggedCount";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -24,6 +23,11 @@ import type { TrashedTerminalGroupMetadata } from "@/store/slices";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useBackgroundedTerminals } from "@/hooks/useTerminalSelectors";
 import { useWorktrees } from "@/hooks/useWorktrees";
+import {
+  DOCK_STATUS_PILL_CLASS,
+  DOCK_STATUS_PILL_OPEN_CLASS,
+  DockStatusPillLabel,
+} from "./dockStatusPill";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
@@ -252,9 +256,8 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   // .dock-status-pill exit transition instead of flashing "(0)".
   const displayCount = useExitLaggedCount(count);
   const triggerLabel =
-    waitingCount > 0
-      ? `Background (${displayCount} · ${waitingCount} waiting)`
-      : `Background (${displayCount})`;
+    `Background: ${displayCount} ${displayCount === 1 ? "panel" : "panels"} across all worktrees` +
+    (waitingCount > 0 ? `, ${waitingCount} waiting` : "");
 
   useEffect(() => {
     if (count === 0) {
@@ -266,51 +269,35 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   return (
     <span className="dock-status-pill" data-visible={count > 0 ? "true" : "false"}>
       <Popover open={isOpen} onOpenChange={setIsOpen}>
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="pill"
-            size="sm"
-            className={cn(
-              compact ? "px-1.5 min-w-0" : "px-3",
-              isOpen && "bg-overlay-emphasis border-border-default"
-            )}
-            aria-haspopup="dialog"
-            aria-expanded={isOpen}
-            aria-controls="background-container-popover"
-            aria-label={triggerLabel}
-          >
-            <span className="relative">
-              <Moon className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
-              {compact && displayCount > 0 && (
-                <span
-                  className={cn(
-                    "absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-3xs font-bold tabular-nums shadow-sm",
-                    waitingCount > 0
-                      ? "bg-state-waiting text-surface-canvas"
-                      : "bg-daintree-text/20 text-text-primary"
-                  )}
-                >
-                  <AnimatedLabel label={displayCount > 9 ? "9+" : String(displayCount)} />
-                </span>
-              )}
-            </span>
-            {!compact && (
-              <span className="font-medium tabular-nums">
-                Background (<AnimatedLabel label={String(displayCount)} />
-                {waitingCount > 0 && (
-                  <>
-                    {" · "}
-                    <span className="text-state-waiting">
-                      <AnimatedLabel label={String(waitingCount)} /> waiting
-                    </span>
-                  </>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="pill"
+                size="sm"
+                className={cn(
+                  DOCK_STATUS_PILL_CLASS,
+                  compact ? "px-2 min-w-0" : "px-3",
+                  isOpen && DOCK_STATUS_PILL_OPEN_CLASS
                 )}
-                )
-              </span>
-            )}
-          </Button>
-        </PopoverTrigger>
+                aria-haspopup="dialog"
+                aria-expanded={isOpen}
+                aria-controls="background-container-popover"
+                aria-label={triggerLabel}
+              >
+                <DockStatusPillLabel
+                  icon={<Moon className="text-text-secondary" aria-hidden="true" />}
+                  label="Background"
+                  count={displayCount}
+                  detail={waitingCount > 0 ? `${waitingCount} waiting` : undefined}
+                  compact={compact}
+                />
+              </Button>
+            </PopoverTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="top">Sent to background, across all worktrees</TooltipContent>
+        </Tooltip>
 
         <PopoverContent
           id="background-container-popover"
@@ -443,7 +430,7 @@ function BackgroundSingleItem({
         <div className="flex items-center gap-1.5 min-w-0">
           <span
             className={cn(
-              "truncate font-medium text-daintree-text/80 group-hover:text-text-primary transition-colors",
+              "truncate font-medium text-text-primary transition-colors",
               compact ? "text-2xs" : "text-xs"
             )}
           >
@@ -459,7 +446,7 @@ function BackgroundSingleItem({
         <div className="flex items-center gap-1.5 mt-0.5 text-2xs text-text-secondary">
           {worktreeName && <span className="truncate">{worktreeName}</span>}
           {worktreeName && (stateLabel || terminal.activityHeadline) && (
-            <span className="text-daintree-text/30">·</span>
+            <span aria-hidden="true">·</span>
           )}
           {StateIcon && stateLabel && (
             <span className={cn("inline-flex items-center gap-1 shrink-0", stateColor)}>
@@ -469,7 +456,7 @@ function BackgroundSingleItem({
           )}
           {terminal.activityHeadline && (
             <>
-              {(worktreeName || stateLabel) && <span className="text-daintree-text/30">·</span>}
+              {(worktreeName || stateLabel) && <span aria-hidden="true">·</span>}
               <span className="truncate italic text-text-secondary">
                 {terminal.activityHeadline}
               </span>
@@ -582,14 +569,14 @@ function BackgroundGroupItem({
           aria-controls={`bg-group-${groupRestoreId}`}
         >
           {isExpanded ? (
-            <ChevronDown className="w-3 h-3 text-daintree-text/60" />
+            <ChevronDown className="w-3 h-3 text-text-secondary" />
           ) : (
-            <ChevronRight className="w-3 h-3 text-daintree-text/60" />
+            <ChevronRight className="w-3 h-3 text-text-secondary" />
           )}
         </Button>
 
         <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
-          <Layers className="w-3 h-3 text-daintree-text/70" />
+          <Layers className="w-3 h-3 text-text-secondary" />
         </div>
 
         <div className="flex-1 min-w-0">

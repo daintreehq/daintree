@@ -352,7 +352,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                     showDockAgentHighlights &&
                     blockedState === "waiting" &&
                     "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
-                  isDeprioritized && "text-daintree-text/40 border-[var(--dock-item-border)]/50"
+                  isDeprioritized && "border-transparent"
                 )}
                 onClick={(e) => {
                   e.preventDefault();
@@ -401,7 +401,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                   <div
                     className={cn(
                       "ml-1.5 flex items-center shrink-0",
-                      plainWorking ? "text-daintree-text/50" : "text-status-success"
+                      plainWorking ? "text-text-secondary" : "text-status-success"
                     )}
                     data-dock-activity-state={plainWorking ? "working" : "finished"}
                     aria-hidden="true"

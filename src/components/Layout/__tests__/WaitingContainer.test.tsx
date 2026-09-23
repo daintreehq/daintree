@@ -242,8 +242,52 @@ describe("WaitingContainer", () => {
         makeTerminal({ id: "t3" }),
       ];
       render(<WaitingContainer />);
-      const trigger = screen.getByRole("button", { name: "Waiting (3)" });
+      const trigger = screen.getByRole("button", {
+        name: "Waiting: 3 agents across all worktrees, all in this one",
+      });
       expect(trigger).toBeTruthy();
+    });
+
+    it("names the local share of a project-wide count", () => {
+      mockTerminals = [
+        makeTerminal({ id: "t1" }),
+        makeTerminal({ id: "t2", worktreeId: "wt-2" }),
+        makeTerminal({ id: "t3", worktreeId: "wt-2" }),
+      ];
+      render(<WaitingContainer />);
+      const trigger = screen.getByRole("button", {
+        name: "Waiting: 3 agents across all worktrees, 1 in this one",
+      });
+      expect(trigger.textContent).toContain("1 here");
+    });
+
+    it("drops the local qualifier when nothing is waiting here", () => {
+      mockTerminals = [makeTerminal({ id: "t1", worktreeId: "wt-2" })];
+      render(<WaitingContainer />);
+      const trigger = screen.getByRole("button", {
+        name: "Waiting: 1 agent across all worktrees, none in this one",
+      });
+      expect(trigger.textContent).not.toContain("here");
+    });
+  });
+
+  describe("scope sections", () => {
+    it("lists this worktree's agents first and names the worktree only for the others", () => {
+      mockTerminals = [
+        makeTerminal({ id: "far", title: "Far agent", worktreeId: "wt-2" }),
+        makeTerminal({ id: "near", title: "Near agent" }),
+      ];
+      render(<WaitingContainer />);
+      fireEvent.click(screen.getByRole("button", { name: /^Waiting:/ }));
+      const here = screen.getByRole("group", { name: "This worktree" });
+      const elsewhere = screen.getByRole("group", { name: "Other worktrees" });
+      expect(here.textContent).toContain("Near agent");
+      expect(here.textContent).not.toContain("feature-auth");
+      expect(elsewhere.textContent).toContain("Far agent");
+      expect(elsewhere.textContent).toContain("feature-ui");
+      expect(
+        here.compareDocumentPosition(elsewhere) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
     });
   });
 
@@ -252,6 +296,7 @@ describe("WaitingContainer", () => {
       mockTerminals = [
         makeTerminal({
           id: "t1",
+          worktreeId: "wt-2",
           title: "Fix auth bug",
           activityHeadline: "Awaiting permission",
           lastStateChange: 1700000000123,
@@ -261,7 +306,7 @@ describe("WaitingContainer", () => {
       const row = screen.getByTestId("waiting-single-item");
       const text = row.textContent ?? "";
       expect(text).toContain("Fix auth bug");
-      expect(text).toContain("feature-auth");
+      expect(text).toContain("feature-ui");
       expect(text).toContain("Awaiting permission");
       expect(within(row).getByTestId("live-time-ago")).toBeTruthy();
     });

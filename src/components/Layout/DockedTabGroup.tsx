@@ -638,7 +638,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   showDockAgentHighlights &&
                   blockedState === "waiting" &&
                   "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
-                isDeprioritized && "text-daintree-text/40 border-[var(--dock-item-border)]/50"
+                isDeprioritized && "border-transparent"
               )}
               onClick={(e) => {
                 e.preventDefault();
@@ -696,7 +696,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 <div
                   className={cn(
                     "ml-1.5 flex items-center shrink-0",
-                    groupPlainWorking ? "text-daintree-text/50" : "text-status-success"
+                    groupPlainWorking ? "text-text-secondary" : "text-status-success"
                   )}
                   data-dock-activity-state={groupPlainWorking ? "working" : "finished"}
                   aria-hidden="true"

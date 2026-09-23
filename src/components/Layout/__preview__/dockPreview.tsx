@@ -297,7 +297,7 @@ function Frame() {
       data-preview-shell
       data-fixture={fixtureName}
       className="flex bg-surface-canvas"
-      style={{ width: `${width}px`, height: "420px" }}
+      style={{ width: `${width}px`, height: "600px" }}
     >
       <div
         data-harness-decoration

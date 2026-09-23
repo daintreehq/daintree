@@ -5,8 +5,6 @@ import { StatusContainer, type StatusContainerConfig } from "./StatusContainer";
 const errorsConfig: StatusContainerConfig = {
   icon: STATE_ICONS.exited,
   iconColor: "text-status-error",
-  badgeColor: "bg-status-error",
-  badgeTextColor: "text-surface-canvas",
   headerLabel: "Errored agents",
   buttonLabel: "Errors",
   statusAriaLabel: "Exited with error",
