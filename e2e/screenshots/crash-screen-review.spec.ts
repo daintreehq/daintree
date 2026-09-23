@@ -69,6 +69,15 @@ async function expandDetails(page: Page) {
   await expect(page.locator(`${FALLBACK} details[open]`).first()).toBeAttached();
 }
 
+/**
+ * The preview's throw never clears, so one Try again lands straight back on the
+ * fallback — the escalated state, which offers the window reload instead.
+ */
+async function retryOnce(page: Page) {
+  await page.locator('[data-testid="error-fallback-restart"]').first().click();
+  await expect(page.locator('[data-testid="error-fallback-reload-window"]').first()).toBeVisible();
+}
+
 const STATES: State[] = [
   {
     name: "fullscreen",
@@ -104,6 +113,13 @@ const STATES: State[] = [
     drive: expandDetails,
   },
   {
+    name: "fullscreen-retried",
+    fixture: "fullscreen",
+    viewport: { width: 1280, height: 800 },
+    marker: `${FALLBACK}[data-variant="fullscreen"]`,
+    drive: retryOnce,
+  },
+  {
     name: "section-main",
     fixture: "section-main",
     viewport: { width: 1280, height: 800 },
@@ -123,6 +139,13 @@ const STATES: State[] = [
     marker: `${FALLBACK}[data-variant="section"]`,
   },
   {
+    name: "section-sidebar-retried",
+    fixture: "section-sidebar",
+    viewport: { width: 1280, height: 800 },
+    marker: `${FALLBACK}[data-variant="section"]`,
+    drive: retryOnce,
+  },
+  {
     name: "component-panel",
     fixture: "component-panel",
     viewport: { width: 980, height: 460 },
@@ -134,6 +157,16 @@ const STATES: State[] = [
     fixture: "worktree-card",
     viewport: { width: 420, height: 320 },
     marker: "button",
+  },
+  {
+    name: "worktree-card-retried",
+    fixture: "worktree-card",
+    viewport: { width: 420, height: 320 },
+    marker: "button",
+    drive: async (page) => {
+      await page.getByRole("button", { name: "Try again" }).click();
+      await expect(page.getByRole("button", { name: "Reload window" })).toBeVisible();
+    },
   },
   {
     name: "plugin-installed",
