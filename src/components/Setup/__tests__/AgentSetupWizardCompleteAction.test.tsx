@@ -311,6 +311,25 @@ describe("AgentSetupWizard completion action", () => {
     expect(buttonLabels()).not.toContain("Continue");
   });
 
+  it.each([
+    [true, "Finish setup"],
+    [false, "Open a project"],
+  ])(
+    "saves rather than celebrates a deferred install (workspace open: %s)",
+    async (hasWorkspace, action) => {
+      await openAt({}, vi.fn(), hasWorkspace);
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>('[data-testid="agent-card-claude"]')!.click();
+      });
+      await clickButton("Continue"); // agents -> cli
+      await clickButton("Set up later"); // cli -> complete
+
+      expect(document.body.textContent).toContain("Setup saved");
+      expect(document.body.textContent).not.toContain("Setup complete");
+      expect(buttonLabels().filter((l) => l !== "Close dialog")).toEqual([action]);
+    }
+  );
+
   it("says why the agents step is blocked when a system tool is missing", async () => {
     systemState.fatal = true;
     await openAt({ claude: "ready" });

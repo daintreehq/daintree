@@ -251,6 +251,31 @@ describe("OnboardingFlow first-run", () => {
     });
   });
 
+  it("completes onboarding when setup reopened from the welcome footer finishes", async () => {
+    // "Not now" on the banner, then "Set up agents" in the footer: a non-first-
+    // run open while onboarding is still incomplete. Finishing it must record
+    // completion, or the user stays "not onboarded" for good.
+    onboardingMock.get.mockResolvedValue({ ...defaultOnboardingState, completed: false });
+
+    const { getByTestId } = await act(async () => {
+      return render(<OnboardingFlow {...defaultProps} />);
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    await act(async () => {
+      fireOpenWizard();
+    });
+    await act(async () => {
+      getByTestId("close-wizard").click();
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    expect(onboardingMock.complete).toHaveBeenCalledTimes(1);
+  });
+
   it("does NOT call onboarding.complete when a non-first-run wizard closes", async () => {
     // Simulates Settings/toolbar re-opening the wizard after onboarding was
     // already completed. Those opens should not re-fire first-run telemetry.

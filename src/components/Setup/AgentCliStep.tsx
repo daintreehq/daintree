@@ -183,18 +183,24 @@ export function AgentCliStep({
     [selectedMethodIndex, onInstallComplete]
   );
 
-  const handleInstallAll = useCallback(async () => {
-    setIsBatchRunning(true);
-    for (const agentId of selectedAgentIds) {
-      if (!mountedRef.current) break;
-      const status = cardStatusesRef.current[agentId];
-      if (status === "installed" || status === "manual") continue;
-      await handleInstall(agentId);
-    }
-    if (mountedRef.current) {
-      setIsBatchRunning(false);
-    }
-  }, [selectedAgentIds, handleInstall]);
+  // Takes the ids the button advertised when it was pressed, not the live
+  // selection: "Install Claude" must not go on to retry another agent whose
+  // own install failed while this one ran.
+  const handleInstallAll = useCallback(
+    async (agentIds: readonly string[]) => {
+      setIsBatchRunning(true);
+      for (const agentId of agentIds) {
+        if (!mountedRef.current) break;
+        const status = cardStatusesRef.current[agentId];
+        if (status === "installed" || status === "manual") continue;
+        await handleInstall(agentId);
+      }
+      if (mountedRef.current) {
+        setIsBatchRunning(false);
+      }
+    },
+    [handleInstall]
+  );
 
   const handleMethodChange = useCallback((agentId: string, index: number) => {
     setSelectedMethodIndex((prev) => ({ ...prev, [agentId]: index }));
@@ -414,7 +420,7 @@ export function AgentCliStep({
         <Button
           variant={hasUsableSelection ? "outline" : "contrast"}
           disabled={isBatchRunning}
-          onClick={handleInstallAll}
+          onClick={() => void handleInstallAll(installableIds)}
           className="w-full"
           data-testid="agent-cli-install-primary"
         >

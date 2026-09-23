@@ -360,9 +360,13 @@ describe("AgentSetupWizard silent-default privacy notify", () => {
     setTelemetryLevelMock.mockRejectedValueOnce(new Error("IPC down"));
     await clickButton("Continue");
 
-    // Still here, with the switch that was not saved, and told why.
-    expect(document.querySelector('button[role="switch"]')).not.toBeNull();
-    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
+    // Still on Privacy (the permissions step has a switch too, so name it),
+    // and told why at a priority that reaches a toast.
+    expect(document.body.textContent).toContain("Enable crash reporting");
+    expect(document.body.textContent).not.toContain("Skip permission prompts for agents");
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", priority: "high" })
+    );
   });
 
   it("does not fire when isFirstRun is false (commit path is bypassed entirely)", async () => {

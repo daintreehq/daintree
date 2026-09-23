@@ -1094,10 +1094,12 @@ function AppearanceStep({
   onThemeSelect: (id: string) => void;
 }) {
   // A user who already picked another theme sees it offered first and
-  // selected, rather than a choice of two with neither marked.
+  // selected, rather than a choice of two with neither marked. Held from the
+  // step's first render, so trying Daintree does not take the way back away.
+  const [openingSchemeId] = useState(selectedSchemeId);
   const current = BUILT_IN_APP_SCHEMES.find(
     (scheme) =>
-      scheme.id === selectedSchemeId &&
+      scheme.id === openingSchemeId &&
       scheme.id !== daintreeScheme.id &&
       scheme.id !== bondiScheme.id
   );
