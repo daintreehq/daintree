@@ -60,6 +60,7 @@ export function DirectoryPickerField({
   disabled,
   placeholder = "Choose a folder…",
   browseLabel,
+  onEnter,
 }: {
   id: string;
   value: string;
@@ -68,6 +69,13 @@ export function DirectoryPickerField({
   placeholder?: string;
   /** Accessible name for the trailing button — name what is being chosen. */
   browseLabel: string;
+  /**
+   * Enter on a field that already holds a folder. Left alone it does nothing:
+   * reopening the picker on the keystroke that usually means "done" would be
+   * worse. A dialog that commits on Enter from its other fields passes its
+   * submit here so this one isn't the field where Enter goes dead.
+   */
+  onEnter?: () => void;
 }) {
   return (
     <div className={COMPOUND_FIELD}>
@@ -85,6 +93,9 @@ export function DirectoryPickerField({
           if (e.key === " " || (e.key === "Enter" && !value)) {
             e.preventDefault();
             onBrowse();
+          } else if (e.key === "Enter" && onEnter && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            onEnter();
           }
         }}
         className={cn(

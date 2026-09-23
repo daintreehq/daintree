@@ -324,13 +324,31 @@ function MoveOrRenameProjectDialogInner({
       ? false
       : !destinationChanged || preview === null || Boolean(loadError) || hasBlockers);
 
-  // Enter commits from any text field, but only through the same gate as the
-  // button — never a preview-less, blocked or doubled commit.
+  // Enter commits from any field, but only through the same gate as the button
+  // — never a preview-less, blocked or doubled commit. Focus moves to the
+  // primary first: committing freezes the field it was typed in, and a focused
+  // element that becomes disabled drops focus out of the dialog altogether.
+  const commitFromKeyboard = () => {
+    if (confirmDisabled || isApplying) return;
+    nameInputRef.current
+      ?.closest<HTMLElement>('[aria-modal="true"]')
+      ?.querySelector<HTMLElement>('[data-confirm-role="confirm"]')
+      ?.focus({ preventScroll: true });
+    void handleConfirm();
+  };
+
   const handleFieldKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     // Enter that confirms an IME candidate is composition, not submission.
     if (e.nativeEvent.isComposing || e.key !== "Enter") return;
     e.preventDefault();
-    if (!confirmDisabled && !isApplying) void handleConfirm();
+    commitFromKeyboard();
+  };
+
+  // Retry unmounts the banner holding the focused button, so hand focus to the
+  // control that decides what gets checked.
+  const handleRetryPreview = () => {
+    setPreviewAttempt((n) => n + 1);
+    document.getElementById(isReattach ? "relocate-existing" : "relocate-folder")?.focus();
   };
 
   const title = isReattach ? "Locate moved project" : "Move or rename project";
@@ -475,6 +493,7 @@ function MoveOrRenameProjectDialogInner({
                     disabled={isApplying}
                     placeholder="Choose where the folder is now…"
                     browseLabel="Browse for the project folder"
+                    onEnter={commitFromKeyboard}
                   />
                 </FormRow>
               </>
@@ -487,6 +506,7 @@ function MoveOrRenameProjectDialogInner({
                     onBrowse={() => void handleBrowseParent()}
                     disabled={isApplying}
                     browseLabel="Browse for a new location"
+                    onEnter={commitFromKeyboard}
                   />
                 </FormRow>
                 <FormRow
@@ -534,7 +554,7 @@ function MoveOrRenameProjectDialogInner({
                 preview={preview}
                 loadError={loadError}
                 oldPath={pending.oldPath}
-                onRetry={() => setPreviewAttempt((n) => n + 1)}
+                onRetry={handleRetryPreview}
               />
             )}
           </FormGrid>
