@@ -20,6 +20,13 @@ export function worktreeNameFromId(worktreeId: string): string {
 export const UNKNOWN_PROJECT_LABEL = "Another project";
 
 /**
+ * The source of an entry that names no project or worktree — disk space, the
+ * pty host, a plugin update. Those come from the app itself, and saying so
+ * keeps every row answering "where", instead of some rows falling silent.
+ */
+export const APP_SOURCE_LABEL = "Daintree";
+
+/**
  * Joins the resolved parts with the separator the row's metadata line uses. A
  * main worktree is named after the folder, which is usually the project's own
  * name, so it isn't repeated.

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArrowDown,
@@ -62,8 +62,8 @@ import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import {
+  APP_SOURCE_LABEL,
   UNKNOWN_PROJECT_LABEL,
-  formatNotificationSource,
   worktreeNameFromId,
 } from "@/lib/notificationSourceLabel";
 
@@ -266,18 +266,29 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
 
   const lastClosedAt = useUIStore((s) => s.lastNotificationCenterClosedAt);
   const currentProjectId = useProjectStore((s) => s.currentProject?.id);
-  const currentProjectOverrides = useProjectSettingsStore((s) =>
-    currentProjectId ? s.notificationOverridesByProjectId[currentProjectId] : undefined
-  );
+  const overridesByProjectId = useProjectSettingsStore((s) => s.notificationOverridesByProjectId);
+  const projects = useProjectStore((s) => s.projects);
+  const currentProjectOverrides = currentProjectId
+    ? overridesByProjectId[currentProjectId]
+    : undefined;
+  // Every project the inbox has heard from, since a silence set from one of
+  // their rows is as invisible as the current project's.
+  const inboxProjectIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const e of entries) if (e.context?.projectId) ids.add(e.context.projectId);
+    if (currentProjectId) ids.add(currentProjectId);
+    return [...ids].sort();
+  }, [entries, currentProjectId]);
+  const inboxProjectKey = inboxProjectIds.join(",");
   // Re-read on every open. "Silence … from this project" writes straight to
   // the project's settings file and tells no renderer store, so this is the
   // point where the inbox can find out (and find out about an Undo).
   useEffect(() => {
-    if (!open || !currentProjectId) return;
+    if (!open || inboxProjectKey === "") return;
     void useProjectSettingsStore
       .getState()
-      .loadNotificationOverridesForProjects([currentProjectId]);
-  }, [open, currentProjectId]);
+      .loadNotificationOverridesForProjects(inboxProjectKey.split(","));
+  }, [open, inboxProjectKey]);
   const resetLastClosedAt = useUIStore((s) => s.resetNotificationCenterLastClosedAt);
 
   const [filter, setFilter] = useState<"all" | "unread" | "archived" | "snoozed">("all");
@@ -986,13 +997,29 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     if (off.length === PROJECT_SILENCEABLE.length) return "This project is muted";
     return `This project: ${off.map(([, label]) => label).join(", ")} off`;
   })();
-  const hasSilences = silencedLabel !== "" || projectOffLabel !== "";
+  const otherProjectsOffLabel = (() => {
+    const silenced = inboxProjectIds.filter(
+      (id) =>
+        id !== currentProjectId &&
+        PROJECT_SILENCEABLE.some(([key]) => overridesByProjectId[id]?.[key] === false)
+    );
+    if (silenced.length === 0) return "";
+    const names = silenced.map((id) => projects.find((p) => p.id === id)?.name);
+    // Names while they fit; a count once they don't, or when one can't be named.
+    if (silenced.length <= 2 && names.every(Boolean)) {
+      return `Silenced in ${names.join(" and ")}`;
+    }
+    return `Silenced in ${silenced.length} other ${silenced.length === 1 ? "project" : "projects"}`;
+  })();
+  const hasSilences =
+    silencedLabel !== "" || projectOffLabel !== "" || otherProjectsOffLabel !== "";
   const showQuietStrip = showMutedPill || hasSilences;
   const quietCause = pillLabel || (hasSilences ? "Some notifications are off" : summaryHeroLine);
   const quietDetail = [
     pillLabel ? summaryHeroLine : "",
     pillLabel ? offLabel : silencedLabel,
     projectOffLabel,
+    otherProjectsOffLabel,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -1658,7 +1685,10 @@ function ChronoSection({
   const newSinceUnreadIds = section.groups
     .filter((g) => g.latestTimestamp > lastClosedAt)
     .flatMap((g) => g.entries.filter((e) => !e.seenAsToast).map((e) => e.id));
-  const sectionLabel = groupByContext ? "Notifications for this context" : "All notifications";
+  const sectionLabel = "All notifications";
+  // Grouped, the section's name is its header's — "Notifications for this
+  // context" named nothing a screen reader user could tell apart.
+  const headerLabelId = useId();
   // Where "new" ends: the first group at or before the watermark, marked only
   // when something newer sits above it in this same section — a section that
   // is all new or all old has no boundary to draw. The divider at the top
@@ -1686,6 +1716,7 @@ function ChronoSection({
       )}
       {groupByContext && (
         <ContextSectionHeader
+          labelId={headerLabelId}
           worktreeId={section.worktreeId}
           projectId={section.projectId}
           count={section.groups.length}
@@ -1698,7 +1729,11 @@ function ChronoSection({
           onMarkRead={() => onMarkIdsRead(sectionUnreadIds, { resetLastClosed: false })}
         />
       )}
-      <div role="group" aria-label={sectionLabel}>
+      <div
+        role="group"
+        aria-label={groupByContext ? undefined : sectionLabel}
+        aria-labelledby={groupByContext ? headerLabelId : undefined}
+      >
         {section.groups.map((group, idx) => {
           const groupKey = group.correlationId ?? group.entries[0]!.id;
           const isDivider = dividerGroupId !== null && groupKey === dividerGroupId;
@@ -1879,7 +1914,10 @@ function ContextSectionHeader({
   newCount,
   unreadIds,
   onMarkRead,
+  labelId,
 }: {
+  /** The name's element id, which the section's group takes as its label. */
+  labelId: string;
   worktreeId?: string;
   projectId?: string;
   count: number;
@@ -1901,12 +1939,14 @@ function ContextSectionHeader({
   // Names, never ids. A project id is a sha256 and a worktree id is a path, so
   // the old `worktreeName ?? worktreeId ?? projectId` fallback printed a
   // 64-character hash as the heading of any section from a project this view
-  // hasn't loaded — the normal case in a multi-project fleet.
-  const label =
-    formatNotificationSource(
-      projectName ?? (projectId ? UNKNOWN_PROJECT_LABEL : undefined),
-      worktreeId ? worktreeName?.trim() || worktreeNameFromId(worktreeId) : undefined
-    ) ?? "Other";
+  // hasn't loaded.
+  const project = projectName ?? (projectId ? UNKNOWN_PROJECT_LABEL : undefined);
+  const resolvedWorktree = worktreeId
+    ? worktreeName?.trim() || worktreeNameFromId(worktreeId)
+    : undefined;
+  // A main worktree is named after its folder, usually the project's own name.
+  const worktree = resolvedWorktree && resolvedWorktree !== project ? resolvedWorktree : undefined;
+  const label = [project, worktree].filter(Boolean).join(" · ") || APP_SOURCE_LABEL;
   const hasUnread = unreadIds.length > 0;
   return (
     <div
@@ -1917,8 +1957,18 @@ function ContextSectionHeader({
       className="flex items-center justify-between gap-2 pl-4 pr-3 py-1 bg-overlay-raised text-2xs font-medium text-text-secondary"
     >
       <span className="flex min-w-0 items-baseline gap-1.5">
-        <span className="truncate text-text-primary" title={label}>
-          {label}
+        {/* Two spans so the worktree survives a long project name. As one
+            string it truncated from the right, and the worktree — the part
+            that tells two sections of one project apart — went first. */}
+        <span id={labelId} className="flex min-w-0 items-baseline text-text-primary" title={label}>
+          {project ? <span className="min-w-0 truncate">{project}</span> : null}
+          {project && worktree ? (
+            <span aria-hidden="true" className="shrink-0 px-1 text-text-secondary">
+              ·
+            </span>
+          ) : null}
+          {worktree ? <span className="max-w-[65%] shrink-0 truncate">{worktree}</span> : null}
+          {!project && !worktree ? <span className="truncate">{APP_SOURCE_LABEL}</span> : null}
         </span>
         {/* Beside the name it counts, not beside the button — at the far end
             it read as part of "Mark read". */}

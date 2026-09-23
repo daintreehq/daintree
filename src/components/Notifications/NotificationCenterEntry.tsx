@@ -350,6 +350,20 @@ export function NotificationCenterEntry({
             {entry.message}
           </p>
         )}
+        {showChip && !entry.title && (
+          <span
+            key={bumpKey}
+            aria-label={formatNotificationCountAriaLabel(safeCount)}
+            data-notification-count="true"
+            style={{ animationDuration: `${DURATION_150}ms` }}
+            className={cn(
+              "col-span-2 row-start-2 mt-0.5 justify-self-start rounded-full bg-tint/15 px-1.5 py-0.5 text-3xs font-medium leading-none text-text-secondary tabular-nums min-w-[2.5ch] text-center",
+              bumpKey > 0 && "animate-badge-bump"
+            )}
+          >
+            {formatNotificationCountGlyph(safeCount)}
+          </span>
+        )}
         {/* Where it came from, and on a snoozed row when it comes back: quiet
             lines under the message rather than more weight on the title line.
             At fleet volume "Tests failed" is only half a fact until it says
@@ -375,20 +389,6 @@ export function NotificationCenterEntry({
           >
             {metaSource}
           </p>
-        )}
-        {showChip && !entry.title && (
-          <span
-            key={bumpKey}
-            aria-label={formatNotificationCountAriaLabel(safeCount)}
-            data-notification-count="true"
-            style={{ animationDuration: `${DURATION_150}ms` }}
-            className={cn(
-              "col-span-2 row-start-2 mt-0.5 justify-self-start rounded-full bg-tint/15 px-1.5 py-0.5 text-3xs font-medium leading-none text-text-secondary tabular-nums min-w-[2.5ch] text-center",
-              bumpKey > 0 && "animate-badge-bump"
-            )}
-          >
-            {formatNotificationCountGlyph(safeCount)}
-          </span>
         )}
         {entry.actions && entry.actions.length > 0 && (
           <div className="col-span-2 row-start-5 mt-1.5 flex flex-wrap gap-1.5">
@@ -675,6 +675,11 @@ function RowOptionsMenu({
   // never mounted, and the programmatic open left focus on <body>.
   const [snoozeOnly, setSnoozeOnly] = useState(false);
   const menuContentRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  // Set when `h` opened the menu. That path started on the ROW, and the list's
+  // keys only move between rows, so an Escape that handed focus to this
+  // trigger (the default) left the user outside j/k.
+  const openedFromRowRef = useRef(false);
   // Opened from the keyboard with nothing under the pointer, so focus goes on
   // the first duration explicitly. Radix's own open focus left it on <body>
   // for a programmatic open. One frame later so it lands after Radix's.
@@ -700,6 +705,7 @@ function RowOptionsMenu({
       return;
     }
     setSnoozeOnly(!isSnoozed);
+    openedFromRowRef.current = true;
     setOpen(true);
     onDropdownOpenChange?.(true);
     onConsumeSnoozePending?.();
@@ -758,6 +764,7 @@ function RowOptionsMenu({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
+          ref={triggerRef}
           aria-label={`Options for ${rowLabel}`}
           onClick={(e) => e.stopPropagation()}
           // `data-[state=open]` so the trigger reads as pressed while its menu
@@ -777,6 +784,17 @@ function RowOptionsMenu({
         sideOffset={4}
         className="min-w-[200px] max-w-[280px]"
         ref={menuContentRef}
+        onCloseAutoFocus={(event) => {
+          if (!openedFromRowRef.current) return;
+          openedFromRowRef.current = false;
+          const row = triggerRef.current?.closest('[role="listitem"]');
+          // A snooze removes the row; the list's own recovery then picks the
+          // neighbour. Only a cancel finds the row still here.
+          if (row instanceof HTMLElement) {
+            event.preventDefault();
+            row.focus({ preventScroll: true });
+          }
+        }}
       >
         {snoozeOnly ? (
           <>

@@ -9,6 +9,7 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import * as notifyLib from "@/lib/notify";
 import { NotificationCenter } from "../NotificationCenter";
 import { useProjectStore } from "@/store/projectStore";
+import { APP_SOURCE_LABEL } from "@/lib/notificationSourceLabel";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
@@ -1389,14 +1390,16 @@ describe("NotificationCenter — Group by context toggle", () => {
     expect(header.textContent).toContain("wt-unknown");
   });
 
-  it("falls back to 'Other' only when the entry has no worktreeId or projectId", () => {
-    useNotificationSettingsStore.setState({ groupByContext: true });
+  it("names an entry with no project or worktree as the app's own, in the header and on the row", () => {
     setEntries([makeEntry({ message: "Contextless" })]);
+    const { unmount } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const rowSource = screen.getByTestId("notification-source").textContent ?? "";
+    expect(rowSource).toBe(APP_SOURCE_LABEL);
+    unmount();
 
+    useNotificationSettingsStore.setState({ groupByContext: true });
     render(<NotificationCenter open onClose={vi.fn()} />);
-
-    const header = screen.getByTestId("context-section-header");
-    expect(header.textContent).toContain("Other");
+    expect(screen.getByTestId("context-section-header").textContent).toContain(rowSource);
   });
 
   it("renders distinct context sections for two unknown worktrees (no merge into one 'Other')", () => {
@@ -3166,5 +3169,49 @@ describe("NotificationCenter — fleet-volume triage", () => {
     const two = headers.find((h) => h.textContent?.includes("two"))!;
     expect(within(one).getByTestId("context-section-new").textContent).toContain("1 new");
     expect(within(two).queryByTestId("context-section-new")).toBeNull();
+  });
+
+  it("names each grouped section by its place for assistive tech, not a generic label", () => {
+    useNotificationSettingsStore.setState({ groupByContext: true });
+    worktreeStoreMock.worktrees.set("/w/login", { worktreeId: "/w/login", name: "feature/login" });
+    setEntries([makeEntry({ message: "m", context: { worktreeId: "/w/login" } })]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    expect(screen.getByRole("group", { name: /feature\/login/ })).toBeTruthy();
+  });
+
+  it("reports silences in other projects the inbox has heard from", () => {
+    const load = vi
+      .spyOn(useProjectSettingsStore.getState(), "loadNotificationOverridesForProjects")
+      .mockResolvedValue(undefined);
+    useProjectStore.setState({
+      projects: [{ id: "p2", path: "/atlas", name: "Atlas API", emoji: "🌲", lastOpened: 0 }],
+    });
+    useProjectSettingsStore.setState({
+      notificationOverridesByProjectId: { p2: { completedEnabled: false } },
+    });
+    setEntries([makeEntry({ message: "From Atlas", context: { projectId: "p2" } })]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    expect(screen.getByTestId("notification-muted-pill").textContent).toContain("Atlas API");
+    expect(load).toHaveBeenCalledWith(["p2"]);
+    load.mockRestore();
+    useProjectStore.setState({ projects: [] });
+    useProjectSettingsStore.setState({ notificationOverridesByProjectId: {} });
+  });
+
+  it("returns to the row after `h` then Escape, so j/k keep working", async () => {
+    setEntries([
+      makeEntry({ id: "a", title: "First", message: "m", correlationId: "c1" }),
+      makeEntry({ id: "b", title: "Second", message: "m", correlationId: "c2" }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    const rows = screen.getAllByRole("listitem");
+    act(() => rows[0]!.focus());
+    act(() => {
+      fireEvent.keyDown(rows[0]!, { key: "h" });
+    });
+    const items = await screen.findAllByRole("menuitem");
+    await waitFor(() => expect(document.activeElement).toBe(items[0]));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    await waitFor(() => expect(document.activeElement).toBe(rows[0]));
   });
 });
