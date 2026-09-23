@@ -25,6 +25,7 @@ import { NonMainSecondaryRow } from "./NonMainSecondaryRow";
 import { scheduleFlip } from "@/utils/flipScheduler";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { computeAlarmTier, formatAlarmDetail } from "@/lib/worktreeAlarmTier";
+import { PathSegments } from "@/components/ui/PathSegments";
 
 export interface WorktreeHeaderProps {
   worktree: WorktreeState;
@@ -406,9 +407,18 @@ export function WorktreeHeader({
                     <FolderOutput className="w-3.5 h-3.5 text-text-muted" aria-hidden="true" />
                   </span>
                 </TooltipTrigger>
-                <TooltipContent side="bottom" className="max-w-xs">
+                {/* Plain-text label: the path renders one box per folder, and
+                    Chromium puts a space between such boxes when it computes
+                    the tooltip's accessible text ("/ repo/ my project"). */}
+                <TooltipContent
+                  side="bottom"
+                  className="max-w-xs"
+                  aria-label={`Outside the project directory ${worktree.path}`}
+                >
                   <span className="block">Outside the project directory</span>
-                  <span className="mt-0.5 block font-mono text-2xs break-all">{worktree.path}</span>
+                  <span className="mt-0.5 block font-mono text-2xs">
+                    <PathSegments path={worktree.path} />
+                  </span>
                 </TooltipContent>
               </Tooltip>
             )}

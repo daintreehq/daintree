@@ -6,6 +6,7 @@ import { actionService } from "@/services/ActionService";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
+import { PathSegments } from "@/components/ui/PathSegments";
 
 export interface PluginViewDiagnosticsFallbackProps {
   /**
@@ -158,7 +159,9 @@ export function PluginViewDiagnosticsFallback({
           {panelName} ({diagnostics.kindId})
         </dd>
         <dt className="text-text-muted">Module</dt>
-        <dd className="font-mono break-all text-text-primary">{diagnostics.componentPath}</dd>
+        <dd className="font-mono text-text-primary">
+          <PathSegments path={diagnostics.componentPath} />
+        </dd>
         {diagnostics.incidentId && (
           <>
             <dt className="text-text-muted">Error ID</dt>

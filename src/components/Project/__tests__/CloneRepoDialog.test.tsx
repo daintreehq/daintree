@@ -497,6 +497,17 @@ describe("CloneRepoDialog", () => {
     expect(cloneRepoMock).toHaveBeenCalledTimes(1);
   });
 
+  it("announces an invalid folder name through the field, never as an interrupting alert", () => {
+    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+    const name = screen.getByLabelText(/^name$/i);
+    fireEvent.change(name, { target: { value: "repo:name" } });
+
+    expect(name.getAttribute("aria-invalid")).toBe("true");
+    const describedBy = name.getAttribute("aria-describedby");
+    expect(describedBy && document.getElementById(describedBy)?.textContent).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("names the URL as the blocker once it stops being clonable, even with a destination set", async () => {
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 

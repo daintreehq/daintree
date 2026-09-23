@@ -826,7 +826,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                   htmlFor="clone-folder-name"
                   hint={
                     folderNameError && (
-                      <p id={folderNameErrorId} role="alert" className="text-xs text-status-error">
+                      <p id={folderNameErrorId} className="text-xs text-status-error">
                         {folderNameError}
                       </p>
                     )

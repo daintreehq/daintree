@@ -42,6 +42,7 @@ import {
   type ProjectPluginInfo,
   type ProjectPluginState,
 } from "@shared/types/plugin";
+import { PathSegments } from "@/components/ui/PathSegments";
 
 /**
  * The word beside a project plugin's name.
@@ -373,7 +374,9 @@ function ProjectPluginPane({
           <SettingsRow
             label="Source"
             description={
-              <span className="font-mono break-all">.daintree/plugins/{plugin.dirName}</span>
+              <span className="font-mono">
+                <PathSegments path={`.daintree/plugins/${plugin.dirName}`} />
+              </span>
             }
           />
 

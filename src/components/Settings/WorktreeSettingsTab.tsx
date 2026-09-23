@@ -249,7 +249,8 @@ export function WorktreeSettingsTab() {
                   <div
                     id="path-pattern-error"
                     className="space-y-1 text-xs text-status-error"
-                    role="alert"
+                    // A failed save interrupts; the live pattern check doesn't.
+                    role={error ? "alert" : undefined}
                   >
                     {errorMessages.map((message) => (
                       <div key={message} className="flex items-start gap-2">
