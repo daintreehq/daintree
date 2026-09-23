@@ -211,7 +211,7 @@ export function IssuePickerDialog({
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Search issues by title or number..."
-            className="w-full pl-10 pr-4 py-2 bg-tint/5 border border-border-default rounded-[var(--radius-md)] text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40"
+            className="w-full pl-10 pr-4 py-2 bg-tint/5 border border-border-default rounded-[var(--radius-md)] text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-selection-outline"
           />
         </div>
 

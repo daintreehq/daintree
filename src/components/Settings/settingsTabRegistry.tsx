@@ -912,6 +912,8 @@ export const SETTINGS_REGISTRY = [
     group: "Terminal",
     label: "Toolbar",
     headerTitle: "Toolbar customization",
+    // Not the gear: that is project General's glyph, and global General's sliders
+    // already read as "settings". This is the strip along the top of the window.
     icon: <PanelTop className="w-4 h-4" />,
     importKind: "lazy",
     importer: importToolbarSettingsTab,
@@ -1982,9 +1984,18 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         keywords: ["branch", "prefix", "username", "git", "naming"],
       },
       {
+        id: "project-worktree-path-pattern",
+        section: "Worktree path pattern",
+        title: "Path pattern",
+        description: "Where this project's new worktrees are created, built from path variables",
+        keywords: ["worktree", "path", "pattern", "location", "directory", "folder", "variables"],
+      },
+      {
+        // Id kept for deep links; the names follow the heading the page renders, which
+        // is what a result with no DOM section lands by.
         id: "project-terminal-settings",
-        section: "Terminal settings",
-        title: "Terminal settings",
+        section: "Terminal defaults",
+        title: "Terminal defaults",
         description: "Project-specific shell, shell args, working directory, and scrollback",
         keywords: ["terminal", "shell", "bash", "zsh", "scrollback", "cwd"],
       },

@@ -247,6 +247,8 @@ export function SettingsRow({
       <div className="flex items-center gap-1.5 flex-wrap">
         <span
           id={labelId}
+          // The hook a search result lands by when its section has no DOM id.
+          data-settings-row-label=""
           className={cn("text-sm font-medium text-text-primary", disabled && "opacity-50")}
         >
           {label}

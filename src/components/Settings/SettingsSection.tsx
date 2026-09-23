@@ -49,6 +49,7 @@ export function SettingsSection({
         <div className="min-w-0 flex-1">
           <h4
             id={headingId}
+            data-settings-section-title=""
             className="text-sm font-semibold text-text-primary flex items-center gap-2 flex-wrap"
           >
             {title}

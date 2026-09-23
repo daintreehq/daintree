@@ -24,7 +24,7 @@ import {
   usePreferencesStore,
   useSettingsStore,
 } from "@/store";
-import { X, Search, ChevronRight, AlertTriangle } from "lucide-react";
+import { X, Search, ChevronRight, Info } from "lucide-react";
 import { ArrowLeftRight, TriangleAlert } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
@@ -33,6 +33,7 @@ import { appClient } from "@/clients";
 import type { AppVersionInfo } from "@shared/types/ipc/app";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { GeneralTab } from "./GeneralTab";
 import {
   SETTINGS_REGISTRY,
@@ -44,6 +45,7 @@ import {
   preloadAllSettingsTabs,
   scopeForTab,
   contentScopeForTab,
+  isSettingsTab,
   type SettingsTab,
   type SettingsScope,
   type LazySettingsTabEntry,
@@ -101,6 +103,65 @@ const SCOPE_OPTIONS = [
   { value: "global" as const, label: "Global" },
   { value: "project" as const, label: "Project" },
 ];
+
+const SEARCH_ENTRY_BY_ID = new Map(SETTINGS_SEARCH_INDEX.map((entry) => [entry.id, entry]));
+
+/**
+ * The settings whose change from default the dialog can see. Not every setting: the
+ * rest report a change on their own row (the modified bar and reset button), so the
+ * `@modified` empty state names this coverage rather than claiming nothing changed.
+ */
+export const MODIFIED_TRACKED_IDS = [
+  "general-project-pulse",
+  "general-developer-tools",
+  "general-grid-agent-highlights",
+  "general-dock-agent-highlights",
+  "terminal-performance-mode",
+  "terminal-scrollback",
+  "terminal-grid-layout",
+  "terminal-hybrid-input",
+  "terminal-hybrid-autofocus",
+  "terminal-two-pane-split",
+  "terminal-preview-layout",
+  "terminal-default-ratio",
+  "appearance-dock-density",
+] as const;
+type TrackedSettingId = (typeof MODIFIED_TRACKED_IDS)[number];
+
+/**
+ * What `@modified` can see, said wherever its results are: "tracks selected settings in
+ * General, Panel grid and Appearance — not project settings". A bare "2 results" read as
+ * an exhaustive audit when it is a sample.
+ */
+export function modifiedCoverageNote(): string {
+  const labels = [
+    ...new Set(
+      MODIFIED_TRACKED_IDS.map((id) => SEARCH_ENTRY_BY_ID.get(id)?.tabLabel).filter(
+        (label): label is string => !!label
+      )
+    ),
+  ];
+  const pages =
+    labels.length <= 1
+      ? labels.join("")
+      : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+  return `@modified tracks selected settings in ${pages} — not project settings`;
+}
+
+/** The tabs holding at least one of `settingIds` — what the sidebar's modified dot marks. */
+export function modifiedTabsFor(settingIds: ReadonlySet<string>): Set<SettingsTab> {
+  const tabs = new Set<SettingsTab>();
+  for (const id of settingIds) {
+    const tab = SEARCH_ENTRY_BY_ID.get(id)?.tab;
+    if (tab) tabs.add(tab);
+  }
+  return tabs;
+}
+
+// The page a Tab out of the sidebar lands on. Inset, so the ring sits inside the
+// scrollport instead of running under its edge fades and the header.
+const SETTINGS_PANEL_CLASS =
+  "rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2";
 
 export interface SettingsNavTarget {
   tab: SettingsTab;
@@ -230,6 +291,7 @@ function SettingsDialogInner({
       }
       setScrollToSection(defaultSectionId ?? null);
       setSearchQuery("");
+      setHiddenSettingBanner(null);
     } else if (isOpen) {
       // Untargeted open (toolbar/menu): always land on global scope
       const tab = rememberedTab;
@@ -280,19 +342,31 @@ function SettingsDialogInner({
     setSubtab(activeSubtabs[activeTab] ?? null);
   }, [activeTab, activeSubtabs, setTab, setSubtab]);
 
+  // Opening lands in search, the way a settings window's filter field does: the
+  // likeliest next keystroke is the name of the setting. A deep link to a section
+  // hands focus to that section's control instead, so it is left alone.
+  useEffect(() => {
+    if (!isOpen || defaultSectionId) return;
+    const frame = requestAnimationFrame(() =>
+      searchInputRef.current?.focus({ preventScroll: true })
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [isOpen, defaultSectionId]);
+
   // Keyboard shortcut: "/" or Cmd+F focuses search
   useEffect(() => {
     if (!isOpen) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      const isSearchShortcut = e.key === "/" || ((e.metaKey || e.ctrlKey) && e.key === "f");
+      const isFindChord = (e.metaKey || e.ctrlKey) && e.key === "f";
       const activeEl = document.activeElement as HTMLElement | null;
       const isEditingField =
         ["INPUT", "TEXTAREA"].includes(activeEl?.tagName ?? "") ||
         activeEl?.contentEditable === "true" ||
         activeEl?.isContentEditable === true;
 
-      if (isSearchShortcut && !isEditingField) {
+      // A bare "/" is text inside a field; the find chord never is.
+      if (isFindChord || (e.key === "/" && !isEditingField)) {
         e.preventDefault();
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
@@ -316,36 +390,25 @@ function SettingsDialogInner({
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
   const dockDensity = usePreferencesStore((s) => s.dockDensity);
 
-  const modifiedTabs = useMemo(() => {
-    const tabs = new Set<SettingsTab>();
-
-    // General defaults: showProjectPulse=true, showDeveloperTools=false, showGridAgentHighlights=false, showDockAgentHighlights=false
-    if (
-      !showProjectPulse ||
-      showDeveloperTools ||
-      showGridAgentHighlights ||
-      showDockAgentHighlights
-    )
-      tabs.add("general");
-
-    // Terminal defaults: performanceMode=false, scrollback=SCROLLBACK_DEFAULT, strategy=automatic,
-    // hybridInput=true, hybridAutoFocus=true, twoPaneSplit.enabled=true, preferPreview=false, ratio=0.5
-    if (
-      performanceMode ||
-      scrollbackLines !== SCROLLBACK_DEFAULT ||
-      layoutConfig.strategy !== "automatic" ||
-      !hybridInputEnabled ||
-      !hybridInputAutoFocus ||
-      !twoPaneSplitConfig.enabled ||
-      twoPaneSplitConfig.preferPreview ||
-      Math.round(twoPaneSplitConfig.defaultRatio * 100) !== 50
-    ) {
-      tabs.add("terminal");
-    }
-
-    if (dockDensity !== "normal") tabs.add("terminalAppearance");
-
-    return tabs;
+  // Tracked per setting so `@modified` lists what actually changed; the sidebar dot is
+  // the same set rolled up to the tab each setting lives on.
+  const modifiedSettingIds = useMemo(() => {
+    const changed: Record<TrackedSettingId, boolean> = {
+      "general-project-pulse": !showProjectPulse,
+      "general-developer-tools": showDeveloperTools,
+      "general-grid-agent-highlights": showGridAgentHighlights,
+      "general-dock-agent-highlights": showDockAgentHighlights,
+      "terminal-performance-mode": performanceMode,
+      "terminal-scrollback": scrollbackLines !== SCROLLBACK_DEFAULT,
+      "terminal-grid-layout": layoutConfig.strategy !== "automatic",
+      "terminal-hybrid-input": !hybridInputEnabled,
+      "terminal-hybrid-autofocus": !hybridInputAutoFocus,
+      "terminal-two-pane-split": !twoPaneSplitConfig.enabled,
+      "terminal-preview-layout": twoPaneSplitConfig.preferPreview,
+      "terminal-default-ratio": Math.round(twoPaneSplitConfig.defaultRatio * 100) !== 50,
+      "appearance-dock-density": dockDensity !== "normal",
+    };
+    return new Set(MODIFIED_TRACKED_IDS.filter((id) => changed[id]));
   }, [
     showProjectPulse,
     showDeveloperTools,
@@ -361,6 +424,8 @@ function SettingsDialogInner({
     twoPaneSplitConfig.preferPreview,
     twoPaneSplitConfig.defaultRatio,
   ]);
+
+  const modifiedTabs = useMemo(() => modifiedTabsFor(modifiedSettingIds), [modifiedSettingIds]);
 
   const projectForm = useProjectSettingsForm({ projectId: projectId ?? null, isOpen });
   const showProjectLoading = useDohertyGate(projectForm.projectIsLoading);
@@ -435,10 +500,11 @@ function SettingsDialogInner({
     () =>
       filterSettings(SETTINGS_SEARCH_INDEX, deferredQuery, {
         modifiedTabs,
+        modifiedSettingIds,
         scope: activeScope,
         hasProject,
       }),
-    [deferredQuery, modifiedTabs, activeScope, hasProject]
+    [deferredQuery, modifiedTabs, modifiedSettingIds, activeScope, hasProject]
   );
 
   const cleanSearchQuery = useMemo(() => parseQuery(deferredQuery).cleanQuery, [deferredQuery]);
@@ -449,13 +515,19 @@ function SettingsDialogInner({
   // deferredQuery drives the expensive filtering computation only.
   const isSearching = searchQuery.trim().length > 0;
 
+  // What a gated result depends on, held until its landing reports whether the setting
+  // was actually on the page. Showing the note up front claimed the setting was hidden
+  // even when its parent was already on.
+  const pendingRequirementRef = useRef<{ settingId: string; label: string } | null>(null);
+
   const handleResultClick = (
     { tab, subtab, sectionId }: SettingsNavTarget,
     requiresEnabled?: { settingId: string; label: string }
   ) => {
     markTabVisited(tab);
     setSearchQuery("");
-    setHiddenSettingBanner(requiresEnabled ?? null);
+    setHiddenSettingBanner(null);
+    pendingRequirementRef.current = requiresEnabled ?? null;
     if (subtab !== undefined) {
       setActiveSubtabs((prev) => ({ ...prev, [tab]: subtab }));
     }
@@ -517,11 +589,15 @@ function SettingsDialogInner({
     }
   };
 
-  const handleScrollToSectionHandled = (sectionId: string) => {
+  const handleScrollToSectionHandled = (sectionId: string, landed: boolean) => {
     setScrollToSection((current) => (current === sectionId ? null : current));
+    const requirement = pendingRequirementRef.current;
+    pendingRequirementRef.current = null;
+    if (requirement && !landed) setHiddenSettingBanner(requirement);
   };
 
   const handleNavSelect = (tab: SettingsTab) => {
+    setFocusedNavTab(null);
     markTabVisited(tab);
     setSearchQuery("");
     setScrollToSection(null);
@@ -532,6 +608,7 @@ function SettingsDialogInner({
   const handleScopeSwitch = (scope: SettingsScope) => {
     if (scope === activeScope) return;
     setSearchQuery("");
+    setHiddenSettingBanner(null);
     const tab = scope === "project" ? rememberedProjectTab : rememberedTab;
     markTabVisited(tab);
     // Scope rides in the same transition as the tab, for the reason handleResultClick
@@ -545,6 +622,10 @@ function SettingsDialogInner({
   };
 
   const tablistRef = useRef<HTMLDivElement>(null);
+  // Manual activation: the arrow keys move focus without selecting, so the one tab
+  // stop has to follow focus rather than stay on the selected tab. Null means "the
+  // selected tab", which is also where it returns once focus leaves the list.
+  const [focusedNavTab, setFocusedNavTab] = useState<SettingsTab | null>(null);
 
   // A deep link or search hit can land on a tab below the nav's fold — MCP, Plugins,
   // Run history — leaving the page with no visible "you are here". Keep the active
@@ -564,6 +645,18 @@ function SettingsDialogInner({
     const tabs = Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'));
     const focusedIndex = tabs.indexOf(document.activeElement as HTMLElement);
     if (focusedIndex === -1) return;
+
+    // Forward Tab leaves the list for the page it selects, as the tabs pattern expects:
+    // in DOM order the header's close button sat between them, one extra stop on every
+    // trip into the content. Close stays reachable — Shift+Tab from the page.
+    if (e.key === "Tab" && !e.shiftKey && !isSearching) {
+      const panel = document.getElementById(`settings-panel-${activeTab}`);
+      if (panel) {
+        e.preventDefault();
+        panel.focus({ preventScroll: true });
+      }
+      return;
+    }
 
     let nextIndex: number | null = null;
 
@@ -588,7 +681,14 @@ function SettingsDialogInner({
     // Manual activation: arrow keys move focus only. Native <button role="tab">
     // already fires onClick on Enter/Space, so the existing onSelect handler
     // covers activation without an explicit keydown branch here.
-    tabs[nextIndex]!.focus();
+    const next = tabs[nextIndex]!;
+    const nextTab = next.dataset.tab;
+    setFocusedNavTab(nextTab && isSettingsTab(nextTab) ? nextTab : null);
+    next.focus();
+  };
+
+  const handleTablistBlur = (e: React.FocusEvent<HTMLDivElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocusedNavTab(null);
   };
 
   // What the header says the change lands on. Derived from the ACTIVE TAB's content
@@ -614,11 +714,25 @@ function SettingsDialogInner({
       onClose={handleDialogClose}
       onBeforeClose={handleBeforeClose}
       size="4xl"
+      // Search owns first focus (below), not the first tabbable — which was the scope
+      // control, so every open painted a focus ring on "Global" and typing did nothing.
+      initialFocus="none"
       maxHeight="h-[75vh]"
       className="settings-shell min-h-[500px] max-h-[800px]"
     >
       <div className="flex h-full overflow-hidden">
-        <div className="settings-sidebar w-52 border-r border-border-default p-3 flex flex-col shrink-0">
+        <div
+          className="settings-sidebar w-52 border-r border-border-default p-3 flex flex-col shrink-0"
+          // Escape clears an active search before it closes the dialog wherever focus sits
+          // in the sidebar, not only inside the field — Tab to the nav and back out was
+          // otherwise one keypress from losing the whole dialog.
+          onKeyDown={(e) => {
+            if (e.key !== "Escape" || !searchQuery || e.target === searchInputRef.current) return;
+            e.stopPropagation();
+            setSearchQuery("");
+            searchInputRef.current?.focus();
+          }}
+        >
           <div className="mb-3 px-2 space-y-2">
             <h2 className="text-sm font-semibold text-text-primary">Settings</h2>
             {hasProject && (
@@ -641,8 +755,12 @@ function SettingsDialogInner({
           <div
             className={cn(
               "flex items-center gap-1.5 px-2 py-1.5 mb-3 rounded-[var(--radius-md)]",
-              "settings-search border border-border-strong",
-              "focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20"
+              // The same boundary token as every text field (`Input`), so a theme that tunes its
+              // field edge tunes this one too; the magnifier and placeholder identify it.
+              "settings-search border border-border-input",
+              // Neutral, the palette input's own focus lift: the sidebar's active marker is
+              // this region's accent, and a second accent edge beside it split the eye.
+              "focus-within:border-selection-outline focus-within:ring-1 focus-within:ring-selection-outline/50"
             )}
           >
             <Search
@@ -668,9 +786,11 @@ function SettingsDialogInner({
                   searchInputRef.current?.focus();
                 }}
                 aria-label="Clear search"
-                className="flex items-center justify-center w-5 h-5 rounded-[var(--radius-sm)] shrink-0 text-text-secondary hover:text-text-primary"
+                // -my keeps the 20px target from growing the 16px field line, which
+                // pushed the whole nav down 8px the moment a query was typed.
+                className="-my-0.5 flex items-center justify-center w-5 h-5 rounded-[var(--radius-sm)] shrink-0 text-text-secondary hover:text-text-primary"
               >
-                <X className="w-3 h-3" />
+                <X className="w-3 h-3" aria-hidden="true" />
               </button>
             )}
           </div>
@@ -686,11 +806,15 @@ function SettingsDialogInner({
           <ScrollShadow
             className="flex-1 min-h-0"
             scrollClassName="space-y-3"
+            // The nav always overflows at ordinary window heights, and the full fade
+            // washed a whole row out until it read as a disabled item.
+            compact
             ref={tablistRef}
             role="tablist"
             aria-orientation="vertical"
             aria-label="Settings sections"
             onKeyDown={handleTablistKeyDown}
+            onBlur={handleTablistBlur}
           >
             <LayoutGroup id="settings-nav">
               {getSettingsNavGroups(activeScope).map((group) => (
@@ -705,6 +829,7 @@ function SettingsDialogInner({
                         icon={entry.icon}
                         label={entry.label}
                         activeTab={activeTab}
+                        tabStop={(focusedNavTab ?? activeTab) === tabId}
                         isSearching={isSearching}
                         matchCount={matchCounts[tabId]}
                         modified={modifiedTabs.has(tabId)}
@@ -752,6 +877,14 @@ function SettingsDialogInner({
                 {scopeAnnouncement(headerScope, hasProject ? projectLabel : null)}
               </span>
               {isSearching ? "Search results" : tabTitles[activeTab]}
+              {headerScope !== activeScope && (
+                // The one exception to "the nav names the scope": a tab filed under
+                // Global whose controls all write to the project. Hidden from the
+                // accessible name, which already says so through the sr-only clause.
+                <span aria-hidden="true" className="flex font-normal">
+                  <ScopeChip scope={headerScope} projectLabel={hasProject ? projectLabel : null} />
+                </span>
+              )}
             </AppDialog.Title>
             <AppDialog.CloseButton aria-label="Close settings" />
           </AppDialog.Header>
@@ -806,43 +939,46 @@ function SettingsDialogInner({
             <div className={isSearching ? "hidden" : undefined}>
               <>
                 {hiddenSettingBanner && (
+                  // An explanation, not a warning: nothing is wrong, the setting is
+                  // simply behind a switch. So it takes the neutral info treatment the
+                  // dependents' disabled reason uses, and the link does the work.
                   <div
-                    className="text-sm text-status-warning bg-status-warning/10 border border-status-warning/20 rounded-[var(--radius-md)] p-3 mb-4 flex items-start justify-between gap-3"
-                    role="alert"
+                    className="settings-card mb-6 flex items-start gap-2 rounded-[var(--radius-lg)] border border-border-default py-2.5 pl-4 pr-2 text-sm text-text-secondary"
+                    role="status"
                   >
-                    <div className="flex items-start gap-2">
-                      <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-                      <span>
-                        This setting is only visible when{" "}
-                        <button
-                          className="underline font-medium hover:opacity-80"
-                          onClick={() => {
-                            const parent = SETTINGS_SEARCH_INDEX.find(
-                              (e) => e.id === hiddenSettingBanner.settingId
+                    <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                    <p className="min-w-0 flex-1 py-px">
+                      The setting you opened only appears when{" "}
+                      <button
+                        type="button"
+                        className="rounded-sm font-medium text-text-primary underline underline-offset-2 hover:decoration-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                        onClick={() => {
+                          const parent = SETTINGS_SEARCH_INDEX.find(
+                            (e) => e.id === hiddenSettingBanner.settingId
+                          );
+                          if (parent) {
+                            handleResultClick(
+                              {
+                                tab: parent.tab,
+                                subtab: parent.subtab,
+                                sectionId: parent.id,
+                              },
+                              parent.requiresEnabled
                             );
-                            if (parent) {
-                              handleResultClick(
-                                {
-                                  tab: parent.tab,
-                                  subtab: parent.subtab,
-                                  sectionId: parent.id,
-                                },
-                                parent.requiresEnabled
-                              );
-                            }
-                          }}
-                        >
-                          {midSentenceLabel(hiddenSettingBanner.label)}
-                        </button>{" "}
-                        is enabled.
-                      </span>
-                    </div>
+                          }
+                        }}
+                      >
+                        {midSentenceLabel(hiddenSettingBanner.label)}
+                      </button>{" "}
+                      is on
+                    </p>
                     <button
+                      type="button"
                       aria-label="Dismiss"
                       onClick={() => setHiddenSettingBanner(null)}
-                      className="shrink-0 opacity-60 hover:opacity-100"
+                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary hover:bg-overlay-soft hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                     >
-                      <X className="w-4 h-4" />
+                      <X className="h-3.5 w-3.5" aria-hidden="true" />
                     </button>
                   </div>
                 )}
@@ -856,7 +992,7 @@ function SettingsDialogInner({
                       id={`settings-panel-${entry.id}`}
                       aria-labelledby={`settings-tab-${entry.id}`}
                       tabIndex={0}
-                      className={isActive ? "" : "hidden"}
+                      className={isActive ? SETTINGS_PANEL_CLASS : "hidden"}
                     >
                       {entry.importKind === "eager" ? (
                         // Only GeneralTab is eager — render with its specific props
@@ -866,6 +1002,7 @@ function SettingsDialogInner({
                             buildArch={buildArch}
                             onNavigateToAgents={(agentId?: string) => {
                               markTabVisited("agents");
+                              setHiddenSettingBanner(null);
                               if (agentId) {
                                 setActiveSubtabs((prev) => ({ ...prev, agents: agentId }));
                               }
@@ -913,7 +1050,7 @@ function SettingsDialogInner({
                           id={`settings-panel-${entry.id}`}
                           aria-labelledby={`settings-tab-${entry.id}`}
                           tabIndex={0}
-                          className={isActive ? "" : "hidden"}
+                          className={isActive ? SETTINGS_PANEL_CLASS : "hidden"}
                         >
                           {visitedTabs.has(tabId) && (
                             <Suspense fallback={null}>
@@ -962,7 +1099,7 @@ function LazyTabContent({
   onSettingsChange?: () => void;
   isActive: boolean;
   scrollToSectionId: string | null;
-  onScrollToSectionHandled: (id: string) => void;
+  onScrollToSectionHandled: (id: string, landed: boolean) => void;
 }) {
   const id = entry.id as SettingsTab;
   const activeSubtab = activeSubtabs[id] ?? null;
@@ -985,7 +1122,7 @@ function LazyTabContent({
   // Runs synchronously after the lazy chunk's Suspense boundary commits, so
   // the target section element is guaranteed to exist in the DOM. Replaces
   // the rAF polling loop that was racing the Suspense reveal (#6878).
-  useSettingsScrollToSection(isActive, scrollToSectionId, onScrollToSectionHandled);
+  useSettingsScrollToSection(isActive, scrollToSectionId, onScrollToSectionHandled, id);
 
   const LazyComp = entry.LazyComponent;
   return <LazyComp {...props} />;
@@ -1012,9 +1149,14 @@ function ProjectFormTabContent({
   projectLabel: string;
   isActive: boolean;
   scrollToSectionId: string | null;
-  onScrollToSectionHandled: (id: string) => void;
+  onScrollToSectionHandled: (id: string, landed: boolean) => void;
 }) {
-  useSettingsScrollToSection(isActive, scrollToSectionId, onScrollToSectionHandled);
+  useSettingsScrollToSection(
+    isActive,
+    scrollToSectionId,
+    onScrollToSectionHandled,
+    entry.id as SettingsTab
+  );
 
   const LazyComp = entry.LazyComponent;
 
@@ -1166,13 +1308,79 @@ function ProjectFormTabContent({
 // within it, and applies the highlight pulse. Returns whether the element
 // was found. Stays a module-level helper so it can be unit-tested in
 // isolation without React's effect machinery.
+// The control a landed-on section hands focus to: its setting first (a switch, a
+// select, a field), then anything else operable in it. Only looking for an <input>
+// left focus stranded in the search box for every switch, select and button row.
+const SECTION_CONTROL_SELECTOR = [
+  'input:not([type="hidden"]):not([disabled])',
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  '[role="switch"]:not([disabled])',
+  '[role="combobox"]:not([disabled])',
+  '[role="radio"][tabindex="0"]',
+].join(", ");
+const SECTION_FALLBACK_SELECTOR = 'button:not([disabled]), a[href], [tabindex="0"]';
+
+function landOn(el: HTMLElement): void {
+  el.scrollIntoView({ behavior: "instant", block: "start" });
+  const control =
+    el.querySelector<HTMLElement>(SECTION_CONTROL_SELECTOR) ??
+    el.querySelector<HTMLElement>(SECTION_FALLBACK_SELECTOR);
+  control?.focus({ preventScroll: true });
+  el.classList.add("settings-highlight");
+  setTimeout(() => el.classList.remove("settings-highlight"), SETTINGS_HIGHLIGHT_DECAY_MS);
+}
+
+function sameText(a: string | null | undefined, b: string): boolean {
+  return (a ?? "").trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/** The settings row labelled `title` inside `root`, if one renders there. */
+function findRowByLabel(root: ParentNode, title: string): HTMLElement | null {
+  for (const label of root.querySelectorAll<HTMLElement>("[data-settings-row-label]")) {
+    if (sameText(label.textContent, title))
+      return label.closest<HTMLElement>("[data-settings-row]");
+  }
+  return null;
+}
+
+/** The section headed `heading` inside `root`. Compares the title text, not a badge. */
+function findSectionByTitle(root: ParentNode, heading: string): HTMLElement | null {
+  for (const h of root.querySelectorAll<HTMLElement>("[data-settings-section-title]")) {
+    if (sameText(h.firstChild?.textContent, heading)) {
+      return h.closest<HTMLElement>(".settings-section");
+    }
+  }
+  return null;
+}
+
 export function scrollAndHighlightSettingsSection(sectionId: string): boolean {
   const el = document.getElementById(sectionId);
   if (!el) return false;
-  el.scrollIntoView({ behavior: "instant", block: "start" });
-  el.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
-  el.classList.add("settings-highlight");
-  setTimeout(() => el.classList.remove("settings-highlight"), SETTINGS_HIGHLIGHT_DECAY_MS);
+  // A section id can name a whole section; the result the user picked names one row
+  // in it, so land on that row when it is there.
+  const entry = SEARCH_ENTRY_BY_ID.get(sectionId);
+  landOn((entry && findRowByLabel(el, entry.title)) || el);
+  return true;
+}
+
+/**
+ * Lands on a search target whose id is not in the DOM — most project settings index a
+ * virtual id — by the words the page renders: the row labelled with the result's title,
+ * else the section it names. Returns whether anything was found.
+ */
+export function landOnSettingByText(sectionId: string, tab: SettingsTab): boolean {
+  const entry = SEARCH_ENTRY_BY_ID.get(sectionId);
+  const panel = document.getElementById(`settings-panel-${tab}`);
+  if (!entry || entry.kind !== "section" || !panel) return false;
+  // A gated setting's section renders while the setting itself is hidden, so landing
+  // on the heading would report "found" for a row that is not there. Only its own
+  // row counts.
+  const target =
+    findRowByLabel(panel, entry.title) ??
+    (entry.requiresEnabled ? null : findSectionByTitle(panel, entry.section));
+  if (!target) return false;
+  landOn(target);
   return true;
 }
 
@@ -1237,16 +1445,29 @@ export function useHoverIntentPrefetch({
 // `onHandled` is called unconditionally so the parent can clear pending
 // state even when the section id doesn't resolve to a real DOM element
 // (e.g. project tab search entries with non-DOM ids).
+// A target with no DOM section — a page result, or a project entry with a virtual id —
+// lands on the page's own nav tab, so the keyboard user arrives somewhere that names
+// the page and one Tab away from its content, instead of on a blurred search box.
+//
+// `onHandled` learns whether the setting itself was found. A section result that is
+// not on the page is one hidden behind a switch, which is what the dialog's
+// "only appears when" note exists to explain — and only then.
 export function useSettingsScrollToSection(
   isActive: boolean,
   scrollToSectionId: string | null,
-  onHandled: (id: string) => void
+  onHandled: (id: string, landed: boolean) => void,
+  tab?: SettingsTab
 ): void {
   useLayoutEffect(() => {
     if (!isActive || !scrollToSectionId) return;
-    scrollAndHighlightSettingsSection(scrollToSectionId);
-    onHandled(scrollToSectionId);
-  }, [isActive, scrollToSectionId, onHandled]);
+    const landed =
+      scrollAndHighlightSettingsSection(scrollToSectionId) ||
+      (tab !== undefined && landOnSettingByText(scrollToSectionId, tab));
+    if (!landed && tab) {
+      document.getElementById(`settings-tab-${tab}`)?.focus({ preventScroll: true });
+    }
+    onHandled(scrollToSectionId, landed);
+  }, [isActive, scrollToSectionId, onHandled, tab]);
 }
 
 function SettingsTabScrollEffect({
@@ -1256,9 +1477,9 @@ function SettingsTabScrollEffect({
 }: {
   isActive: boolean;
   scrollToSectionId: string | null;
-  onScrollToSectionHandled: (id: string) => void;
+  onScrollToSectionHandled: (id: string, landed: boolean) => void;
 }) {
-  useSettingsScrollToSection(isActive, scrollToSectionId, onScrollToSectionHandled);
+  useSettingsScrollToSection(isActive, scrollToSectionId, onScrollToSectionHandled, "general");
   return null;
 }
 
@@ -1286,6 +1507,8 @@ interface NavItemProps {
   icon: React.ReactNode;
   label: string;
   activeTab: SettingsTab;
+  /** Holds the list's one tab stop. Defaults to the selected tab. */
+  tabStop?: boolean;
   isSearching: boolean;
   matchCount?: number;
   modified?: boolean;
@@ -1305,6 +1528,7 @@ export function NavItem({
   icon,
   label,
   activeTab,
+  tabStop,
   isSearching,
   matchCount,
   modified,
@@ -1325,7 +1549,7 @@ export function NavItem({
       id={`settings-tab-${tab}`}
       aria-selected={selected}
       aria-controls={`settings-panel-${tab}`}
-      tabIndex={selected ? 0 : -1}
+      tabIndex={(tabStop ?? selected) ? 0 : -1}
       data-tab={tab}
       onClick={() => onSelect(tab)}
       onMouseEnter={onEnter}
@@ -1333,10 +1557,12 @@ export function NavItem({
       onFocus={onEnter}
       onBlur={onLeave}
       className={cn(
-        // scroll-my clears the list's 32px scroll fade, so keeping the active item in
+        // scroll-my clears the list's 16px scroll fade, so keeping the active item in
         // view never parks it under the fade where it reads as dimmed.
-        "relative text-left px-3 py-1.5 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full scroll-my-10",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+        "relative text-left px-3 py-1.5 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full scroll-my-6",
+        // Inset, like the subtab bar: the item spans the scrollport, so a positive
+        // offset had both vertical sides of the ring clipped away.
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
         "settings-nav-item",
         active ? "text-text-primary" : "text-text-secondary hover:text-text-primary"
       )}
@@ -1356,7 +1582,7 @@ export function NavItem({
         <m.span
           layoutId={`active-indicator-${scopeForTab(tab)}`}
           layout="position"
-          className="pointer-events-none absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-r bg-accent-primary"
+          className="pointer-events-none absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-r-full bg-accent-primary"
           transition={{ duration: getUiAnimationDuration() / 1000, ease: EASE_OUT_EXPO_FM }}
           aria-hidden="true"
           data-settings-nav-indicator="true"
@@ -1473,6 +1699,30 @@ export function ScopeChip({
   );
 }
 
+/**
+ * Where a result lives, in the words the sidebar and the page use: page, then subtab,
+ * then section. A page result is the page itself, so it says so instead of repeating
+ * its own title, and a section named the same as the result's title (or its subtab)
+ * is dropped rather than printed twice.
+ */
+export function resultBreadcrumb(result: {
+  kind: "tab-nav" | "section";
+  tabLabel: string;
+  subtabLabel?: string;
+  section: string;
+  title: string;
+}): string[] {
+  if (result.kind === "tab-nav") return ["Page"];
+  const crumbs = [result.tabLabel];
+  const seen = new Set([result.tabLabel.toLowerCase(), result.title.toLowerCase()]);
+  for (const part of [result.subtabLabel, result.section]) {
+    if (!part || seen.has(part.toLowerCase())) continue;
+    seen.add(part.toLowerCase());
+    crumbs.push(part);
+  }
+  return crumbs;
+}
+
 /** The listbox half of the search combobox; `aria-controls` points here. */
 export const SEARCH_RESULTS_LISTBOX_ID = "settings-search-results";
 
@@ -1549,105 +1799,130 @@ export function SearchResults({
       <EmptyState
         variant="zero-data"
         scale="canvas"
-        title="No modified settings"
-        description="No settings have been changed from their defaults"
+        title="No tracked changes"
+        description={`${modifiedCoverageNote()}. Other changes are marked on their own rows.`}
       />
     );
   }
 
+  // One scope exists without a project, so a chip on every row would say nothing.
+  const showScope = projectLabel !== null;
+  const filteringModified = parseQuery(query).filterModified;
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-3">
+      <div className={cn("flex items-center justify-between", filteringModified ? "mb-1" : "mb-3")}>
         <p className="text-xs text-text-secondary">
           <span className="tabular-nums">{results.length}</span> result
           {results.length === 1 ? "" : "s"}
         </p>
         {/* Real instructions, not a placeholder — they take the secondary ramp. */}
-        <p className="text-3xs text-text-secondary">
-          <kbd className="settings-kbd px-1 py-0.5 rounded border font-mono">↑↓</kbd> navigate{" "}
-          <kbd className="settings-kbd px-1 py-0.5 rounded border font-mono">↵</kbd> go
+        <p className="shrink-0 whitespace-nowrap text-3xs text-text-secondary">
+          <kbd className="settings-kbd px-1 py-0.5 rounded-sm border font-mono">↑↓</kbd> navigate{" "}
+          <kbd className="settings-kbd px-1 py-0.5 rounded-sm border font-mono">↵</kbd> open
         </p>
       </div>
+      {filteringModified && (
+        // Its own line: beside the count it wrapped and crushed the key hints.
+        <p className="mb-3 text-xs text-text-secondary">{modifiedCoverageNote()}</p>
+      )}
       <div
         id={SEARCH_RESULTS_LISTBOX_ID}
         role="listbox"
         aria-label="Search results"
         className="space-y-1"
       >
-        {results.map((result, index) => (
-          <button
-            key={result.id}
-            id={searchResultOptionId(result.id)}
-            // The button IS the option — a role="option" wrapper around a button
-            // would nest interactive roles. Overriding the implicit button role
-            // keeps the click while giving the listbox the child it requires and
-            // the input something to point at.
-            //
-            // Out of the Tab sequence: focus is virtual and owned by the input.
-            // Left tabbable, a Tab into a row moved DOM focus without moving the
-            // highlight, and the arrow keys — handled on the input — went dead.
-            role="option"
-            tabIndex={-1}
-            aria-selected={index === activeIndex}
-            ref={index === activeIndex ? activeRef : undefined}
-            onClick={() =>
-              onResultClick(
-                { tab: result.tab, subtab: result.subtab, sectionId: result.id },
-                result.requiresEnabled
-              )
-            }
-            className={cn(
-              "group w-full text-left p-3 rounded-[var(--radius-md)] border transition-colors",
-              index === activeIndex
-                ? "bg-overlay-selected border-border-strong"
-                : "border-transparent hover:bg-overlay-soft hover:border-border-default",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-            )}
-          >
-            <div className="flex items-center gap-3">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-0.5">
-                  <ScopeChip
-                    scope={result.scope}
-                    projectLabel={projectLabel}
-                    crossScope={result.scope !== activeScope}
-                  />
-                  <span className="text-3xs font-medium text-text-secondary uppercase tracking-wide">
-                    {result.tabLabel}
-                  </span>
-                  {result.subtabLabel && (
-                    <>
-                      <span className="text-3xs text-daintree-text/30">›</span>
-                      <span className="text-3xs text-text-secondary">{result.subtabLabel}</span>
-                    </>
-                  )}
-                  <span className="text-3xs text-daintree-text/30">›</span>
-                  <span className="text-3xs text-text-secondary">{result.section}</span>
-                  {result.requiresEnabled && (
-                    <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-3xs font-medium text-status-warning shrink-0">
-                      <AlertTriangle className="w-3 h-3" />
-                      Requires {midSentenceLabel(result.requiresEnabled.label)}
+        {results.map((result, index) => {
+          const crumbs = resultBreadcrumb(result);
+          return (
+            <button
+              key={result.id}
+              id={searchResultOptionId(result.id)}
+              // The button IS the option — a role="option" wrapper around a button
+              // would nest interactive roles. Overriding the implicit button role
+              // keeps the click while giving the listbox the child it requires and
+              // the input something to point at.
+              //
+              // Out of the Tab sequence: focus is virtual and owned by the input.
+              // Left tabbable, a Tab into a row moved DOM focus without moving the
+              // highlight, and the arrow keys — handled on the input — went dead.
+              role="option"
+              tabIndex={-1}
+              aria-selected={index === activeIndex}
+              ref={index === activeIndex ? activeRef : undefined}
+              onClick={() =>
+                onResultClick(
+                  { tab: result.tab, subtab: result.subtab, sectionId: result.id },
+                  result.requiresEnabled
+                )
+              }
+              className={cn(
+                // The app's one "Enter acts on this row" treatment — the neutral
+                // selection-outline rail carries the 3:1 the raised fill cannot.
+                PALETTE_ROW_CLASS,
+                "group w-full text-left p-3 rounded-[var(--radius-md)]",
+                "hover:bg-overlay-soft",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+              )}
+            >
+              <div className="flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1 min-w-0">
+                    {showScope && (
+                      <ScopeChip
+                        // What the setting writes to, which is not always the nav list
+                        // it is filed under (`integrations`). Only a row whose nav and
+                        // effect agree can promise that opening it switches scope.
+                        scope={result.effectScope ?? result.scope}
+                        projectLabel={projectLabel}
+                        crossScope={
+                          result.scope !== activeScope &&
+                          (result.effectScope ?? result.scope) === result.scope
+                        }
+                      />
+                    )}
+                    <span className="flex min-w-0 items-center gap-1 text-3xs text-text-secondary">
+                      {crumbs.map((crumb, i) => (
+                        <span key={i} className="flex min-w-0 items-center gap-1">
+                          {i > 0 && (
+                            <ChevronRight
+                              className="h-2.5 w-2.5 shrink-0 text-text-muted"
+                              aria-hidden="true"
+                            />
+                          )}
+                          <span className={cn("truncate", i === 0 && "font-medium")}>{crumb}</span>
+                        </span>
+                      ))}
                     </span>
+                    {result.requiresEnabled && (
+                      // Where the row lives, not a verdict on it: true whether or not the
+                      // parent is on right now, and plain text so it cannot be read as a
+                      // second scope chip.
+                      <span className="ml-auto shrink-0 text-3xs text-text-secondary">
+                        Only when {midSentenceLabel(result.requiresEnabled.label)} is on
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-sm font-medium text-text-primary">
+                    <HighlightText text={result.title} query={query} />
+                  </div>
+                  <div className="text-xs text-text-secondary mt-0.5 leading-relaxed">
+                    <HighlightText text={result.description} query={query} />
+                  </div>
+                </div>
+                <ChevronRight
+                  aria-hidden="true"
+                  className={cn(
+                    "w-4 h-4 shrink-0 transition-[color,translate] duration-150",
+                    index === activeIndex
+                      ? "text-text-secondary translate-x-0.5"
+                      : "text-text-muted group-hover:text-text-secondary"
                   )}
-                </div>
-                <div className="text-sm font-medium text-text-primary">
-                  <HighlightText text={result.title} query={query} />
-                </div>
-                <div className="text-xs text-text-secondary mt-0.5 leading-relaxed">
-                  <HighlightText text={result.description} query={query} />
-                </div>
+                />
               </div>
-              <ChevronRight
-                className={cn(
-                  "w-4 h-4 text-daintree-text/20 shrink-0 transition-[color,translate] duration-150",
-                  index === activeIndex
-                    ? "text-daintree-text/40 translate-x-0.5"
-                    : "group-hover:text-daintree-text/40"
-                )}
-              />
-            </div>
-          </button>
-        ))}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

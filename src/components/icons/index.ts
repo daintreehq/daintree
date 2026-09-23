@@ -51,6 +51,7 @@ export {
   Moon, // sleep a project — shut it down the way quitting does, restored on reopen
   Network, // Subagent tree — a parent session's spawned child sessions
   Package, // plugin (a packaged extension) — plugin tray, unresolved plugin glyphs
+  PanelTop, // the app toolbar — the strip along the top of the window
   Paperclip, // attach files to a composer draft — the same references a drop or a paste inserts
   Plug, // agent (integration that plugs into the host system)
   Plus, // the toolbar launcher — "make me a new thing" (agent, panel)

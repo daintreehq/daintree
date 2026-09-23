@@ -383,7 +383,7 @@ export function DiffFileSidebar({
       </div>
 
       <div className="shrink-0 px-2 py-1.5">
-        <div className="flex items-center gap-1.5 rounded border border-border-default bg-surface-canvas px-2 py-1 focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20">
+        <div className="flex items-center gap-1.5 rounded border border-border-default bg-surface-canvas px-2 py-1 focus-within:border-selection-outline focus-within:ring-1 focus-within:ring-selection-outline/50">
           <Search className="h-3 w-3 shrink-0 text-text-muted" />
           <input
             value={filter}

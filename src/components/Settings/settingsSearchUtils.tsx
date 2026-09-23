@@ -57,6 +57,13 @@ export function parseQuery(raw: string): ParsedQuery {
 export interface FilterSettingsOptions {
   modifiedTabs?: ReadonlySet<SettingsTab>;
   /**
+   * Ids of the individual entries whose setting differs from its default. When
+   * present, `@modified` keeps exactly these rows instead of every row on a tab that
+   * has at least one change — which listed "About Daintree" and "System status" as
+   * modified the moment any General switch moved.
+   */
+  modifiedSettingIds?: ReadonlySet<string>;
+  /**
    * The user's currently-active scope. When a text query is present this
    * acts as a *ranking boost* — same-scope entries earn `SAME_SCOPE_BOOST`
    * to win close ties but cross-scope results still appear, so searching
@@ -82,6 +89,16 @@ export interface FilterSettingsOptions {
 // the plural ("notifications").
 const SAME_SCOPE_BOOST = 5;
 
+function modifiedPredicate(
+  options: FilterSettingsOptions | undefined
+): ((entry: SettingsSearchEntry) => boolean) | null {
+  const ids = options?.modifiedSettingIds;
+  if (ids) return ids.size === 0 ? null : (entry) => ids.has(entry.id);
+  const tabs = options?.modifiedTabs;
+  if (!tabs || tabs.size === 0) return null;
+  return (entry) => tabs.has(entry.tab);
+}
+
 export function filterSettings(
   index: readonly SettingsSearchEntry[],
   query: string,
@@ -96,10 +113,10 @@ export function filterSettings(
   // @modified only — return all entries in modified tabs, still scoped to
   // the active scope so the scope-specific empty state stays coherent.
   if (!cleanQuery && filterModified) {
-    const modifiedTabs = options?.modifiedTabs;
-    if (!modifiedTabs || modifiedTabs.size === 0) return [];
+    const isModified = modifiedPredicate(options);
+    if (!isModified) return [];
     const scopedIndex = activeScope ? index.filter((entry) => entry.scope === activeScope) : index;
-    return scopedIndex.filter((entry) => modifiedTabs.has(entry.tab));
+    return scopedIndex.filter(isModified);
   }
 
   // Key the Fuse cache on the stable index reference. Previously the cache
@@ -174,9 +191,9 @@ export function filterSettings(
 
   // Apply @modified filter if active
   if (filterModified) {
-    const modifiedTabs = options?.modifiedTabs;
-    if (!modifiedTabs || modifiedTabs.size === 0) return [];
-    results = results.filter((entry) => modifiedTabs.has(entry.tab));
+    const isModified = modifiedPredicate(options);
+    if (!isModified) return [];
+    results = results.filter(isModified);
   }
 
   // Hide project-scope entries when no project is open — they'd lead to an

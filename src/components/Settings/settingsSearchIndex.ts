@@ -13,6 +13,12 @@ export interface SettingsSearchEntry {
   tabLabel: string;
   scope: SettingsScope;
   /**
+   * What the setting writes to, when that differs from the nav scope it is filed under
+   * (`scope`). Drives the scope the result's chip names; `scope` still decides where
+   * opening it navigates.
+   */
+  effectScope?: SettingsScope;
+  /**
    * Classifies the entry for the post-scoring pass. `tab-nav` is the
    * synthetic row generated for each tab's nav target (id `tab-nav-${tab}`);
    * `section` is a content section surfaced inside a tab. Required so the
@@ -42,13 +48,15 @@ function sectionToEntry(
   section: SettingsSectionMeta,
   tab: SettingsTab,
   tabLabel: string,
-  scope: SettingsScope
+  scope: SettingsScope,
+  effectScope: SettingsScope | undefined
 ): SettingsSearchEntry {
   return {
     id: section.id,
     tab,
     tabLabel,
     scope,
+    ...(effectScope && effectScope !== scope ? { effectScope } : {}),
     kind: "section",
     section: section.section,
     title: section.title,
@@ -73,13 +81,15 @@ function buildEntriesForTab(
   scope: SettingsScope,
   navDescription: string,
   navKeywords: readonly string[] | undefined,
-  sections: readonly SettingsSectionMeta[] | undefined
+  sections: readonly SettingsSectionMeta[] | undefined,
+  effectScope?: SettingsScope
 ): SettingsSearchEntry[] {
   const navEntry: SettingsSearchEntry = {
     id: `tab-nav-${tab}`,
     tab,
     tabLabel,
     scope,
+    ...(effectScope && effectScope !== scope ? { effectScope } : {}),
     kind: "tab-nav",
     section: "Settings Navigation",
     title: tabLabel,
@@ -87,7 +97,7 @@ function buildEntriesForTab(
     ...(navKeywords ? { keywords: [...navKeywords] } : {}),
   };
   if (!sections || sections.length === 0) return [navEntry];
-  return [navEntry, ...sections.map((s) => sectionToEntry(s, tab, tabLabel, scope))];
+  return [navEntry, ...sections.map((s) => sectionToEntry(s, tab, tabLabel, scope, effectScope))];
 }
 
 function deriveSettingsSearchIndex(): SettingsSearchEntry[] {
@@ -109,7 +119,8 @@ function deriveSettingsSearchIndex(): SettingsSearchEntry[] {
         tab.scope,
         tab.searchNavDescription ?? "",
         tab.searchNavKeywords,
-        tab.sections
+        tab.sections,
+        tab.contentScope
       )
     );
   }
