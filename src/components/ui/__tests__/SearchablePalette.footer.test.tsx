@@ -49,7 +49,7 @@ interface RenderArgs {
   results?: Item[];
   footer?: React.ReactNode;
   getFooter?: (selectedItem: Item | null) => React.ReactNode;
-  getActionLabel?: (selectedItem: Item | null) => string;
+  getActionLabel?: (selectedItem: Item) => string;
   tier?: PaletteSurfaceTier;
 }
 
@@ -199,12 +199,12 @@ describe("SearchablePalette footer", () => {
     expect(document.body.textContent).not.toContain("close");
   });
 
-  it("getActionLabel receives null when results are empty", () => {
-    const fn = vi.fn((item: Item | null) => (item ? `Switch ${item.label}` : "Pick"));
+  it("shows no Enter hint when results are empty", () => {
+    const fn = vi.fn((item: Item) => `Switch ${item.label}`);
     renderPalette({ results: [], selectedIndex: -1, getActionLabel: fn });
 
-    expect(fn).toHaveBeenCalledWith(null);
-    expect(document.body.textContent).toContain("to pick");
+    expect(fn).not.toHaveBeenCalled();
+    expect(document.body.querySelector("kbd")).toBeNull();
   });
 
   it("getFooter takes precedence over getActionLabel", () => {
@@ -293,11 +293,11 @@ describe("SearchablePalette footer", () => {
     expect(document.body.textContent).not.toContain("to switch to alpha");
   });
 
-  it("getActionLabel receives null when selectedIndex is out of range", () => {
-    const fn = vi.fn((item: Item | null) => (item ? `Switch ${item.label}` : "Fallback"));
+  it("shows no Enter hint when selectedIndex is out of range", () => {
+    const fn = vi.fn((item: Item) => `Switch ${item.label}`);
     renderPalette({ selectedIndex: 99, getActionLabel: fn });
-    expect(fn).toHaveBeenCalledWith(null);
-    expect(document.body.textContent).toContain("to fallback");
+    expect(fn).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toContain("to switch");
   });
 
   describe("footer stability when action label is unchanged", () => {

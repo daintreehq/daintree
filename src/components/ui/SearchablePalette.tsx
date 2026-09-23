@@ -135,9 +135,10 @@ export interface SearchablePaletteProps<T> {
    * chip and lowercases the label for mid-sentence rendering. Ignored when
    * `footer` or `getFooter` is also set — those win, in that order. Use a
    * stable reference (module-level fn or `useCallback`) to avoid recomputing
-   * the footer node every render.
+   * the footer node every render. Called only while a row is selected; with
+   * nothing selected the footer carries no hint.
    */
-  getActionLabel?: (selectedItem: T | null) => string;
+  getActionLabel?: (selectedItem: T) => string;
   /** Additional className for AppPaletteDialog.Body */
   bodyClassName?: string;
   /** Custom content before the list */
@@ -363,7 +364,10 @@ export function SearchablePalette<T>({
   // supplied, so consumers aren't surprised by getActionLabel side-effects
   // when its output would be discarded anyway.
   const actionLabelActive = !getFooter && footer === undefined && getActionLabel != null;
-  const rawActionLabel = actionLabelActive ? getActionLabel!(selectedItem) : null;
+  // No selection, no hint: with nothing on screen for Enter to act on, a verb
+  // in the footer promises an action the key will not take.
+  const rawActionLabel =
+    actionLabelActive && selectedItem != null ? getActionLabel!(selectedItem) : null;
   const actionLabelFooter = useMemo(() => {
     if (rawActionLabel == null) return null;
     const actionLabel = rawActionLabel.trim() || "Select";
