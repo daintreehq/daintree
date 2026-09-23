@@ -42,6 +42,7 @@ import {
   type SnoozeDurationOption,
 } from "@shared/utils/snoozeTimestamps";
 import { useNotificationSource } from "./notificationSource";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 
 const snoozedUntilFormatter = new Intl.DateTimeFormat(undefined, {
   weekday: "short",
@@ -632,6 +633,16 @@ async function reportNotificationOnGitHub(
   }
 }
 
+/**
+ * The silence and mute actions write the project's settings file, and the
+ * silence tells no renderer store at all, so the inbox's quiet strip kept
+ * describing the state from before the click until the panel reopened.
+ */
+function refreshProjectOverrides(projectId: string | undefined): void {
+  if (!projectId) return;
+  void useProjectSettingsStore.getState().loadNotificationOverridesForProjects([projectId]);
+}
+
 interface RowOptionsMenuProps {
   entry: NotificationHistoryEntry;
   rowLabel: string;
@@ -857,10 +868,9 @@ function RowOptionsMenu({
                 onSelect={() => {
                   const projectId = entry.context?.projectId;
                   if (!isNotificationEventKind(eventKind)) return;
-                  void actionService.dispatch("project.silenceNotificationKind", {
-                    kind: eventKind,
-                    projectId,
-                  });
+                  void actionService
+                    .dispatch("project.silenceNotificationKind", { kind: eventKind, projectId })
+                    .then(() => refreshProjectOverrides(projectId));
                 }}
               >
                 {/* No shim. The gutter these two need in a menu that also offers
@@ -877,7 +887,9 @@ function RowOptionsMenu({
                 onSelect={() => {
                   const projectId = entry.context?.projectId;
                   if (!projectId) return;
-                  void actionService.dispatch("project.muteNotifications", { projectId });
+                  void actionService
+                    .dispatch("project.muteNotifications", { projectId })
+                    .then(() => refreshProjectOverrides(projectId));
                 }}
               >
                 Mute project notifications

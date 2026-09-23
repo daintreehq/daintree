@@ -1949,50 +1949,66 @@ function ContextSectionHeader({
   const label = [project, worktree].filter(Boolean).join(" · ") || APP_SOURCE_LABEL;
   const hasUnread = unreadIds.length > 0;
   return (
+    // Sticky, so the place a row belongs to stays on screen while you read
+    // it: mid-section, the rows carry no source of their own. The solid layer
+    // underneath is what makes that work — `overlay-raised` is a tint, and
+    // alone it let the rows scroll visibly through the header. `z-20` puts it
+    // above ScrollShadow's `z-10` top fade, whose lower edge then falls just
+    // under the header as its shadow. The list's `scroll-py-8` already keeps
+    // keyboard-focused rows clear of it.
     <div
-      data-testid="context-section-header"
-      // Sentence case, not the uppercase eyebrow the other labels use: this
-      // one is a name. Branch names are case-sensitive and uppercasing
-      // "feature/refine-inbox" misstates the thing it identifies.
-      className="flex items-center justify-between gap-2 pl-4 pr-3 py-1 bg-overlay-raised text-2xs font-medium text-text-secondary"
+      data-testid="context-section-sticky"
+      className="sticky top-0 z-20 bg-[var(--overlay-surface-solid)]"
     >
-      <span className="flex min-w-0 items-baseline gap-1.5">
-        {/* Two spans so the worktree survives a long project name. As one
+      <div
+        data-testid="context-section-header"
+        // Sentence case, not the uppercase eyebrow the other labels use: this
+        // one is a name. Branch names are case-sensitive and uppercasing
+        // "feature/refine-inbox" misstates the thing it identifies.
+        className="flex items-center justify-between gap-2 pl-4 pr-3 py-1 bg-overlay-raised text-2xs font-medium text-text-secondary"
+      >
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          {/* Two spans so the worktree survives a long project name. As one
             string it truncated from the right, and the worktree — the part
             that tells two sections of one project apart — went first. */}
-        <span id={labelId} className="flex min-w-0 items-baseline text-text-primary" title={label}>
-          {project ? <span className="min-w-0 truncate">{project}</span> : null}
-          {project && worktree ? (
-            <span aria-hidden="true" className="shrink-0 px-1 text-text-secondary">
-              ·
-            </span>
-          ) : null}
-          {worktree ? <span className="max-w-[65%] shrink-0 truncate">{worktree}</span> : null}
-          {!project && !worktree ? <span className="truncate">{APP_SOURCE_LABEL}</span> : null}
-        </span>
-        {/* Beside the name it counts, not beside the button — at the far end
-            it read as part of "Mark read". */}
-        <span className="shrink-0 tabular-nums" aria-label={`${count} notifications`}>
-          {count}
-        </span>
-        {newCount > 0 && (
-          <span data-testid="context-section-new" className="shrink-0 tabular-nums">
-            · {newCount} new
+          <span
+            id={labelId}
+            className="flex min-w-0 items-baseline text-text-primary"
+            title={label}
+          >
+            {project ? <span className="min-w-0 truncate">{project}</span> : null}
+            {project && worktree ? (
+              <span aria-hidden="true" className="shrink-0 px-1 text-text-secondary">
+                ·
+              </span>
+            ) : null}
+            {worktree ? <span className="max-w-[65%] shrink-0 truncate">{worktree}</span> : null}
+            {!project && !worktree ? <span className="truncate">{APP_SOURCE_LABEL}</span> : null}
           </span>
-        )}
-      </span>
-      {hasUnread && (
-        <button
-          type="button"
-          onClick={onMarkRead}
-          className={cn(
-            "shrink-0 inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 text-text-secondary hover:text-text-primary hover:bg-overlay-medium transition-colors",
-            PALETTE_ROW_FOCUS_CLASS
+          {/* Beside the name it counts, not beside the button — at the far end
+            it read as part of "Mark read". */}
+          <span className="shrink-0 tabular-nums" aria-label={`${count} notifications`}>
+            {count}
+          </span>
+          {newCount > 0 && (
+            <span data-testid="context-section-new" className="shrink-0 tabular-nums">
+              · {newCount} new
+            </span>
           )}
-        >
-          Mark read
-        </button>
-      )}
+        </span>
+        {hasUnread && (
+          <button
+            type="button"
+            onClick={onMarkRead}
+            className={cn(
+              "shrink-0 inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 text-text-secondary hover:text-text-primary hover:bg-overlay-medium transition-colors",
+              PALETTE_ROW_FOCUS_CLASS
+            )}
+          >
+            Mark read
+          </button>
+        )}
+      </div>
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { NotificationCenterEntry, formatSnoozeWake } from "../NotificationCenterEntry";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 const getMock = vi.hoisted(() => vi.fn());
@@ -948,5 +949,37 @@ describe("NotificationCenterEntry snooze keybinding", () => {
     await waitFor(() => expect(document.activeElement).toBe(items[0]));
     fireEvent.click(items[1]!);
     expect(onSnooze).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("NotificationCenterEntry silence refresh", () => {
+  it("re-reads the project's silences once a row-menu silence or mute lands", async () => {
+    const load = vi
+      .spyOn(useProjectSettingsStore.getState(), "loadNotificationOverridesForProjects")
+      .mockResolvedValue(undefined);
+    try {
+      for (const itemText of [/^Silence /, /^Mute project notifications$/]) {
+        load.mockClear();
+        const { unmount } = render(
+          <NotificationCenterEntry
+            entry={makeEntry({ context: { projectId: "p1", eventKind: "waiting" } })}
+          />
+        );
+        const trigger = screen.getByLabelText(/^Options for /);
+        await act(async () => {
+          fireEvent.pointerDown(trigger, { button: 0 });
+          fireEvent.pointerUp(trigger, { button: 0 });
+          fireEvent.click(trigger);
+        });
+        await act(async () => {
+          fireEvent.click(screen.getByText(itemText));
+        });
+        // The settings file changed under the inbox; its strip has to hear.
+        await waitFor(() => expect(load).toHaveBeenCalledWith(["p1"]));
+        unmount();
+      }
+    } finally {
+      load.mockRestore();
+    }
   });
 });
