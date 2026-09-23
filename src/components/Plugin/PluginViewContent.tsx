@@ -19,9 +19,11 @@ import {
   clearViewRenderFailure,
   getPanelRemovedSignal,
   isViewReloadBlocked,
+  registerUserViewReload,
   reportViewMounted,
   reportViewRenderFailed,
   resetViewReloadBudget,
+  setViewUnsavedChanges,
 } from "@/services/plugin/pluginPanelLifecycle";
 import { registerPanelReloadHandler } from "@/services/plugin/pluginPanelReload";
 import { Package } from "lucide-react";
@@ -134,7 +136,8 @@ export interface PluginViewContentProps {
    */
   readRecoveryState?: () => { state?: Record<string, unknown>; version?: number } | null;
   /**
-   * Hand the view `requestReload` (#12609). Opt-in because the loop guard that
+   * Hand the view `requestReload` (#12609) and `setHasUnsavedChanges`, and
+   * accept the user's reload (#12611). Opt-in because the loop guard that
    * polices it lives on the panel's lifecycle record, so only a host presenting
    * a real panel — grid, dock, or dialog — can offer it. Project surfaces don't.
    */
@@ -558,6 +561,12 @@ export function makePluginViewContent(
     const markAttemptCommitted = useCallback((attempt: number) => {
       committedAttemptRef.current = attempt;
     }, []);
+    /**
+     * Identifies the current attempt to the lifecycle service's unsaved-work
+     * flag (#12611). Replaced whenever an attempt is retired, so a flag raised
+     * by an outgoing view is lowered by its own token and nothing else's.
+     */
+    const unsavedOwnerRef = useRef<object>({});
     // Read once per mount from the lifecycle service, which is where the block
     // lives: a panel stopped for reloading too often stays stopped across a
     // sibling maximize or a dock-tab switch.
@@ -669,6 +678,28 @@ export function makePluginViewContent(
     const statusRef = useRef<HTMLDivElement | null>(null);
     /** Whether focus is currently somewhere inside the plugin's own content. */
     const focusWasInsideContent = useRef(false);
+    /**
+     * Whether focus belongs to the plugin's content, including content that has
+     * just gone away. The flag can outlive the node it describes, since
+     * removing a focused element fires no blur, so it is trusted only while
+     * focus is still stranded on the body: focus the user has since put
+     * elsewhere is theirs to keep.
+     */
+    const focusIsInContent = useCallback((): boolean => {
+      const content = contentNodeRef.current;
+      const active = document.activeElement;
+      const stranded = !active || active === document.body;
+      return (
+        (!!content && !!active && content.contains(active)) ||
+        (focusWasInsideContent.current && stranded)
+      );
+    }, []);
+
+    /** Lower the outgoing attempt's unsaved-work flag and mint the next token. */
+    const retireUnsavedOwner = useCallback((): void => {
+      setViewUnsavedChanges(panelId, unsavedOwnerRef.current, false);
+      unsavedOwnerRef.current = {};
+    }, [panelId]);
 
     /**
      * Whether the boundary is currently showing its fallback.
@@ -684,6 +715,11 @@ export function makePluginViewContent(
       (error: Error) => {
         boundaryShowingError.current = true;
         lastErrorWasImportStage.current = isImportStageFailure(error);
+        // The boundary has thrown the view away, so whatever it said it held
+        // went with it, and the setter it kept must not raise the flag again
+        // (#12611). Retired before the abort so no abort listener sees it live.
+        attemptRef.current += 1;
+        retireUnsavedOwner();
         // Abort BEFORE reporting, and for the same reason `handleReset` does it
         // on retry: the thrown-away view instance is finished either way, so
         // anything it tied to `disposeSignal` has to cancel now rather than keep
@@ -693,7 +729,7 @@ export function makePluginViewContent(
         controllerRef.current?.abort();
         reportViewRenderFailed(panelId, { kindId, pluginId });
       },
-      [panelId]
+      [panelId, retireUnsavedOwner]
     );
 
     /**
@@ -711,6 +747,7 @@ export function makePluginViewContent(
         // listener that calls back into `requestReload` must already find its
         // attempt stale.
         attemptRef.current += 1;
+        retireUnsavedOwner();
         // The attempt being built is new, so whatever the last one threw is no
         // longer on screen once it commits, and whatever focus the last one held
         // went with its DOM.
@@ -749,7 +786,7 @@ export function makePluginViewContent(
         // takes.
         clearViewRenderFailure(panelId);
       },
-      [panelId, readRecoveryState]
+      [panelId, readRecoveryState, retireUnsavedOwner]
     );
 
     const handleReset = (): void => {
@@ -760,12 +797,19 @@ export function makePluginViewContent(
     };
 
     // The user's own reload, and the only thing that lifts a reload block:
-    // neither time nor a backend restart does (#12609).
+    // neither time nor a backend restart does (#12609). Focus that was inside
+    // the content it discards comes back to the host rather than dropping to
+    // the body; focus anywhere else stays where the user put it (#12611).
     const handleReloadPanel = useCallback(() => {
+      const hadFocus = focusIsInContent();
       resetViewReloadBudget(panelId);
       setReloadBlocked(false);
       replaceAttempt(false);
-    }, [panelId, replaceAttempt]);
+      if (hadFocus) {
+        focusWasInsideContent.current = false;
+        statusRef.current?.focus({ preventScroll: true });
+      }
+    }, [focusIsInContent, panelId, replaceAttempt]);
 
     // The path this attempt was built for. A change — a slot registering after
     // mount, a builtin re-registering its component, or its plugin toggling —
@@ -939,6 +983,7 @@ export function makePluginViewContent(
             // place: retire the attempt so nothing it still holds can act, and
             // leave the next one to the user.
             attemptRef.current += 1;
+            retireUnsavedOwner();
             controllerRef.current.abort();
             setReloadBlocked(true);
             settle?.("rate-limited");
@@ -949,7 +994,7 @@ export function makePluginViewContent(
         });
       },
       // `pluginId` is a factory-scope constant, not a reactive value.
-      [panelId, replaceAttempt]
+      [panelId, replaceAttempt, retireUnsavedOwner]
     );
 
     // One callback per attempt, so a view can safely list it as a dependency.
@@ -973,6 +1018,60 @@ export function makePluginViewContent(
       );
     }, [offerRequestReload, builtinDisabled, panelId, requestReloadFor]);
 
+    /**
+     * A view's unsaved-work report, bound to the attempt that made it (#12611).
+     * Only the attempt that is current may raise or lower the flag, and it does
+     * so under its own token, so a setter held past its view cannot clear what
+     * the replacement raised. Not gated on `aliveRef`: a StrictMode replay runs
+     * the view's effects before this host's, so a view re-reporting from its
+     * mount effect would find the host still marked dead.
+     */
+    const setHasUnsavedChangesFor = useCallback(
+      (attempt: number, hasUnsavedChanges: boolean): void => {
+        if (attempt !== attemptRef.current) return;
+        setViewUnsavedChanges(panelId, unsavedOwnerRef.current, hasUnsavedChanges === true);
+      },
+      [panelId]
+    );
+    const setHasUnsavedChanges = useMemo(
+      () =>
+        offerRequestReload
+          ? (hasUnsavedChanges: boolean) => setHasUnsavedChangesFor(retryCount, hasUnsavedChanges)
+          : undefined,
+      [offerRequestReload, setHasUnsavedChangesFor, retryCount]
+    );
+
+    // The user's reload reaches this mount through the lifecycle service, which
+    // is how the menus and the action surface find a live view by panel id.
+    useEffect(() => {
+      if (!offerRequestReload) return;
+      return registerUserViewReload(panelId, () => {
+        if (aliveRef.current) handleReloadPanel();
+      });
+    }, [offerRequestReload, panelId, handleReloadPanel]);
+
+    // An unmounted view holds nothing, so neither does the panel. Deferred and
+    // called off by a replayed setup, like the dispose abort above: StrictMode
+    // runs this cleanup and then the view's own effects, which may report
+    // unsaved work again before this setup runs. A real unmount never re-runs
+    // setup, so the retirement lands and a setter the view kept goes stale.
+    const pendingUnsavedRetire = useRef<{ cancelled: boolean } | null>(null);
+    useEffect(() => {
+      if (pendingUnsavedRetire.current) {
+        pendingUnsavedRetire.current.cancelled = true;
+        pendingUnsavedRetire.current = null;
+      }
+      return () => {
+        const retire = { cancelled: false };
+        pendingUnsavedRetire.current = retire;
+        queueMicrotask(() => {
+          if (retire.cancelled) return;
+          attemptRef.current += 1;
+          retireUnsavedOwner();
+        });
+      };
+    }, [retireUnsavedOwner]);
+
     // Stale content stays visible behind a terminal failure — it is the last
     // thing the plugin actually produced, and blanking it loses context the user
     // may still want to read — but it stops being interactive. Clicking a
@@ -993,19 +1092,10 @@ export function makePluginViewContent(
     const contentUnavailable = contentInert || reloadBlocked;
     useEffect(() => {
       if (!contentUnavailable) return;
-      const content = contentNodeRef.current;
-      const active = document.activeElement;
-      // The flag can outlive the node it describes, since removing a focused
-      // element fires no blur. Trust it only while focus is still stranded on
-      // the body: focus the user has since put elsewhere is theirs to keep.
-      const stranded = !active || active === document.body;
-      const hadFocus =
-        (!!content && !!active && content.contains(active)) ||
-        (focusWasInsideContent.current && stranded);
-      if (!hadFocus) return;
+      if (!focusIsInContent()) return;
       focusWasInsideContent.current = false;
       statusRef.current?.focus({ preventScroll: true });
-    }, [contentUnavailable]);
+    }, [contentUnavailable, focusIsInContent]);
 
     return (
       // Outside the boundary, not inside: the fallback is rendered BY the
@@ -1147,6 +1237,7 @@ export function makePluginViewContent(
                   stateVersion={mountStateVersion}
                   persistState={persistState}
                   requestReload={requestReload}
+                  setHasUnsavedChanges={setHasUnsavedChanges}
                   worktreeId={worktreeId}
                   styleRootAttributes={PLUGIN_STYLE_ROOT_PROPS}
                 />

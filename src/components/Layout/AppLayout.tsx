@@ -11,6 +11,7 @@ import { ErrorBoundary } from "../ErrorBoundary";
 import { PortalCloseConfirmDialog, PortalVisibilityController } from "../Portal";
 import { FleetArmingRibbon } from "@/components/Fleet";
 import { TerminalDestructiveActionConfirmDialog } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
+import { PluginPanelReloadConfirmDialog } from "@/components/Plugin/PluginPanelReloadConfirmDialog";
 import { MoveOrRenameProjectDialog } from "@/components/Project/MoveOrRenameProjectDialog";
 import { ImportConfigDialog } from "@/components/Config/ImportConfigDialog";
 import { ChordIndicator } from "./ChordIndicator";
@@ -894,6 +895,7 @@ export function AppLayout({
         <FleetArmingRibbon />
       </div>
       <TerminalDestructiveActionConfirmDialog />
+      <PluginPanelReloadConfirmDialog />
       <PortalCloseConfirmDialog />
       <MoveOrRenameProjectDialog />
       <ImportConfigDialog />

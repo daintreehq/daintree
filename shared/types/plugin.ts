@@ -487,6 +487,23 @@ export interface PanelViewProps {
    */
   readonly requestReload?: () => void;
   /**
+   * Tell the host whether this view holds work that a reload would lose
+   * (#12611).
+   *
+   * The user can reload a plugin panel from its menus, and an agent can do the
+   * same through the host's tools. Neither asks first by default, because what
+   * you accepted through {@link persistState} comes back. While this is set to
+   * `true`, both ask the user to confirm before discarding the view. Set it
+   * back to `false` once the work is saved or dropped.
+   *
+   * Your own {@link requestReload} is never held up by it. The setter belongs to
+   * the attempt that received it: one held past this attempt's teardown does
+   * nothing, and a new attempt starts with no unsaved work until it says so.
+   *
+   * Absent where the host offers no reload, so call it optionally.
+   */
+  readonly setHasUnsavedChanges?: (hasUnsavedChanges: boolean) => void;
+  /**
    * The worktree the panel instance belongs to, as recorded on the panel at
    * spawn time. Lets a view reconstruct its own context without dispatching
    * `worktree.getCurrent` — which resolves the *visible* worktree, not the

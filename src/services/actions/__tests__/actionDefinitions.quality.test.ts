@@ -434,7 +434,13 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // needs the user's setting, and that a read is what lets the next one go
   // out; a caller missing any of those reads the silence as a bug. The 1_101 B
   // is exactly their four descriptions.
-  const MAX_COHORT_TOTAL_BYTES = 56_057;
+  // 56_057 → 56_314 for #12611's `plugin.reloadPanel` on the action tier, and
+  // off the external surface, so the external total does not move. What the
+  // prose has to carry is that unpersisted view state is lost and that a view
+  // reporting unsaved work stages the user's confirm and fails the call; a
+  // caller missing the second reads the refusal as a bug. The 257 B is exactly
+  // its description.
+  const MAX_COHORT_TOTAL_BYTES = 56_314;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1339,10 +1345,11 @@ describe("plugin-dispatch injection guard (#10558)", () => {
     // Valid args so dispatch reaches the plugin-dispatch gate rather than
     // short-circuiting on VALIDATION_ERROR (terminal.sendCommand requires both;
     // project.runCheck requires projectId + runnerId; the terminal-watch tools
-    // take terminalIds or a watchId). Schemas are non-strict, so the union
-    // satisfies every denied action.
+    // take terminalIds or a watchId; plugin.reloadPanel a panelId). Schemas are
+    // non-strict, so the union satisfies every denied action.
     const args = {
       terminalId: "t-placeholder",
+      panelId: "p-placeholder",
       command: "noop",
       url: "https://example.com",
       projectId: "p-placeholder",

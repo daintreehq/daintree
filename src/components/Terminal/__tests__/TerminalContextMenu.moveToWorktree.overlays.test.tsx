@@ -220,6 +220,7 @@ describe("TerminalContextMenu More worktrees…, through the real overlays", () 
       isMaximized: false,
       isDockable: false,
       canMoveToWorktree: true,
+      canReload: true,
     })
       .flat()
       .find((command) => command.id === "move-to-worktree")!;

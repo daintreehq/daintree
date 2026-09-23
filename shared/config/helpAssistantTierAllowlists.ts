@@ -280,6 +280,10 @@ export const ACTION_TIER_ADDONS = [
   // read-only session must not reach it, but within a project it does nothing a
   // reopen would not (#12214).
   "plugin.reloadProject",
+  // Remounts one plugin view, the same as the user's Reload panel. It discards
+  // view state the plugin never persisted, so a read-only session must not
+  // reach it; a view reporting unsaved work stages the user's confirm (#12611).
+  "plugin.reloadPanel",
 ] as const satisfies readonly BuiltInActionId[];
 
 export const SYSTEM_TIER_ADDONS = [
