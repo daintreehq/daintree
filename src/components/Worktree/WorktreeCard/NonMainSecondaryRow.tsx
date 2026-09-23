@@ -80,8 +80,13 @@ export function NonMainSecondaryRow({
   // has genuinely drifted still shows the counts — that path mounts on
   // `hasUpstreamDelta` and is unchanged.
   const isDetached = Boolean(worktree.isDetached);
+  // A failed fetch mounts it too: with no counts and no base to show, the
+  // badge's failure mark is the only thing saying the numbers are unconfirmed.
   const showUpstreamBadge =
-    hasUpstreamDelta || hasAuthFailedSignIn || (worktree.baseBranchName != null && !isDetached);
+    hasUpstreamDelta ||
+    hasAuthFailedSignIn ||
+    Boolean(worktree.fetchAuthFailed || worktree.fetchNetworkFailed) ||
+    (worktree.baseBranchName != null && !isDetached);
 
   // `tracking` is normalised to a string or null on every status pass, so a
   // null one with a snapshot present is a positive "no upstream configured",

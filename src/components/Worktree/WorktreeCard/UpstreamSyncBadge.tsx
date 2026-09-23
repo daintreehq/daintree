@@ -214,7 +214,11 @@ export function UpstreamSyncBadge({
   // an unreachable remote explains the staleness that always comes with it,
   // and plain staleness is what is left. A fetch in flight does not clear it —
   // the counts are exactly as old as they were until the answer lands.
-  const status: SyncStatus | null = isAuthActionable
+  // The failure and the way out of it are separate facts. Without a matched
+  // forge provider there is no reconnect to offer, but the fetches are still
+  // suspended and the counts still frozen, so the key stays and only the
+  // button goes.
+  const status: SyncStatus | null = fetchAuthFailed
     ? "auth"
     : fetchNetworkFailed
       ? "unreachable"
@@ -241,17 +245,31 @@ export function UpstreamSyncBadge({
         ? `Base (${compareLabel}): in sync`
         : null;
   const noUpstream = hasNoUpstream === true && showBaseSegment;
+  const lastFetched =
+    lastFetchedAt != null
+      ? formatRelativeTime(lastFetchedAt, Math.max(nowMs, lastFetchedAt))
+      : null;
+  // The actionable variant carries its own title, so only the passive auth
+  // failure needs the sentence here.
   const statusSentence =
-    status === "unreachable"
-      ? "Couldn't reach the remote"
-      : status === "stale"
-        ? "Counts may be out of date"
-        : null;
+    status === "auth" && !isAuthActionable
+      ? "Authentication failed, fetches paused"
+      : status === "unreachable"
+        ? "Couldn't reach the remote"
+        : status === "stale"
+          ? "Counts may be out of date"
+          : null;
+  const localBaseNote = comparedWithLocalBase && showBaseSegment;
+  // Everything the tooltip says, in the order it says it, so none of it is
+  // reachable by pointer alone.
   const accessibleSummary = [
     statusSentence,
     upstreamSentence,
     baseSentence,
+    localBaseNote ? "Remote comparison unavailable" : null,
     noUpstream ? "No upstream branch configured" : null,
+    isFetchInFlight ? "Fetching now" : null,
+    lastFetched ? `Last fetched ${lastFetched}` : null,
   ]
     .filter(Boolean)
     .join(". ");
@@ -311,17 +329,15 @@ export function UpstreamSyncBadge({
 
   // Both variants explain themselves with the same body, so a truncated name,
   // the counts and the fetch state read the same whichever one is showing.
-  const lastFetched =
-    lastFetchedAt != null
-      ? formatRelativeTime(lastFetchedAt, Math.max(nowMs, lastFetchedAt))
-      : null;
   const detail = (
     <>
       {/* The qualification comes before the counts it qualifies: read in the
           other order, the numbers have already been believed. */}
       {statusSentence && (
         <div
-          className={status === "unreachable" ? "text-status-warning" : undefined}
+          className={
+            status === "unreachable" || status === "auth" ? "text-status-warning" : undefined
+          }
           data-testid={status === "unreachable" ? "upstream-sync-network-warning" : undefined}
         >
           {statusSentence}
@@ -330,15 +346,14 @@ export function UpstreamSyncBadge({
       {upstreamSentence && <div>{upstreamSentence}</div>}
       {baseSentence && <div className="break-words">{baseSentence}</div>}
       <div className="mt-1 text-text-secondary empty:hidden">
-        {comparedWithLocalBase && showBaseSegment && (
+        {localBaseNote && (
           <div data-testid="upstream-sync-local-base">Remote comparison unavailable</div>
         )}
         {noUpstream && <div>No upstream branch configured</div>}
-        {isFetchInFlight ? (
-          <div>Fetching now</div>
-        ) : lastFetched ? (
-          <div>Last fetched {lastFetched}</div>
-        ) : null}
+        {/* The age stays while a fetch runs: the numbers on screen are still
+            that old until the answer lands. */}
+        {isFetchInFlight && <div>Fetching now</div>}
+        {lastFetched && <div>Last fetched {lastFetched}</div>}
       </div>
     </>
   );
@@ -354,7 +369,7 @@ export function UpstreamSyncBadge({
             type="button"
             onClick={handleSignInClick}
             data-no-dnd
-            className="group flex items-center w-fit max-w-full min-w-0 text-left text-3xs font-mono tabular-nums cursor-pointer rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+            className="group flex items-center w-fit max-w-full min-w-0 -my-1 py-1 text-left text-3xs font-mono tabular-nums cursor-pointer rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
             data-testid="upstream-sync-indicator"
             data-fetch-auth-failed="true"
             aria-label={`Forge authentication failed — click to reconnect${
@@ -400,7 +415,7 @@ export function UpstreamSyncBadge({
           tabIndex={0}
           aria-label={accessibleSummary}
           className={cn(
-            "flex items-center w-fit max-w-full text-3xs font-mono tabular-nums rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
+            "flex items-center w-fit max-w-full text-3xs font-mono tabular-nums rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary",
             containerGapClass,
             isFlashing && "animate-upstream-badge-flash"
           )}

@@ -80,15 +80,19 @@ describe("UpstreamSyncBadge — auth-failed sign-in branch (issue #9982)", () =>
     );
   });
 
-  it("does not render the sign-in branch when hasAuthFailedSignIn is false even with auth-failed fetch", () => {
+  it("keeps the auth failure visible when there is no reconnect to offer", () => {
     renderBadge({
       aheadCount: 0,
       behindCount: 0,
       fetchAuthFailed: true,
       hasAuthFailedSignIn: false,
     });
-    // No counts + no auth-failed-sign-in affordance + no base divergence → null
-    expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
+    // No provider, so no button — but the fetches are still suspended, and a
+    // line that said nothing would read as "in sync".
+    expect(screen.queryByRole("button")).toBeNull();
+    const indicator = screen.getByTestId("upstream-sync-indicator");
+    expect(screen.getByTestId("upstream-sync-status").getAttribute("data-status")).toBe("auth");
+    expect(indicator.getAttribute("aria-label")).toMatch(/authentication failed/i);
   });
 });
 
@@ -609,5 +613,14 @@ describe("UpstreamSyncBadge — keyboard and assistive-technology reach", () => 
       expect(name).toContain(fact);
     }
     expect(name).not.toMatch(/[↑↓Δ≡]/);
+  });
+});
+
+describe("UpstreamSyncBadge — the tooltip keeps the age of the counts", () => {
+  it("names how old the counts are while a fetch is in flight, and says it is fetching", () => {
+    renderBadge({ aheadCount: 2, isFetchInFlight: true, lastFetchedAt: Date.now() });
+    const name = screen.getByTestId("upstream-sync-indicator").getAttribute("aria-label") ?? "";
+    expect(name).toContain("Fetching now");
+    expect(name).toContain("Last fetched");
   });
 });

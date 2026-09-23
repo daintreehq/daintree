@@ -356,3 +356,24 @@ describe("NonMainSecondaryRow — base relationship without drift", () => {
     expect(upstreamBadgeProps.at(-1)?.hasNoUpstream).toBe(false);
   });
 });
+
+describe("NonMainSecondaryRow — a failed fetch still mounts the sync line", () => {
+  beforeEach(() => {
+    upstreamBadgeProps.length = 0;
+  });
+
+  // With no counts and no base to show, the badge's failure mark is the only
+  // thing saying the numbers are unconfirmed; gating it on the counts hid it.
+  it.each([
+    ["an unreachable remote", { fetchNetworkFailed: true }],
+    ["an auth failure with no reconnect to offer", { fetchAuthFailed: true }],
+  ])("mounts for %s", (_label, failure) => {
+    renderRow({ worktree: { ...baseWorktree, baseBranchName: null, ...failure } as WorktreeState });
+    expect(upstreamBadgeProps).not.toHaveLength(0);
+  });
+
+  it("stays unmounted with nothing to say and nothing wrong", () => {
+    renderRow({ worktree: { ...baseWorktree, baseBranchName: null } as WorktreeState });
+    expect(upstreamBadgeProps).toHaveLength(0);
+  });
+});
