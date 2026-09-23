@@ -1,10 +1,8 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { Fragment, useState, useEffect, useMemo, useRef } from "react";
 import {
   CornerDownLeft,
   LayoutGrid,
   PanelBottom,
-  SquareTerminal,
-  Clock,
   ChevronUp,
   ChevronDown,
   GitBranch,
@@ -21,10 +19,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { RunCommand } from "@/types";
 import { logError } from "@/utils/logger";
 import { RunningTaskList } from "./RunningTaskList";
-import {
-  PALETTE_ROW_FOCUS_CLASS,
-  PALETTE_SECTION_LABEL_CLASS,
-} from "@/components/ui/paletteRowStyles";
+import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
+import { HighlightedText } from "@/components/ui/HighlightedText";
+import { KbdChord } from "@/components/ui/Kbd";
+import { isMac } from "@/lib/platform";
 
 interface QuickRunProps {
   projectId: string;
@@ -58,7 +56,60 @@ type SuggestionItem =
       label: string;
       value: string;
       type: "history";
+    }
+  | {
+      /** The literal text in the field, so what Enter runs is always a visible row. */
+      label: string;
+      value: string;
+      type: "typed";
     };
+
+type SuggestionSection = "saved" | "script" | "history";
+
+/** Band labels, in the order the bands render. */
+const SECTION_LABELS: Record<SuggestionSection, string> = {
+  saved: "Pinned",
+  script: "Scripts",
+  history: "Recent",
+};
+const SECTION_ORDER: readonly SuggestionSection[] = ["saved", "script", "history"];
+
+const PIN_KEY_LABEL = isMac() ? "⌥P" : "Alt+P";
+const SUMMARY_ID = "quick-run-summary";
+
+/** Commands are set in the mono face, which draws them without ligatures. */
+const COMMAND_TEXT_CLASS = "font-mono";
+
+/** The keyboard routes for the lit row, for sighted users. */
+function PinHint({
+  saved,
+  canComplete,
+  className,
+}: {
+  saved: boolean;
+  canComplete?: boolean;
+  className?: string;
+}) {
+  return (
+    <span aria-hidden="true" className={cn("shrink-0 items-center gap-1", className)}>
+      {canComplete && (
+        <>
+          <KbdChord shortcut="Tab" density="compact" />
+          <span className="mr-1">Edit</span>
+        </>
+      )}
+      <KbdChord shortcut="Alt+P" density="compact" />
+      {saved ? "Unpin" : "Pin"}
+    </span>
+  );
+}
+
+/** Case-insensitive substring ranges for `HighlightedText`. */
+function matchRanges(text: string, search: string): Array<[number, number]> | undefined {
+  if (!search) return undefined;
+  const at = text.toLowerCase().indexOf(search);
+  return at < 0 ? undefined : [[at, at + search.length - 1]];
+}
 
 const QUICK_RUN_PANEL_ID = "quick-run-panel";
 const HISTORY_KEY_PREFIX = "daintree_cmd_history_";
@@ -69,6 +120,7 @@ const EXPANDED_KEY_PREFIX = "daintree_quickrun_expanded_";
 const SUGGESTION_LIST_ID = "quick-run-suggestions";
 const suggestionOptionId = (index: number) => `quick-run-suggestion-${index}`;
 const MAX_HISTORY = 10;
+const LEAD_INDEX = -2;
 
 /**
  * Normalize a command string for comparison.
@@ -182,6 +234,12 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   const { worktreeMap } = useWorktrees();
 
   const [input, setInput] = useState("");
+  const [launchError, setLaunchError] = useState<string | null>(null);
+  const [launchOverride, setLaunchOverride] = useState<{
+    value: string;
+    dock?: boolean;
+    restart?: boolean;
+  } | null>(null);
   const [runAsDocked, setRunAsDocked] = useState(false);
   const [autoRestart, setAutoRestart] = useState(() => {
     try {
@@ -200,6 +258,8 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   }, [projectId]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  // `LEAD_INDEX` means "whichever row is exactly what was typed", resolved
+  // against the list each render, since the list re-sorts under every keystroke.
   const [focusedSuggestionIndex, setFocusedSuggestionIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const isRunningRef = useRef(false);
@@ -217,15 +277,6 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   // in the field still brings the list up.
   const quietFocusRef = useRef(false);
 
-  // Keep the arrow-key selection on screen. `aria-activedescendant` names the
-  // row for assistive technology but scrolls nothing, so in a list longer than
-  // its cap Enter could run a command the user could not see.
-  useEffect(() => {
-    if (focusedSuggestionIndex < 0) return;
-    document
-      .getElementById(suggestionOptionId(focusedSuggestionIndex))
-      ?.scrollIntoView?.({ block: "nearest" });
-  }, [focusedSuggestionIndex]);
   useEffect(() => {
     if (!focusOnMountRef.current) return;
     quietFocusRef.current = true;
@@ -271,10 +322,18 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     });
   };
 
-  const handlePin = async (e: React.MouseEvent, item: SuggestionItem) => {
-    e.stopPropagation();
-    e.preventDefault();
+  // Pinning moves a row into another band, so its index changes under the
+  // highlight. Remember which command was acted on and put the highlight back
+  // on it once the list has re-sorted.
+  const [refocus, setRefocus] = useState<{ value: string; wasSaved: boolean } | null>(null);
 
+  const togglePin = (item: SuggestionItem) => {
+    setRefocus({ value: item.value, wasSaved: item.type === "saved" });
+    if (item.type === "saved") void handleUnpin(item);
+    else void handlePin(item);
+  };
+
+  const handlePin = async (item: SuggestionItem) => {
     const commandToSave: RunCommand = {
       id: `cmd-${crypto.randomUUID()}`,
       name: item.label,
@@ -293,17 +352,16 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     try {
       await promoteToSaved(commandToSave);
     } catch (err) {
+      setRefocus(null);
       logError("Failed to pin command", err);
     }
   };
 
-  const handleUnpin = async (e: React.MouseEvent, item: SuggestionItem) => {
-    e.stopPropagation();
-    e.preventDefault();
-
+  const handleUnpin = async (item: SuggestionItem) => {
     try {
       await removeFromSaved(item.value);
     } catch (err) {
+      setRefocus(null);
       logError("Failed to unpin command", err);
     }
   };
@@ -387,10 +445,30 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
 
     if (!search) return uniqueOptions;
 
-    return uniqueOptions.filter(
+    const matches = uniqueOptions.filter(
       (opt) => opt.value.toLowerCase().includes(search) || opt.label.toLowerCase().includes(search)
     );
+
+    // Enter runs whatever row is lit, and typing lights the row that is exactly
+    // the typed command — so what Enter runs is always a visible row. An exact
+    // match is lit where it sits, under its own band; anything else gets the
+    // typed text itself as a leading row rather than left implied by an unlit
+    // list.
+    const typed = input.trim();
+    const normalizedTyped = normalizeCommand(typed);
+    if (matches.some((opt) => normalizeCommand(opt.value) === normalizedTyped)) return matches;
+    return [{ label: typed, value: typed, type: "typed" as const }, ...matches];
   }, [input, allDetectedRunners, history, settings]);
+
+  if (refocus) {
+    const normalized = normalizeCommand(refocus.value);
+    const at = suggestions.findIndex((s) => normalizeCommand(s.value) === normalized);
+    const moved = at >= 0 && (suggestions[at]!.type === "saved") !== refocus.wasSaved;
+    if (moved) {
+      setRefocus(null);
+      if (at !== focusedSuggestionIndex) setFocusedSuggestionIndex(at);
+    }
+  }
 
   const handleToggleAutoRestart = () => {
     setAutoRestart((prev) => {
@@ -402,6 +480,26 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
       }
       return next;
     });
+  };
+
+  // A pinned command carries its own output and restart choice, and a toggle
+  // pressed while that command is lit overrides it for this launch only.
+  // Resolved before anything runs, so the summary, the toggles and the launch
+  // all state the same thing.
+  const resolveRunOptions = (item: SuggestionItem) => {
+    const override = launchOverride?.value === item.value ? launchOverride : undefined;
+    return {
+      dock:
+        override?.dock ??
+        (item.type === "saved" && item.preferredLocation !== undefined
+          ? item.preferredLocation === "dock"
+          : runAsDocked),
+      restart:
+        override?.restart ??
+        (item.type === "saved" && item.preferredAutoRestart !== undefined
+          ? item.preferredAutoRestart
+          : autoRestart),
+    };
   };
 
   const handleRunItem = async (item: SuggestionItem) => {
@@ -416,76 +514,217 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     if (isRunningRef.current) return;
     isRunningRef.current = true;
 
+    const { dock, restart } = resolveRunOptions(item);
+    setShowSuggestions(false);
+    setInput("");
+    setFocusedSuggestionIndex(-1);
+    setLaunchError(null);
+    setLaunchOverride(null);
+
     try {
-      // Apply stored preferences for saved items, fall back to global state
-      const useDock =
-        item.type === "saved" && item.preferredLocation !== undefined
-          ? item.preferredLocation === "dock"
-          : runAsDocked;
-      const useAutoRestart =
-        item.type === "saved" && item.preferredAutoRestart !== undefined
-          ? item.preferredAutoRestart
-          : autoRestart;
-
-      // Update visible toggles to reflect the preferences being used
-      if (item.type === "saved") {
-        if (item.preferredLocation !== undefined) setRunAsDocked(useDock);
-        if (item.preferredAutoRestart !== undefined) setAutoRestart(useAutoRestart);
-      }
-
-      saveHistory(cmd);
-      setShowSuggestions(false);
-      setInput("");
-      setFocusedSuggestionIndex(-1);
-
       await addPanel({
         kind: "terminal",
         title: cmd,
         cwd: cwd,
         command: cmd,
-        location: useDock ? "dock" : "grid",
+        location: dock ? "dock" : "grid",
         worktreeId: activeWorktreeId || undefined,
-        exitBehavior: useAutoRestart ? "restart" : undefined,
+        exitBehavior: restart ? "restart" : undefined,
         spawnedBy: "quickrun",
       });
+      saveHistory(cmd);
     } catch (error) {
       logError("Failed to spawn terminal", error);
+      // Give the command back rather than leaving an empty field and no task —
+      // unless something new has been typed since.
+      setInput((current) => (current === "" ? cmd : current));
+      setLaunchError(cmd);
     } finally {
       isRunningRef.current = false;
     }
   };
 
-  const handleRun = async (cmd: string) => {
-    await handleRunItem({ label: cmd, value: cmd, type: "history" });
+  const listOpen = showSuggestions && suggestions.length > 0;
+  const searching = input.trim().length > 0;
+  const normalizedInput = normalizeCommand(input);
+  const activeIndex =
+    focusedSuggestionIndex === LEAD_INDEX
+      ? searching
+        ? Math.max(
+            0,
+            suggestions.findIndex((s) => normalizeCommand(s.value) === normalizedInput)
+          )
+        : -1
+      : focusedSuggestionIndex;
+  const highlighted = listOpen ? suggestions[activeIndex] : undefined;
+
+  // Keep the arrow-key selection on screen. `aria-activedescendant` names the
+  // row for assistive technology but scrolls nothing, so in a list longer than
+  // its cap Enter could run a command the user could not see.
+  useEffect(() => {
+    if (activeIndex < 0) return;
+    document
+      .getElementById(suggestionOptionId(activeIndex))
+      ?.scrollIntoView?.({ block: "nearest" });
+    // `listOpen` too: reopening mounts a fresh scroller at the top while the
+    // lit row may be one the user had scrolled down to.
+  }, [activeIndex, listOpen]);
+
+  // The one thing Run means, for Enter and the arrow alike: the lit row, or
+  // with the list shut, the text in the field.
+  const runTarget: SuggestionItem | undefined =
+    highlighted ??
+    (searching ? { label: input.trim(), value: input.trim(), type: "typed" } : undefined);
+
+  const effective = runTarget
+    ? resolveRunOptions(runTarget)
+    : { dock: runAsDocked, restart: autoRestart };
+
+  // A toggle changes the default — unless the lit command brings its own value
+  // for it, in which case the press overrides that value for this launch and
+  // leaves the saved command alone.
+  const toggleOption = (key: "dock" | "restart") => {
+    const ownsKey =
+      runTarget?.type === "saved" &&
+      (key === "dock"
+        ? runTarget.preferredLocation !== undefined
+        : runTarget.preferredAutoRestart !== undefined);
+    if (runTarget && ownsKey) {
+      const base = launchOverride?.value === runTarget.value ? launchOverride : null;
+      setLaunchOverride({ ...base, value: runTarget.value, [key]: !effective[key] });
+      return;
+    }
+    if (key === "dock") setRunAsDocked(!runAsDocked);
+    else handleToggleAutoRestart();
   };
+
+  // Tab completes: the lit command goes into the field to be read in full or
+  // edited, without running. Only while it differs from what is there, so a
+  // second Tab moves focus on as usual rather than trapping it.
+  const canComplete =
+    highlighted != null && normalizeCommand(highlighted.value) !== normalizedInput;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      if (focusedSuggestionIndex >= 0 && suggestions[focusedSuggestionIndex]) {
-        handleRunItem(suggestions[focusedSuggestionIndex]);
-      } else {
-        handleRun(input);
-      }
+      if (runTarget) void handleRunItem(runTarget);
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
       setShowSuggestions(true);
-      setFocusedSuggestionIndex((prev) => Math.min(prev + 1, suggestions.length - 1));
+      setFocusedSuggestionIndex(Math.min(activeIndex + 1, suggestions.length - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setFocusedSuggestionIndex((prev) => Math.max(prev - 1, -1));
+      setFocusedSuggestionIndex(Math.max(activeIndex - 1, -1));
     } else if (e.key === "Escape") {
       // Dismiss the menu, keep the field. Blurring threw the keyboard user out
       // of the one control they came here for.
       setShowSuggestions(false);
       setFocusedSuggestionIndex(-1);
+    } else if (e.key === "Tab" && !e.shiftKey && canComplete && highlighted) {
+      e.preventDefault();
+      setInput(highlighted.value);
+      setFocusedSuggestionIndex(LEAD_INDEX);
+    } else if (e.altKey && e.code === "KeyP" && listOpen && highlighted) {
+      // `code`, not `key`: Option+P types "π" on a Mac layout.
+      e.preventDefault();
+      togglePin(highlighted);
     }
+  };
+
+  const search = input.toLowerCase().trim();
+
+  // One line per command: what you'd call it first, then what it is. Two-line
+  // rows seated five commands in the menu and cut most of them at the 200px
+  // floor; the band labels now say which kind a row is, so the leading
+  // pin/clock/terminal glyphs went with the second line.
+  const renderOption = (item: SuggestionItem, index: number) => {
+    const selected = index === activeIndex;
+    const primary = item.type === "saved" || item.type === "script" ? item.label : item.value;
+    const secondary =
+      item.type === "saved"
+        ? item.label !== item.value
+          ? item.value
+          : undefined
+        : item.type === "script"
+          ? item.description || (item.label !== item.value ? item.value : undefined)
+          : undefined;
+    return (
+      <div
+        key={`${item.type}-${item.value}`}
+        id={suggestionOptionId(index)}
+        role="option"
+        aria-selected={selected}
+        aria-describedby={selected ? SUMMARY_ID : undefined}
+        title={item.value}
+        // Hover moves the highlight rather than painting a second, lookalike
+        // state beside it — so there is only ever one lit row, and it is the
+        // one Enter runs.
+        onMouseMove={() => {
+          if (!selected) setFocusedSuggestionIndex(index);
+        }}
+        onClick={() => {
+          setInput(item.value);
+          void handleRunItem(item);
+        }}
+        className={cn(
+          PALETTE_ROW_CLASS,
+          "flex min-h-7 cursor-pointer items-center gap-2 px-3 text-xs text-text-secondary"
+        )}
+      >
+        {item.type === "typed" ? (
+          <>
+            <span className="shrink-0">Run</span>
+            <span className={cn("min-w-0 truncate text-text-primary", COMMAND_TEXT_CLASS)}>
+              {item.value}
+            </span>
+          </>
+        ) : (
+          <>
+            <span
+              className={cn(
+                "min-w-0 truncate text-text-primary",
+                item.type === "saved" ? "font-medium" : COMMAND_TEXT_CLASS
+              )}
+            >
+              <HighlightedText text={primary} indices={matchRanges(primary, search)} />
+            </span>
+            {secondary && (
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate text-2xs",
+                  secondary === item.value && COMMAND_TEXT_CLASS
+                )}
+              >
+                <HighlightedText text={secondary} indices={matchRanges(secondary, search)} />
+              </span>
+            )}
+          </>
+        )}
+        {selected && (
+          // A pointer affordance only — never a tab stop and never inside the
+          // option's accessible name, since an option's children are
+          // presentational. The keyboard route is Alt+P, named in the footer.
+          <span
+            aria-hidden="true"
+            title={`${item.type === "saved" ? "Unpin" : "Pin"} (${PIN_KEY_LABEL})`}
+            onClick={(e) => {
+              e.stopPropagation();
+              togglePin(item);
+            }}
+            className="ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary transition-colors hover:bg-overlay-medium hover:text-text-primary"
+          >
+            {item.type === "saved" ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
+          </span>
+        )}
+      </div>
+    );
   };
 
   const activeWorktree = activeWorktreeId ? worktreeMap.get(activeWorktreeId) : null;
   // The branch, beside a branch glyph — the worktree's folder name is often
   // something else entirely (worktree "main" on branch "develop").
   const destinationLabel = activeWorktree?.branch || activeWorktree?.name || "";
+  const runSummary = `${effective.dock ? "Dock" : "Grid"}${effective.restart ? " · Restarts" : ""}`;
   const isWorktreeValid = activeWorktree != null && activeWorktree.path != null;
 
   return (
@@ -508,8 +747,32 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
           </div>
         ) : (
           <>
-            {activeWorktreeId && <RunningTaskList worktreeId={activeWorktreeId} />}
+            {activeWorktreeId && (
+              <RunningTaskList
+                worktreeId={activeWorktreeId}
+                onFocusFallback={(options) => {
+                  // Quietly: landing here after clearing the last task should
+                  // not throw the suggestion list over the panel.
+                  quietFocusRef.current = true;
+                  inputRef.current?.focus(options);
+                  quietFocusRef.current = false;
+                }}
+              />
+            )}
             <div
+              // The list closes when focus leaves the field and its own
+              // controls, not the field alone: tabbing to a toggle keeps the lit
+              // command — and with it a pinned command's own settings, which the
+              // toggles show and a press overrides — rather than dropping back
+              // to the defaults mid-choice.
+              onBlur={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget)) setShowSuggestions(false);
+              }}
+              onKeyDown={(e) => {
+                // The field handles its own keys; from a toggle, Escape still
+                // dismisses the list it kept open.
+                if (e.key === "Escape" && e.target !== inputRef.current) setShowSuggestions(false);
+              }}
               className={cn(
                 // Fallback keeps themes without --dock-input-bg byte-identical.
                 "relative flex flex-wrap items-center rounded-[var(--radius-md)] border border-selection-outline bg-[var(--dock-input-bg,var(--color-overlay-soft))]",
@@ -533,14 +796,15 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                 value={input}
                 onChange={(e) => {
                   setInput(e.target.value);
+                  setLaunchError(null);
                   setShowSuggestions(true);
-                  setFocusedSuggestionIndex(-1);
+                  // Typing lights the first row, which is always what Enter runs.
+                  setFocusedSuggestionIndex(e.target.value.trim() ? LEAD_INDEX : -1);
                 }}
                 onFocus={() => {
                   if (!quietFocusRef.current) setShowSuggestions(true);
                 }}
                 onClick={() => setShowSuggestions(true)}
-                onBlur={() => setShowSuggestions(false)}
                 onKeyDown={handleKeyDown}
                 placeholder="Run a command"
                 aria-label="Command input"
@@ -548,18 +812,17 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                 // DOM focus never leaves the input, so without the combobox
                 // half nothing tells a screen reader which row Enter will run.
                 role="combobox"
-                aria-expanded={showSuggestions && suggestions.length > 0}
+                aria-autocomplete="list"
+                aria-keyshortcuts="Alt+P"
+                aria-expanded={listOpen}
                 aria-controls={SUGGESTION_LIST_ID}
-                aria-activedescendant={
-                  focusedSuggestionIndex >= 0
-                    ? suggestionOptionId(focusedSuggestionIndex)
-                    : undefined
-                }
+                aria-activedescendant={highlighted ? suggestionOptionId(activeIndex) : undefined}
                 className={cn(
                   // `pr-2` is load-bearing at the narrow end: without it the
                   // field's text runs flush into the button cluster and the
                   // last glyph touches the first icon.
-                  "flex-1 bg-transparent py-2 pr-2 text-xs font-mono text-text-primary placeholder:text-text-secondary",
+                  "flex-1 bg-transparent py-2 pr-2 text-xs text-text-primary placeholder:text-text-secondary",
+                  COMMAND_TEXT_CLASS,
                   // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- the wrapper paints the indicator for this field via focus-within:border-accent-primary; a ring on the bare input would sit inside that border and double it
                   "focus:outline-hidden min-w-0"
                 )}
@@ -576,29 +839,35 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                   "@max-[280px]/footer:order-last @max-[280px]/footer:basis-full @max-[280px]/footer:justify-end @max-[280px]/footer:border-t @max-[280px]/footer:border-border-subtle @max-[280px]/footer:py-0.5 @max-[280px]/footer:pr-1.5"
                 )}
               >
-                {/* Auto-Restart Toggle */}
+                {/* The toggles show what the next run will actually do,
+                    including a lit pinned command's own choice. Mousedown is
+                    held so the field — and its lit row — keep focus. */}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={handleToggleAutoRestart}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => toggleOption("restart")}
                       className={cn(
-                        "p-1.5 rounded-[var(--radius-sm)] transition-colors",
-                        autoRestart
-                          ? "bg-overlay-medium text-text-primary"
-                          : "text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
+                        "rounded-[var(--radius-sm)] border p-1 transition-colors",
+                        // The fill alone cleared about 1.1:1; the outline is
+                        // the find bars' pressed treatment (TerminalSearchBar,
+                        // FindBar), the closest toggles in the app.
+                        effective.restart
+                          ? "border-text-secondary bg-border-default text-text-primary"
+                          : "border-transparent text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
                       )}
                       // The label names the control, not its state — the state
                       // is `aria-pressed`'s job, and a label that flips reads
                       // as a different control each time it is pressed.
                       aria-label="Auto-restart"
-                      aria-pressed={autoRestart}
+                      aria-pressed={effective.restart}
                     >
                       <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
-                    {autoRestart ? "Auto-restart: on" : "Auto-restart: off"}
+                    {effective.restart ? "Auto-restart: on" : "Auto-restart: off"}
                   </TooltipContent>
                 </Tooltip>
 
@@ -607,20 +876,24 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={() => setRunAsDocked(!runAsDocked)}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => toggleOption("dock")}
                       className={cn(
-                        "p-1.5 rounded-[var(--radius-sm)] transition-colors",
-                        runAsDocked
-                          ? "bg-overlay-medium text-text-primary"
-                          : "text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
+                        "rounded-[var(--radius-sm)] border p-1 transition-colors",
+                        // The fill alone cleared about 1.1:1; the outline is
+                        // the find bars' pressed treatment (TerminalSearchBar,
+                        // FindBar), the closest toggles in the app.
+                        effective.dock
+                          ? "border-text-secondary bg-border-default text-text-primary"
+                          : "border-transparent text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
                       )}
                       // Same rule as auto-restart: one stable name, with the
                       // state on `aria-pressed`. Pressed means docked, which
                       // is the non-default half of the pair.
                       aria-label="Run in the dock as a background task"
-                      aria-pressed={runAsDocked}
+                      aria-pressed={effective.dock}
                     >
-                      {runAsDocked ? (
+                      {effective.dock ? (
                         <PanelBottom className="h-3.5 w-3.5" aria-hidden="true" />
                       ) : (
                         <LayoutGrid className="h-3.5 w-3.5" aria-hidden="true" />
@@ -628,7 +901,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
-                    {runAsDocked
+                    {effective.dock
                       ? "Output: dock (background task)"
                       : "Output: grid (interactive terminal)"}
                   </TooltipContent>
@@ -642,8 +915,13 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                     <span className="inline-flex">
                       <button
                         type="button"
-                        onClick={() => handleRun(input)}
-                        disabled={!input.trim()}
+                        // Keep the field focused so a lit row survives the
+                        // press and the arrow runs the same thing Enter would.
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          if (runTarget) void handleRunItem(runTarget);
+                        }}
+                        disabled={!runTarget}
                         className={cn(
                           "p-1.5 rounded-[var(--radius-sm)] transition-colors",
                           // Neutral, not accent: the focus ring on the field
@@ -651,7 +929,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                           // beside it made two marks compete for the same job.
                           // A high-contrast neutral reads as the primary
                           // action and stays theme-aware by construction.
-                          input.trim()
+                          runTarget
                             ? "text-text-primary hover:bg-overlay-medium"
                             : "cursor-not-allowed text-text-muted"
                         )}
@@ -668,108 +946,124 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                 </Tooltip>
               </div>
 
-              {/* Autocomplete Menu */}
-              {showSuggestions && suggestions.length > 0 && (
+              {listOpen && (
                 <div
-                  role="listbox"
-                  id={SUGGESTION_LIST_ID}
-                  aria-label="Commands"
                   onMouseDown={(e) => e.preventDefault()}
-                  className="absolute bottom-full left-0 right-0 z-50 mb-1 flex max-h-64 flex-col overflow-hidden rounded-[var(--radius-md)] border border-border-default bg-surface-panel-elevated shadow-[var(--theme-shadow-floating)]"
+                  className="absolute bottom-full left-0 right-0 z-50 mb-1 flex max-h-72 flex-col overflow-hidden rounded-[var(--radius-md)] border border-border-default bg-surface-panel-elevated shadow-[var(--theme-shadow-floating)]"
                 >
                   <div
-                    className={cn(
-                      "shrink-0 border-b border-border-subtle bg-surface-input px-3 py-1",
-                      PALETTE_SECTION_LABEL_CLASS
-                    )}
+                    role="listbox"
+                    id={SUGGESTION_LIST_ID}
+                    aria-label="Commands"
+                    className="min-h-0 flex-1 overflow-y-auto py-1"
                   >
-                    Commands
-                  </div>
-                  <div className="overflow-y-auto flex-1">
-                    {suggestions.map((item, index) => (
-                      <button
-                        type="button"
-                        key={`${item.value}-${index}`}
-                        id={suggestionOptionId(index)}
-                        role="option"
-                        aria-selected={index === focusedSuggestionIndex}
-                        className={cn(
-                          "group flex w-full items-center gap-3 px-3 py-2 text-left text-xs font-mono transition-colors",
-                          PALETTE_ROW_FOCUS_CLASS,
-                          // Neutral, matching the palette rows (#11686): the
-                          // arrow-key cursor is not a focus anchor, and lighting
-                          // it accent put a second accent beside the field's
-                          // focus border while both were visible.
-                          index === focusedSuggestionIndex
-                            ? "bg-overlay-raised text-text-primary"
-                            : "text-text-secondary hover:bg-overlay-soft"
-                        )}
-                        onClick={() => {
-                          setInput(item.value);
-                          handleRunItem(item);
-                        }}
-                      >
-                        {item.type === "saved" ? (
-                          <Pin className="h-3 w-3 text-text-secondary shrink-0" />
-                        ) : item.type === "history" ? (
-                          <Clock className="h-3 w-3 text-text-secondary shrink-0" />
-                        ) : (
-                          <SquareTerminal className="h-3 w-3 text-text-secondary shrink-0" />
-                        )}
-                        <div className="flex-1 truncate flex items-start justify-between min-w-0">
-                          <div className="truncate">
-                            <span
-                              className={cn(
-                                "group-hover:text-text-primary",
-                                item.type === "saved" ? "font-semibold text-text-primary" : ""
-                              )}
-                            >
-                              {item.type === "saved" ? item.label : item.value}
-                            </span>
-                            {item.type === "script" && item.label !== item.value && (
-                              <span className="ml-2 text-2xs font-sans text-text-secondary">
-                                ({item.label})
-                              </span>
-                            )}
-                            {item.type === "saved" && item.label !== item.value && (
-                              <span className="ml-2 text-2xs font-sans text-text-secondary">
-                                {item.value}
-                              </span>
-                            )}
-                            {(item.type === "script" || item.type === "saved") &&
-                              "description" in item &&
-                              item.description && (
-                                <span className="mt-0.5 block truncate text-2xs font-sans text-text-secondary">
-                                  {item.description}
-                                </span>
-                              )}
+                    {suggestions[0]?.type === "typed" && renderOption(suggestions[0], 0)}
+                    {SECTION_ORDER.map((section) => {
+                      const rows = suggestions
+                        .map((item, index) => ({ item, index }))
+                        .filter(({ item }) => item.type === section);
+                      if (rows.length === 0) return null;
+                      return (
+                        <Fragment key={section}>
+                          {/* A disabled option rather than a role="group"
+                              label, as the action palette and plugin selector
+                              do: group labels inside a listbox are dropped
+                              under Chromium + VoiceOver, which announces an
+                              empty group instead. The arrows never land on it —
+                              it has no index in `suggestions`. */}
+                          <div
+                            role="option"
+                            aria-disabled="true"
+                            aria-selected="false"
+                            aria-label={SECTION_LABELS[section]}
+                            data-band={section}
+                            className={cn("px-3 pb-1 pt-2", PALETTE_SECTION_LABEL_CLASS)}
+                          >
+                            {SECTION_LABELS[section]}
                           </div>
-                          {item.type === "saved" ? (
-                            <button
-                              type="button"
-                              onClick={(e) => handleUnpin(e, item)}
-                              className="ml-2 shrink-0 rounded-[var(--radius-sm)] p-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-overlay-soft"
-                              aria-label="Unpin this command"
-                            >
-                              <PinOff className="h-3 w-3 text-text-secondary hover:text-status-error" />
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={(e) => handlePin(e, item)}
-                              className="ml-2 shrink-0 rounded-[var(--radius-sm)] p-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-overlay-soft"
-                              aria-label="Pin this command"
-                            >
-                              <Pin className="h-3 w-3 text-text-secondary hover:text-text-primary" />
-                            </button>
-                          )}
-                        </div>
-                      </button>
-                    ))}
+                          {rows.map(({ item, index }) => renderOption(item, index))}
+                        </Fragment>
+                      );
+                    })}
+                  </div>
+                  {/* What Run will do, stated before it happens: the full
+                      command the lit row stands for, where it runs, and how —
+                      including a pinned command's own output and restart
+                      choice, which override the toggles below. The branch
+                      caption above the field is under this menu while it is
+                      open, so the destination is restated here. The lit option
+                      is described by it, so a screen reader hears the same. */}
+                  <div
+                    id={SUMMARY_ID}
+                    // `gap`, not `space-y`: space-y margins every child but the last, so
+                    // the screen-reader line appended when a row lights gave the
+                    // settings row a margin and grew the strip by 2px.
+                    className="flex shrink-0 flex-col gap-0.5 border-t border-border-subtle bg-surface-input px-3 py-1.5 text-2xs text-text-secondary"
+                  >
+                    {/* Always one line, lit or not: a summary that appeared,
+                        or wrapped, as rows lit up changed the popup's height
+                        and moved the rows — which is bottom-anchored — out from
+                        under the pointer between hover and click. The whole
+                        command is a Tab away in the field. */}
+                    <div className="flex h-4 items-center gap-2">
+                      <span
+                        className={cn(
+                          "min-w-0 flex-1 truncate",
+                          highlighted && cn("text-text-primary", COMMAND_TEXT_CLASS)
+                        )}
+                      >
+                        {highlighted ? highlighted.value : "Choose a command, or type one"}
+                      </span>
+                      {highlighted && (
+                        <PinHint
+                          saved={highlighted.type === "saved"}
+                          canComplete={canComplete}
+                          className="flex @max-[280px]/footer:hidden"
+                        />
+                      )}
+                    </div>
+                    {/* Below 280px the settings take their own line so the
+                        branch keeps its width, and the key hint rides with them
+                        instead of taking the command's. */}
+                    <div className="flex h-4 min-w-0 items-center gap-x-1 @max-[280px]/footer:h-auto @max-[280px]/footer:flex-wrap">
+                      <span className="flex min-w-0 items-center gap-1 @max-[280px]/footer:basis-full">
+                        <GitBranch className="h-3 w-3 shrink-0" aria-hidden="true" />
+                        <span className="sr-only">Runs on </span>
+                        <span className="min-w-0 truncate">{destinationLabel}</span>
+                      </span>
+                      <span className="flex shrink-0 items-center gap-1 @max-[280px]/footer:h-4 @max-[280px]/footer:min-w-0 @max-[280px]/footer:flex-1">
+                        <span className="min-w-0 truncate">
+                          <span aria-hidden="true" className="@max-[280px]/footer:hidden">
+                            {"· "}
+                          </span>
+                          {runSummary}
+                        </span>
+                        {highlighted && (
+                          <PinHint
+                            saved={highlighted.type === "saved"}
+                            className="ml-auto hidden @max-[280px]/footer:flex"
+                          />
+                        )}
+                      </span>
+                    </div>
+                    {highlighted && (
+                      <span className="sr-only">
+                        {`${canComplete ? "Tab to edit, " : ""}${PIN_KEY_LABEL} to ${highlighted.type === "saved" ? "unpin" : "pin"}`}
+                      </span>
+                    )}
                   </div>
                 </div>
               )}
             </div>
+            {launchError && (
+              <div
+                role="alert"
+                className="mt-1 truncate text-2xs text-text-primary"
+                title={launchError}
+              >
+                Couldn't start {launchError}
+              </div>
+            )}
           </>
         )}
       </div>

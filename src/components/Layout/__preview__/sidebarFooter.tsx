@@ -441,6 +441,138 @@ export const FIXTURES: Record<string, Fixture> = {
     },
   },
 
+  /**
+   * A real monorepo's worth of suggestions: pins that came from scripts and
+   * pins typed by hand, a long run of detected scripts, and history with the
+   * kind of command lines people actually paste. Four suggestions hid how the
+   * menu behaves once it has to scroll and once rows have to be told apart.
+   */
+  "long-suggestions": {
+    what: "three pins, fourteen scripts and six history entries",
+    seed: () => {
+      baseline();
+      const scripts: RunCommand[] = [
+        { id: "r-dev", name: "dev", command: "npm run dev", description: "Main + Renderer (Vite)" },
+        { id: "r-test", name: "test", command: "npm test", description: "vitest" },
+        {
+          id: "r-check",
+          name: "check",
+          command: "npm run check",
+          description: "typecheck + 12 codegen/guard checks + lint ratchet + format:check",
+        },
+        { id: "r-build", name: "build", command: "npm run build", description: "production build" },
+        {
+          id: "r-fix",
+          name: "fix",
+          command: "npm run fix",
+          description: "prettier + eslint --fix",
+        },
+        { id: "r-rebuild", name: "rebuild", command: "npm run rebuild" },
+        { id: "r-typecheck", name: "typecheck", command: "npm run typecheck" },
+        { id: "r-lint", name: "lint", command: "npm run lint" },
+        { id: "r-format", name: "format", command: "npm run format" },
+        { id: "r-e2e", name: "test:e2e", command: "npm run test:e2e", description: "Playwright" },
+        { id: "r-codegen", name: "codegen:ipc", command: "npm run codegen:ipc" },
+        { id: "r-db", name: "db:generate", command: "npm run db:generate" },
+        {
+          id: "r-packages",
+          name: "packages:build",
+          command: "npm run packages:build",
+          description: "Build every plugin SDK workspace package",
+        },
+        { id: "r-help", name: "build:help", command: "npm run build:help" },
+      ];
+      const saved: RunCommand[] = [
+        {
+          id: "s-dev",
+          name: "Dev server",
+          command: "npm run dev",
+          preferredLocation: "grid",
+          preferredAutoRestart: true,
+        },
+        {
+          id: "s-check",
+          name: "check",
+          command: "npm run check",
+          preferredLocation: "dock",
+        },
+        {
+          id: "s-docs",
+          name: "Docs preview",
+          command: "npx serve docs --listen 4000 --no-clipboard",
+          description: "Pinned from history",
+          preferredLocation: "dock",
+        },
+      ];
+      useProjectSettingsStore.setState({
+        settings: { runCommands: saved },
+        detectedRunners: scripts,
+        allDetectedRunners: scripts,
+      });
+      const now = Date.now();
+      const history = [
+        "npm test -- src/components/Project/__tests__/QuickRun.test.tsx",
+        "git log --oneline -20",
+        "DAINTREE_SHOT_FOOTER=1 npx playwright test --project=screenshots sidebar-footer-review",
+        "docker compose up -d postgres redis",
+        "ls -la",
+        "npm run test:e2e -- e2e/full/panels/core-light-theme-smoke.spec.ts",
+      ].map((command, i) => ({ command, timestamp: now - i * 60_000 }));
+      try {
+        localStorage.setItem(`daintree_cmd_history_${PROJECT_ID}`, JSON.stringify(history));
+      } catch {
+        // history is then empty, which the capture will show
+      }
+    },
+  },
+
+  /** A fresh project: nothing detected, nothing pinned, nothing run yet. */
+  "no-suggestions": {
+    what: "no scripts detected, nothing pinned, no history",
+    seed: () => {
+      baseline();
+      useProjectSettingsStore.setState({
+        settings: { runCommands: [] },
+        detectedRunners: [],
+        allDetectedRunners: [],
+      });
+    },
+  },
+
+  /** Every task status at once, and more tasks than the list shows. */
+  "many-tasks": {
+    what: "seven QuickRun tasks — running, restarting, failed, finished — past the cap",
+    seed: () => {
+      baseline();
+      const panels = [
+        task("t-dev", "npm run dev", { startedAt: Date.now() - 1_325_000 }),
+        task("t-docs", "npx serve docs --listen 4000 --no-clipboard", {
+          startedAt: Date.now() - 604_000,
+        }),
+        task("t-watch", "npm run test -- --watch src/components/Project", {
+          isRestarting: true,
+          exitBehavior: "restart",
+        }),
+        task("t-check", "npm run check", {
+          runtimeStatus: "exited",
+          exitCode: 2,
+          startedAt: Date.now() - 181_000,
+        }),
+        task("t-build", "npm run build", {
+          runtimeStatus: "exited",
+          exitCode: 0,
+          startedAt: Date.now() - 12_000,
+        }),
+        task("t-lint", "npm run lint", { startedAt: Date.now() - 31_000 }),
+        task("t-e2e", "npm run test:e2e", { startedAt: Date.now() - 8_000 }),
+      ];
+      usePanelStore.setState({
+        panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
+        panelIds: panels.map((p) => p.id),
+      });
+    },
+  },
+
   /** Tasks running under QuickRun push the input down and add their own rows. */
   "running-tasks": {
     what: "two QuickRun tasks running above the input",

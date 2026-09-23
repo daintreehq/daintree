@@ -499,13 +499,20 @@ code.hljs {
     letter-spacing: 0 !important;
   }
 
-  /* Consistent monospace font stack */
+  /* Consistent monospace font stack.
+
+     Ligatures off: the mono face (JetBrains Mono) draws `--` as one long dash,
+     `->` and `!=` as arrows and symbols, and in the UI the mono face is almost
+     always showing something to be read or typed character for character — a
+     command's `--flag`, a path, a hash. The terminal and the editor set their
+     own font and are untouched by this. */
   code,
   kbd,
   samp,
   pre,
   .font-mono {
     font-family: var(--font-mono);
+    font-variant-ligatures: none;
   }
 
   /* CodeMirror defaults to a bare `monospace`, which renders as serif on

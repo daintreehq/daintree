@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { primeRadix } from "@/components/ui/radix-loader";
 import type { PtyPanelData } from "@shared/types/panel";
-import { RunningTaskList } from "../RunningTaskList";
+import { RunningTaskList, resetDismissedTasks } from "../RunningTaskList";
 
 const WORKTREE_ID = "wt-1";
 
@@ -47,6 +47,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetDismissedTasks();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
@@ -91,15 +92,15 @@ describe("RunningTaskList overflow", () => {
   it("keeps the tail out of the DOM until the disclosure is opened", () => {
     seedTasks(8);
     render(<RunningTaskList worktreeId={WORKTREE_ID} />);
-    expect(screen.getByText("cmd-4")).toBeTruthy();
-    expect(screen.queryByText("cmd-5")).toBeNull();
+    expect(screen.getByText("cmd-3")).toBeTruthy();
+    expect(screen.queryByText("cmd-2")).toBeNull();
   });
 
   it("opens the tail so every hidden task is reachable (#12001)", () => {
     seedTasks(8);
     render(<RunningTaskList worktreeId={WORKTREE_ID} />);
     openOverflow();
-    for (const i of [5, 6, 7]) {
+    for (const i of [0, 1, 2]) {
       expect(within(overflowList()).getByText(`cmd-${i}`)).toBeTruthy();
     }
   });
@@ -146,7 +147,7 @@ describe("RunningTaskList overflow", () => {
     render(<RunningTaskList worktreeId={WORKTREE_ID} />);
     openOverflow();
 
-    const row = within(overflowList()).getByText("cmd-7").closest("[data-task-row]")!;
+    const row = within(overflowList()).getByText("cmd-0").closest("[data-task-row]")!;
     const stop = within(row as HTMLElement).getByLabelText("Stop task");
 
     // The row used to be a role="button" wrapping these actions, and its
@@ -156,7 +157,7 @@ describe("RunningTaskList overflow", () => {
     fireEvent.keyDown(stop, { key: "Enter" });
     fireEvent.click(stop);
 
-    expect(killMock).toHaveBeenCalledWith("task-7");
+    expect(killMock).toHaveBeenCalledWith("task-0");
     expect(storeState.activateTerminal).not.toHaveBeenCalled();
   });
 
@@ -165,9 +166,9 @@ describe("RunningTaskList overflow", () => {
     render(<RunningTaskList worktreeId={WORKTREE_ID} />);
     openOverflow();
 
-    const row = within(overflowList()).getByText("cmd-7").closest("[data-task-row]")!;
+    const row = within(overflowList()).getByText("cmd-2").closest("[data-task-row]")!;
     fireEvent.click(within(row as HTMLElement).getByLabelText("Stop task"));
-    expect(killMock).toHaveBeenCalledWith("task-7");
+    expect(killMock).toHaveBeenCalledWith("task-2");
   });
 
   it("restarts a hidden failed task", () => {
@@ -175,9 +176,9 @@ describe("RunningTaskList overflow", () => {
     render(<RunningTaskList worktreeId={WORKTREE_ID} />);
     openOverflow();
 
-    const row = within(overflowList()).getByText("cmd-6").closest("[data-task-row]")!;
+    const row = within(overflowList()).getByText("cmd-1").closest("[data-task-row]")!;
     fireEvent.click(within(row as HTMLElement).getByLabelText("Restart task"));
-    expect(storeState.restartTerminal).toHaveBeenCalledWith("task-6");
+    expect(storeState.restartTerminal).toHaveBeenCalledWith("task-1");
   });
 
   it("dismisses a hidden failed task, dropping it from the tail", () => {
@@ -185,9 +186,9 @@ describe("RunningTaskList overflow", () => {
     render(<RunningTaskList worktreeId={WORKTREE_ID} />);
     openOverflow();
 
-    const row = within(overflowList()).getByText("cmd-7").closest("[data-task-row]")!;
+    const row = within(overflowList()).getByText("cmd-2").closest("[data-task-row]")!;
     fireEvent.click(within(row as HTMLElement).getByLabelText("Dismiss"));
-    expect(screen.queryByText("cmd-7")).toBeNull();
+    expect(screen.queryByText("cmd-2")).toBeNull();
     expect(screen.getByTestId("running-task-overflow").textContent).toContain("2");
   });
 
@@ -196,10 +197,88 @@ describe("RunningTaskList overflow", () => {
     render(<RunningTaskList worktreeId={WORKTREE_ID} />);
     openOverflow();
 
-    const row = within(overflowList()).getByText("cmd-5").closest("[data-task-row]")!;
+    const row = within(overflowList()).getByText("cmd-2").closest("[data-task-row]")!;
     fireEvent.click(within(row as HTMLElement).getByLabelText("Focus terminal"));
-    expect(storeState.activateTerminal).toHaveBeenCalledWith("task-5");
-    expect(screen.queryByText("cmd-6")).toBeNull();
+    expect(storeState.activateTerminal).toHaveBeenCalledWith("task-2");
+    expect(screen.queryByText("cmd-1")).toBeNull();
+  });
+
+  it("always shows the task launched last, however many came before it", () => {
+    // Launching is why the user is looking at this list; the row they just
+    // started must never be the one hidden behind the disclosure.
+    for (const count of [1, 5, 6, 12]) {
+      seedTasks(count);
+      const { unmount } = render(<RunningTaskList worktreeId={WORKTREE_ID} />);
+      expect(screen.getByText(`cmd-${count - 1}`)).toBeTruthy();
+      unmount();
+    }
+  });
+
+  it("keeps a finished task until it is dismissed", () => {
+    // A quick command finishes before the user looks back; the row is the
+    // one-step route to its output, so it must not clear itself.
+    vi.useFakeTimers();
+    try {
+      seedTasks(1, { runtimeStatus: "exited", exitCode: 0 });
+      render(<RunningTaskList worktreeId={WORKTREE_ID} />);
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      const row = screen.getByText("cmd-0").closest<HTMLElement>("[data-task-row]")!;
+      fireEvent.click(within(row).getByLabelText("Dismiss"));
+      expect(screen.queryByText("cmd-0")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a dismissal when the list unmounts and mounts again", () => {
+    // Collapsing Quick Run unmounts the list; reopening must not bring back
+    // what the user already cleared.
+    seedTasks(2, { runtimeStatus: "exited", exitCode: 1 });
+    const first = render(<RunningTaskList worktreeId={WORKTREE_ID} />);
+    const row = screen.getByText("cmd-1").closest<HTMLElement>("[data-task-row]")!;
+    fireEvent.click(within(row).getByLabelText("Dismiss"));
+    first.unmount();
+
+    render(<RunningTaskList worktreeId={WORKTREE_ID} />);
+    expect(screen.queryByText("cmd-1")).toBeNull();
+    expect(screen.getByText("cmd-0")).toBeTruthy();
+  });
+
+  it("keeps a dismissal while another worktree is shown", () => {
+    seedTasks(2, { runtimeStatus: "exited", exitCode: 1 });
+    const { rerender } = render(<RunningTaskList worktreeId={WORKTREE_ID} />);
+    const row = screen.getByText("cmd-1").closest<HTMLElement>("[data-task-row]")!;
+    fireEvent.click(within(row).getByLabelText("Dismiss"));
+
+    rerender(<RunningTaskList worktreeId="wt-other" />);
+    rerender(<RunningTaskList worktreeId={WORKTREE_ID} />);
+    expect(screen.queryByText("cmd-1")).toBeNull();
+  });
+
+  it("hands focus to the next task when a dismissal removes the focused button", () => {
+    seedTasks(3, { runtimeStatus: "exited", exitCode: 1 });
+    const fallback = vi.fn();
+    render(<RunningTaskList worktreeId={WORKTREE_ID} onFocusFallback={fallback} />);
+    const row = screen.getByText("cmd-1").closest<HTMLElement>("[data-task-row]")!;
+    const dismiss = within(row).getByLabelText("Dismiss");
+    dismiss.focus();
+    fireEvent.click(dismiss, { detail: 0 });
+
+    expect(screen.queryByText("cmd-1")).toBeNull();
+    expect(document.activeElement?.textContent).toBe("cmd-2");
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it("hands focus back to the field when the last task is dismissed", () => {
+    seedTasks(1, { runtimeStatus: "exited", exitCode: 1 });
+    const fallback = vi.fn();
+    render(<RunningTaskList worktreeId={WORKTREE_ID} onFocusFallback={fallback} />);
+    const dismiss = screen.getByLabelText("Dismiss");
+    dismiss.focus();
+    fireEvent.click(dismiss, { detail: 0 });
+    expect(fallback).toHaveBeenCalledTimes(1);
   });
 
   it("drops the disclosure once the tail shrinks back under the cap", () => {
