@@ -699,7 +699,11 @@ export function FileBrowserViewer({
   // `compactBelow` is where the secondary actions fold into "More actions" so
   // the path pill keeps room for a file name. A row carrying the mode toggle
   // folds earlier, because that control alone takes ~120px.
-  const showModeToggle = filePath !== null && (isRenderable || canEdit);
+  // Reading controls only for content that can be read: a Markdown file that
+  // failed as oversized has no source or rendered view for them to change.
+  // A plugin's Edit mode stays, since it may open what the reader could not.
+  const readable = state.status !== "error";
+  const showModeToggle = filePath !== null && ((isRenderable && readable) || canEdit);
   return (
     <>
       <FileViewerToolbar.Root
@@ -779,12 +783,12 @@ export function FileBrowserViewer({
               filePath={filePath}
               contents={state.status === "text" || state.status === "html" ? state.content : null}
               textSize={
-                isMarkdown && renderMode === "rendered"
+                readable && isMarkdown && renderMode === "rendered"
                   ? { value: markdownFontSize, onValueChange: setMarkdownFontSize }
                   : null
               }
               wrap={
-                isMarkdown && renderMode === "source"
+                readable && isMarkdown && renderMode === "source"
                   ? { value: wrapLines, onValueChange: setWrapLines }
                   : null
               }

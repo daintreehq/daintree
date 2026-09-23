@@ -503,6 +503,11 @@ describe("fitFileName", () => {
     expect(screen.getByRole("button", { name: "Copy file path: src/a/b.ts" })).toBeTruthy();
   });
 
+  it("keeps a long extension whole", () => {
+    const fitted = fitFileName("daintree-agent-development.code-workspace", fitsWithin(28));
+    expect(fitted.endsWith(".code-workspace")).toBe(true);
+  });
+
   it("treats a dotless name as all stem", () => {
     const fitted = fitFileName("Makefile-for-the-whole-monorepo", fitsWithin(12));
     expect(fitted.length).toBeLessThanOrEqual(12);

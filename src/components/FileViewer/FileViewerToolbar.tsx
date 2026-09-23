@@ -36,7 +36,8 @@ function measureTextWidth(text: string, font: string): number {
  */
 export function fitFileName(name: string, fits: (text: string) => boolean): string {
   const dot = name.lastIndexOf(".");
-  const hasExtension = dot > 0 && dot < name.length - 1 && name.length - dot <= 8;
+  // No length cap: ".code-workspace" identifies a file as surely as ".ts".
+  const hasExtension = dot > 0 && dot < name.length - 1;
   const stem = hasExtension ? name.slice(0, dot) : name;
   const extension = hasExtension ? name.slice(dot) : "";
   // A few characters of the stem's tail stay beside the extension — the end of

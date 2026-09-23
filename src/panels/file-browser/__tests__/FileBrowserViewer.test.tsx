@@ -1851,6 +1851,17 @@ describe("viewer at tight widths and keyboard continuity", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: /^Copy folder path/ }));
   });
 
+  it("drops reading controls for a Markdown file that failed to read", async () => {
+    readMock.mockRejectedValue(new ClientAppError("FILE_TOO_LARGE", "FILE_TOO_LARGE"));
+    renderViewer("/repo/docs/huge.md");
+    await screen.findByTestId("file-browser-unavailable");
+    expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull();
+    expect(screen.queryByTestId("markdown-text-size-mock")).toBeNull();
+    // Identity and the way out survive.
+    expect(screen.getByRole("button", { name: /^Copy file path/ })).toBeTruthy();
+  });
+
   it("announces a folder that couldn't be read, with Retry", () => {
     const onRefresh = vi.fn();
     renderViewer(null, { folderPath: "src", folderStatus: "error", onRefresh });
