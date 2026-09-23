@@ -334,7 +334,10 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
     (!snapshot.resource ||
       !snapshot.pty ||
       !snapshot.memory ||
-      !snapshot.memory.terminalWorkloads.available);
+      !snapshot.memory.terminalWorkloads.available ||
+      // Terminals exist but no view has reported how it draws them. An empty
+      // renderer cache is fine with no terminals; with some, it's a gap.
+      (snapshot.pty.terminalCount > 0 && snapshot.rendererTerminals.length === 0));
   // Present but old: the verdict can't speak for "right now" either.
   const readingsStale = !!snapshot?.memory?.terminalWorkloads.stale;
   const memoryWorkloads = memory?.terminalWorkloads ?? null;

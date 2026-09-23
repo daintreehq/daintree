@@ -14,6 +14,19 @@ vi.mock("@/clients/systemClient", () => ({
 const logError = vi.fn();
 vi.mock("@/utils/logger", () => ({ logError: (...args: unknown[]) => logError(...args) }));
 
+const quietRenderer: WhySlowSnapshot["rendererTerminals"] = [
+  {
+    webContentsId: 1,
+    webglMode: "webgl",
+    wantsWebgl: 2,
+    terminalCount: 2,
+    countsByTier: { VISIBLE: 2 },
+    timestamp: 1,
+    ageMs: 500,
+    stale: false,
+  },
+];
+
 const quietMemory: WhySlowSnapshot["memory"] = {
   appMemoryMb: 400,
   terminalWorkloads: {
@@ -367,6 +380,7 @@ describe("WhySlowContent", () => {
         pty: makeQuietPty(),
         worktrees: quietWorktrees,
         memory: quietMemory,
+        rendererTerminals: quietRenderer,
       })
     );
 
@@ -442,7 +456,12 @@ describe("WhySlowContent", () => {
   it("hides the all-clear line while a refresh is failing", async () => {
     vi.useFakeTimers();
     getWhySlowSnapshot.mockResolvedValueOnce(
-      makeSnapshot({ resource: makeQuietResource(), pty: makeQuietPty(), memory: quietMemory })
+      makeSnapshot({
+        resource: makeQuietResource(),
+        pty: makeQuietPty(),
+        memory: quietMemory,
+        rendererTerminals: quietRenderer,
+      })
     );
 
     render(<WhySlowContent />);
@@ -529,6 +548,25 @@ describe("WhySlowContent", () => {
     expect(lastAlert).toBeLessThan(firstWarn);
   });
 
+  it("treats terminals with no renderer report as a missing reading", async () => {
+    getWhySlowSnapshot.mockResolvedValue(
+      makeSnapshot({
+        resource: makeQuietResource(),
+        pty: makeQuietPty(),
+        worktrees: quietWorktrees,
+        memory: quietMemory,
+        rendererTerminals: [],
+      })
+    );
+
+    render(<WhySlowContent />);
+
+    expect(
+      await screen.findByText("No slowdowns found, but some readings are unavailable")
+    ).toBeTruthy();
+    expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
+  });
+
   it("qualifies a quiet verdict when a reading is present but out of date", async () => {
     getWhySlowSnapshot.mockResolvedValue(
       makeSnapshot({
@@ -539,6 +577,7 @@ describe("WhySlowContent", () => {
           ...quietMemory!,
           terminalWorkloads: { ...quietMemory!.terminalWorkloads, stale: true },
         },
+        rendererTerminals: quietRenderer,
       })
     );
 

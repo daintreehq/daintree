@@ -405,8 +405,9 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           <div
             id="diagnostics-problems-panel"
             role="tabpanel"
+            tabIndex={0}
             aria-labelledby="diagnostics-problems-tab"
-            className="h-full"
+            className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           >
             <ProblemsContent onRetry={onRetry} onCancelRetry={onCancelRetry} />
           </div>
@@ -415,8 +416,9 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           <div
             id="diagnostics-logs-panel"
             role="tabpanel"
+            tabIndex={0}
             aria-labelledby="diagnostics-logs-tab"
-            className="h-full"
+            className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           >
             <LogsContent />
           </div>
@@ -425,8 +427,9 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           <div
             id="diagnostics-events-panel"
             role="tabpanel"
+            tabIndex={0}
             aria-labelledby="diagnostics-events-tab"
-            className="h-full"
+            className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           >
             <EventsContent />
           </div>
@@ -435,8 +438,9 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           <div
             id="diagnostics-telemetry-panel"
             role="tabpanel"
+            tabIndex={0}
             aria-labelledby="diagnostics-telemetry-tab"
-            className="h-full"
+            className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           >
             <TelemetryContent />
           </div>
@@ -445,8 +449,9 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           <div
             id="diagnostics-perf-panel"
             role="tabpanel"
+            tabIndex={0}
             aria-labelledby="diagnostics-perf-tab"
-            className="h-full"
+            className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           >
             <PerfContent />
           </div>
@@ -455,8 +460,9 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           <div
             id="diagnostics-whySlow-panel"
             role="tabpanel"
+            tabIndex={0}
             aria-labelledby="diagnostics-whySlow-tab"
-            className="h-full"
+            className="h-full focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           >
             <WhySlowContent />
           </div>
