@@ -131,7 +131,9 @@ function item(page: Page, id: string): Locator {
 
 async function expandItem(page: Page, id: string) {
   const row = item(page, id);
-  await row.getByRole("button").first().click();
+  const disclosure = row.getByRole("button").first();
+  // A sole artifact opens already expanded; clicking it again would close it.
+  if ((await disclosure.getAttribute("aria-expanded")) !== "true") await disclosure.click();
   await expect(row.getByRole("button", { name: /copy/i })).toBeVisible();
 }
 

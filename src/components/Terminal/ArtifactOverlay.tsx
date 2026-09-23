@@ -18,8 +18,9 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { FileStack } from "@/components/icons";
-import { useArtifacts, type SaveArtifactOutcome } from "@/hooks/useArtifacts";
+import { orderPatchesForApply, useArtifacts, type SaveArtifactOutcome } from "@/hooks/useArtifacts";
 import { useUnseenOutput } from "@/hooks/useUnseenOutput";
+import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import type { Artifact } from "@shared/types";
 
 type ApplyPatchOutcome =
@@ -27,27 +28,81 @@ type ApplyPatchOutcome =
   | { success: false; error: string; cancelled?: boolean };
 
 /**
- * What a row says about the last thing done to its artifact. Apply results
- * persist until the next attempt — a failed `git apply` explains itself in its
- * own words, and that explanation has to still be there when the user looks
- * back. Copy and save confirmations clear themselves.
+ * The recorded result of the last `git apply` of a patch. It lives on the
+ * overlay, not the row, so it survives collapsing the row and closing the
+ * tray, and only another apply replaces it — copy and save report separately.
  */
-type RowOutcome =
-  | { kind: "applied"; files: string[] }
-  | { kind: "apply-failed"; message: string }
+type ApplyResult = { kind: "applied"; files: string[] } | { kind: "failed"; message: string };
+
+/** Copy and save feedback: row-local, and a success clears itself. */
+type RowFeedback =
   | { kind: "saved"; filePath: string }
   | { kind: "save-failed"; message: string }
   | { kind: "copy-failed" };
 
-const TRANSIENT_OUTCOME_MS = 4000;
+const TRANSIENT_FEEDBACK_MS = 4000;
 const COPIED_FLASH_MS = 2000;
+
+export type PatchLineKind = "file" | "hunk" | "add" | "del" | "context" | "meta";
+
+export interface PatchLine {
+  kind: PatchLineKind;
+  /** The line as written, for kinds that are shown verbatim. */
+  text: string;
+}
+
+const FILE_HEADER_PREFIXES = [
+  "--- ",
+  "+++ ",
+  "index ",
+  "new file mode",
+  "deleted file mode",
+  "old mode",
+  "new mode",
+  "similarity index",
+  "rename from",
+  "rename to",
+  "copy from",
+  "copy to",
+  "Binary files",
+];
+
+/**
+ * Reads a unified diff line by line with the one piece of context that matters:
+ * whether we are inside a hunk. Inside one, a line is a change by its first
+ * character alone — so added source text that happens to begin `++` is an
+ * addition, not a file header — and `\ No newline at end of file` is a note.
+ */
+export function parsePatchLines(content: string): PatchLine[] {
+  let inHunk = false;
+  return content.split("\n").map((text): PatchLine => {
+    if (text.startsWith("diff ")) {
+      inHunk = false;
+      return { kind: "file", text };
+    }
+    if (text.startsWith("@@")) {
+      inHunk = true;
+      return { kind: "hunk", text };
+    }
+    if (inHunk) {
+      if (text.startsWith("+")) return { kind: "add", text };
+      if (text.startsWith("-")) return { kind: "del", text };
+      if (text.startsWith(" ") || text === "") return { kind: "context", text };
+      return { kind: "meta", text };
+    }
+    if (FILE_HEADER_PREFIXES.some((prefix) => text.startsWith(prefix))) {
+      return { kind: "file", text };
+    }
+    return { kind: "meta", text };
+  });
+}
 
 export function getPatchStats(content: string): { additions: number; deletions: number } {
   let additions = 0;
   let deletions = 0;
-  for (const line of content.split("\n")) {
-    if (line.startsWith("+") && !line.startsWith("+++")) additions++;
-    else if (line.startsWith("-") && !line.startsWith("---")) deletions++;
+  for (const line of parsePatchLines(content)) {
+    if (line.kind === "add") additions++;
+    else if (line.kind === "del") deletions++;
   }
   return { additions, deletions };
 }
@@ -55,13 +110,13 @@ export function getPatchStats(content: string): { additions: number; deletions: 
 /** Files a unified diff touches, in order, from its `+++` headers (`---` for a deletion). */
 export function getPatchFiles(content: string): string[] {
   const files: string[] = [];
-  const lines = content.split("\n");
+  const lines = parsePatchLines(content);
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    if (!line.startsWith("+++ ")) continue;
-    let target = line.slice(4).trim();
+    const { kind, text } = lines[i]!;
+    if (kind !== "file" || !text.startsWith("+++ ")) continue;
+    let target = text.slice(4).trim();
     if (target === "/dev/null") {
-      const previous = lines[i - 1] ?? "";
+      const previous = lines[i - 1]?.text ?? "";
       if (previous.startsWith("--- ")) target = previous.slice(4).trim();
     }
     const path = target.replace(/^[ab]\//, "");
@@ -70,63 +125,109 @@ export function getPatchFiles(content: string): string[] {
   return files;
 }
 
-type PatchLineKind = "file" | "hunk" | "add" | "del" | "context";
-
-function patchLineKind(line: string): PatchLineKind {
-  if (
-    line.startsWith("+++") ||
-    line.startsWith("---") ||
-    line.startsWith("diff ") ||
-    line.startsWith("index ")
-  ) {
-    return "file";
-  }
-  if (line.startsWith("@@")) return "hunk";
-  if (line.startsWith("+")) return "add";
-  if (line.startsWith("-")) return "del";
-  return "context";
-}
-
 // The diff workspace's reading (DiffViewer): code stays neutral, the row carries
 // the tint, and the sign sits in its own column in the gutter colour.
-const PATCH_ROW_CLASS: Record<PatchLineKind, string> = {
+export const PATCH_ROW_CLASS: Record<PatchLineKind, string> = {
   file: "text-text-secondary",
   hunk: "text-status-info bg-overlay-subtle",
   add: "text-text-primary bg-diff-insert-background",
   del: "text-text-primary bg-diff-delete-background",
   context: "text-text-primary",
+  meta: "text-text-secondary italic",
 };
 
-const PATCH_SIGN_CLASS: Record<PatchLineKind, string> = {
-  file: "",
-  hunk: "",
-  add: "text-diff-gutter-insert",
-  del: "text-diff-gutter-delete",
-  context: "",
+// The sign column is pinned while the code scrolls sideways, so it needs an
+// opaque base under its tint or the code would show through it.
+const PATCH_SIGN_CLASS: Partial<Record<PatchLineKind, string>> = {
+  add: "text-diff-gutter-insert bg-surface-canvas [background-image:linear-gradient(var(--color-diff-insert-background),var(--color-diff-insert-background))]",
+  del: "text-diff-gutter-delete bg-surface-canvas [background-image:linear-gradient(var(--color-diff-delete-background),var(--color-diff-delete-background))]",
+  context: "bg-surface-canvas",
 };
 
-export function patchLineClass(line: string): string {
-  return PATCH_ROW_CLASS[patchLineKind(line)];
+/**
+ * A bounded scroller that says when there is more: an edge fade on whichever
+ * side still has content, since the platform's overlay scrollbars show nothing
+ * until the user is already scrolling.
+ */
+function ScrollArea({
+  className,
+  fadeClassName = "from-surface-canvas",
+  children,
+}: {
+  className?: string;
+  fadeClassName?: string;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState({ bottom: false, right: false });
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const update = () => {
+      const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+      const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      setMore((prev) =>
+        prev.bottom === bottom && prev.right === right ? prev : { bottom, right }
+      );
+    };
+    update();
+    el.addEventListener("scroll", update, { passive: true });
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    observer?.observe(el);
+    if (el.firstElementChild) observer?.observe(el.firstElementChild);
+    return () => {
+      el.removeEventListener("scroll", update);
+      observer?.disconnect();
+    };
+  }, []);
+
+  return (
+    <div className="relative min-h-0">
+      <div ref={ref} className={cn("overflow-auto", className)}>
+        {children}
+      </div>
+      {more.bottom && (
+        <div
+          aria-hidden="true"
+          className={cn(
+            "pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-linear-to-t to-transparent",
+            fadeClassName
+          )}
+        />
+      )}
+      {more.right && (
+        <div
+          aria-hidden="true"
+          className={cn(
+            "pointer-events-none absolute inset-y-0 right-0 w-6 bg-linear-to-l to-transparent",
+            fadeClassName
+          )}
+        />
+      )}
+    </div>
+  );
 }
 
-function PatchDiffLines({ content, className }: { content: string; className?: string }) {
+function PatchDiffLines({ content }: { content: string }) {
   return (
-    <pre className={cn("font-mono text-xs leading-5 overflow-auto select-text", className)}>
+    <pre className="font-mono text-xs leading-5 select-text">
       <code className="block min-w-max py-1">
-        {content.split("\n").map((line, i) => {
-          const kind = patchLineKind(line);
+        {parsePatchLines(content).map(({ kind, text }, i) => {
           const signed = kind === "add" || kind === "del" || kind === "context";
           return (
             <div key={i} className={cn("flex pr-3", PATCH_ROW_CLASS[kind])}>
               {signed ? (
                 <>
-                  <span className={cn("w-6 shrink-0 text-center", PATCH_SIGN_CLASS[kind])}>
-                    {kind === "context" ? " " : line[0]}
+                  <span
+                    className={cn("sticky left-0 w-6 shrink-0 text-center", PATCH_SIGN_CLASS[kind])}
+                  >
+                    {kind === "context" ? " " : text[0]}
                   </span>
-                  <span>{line.slice(1) || " "}</span>
+                  <span>{text.slice(1) || " "}</span>
                 </>
               ) : (
-                <span className="pl-3">{line || " "}</span>
+                <span className="pl-3">{text || " "}</span>
               )}
             </div>
           );
@@ -150,7 +251,7 @@ function PatchStats({ content, className }: { content: string; className?: strin
 }
 
 /** One patch as the confirm dialogs show it: the files it touches, then every line of it. */
-function PatchPreview({ patch, maxHeightClass }: { patch: Artifact; maxHeightClass: string }) {
+function PatchPreview({ patch, scrollClassName }: { patch: Artifact; scrollClassName?: string }) {
   const files = getPatchFiles(patch.content);
   return (
     <div className="rounded-[var(--radius-md)] border border-border-default bg-surface-canvas overflow-hidden">
@@ -168,9 +269,31 @@ function PatchPreview({ patch, maxHeightClass }: { patch: Artifact; maxHeightCla
         </span>
         <PatchStats content={patch.content} />
       </div>
-      <PatchDiffLines content={patch.content} className={maxHeightClass} />
+      <ScrollArea className={scrollClassName}>
+        <PatchDiffLines content={patch.content} />
+      </ScrollArea>
     </div>
   );
+}
+
+/**
+ * git's own words say what went wrong; this says what to do about it. A plain
+ * `git apply` is all-or-nothing, so a failure never leaves half a patch behind.
+ */
+export function describeApplyFailure(message: string): string {
+  if (/no such file|does not exist in index|No such file or directory/i.test(message)) {
+    return "It edits a file that isn't in this worktree. Check it's the worktree the agent was working in.";
+  }
+  if (/corrupt patch|malformed|No valid patches|unrecognized input/i.test(message)) {
+    return "The patch text is incomplete, so git can't read it. Ask the agent to print it again.";
+  }
+  if (/already exists in working directory/i.test(message)) {
+    return "It creates a file that already exists here. It may already be applied.";
+  }
+  if (/patch does not apply|patch failed/i.test(message)) {
+    return "The files have changed since the agent wrote it. Ask the agent to redo it against the current files, or copy it and apply the parts that still fit.";
+  }
+  return "Nothing was changed. git's details are below.";
 }
 
 const ARTIFACT_TYPE_ICONS: Record<Artifact["type"], LucideIcon> = {
@@ -193,6 +316,10 @@ function splitPath(path: string): { base: string; dir: string } {
   const slash = path.lastIndexOf("/");
   if (slash === -1) return { base: path, dir: "" };
   return { base: path.slice(slash + 1), dir: path.slice(0, slash) };
+}
+
+function artifactName(artifact: Artifact): string {
+  return splitPath(artifact.filename || ARTIFACT_TYPE_LABELS[artifact.type] || "Artifact").base;
 }
 
 function plural(n: number, one: string, many: string): string {
@@ -241,91 +368,102 @@ interface ArtifactItemProps {
   artifact: Artifact;
   isExpanded: boolean;
   onToggle: (id: string) => void;
-  outcome: RowOutcome | undefined;
-  onOutcome: (id: string, outcome: RowOutcome | null) => void;
+  applyResult: ApplyResult | undefined;
+  onApplyResult: (id: string, result: ApplyResult | null) => void;
   onCopy: (artifact: Artifact) => Promise<boolean>;
   onSave: (artifact: Artifact) => Promise<SaveArtifactOutcome>;
   onApplyPatch: (artifact: Artifact) => Promise<ApplyPatchOutcome>;
   canApplyPatch: boolean;
   isProcessing: boolean;
   isApplying: boolean;
+  isApplyLocked: boolean;
 }
 
 function ArtifactItem({
   artifact,
   isExpanded,
   onToggle,
-  outcome,
-  onOutcome,
+  applyResult,
+  onApplyResult,
   onCopy,
   onSave,
   onApplyPatch,
   canApplyPatch,
   isProcessing,
   isApplying,
+  isApplyLocked,
 }: ArtifactItemProps) {
   const bodyId = useId();
+  const rowRef = useRef<HTMLLIElement>(null);
   const [copied, setCopied] = useState(false);
+  const [feedback, setFeedbackState] = useState<RowFeedback | null>(null);
   const copiedTimerRef = useRef<number | null>(null);
-  const outcomeTimerRef = useRef<number | null>(null);
+  const feedbackTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     return () => {
       if (copiedTimerRef.current) window.clearTimeout(copiedTimerRef.current);
-      if (outcomeTimerRef.current) window.clearTimeout(outcomeTimerRef.current);
+      if (feedbackTimerRef.current) window.clearTimeout(feedbackTimerRef.current);
     };
   }, []);
 
-  const setOutcome = useCallback(
-    (next: RowOutcome | null, transient = false) => {
-      if (outcomeTimerRef.current) window.clearTimeout(outcomeTimerRef.current);
-      outcomeTimerRef.current = null;
-      onOutcome(artifact.id, next);
-      if (next && transient) {
-        outcomeTimerRef.current = window.setTimeout(
-          () => onOutcome(artifact.id, null),
-          TRANSIENT_OUTCOME_MS
-        );
-      }
-    },
-    [artifact.id, onOutcome]
-  );
+  // An opened row brings its actions into view instead of growing below the fold.
+  useEffect(() => {
+    if (isExpanded) rowRef.current?.scrollIntoView({ block: "nearest" });
+  }, [isExpanded]);
+
+  const setFeedback = useCallback((next: RowFeedback | null, transient = false) => {
+    if (feedbackTimerRef.current) window.clearTimeout(feedbackTimerRef.current);
+    feedbackTimerRef.current = null;
+    setFeedbackState(next);
+    if (next && transient) {
+      feedbackTimerRef.current = window.setTimeout(
+        () => setFeedbackState(null),
+        TRANSIENT_FEEDBACK_MS
+      );
+    }
+  }, []);
 
   const handleCopy = useCallback(async () => {
     const success = await onCopy(artifact);
     if (success) {
+      setFeedback(null);
       setCopied(true);
       if (copiedTimerRef.current) window.clearTimeout(copiedTimerRef.current);
       copiedTimerRef.current = window.setTimeout(() => setCopied(false), COPIED_FLASH_MS);
     } else {
-      setOutcome({ kind: "copy-failed" });
+      setFeedback({ kind: "copy-failed" });
     }
-  }, [artifact, onCopy, setOutcome]);
+  }, [artifact, onCopy, setFeedback]);
 
   const handleSave = useCallback(async () => {
     const result = await onSave(artifact);
-    if (result.status === "saved") setOutcome({ kind: "saved", filePath: result.filePath }, true);
-    else if (result.status === "failed") setOutcome({ kind: "save-failed", message: result.error });
-  }, [artifact, onSave, setOutcome]);
+    if (result.status === "saved") setFeedback({ kind: "saved", filePath: result.filePath }, true);
+    else if (result.status === "failed")
+      setFeedback({ kind: "save-failed", message: result.error });
+  }, [artifact, onSave, setFeedback]);
 
   const handleApplyPatch = useCallback(async () => {
     const result = await onApplyPatch(artifact);
     if (result.success) {
-      setOutcome({ kind: "applied", files: result.modifiedFiles });
+      onApplyResult(artifact.id, { kind: "applied", files: result.modifiedFiles });
     } else if (!result.cancelled) {
-      setOutcome({ kind: "apply-failed", message: result.error || "git apply failed" });
+      onApplyResult(artifact.id, {
+        kind: "failed",
+        message: result.error || "git apply failed",
+      });
     }
-  }, [artifact, onApplyPatch, setOutcome]);
+  }, [artifact, onApplyPatch, onApplyResult]);
 
   const Icon = ARTIFACT_TYPE_ICONS[artifact.type] ?? File;
   const typeLabel = ARTIFACT_TYPE_LABELS[artifact.type] ?? "Artifact";
   const isPatch = artifact.type === "patch";
   const { base, dir } = splitPath(artifact.filename || typeLabel);
   const lines = artifact.content.split("\n").length;
-  const applied = outcome?.kind === "applied";
 
   return (
     <li
+      ref={rowRef}
       data-artifact-item={artifact.id}
       className="rounded-[var(--radius-md)] border border-border-default bg-surface-panel overflow-hidden"
     >
@@ -349,7 +487,11 @@ function ArtifactItem({
           <span className="font-medium text-text-primary">{base}</span>
           {dir && <span className="ml-1.5 text-xs text-text-secondary">{dir}</span>}
         </span>
-        {applied && <span className="shrink-0 text-xs text-text-secondary">Applied</span>}
+        {applyResult && (
+          <span className="shrink-0 text-xs text-text-secondary">
+            {applyResult.kind === "applied" ? "Applied" : "Didn't apply"}
+          </span>
+        )}
         {isPatch ? (
           <PatchStats content={artifact.content} />
         ) : (
@@ -361,15 +503,7 @@ function ArtifactItem({
 
       {isExpanded && (
         <div id={bodyId} className="border-t border-border-default">
-          {isPatch ? (
-            <PatchDiffLines content={artifact.content} className="max-h-56 bg-surface-canvas" />
-          ) : (
-            <pre className="max-h-56 overflow-auto bg-surface-canvas px-3 py-2 font-mono text-xs leading-5 text-text-primary select-text">
-              <code>{artifact.content}</code>
-            </pre>
-          )}
-
-          <div className="flex flex-wrap items-center gap-1.5 px-3 py-2 border-t border-border-default">
+          <div className="flex flex-wrap items-center gap-1.5 px-3 py-2">
             {isPatch && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -378,7 +512,7 @@ function ArtifactItem({
                       variant="contrast"
                       size="sm"
                       onClick={() => void handleApplyPatch()}
-                      disabled={!canApplyPatch || (isProcessing && !isApplying)}
+                      disabled={!canApplyPatch || (isApplyLocked && !isApplying)}
                       loading={isApplying}
                     >
                       Apply patch
@@ -386,9 +520,11 @@ function ArtifactItem({
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="top">
-                  {canApplyPatch
-                    ? "Preview the diff, then git apply it in this worktree"
-                    : "This terminal isn't in a worktree, so there's nowhere to apply it"}
+                  {!canApplyPatch
+                    ? "This terminal isn't in a worktree, so there's nowhere to apply it"
+                    : isApplyLocked && !isApplying
+                      ? "Another patch is being applied"
+                      : "Preview the diff, then git apply it in this worktree"}
                 </TooltipContent>
               </Tooltip>
             )}
@@ -417,40 +553,57 @@ function ArtifactItem({
 
           <div role="status" aria-live="polite">
             {copied && <span className="sr-only">Copied to clipboard</span>}
-            {outcome?.kind === "applied" && (
+            {applyResult?.kind === "applied" && (
               <OutcomeLine tone="success" icon={CircleCheck}>
-                Applied to {plural(outcome.files.length, "file", "files")}
-                {outcome.files.length > 0 && (
-                  <span className="block truncate font-mono text-text-secondary">
-                    {outcome.files.join(", ")}
+                Applied to {plural(applyResult.files.length, "file", "files")}
+                {applyResult.files.map((file) => (
+                  <span key={file} className="block break-all font-mono text-text-secondary">
+                    {file}
                   </span>
-                )}
+                ))}
               </OutcomeLine>
             )}
-            {outcome?.kind === "apply-failed" && (
-              <OutcomeLine tone="error" icon={CircleAlert} onDismiss={() => setOutcome(null)}>
-                Patch didn't apply. Nothing was changed.
+            {applyResult?.kind === "failed" && (
+              <OutcomeLine
+                tone="error"
+                icon={CircleAlert}
+                onDismiss={() => onApplyResult(artifact.id, null)}
+              >
+                Patch didn't apply. {describeApplyFailure(applyResult.message)}
                 <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words font-mono text-text-secondary">
-                  {outcome.message}
+                  {applyResult.message}
                 </pre>
               </OutcomeLine>
             )}
-            {outcome?.kind === "saved" && (
+            {feedback?.kind === "saved" && (
               <OutcomeLine tone="neutral" icon={Check}>
-                Saved to <span className="font-mono text-text-secondary">{outcome.filePath}</span>
+                Saved to{" "}
+                <span className="break-all font-mono text-text-secondary">{feedback.filePath}</span>
               </OutcomeLine>
             )}
-            {outcome?.kind === "save-failed" && (
-              <OutcomeLine tone="error" icon={CircleAlert} onDismiss={() => setOutcome(null)}>
+            {feedback?.kind === "save-failed" && (
+              <OutcomeLine tone="error" icon={CircleAlert} onDismiss={() => setFeedback(null)}>
                 Couldn't save. Try again, or copy it instead.
-                <span className="block text-text-secondary">{outcome.message}</span>
+                <span className="block text-text-secondary">{feedback.message}</span>
               </OutcomeLine>
             )}
-            {outcome?.kind === "copy-failed" && (
-              <OutcomeLine tone="error" icon={CircleAlert} onDismiss={() => setOutcome(null)}>
-                Couldn't copy to the clipboard.
+            {feedback?.kind === "copy-failed" && (
+              <OutcomeLine tone="error" icon={CircleAlert} onDismiss={() => setFeedback(null)}>
+                Couldn't copy to the clipboard. Save it as a file instead.
               </OutcomeLine>
             )}
+          </div>
+
+          <div className="border-t border-border-default bg-surface-canvas">
+            <ScrollArea className="max-h-56">
+              {isPatch ? (
+                <PatchDiffLines content={artifact.content} />
+              ) : (
+                <pre className="px-3 py-2 font-mono text-xs leading-5 text-text-primary select-text">
+                  <code>{artifact.content}</code>
+                </pre>
+              )}
+            </ScrollArea>
           </div>
         </div>
       )}
@@ -471,11 +624,14 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
   const panelId = useId();
   const [isExpanded, setIsExpanded] = useState(false);
   const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [outcomes, setOutcomes] = useState<ReadonlyMap<string, RowOutcome>>(() => new Map());
+  const [applyResults, setApplyResults] = useState<ReadonlyMap<string, ApplyResult>>(
+    () => new Map()
+  );
   const [codeOnly, setCodeOnly] = useState(false);
   const [bulkStatus, setBulkStatus] = useState<BulkStatus | null>(null);
   const bulkStatusTimerRef = useRef<number | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
   const restoreFocusRef = useRef(false);
   const {
     artifacts,
@@ -504,10 +660,10 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     });
   }, []);
 
-  const handleOutcome = useCallback((id: string, outcome: RowOutcome | null) => {
-    setOutcomes((prev) => {
+  const handleApplyResult = useCallback((id: string, result: ApplyResult | null) => {
+    setApplyResults((prev) => {
       const next = new Map(prev);
-      if (outcome) next.set(id, outcome);
+      if (result) next.set(id, result);
       else next.delete(id);
       return next;
     });
@@ -587,9 +743,16 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     };
   }, []);
 
-  // Closing hands focus back to the pill, the one control that survives the close.
+  // The pill unmounts as the tray opens, so focus moves to the first row rather
+  // than falling to the document; closing hands it back to the pill.
   useEffect(() => {
-    if (isExpanded || !restoreFocusRef.current) return;
+    if (isExpanded) {
+      panelRef.current
+        ?.querySelector<HTMLButtonElement>("[data-artifact-item] > button")
+        ?.focus({ preventScroll: true });
+      return;
+    }
+    if (!restoreFocusRef.current) return;
     restoreFocusRef.current = false;
     triggerRef.current?.focus({ preventScroll: true });
   }, [isExpanded]);
@@ -599,7 +762,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     if (bulkStatusTimerRef.current) window.clearTimeout(bulkStatusTimerRef.current);
     bulkStatusTimerRef.current = status.persistent
       ? null
-      : window.setTimeout(() => setBulkStatus(null), TRANSIENT_OUTCOME_MS);
+      : window.setTimeout(() => setBulkStatus(null), TRANSIENT_FEEDBACK_MS);
   }, []);
 
   const handleCopyAll = useCallback(async () => {
@@ -611,7 +774,11 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
         persistent: false,
       });
     } else if (result.failed > 0) {
-      showBulkStatus({ text: "Couldn't copy to the clipboard", tone: "error", persistent: true });
+      showBulkStatus({
+        text: "Couldn't copy to the clipboard. Save them as files instead.",
+        tone: "error",
+        persistent: true,
+      });
     }
   }, [copyAll, codeOnly, showBulkStatus]);
 
@@ -624,11 +791,9 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
         persistent: false,
       });
     } else if (result.failed > 0) {
+      const names = result.failures.map((f) => artifactName(f.artifact)).join(", ");
       showBulkStatus({
-        text:
-          result.succeeded > 0
-            ? `Saved ${result.succeeded}, couldn't save ${result.failed}`
-            : "Couldn't save the artifacts",
+        text: `${result.succeeded > 0 ? `Saved ${result.succeeded}. ` : ""}Couldn't save ${names}. Try those again one at a time.`,
         tone: "error",
         persistent: true,
       });
@@ -636,9 +801,10 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
   }, [saveAll, showBulkStatus]);
 
   const handleApplyAllPatches = useCallback(() => {
-    // Snapshot at request time so the dialog previews exactly the set confirm
-    // will apply — patches detected while the dialog is open are excluded.
-    setPendingBulkPatches(artifacts.filter((a) => a.type === "patch"));
+    // Snapshot at request time, in the order it will run, so the dialog
+    // previews exactly what confirm applies — patches detected while the
+    // dialog is open are excluded.
+    setPendingBulkPatches(orderPatchesForApply(artifacts.filter((a) => a.type === "patch")));
   }, [artifacts]);
 
   const handleCancelApplyAllPatches = useCallback(() => {
@@ -652,14 +818,14 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     const result = await applyAllPatches(snapshot);
     const failures = new Map(result.failures.map((f) => [f.artifact.id, f.error]));
     // Each patch's own row reports its own result, so a partial run shows which ones landed.
-    setOutcomes((prev) => {
+    setApplyResults((prev) => {
       const next = new Map(prev);
       for (const patch of snapshot) {
         const error = failures.get(patch.id);
         next.set(
           patch.id,
           error !== undefined
-            ? { kind: "apply-failed", message: error }
+            ? { kind: "failed", message: error }
             : { kind: "applied", files: getPatchFiles(patch.content) }
         );
       }
@@ -681,13 +847,19 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
       showBulkStatus({
         text:
           result.succeeded > 0
-            ? `Applied ${result.succeeded}, ${result.failed} didn't apply. Details are on the rows below.`
-            : `${plural(result.failed, "patch", "patches")} didn't apply. Details are on the rows below.`,
+            ? `Applied ${result.succeeded}, ${result.failed} didn't apply. Each row says why.`
+            : `${plural(result.failed, "patch", "patches")} didn't apply. Each row says why.`,
         tone: "error",
         persistent: true,
       });
     }
   }, [applyAllPatches, pendingBulkPatches, showBulkStatus]);
+
+  const openPanel = useCallback(() => {
+    // One artifact has nothing to choose between, so it opens ready to act on.
+    if (artifacts.length === 1) setExpandedIds(new Set([artifacts[0]!.id]));
+    setIsExpanded(true);
+  }, [artifacts]);
 
   const closePanel = useCallback(() => {
     handleCancelApplyPatch();
@@ -696,18 +868,16 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
     setIsExpanded(false);
   }, [handleCancelApplyPatch, handleCancelApplyAllPatches]);
 
-  const openPanel = useCallback(() => {
-    // One artifact has nothing to choose between, so it opens ready to act on.
-    if (artifacts.length === 1) setExpandedIds(new Set([artifacts[0]!.id]));
-    setIsExpanded(true);
-  }, [artifacts]);
-
   const handleClear = useCallback(() => {
-    setOutcomes(new Map());
+    setApplyResults(new Map());
     setExpandedIds(new Set());
     setBulkStatus(null);
+    // The next artifact to arrive shows as the pill again, not a tray reopened by itself.
+    setIsExpanded(false);
     clearArtifacts();
-  }, [clearArtifacts]);
+    // The overlay unmounts with its last artifact, so focus goes back to the terminal it sat on.
+    terminalInstanceService.focus(terminalId);
+  }, [clearArtifacts, terminalId]);
 
   const codeArtifactCount = artifacts.filter((a) => a.type === "code").length;
   const patchCount = artifacts.filter((a) => a.type === "patch").length;
@@ -716,6 +886,9 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
   const showApplyAll = patchCount > 1;
   const canApplyAll = showApplyAll && !!worktreeId && !!cwd;
   const isBulkActionRunning = !!bulkProgress;
+  // One git apply at a time: while a single apply or a bulk run is in flight,
+  // every other apply entry point waits. (An open confirm is modal already.)
+  const isApplyLocked = applyingId !== null || bulkProgress?.action === "apply";
 
   if (!hasArtifacts) {
     return null;
@@ -766,6 +939,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
         </div>
       ) : (
         <section
+          ref={panelRef}
           id={panelId}
           data-artifact-panel
           aria-label="Artifacts"
@@ -821,7 +995,6 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     disabled={isBulkActionRunning || copyTargetCount === 0}
                     className="rounded-r-none"
                   >
-                    <Copy aria-hidden="true" />
                     Copy all
                   </Button>
                   <Tooltip>
@@ -852,7 +1025,6 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   onClick={() => void handleSaveAll()}
                   disabled={isBulkActionRunning}
                 >
-                  <Download aria-hidden="true" />
                   Save all…
                 </Button>
                 {showApplyAll && (
@@ -863,18 +1035,23 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                           variant="subtle"
                           size="sm"
                           onClick={handleApplyAllPatches}
-                          disabled={isBulkActionRunning || !canApplyAll}
+                          disabled={
+                            !canApplyAll ||
+                            (isApplyLocked && bulkProgress?.action !== "apply") ||
+                            (isBulkActionRunning && bulkProgress?.action !== "apply")
+                          }
                           loading={bulkProgress?.action === "apply"}
                         >
-                          <FileDiff aria-hidden="true" />
                           Apply {plural(patchCount, "patch", "patches")}
                         </Button>
                       </span>
                     </TooltipTrigger>
                     <TooltipContent side="bottom">
-                      {canApplyAll
-                        ? "Preview every diff, then git apply them in order"
-                        : "This terminal isn't in a worktree, so there's nowhere to apply them"}
+                      {!canApplyAll
+                        ? "This terminal isn't in a worktree, so there's nowhere to apply them"
+                        : isApplyLocked
+                          ? "Another patch is being applied"
+                          : "Preview every diff, then git apply them in order"}
                     </TooltipContent>
                   </Tooltip>
                 )}
@@ -883,7 +1060,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
 
             <div role="status" aria-live="polite">
               {(bulkProgressText || bulkStatus) && (
-                <div className="flex items-center gap-2 px-3 pb-2 text-xs">
+                <div className="flex items-start gap-2 px-3 pb-2 text-xs">
                   {bulkProgressText ? (
                     <span className="tabular-nums text-text-secondary">{bulkProgressText}</span>
                   ) : bulkStatus ? (
@@ -891,12 +1068,12 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                       {bulkStatus.tone === "success" ? (
                         <CircleCheck
                           aria-hidden="true"
-                          className="size-3.5 shrink-0 text-status-success"
+                          className="size-3.5 shrink-0 mt-px text-status-success"
                         />
                       ) : (
                         <CircleAlert
                           aria-hidden="true"
-                          className="size-3.5 shrink-0 text-status-error"
+                          className="size-3.5 shrink-0 mt-px text-status-error"
                         />
                       )}
                       <span className="min-w-0 flex-1 text-text-primary">{bulkStatus.text}</span>
@@ -925,14 +1102,15 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                 artifact={artifact}
                 isExpanded={expandedIds.has(artifact.id)}
                 onToggle={handleToggleItem}
-                outcome={outcomes.get(artifact.id)}
-                onOutcome={handleOutcome}
+                applyResult={applyResults.get(artifact.id)}
+                onApplyResult={handleApplyResult}
                 onCopy={handleCopy}
                 onSave={handleSave}
                 onApplyPatch={handleApplyPatch}
                 canApplyPatch={canApplyPatch(artifact)}
                 isProcessing={isBulkActionRunning || actionInProgress === artifact.id}
                 isApplying={applyingId === artifact.id}
+                isApplyLocked={isApplyLocked}
               />
             ))}
           </ul>
@@ -956,7 +1134,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
         onConfirm={() => void handleConfirmApplyPatch()}
       >
         {pendingPatch && (
-          <PatchPreview patch={pendingPatch} maxHeightClass="max-h-[min(24rem,50vh)]" />
+          <PatchPreview patch={pendingPatch} scrollClassName="max-h-[min(24rem,50vh)]" />
         )}
       </ConfirmDialog>
 
@@ -966,9 +1144,9 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
         title={`Apply ${plural(pendingBulkCount, "patch", "patches")} to this worktree?`}
         description={
           <span>
-            Runs <span className="font-mono">git apply</span> on each patch below, in the order the
-            agent wrote them, in <span className="font-mono text-text-primary">{cwd}</span>. Every
-            patch is attempted; if one fails, the others still apply. There's no automatic undo.
+            Runs <span className="font-mono">git apply</span> on each patch below, in this order, in{" "}
+            <span className="font-mono text-text-primary">{cwd}</span>. Every patch is attempted; if
+            one fails, the others still apply. There's no automatic undo.
           </span>
         }
         confirmLabel={`Apply ${plural(pendingBulkCount, "patch", "patches")}`}
@@ -980,11 +1158,15 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
         {pendingBulkPatches && (
           // D2 requires the actual diff of every patch, not just counts, so
           // each one is shown in full and the list is the one vertical scroller.
-          <div className="max-h-[min(28rem,55vh)] overflow-y-auto space-y-2">
-            {pendingBulkPatches.map((patch) => (
-              <PatchPreview key={patch.id} patch={patch} maxHeightClass="" />
-            ))}
-          </div>
+          <ScrollArea className="max-h-[min(28rem,55vh)]" fadeClassName="from-surface-panel">
+            <ol className="space-y-2">
+              {pendingBulkPatches.map((patch) => (
+                <li key={patch.id}>
+                  <PatchPreview patch={patch} />
+                </li>
+              ))}
+            </ol>
+          </ScrollArea>
         )}
       </ConfirmDialog>
     </>

@@ -9,7 +9,10 @@ const applyPatch = vi.fn();
 const applyAllPatches = vi.fn();
 let mockArtifacts: Artifact[] = [];
 
-vi.mock("@/hooks/useArtifacts", () => ({
+vi.mock("@/hooks/useArtifacts", async (importOriginal) => ({
+  // The real apply ordering, so the gate is tested against the order the hook runs in.
+  orderPatchesForApply: (await importOriginal<typeof import("@/hooks/useArtifacts")>())
+    .orderPatchesForApply,
   useArtifacts: () => ({
     artifacts: mockArtifacts,
     actionInProgress: null,
@@ -57,8 +60,8 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     ) : null,
 }));
 
-function makePatch(id: string, content: string): Artifact {
-  return { id, type: "patch", filename: `${id}.diff`, content, extractedAt: 1 };
+function makePatch(id: string, content: string, extractedAt = 1): Artifact {
+  return { id, type: "patch", filename: `${id}.diff`, content, extractedAt };
 }
 
 const PATCH_A = makePatch("patch-a", "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old a\n+new a");
@@ -171,6 +174,24 @@ describe("ArtifactOverlay confirm gate (issue #10020)", () => {
 
     expect(applyAllPatches).toHaveBeenCalledTimes(1);
     expect(applyAllPatches).toHaveBeenCalledWith([PATCH_A, PATCH_B]);
+  });
+
+  it("bulk confirm previews and applies the patches in the same order", async () => {
+    // Listed newest first, but written by the agent A-then-B: both the preview
+    // and the run must follow the order they will actually be applied in.
+    const first = makePatch("patch-a", PATCH_A.content, 1);
+    const second = makePatch("patch-b", PATCH_B.content, 2);
+    mockArtifacts = [second, first];
+    renderOverlay();
+    fireEvent.click(screen.getByRole("button", { name: /^Apply 2 patches$/ }));
+
+    const text = screen.getByRole("dialog").textContent ?? "";
+    expect(text.indexOf("+new a")).toBeLessThan(text.indexOf("+new b"));
+
+    await act(async () => {
+      confirmDialog("Apply 2 patches");
+    });
+    expect(applyAllPatches).toHaveBeenCalledWith([first, second]);
   });
 
   it("cancelling the bulk dialog never applies", () => {

@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { getPatchFiles, getPatchStats, patchLineClass } from "../ArtifactOverlay";
+import {
+  describeApplyFailure,
+  getPatchFiles,
+  getPatchStats,
+  parsePatchLines,
+  PATCH_ROW_CLASS,
+} from "../ArtifactOverlay";
 
 const PATCH = [
   "diff --git a/src/foo.ts b/src/foo.ts",
@@ -11,6 +17,10 @@ const PATCH = [
   "+const b = 3;",
   "+const c = 4;",
 ].join("\n");
+
+function kinds(content: string) {
+  return parsePatchLines(content).map((line) => line.kind);
+}
 
 describe("ArtifactOverlay patch preview helpers (issue #10020)", () => {
   describe("getPatchStats", () => {
@@ -24,25 +34,42 @@ describe("ArtifactOverlay patch preview helpers (issue #10020)", () => {
         deletions: 0,
       });
     });
+
+    it("counts hunk lines whose text begins with ++ or -- as changes, not headers", () => {
+      const patch = [PATCH, "@@ -9,2 +10,2 @@", "--- old separator", "+++ new separator"].join(
+        "\n"
+      );
+      expect(getPatchStats(patch)).toEqual({ additions: 3, deletions: 2 });
+    });
   });
 
-  describe("patchLineClass", () => {
-    it("gives additions, deletions, hunk headers, file headers and context each their own treatment", () => {
-      const classes = [
-        patchLineClass("+const b = 3;"),
-        patchLineClass("-const b = 2;"),
-        patchLineClass(" const a = 1;"),
-        patchLineClass("@@ -1,3 +1,4 @@"),
-        patchLineClass("+++ b/src/foo.ts"),
-      ];
-      expect(new Set(classes).size).toBe(classes.length);
+  describe("parsePatchLines", () => {
+    it("reads headers, hunks, changes and context in order", () => {
+      expect(kinds(PATCH)).toEqual([
+        "file",
+        "file",
+        "file",
+        "hunk",
+        "context",
+        "del",
+        "add",
+        "add",
+      ]);
     });
 
-    it("never styles +++/--- file headers as change lines", () => {
-      const header = [patchLineClass("+++ b/src/foo.ts"), patchLineClass("--- a/src/foo.ts")];
-      const changes = [patchLineClass("+added"), patchLineClass("-removed")];
-      expect(header[0]).toBe(header[1]);
-      for (const change of changes) expect(header).not.toContain(change);
+    it("keeps the no-newline marker as a verbatim note inside a hunk", () => {
+      const lines = parsePatchLines([PATCH, "\\ No newline at end of file"].join("\n"));
+      expect(lines.at(-1)).toEqual({ kind: "meta", text: "\\ No newline at end of file" });
+    });
+
+    it("treats a new diff header as leaving the hunk, so the next --- is a header again", () => {
+      const second = ["diff --git a/b.ts b/b.ts", "--- a/b.ts", "+++ b/b.ts"].join("\n");
+      expect(kinds([PATCH, second].join("\n")).slice(-3)).toEqual(["file", "file", "file"]);
+    });
+
+    it("gives every line kind its own treatment", () => {
+      const classes = Object.values(PATCH_ROW_CLASS);
+      expect(new Set(classes).size).toBe(classes.length);
     });
   });
 
@@ -69,6 +96,25 @@ describe("ArtifactOverlay patch preview helpers (issue #10020)", () => {
     it("names a deleted file by its old path rather than /dev/null", () => {
       const deletion = ["--- a/src/gone.ts", "+++ /dev/null", "@@ -1 +0,0 @@", "-bye"].join("\n");
       expect(getPatchFiles(deletion)).toEqual(["src/gone.ts"]);
+    });
+
+    it("ignores ++-prefixed content lines inside a hunk", () => {
+      const patch = [PATCH, "+++ b/not-a-file.ts"].join("\n");
+      expect(getPatchFiles(patch)).toEqual(["src/foo.ts"]);
+    });
+  });
+
+  describe("describeApplyFailure", () => {
+    it("tells a stale patch, a missing file and an unreadable patch apart", () => {
+      const advice = [
+        describeApplyFailure(
+          "error: patch failed: src/a.ts:24\nerror: src/a.ts: patch does not apply"
+        ),
+        describeApplyFailure("error: src/a.ts: No such file or directory"),
+        describeApplyFailure("error: corrupt patch at line 12"),
+        describeApplyFailure("something git has never said"),
+      ];
+      expect(new Set(advice).size).toBe(advice.length);
     });
   });
 });

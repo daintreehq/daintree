@@ -552,7 +552,7 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "outcome",
       signature: "text-status-success",
-      anchor: 'className="size-3.5 shrink-0 text-status-success"',
+      anchor: 'className="size-3.5 shrink-0 mt-px text-status-success"',
       expectedOccurrences: 1,
       rationale:
         "The result of a named bulk copy, save or apply run; copy and save clear on a timer, apply until dismissed or rerun",

@@ -166,6 +166,11 @@ function sortArtifacts(artifacts: Artifact[], mode: "filename" | "extraction"): 
   });
 }
 
+/** The order a bulk apply runs in — the order the agent wrote the patches. */
+export function orderPatchesForApply(patches: Artifact[]): Artifact[] {
+  return sortArtifacts(patches, "extraction");
+}
+
 export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: string) {
   const [artifacts, setArtifacts] = useState<Artifact[]>(() => artifactStore.get(terminalId) || []);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
@@ -468,7 +473,8 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
   }, [artifacts, cwd, terminalId]);
 
   // `patchesToApply` lets the caller pass the exact snapshot its confirm dialog
-  // previewed, so patches detected while the dialog was open are not applied unseen.
+  // previewed, so patches detected while the dialog was open are not applied
+  // unseen. It is applied in the order given: that order is the one previewed.
   const applyAllPatches = useCallback(
     async (patchesToApply?: Artifact[]): Promise<BulkResult> => {
       if (!isElectronAvailable() || !worktreeId || !cwd) {
@@ -484,7 +490,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
         return { succeeded: 0, failed: 0, failures: [] };
       }
 
-      const sorted = sortArtifacts(patches, "extraction");
+      const sorted = patchesToApply ? patches : orderPatchesForApply(patches);
       const result: BulkResult = { succeeded: 0, failed: 0, failures: [], modifiedFiles: [] };
       const modifiedFilesSet = new Set<string>();
 
