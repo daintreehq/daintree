@@ -4,6 +4,12 @@ import { createRef } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 
 import { ScrollPill } from "../ScrollPill";
+import {
+  UI_ENTER_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_DURATION,
+  UI_EXIT_EASING,
+} from "@/lib/animationUtils";
 
 describe("ScrollPill", () => {
   it("renders a button with type=button by default", () => {
@@ -39,6 +45,39 @@ describe("ScrollPill", () => {
     const button = screen.getByRole("button");
     expect(button.className).toContain("transition-[opacity,translate]");
     expect(button.className.split(/\s+/)).not.toContain("transition");
+  });
+
+  it("never lets a hover utility replace the opaque fill", () => {
+    // The overlay ladder is alpha-only: as a background-color on hover it
+    // turned the pill see-through. A hover tint must be an image layer.
+    render(
+      <ScrollPill isVisible translateDirection="down">
+        hi
+      </ScrollPill>
+    );
+    const classes = screen.getByRole("button").className.split(/\s+/);
+    const hoverFills = classes.filter((c) => c.startsWith("hover:bg-"));
+    expect(hoverFills.length).toBeGreaterThan(0);
+    for (const c of hoverFills) expect(c).toMatch(/^hover:bg-\[linear-gradient\(/);
+  });
+
+  it("enters on the entry tier and leaves on the exit tier", () => {
+    const { rerender } = render(
+      <ScrollPill isVisible translateDirection="down">
+        hi
+      </ScrollPill>
+    );
+    const button = screen.getByRole("button");
+    expect(button.style.transitionDuration).toBe(`${UI_ENTER_DURATION}ms`);
+    expect(button.style.transitionTimingFunction).toBe(UI_ENTER_EASING);
+    expect(button.className.split(/\s+/).some((c) => /^duration-/.test(c))).toBe(false);
+    rerender(
+      <ScrollPill isVisible={false} translateDirection="down">
+        hi
+      </ScrollPill>
+    );
+    expect(button.style.transitionDuration).toBe(`${UI_EXIT_DURATION}ms`);
+    expect(button.style.transitionTimingFunction).toBe(UI_EXIT_EASING);
   });
 
   it("applies the visible resting state when isVisible is true", () => {

@@ -264,7 +264,9 @@ describe("FleetDraftingPill", () => {
 
     render(<FleetDraftingPill />);
     expect(screen.getByTestId("fleet-drafting-pill")).toBeTruthy();
-    expect(screen.getByText(/Mirroring to 1 peer/)).toBeTruthy();
+    expect(screen.getByTestId("fleet-drafting-pill-trigger").textContent).toMatch(
+      /Mirroring to 1 peer/
+    );
   });
 
   it("shows peer count for multiple peers", () => {
@@ -280,7 +282,9 @@ describe("FleetDraftingPill", () => {
     usePanelStore.setState({ focusedId: "t-1" });
 
     render(<FleetDraftingPill />);
-    expect(screen.getByText(/Mirroring to 2 peers/)).toBeTruthy();
+    expect(screen.getByTestId("fleet-drafting-pill-trigger").textContent).toMatch(
+      /Mirroring to 2 peers/
+    );
   });
 
   it("does not show chevron when no recipe variables in draft", () => {

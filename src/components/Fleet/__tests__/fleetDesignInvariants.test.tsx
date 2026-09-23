@@ -388,8 +388,23 @@ describe("Fleet drafting preview invariants", () => {
     usePanelStore.setState({ focusedId: "p" });
     useFleetArmingStore.getState().armIds(["p", "live", "dead"]);
     render(<FleetDraftingPill />);
-    expect(screen.getByText(/Mirroring to 1 peer\b/)).toBeTruthy();
-    expect(screen.queryByText(/Mirroring to 2 peers/)).toBeNull();
+    expect(screen.getByTestId("fleet-drafting-pill-trigger").textContent).toMatch(
+      /Mirroring to 1 peer\b/
+    );
+    expect(screen.getByTestId("fleet-drafting-pill-trigger").textContent).not.toMatch(
+      /Mirroring to 2 peers/
+    );
+  });
+
+  it("never truncates the peer count when the chip runs out of width", () => {
+    seed([makeAgent("p"), makeAgent("q"), makeAgent("r")]);
+    usePanelStore.setState({ focusedId: "p" });
+    useFleetArmingStore.getState().armIds(["p", "q", "r"]);
+    render(<FleetDraftingPill />);
+    const trigger = screen.getByTestId("fleet-drafting-pill-trigger");
+    const truncating = Array.from(trigger.querySelectorAll(".truncate"));
+    expect(truncating.length).toBeGreaterThan(0);
+    for (const el of truncating) expect(el.textContent).not.toMatch(/\d+ peers?/);
   });
 
   it("with focus outside the fleet every armed peer still counts", () => {
@@ -400,7 +415,9 @@ describe("Fleet drafting preview invariants", () => {
     usePanelStore.setState({ focusedId: "outsider" });
     useFleetArmingStore.getState().armIds(["q", "r"]);
     render(<FleetDraftingPill />);
-    expect(screen.getByText(/Mirroring to 2 peers/)).toBeTruthy();
+    expect(screen.getByTestId("fleet-drafting-pill-trigger").textContent).toMatch(
+      /Mirroring to 2 peers/
+    );
   });
 
   it("the pill's reach excludes a peer the user has skipped, and stays mounted while the preview is open", () => {

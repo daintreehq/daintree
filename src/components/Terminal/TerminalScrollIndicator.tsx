@@ -25,19 +25,19 @@ export function TerminalScrollIndicator({ terminalId }: TerminalScrollIndicatorP
     requestAnimationFrame(() => terminalInstanceService.focus(terminalId));
   };
 
+  // Rendered inside `TerminalChipRow`, which owns the position, insets and
+  // shadow clip it shares with the fleet chip.
   return (
-    <div className="absolute inset-0 z-30 pointer-events-none flex items-end justify-end pb-1.5 pr-[14px]">
-      <ScrollPill
-        isVisible={isVisible}
-        translateDirection="down"
-        className="flex items-center gap-1 px-2 py-0.5"
-        onClick={handleClick}
-        onPointerDown={(e) => e.stopPropagation()}
-        aria-label="Scroll to latest output"
-      >
-        <ChevronDown className="h-3 w-3" />
-        New output below
-      </ScrollPill>
-    </div>
+    <ScrollPill
+      isVisible={isVisible}
+      translateDirection="down"
+      className="flex items-center gap-1 px-2 py-0.5"
+      onClick={handleClick}
+      onPointerDown={(e) => e.stopPropagation()}
+      aria-label="New output below, scroll to latest output"
+    >
+      <ChevronDown className="h-3 w-3" />
+      New output below
+    </ScrollPill>
   );
 }
