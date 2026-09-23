@@ -755,6 +755,29 @@ describe("worktreeDeleteBlockedBy (#12115)", () => {
     ).toBeNull();
   });
 
+  it("still refuses on commits a partial walk observed before the parent failed", () => {
+    // Evidence is evidence: the walk stopped early, but what it saw is on no
+    // remote, and the host refuses on it whatever became of the parent read.
+    expect(
+      worktreeDeleteBlockedBy({
+        state: "failed",
+        submodules: {
+          status: "unverified",
+          risk: emptyRisk({ incomplete: true, atRiskCommits: [{ oid: "abc", subject: "s" }] }),
+        },
+      })
+    ).toBe("at-risk-commits");
+  });
+
+  it("does not refuse on a partial walk that observed nothing when the parent failed", () => {
+    expect(
+      worktreeDeleteBlockedBy({
+        state: "failed",
+        submodules: { status: "unverified", risk: emptyRisk({ incomplete: true }) },
+      })
+    ).toBeNull();
+  });
+
   it("has nothing to block on for an already-removed worktree", () => {
     expect(worktreeDeleteBlockedBy({ state: "gone" })).toBeNull();
   });

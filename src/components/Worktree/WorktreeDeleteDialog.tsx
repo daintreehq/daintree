@@ -78,7 +78,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const [recheckStatus, setRecheckStatus] = useState("");
   // Set by a recheck, consumed once it settles: a recheck that clears the
   // state it was called from unmounts or relabels the control that has focus.
-  const refocusAfterRecheckRef = useRef(false);
+  // Which check is in flight, so its result can be announced and any focus it
+  // stranded recovered once it settles. `null` when nothing is waiting.
+  const pendingCheckRef = useRef<"open" | "recheck" | "submit" | null>(null);
   // The worktree the open-time fetch last ran for. A second run for the same
   // one is a recheck, which keeps the evidence on screen while it runs.
   const fetchedForRef = useRef<string | null>(null);
@@ -89,6 +91,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const [teardownUnreadable, setTeardownUnreadable] = useState(false);
   const [teardownPending, setTeardownPending] = useState(true);
   const [devPreviewUnreadable, setDevPreviewUnreadable] = useState(false);
+  const [devPreviewPending, setDevPreviewPending] = useState(true);
   // Monotonic session token bumped on every open/close/worktree change (in the
   // open effect below). An in-flight submit revalidation captures the token and
   // aborts if it changed while awaiting — so a close→reopen (or worktree swap)
@@ -227,8 +230,12 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
    * runs the same one and refuses on it. Suppressing that was how a parent
    * timeout turned an unrecoverable-commit refusal into an offered delete.
    */
+  //
+  // Commits the inventory actually observed block even under a parent
+  // failure and a partial walk: they are evidence, and the host refuses on
+  // them. Only an inventory that established nothing is exempt.
   const submoduleBlock =
-    submodules && (!verifyFailed || submodules.status === "verified")
+    submodules && (!verifyFailed || submodules.status === "verified" || atRiskCommitCount > 0)
       ? submoduleDeleteBlock(submodules)
       : null;
   const isBlocked = submoduleBlock !== null;
@@ -259,7 +266,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           : fileSummary.hasTrackedChanges
             ? "Force-deleting this worktree permanently discards the uncommitted work listed above."
             : nestedFileCount > 0
-              ? "Force-deleting this worktree discards modified and untracked files inside its submodules — this is irreversible."
+              ? "Force-deleting this worktree permanently discards the uncommitted work inside its submodules listed above."
               : "Force-deleting this worktree discards an uncommitted submodule change — this is irreversible.";
   // Never gate a delete that cannot proceed. A typed-name input on a blocked
   // state asks for the most emphatic consent the app has and then refuses
@@ -319,6 +326,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     sessionRef.current += 1;
     if (!isOpen) {
       fetchedForRef.current = null;
+      pendingCheckRef.current = null;
       return;
     }
     let cancelled = false;
@@ -326,6 +334,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     // the refusal and its evidence don't blink out and back. Safe to hold:
     // `previewPending` disables every submit path until it settles.
     if (fetchedForRef.current !== worktree.id) {
+      pendingCheckRef.current = "open";
       setFreshPreview(null);
       setVerifyFailed(false);
       setFailedSubmodules(null);
@@ -361,6 +370,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     if (!isOpen) return;
     let cancelled = false;
     setDevPreviewUnreadable(false);
+    setDevPreviewPending(true);
     window.electron.devPreview
       .getByWorktree({ worktreeId: worktree.id })
       .then((state) => {
@@ -372,6 +382,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
         // dialog — but it is said, since the delete still stops whatever is
         // running.
         if (!cancelled) setDevPreviewUnreadable(true);
+      })
+      .finally(() => {
+        if (!cancelled) setDevPreviewPending(false);
       });
     return () => {
       cancelled = true;
@@ -404,39 +417,58 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     };
   }, [isOpen, worktree.id]);
 
-  // Once a recheck settles: say what it found, and if the control that had
-  // focus went away with the state it answered (the refusal's Retry turning
-  // back into the delete, a banner's Retry unmounting), put focus on Cancel —
-  // never leave it on a delete the user didn't reach for.
+  // Once any check settles — the open-time read, a Retry, or the submit-time
+  // re-read that held a force delete back — say what it found, and if the
+  // control that had focus went away with the state it answered (a gate input
+  // replaced by a refusal, a banner's Retry unmounting, the refusal's Retry
+  // turning back into the delete), put focus on Cancel. Never leave it on a
+  // delete the user didn't reach for.
   useEffect(() => {
-    if (previewPending || !refocusAfterRecheckRef.current) return;
-    refocusAfterRecheckRef.current = false;
+    const kind = pendingCheckRef.current;
+    if (previewPending || isDeleting || kind === null) return;
+    pendingCheckRef.current = null;
+    const prefix =
+      kind === "open"
+        ? "Check complete"
+        : kind === "recheck"
+          ? "Checked again"
+          : "Checked before deleting";
     // Says what is actually needed next, never "can be deleted" while the
     // primary is still waiting on force or a typed name.
     setRecheckStatus(
-      isBlocked
-        ? "Checked again — still blocked"
-        : verifyFailed
-          ? "Checked again — still couldn't check this worktree"
-          : blockedByDirtyTree
-            ? "Checked again — select Force delete to continue"
-            : isHighTier && !isConfirmMatched
-              ? "Checked again — type the name to continue"
-              : "Checked again — the worktree can be deleted"
+      `${prefix} — ${
+        isBlocked
+          ? "deleting is blocked"
+          : verifyFailed
+            ? "this worktree couldn't be checked"
+            : blockedByDirtyTree
+              ? "select Force delete to continue"
+              : isHighTier && !isConfirmMatched
+                ? "type the name to continue"
+                : "the worktree can be deleted"
+      }`
     );
     const root = bodyRef.current?.closest<HTMLElement>('[data-testid="delete-worktree-dialog"]');
     const active = document.activeElement;
     const lostFocus =
       !active || active === document.body || !active.isConnected || !root?.contains(active);
     const onPrimary = active instanceof HTMLElement && active.dataset.confirmRole === "confirm";
-    if (!isBlocked && (lostFocus || onPrimary)) {
+    if (lostFocus || (kind === "recheck" && onPrimary && !isBlocked)) {
       root?.querySelector<HTMLElement>('[data-confirm-role="cancel"]')?.focus();
     }
-  }, [previewPending, isBlocked, verifyFailed, blockedByDirtyTree, isHighTier, isConfirmMatched]);
+  }, [
+    previewPending,
+    isDeleting,
+    isBlocked,
+    verifyFailed,
+    blockedByDirtyTree,
+    isHighTier,
+    isConfirmMatched,
+  ]);
 
   const recheck = () => {
     if (previewPending || isDeleting) return;
-    refocusAfterRecheckRef.current = true;
+    pendingCheckRef.current = "recheck";
     // In this render, not the fetch effect's: the settle effect below reads
     // `previewPending` and would otherwise consume the recheck before it ran.
     setPreviewPending(true);
@@ -500,6 +532,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // the immediate dismiss #8417 asks for on all of them.
   const revalidateThenDelete = async () => {
     const session = sessionRef.current;
+    pendingCheckRef.current = "submit";
     setIsDeleting(true);
     const outcome = await settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(worktree.id));
     const preview = outcome.state === "verified" ? outcome.preview : null;
@@ -592,13 +625,27 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           : null;
   const hasFileChanges = fileChangeLabel !== null;
   const nestedFileLabel = `${nestedFileCount} file${nestedFileCount === 1 ? "" : "s"}`;
+  // The same split as the parent's: a modified tracked file inside a
+  // submodule loses its uncommitted change, not its committed history.
+  const nestedDirtyCount = submodules?.risk?.dirtyFiles.length ?? 0;
+  const nestedUntrackedCount = submodules?.risk?.untrackedFiles.length ?? 0;
+  const nestedLossLabel = [
+    nestedDirtyCount > 0
+      ? `uncommitted changes to ${nestedDirtyCount} tracked file${nestedDirtyCount === 1 ? "" : "s"}`
+      : null,
+    nestedUntrackedCount > 0
+      ? `${nestedUntrackedCount} untracked file${nestedUntrackedCount === 1 ? "" : "s"}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" and ");
   /** What is at stake in a force delete, in the fewest words that stay true. */
   const atStakeLabel = hasFileChanges
     ? nestedFileCount > 0
-      ? `${fileChangeLabel} present, and ${nestedFileLabel} inside submodules`
+      ? `${fileChangeLabel} present, plus ${nestedLossLabel} inside submodules`
       : `${fileChangeLabel} present`
     : nestedFileCount > 0
-      ? `${nestedFileLabel} inside submodules will be discarded`
+      ? `${nestedLossLabel} inside submodules would be discarded`
       : `uncommitted changes to ${submoduleEntryLabel} present`;
 
   /**
@@ -690,6 +737,18 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       ),
     });
   }
+  if (devPreviewPending && canSubmit) {
+    consequences.push({
+      key: "dev-pending",
+      tone: "neutral",
+      content: (
+        <>
+          <span className="font-medium">Any running dev server will be stopped</span>
+          <span className="ml-1 text-text-secondary"> Still checking whether one is running</span>
+        </>
+      ),
+    });
+  }
   if (devPreviewUnreadable) {
     consequences.push({
       key: "dev-unknown",
@@ -745,7 +804,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     consequences.push({
       key: "submodule-files",
       tone: "danger",
-      content: `${nestedFileLabel} inside submodules will be permanently lost`,
+      content: capitalize(`${nestedLossLabel} inside submodules will be permanently lost`),
     });
   }
   if (force && submoduleEntryCount > 0) {

@@ -350,14 +350,24 @@ export function worktreeDeleteContentRisk(
  * have completed on its own, and a completed inventory is exactly what
  * `WorkspaceService.guardSubmoduleDelete` refuses on. But an inventory that is
  * itself only `unverified` BECAUSE the parent fetch took it down must not read
- * as a refusal — that is how a parent timeout turned into a blocked delete.
+ * as a refusal — that is how a parent timeout turned into a blocked delete —
+ * unless it observed at-risk commits before it stopped.
  */
 export function worktreeDeleteBlockedBy(
   outcome: WorktreeDeletePreviewOutcome
 ): WorktreeSubmoduleDeleteBlock | null {
   const risk = worktreeDeleteContentRisk(outcome, { hasTrackedChanges: false }).submodules;
   if (!risk) return null;
-  if (outcome.state === "failed" && risk.status !== "verified") return null;
+  // Commits the inventory observed are evidence even from a partial walk, and
+  // the host refuses on them whatever became of the parent read. Only an
+  // inventory that established nothing stays exempt.
+  if (
+    outcome.state === "failed" &&
+    risk.status !== "verified" &&
+    (risk.risk?.atRiskCommits.length ?? 0) === 0
+  ) {
+    return null;
+  }
   return submoduleDeleteBlock(risk);
 }
 
