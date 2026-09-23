@@ -34,7 +34,6 @@ import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { getBuildChannelLabel } from "@shared/config/distribution";
-import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { useDistributionStore } from "@/store/distributionStore";
@@ -128,6 +127,8 @@ function describeUpdateChannel(
   return base.endsWith(".") ? `${base} ${checked}` : `${base}. ${checked}`;
 }
 
+type SaveTarget = "sessionRestore" | "updates" | "idleNotify" | "idleAutoClose" | "hibernation";
+
 interface ShortcutDisplay {
   actionId: string;
   key: string;
@@ -180,6 +181,31 @@ export function GeneralTab({
    */
   const [sectionErrors, setSectionErrors] = useState<Record<string, string | null>>({});
   const [configRetryNonce, setConfigRetryNonce] = useState(0);
+  /**
+   * A failed save rolls its control back, which on its own reads as a click that never
+   * landed. The failure stays on the group it belongs to, with a Retry that resends the
+   * attempted value, until a save there succeeds.
+   */
+  const [saveFailures, setSaveFailures] = useState<Partial<Record<SaveTarget, () => void>>>({});
+  const recordSaveFailure = (target: SaveTarget, retry: () => void) =>
+    setSaveFailures((failures) => ({ ...failures, [target]: retry }));
+  const clearSaveFailure = (target: SaveTarget) =>
+    setSaveFailures((failures) => {
+      if (!failures[target]) return failures;
+      const next = { ...failures };
+      delete next[target];
+      return next;
+    });
+  const saveFailureBanner = (target: SaveTarget) => {
+    const retry = saveFailures[target];
+    return retry ? (
+      <SettingsLoadErrorBanner
+        title="Couldn't save that change"
+        message="The setting is back to its previous value."
+        onRetry={retry}
+      />
+    ) : null;
+  };
 
   /**
    * What the section header says about the roster. The old copy — "Agents ready to use on
@@ -314,22 +340,11 @@ export function GeneralTab({
     try {
       const result = await window.electron.storeUpdate.setSettings(next);
       if (isMountedRef.current) setStoreUpdateNotificationsEnabled(result.enabled);
+      if (isMountedRef.current) clearSaveFailure("updates");
     } catch (error) {
       logError("Failed to set store update notification settings", error);
       if (isMountedRef.current) setStoreUpdateNotificationsEnabled(prev);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Update notification preference couldn't be saved.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleStoreUpdateNotificationsToggle(),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("updates", () => void handleStoreUpdateNotificationsToggle());
     } finally {
       if (isMountedRef.current) setStoreUpdateSettingsSaving(false);
     }
@@ -344,22 +359,11 @@ export function GeneralTab({
     try {
       const result = await window.electron.update.setChannel(channel);
       if (isMountedRef.current) setUpdateChannel(result);
+      if (isMountedRef.current) clearSaveFailure("updates");
     } catch (error) {
       logError("Failed to set update channel", error);
       if (isMountedRef.current) setUpdateChannel(prev);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Update channel couldn't be changed.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleChannelChange(channel),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("updates", () => void handleChannelChange(channel));
     } finally {
       if (isMountedRef.current) setChannelSaving(false);
     }
@@ -568,19 +572,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setHibernationConfig(result.result as HibernationConfig);
+      clearSaveFailure("hibernation");
     } catch (error) {
       if (!isMountedRef.current) return;
       setHibernationConfig(prev);
       logError("Failed to update hibernation config", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Auto-hibernation couldn't be updated.",
-        actions: [
-          { label: "Try again", variant: "primary", onClick: () => void handleHibernationToggle() },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("hibernation", () => void handleHibernationToggle());
     } finally {
       if (isMountedRef.current) {
         setIsSaving(false);
@@ -604,23 +601,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setSessionRestoreConfig(result.result as SessionRestoreConfig);
+      clearSaveFailure("sessionRestore");
     } catch (error) {
       if (!isMountedRef.current) return;
       setSessionRestoreConfig(prev);
       logError("Failed to update session restore config", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Project restore couldn't be updated.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleSessionRestoreToggle(),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("sessionRestore", () => void handleSessionRestoreToggle());
     } finally {
       if (isMountedRef.current) {
         setIsSessionRestoreSaving(false);
@@ -644,19 +630,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setIdleNotifyConfig(result.result as IdleTerminalNotifyConfig);
+      clearSaveFailure("idleNotify");
     } catch (error) {
       if (!isMountedRef.current) return;
       setIdleNotifyConfig(prev);
       logError("Failed to update idle terminal notify config", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Idle terminal notifications couldn't be updated.",
-        actions: [
-          { label: "Try again", variant: "primary", onClick: () => void handleIdleNotifyToggle() },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("idleNotify", () => void handleIdleNotifyToggle());
     } finally {
       if (isMountedRef.current) {
         setIsIdleNotifySaving(false);
@@ -680,23 +659,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setIdleNotifyConfig(result.result as IdleTerminalNotifyConfig);
+      clearSaveFailure("idleNotify");
     } catch (error) {
       if (!isMountedRef.current) return;
       setIdleNotifyConfig(prev);
       logError("Failed to update idle terminal notify threshold", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Idle threshold couldn't be updated.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleIdleNotifyThresholdChange(value),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("idleNotify", () => void handleIdleNotifyThresholdChange(value));
     } finally {
       if (isMountedRef.current) {
         setIsIdleNotifySaving(false);
@@ -720,23 +688,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setIdleAutoCloseConfig(result.result as IdleBackgroundAutoCloseConfig);
+      clearSaveFailure("idleAutoClose");
     } catch (error) {
       if (!isMountedRef.current) return;
       setIdleAutoCloseConfig(prev);
       logError("Failed to update idle background auto-close config", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Auto-close for idle projects couldn't be updated.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleIdleAutoCloseToggle(),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("idleAutoClose", () => void handleIdleAutoCloseToggle());
     } finally {
       if (isMountedRef.current) {
         setIsIdleAutoCloseSaving(false);
@@ -760,23 +717,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setIdleAutoCloseConfig(result.result as IdleBackgroundAutoCloseConfig);
+      clearSaveFailure("idleAutoClose");
     } catch (error) {
       if (!isMountedRef.current) return;
       setIdleAutoCloseConfig(prev);
       logError("Failed to update idle background auto-close threshold", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Idle auto-close threshold couldn't be updated.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleIdleAutoCloseThresholdChange(value),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("idleAutoClose", () => void handleIdleAutoCloseThresholdChange(value));
     } finally {
       if (isMountedRef.current) {
         setIsIdleAutoCloseSaving(false);
@@ -800,23 +746,12 @@ export function GeneralTab({
         throw new Error(result.error.message);
       }
       setHibernationConfig(result.result as HibernationConfig);
+      clearSaveFailure("hibernation");
     } catch (error) {
       if (!isMountedRef.current) return;
       setHibernationConfig(prev);
       logError("Failed to update hibernation threshold", error);
-      notify({
-        type: "error",
-        title: "Couldn't save setting",
-        message: "Inactivity threshold couldn't be updated.",
-        actions: [
-          {
-            label: "Try again",
-            variant: "primary",
-            onClick: () => void handleThresholdChange(value),
-          },
-        ],
-        context: { eventKind: "uiFeedback" },
-      });
+      recordSaveFailure("hibernation", () => void handleThresholdChange(value));
     } finally {
       if (isMountedRef.current) {
         setIsSaving(false);
@@ -1086,6 +1021,7 @@ export function GeneralTab({
                   onRetry={() => setConfigRetryNonce((n) => n + 1)}
                 />
               )}
+              {saveFailureBanner("sessionRestore")}
               <SettingsGroup>
                 <SettingsSwitchCard
                   title="Restore live projects"
@@ -1112,6 +1048,7 @@ export function GeneralTab({
                 description="Updates are managed by the Microsoft Store on Windows"
                 id="general-update-channel"
               >
+                {saveFailureBanner("updates")}
                 <SettingsGroup>
                   <SettingsSwitchCard
                     title="Notify when a new version is available"
@@ -1130,6 +1067,7 @@ export function GeneralTab({
                     onRetry={() => setChannelRetryNonce((n) => n + 1)}
                   />
                 )}
+                {saveFailureBanner("updates")}
                 {/* The row stays through a failed load, with no channel selected: an
                     unknown channel must never read as "stable". */}
                 <SettingsGroup>
@@ -1277,6 +1215,7 @@ export function GeneralTab({
                   onRetry={() => setConfigRetryNonce((n) => n + 1)}
                 />
               )}
+              {saveFailureBanner("idleNotify")}
               <SettingsGroup id="general-idle-terminal-notify">
                 <SettingsSwitchCard
                   title="Notify me about idle terminals"
@@ -1319,6 +1258,7 @@ export function GeneralTab({
                   onRetry={() => setConfigRetryNonce((n) => n + 1)}
                 />
               )}
+              {saveFailureBanner("idleAutoClose")}
               <SettingsGroup id="general-idle-background-auto-close">
                 <SettingsSwitchCard
                   title="Close idle projects automatically"
@@ -1365,6 +1305,7 @@ export function GeneralTab({
                   onRetry={() => setConfigRetryNonce((n) => n + 1)}
                 />
               )}
+              {saveFailureBanner("hibernation")}
               <SettingsGroup id="general-hibernation">
                 <SettingsSwitchCard
                   title="Hibernate inactive projects"

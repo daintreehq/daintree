@@ -165,6 +165,34 @@ function storeSlice(source: object, keys: readonly string[]): StoreMirror {
   return slice;
 }
 
+function restoredPatch(
+  patch: Partial<NotificationSettings>,
+  keys: readonly string[]
+): Partial<NotificationSettings> {
+  const kept: Partial<NotificationSettings> = {};
+  for (const key of keys) Object.assign(kept, { [key]: Reflect.get(patch, key) });
+  return kept;
+}
+
+function withoutKeys(
+  failures: Partial<Record<SaveGroup, SaveFailure>>,
+  keys: readonly string[]
+): Partial<Record<SaveGroup, SaveFailure>> {
+  let changed = false;
+  const next: Partial<Record<SaveGroup, SaveFailure>> = {};
+  for (const failure of Object.values(failures)) {
+    const remaining = Object.keys(failure.patch).filter((k) => !keys.includes(k));
+    if (remaining.length !== Object.keys(failure.patch).length) changed = true;
+    if (remaining.length > 0) {
+      next[failure.group] = {
+        group: failure.group,
+        patch: restoredPatch(failure.patch, remaining),
+      };
+    }
+  }
+  return changed ? next : failures;
+}
+
 function saveGroupOf(patch: Partial<NotificationSettings>): SaveGroup {
   for (const [key, group] of Object.entries(SAVE_GROUP_BY_KEY)) {
     if (key in patch) return group;
@@ -240,16 +268,9 @@ export function NotificationSettingsTab() {
       ?.setSettings(patch)
       .then(() => {
         confirmedRef.current = { ...confirmedRef.current, ...patch };
-        // A success retires a failure it fully covers: the failed values are superseded.
-        setSaveFailures((failures) => {
-          const failure = failures[group];
-          if (!failure || !Object.keys(failure.patch).every((k) => keys.includes(k))) {
-            return failures;
-          }
-          const next = { ...failures };
-          delete next[group];
-          return next;
-        });
+        // A success supersedes any failed value for the same keys, so Retry never
+        // resends them over this newer one.
+        setSaveFailures((failures) => withoutKeys(failures, keys));
       })
       .catch(() => {
         const stale = keys.filter(isNewest);
@@ -263,7 +284,11 @@ export function NotificationSettingsTab() {
         if (Object.keys(restoredStore).length > 0) {
           useNotificationSettingsStore.setState(restoredStore);
         }
-        setSaveFailures((failures) => ({ ...failures, [group]: { group, patch } }));
+        // Only the keys this save still owns are worth retrying.
+        setSaveFailures((failures) => ({
+          ...failures,
+          [group]: { group, patch: { ...failures[group]?.patch, ...restoredPatch(patch, stale) } },
+        }));
       });
   };
 

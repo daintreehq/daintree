@@ -258,4 +258,41 @@ describe("NotificationSettingsTab", () => {
       vi.useRealTimers();
     }
   });
+
+  it("Retry resends only what a newer successful edit hasn't already replaced", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...BASE,
+      quietHoursEnabled: true,
+      quietHoursStartMin: 21 * 60,
+      quietHoursEndMin: 7 * 60,
+    });
+    let rejectReset: (error: Error) => void = () => {};
+    setSettings
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectReset = reject;
+          })
+      )
+      .mockResolvedValue(undefined);
+    render(<NotificationSettingsTab />);
+
+    const resetHours = await screen.findByRole("button", {
+      name: "Reset quiet hours to 22:00 to 08:00",
+    });
+    fireEvent.click(resetHours);
+
+    const start = screen.getByRole("combobox", { name: "Starts at" });
+    fireEvent.keyDown(start, { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: "23:00" }));
+    await waitFor(() => expect(setSettings).toHaveBeenLastCalledWith({ quietHoursStartMin: 1380 }));
+
+    await act(async () => {
+      rejectReset(new Error("disk full"));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    });
+    expect(setSettings).toHaveBeenLastCalledWith({ quietHoursEndMin: 480 });
+  });
 });
