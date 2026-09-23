@@ -382,3 +382,28 @@ describe("worktree error banner stacking (issue #12087)", () => {
     }
   );
 });
+
+// The collapsed alarm mark is a non-focusable span, so the select overlay is
+// where a keyboard user meets it. WorktreeHeader.test proves the header puts
+// the alarm's words at `collapsedAlarmDescriptionId(worktree.id)` and opens the
+// tooltip from `isKeyboardFocused`; this is the card's half of each contract.
+describe("collapsed alarm reaches the select overlay", () => {
+  it("describes the overlay by the header's alarm node while collapsed", () => {
+    const tag = openingTagWith(cardSource, "button", 'data-card-select-overlay=""');
+    expect(tag).toMatch(
+      /aria-describedby=\{\s*effectiveIsCollapsed \? collapsedAlarmDescriptionId\(worktree\.id\) : undefined\s*\}/
+    );
+  });
+
+  it("tracks the overlay's keyboard focus and hands it to the header", () => {
+    const tag = openingTagWith(cardSource, "button", 'data-card-select-overlay=""');
+    expect(tag).toMatch(/onFocus=\{handleSelectFocus\}/);
+    expect(tag).toMatch(/onBlur=\{handleSelectBlur\}/);
+    // Focus-visible only: a pointer click focuses the overlay too, and a click
+    // that selected the row should not also pop the alarm open under it.
+    expect(cardSource).toMatch(/handleSelectFocus[\s\S]{0,200}matches\(":focus-visible"\)/);
+    expect(openingTagWith(cardSource, "WorktreeHeader", "isKeyboardFocused=")).toMatch(
+      /isKeyboardFocused=\{isSelectFocusVisible\}/
+    );
+  });
+});

@@ -39,6 +39,9 @@ import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import { FocusedSubLine } from "./WorktreeCard/FocusedSubLine";
+import { collapsedAlarmDescriptionId } from "./WorktreeCard/CollapsedAlarmPill";
+import { isTooltipFocusOpenSuppressed } from "@/lib/tooltipDismissRegistry";
+import { isTooltipSuppressedForElement } from "@/lib/tooltipFocusSuppression";
 import {
   WorktreeDetailsSection,
   WorktreeDeleteErrorBanner,
@@ -273,6 +276,17 @@ export function WorktreeCard({
   // animation rather than dropping silently.
   const prevAgentStateRef = useRef(dominantAgentState);
   const [flashKey, setFlashKey] = useState(0);
+  const [isSelectFocusVisible, setIsSelectFocusVisible] = useState(false);
+  // A focus handed back by a closing overlay is not a visit, so the same
+  // suppression the tooltip wrapper applies to its own focus opens applies here.
+  const handleSelectFocus = useCallback((e: React.FocusEvent<HTMLButtonElement>) => {
+    setIsSelectFocusVisible(
+      e.currentTarget.matches(":focus-visible") &&
+        !isTooltipFocusOpenSuppressed() &&
+        !isTooltipSuppressedForElement(e.currentTarget)
+    );
+  }, []);
+  const handleSelectBlur = useCallback(() => setIsSelectFocusVisible(false), []);
 
   useEffect(() => {
     const prev = prevAgentStateRef.current;
@@ -1108,6 +1122,14 @@ export function WorktreeCard({
                 (isDraggingSort || isWorktreeSortDragging) && "pointer-events-none"
               )}
               aria-label={`Select worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}`}
+              // Collapsed, the alarm mark is a non-focusable span on this row,
+              // so this button is where a keyboard user meets it: described by
+              // the mark's words, and revealing its tooltip while ringed.
+              aria-describedby={
+                effectiveIsCollapsed ? collapsedAlarmDescriptionId(worktree.id) : undefined
+              }
+              onFocus={handleSelectFocus}
+              onBlur={handleSelectBlur}
             />
           )}
           {flashKey > 0 && (
@@ -1324,6 +1346,7 @@ export function WorktreeCard({
                   isMainOnStandardBranch={isMainOnStandardBranch}
                   isPinned={isPinned}
                   isCollapsed={effectiveIsCollapsed}
+                  isKeyboardFocused={isSelectFocusVisible}
                   canCollapse={canCollapse}
                   onToggleCollapse={handleToggleCollapse}
                   contentId={`worktree-body-${worktree.id}`}

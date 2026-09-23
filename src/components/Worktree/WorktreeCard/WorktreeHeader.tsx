@@ -14,7 +14,7 @@ import { PRBadge } from "./PRBadge";
 import { EnvironmentPopover } from "./EnvironmentPopover";
 import { DevServerIndicator } from "./DevServerIndicator";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
-import { CollapsedAlarmPill } from "./CollapsedAlarmPill";
+import { CollapsedAlarmPill, collapsedAlarmDescriptionId } from "./CollapsedAlarmPill";
 import { isExternalWorktree, isLiveDevServerStatus } from "@/lib/worktreeFilters";
 import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
@@ -35,6 +35,8 @@ export interface WorktreeHeaderProps {
   isMainOnStandardBranch?: boolean;
   isPinned: boolean;
   isCollapsed?: boolean;
+  /** The card's select button has `:focus-visible`; opens the collapsed alarm's tooltip. */
+  isKeyboardFocused?: boolean;
   canCollapse?: boolean;
   onToggleCollapse?: (e: React.MouseEvent) => void;
   contentId?: string;
@@ -167,6 +169,7 @@ export function WorktreeHeader({
   isMainOnStandardBranch,
   isPinned,
   isCollapsed,
+  isKeyboardFocused,
   canCollapse,
   onToggleCollapse,
   contentId,
@@ -372,7 +375,12 @@ export function WorktreeHeader({
             </span>
           )}
           {isCollapsed && (
-            <CollapsedAlarmPill alarm={collapsedAlarm} detail={collapsedAlarmDetail} />
+            <CollapsedAlarmPill
+              alarm={collapsedAlarm}
+              detail={collapsedAlarmDetail}
+              descriptionId={collapsedAlarmDescriptionId(worktree.id)}
+              revealed={isKeyboardFocused}
+            />
           )}
         </div>
 
