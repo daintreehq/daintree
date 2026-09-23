@@ -5,6 +5,7 @@ import type { EventRecord, EventCategory } from "@/store/eventStore";
 import { ArrowDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { EVENT_CATEGORY_STYLES } from "@/config/categoryColors";
 
 interface EventTimelineProps {
@@ -68,13 +69,15 @@ function EventRow({ event, isSelected, onSelect }: EventRowProps) {
     <button
       type="button"
       onClick={handleClick}
+      // A list-detail row, not a listbox option: `aria-current` for AT and
+      // `data-selected` for the shared selected-row treatment (fill + rail).
       aria-current={isSelected ? "true" : undefined}
+      data-selected={isSelected ? "true" : undefined}
       className={cn(
-        "flex w-full items-center gap-2 border-l-2 px-3 py-1 text-left text-xs transition-colors",
+        PALETTE_ROW_CLASS,
+        "flex w-full items-center gap-2 px-3 py-1 text-left text-xs",
         "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-        isSelected
-          ? "border-l-text-primary bg-overlay-selected"
-          : "border-l-transparent hover:bg-overlay-subtle"
+        !isSelected && "hover:bg-overlay-subtle"
       )}
     >
       <span className="flex w-16 shrink-0 items-center gap-1.5 text-2xs text-text-secondary">

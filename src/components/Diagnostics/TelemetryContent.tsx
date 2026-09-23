@@ -4,6 +4,7 @@ import { Check, Copy } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { useTelemetryPreviewStore } from "@/store/telemetryPreviewStore";
 import { telemetryPreviewClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
@@ -61,12 +62,12 @@ function TelemetryRow({ event, isSelected, onSelect }: RowProps) {
       type="button"
       onClick={() => onSelect(event.id)}
       aria-current={isSelected ? "true" : undefined}
+      data-selected={isSelected ? "true" : undefined}
       className={cn(
-        "flex w-full items-center gap-2 border-b border-l-2 border-b-divider px-3 py-1.5 text-left transition-colors",
+        PALETTE_ROW_CLASS,
+        "flex w-full items-center gap-2 border-b-divider px-3 py-1.5 text-left",
         "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-        isSelected
-          ? "border-l-text-primary bg-overlay-selected"
-          : "border-l-transparent hover:bg-overlay-subtle"
+        !isSelected && "hover:bg-overlay-subtle"
       )}
     >
       <KindLabel kind={event.kind} />

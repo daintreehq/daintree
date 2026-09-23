@@ -135,6 +135,7 @@ export function LogFilters({
               variant="subtle"
               size="xs"
               onClick={() => handleLevelToggle(level)}
+              data-filter-chip="true"
               className={cn("gap-1.5", isActive && PRESSED_TOGGLE)}
               aria-pressed={isActive}
               aria-label={`${label}${count > 0 ? ` (${count})` : ""}`}

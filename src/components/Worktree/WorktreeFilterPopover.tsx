@@ -184,7 +184,7 @@ interface FilterChipProps {
  * Zero-count chips stay clickable rather than `disabled`. Their `(0)` is what
  * answers "will this do anything", and disabling would take them out of the tab
  * order — so a keyboard user would silently skip values that reappear the moment
- * another facet changes. Matches `LogFilters`, which fades rather than disables.
+ * another facet changes. Matches `LogFilters`, which keeps zero-count rows enabled.
  */
 function FilterChip({ label, isActive, onClick, count }: FilterChipProps) {
   const isUnavailable = count === 0 && !isActive;
