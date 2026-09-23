@@ -1,3 +1,4 @@
+import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -1760,6 +1761,34 @@ describe("recipeStore", () => {
           expect.objectContaining({ currentCount: 18, allowedCount: 3 })
         );
         expect(results.spawned).toHaveLength(3);
+      } finally {
+        usePanelLimitStore.setState({ requestConfirmation: previousRequestConfirmation });
+      }
+    });
+
+    it("records a panel-limit decline as the user's answer, not the limit refusing", async () => {
+      const requestConfirmationSpy = vi.fn().mockResolvedValue(false);
+      const previousRequestConfirmation = usePanelLimitStore.getState().requestConfirmation;
+      usePanelLimitStore.setState({ requestConfirmation: requestConfirmationSpy });
+      try {
+        const ambientIds = Array.from({ length: 18 }, (_, i) => `ambient-${i}`);
+        panelStoreState.panelIds = ambientIds;
+        panelStoreState.panelsById = Object.fromEntries(
+          ambientIds.map((id) => [id, { location: "grid" }])
+        );
+        useRecipeStore.setState({
+          recipes: [tenTerminalRecipe()],
+          isLoading: false,
+          currentProjectId: "project-1",
+        });
+
+        const results = await useRecipeStore
+          .getState()
+          .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
+
+        expect(addTerminalMock).not.toHaveBeenCalled();
+        expect(results.failed).toHaveLength(10);
+        expect(results.failed.every((f) => f.error === PANEL_LIMIT_DECLINED_REASON)).toBe(true);
       } finally {
         usePanelLimitStore.setState({ requestConfirmation: previousRequestConfirmation });
       }

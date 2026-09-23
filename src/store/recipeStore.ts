@@ -7,6 +7,7 @@ import { useToolbarPreferencesStore } from "./toolbarPreferencesStore";
 import { launcherItemToolbarButtonId } from "@shared/types/toolbar";
 import { recipeToolbarSourceId } from "@/utils/recipeScope";
 import { preflightSpawnBatchLimit } from "./panelLimitStore";
+import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
 import { countPanelsTowardLimit } from "./slices/panelRegistry/panelCount";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
@@ -1115,12 +1116,17 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // same stale count and under-enforce the ceiling; gate the whole burst once
     // here and pass `bypassLimits` on each individual call. (#9165)
     const currentCount = countPanelsTowardLimit(terminalStore.panelsById, terminalStore.panelIds);
-    const { allowed } = await preflightSpawnBatchLimit(currentCount, validIndices.length, {
-      sourceName: recipe.name,
-    });
+    const { allowed, declined } = await preflightSpawnBatchLimit(
+      currentCount,
+      validIndices.length,
+      { sourceName: recipe.name }
+    );
     const spawnIndices = validIndices.slice(0, allowed);
     for (const index of validIndices.slice(allowed)) {
-      results.failed.push({ index, error: "Panel limit reached" });
+      results.failed.push({
+        index,
+        error: declined ? PANEL_LIMIT_DECLINED_REASON : "Panel limit reached",
+      });
     }
 
     // Capture focus intent synchronously before the batch. The batched

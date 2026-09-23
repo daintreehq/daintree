@@ -5,6 +5,7 @@ const notifyMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
 import { notifyRecipeSpawnFailures } from "../recipeNotify";
+import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
 
 function failure(index: number, error: string) {
   return { index, error };
@@ -30,6 +31,28 @@ describe("notifyRecipeSpawnFailures", () => {
   it("does nothing for an empty result set", () => {
     notifyRecipeSpawnFailures({ spawned: [], failed: [] });
     expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("stays quiet when the user declined every missing terminal at the panel-limit confirm", () => {
+    notifyRecipeSpawnFailures(
+      {
+        spawned: [],
+        failed: [failure(0, PANEL_LIMIT_DECLINED_REASON), failure(1, PANEL_LIMIT_DECLINED_REASON)],
+      },
+      { recipeName: "Dev setup" }
+    );
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("still reports real failures mixed in with a decline", () => {
+    notifyRecipeSpawnFailures(
+      {
+        spawned: [],
+        failed: [failure(0, PANEL_LIMIT_DECLINED_REASON), failure(1, "spawn ENOENT")],
+      },
+      { recipeName: "Dev setup" }
+    );
+    expect(notifyMock).toHaveBeenCalledTimes(1);
   });
 
   it("emits an error when no terminals spawned", () => {

@@ -1,9 +1,11 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { spawnPanelsFromRecipe } from "../panelSpawning";
 import type { RecipeTerminal } from "@shared/types";
+import { usePanelLimitStore } from "@/store/panelLimitStore";
+import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
 
 const mockAddPanel = vi.fn();
 const mockAgentSettingsGet = vi.fn();
@@ -620,5 +622,48 @@ describe("spawnPanelsFromRecipe", () => {
         cwd: "/path/to/wt",
       })
     ).rejects.toThrow(AggregateError);
+  });
+
+  describe("when the user declines the panel-limit confirm", () => {
+    const initial = usePanelLimitStore.getState();
+
+    beforeEach(() => {
+      usePanelLimitStore.setState({
+        confirmationLimit: 1,
+        hardLimit: 32,
+        warningsDisabled: false,
+        requestConfirmation: vi.fn().mockResolvedValue(false),
+      });
+    });
+
+    afterEach(() => {
+      usePanelLimitStore.setState(initial, true);
+    });
+
+    it("opens nothing and does not report the user's answer as a failure", async () => {
+      await expect(
+        spawnPanelsFromRecipe({
+          terminals: [makeTerminal(), makeTerminal()],
+          worktreeId: "wt-1",
+          cwd: "/path/to/wt",
+        })
+      ).resolves.toBeUndefined();
+      expect(mockAddPanel).not.toHaveBeenCalled();
+    });
+
+    it("tells a per-panel callback the panels were declined, not refused by the limit", async () => {
+      const onPanelSpawned = vi.fn();
+      await spawnPanelsFromRecipe({
+        terminals: [makeTerminal(), makeTerminal()],
+        worktreeId: "wt-1",
+        cwd: "/path/to/wt",
+        onPanelSpawned,
+      });
+      expect(onPanelSpawned).toHaveBeenCalledTimes(2);
+      for (const [, panelId, error] of onPanelSpawned.mock.calls) {
+        expect(panelId).toBeNull();
+        expect(error).toMatchObject({ message: PANEL_LIMIT_DECLINED_REASON });
+      }
+    });
   });
 });
