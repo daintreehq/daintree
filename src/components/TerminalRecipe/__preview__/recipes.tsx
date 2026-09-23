@@ -113,12 +113,16 @@ function populated(): Inventory {
       ),
     ],
     team: [
+      recipe("Full stack", [devServer(), shell("API", "npm run api"), claude("Agent")], {
+        ...team("full-stack"),
+        ...used(0.2),
+        showInEmptyState: true,
+      }),
       recipe(
-        "Full stack",
-        [devServer(), shell("API", "npm run api"), claude("Agent")],
-        { ...team("full-stack"), ...used(0.2), showInEmptyState: true }
+        "Test watch",
+        [shell("Vitest", "npm test -- --watch"), shell("Coverage", "npm run coverage")],
+        team("test-watch")
       ),
-      recipe("Test watch", [shell("Vitest", "npm test -- --watch")], team("test-watch")),
     ],
     project: [
       recipe("Test watch", [shell("Vitest", "npx vitest")], { ...project, ...used(20) }),

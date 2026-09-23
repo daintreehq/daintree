@@ -110,7 +110,7 @@ export function RecipeRunnerList({
     // group/recipes scopes the roving aria-selected ring to keyboard use: in
     // list mode focus lives in the combobox input (not the listbox), so the
     // group must wrap both. At rest no ring shows — see RecipeRunnerItem.
-    <div className="group/recipes" onKeyDown={onKeyDown}>
+    <div className="group/recipes">
       {showSearch && (
         // A labelled header row, not a second full-width search field. Once
         // every band shared one measure this input became the same width and
@@ -135,6 +135,10 @@ export function RecipeRunnerList({
               aria-controls="recipe-listbox"
               aria-activedescendant={focusedItemId}
               aria-label="Filter recipes"
+              // On the input, not the band: the combobox owns the arrow/Enter
+              // contract, and a handler on the wrapper also caught Enter on the
+              // Manage button beside it and launched the active recipe.
+              onKeyDown={onKeyDown}
               value={searchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
               placeholder="Filter recipes…"

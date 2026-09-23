@@ -145,7 +145,10 @@ export function useRecipeRunner({
     });
   }, [allRecipes, activeWorktreeId]);
 
-  const showSearch = recipes.length > 6;
+  // A live query keeps the list, even once the inventory drops to six or
+  // fewer: the grid has no filter field, so switching to it with a query still
+  // applied would hide recipes behind a search the user can no longer see.
+  const showSearch = recipes.length > 6 || searchQuery.trim().length > 0;
 
   const sections = useMemo(() => buildRecipeSections(recipes), [recipes]);
 
@@ -164,6 +167,18 @@ export function useRecipeRunner({
 
   // +1 for "Create new recipe" button
   const totalItems = getFlatRecipes().length + 1;
+
+  // Deleting the last filtered result, or the inventory shrinking under an
+  // open band, must not leave Enter pointed past the end of the list.
+  useEffect(() => {
+    if (focusedIndex >= totalItems) setFocusedIndex(totalItems - 1);
+  }, [focusedIndex, totalItems]);
+
+  // A query outliving every recipe would otherwise reappear, invisible, the
+  // next time one is created.
+  useEffect(() => {
+    if (recipes.length === 0) setSearchQuery("");
+  }, [recipes.length]);
 
   // Reset focused index on worktree/query change
   useEffect(() => {

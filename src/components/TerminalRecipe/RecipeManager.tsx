@@ -87,6 +87,13 @@ export function RecipeManager({
   const currentProject = useProjectStore((s) => s.currentProject);
   const worktrees = useWorktreeStoreOptional((s) => s.worktrees, EMPTY_WORKTREES);
   const [filter, setFilter] = useState("");
+  const [filterMinHeight, setFilterMinHeight] = useState<number | null>(null);
+  const inventoryRef = useRef<HTMLDivElement>(null);
+  const handleFilterChange = (next: string) => {
+    if (!filter && next) setFilterMinHeight(inventoryRef.current?.offsetHeight ?? null);
+    if (!next) setFilterMinHeight(null);
+    setFilter(next);
+  };
 
   const nameOf = (id: string | null) =>
     (id &&
@@ -107,6 +114,15 @@ export function RecipeManager({
   const [importJson, setImportJson] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
   const exportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Kept mounted between opens; a filter left from last time would reopen the
+  // manager showing a fraction of the inventory with no obvious reason why.
+  useEffect(() => {
+    if (!isOpen) {
+      setFilter("");
+      setFilterMinHeight(null);
+    }
+  }, [isOpen]);
 
   useEffect(() => {
     return () => {
@@ -538,10 +554,16 @@ export function RecipeManager({
               }
             />
           ) : (
-            // A floor on the body height, so filtering a long inventory down to
-            // two rows does not collapse the dialog and pull the field out from
-            // under the pointer.
-            <div className="min-h-[24rem]">
+            // While a filter is active the inventory keeps the height it had
+            // before filtering, so narrowing a long list to two rows does not
+            // shrink and recentre the dialog and pull the field out from under
+            // the pointer. The bottom padding lets the last row scroll clear of
+            // the body's edge fade.
+            <div
+              ref={inventoryRef}
+              className="min-h-[24rem] pb-6"
+              style={filterMinHeight ? { minHeight: filterMinHeight } : undefined}
+            >
               {/* Stays put while the inventory scrolls, so filtering or
                   importing from the bottom of a long list is not a trip back
                   to the top. The negative margin reclaims the body's top
@@ -556,7 +578,7 @@ export function RecipeManager({
                     type="search"
                     density="compact"
                     value={filter}
-                    onChange={(e) => setFilter(e.target.value)}
+                    onChange={(e) => handleFilterChange(e.target.value)}
                     placeholder="Filter recipes…"
                     aria-label="Filter recipes"
                     className="h-7 pl-8"

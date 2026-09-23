@@ -176,7 +176,10 @@ test("recipes review", async ({ page }) => {
   await step("manager-crowded", async () => {
     await open(page, { view: "manager", fixture: "crowded" });
     await snap(page, DIALOG, "02-manager-crowded-top.png");
-    await page.locator(`${DIALOG} h3`).last().scrollIntoViewIfNeeded();
+    await page
+      .locator(`${DIALOG} section`)
+      .last()
+      .evaluate((el) => el.scrollIntoView({ block: "end" }));
     await snap(page, DIALOG, "02-manager-crowded-bottom.png");
   });
 

@@ -219,7 +219,10 @@ export function RecipeRunnerItem({
           />
           <span
             className={cn(
-              "min-w-0 flex-1 text-sm font-medium truncate",
+              // The row Enter will act on shows its whole name while the filter
+              // owns focus: `title` only discloses on hover, and a keyboard
+              // user choosing between two long names needs their endings.
+              "min-w-0 flex-1 text-sm font-medium truncate group-focus-within/recipes:group-aria-selected:whitespace-normal group-focus-within/recipes:group-aria-selected:break-words",
               recipe.shadowedBy ? "text-text-secondary" : "text-text-primary"
             )}
           >

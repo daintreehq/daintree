@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { RecipeRunnerList } from "../RecipeRunnerList";
 import { buildRecipeSections } from "../recipeRunnerUtils";
 import type { TerminalRecipe } from "@/types";
@@ -123,5 +123,36 @@ describe("RecipeRunnerList — the row Enter will act on stays on screen", () =>
     } finally {
       Element.prototype.scrollIntoView = original;
     }
+  });
+});
+
+describe("RecipeRunnerList — only the filter owns the launch keys", () => {
+  it("leaves keys on the band's other controls to those controls", () => {
+    const seen: string[] = [];
+    render(
+      <RecipeRunnerList
+        sections={buildRecipeSections(RECIPES)}
+        searchQuery=""
+        searchResults={[]}
+        focusedIndex={0}
+        focusedItemId="recipe-option-a"
+        showSearch
+        onSearchChange={noop}
+        onKeyDown={(e) => seen.push(e.key)}
+        onRun={noop}
+        onEdit={noop}
+        onDuplicate={noop}
+        onPin={noop}
+        onUnpin={noop}
+        onDelete={noop}
+        onCreate={noop}
+        onManage={noop}
+      />
+    );
+    // Enter on Manage must activate Manage, never launch the active recipe.
+    fireEvent.keyDown(screen.getByRole("button", { name: "Manage" }), { key: "Enter" });
+    expect(seen).toEqual([]);
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Filter recipes" }), { key: "Enter" });
+    expect(seen).toEqual(["Enter"]);
   });
 });

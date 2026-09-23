@@ -107,6 +107,7 @@ function makeRecipe(
 
 beforeEach(() => {
   recipes.length = 0;
+  recipeStoreState.recipes = recipes;
   projectSettingsState.allDetectedRunners = [];
   runRecipeWithResultsMock.mockReset();
   addPanelMock.mockReset();
@@ -1036,5 +1037,32 @@ describe("useRecipeRunner — keyboard edit follows the same ownership rule as t
     } finally {
       window.removeEventListener("daintree:open-recipe-editor", listener);
     }
+  });
+});
+
+describe("useRecipeRunner — a live query never hides recipes behind a vanished filter", () => {
+  it("keeps the filterable list while a query is active, whatever the count", () => {
+    for (let i = 0; i < 7; i++) recipes.push(makeRecipe({ id: `r${i}`, name: `Recipe ${i}` }));
+    const { result, rerender } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/repo" })
+    );
+    act(() => result.current.setSearchQuery("Recipe 3"));
+    // A store update hands the hook a new array, as a delete does.
+    recipeStoreState.recipes = recipes.slice(2);
+    rerender();
+    expect(result.current.recipes.length).toBeLessThanOrEqual(6);
+    // Whatever mode the band is in, the query that narrows it must be visible.
+    expect(result.current.showSearch).toBe(true);
+  });
+
+  it("never leaves the active row past the end of a shrunken list", () => {
+    for (let i = 0; i < 4; i++) recipes.push(makeRecipe({ id: `r${i}`, name: `Recipe ${i}` }));
+    const { result, rerender } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/repo" })
+    );
+    act(() => result.current.setFocusedIndex(4));
+    recipeStoreState.recipes = recipes.slice(3);
+    rerender();
+    expect(result.current.focusedIndex).toBeLessThan(result.current.totalItems);
   });
 });
