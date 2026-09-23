@@ -233,9 +233,10 @@ describe("BackgroundContainer", () => {
         makeTerminal({ id: "t3", agentState: "completed" }),
       ];
       render(<BackgroundContainer />);
-      const trigger = screen.getByRole("button", { name: /Background \(3\)/ });
-      expect(trigger).toBeTruthy();
-      expect(trigger.getAttribute("aria-label")).toBe("Background (3)");
+      const trigger = screen.getByRole("button", { name: /^Background: 3 panels/ });
+      expect(trigger.getAttribute("aria-label")).toBe(
+        "Background: 3 panels across all worktrees, all in this one"
+      );
     });
 
     it("appends waiting count when terminals are waiting", () => {
@@ -245,11 +246,10 @@ describe("BackgroundContainer", () => {
         makeTerminal({ id: "t3", agentState: "working" }),
       ];
       render(<BackgroundContainer />);
-      const trigger = screen.getByRole("button", {
-        name: /Background \(3 · 2 waiting\)/,
-      });
-      expect(trigger).toBeTruthy();
-      expect(trigger.getAttribute("aria-label")).toBe("Background (3 · 2 waiting)");
+      const trigger = screen.getByRole("button", { name: /^Background: 3 panels/ });
+      expect(trigger.getAttribute("aria-label")).toBe(
+        "Background: 3 panels across all worktrees, all in this one, 2 waiting"
+      );
     });
   });
 

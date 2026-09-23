@@ -24,6 +24,10 @@ vi.mock("@/hooks/useTerminalSelectors", () => ({
   useErrorTerminals: () => mockErrored,
 }));
 
+vi.mock("@/hooks/useWorktrees", () => ({
+  useWorktrees: () => ({ worktreeMap: new Map() }),
+}));
+
 vi.mock("@/store/panelStore", async () => {
   const { create } = await import("zustand");
   const store = create(() => ({

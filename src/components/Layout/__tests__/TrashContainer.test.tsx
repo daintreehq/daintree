@@ -286,9 +286,12 @@ describe("TrashContainer", () => {
     dndMocks.isOver = true;
     const { getByTestId } = render(<TrashContainer trashedTerminals={[makeTrashedItem("1")]} />);
     const pill = getByTestId("trash-container");
-    expect(pill.className).not.toContain("cursor-copy");
-    expect(pill.className).not.toContain("bg-overlay-soft");
-    expect(pill.className).not.toContain("ring-border-default");
+    // Token-wise: the resting pill carries `hover:bg-overlay-soft`, which is not
+    // the armed cue.
+    const tokens = pill.className.split(/\s+/);
+    expect(tokens).not.toContain("cursor-copy");
+    expect(tokens).not.toContain("bg-overlay-soft");
+    expect(tokens).not.toContain("ring-border-default");
   });
 
   it("does not pulse on initial mount", () => {
