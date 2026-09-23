@@ -872,9 +872,7 @@ describe("WorktreeHeader collapsed session indicators", () => {
     const indicators = screen.getByTestId("collapsed-session-indicators");
     const badges = indicators.querySelectorAll(":scope > span[aria-hidden='true']");
     expect(badges.length).toBe(2);
-    // First badge should be working (text-state-working), second waiting (text-state-waiting)
-    expect(badges[0]!.className).toContain("text-state-working");
-    expect(badges[1]!.className).toContain("text-state-waiting");
+    expect(Array.from(badges, (b) => b.getAttribute("data-state"))).toEqual(["working", "waiting"]);
   });
 
   it("applies animate-spin-slow only to working icon", () => {
