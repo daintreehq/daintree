@@ -30,6 +30,12 @@
  *   DAINTREE_SHOT_NOTIFICATIONS   optional JSON patch applied to the global notification
  *                                 settings before capture, to see states the defaults hide
  *                                 (quiet hours on, sounds on) — e.g. '{"quietHoursEnabled":true}'
+ *   DAINTREE_SHOT_POPULATED       populate the extension and integration pages (needs
+ *                                 `npm run build:e2e` for the sideloaded samples): git
+ *                                 remotes on three forges, the settings-rich sample
+ *                                 plugin, a running and a staged project plugin, real
+ *                                 forge audit records, and a walk through every option
+ *                                 of the forge-provider and project-plugin pickers
  *
  * A manifest.json beside the PNGs lists every file written with its tab, subtab and
  * slice, and the run fails unless the files on disk match it.
@@ -37,13 +43,14 @@
 
 import { test, expect, type Page, type ElectronApplication } from "@playwright/test";
 import { execSync } from "child_process";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync } from "fs";
+import { cpSync, mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { openAndOnboardProject } from "../helpers/project";
 import { dismissBlockingPalette } from "../helpers/overlays";
 import { setAppTheme } from "../helpers/theme";
+import { SAMPLE_PLUGINS_DIR, activateE2EPlugin } from "../helpers/plugins";
 
 const ENABLED = !!process.env.DAINTREE_SHOT_SETTINGS_PAGES;
 const THEME = process.env.DAINTREE_SHOT_THEME ?? "";
@@ -55,6 +62,63 @@ const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "").split(",").filter(Boolean);
 const NOTIFICATION_SEED: Record<string, unknown> | null = process.env.DAINTREE_SHOT_NOTIFICATIONS
   ? (JSON.parse(process.env.DAINTREE_SHOT_NOTIFICATIONS) as Record<string, unknown>)
   : null;
+const POPULATED = !!process.env.DAINTREE_SHOT_POPULATED;
+
+const PROJECT_PLUGIN_FIXTURE = path.resolve(
+  import.meta.dirname,
+  "../../plugins/fixtures/project-local/.daintree"
+);
+
+/**
+ * Pages whose content hangs off a picker rather than a tablist: every option is a
+ * page of its own, so the populated run opens the picker once for a shot of the
+ * list and then captures the page behind each option.
+ */
+const PICKERS: Record<string, { trigger: string; list: string }> = {
+  "code-forge": {
+    trigger: '[data-testid="forge-provider-selector-trigger"]',
+    list: "#forge-provider-selector-list",
+  },
+  "project:plugins": {
+    trigger: '[data-testid="project-plugin-selector-trigger"]',
+    list: "#project-plugin-selector-list",
+  },
+};
+
+/**
+ * A project plugin added after trust is granted, so it lands staged: read but never
+ * run. Declares capabilities and one project-scoped setting of each kind the form
+ * renders differently at project scope.
+ */
+const STAGED_PROJECT_PLUGIN = {
+  name: "acme.release-notes",
+  version: "0.3.0",
+  scope: "project",
+  displayName: "Release Notes",
+  description: "Drafts release notes from merged pull requests since the last tag.",
+  main: "dist/index.js",
+  engines: { daintree: ">=0.11.0" },
+  capabilities: ["git:read", "fs:project-write", "network:fetch"],
+  contributes: {
+    settings: [
+      {
+        id: "changelogPath",
+        type: "file",
+        label: "Changelog file",
+        description: "Where drafted notes are appended",
+        scope: "project",
+      },
+      {
+        id: "sections",
+        type: "enum",
+        label: "Grouping",
+        options: ["By label", "By author", "Flat list"],
+        default: "By label",
+        scope: "project",
+      },
+    ],
+  },
+};
 
 const DIALOG = '[role="dialog"]:has(.settings-sidebar)';
 // AppDialog puts role="dialog" on the full-viewport scrim; the card is its child.
@@ -91,6 +155,15 @@ function createFixtureRepo(): { dir: string; cleanup: () => void } {
   writeFileSync(path.join(dir, "README.md"), "# Helios Dashboard\n");
   writeFileSync(path.join(dir, "package.json"), '{"name":"helios","scripts":{"dev":"vite"}}\n');
   writeFileSync(path.join(dir, "src", "index.ts"), "export const version = 1;\n");
+  if (POPULATED) {
+    // One remote per routing outcome: a GitHub hostname match, a GitLab hostname
+    // match, and a self-hosted host no provider claims. Owners that do not exist, so
+    // the audit calls below can only ever read, and only ever miss.
+    git("remote add origin https://github.com/daintree-shot-fixture/helios-dashboard.git", dir);
+    git("remote add upstream https://gitlab.com/daintree-shot-fixture/helios.git", dir);
+    git("remote add mirror git@git.internal.example:platform/helios-dashboard.git", dir);
+    cpSync(PROJECT_PLUGIN_FIXTURE, path.join(dir, ".daintree"), { recursive: true });
+  }
   git("add -A", dir);
   git('commit -m "initial commit"', dir);
   return {
@@ -230,6 +303,82 @@ async function capturePage(page: Page, tab: string, subtab: string | null): Prom
   }
 }
 
+/**
+ * Everything the extension and integration pages need to show a populated state,
+ * written through the seams the product itself uses.
+ */
+async function populate(app: ElectronApplication, page: Page, repoDir: string): Promise<void> {
+  await activateE2EPlugin(app, "daintree.rich").catch(() => {});
+  // Trust the folder, then add a second plugin and rescan: it is new to a trusted
+  // folder, so it stages instead of running — one plugin in each state.
+  await page.evaluate(() => window.electron.plugin.setProjectPluginTrust("enabled"));
+  const staged = path.join(repoDir, ".daintree", "plugins", STAGED_PROJECT_PLUGIN.name);
+  mkdirSync(path.join(staged, "dist"), { recursive: true });
+  writeFileSync(path.join(staged, "dist", "index.js"), "export async function activate() {}\n");
+  writeFileSync(path.join(staged, "plugin.json"), JSON.stringify(STAGED_PROJECT_PLUGIN, null, 2));
+  await page.evaluate(() => window.electron.plugin.reloadProjectPlugins());
+  // Real forge calls against the fixture's GitHub remote, so the audit log holds
+  // records the provider actually wrote. Read-only methods on an owner that does not
+  // exist; with no token stored they fail or miss, which is the interesting case.
+  await page.evaluate(async (cwd) => {
+    const forge = window.electron.forge;
+    await Promise.allSettled([
+      forge.listIssues({ cwd }),
+      forge.listPRs({ cwd }),
+      forge.getRepoMetadata({ cwd }),
+      forge.getIssue({ cwd, issueNumber: 42 }),
+    ]);
+  }, repoDir);
+  await settle(page, 1500);
+}
+
+async function walkPicker(
+  page: Page,
+  tab: string,
+  picker: { trigger: string; list: string }
+): Promise<void> {
+  const panel = `${DIALOG} #settings-panel-${cssEscape(tab)}`;
+  const open = async () => {
+    await page.locator(`${panel} ${picker.trigger}`).first().click();
+    await page.locator(picker.list).waitFor({ state: "visible", timeout: 10_000 });
+    await settle(page, 300);
+  };
+  await open();
+  const options = await page
+    .locator(`${picker.list} [role="option"]:not([aria-disabled="true"])`)
+    .evaluateAll((els) =>
+      els.map((el) => ({ id: el.id, selected: el.getAttribute("aria-selected") === "true" }))
+    );
+  const base = `${tab.replace(":", "_")}.picker-open--p1--${THEME_SLUG}.png`;
+  await page
+    .locator(CARD)
+    .first()
+    .screenshot({ path: path.join(OUTPUT_DIR, base), type: "png" });
+  manifest.push({ file: base, tab, subtab: "picker-open", slice: 1, slices: 1 });
+  await page.keyboard.press("Escape");
+  await settle(page, 300);
+
+  for (const option of options) {
+    if (option.selected || !option.id) continue;
+    await open();
+    await page.locator(`[id="${option.id}"]`).click();
+    await settle(page, 900);
+    const slug = option.id.replace(/^.*-item-/, "").replace(/[^a-zA-Z0-9]+/g, "-");
+    await capturePage(page, tab, slug);
+  }
+}
+
+/** The editor and image viewer with their custom choice picked (unsaved drafts). */
+async function captureCustomIntegrations(page: Page): Promise<void> {
+  const panel = `${DIALOG} #settings-panel-integrations`;
+  await page.locator(`${panel} #editor-external button[role="combobox"]`).first().click();
+  await page.locator('[role="option"]', { hasText: "Custom" }).first().click();
+  await settle(page, 300);
+  await page.locator(`${panel} input[type="radio"][value="custom"]`).first().check();
+  await settle(page, 500);
+  await capturePage(page, "integrations", "custom");
+}
+
 test("settings pages review — every tab and subtab, sliced top to bottom", async () => {
   test.info().annotations.push({
     type: "conditional-skip",
@@ -241,17 +390,34 @@ test("settings pages review — every tab and subtab, sliced top to bottom", asy
   mkdirSync(OUTPUT_DIR, { recursive: true });
   const repo = createFixtureRepo();
   const userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-settingspagesshot-"));
+  const fakeHome = path.join(userDataDir, "home");
+  mkdirSync(path.join(fakeHome, ".config"), { recursive: true });
   let ctx: AppContext | undefined;
 
   try {
+    if (POPULATED && !existsSync(SAMPLE_PLUGINS_DIR)) {
+      throw new Error(`Sample plugins missing at ${SAMPLE_PLUGINS_DIR} — run npm run build:e2e`);
+    }
     ctx = await launchApp({
       userDataDir,
       windowSize: WIDE,
       extraArgs: ["--disable-gpu", "--in-process-gpu", "--disable-breakpad", "--noerrdialogs"],
+      // PluginService reads `os.homedir()/.daintree/plugins` with no E2E override, so a
+      // fake HOME is what keeps the developer's own installed plugins out of the shots.
+      ...(POPULATED
+        ? {
+            env: {
+              DAINTREE_E2E_SIDELOAD_PLUGIN_DIR: SAMPLE_PLUGINS_DIR,
+              HOME: fakeHome,
+              XDG_CONFIG_HOME: path.join(fakeHome, ".config"),
+            },
+          }
+        : {}),
     });
     await setWindowSize(ctx.app, WIDE);
 
     const page = await openAndOnboardProject(ctx.app, ctx.window, repo.dir, PROJECT_NAME);
+    if (POPULATED) await populate(ctx.app, page, repo.dir);
     if (THEME) await setAppTheme(page, THEME);
     if (NOTIFICATION_SEED) {
       await page.evaluate(async (patch) => {
@@ -275,8 +441,13 @@ test("settings pages review — every tab and subtab, sliced top to bottom", asy
       await openSettingsAt(page, { tab });
       await settle(page, 900);
       const subtabs = await listSubtabs(page, tab);
-      if (subtabs.length === 0) {
+      const picker = POPULATED ? PICKERS[tab] : undefined;
+      if (picker) {
         await capturePage(page, tab, null);
+        await walkPicker(page, tab, picker);
+      } else if (subtabs.length === 0) {
+        await capturePage(page, tab, null);
+        if (POPULATED && tab === "integrations") await captureCustomIntegrations(page);
       } else {
         for (const sub of subtabs) {
           await page
