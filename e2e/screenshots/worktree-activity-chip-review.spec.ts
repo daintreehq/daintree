@@ -324,14 +324,88 @@ async function hoverChip(page: Page, r: Locator, expectText: string | RegExp): P
 /** Real Tab presses until the target holds :focus-visible. */
 async function tabTo(page: Page, target: Locator): Promise<void> {
   await page.locator(SEL.worktree.searchInput).first().click();
+  if (process.env.DAINTREE_SHOT_DIAG) {
+    await target.evaluate((el) => {
+      const w = window as unknown as { __chipLog: string[] };
+      w.__chipLog = [];
+      const t0 = performance.now();
+      const log = (m: string) => w.__chipLog.push(`${Math.round(performance.now() - t0)} ${m}`);
+      document.addEventListener("tooltip.open", (e) => {
+        const src = (e.target as Element | null)?.nodeName ?? "?";
+        log(`tooltip.open from ${src}`);
+      });
+      el.addEventListener("focus", () => log("chip focus"));
+      el.addEventListener("blur", () => log("chip blur"));
+      new MutationObserver(() => log(`chip state ${el.getAttribute("data-state")}`)).observe(el, {
+        attributes: true,
+        attributeFilter: ["data-state"],
+      });
+      const hovered = document.elementFromPoint(1600, 1000);
+      log(`under pointer: ${hovered?.tagName} ${hovered?.getAttribute("aria-label") ?? ""}`);
+    });
+  }
+  const scrollState = () =>
+    target.evaluate((el) => {
+      const tops: number[] = [];
+      for (let n = el.parentElement; n; n = n.parentElement) tops.push(n.scrollTop);
+      return tops.join(",");
+    });
   for (let i = 0; i < 150; i++) {
+    const before = process.env.DAINTREE_SHOT_DIAG ? await scrollState() : "";
     await page.keyboard.press("Tab");
     const reached = await target
       .evaluate((el) => el === document.activeElement && el.matches(":focus-visible"))
       .catch(() => false);
-    if (reached) return;
+    if (reached) {
+      if (process.env.DAINTREE_SHOT_DIAG) {
+        await page.waitForTimeout(400);
+        const open = await openHoverCard(page)
+          .isVisible()
+          .catch(() => false);
+        const dom = await target.evaluate((el) => {
+          const wrappers = [...document.querySelectorAll("[data-radix-popper-content-wrapper]")];
+          return {
+            state: el.getAttribute("data-state"),
+            wrappers: wrappers.map((w) => ({
+              vis: getComputedStyle(w).visibility,
+              op: getComputedStyle(w.firstElementChild ?? w).opacity,
+              text: (w.textContent ?? "").slice(0, 30),
+              hidden: (w.firstElementChild as HTMLElement | null)?.dataset.side,
+            })),
+            active: document.activeElement?.getAttribute("aria-label"),
+            log: (window as unknown as { __chipLog?: string[] }).__chipLog?.slice(-8),
+          };
+        });
+        console.log(
+          `[chip-diag] final Tab scrolled=${before !== (await scrollState())} open=${open} ${JSON.stringify(dom)}`
+        );
+      }
+      return;
+    }
   }
   throw new Error("never reached :focus-visible on the chip by Tab");
+}
+
+/**
+ * Under heavy machine load a keyboard focus has occasionally left the card
+ * closed (Radix state "closed", nothing mounted) and never reproduced once
+ * instrumented. Leave and re-enter the chip once, and say so loudly, so a
+ * misfire is visible in the log rather than either failing the whole round or
+ * passing silently.
+ */
+const focusRetries: string[] = [];
+async function ensureFocusOpened(page: Page, chip: Locator, label: string): Promise<void> {
+  const opened = () =>
+    openHoverCard(page)
+      .isVisible()
+      .catch(() => false);
+  await page.waitForTimeout(400);
+  if (await opened()) return;
+  focusRetries.push(label);
+  console.warn(`[chip-shots] ${label}: focus left the card closed; re-entering once`);
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Tab");
+  await expect(chip, "re-entry did not land back on the chip").toBeFocused();
 }
 
 /** Rewrite the dirty file and wait for the chip to read as just-active. */
@@ -427,6 +501,7 @@ test("worktree activity chip review — states and themes", async () => {
         // the below-the-fold case is its own step.
         await chip.evaluate((el) => el.scrollIntoView({ block: "center" }));
         await tabTo(page, chip);
+        await ensureFocusOpened(page, chip, `${t} focus`);
         const card = openHoverCard(page);
         await expect(card, "focus did not open the hover card").toBeVisible({ timeout: T_LONG });
         await snapRegion(page, `${t}-30-focus-stale`, [detailsRowOf(rows.stale), card]);
@@ -464,6 +539,7 @@ test("worktree activity chip review — states and themes", async () => {
           return r.bottom > window.innerHeight - 200;
         });
         await tabTo(page, chip);
+        await ensureFocusOpened(page, chip, `${t} focus-fold`);
         await settle(page, 600);
         const open = await openHoverCard(page)
           .isVisible()
@@ -485,6 +561,9 @@ test("worktree activity chip review — states and themes", async () => {
 
   const onDisk = readdirSync(OUTPUT_DIR).filter((f) => f.endsWith(".png"));
   console.log(`[chip-shots] wrote ${written.size} shots; ${onDisk.length} PNGs on disk`);
+  if (focusRetries.length > 0) {
+    console.warn(`[chip-shots] focus needed a retry in: ${focusRetries.join(", ")}`);
+  }
   if (written.size === 0) throw new Error("[chip-shots] produced no screenshots at all");
   if (stepFailures.length > 0) {
     throw new Error(
