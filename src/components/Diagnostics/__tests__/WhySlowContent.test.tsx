@@ -14,6 +14,19 @@ vi.mock("@/clients/systemClient", () => ({
 const logError = vi.fn();
 vi.mock("@/utils/logger", () => ({ logError: (...args: unknown[]) => logError(...args) }));
 
+const quietMemory: WhySlowSnapshot["memory"] = {
+  appMemoryMb: 400,
+  terminalWorkloads: {
+    available: true,
+    stale: false,
+    ageMs: 1000,
+    totalMemoryMb: 800,
+    processCount: 10,
+    terminalCount: 3,
+    topProjects: [],
+  },
+};
+
 function makeSnapshot(overrides?: Partial<WhySlowSnapshot>): WhySlowSnapshot {
   return {
     timestamp: 1,
@@ -353,12 +366,31 @@ describe("WhySlowContent", () => {
         resource: makeQuietResource(),
         pty: makeQuietPty(),
         worktrees: quietWorktrees,
+        memory: quietMemory,
       })
     );
 
     render(<WhySlowContent />);
 
     expect(await screen.findByTestId("why-slow-all-clear")).toBeTruthy();
+  });
+
+  it("qualifies a quiet verdict when a reading is missing instead of claiming all clear", async () => {
+    getWhySlowSnapshot.mockResolvedValue(
+      makeSnapshot({
+        resource: makeQuietResource(),
+        pty: makeQuietPty(),
+        worktrees: quietWorktrees,
+        memory: null,
+      })
+    );
+
+    render(<WhySlowContent />);
+
+    expect(
+      await screen.findByText("No slowdowns found, but some readings are unavailable")
+    ).toBeTruthy();
+    expect(screen.queryByTestId("why-slow-all-clear")).toBeNull();
   });
 
   it("does not claim all-clear when the resource section degraded to null", async () => {
@@ -410,7 +442,7 @@ describe("WhySlowContent", () => {
   it("hides the all-clear line while a refresh is failing", async () => {
     vi.useFakeTimers();
     getWhySlowSnapshot.mockResolvedValueOnce(
-      makeSnapshot({ resource: makeQuietResource(), pty: makeQuietPty() })
+      makeSnapshot({ resource: makeQuietResource(), pty: makeQuietPty(), memory: quietMemory })
     );
 
     render(<WhySlowContent />);
@@ -495,5 +527,22 @@ describe("WhySlowContent", () => {
     const lastAlert = findings.map((f) => f.tone).lastIndexOf("alert");
     expect(lastAlert).toBeGreaterThanOrEqual(0);
     expect(lastAlert).toBeLessThan(firstWarn);
+  });
+
+  it("says which way a pending profile switch is heading", () => {
+    const base = makeQuietResource();
+    const easing = describeSlowdowns(
+      makeSnapshot({
+        resource: { ...base, currentProfile: "efficiency", targetProfile: "balanced" },
+      })
+    ).find((f) => f.id === "profile");
+    const worsening = describeSlowdowns(
+      makeSnapshot({
+        resource: { ...base, currentProfile: "balanced", targetProfile: "efficiency" },
+      })
+    ).find((f) => f.id === "profile");
+    expect(easing?.suggestion).toMatch(/eased/);
+    expect(worsening?.suggestion).not.toMatch(/eased/);
+    expect(worsening?.suggestion).toMatch(/power-saving/);
   });
 });

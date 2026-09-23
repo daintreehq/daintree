@@ -9,6 +9,8 @@ import { sanitizeErrorText } from "@/utils/errorText";
 
 interface EventDetailProps {
   event: EventRecord | null;
+  /** False when there is nothing to select yet, so the pane doesn't ask for a selection. */
+  hasEvents?: boolean;
   className?: string;
 }
 
@@ -58,7 +60,7 @@ function ContextPill({ label, value, filterKey, currentFilters, onToggle }: Cont
   );
 }
 
-export function EventDetail({ event, className }: EventDetailProps) {
+export function EventDetail({ event, hasEvents = true, className }: EventDetailProps) {
   const filters = useEventStore((state) => state.filters);
   const setFilters = useEventStore((state) => state.setFilters);
   const [copied, setCopied] = useState(false);
@@ -100,7 +102,7 @@ export function EventDetail({ event, className }: EventDetailProps) {
           className
         )}
       >
-        <p>Select an event to see its payload</p>
+        <p>{hasEvents ? "Select an event to see its payload" : "Nothing to inspect yet"}</p>
       </div>
     );
   }
@@ -136,9 +138,13 @@ export function EventDetail({ event, className }: EventDetailProps) {
     }
   };
 
+  // Local time, matching the timeline row; the ISO string stays in the tooltip.
   const formatTimestamp = (timestamp: number) => {
     const date = new Date(timestamp);
-    return date.toISOString();
+    const time = [date.getHours(), date.getMinutes(), date.getSeconds()]
+      .map((n) => n.toString().padStart(2, "0"))
+      .join(":");
+    return `${date.toLocaleDateString()} ${time}.${date.getMilliseconds().toString().padStart(3, "0")}`;
   };
 
   const getTimeSince = (timestamp: number) => {
@@ -159,7 +165,9 @@ export function EventDetail({ event, className }: EventDetailProps) {
               {event.type}
             </h3>
             <div className="flex items-center gap-2 text-2xs text-text-secondary">
-              <span className="font-mono">{formatTimestamp(event.timestamp)}</span>
+              <span className="font-mono" title={new Date(event.timestamp).toISOString()}>
+                {formatTimestamp(event.timestamp)}
+              </span>
               <span>•</span>
               <span>{getTimeSince(event.timestamp)}</span>
               <span>•</span>
@@ -185,7 +193,114 @@ export function EventDetail({ event, className }: EventDetailProps) {
         </div>
       </div>
 
-      <div className="flex-shrink-0 border-b border-divider">
+      {/* One scroll container for everything below the header, payload first:
+          it's what someone opens an event to read, and at the default dock
+          height a separately-scrolling payload box had room for one line. */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="border-b border-divider">
+          <button
+            onClick={() => toggleSection("payload")}
+            aria-expanded={expandedSections.has("payload")}
+            className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary"
+          >
+            {expandedSections.has("payload") ? (
+              <ChevronDown className="w-3.5 h-3.5" />
+            ) : (
+              <ChevronRight className="w-3.5 h-3.5" />
+            )}
+            <span className="text-xs font-medium">Payload</span>
+          </button>
+          {expandedSections.has("payload") && (
+            <div className="px-3 pb-2.5">
+              <pre className="text-xs font-mono text-text-primary bg-surface-canvas border border-divider p-2.5 rounded-[var(--radius-md)] overflow-x-auto select-text">
+                {formattedPayload}
+              </pre>
+            </div>
+          )}
+        </div>
+
+        {event.payload &&
+          (event.payload.worktreeId ||
+            event.payload.agentId ||
+            event.payload.runId ||
+            event.payload.terminalId ||
+            event.payload.issueNumber ||
+            event.payload.prNumber) && (
+            <div className="flex-shrink-0">
+              <button
+                onClick={() => toggleSection("context")}
+                aria-expanded={expandedSections.has("context")}
+                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary"
+              >
+                {expandedSections.has("context") ? (
+                  <ChevronDown className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronRight className="w-3.5 h-3.5" />
+                )}
+                <span className="text-xs font-medium">Context</span>
+              </button>
+              {expandedSections.has("context") && (
+                <div className="px-3 pb-2.5 space-y-1.5 text-xs">
+                  {event.payload.worktreeId !== undefined && (
+                    <ContextPill
+                      label="Worktree"
+                      value={event.payload.worktreeId}
+                      filterKey="worktreeId"
+                      currentFilters={filters}
+                      onToggle={handleContextToggle}
+                    />
+                  )}
+                  {event.payload.agentId !== undefined && (
+                    <ContextPill
+                      label="Agent"
+                      value={event.payload.agentId}
+                      filterKey="agentId"
+                      currentFilters={filters}
+                      onToggle={handleContextToggle}
+                    />
+                  )}
+                  {event.payload.runId !== undefined && (
+                    <ContextPill
+                      label="Run"
+                      value={event.payload.runId}
+                      filterKey="runId"
+                      currentFilters={filters}
+                      onToggle={handleContextToggle}
+                    />
+                  )}
+                  {event.payload.terminalId !== undefined && (
+                    <ContextPill
+                      label="Terminal"
+                      value={event.payload.terminalId}
+                      filterKey="terminalId"
+                      currentFilters={filters}
+                      onToggle={handleContextToggle}
+                    />
+                  )}
+                  {event.payload.issueNumber !== undefined && (
+                    <ContextPill
+                      label="Issue #"
+                      value={event.payload.issueNumber}
+                      filterKey="issueNumber"
+                      currentFilters={filters}
+                      onToggle={handleContextToggle}
+                    />
+                  )}
+                  {event.payload.prNumber !== undefined && (
+                    <ContextPill
+                      label="PR #"
+                      value={event.payload.prNumber}
+                      filterKey="prNumber"
+                      currentFilters={filters}
+                      onToggle={handleContextToggle}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+      </div>
+      <div className="border-b border-divider">
         <button
           onClick={() => toggleSection("metadata")}
           aria-expanded={expandedSections.has("metadata")}
@@ -235,109 +350,6 @@ export function EventDetail({ event, className }: EventDetailProps) {
           </div>
         )}
       </div>
-
-      <div className="flex-1 min-h-0 flex flex-col border-b border-divider">
-        <button
-          onClick={() => toggleSection("payload")}
-          aria-expanded={expandedSections.has("payload")}
-          className="flex-shrink-0 px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary"
-        >
-          {expandedSections.has("payload") ? (
-            <ChevronDown className="w-3.5 h-3.5" />
-          ) : (
-            <ChevronRight className="w-3.5 h-3.5" />
-          )}
-          <span className="text-xs font-medium">Payload</span>
-        </button>
-        {expandedSections.has("payload") && (
-          <div className="flex-1 min-h-0 overflow-auto px-3 pb-2.5">
-            <pre className="text-xs font-mono text-text-primary bg-surface-canvas border border-divider p-2.5 rounded-[var(--radius-md)] overflow-x-auto select-text">
-              {formattedPayload}
-            </pre>
-          </div>
-        )}
-      </div>
-
-      {event.payload &&
-        (event.payload.worktreeId ||
-          event.payload.agentId ||
-          event.payload.runId ||
-          event.payload.terminalId ||
-          event.payload.issueNumber ||
-          event.payload.prNumber) && (
-          <div className="flex-shrink-0">
-            <button
-              onClick={() => toggleSection("context")}
-              aria-expanded={expandedSections.has("context")}
-              className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-overlay-subtle transition-colors text-text-primary"
-            >
-              {expandedSections.has("context") ? (
-                <ChevronDown className="w-3.5 h-3.5" />
-              ) : (
-                <ChevronRight className="w-3.5 h-3.5" />
-              )}
-              <span className="text-xs font-medium">Context</span>
-            </button>
-            {expandedSections.has("context") && (
-              <div className="px-3 pb-2.5 space-y-1.5 text-xs">
-                {event.payload.worktreeId !== undefined && (
-                  <ContextPill
-                    label="Worktree"
-                    value={event.payload.worktreeId}
-                    filterKey="worktreeId"
-                    currentFilters={filters}
-                    onToggle={handleContextToggle}
-                  />
-                )}
-                {event.payload.agentId !== undefined && (
-                  <ContextPill
-                    label="Agent"
-                    value={event.payload.agentId}
-                    filterKey="agentId"
-                    currentFilters={filters}
-                    onToggle={handleContextToggle}
-                  />
-                )}
-                {event.payload.runId !== undefined && (
-                  <ContextPill
-                    label="Run"
-                    value={event.payload.runId}
-                    filterKey="runId"
-                    currentFilters={filters}
-                    onToggle={handleContextToggle}
-                  />
-                )}
-                {event.payload.terminalId !== undefined && (
-                  <ContextPill
-                    label="Terminal"
-                    value={event.payload.terminalId}
-                    filterKey="terminalId"
-                    currentFilters={filters}
-                    onToggle={handleContextToggle}
-                  />
-                )}
-                {event.payload.issueNumber !== undefined && (
-                  <ContextPill
-                    label="Issue #"
-                    value={event.payload.issueNumber}
-                    filterKey="issueNumber"
-                    currentFilters={filters}
-                    onToggle={handleContextToggle}
-                  />
-                )}
-                {event.payload.prNumber !== undefined && (
-                  <ContextPill
-                    label="PR #"
-                    value={event.payload.prNumber}
-                    filterKey="prNumber"
-                    currentFilters={filters}
-                    onToggle={handleContextToggle}
-                  />
-                )}
-              </div>
-            )}
-          </div>
-        )}
     </div>
   );
 }

@@ -1,7 +1,10 @@
 import { useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
+import { RefreshCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { MetricTile, type MetricTone } from "./MetricTile";
 import { DiagnosticsNotice } from "./DiagnosticsNotice";
@@ -103,9 +106,7 @@ function ResultRow({ row }: { row: PerfSummaryRow }) {
       </td>
       <td className="px-3 py-1">
         {row.outsideReference ? (
-          <span className="inline-flex items-center rounded-[var(--radius-sm)] border border-border-strong bg-overlay-subtle px-1.5 py-0.5 text-2xs font-medium text-text-primary">
-            Outside reference
-          </span>
+          <span className="text-2xs font-medium text-text-primary">Outside reference</span>
         ) : (
           <span className="text-2xs text-text-secondary">Within reference</span>
         )}
@@ -248,11 +249,25 @@ export function PerfContent({ className }: PerfContentProps) {
               </span>
             ) : null}
           </h3>
-          {showRows && generatedAt !== null ? (
-            <span className="text-2xs tabular-nums text-text-secondary">
-              Generated {formatRelative(generatedAt)}
-            </span>
-          ) : null}
+          <div className="flex items-center gap-2">
+            {showRows && generatedAt !== null ? (
+              <span className="text-2xs tabular-nums text-text-secondary">
+                Generated {formatRelative(generatedAt)}
+              </span>
+            ) : null}
+            {projectPath && !summaryLoadError ? (
+              <Button
+                variant="subtle"
+                size="xs"
+                onClick={() => void refreshSummaries(projectPath)}
+                disabled={isLoadingSummaries}
+                aria-label="Re-read benchmark results"
+              >
+                <SpinningIcon icon={RefreshCw} active={isLoadingSummaries} />
+                Refresh
+              </Button>
+            ) : null}
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden">
           {summaryLoadError ? (

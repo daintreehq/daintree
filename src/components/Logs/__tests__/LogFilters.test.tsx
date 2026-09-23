@@ -2,7 +2,18 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { LogFilters } from "../LogFilters";
-import { dispatchEscape, _resetForTests } from "@/lib/escapeStack";
+import { _resetForTests } from "@/lib/escapeStack";
+
+async function openSources() {
+  const trigger = screen.getByText(/Sources/).closest("button")!;
+  fireEvent.click(trigger);
+  await waitFor(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  return trigger;
+}
+
+function pressEscape() {
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+}
 
 describe("LogFilters accessibility", () => {
   afterEach(() => {
@@ -45,19 +56,19 @@ describe("LogFilters accessibility", () => {
 
   it("toggles aria-expanded when sources popover opens and closes", async () => {
     render(<LogFilters {...baseProps} />);
-    const trigger = screen.getByText(/Sources/).closest("button")!;
-    expect(trigger.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(trigger);
-    expect(trigger.getAttribute("aria-expanded")).toBe("true");
-    dispatchEscape();
+    expect(screen.getByText(/Sources/).closest("button")!.getAttribute("aria-expanded")).not.toBe(
+      "true"
+    );
+    const trigger = await openSources();
+    pressEscape();
     await waitFor(() => {
       expect(trigger.getAttribute("aria-expanded")).toBe("false");
     });
   });
 
-  it("renders source items with aria-pressed when popover is open", () => {
+  it("renders source items with aria-pressed when popover is open", async () => {
     render(<LogFilters {...baseProps} filters={{ sources: ["renderer"] }} />);
-    fireEvent.click(screen.getByText(/Sources/).closest("button")!);
+    await openSources();
     const rendererBtn = screen.getByText(/renderer/).closest("button")!;
     const mainBtn = screen.getByText("main").closest("button")!;
     expect(rendererBtn.getAttribute("aria-pressed")).toBe("true");
@@ -66,9 +77,9 @@ describe("LogFilters accessibility", () => {
 
   it("closes sources popover on Escape", async () => {
     render(<LogFilters {...baseProps} />);
-    fireEvent.click(screen.getByText(/Sources/).closest("button")!);
+    await openSources();
     expect(screen.getByText(/renderer/)).toBeTruthy();
-    dispatchEscape();
+    pressEscape();
     await waitFor(() => {
       expect(screen.queryByText(/renderer/)).toBeNull();
     });
@@ -109,9 +120,9 @@ describe("LogFilters accessibility", () => {
     );
   });
 
-  it("renders source counts beside source names in dropdown", () => {
+  it("renders source counts beside source names in dropdown", async () => {
     render(<LogFilters {...baseProps} />);
-    fireEvent.click(screen.getByText(/Sources/).closest("button")!);
+    await openSources();
     const rendererBtn = screen.getByText(/^\*?renderer/).closest("button")!;
     const mainBtn = screen.getByText(/^\*?main/).closest("button")!;
     const preloadBtn = screen.getByText(/^\*?preload/).closest("button")!;
@@ -123,25 +134,29 @@ describe("LogFilters accessibility", () => {
     expect(preloadCount?.textContent).toBe("0");
   });
 
-  it("steps zero-count source rows down to secondary text, never whole-row opacity", () => {
+  it("marks zero-count source rows as empty without fading them", async () => {
     // Opacity dimmed the row's focus ring and hover with it.
     render(<LogFilters {...baseProps} />);
-    fireEvent.click(screen.getByText(/Sources/).closest("button")!);
+    await openSources();
     const preloadBtn = screen.getByText(/^\*?preload/).closest("button")!;
     expect(preloadBtn.classList.contains("text-text-secondary")).toBe(true);
-    expect([...preloadBtn.classList].some((c) => /^opacity-\d+$/.test(c))).toBe(false);
+    expect(preloadBtn.dataset.empty).toBe("true");
+    // Base-state opacity only; the Button's own `disabled:opacity-*` is fine.
+    expect(preloadBtn.className.split(/\s+/)).not.toContainEqual(
+      expect.stringMatching(/^opacity-/)
+    );
   });
 
-  it("keeps zero-count source rows clickable", () => {
+  it("keeps zero-count source rows clickable", async () => {
     const onFiltersChange = vi.fn();
     render(<LogFilters {...baseProps} onFiltersChange={onFiltersChange} />);
-    fireEvent.click(screen.getByText(/Sources/).closest("button")!);
+    await openSources();
     const preloadBtn = screen.getByText(/^\*?preload/).closest("button")!;
     fireEvent.click(preloadBtn);
     expect(onFiltersChange).toHaveBeenCalledWith({ sources: ["preload"] });
   });
 
-  it("does not dim zero-count rows when the source is actively selected", () => {
+  it("does not dim zero-count rows when the source is actively selected", async () => {
     render(
       <LogFilters
         {...baseProps}
@@ -149,16 +164,18 @@ describe("LogFilters accessibility", () => {
         sourceCounts={{ ...baseProps.sourceCounts, preload: 0 }}
       />
     );
-    fireEvent.click(screen.getByText(/Sources/).closest("button")!);
+    await openSources();
     const preloadBtn = screen.getByText(/preload/).closest("button")!;
     expect(preloadBtn.getAttribute("aria-pressed")).toBe("true");
     expect(preloadBtn.classList.contains("text-text-secondary")).toBe(false);
+    expect(preloadBtn.dataset.empty).toBeUndefined();
   });
 
-  it("does not dim non-zero source rows", () => {
+  it("does not dim non-zero source rows", async () => {
     render(<LogFilters {...baseProps} />);
-    fireEvent.click(screen.getByText(/Sources/).closest("button")!);
+    await openSources();
     const rendererBtn = screen.getByText(/^\*?renderer/).closest("button")!;
     expect(rendererBtn.classList.contains("text-text-secondary")).toBe(false);
+    expect(rendererBtn.dataset.empty).toBeUndefined();
   });
 });

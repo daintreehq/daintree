@@ -9,6 +9,7 @@ import { telemetryPreviewClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import type { SanitizedTelemetryEvent } from "@shared/types";
 import { logError } from "@/utils/logger";
+import { DiagnosticsNotice } from "./DiagnosticsNotice";
 
 export interface TelemetryContentProps {
   className?: string;
@@ -60,7 +61,7 @@ function TelemetryRow({ event, isSelected, onSelect }: RowProps) {
         "flex w-full items-center gap-2 border-b border-l-2 border-b-divider px-3 py-1.5 text-left transition-colors",
         "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
         isSelected
-          ? "border-l-text-primary bg-overlay-medium"
+          ? "border-l-text-primary bg-overlay-selected"
           : "border-l-transparent hover:bg-overlay-subtle"
       )}
     >
@@ -140,7 +141,9 @@ function TelemetryDetail({ event }: DetailProps) {
             </div>
             <p className="font-mono text-xs text-text-primary break-words">{event.label}</p>
             <div className="flex items-center gap-2 text-2xs text-text-secondary font-mono">
-              <span>{new Date(event.timestamp).toISOString()}</span>
+              <span title={new Date(event.timestamp).toISOString()}>
+                {new Date(event.timestamp).toLocaleDateString()} {formatClockTime(event.timestamp)}
+              </span>
               <span aria-hidden>•</span>
               <span>ID {event.id.slice(0, 8)}</span>
             </div>
@@ -206,16 +209,25 @@ export function TelemetryContent({ className }: TelemetryContentProps) {
       }))
     );
 
+  // Whether preview is on is unknown until the first read lands — and if that
+  // read fails, "off" would be a guess, so the tab says it couldn't tell.
+  const [stateRead, setStateRead] = useState<"pending" | "done" | "failed">("pending");
+  const [reloadKey, setReloadKey] = useState(0);
+
   useEffect(() => {
     let disposed = false;
+    setStateRead("pending");
     telemetryPreviewClient.subscribe();
     telemetryPreviewClient
       .getState()
       .then((state) => {
-        if (!disposed) setActive(state.active);
+        if (disposed) return;
+        setActive(state.active);
+        setStateRead("done");
       })
       .catch((err) => {
         logError("Failed to read telemetry preview state", err);
+        if (!disposed) setStateRead("failed");
       });
 
     const unsubscribeBatch = telemetryPreviewClient.onEventBatch((incoming) => {
@@ -233,7 +245,7 @@ export function TelemetryContent({ className }: TelemetryContentProps) {
       unsubscribeState();
       telemetryPreviewClient.unsubscribe();
     };
-  }, [appendEvents, setActive]);
+  }, [appendEvents, setActive, reloadKey]);
 
   const deferredEvents = useDeferredValue(events);
   const selectedEvent = useMemo(() => {
@@ -242,6 +254,19 @@ export function TelemetryContent({ className }: TelemetryContentProps) {
   }, [events, selectedEventId]);
 
   if (events.length === 0) {
+    if (stateRead === "pending") return <div className={cn("h-full", className)} />;
+    if (stateRead === "failed") {
+      return (
+        <div className={cn("h-full p-3", className)}>
+          <DiagnosticsNotice
+            kind="failed"
+            title="Couldn't check whether telemetry preview is on"
+            description="Preview only mirrors payloads here. It never sends anything."
+            onRetry={() => setReloadKey((k) => k + 1)}
+          />
+        </div>
+      );
+    }
     return (
       <div className={cn("h-full flex items-center justify-center", className)}>
         <TelemetryEmptyState active={active} />

@@ -8,6 +8,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { EmptyState } from "@/components/ui/EmptyState";
 import { logError } from "@/utils/logger";
 
+const CONTEXT_LABELS: Record<string, string> = {
+  worktreeId: "Worktree",
+  terminalId: "Terminal",
+  filePath: "File",
+  command: "Command",
+};
+
 const ERROR_TYPE_LABELS: Record<string, string> = {
   git: "Git",
   process: "Process",
@@ -170,7 +177,7 @@ function ErrorRow({
           <div className="flex items-center justify-end gap-1">
             {isRetrying && onCancelRetry ? (
               <Button
-                variant="ghost"
+                variant="subtle"
                 size="xs"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -228,7 +235,7 @@ function ErrorRow({
                     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
                       {contextEntries.map(([k, v]) => (
                         <div key={k} className="contents">
-                          <dt className="text-text-secondary">{k}</dt>
+                          <dt className="text-text-secondary">{CONTEXT_LABELS[k] ?? k}</dt>
                           <dd className="min-w-0 break-all font-mono text-text-primary">
                             {String(v)}
                           </dd>

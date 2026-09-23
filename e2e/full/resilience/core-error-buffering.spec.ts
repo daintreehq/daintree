@@ -56,7 +56,7 @@ async function getErrorStoreErrors(window: Page): Promise<Array<{ id: string; me
 async function clearErrorsAndCloseDock(window: Page) {
   const dock = window.locator('[aria-label="Diagnostics dock"]');
   if (await dock.isVisible().catch(() => false)) {
-    const clearButton = window.locator('button:has-text("Clear All")');
+    const clearButton = window.locator('button:has-text("Dismiss all")');
     if (await clearButton.isVisible().catch(() => false)) {
       if (await clearButton.isEnabled().catch(() => false)) {
         await clearButton.click();

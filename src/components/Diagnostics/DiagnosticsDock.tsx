@@ -22,7 +22,6 @@ import {
   LogsActions,
   EventsActions,
   TelemetryActions,
-  PerfActions,
 } from "./DiagnosticsActions";
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
@@ -385,7 +384,6 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           {activeTab === "logs" && <LogsActions />}
           {activeTab === "events" && <EventsActions />}
           {activeTab === "telemetry" && <TelemetryActions />}
-          {activeTab === "perf" && <PerfActions />}
 
           <Tooltip>
             <TooltipTrigger asChild>

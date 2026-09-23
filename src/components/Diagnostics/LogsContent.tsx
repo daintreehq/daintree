@@ -5,6 +5,7 @@ import { ArrowDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { DiagnosticsNotice } from "./DiagnosticsNotice";
+import { ListSkeleton } from "./ListSkeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import {
   useLogsStore,
@@ -313,6 +314,16 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
         </div>
       )}
 
+      {loadState === "failed" && hasLiveLogs ? (
+        <DiagnosticsNotice
+          kind="failed"
+          className="mx-3 mt-2"
+          title="Couldn't read earlier log entries"
+          description="Only entries since the dock opened are shown. Open the log file to see everything."
+          onRetry={() => setReloadKey((k) => k + 1)}
+        />
+      ) : null}
+
       <div className="flex-1 relative min-h-0">
         {loadState === "failed" && !hasLiveLogs ? (
           <div className="p-3">
@@ -324,7 +335,9 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
             />
           </div>
         ) : displayEntries.length === 0 ? (
-          loadState === "loading" ? null : hasLiveLogs && hasActiveFilters ? (
+          loadState === "loading" ? (
+            <ListSkeleton label="Loading logs" />
+          ) : hasLiveLogs && hasActiveFilters ? (
             <div className="flex items-center justify-center h-full">
               <EmptyState
                 variant="filtered-empty"

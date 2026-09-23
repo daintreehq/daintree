@@ -3,8 +3,6 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useLogsStore, useErrorStore } from "@/store";
 import { useTelemetryPreviewStore } from "@/store/telemetryPreviewStore";
-import { usePerfMetricsStore } from "@/store/perfMetricsStore";
-import { useProjectStore } from "@/store/projectStore";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -138,36 +136,6 @@ export function TelemetryActions() {
           </span>
         </TooltipTrigger>
         <TooltipContent side="bottom">Remove the captured payloads from this view</TooltipContent>
-      </Tooltip>
-    </div>
-  );
-}
-
-export function PerfActions() {
-  const isLoading = usePerfMetricsStore((s) => s.isLoadingSummaries);
-  const projectPath = useProjectStore((s) => s.currentProject?.path ?? null);
-
-  const handleRefresh = useCallback(() => {
-    if (!projectPath) return;
-    void usePerfMetricsStore.getState().refreshSummaries(projectPath);
-  }, [projectPath]);
-
-  return (
-    <div className="flex items-center gap-2">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex">
-            <Button
-              variant="subtle"
-              size="xs"
-              onClick={handleRefresh}
-              disabled={isLoading || !projectPath}
-            >
-              Refresh
-            </Button>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Re-read perf result files</TooltipContent>
       </Tooltip>
     </div>
   );

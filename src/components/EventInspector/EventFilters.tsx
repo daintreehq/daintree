@@ -217,11 +217,7 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
               variant="subtle"
               size="xs"
               onClick={() => toggleCategoryFilter(category)}
-              className={cn(
-                "gap-1.5",
-                isActive && PRESSED_TOGGLE,
-                count === 0 && !isActive && "opacity-60"
-              )}
+              className={cn("gap-1.5", isActive && PRESSED_TOGGLE)}
               aria-pressed={isActive}
             >
               <span

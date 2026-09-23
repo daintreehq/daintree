@@ -8,6 +8,7 @@ import { EventFilters } from "../EventInspector/EventFilters";
 import { eventInspectorClient } from "@/clients";
 import { logError } from "@/utils/logger";
 import { DiagnosticsNotice } from "./DiagnosticsNotice";
+import { ListSkeleton } from "./ListSkeleton";
 
 export interface EventsContentProps {
   className?: string;
@@ -48,24 +49,25 @@ export function EventsContent({ className }: EventsContentProps) {
     }))
   );
 
-  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadState, setLoadState] = useState<"loading" | "loaded" | "failed">("loading");
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let disposed = false;
 
     eventInspectorClient.subscribe();
+    setLoadState("loading");
 
     eventInspectorClient
       .getEvents()
       .then((existingEvents) => {
         if (disposed) return;
-        setLoadFailed(false);
+        setLoadState("loaded");
         setEvents(existingEvents);
       })
       .catch((error) => {
         logError("Failed to load events", error);
-        if (!disposed) setLoadFailed(true);
+        if (!disposed) setLoadState("failed");
       });
 
     const unsubscribe = eventInspectorClient.onEventBatch((events) => {
@@ -94,7 +96,7 @@ export function EventsContent({ className }: EventsContentProps) {
     <div className={cn("flex flex-col h-full", className)}>
       <EventFilters events={events} filters={filters} onFiltersChange={setFilters} />
 
-      {loadFailed && events.length === 0 ? (
+      {loadState === "failed" && events.length === 0 ? (
         <div className="p-3">
           <DiagnosticsNotice
             kind="failed"
@@ -104,23 +106,38 @@ export function EventsContent({ className }: EventsContentProps) {
           />
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1">
-          <div className="flex min-h-0 w-1/2 flex-col border-r border-divider">
-            <EventTimeline
-              events={deferredFilteredEvents}
-              totalCount={events.length}
-              onClearFilters={clearFilters}
-              selectedId={selectedEventId}
-              onSelectEvent={setSelectedEvent}
-              autoScroll={autoScroll}
-              onAutoScrollChange={setAutoScroll}
+        <>
+          {loadState === "failed" ? (
+            <DiagnosticsNotice
+              kind="failed"
+              className="mx-3 mt-2"
+              title="Couldn't read earlier events"
+              description="Only events since the dock opened are shown."
+              onRetry={() => setReloadKey((k) => k + 1)}
             />
-          </div>
+          ) : null}
+          <div className="flex min-h-0 flex-1">
+            <div className="flex min-h-0 w-1/2 flex-col border-r border-divider">
+              {loadState === "loading" && events.length === 0 ? (
+                <ListSkeleton label="Loading events" />
+              ) : (
+                <EventTimeline
+                  events={deferredFilteredEvents}
+                  totalCount={events.length}
+                  onClearFilters={clearFilters}
+                  selectedId={selectedEventId}
+                  onSelectEvent={setSelectedEvent}
+                  autoScroll={autoScroll}
+                  onAutoScrollChange={setAutoScroll}
+                />
+              )}
+            </div>
 
-          <div className="flex min-h-0 w-1/2 flex-col">
-            <EventDetail event={selectedEvent} />
+            <div className="flex min-h-0 w-1/2 flex-col">
+              <EventDetail event={selectedEvent} hasEvents={events.length > 0} />
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );

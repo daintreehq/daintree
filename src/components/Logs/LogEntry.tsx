@@ -25,9 +25,9 @@ interface LogEntryProps {
 // Text stays neutral because status-coloured text fails contrast on most themes.
 const LEVEL_CHIP: Record<LogLevel, string> = {
   debug: "bg-overlay-soft text-text-secondary",
-  info: "bg-status-info/15 text-text-primary",
-  warn: "bg-status-warning/20 text-text-primary",
-  error: "bg-status-error/20 text-text-primary",
+  info: "bg-status-info/25 text-text-primary",
+  warn: "bg-status-warning/25 text-text-primary",
+  error: "bg-status-error/25 text-text-primary",
 };
 
 const LEVEL_EDGE: Record<LogLevel, string> = {

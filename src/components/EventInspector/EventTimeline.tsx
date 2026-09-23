@@ -43,10 +43,12 @@ function getPayloadSummary(event: EventRecord): string {
   if (!payload || typeof payload !== "object") return "";
 
   const parts: string[] = [];
-  if (payload.worktreeId) parts.push(`worktree: ${String(payload.worktreeId).substring(0, 8)}`);
-  if (payload.agentId) parts.push(`agent: ${String(payload.agentId).substring(0, 8)}`);
-  if (payload.runId) parts.push(`run: ${String(payload.runId).substring(0, 8)}`);
-  if (payload.terminalId) parts.push(`terminal: ${String(payload.terminalId).substring(0, 8)}`);
+  // Whole ids: the row truncates with an ellipsis, and a hard cut mid-id reads
+  // as a different, shorter id.
+  if (payload.worktreeId) parts.push(`worktree: ${String(payload.worktreeId)}`);
+  if (payload.agentId) parts.push(`agent: ${String(payload.agentId)}`);
+  if (payload.runId) parts.push(`run: ${String(payload.runId)}`);
+  if (payload.terminalId) parts.push(`terminal: ${String(payload.terminalId)}`);
 
   return parts.length > 0 ? parts.join(" • ") : "";
 }
@@ -71,7 +73,7 @@ function EventRow({ event, isSelected, onSelect }: EventRowProps) {
         "flex w-full items-center gap-2 border-l-2 px-3 py-1 text-left text-xs transition-colors",
         "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
         isSelected
-          ? "border-l-text-primary bg-overlay-medium"
+          ? "border-l-text-primary bg-overlay-selected"
           : "border-l-transparent hover:bg-overlay-subtle"
       )}
     >

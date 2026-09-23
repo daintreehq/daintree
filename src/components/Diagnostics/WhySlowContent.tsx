@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { CircleAlert, Gauge, RefreshCw, TriangleAlert } from "lucide-react";
+import { CircleAlert, Gauge, Info, RefreshCw, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
@@ -42,14 +42,27 @@ function plural(count: number, one: string, many: string): string {
 // summary can never disagree with a warn-toned tile over the same number.
 const PTY_LAG_WARN_THRESHOLD_MS = 50;
 
-/** One observed reason the app may feel slow, phrased for someone who doesn't know the internals. */
+/**
+ * One observed reason the app may feel slow, phrased for someone who doesn't
+ * know the internals. `info` is ordinary activity worth knowing about (a git
+ * fetch, a backgrounded window) — it still rules out "all clear", but it isn't
+ * counted as something slowing Daintree down.
+ */
 export interface SlowdownFinding {
   id: string;
-  tone: Exclude<MetricTone, "default">;
+  tone: Exclude<MetricTone, "default"> | "info";
   text: string;
   /** What the reader can do about it, when there is something. */
   suggestion?: string;
 }
+
+// How much each profile throttles, so a pending switch reads as easing or worsening.
+const PROFILE_RANK: Record<string, number> = { performance: 0, balanced: 1, efficiency: 2 };
+const PROFILE_MODE: Record<string, string> = {
+  performance: "full-speed",
+  balanced: "balanced",
+  efficiency: "power-saving",
+};
 
 /**
  * Turn the snapshot into the observations that explain a slowdown, worst
@@ -68,25 +81,30 @@ export function describeSlowdowns(snapshot: WhySlowSnapshot): SlowdownFinding[] 
         text: r.lagEscalatedActive
           ? "Daintree's main process stalled badly and is holding back background work"
           : "Daintree's main process is responding slowly and is holding back background work",
-        suggestion: "Closing idle terminals and agents frees it up fastest",
+        suggestion: "Closing idle terminals and agents may help",
       });
     }
-    if (r.currentProfile !== "performance") {
-      const mode = r.currentProfile === "efficiency" ? "power-saving" : "balanced";
+    const current = PROFILE_RANK[r.currentProfile] ?? 0;
+    const target = PROFILE_RANK[r.targetProfile] ?? 0;
+    if (current > 0) {
+      const easing = target < current;
       findings.push({
         id: "profile",
-        tone: r.currentProfile === "efficiency" ? "alert" : "warn",
-        text: `Daintree switched to ${mode} mode, so terminals and status checks update less often`,
+        // Already on its way back is less urgent than staying throttled.
+        tone: r.currentProfile === "efficiency" && !easing ? "alert" : "warn",
+        text: `Daintree switched to ${PROFILE_MODE[r.currentProfile]} mode, so terminals and status checks update less often`,
         suggestion:
-          r.targetProfile !== r.currentProfile
-            ? `Pressure has eased; it's moving back to ${r.targetProfile} mode`
-            : undefined,
+          target === current
+            ? undefined
+            : easing
+              ? `Pressure has eased; it's heading back to ${PROFILE_MODE[r.targetProfile]} mode`
+              : `Pressure is still rising; it's heading to ${PROFILE_MODE[r.targetProfile]} mode`,
       });
-    } else if (r.targetProfile !== "performance") {
+    } else if (target > 0) {
       findings.push({
         id: "profile",
         tone: "warn",
-        text: `Daintree is about to switch to ${r.targetProfile === "efficiency" ? "power-saving" : "balanced"} mode`,
+        text: `Daintree is about to switch to ${PROFILE_MODE[r.targetProfile]} mode`,
       });
     }
     if (r.isOnBattery) {
@@ -115,7 +133,7 @@ export function describeSlowdowns(snapshot: WhySlowSnapshot): SlowdownFinding[] 
   if (snapshot.focusThrottle.throttled) {
     findings.push({
       id: "focus",
-      tone: "warn",
+      tone: "info",
       text: `No Daintree window is in front, so background checks run ${snapshot.focusThrottle.pollMultiplier}× less often`,
       suggestion: "This is expected and lifts as soon as you switch back",
     });
@@ -127,7 +145,7 @@ export function describeSlowdowns(snapshot: WhySlowSnapshot): SlowdownFinding[] 
       id: "webgl",
       tone: "warn",
       text: `${plural(terminals, "terminal is", "terminals are")} drawn without GPU acceleration`,
-      suggestion: "Too many terminals want the GPU at once; closing some restores it",
+      suggestion: "Closing some terminals may bring it back",
     });
   }
   const p = snapshot.pty;
@@ -153,7 +171,7 @@ export function describeSlowdowns(snapshot: WhySlowSnapshot): SlowdownFinding[] 
   if (snapshot.worktrees && snapshot.worktrees.fetchInFlightCount > 0) {
     findings.push({
       id: "fetch",
-      tone: "warn",
+      tone: "info",
       text: `${plural(snapshot.worktrees.fetchInFlightCount, "git fetch is", "git fetches are")} running`,
     });
   }
@@ -172,7 +190,7 @@ export function describeSlowdowns(snapshot: WhySlowSnapshot): SlowdownFinding[] 
       text: `${plural(w.degraded.length, "background worker is", "background workers are")} running on a slower fallback`,
     });
   }
-  const order: Record<SlowdownFinding["tone"], number> = { alert: 0, warn: 1 };
+  const order: Record<SlowdownFinding["tone"], number> = { alert: 0, warn: 1, info: 2 };
   return findings
     .map((finding, index) => ({ finding, index }))
     .sort((a, b) => order[a.finding.tone] - order[b.finding.tone] || a.index - b.index)
@@ -309,6 +327,13 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
   const findings = snapshot ? describeSlowdowns(snapshot) : [];
   const allClear = snapshot ? isAllClear(snapshot) : false;
   const memory = snapshot?.memory ?? null;
+  // A verdict over readings that didn't arrive has to say so.
+  const readingsIncomplete =
+    !!snapshot &&
+    (!snapshot.resource ||
+      !snapshot.pty ||
+      !snapshot.memory ||
+      !snapshot.memory.terminalWorkloads.available);
   const memoryWorkloads = memory?.terminalWorkloads ?? null;
   // "Has data" = a live measurement, or retained nonzero values from a prior
   // successful sweep. A never-sampled slice must render as "—", not a fake 0.
@@ -321,7 +346,13 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
   return (
     <div className={cn("h-full overflow-auto px-3 py-2.5 text-sm text-text-primary", className)}>
       <div className="mb-2.5 flex items-center justify-between gap-3">
-        <Verdict snapshot={snapshot} error={error} findings={findings} allClear={allClear} />
+        <Verdict
+          snapshot={snapshot}
+          error={error}
+          findings={findings}
+          allClear={allClear}
+          incomplete={readingsIncomplete}
+        />
         <div className="flex shrink-0 items-center gap-2">
           {snapshot && !error ? (
             <span
@@ -331,16 +362,19 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
               Updated {formatSnapshotAge(snapshotAgeMs)}
             </span>
           ) : null}
-          <Button
-            variant="subtle"
-            size="xs"
-            onClick={() => void refresh()}
-            disabled={isRefreshing}
-            aria-label="Refresh diagnostics snapshot"
-          >
-            <SpinningIcon icon={RefreshCw} active={isRefreshing} />
-            Refresh
-          </Button>
+          {/* While a read is failing, the notice's Retry is the one action. */}
+          {!error ? (
+            <Button
+              variant="subtle"
+              size="xs"
+              onClick={() => void refresh()}
+              disabled={isRefreshing}
+              aria-label="Refresh diagnostics snapshot"
+            >
+              <SpinningIcon icon={RefreshCw} active={isRefreshing} />
+              Refresh
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -372,14 +406,19 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
       {!snapshot && !error ? <WhySlowSkeleton /> : null}
 
       {snapshot ? (
-        <div className={cn("flex flex-col gap-3", error && "opacity-70")}>
-          {findings.length > 0 ? (
-            <ul className="flex flex-col gap-1.5" aria-label="What's slowing Daintree down">
-              {findings.map((finding) => (
-                <FindingRow key={finding.id} finding={finding} />
+        <div className="flex flex-col gap-3">
+          {sortedReasons.length > 0 ? (
+            <p className="text-xs text-text-secondary">
+              <span className="font-medium text-text-primary">Biggest factors: </span>
+              {sortedReasons.slice(0, 3).map((r, index) => (
+                <span key={r.signal}>
+                  {index > 0 ? " · " : ""}
+                  {r.detail} <span className="tabular-nums">(+{r.contribution})</span>
+                </span>
               ))}
-            </ul>
+            </p>
           ) : null}
+          {findings.length > 0 ? <FindingsList findings={findings} /> : null}
 
           <section aria-labelledby="why-slow-resource">
             <SectionHeading id="why-slow-resource">Resource mode</SectionHeading>
@@ -395,9 +434,13 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
                     label="Heading to"
                     value={PROFILE_LABEL[resource.targetProfile] ?? resource.targetProfile}
                     tone={
-                      resource.targetProfile !== resource.currentProfile
-                        ? "warn"
-                        : profileTone(resource.targetProfile)
+                      // Moving back toward full speed is recovery, not a warning.
+                      (PROFILE_RANK[resource.targetProfile] ?? 0) <
+                      (PROFILE_RANK[resource.currentProfile] ?? 0)
+                        ? "default"
+                        : resource.targetProfile !== resource.currentProfile
+                          ? "warn"
+                          : profileTone(resource.targetProfile)
                     }
                   />
                   <MetricTile
@@ -445,7 +488,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
                     ? `×${snapshot.focusThrottle.pollMultiplier}`
                     : undefined
                 }
-                tone={snapshot.focusThrottle.throttled ? "warn" : "default"}
+                hint={snapshot.focusThrottle.throttled ? "window in background" : undefined}
               />
               <MetricTile
                 label="Terminal drawing"
@@ -542,11 +585,6 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
               <MetricTile
                 label="Git fetches running"
                 value={snapshot.worktrees ? String(snapshot.worktrees.fetchInFlightCount) : "—"}
-                tone={
-                  snapshot.worktrees && snapshot.worktrees.fetchInFlightCount > 0
-                    ? "warn"
-                    : "default"
-                }
               />
               <MetricTile
                 label="Queued jobs"
@@ -573,27 +611,34 @@ function Verdict({
   error,
   findings,
   allClear,
+  incomplete,
 }: {
   snapshot: WhySlowSnapshot | null;
   error: boolean;
   findings: SlowdownFinding[];
   allClear: boolean;
+  incomplete: boolean;
 }) {
+  const problems = findings.filter((f) => f.tone !== "info").length;
   let text: string;
   if (!snapshot) {
     text = error ? "Performance snapshot unavailable" : "Checking what's slowing Daintree down";
-  } else if (findings.length > 0) {
+  } else if (problems > 0) {
     text =
-      findings.length === 1
+      problems === 1
         ? "1 thing may be slowing Daintree down"
-        : `${findings.length} things may be slowing Daintree down`;
-  } else if (allClear && !error) {
-    text = "";
+        : `${problems} things may be slowing Daintree down`;
   } else if (error) {
     // Stale data must not claim "right now" — the notice below carries the age.
-    text = "Nothing was slowing Daintree down at the last reading";
-  } else {
+    text = incomplete
+      ? "No slowdowns at the last reading, but some readings were missing"
+      : "Nothing was slowing Daintree down at the last reading";
+  } else if (incomplete) {
     text = "No slowdowns found, but some readings are unavailable";
+  } else if (allClear) {
+    text = "";
+  } else {
+    text = "Nothing major is slowing Daintree down";
   }
 
   return (
@@ -602,8 +647,6 @@ function Verdict({
       {text ? (
         <h3 className="truncate text-sm font-medium text-text-primary">{text}</h3>
       ) : (
-        // Suppressed while a refresh is failing: "right now" from stale data
-        // would contradict the stale notice.
         <h3
           data-testid="why-slow-all-clear"
           className="truncate text-sm font-medium text-text-primary"
@@ -615,15 +658,55 @@ function Verdict({
   );
 }
 
+// Enough to answer the question at the default dock height; the rest are a
+// click away rather than pushing the readings off screen.
+const FINDINGS_VISIBLE = 4;
+
+function FindingsList({ findings }: { findings: SlowdownFinding[] }) {
+  const [showAll, setShowAll] = useState(false);
+  const hidden = findings.length - FINDINGS_VISIBLE;
+  const visible = showAll || hidden <= 1 ? findings : findings.slice(0, FINDINGS_VISIBLE);
+  return (
+    <div className="flex flex-col gap-1">
+      <ul
+        id="why-slow-findings"
+        className="flex flex-col gap-1.5"
+        aria-label="What's slowing Daintree down"
+      >
+        {visible.map((finding) => (
+          <FindingRow key={finding.id} finding={finding} />
+        ))}
+      </ul>
+      {hidden > 1 ? (
+        <Button
+          variant="ghost"
+          size="xs"
+          className="self-start"
+          aria-expanded={showAll}
+          aria-controls="why-slow-findings"
+          onClick={() => setShowAll((v) => !v)}
+        >
+          {showAll ? "Show fewer" : `Show ${hidden} more`}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 function FindingRow({ finding }: { finding: SlowdownFinding }) {
-  const Glyph = finding.tone === "alert" ? CircleAlert : TriangleAlert;
+  const Glyph =
+    finding.tone === "alert" ? CircleAlert : finding.tone === "warn" ? TriangleAlert : Info;
   return (
     <li className="flex items-start gap-2" data-finding={finding.id}>
       <Glyph
         aria-hidden="true"
         className={cn(
           "mt-0.5 h-3.5 w-3.5 shrink-0",
-          finding.tone === "alert" ? "text-status-error" : "text-status-warning"
+          finding.tone === "alert"
+            ? "text-status-error"
+            : finding.tone === "warn"
+              ? "text-status-warning"
+              : "text-text-secondary"
         )}
       />
       <div className="min-w-0 text-xs">
@@ -646,13 +729,17 @@ function SectionHeading({ id, children }: { id: string; children: ReactNode }) {
 
 function WhySlowSkeleton() {
   return (
-    <Skeleton label="Loading performance snapshot" className="flex flex-col gap-2">
-      <SkeletonBone className="h-3 w-2/5 rounded-[var(--radius-sm)]" />
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {[0, 1, 2, 3].map((i) => (
-          <SkeletonBone key={i} className="h-11 rounded-[var(--radius-md)]" />
-        ))}
-      </div>
+    <Skeleton label="Loading performance snapshot" className="flex flex-col gap-3">
+      {[0, 1].map((section) => (
+        <div key={section} className="flex flex-col gap-1.5">
+          <SkeletonBone className="h-2.5 w-24 rounded-[var(--radius-sm)]" />
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {[0, 1, 2, 3].map((i) => (
+              <SkeletonBone key={i} className="h-11 rounded-[var(--radius-md)]" />
+            ))}
+          </div>
+        </div>
+      ))}
     </Skeleton>
   );
 }

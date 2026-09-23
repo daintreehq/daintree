@@ -125,8 +125,8 @@ async function clearErrorsAndCloseDock(window: Page) {
   // Close dock if visible
   const dock = window.locator(SEL.diagnostics.dock);
   if (await dock.isVisible().catch(() => false)) {
-    // Click "Clear All" if there are errors
-    const clearButton = window.locator('button:has-text("Clear All")');
+    // Click "Dismiss all" if there are errors
+    const clearButton = window.locator('button:has-text("Dismiss all")');
     if (await clearButton.isVisible().catch(() => false)) {
       if (await clearButton.isEnabled().catch(() => false)) {
         await clearButton.click();
