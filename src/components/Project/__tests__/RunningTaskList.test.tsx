@@ -257,6 +257,30 @@ describe("RunningTaskList overflow", () => {
     expect(screen.queryByText("cmd-1")).toBeNull();
   });
 
+  it("hands focus to the next task when a dismissal removes the focused button", () => {
+    seedTasks(3, { runtimeStatus: "exited", exitCode: 1 });
+    const fallback = vi.fn();
+    render(<RunningTaskList worktreeId={WORKTREE_ID} onFocusFallback={fallback} />);
+    const row = screen.getByText("cmd-1").closest<HTMLElement>("[data-task-row]")!;
+    const dismiss = within(row).getByLabelText("Dismiss");
+    dismiss.focus();
+    fireEvent.click(dismiss, { detail: 0 });
+
+    expect(screen.queryByText("cmd-1")).toBeNull();
+    expect(document.activeElement?.textContent).toBe("cmd-2");
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it("hands focus back to the field when the last task is dismissed", () => {
+    seedTasks(1, { runtimeStatus: "exited", exitCode: 1 });
+    const fallback = vi.fn();
+    render(<RunningTaskList worktreeId={WORKTREE_ID} onFocusFallback={fallback} />);
+    const dismiss = screen.getByLabelText("Dismiss");
+    dismiss.focus();
+    fireEvent.click(dismiss, { detail: 0 });
+    expect(fallback).toHaveBeenCalledTimes(1);
+  });
+
   it("drops the disclosure once the tail shrinks back under the cap", () => {
     seedTasks(6);
     const { rerender } = render(<RunningTaskList worktreeId={WORKTREE_ID} />);

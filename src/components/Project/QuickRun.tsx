@@ -751,7 +751,18 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
           </div>
         ) : (
           <>
-            {activeWorktreeId && <RunningTaskList worktreeId={activeWorktreeId} />}
+            {activeWorktreeId && (
+              <RunningTaskList
+                worktreeId={activeWorktreeId}
+                onFocusFallback={(options) => {
+                  // Quietly: landing here after clearing the last task should
+                  // not throw the suggestion list over the panel.
+                  quietFocusRef.current = true;
+                  inputRef.current?.focus(options);
+                  quietFocusRef.current = false;
+                }}
+              />
+            )}
             <div
               // The list closes when focus leaves the field and its own
               // controls, not the field alone: tabbing to a toggle keeps the lit
@@ -980,44 +991,51 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                     id={SUMMARY_ID}
                     className="shrink-0 space-y-0.5 border-t border-border-subtle bg-surface-input px-3 py-1.5 text-2xs text-text-secondary"
                   >
-                    {highlighted && (
-                      <div className="flex items-start gap-2">
-                        <span
-                          className={cn(
-                            "line-clamp-3 min-w-0 flex-1 text-text-primary [overflow-wrap:anywhere]",
-                            COMMAND_TEXT_CLASS
-                          )}
-                        >
-                          {highlighted.value}
-                        </span>
+                    {/* Always one line, lit or not: a summary that appeared,
+                        or wrapped, as rows lit up changed the popup's height
+                        and moved the rows — which is bottom-anchored — out from
+                        under the pointer between hover and click. The whole
+                        command is a Tab away in the field. */}
+                    <div className="flex h-4 items-center gap-2">
+                      <span
+                        className={cn(
+                          "min-w-0 flex-1 truncate",
+                          highlighted && cn("text-text-primary", COMMAND_TEXT_CLASS)
+                        )}
+                      >
+                        {highlighted ? highlighted.value : "Choose a command, or type one"}
+                      </span>
+                      {highlighted && (
                         <PinHint
                           saved={highlighted.type === "saved"}
                           canComplete={canComplete}
                           className="flex @max-[280px]/footer:hidden"
                         />
-                      </div>
-                    )}
+                      )}
+                    </div>
                     {/* Below 280px the settings take their own line so the
                         branch keeps its width, and the key hint rides with them
                         instead of taking the command's. */}
-                    <div className="flex min-w-0 flex-wrap items-center gap-x-1">
+                    <div className="flex h-4 min-w-0 items-center gap-x-1 @max-[280px]/footer:h-auto @max-[280px]/footer:flex-wrap">
                       <span className="flex min-w-0 items-center gap-1 @max-[280px]/footer:basis-full">
                         <GitBranch className="h-3 w-3 shrink-0" aria-hidden="true" />
                         <span className="sr-only">Runs on </span>
                         <span className="min-w-0 truncate">{destinationLabel}</span>
                       </span>
-                      <span className="shrink-0">
-                        <span aria-hidden="true" className="@max-[280px]/footer:hidden">
-                          {"· "}
+                      <span className="flex shrink-0 items-center gap-1 @max-[280px]/footer:h-4 @max-[280px]/footer:min-w-0 @max-[280px]/footer:flex-1">
+                        <span className="min-w-0 truncate">
+                          <span aria-hidden="true" className="@max-[280px]/footer:hidden">
+                            {"· "}
+                          </span>
+                          {runSummary}
                         </span>
-                        {runSummary}
+                        {highlighted && (
+                          <PinHint
+                            saved={highlighted.type === "saved"}
+                            className="ml-auto hidden @max-[280px]/footer:flex"
+                          />
+                        )}
                       </span>
-                      {highlighted && (
-                        <PinHint
-                          saved={highlighted.type === "saved"}
-                          className="ml-auto hidden @max-[280px]/footer:flex"
-                        />
-                      )}
                     </div>
                     {highlighted && (
                       <span className="sr-only">

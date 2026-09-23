@@ -522,6 +522,22 @@ describe("QuickRun", () => {
     expect(input.getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("keeps the summary the same height whether or not a row is lit", () => {
+    // The popup is bottom-anchored, so a summary that grew as a row lit up
+    // moved every row out from under the pointer between hover and click.
+    seedHistory("npm test -- a/very/long/path/that/would/wrap/at/two/hundred/pixels", "ls");
+    render(<Footer projectId="test-project" />);
+    const input = openPanel();
+    fireEvent.click(input);
+    const summary = document.getElementById("quick-run-summary")!;
+    const lines = () =>
+      Array.from(summary.children).filter((c) => !c.classList.contains("sr-only")).length;
+    const unlit = lines();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(input.getAttribute("aria-activedescendant")).toBeTruthy();
+    expect(lines()).toBe(unlit);
+  });
+
   it("brings a lit row back into view when the list reopens", () => {
     seedHistory("a", "b", "c");
     const scrolled: string[] = [];

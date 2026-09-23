@@ -43,9 +43,11 @@ export function resetDismissedTasks(): void {
 
 interface RunningTaskListProps {
   worktreeId: string;
+  /** Where focus goes when a dismissal leaves no task to land on. */
+  onFocusFallback?: (options: FocusOptions) => void;
 }
 
-export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
+export function RunningTaskList({ worktreeId, onFocusFallback }: RunningTaskListProps) {
   const quickRunTerminals = usePanelStore(
     useShallow((state) => {
       const result: PtyPanelData[] = [];
@@ -141,6 +143,24 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
     setDismissedIds((prev) => new Set(prev).add(id));
   }, []);
 
+  // Dismissing unmounts the button that held focus, which dropped it on the
+  // page. Hand it to the neighbouring task — or back to the field — first.
+  const handleDismissFrom = (id: string, from: HTMLElement, keyboard: boolean) => {
+    if (document.activeElement === from) {
+      const row = from.closest("[data-task-row]");
+      const rows = Array.from(
+        row?.closest("[data-task-list]")?.querySelectorAll<HTMLElement>("[data-task-row]") ?? []
+      );
+      const at = rows.findIndex((r) => r === row);
+      const next = rows[at + 1] ?? rows[at - 1];
+      const options = { preventScroll: true, focusVisible: keyboard };
+      const target = next?.querySelector<HTMLElement>("[data-task-focus]");
+      if (target) target.focus(options);
+      else onFocusFallback?.(options);
+    }
+    handleDismiss(id);
+  };
+
   const visibleTasks = quickRunTerminals.filter((t) => !dismissedIds.has(t.id));
 
   if (visibleTasks.length === 0) return null;
@@ -153,7 +173,7 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
   const displayTasks = visibleTasks.slice(overflowTasks.length);
 
   return (
-    <div className="-mx-2 mb-2 space-y-0.5">
+    <div data-task-list="" className="-mx-2 mb-2 space-y-0.5">
       {overflowTasks.length > 0 && (
         <TaskOverflow
           tasks={overflowTasks}
@@ -161,7 +181,7 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
           onStop={handleStop}
           onFocus={handleFocus}
           onRestart={handleRestart}
-          onDismiss={handleDismiss}
+          onDismiss={handleDismissFrom}
         />
       )}
       {displayTasks.map((t) => {
@@ -175,7 +195,7 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
             onStop={handleStop}
             onFocus={handleFocus}
             onRestart={handleRestart}
-            onDismiss={handleDismiss}
+            onDismiss={handleDismissFrom}
           />
         );
       })}
@@ -205,7 +225,7 @@ function TaskOverflow({
   onStop: (id: string) => void;
   onFocus: (id: string) => void;
   onRestart: (id: string) => void;
-  onDismiss: (id: string) => void;
+  onDismiss: (id: string, from: HTMLElement, keyboard: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -234,7 +254,7 @@ function TaskOverflow({
         aria-label="Earlier tasks"
         className="p-1 min-w-64 max-w-sm max-h-[var(--radix-popover-content-available-height)] overflow-y-auto"
       >
-        <ul className="flex flex-col gap-0.5">
+        <ul data-task-list="" className="flex flex-col gap-0.5">
           {tasks.map((t) => (
             <li key={t.id}>
               <TaskRow
@@ -267,7 +287,7 @@ interface TaskRowProps {
   onStop: (id: string) => void;
   onFocus: (id: string) => void;
   onRestart: (id: string) => void;
-  onDismiss: (id: string) => void;
+  onDismiss: (id: string, from: HTMLElement, keyboard: boolean) => void;
 }
 
 function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss }: TaskRowProps) {
@@ -296,6 +316,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
       {/* Command */}
       <button
         type="button"
+        data-task-focus=""
         onClick={() => onFocus(terminal.id)}
         className="flex-1 min-h-6 truncate text-left text-text-secondary hover:text-text-primary transition-colors cursor-pointer min-w-0"
         title={command}
@@ -356,7 +377,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
           <button
             onClick={(e) => {
               e.stopPropagation();
-              onDismiss(terminal.id);
+              onDismiss(terminal.id, e.currentTarget, e.detail === 0);
             }}
             className="p-1.5 rounded-[var(--radius-sm)] hover:bg-overlay-soft text-text-secondary hover:text-text-primary"
             aria-label="Dismiss"
