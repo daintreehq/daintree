@@ -938,6 +938,8 @@ export function DaintreeAssistantSettingsTab() {
             onChange={toggleDocSearch}
             ariaLabel="Allow the assistant to search Daintree documentation"
             disabled={loading}
+            isModified={settings.docSearch !== DEFAULT_SETTINGS.docSearch}
+            onReset={() => void persist({ docSearch: DEFAULT_SETTINGS.docSearch })}
           />
           <SettingsSwitchCard
             id="assistant-daintree-control"
@@ -951,6 +953,8 @@ export function DaintreeAssistantSettingsTab() {
             onChange={toggleDaintreeControl}
             ariaLabel="Allow the assistant to call Daintree control tools"
             disabled={loading}
+            isModified={settings.daintreeControl !== DEFAULT_SETTINGS.daintreeControl}
+            onReset={() => void persist({ daintreeControl: DEFAULT_SETTINGS.daintreeControl })}
           />
         </SettingsGroup>
       </SettingsSection>

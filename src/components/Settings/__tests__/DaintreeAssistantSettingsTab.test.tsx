@@ -337,6 +337,55 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
+  it("marks the behavior switches modified only when they differ from their defaults, and resets them", async () => {
+    installApi({
+      getSettings: vi.fn().mockResolvedValue({
+        docSearch: false,
+        daintreeControl: false,
+        tier: "action" as const,
+        bypassPermissions: false,
+        auditRetention: 7,
+      }),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Search documentation");
+
+    const docReset = await screen.findByLabelText("Reset Search documentation to default");
+    const controlReset = screen.getByLabelText("Reset Daintree control to default");
+
+    fireEvent.click(docReset);
+    await waitFor(() => {
+      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({ docSearch: true });
+    });
+    fireEvent.click(controlReset);
+    await waitFor(() => {
+      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+        daintreeControl: true,
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Reset Search documentation to default")).toBeNull();
+      expect(screen.queryByLabelText("Reset Daintree control to default")).toBeNull();
+    });
+  });
+
+  it("does not mark the behavior switches modified at their defaults", async () => {
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Search documentation");
+
+    expect(screen.queryByLabelText("Reset Search documentation to default")).toBeNull();
+    expect(screen.queryByLabelText("Reset Daintree control to default")).toBeNull();
+  });
+
   it("hides the debug logging toggle unless the Daintree Assistant agent is selected", async () => {
     helpPanelState.preferredAgentId = "claude";
     const { container } = render(

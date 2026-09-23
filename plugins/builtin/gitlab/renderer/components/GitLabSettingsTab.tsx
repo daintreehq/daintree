@@ -363,11 +363,14 @@ export function GitLabSettingsTab() {
                 use).
               </>
             }
+            layout="stacked"
             control={
-              <Button onClick={openTokenPage} variant="outline" size="sm">
-                <ExternalLink aria-hidden="true" />
-                Create token on GitLab
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={openTokenPage} variant="outline" size="sm">
+                  <ExternalLink aria-hidden="true" />
+                  Create token on GitLab
+                </Button>
+              </div>
             }
           />
         </SettingsGroup>

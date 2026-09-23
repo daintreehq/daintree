@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FileBrowserVisibilitySettings } from "./FileBrowserVisibilitySettings";
 import { SettingsActions, SettingsGroup, SettingsRow } from "./SettingsGroup";
+import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
@@ -61,6 +62,8 @@ export function WorktreeSettingsTab() {
   const [pattern, setPattern] = useState("");
   const [originalPattern, setOriginalPattern] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadNonce, setLoadNonce] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedMessage, setSavedMessage] = useState(false);
@@ -87,12 +90,15 @@ export function WorktreeSettingsTab() {
 
   useEffect(() => {
     let settled = false;
+    let cancelled = false;
     timedOutRef.current = false;
+    setIsLoading(true);
+    setLoadError(null);
     const timer = setTimeout(() => {
       if (!settled) {
         settled = true;
         timedOutRef.current = true;
-        setError("Settings load timed out");
+        setLoadError("Settings load timed out");
         setIsLoading(false);
       }
     }, 10_000);
@@ -100,7 +106,7 @@ export function WorktreeSettingsTab() {
     actionService
       .dispatch("worktreeConfig.get", undefined, { source: "user" })
       .then((result) => {
-        if (timedOutRef.current) return;
+        if (timedOutRef.current || cancelled) return;
         settled = true;
         clearTimeout(timer);
         if (!result.ok) {
@@ -111,24 +117,32 @@ export function WorktreeSettingsTab() {
         setOriginalPattern(config.pathPattern);
       })
       .catch((err) => {
+        if (cancelled) return;
         settled = true;
         clearTimeout(timer);
-        setError(formatErrorMessage(err, "Failed to load worktree settings"));
+        setLoadError(formatErrorMessage(err, "Failed to load worktree settings"));
       })
       .finally(() => {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       });
 
-    return () => clearTimeout(timer);
-  }, []);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [loadNonce]);
+
+  // Until the stored pattern arrives the field holds a placeholder empty string:
+  // validating it, marking it modified, or saving over it would all act on a value
+  // the user never saw.
+  const unavailable = isLoading || loadError !== null;
 
   const validation = useMemo(() => {
     if (!pattern.trim()) return { valid: false, error: "Pattern cannot be empty" };
     return validatePathPattern(pattern);
   }, [pattern]);
 
-  // Report validation state to sidebar (only after loading completes)
-  useSettingsTabValidation("worktree", !isLoading && !validation.valid);
+  useSettingsTabValidation("worktree", !unavailable && !validation.valid);
 
   const preview = useMemo(() => {
     if (!validation.valid) return null;
@@ -138,7 +152,7 @@ export function WorktreeSettingsTab() {
   const hasChanges = pattern !== originalPattern;
 
   const handleSave = async () => {
-    if (!validation.valid || isSaving) return;
+    if (unavailable || !validation.valid || isSaving) return;
 
     setIsSaving(true);
     setError(null);
@@ -168,9 +182,7 @@ export function WorktreeSettingsTab() {
     }
   };
 
-  // A failed load leaves the pattern empty, which trips validation too — so
-  // these are reported together rather than one masking the other's cause.
-  const patternError = !isLoading && !validation.valid ? validation.error : undefined;
+  const patternError = !unavailable && !validation.valid ? validation.error : undefined;
 
   const handleReset = () => {
     setPattern(DEFAULT_WORKTREE_PATH_PATTERN);
@@ -186,7 +198,7 @@ export function WorktreeSettingsTab() {
   // the WebContentsView detaches. handleSave's internal validation/saving
   // guards short-circuit cleanly when the pattern is invalid or a save is
   // already in flight.
-  useSettingsTabFlush("worktree", handleSave, hasChanges && !isLoading);
+  useSettingsTabFlush("worktree", handleSave, hasChanges && !unavailable);
 
   const errorMessages = [patternError, error].filter(Boolean);
   const hasPatternMessages = errorMessages.length > 0;
@@ -198,16 +210,24 @@ export function WorktreeSettingsTab() {
         title="Path pattern"
         description="Where new worktrees are created. Relative paths (starting with . or ..) resolve from the repository root."
       >
+        {loadError !== null && (
+          <SettingsLoadErrorBanner
+            title="Path pattern didn't load"
+            message={loadError}
+            onRetry={() => setLoadNonce((n) => n + 1)}
+          />
+        )}
         <SettingsGroup>
           <SettingsRow
             layout="stacked"
             label="Pattern"
+            disabled={unavailable}
             // Measured against the field, not the saved value: reset fills in the
             // default and the explicit Save below still commits it.
-            isModified={!isLoading && pattern !== DEFAULT_WORKTREE_PATH_PATTERN}
+            isModified={!unavailable && pattern !== DEFAULT_WORKTREE_PATH_PATTERN}
             onReset={handleReset}
             resetAriaLabel="Reset path pattern to default"
-            control={({ labelId }) => (
+            control={({ labelId, disabled }) => (
               <div className="grid gap-2">
                 <Input
                   id="path-pattern"
@@ -217,8 +237,8 @@ export function WorktreeSettingsTab() {
                     setPattern(e.target.value);
                     setError(null);
                   }}
-                  disabled={isLoading}
-                  invalid={!validation.valid && !isLoading}
+                  disabled={disabled}
+                  invalid={!!patternError}
                   aria-labelledby={labelId}
                   aria-invalid={!!patternError}
                   aria-describedby={hasPatternMessages ? "path-pattern-error" : undefined}
@@ -263,7 +283,8 @@ export function WorktreeSettingsTab() {
           <SettingsRow
             layout="stacked"
             label="Presets"
-            control={({ labelId }) => (
+            disabled={unavailable}
+            control={({ labelId, disabled }) => (
               <div role="group" aria-labelledby={labelId} className="flex flex-wrap gap-2">
                 {PATTERN_PRESETS.map((preset) => (
                   <Tooltip key={preset.label}>
@@ -273,7 +294,7 @@ export function WorktreeSettingsTab() {
                         variant="outline"
                         size="sm"
                         onClick={() => handlePresetClick(preset.pattern)}
-                        disabled={isLoading}
+                        disabled={disabled}
                       >
                         {preset.label}
                       </Button>
@@ -320,7 +341,7 @@ export function WorktreeSettingsTab() {
               variant="contrast"
               size="sm"
               onClick={handleSave}
-              disabled={isLoading || !hasChanges || !validation.valid || isSaving}
+              disabled={unavailable || !hasChanges || !validation.valid || isSaving}
             >
               {isSaving ? "Saving…" : "Save"}
             </Button>

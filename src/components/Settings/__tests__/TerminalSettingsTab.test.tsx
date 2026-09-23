@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const dispatch = vi.fn().mockResolvedValue({ ok: true });
@@ -9,13 +9,20 @@ vi.mock("@/services/ActionService", () => ({
 
 import { TerminalSettingsTab } from "../TerminalSettingsTab";
 import { useLayoutConfigStore } from "@/store";
+import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
+import { usePanelLimitStore } from "@/store/panelLimitStore";
+
+const getHardwareInfo = vi.fn();
+const setResourceMonitoring = vi.fn();
 
 beforeEach(() => {
   dispatch.mockClear();
+  getHardwareInfo.mockReset().mockResolvedValue(null);
+  setResourceMonitoring.mockReset().mockResolvedValue(undefined);
   Reflect.set(window, "electron", {
-    system: { getHardwareInfo: vi.fn().mockResolvedValue(null) },
+    system: { getHardwareInfo },
     terminalConfig: {
-      setResourceMonitoring: vi.fn().mockResolvedValue(undefined),
+      setResourceMonitoring,
       setMemoryLeakDetection: vi.fn().mockResolvedValue(undefined),
       setMemoryLeakAutoRestartThresholdMb: vi.fn().mockResolvedValue(undefined),
     },
@@ -99,5 +106,72 @@ describe("TerminalSettingsTab", () => {
       { mode: "on" },
       { source: "user" }
     );
+  });
+});
+
+describe("TerminalSettingsTab save failures", () => {
+  it("shows a retryable error on the group and clears it once the save succeeds", async () => {
+    dispatch.mockResolvedValueOnce({ ok: false, error: { message: "disk full" } });
+    renderSubtab("accessibility");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("radio", { name: "On" }));
+    });
+    expect(screen.getByText("Couldn't save that change")).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(dispatch).toHaveBeenLastCalledWith(
+      "terminalConfig.setScreenReaderMode",
+      { mode: "on" },
+      { source: "user" }
+    );
+    expect(screen.queryByText("Couldn't save that change")).toBeNull();
+  });
+
+  it("rolls resource monitoring back when its IPC write fails", async () => {
+    useResourceMonitoringStore.setState({ enabled: false });
+    setResourceMonitoring.mockRejectedValueOnce(new Error("IPC down"));
+    renderSubtab("performance");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("switch", { name: "Resource Monitoring Toggle" }));
+    });
+    expect(useResourceMonitoringStore.getState().enabled).toBe(false);
+    expect(screen.getByText("Couldn't save that change")).toBeTruthy();
+  });
+});
+
+describe("TerminalSettingsTab panel limits", () => {
+  it("marks each limit that differs from the hardware recommendation and resets it alone", async () => {
+    // 16 GB recommends soft 16, confirm 30, hard 48.
+    getHardwareInfo.mockResolvedValue({
+      totalMemoryBytes: 16 * 1024 ** 3,
+      logicalCpuCount: 8,
+    });
+    usePanelLimitStore.setState({
+      softWarningLimit: 20,
+      confirmationLimit: 30,
+      hardLimit: 48,
+      warningsDisabled: false,
+      hardwareDefaultsApplied: true,
+    });
+    renderSubtab("performance");
+    await act(async () => {});
+
+    expect(
+      screen.queryByRole("button", {
+        name: "Reset confirmation limit to the hardware-recommended value",
+      })
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Reset hard limit to the hardware-recommended value" })
+    ).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reset soft warning to the hardware-recommended value" })
+    );
+    expect(usePanelLimitStore.getState().softWarningLimit).toBe(16);
+    expect(
+      screen.getByRole("button", { name: "Reset to hardware-recommended defaults" })
+    ).toBeTruthy();
   });
 });

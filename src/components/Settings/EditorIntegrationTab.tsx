@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useId } from "react";
-import { CheckCircle, AlertCircle, RefreshCw, ExternalLink } from "lucide-react";
+import { CheckCircle, AlertCircle, RefreshCw, ExternalLink, ChevronRight } from "lucide-react";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import {
@@ -51,10 +51,12 @@ export function EditorIntegrationTab() {
   const [isTesting, setIsTesting] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<"ok" | "error" | null>(null);
+  const [showDetected, setShowDetected] = useState(false);
   const isMountedRef = useRef(true);
   const editorId = useId();
   const commandId = useId();
   const argsId = useId();
+  const detectedRegionId = useId();
 
   const activeProjectId = useProjectStore((s) => s.currentProject?.id);
   const activeProjectPath = useProjectStore((s) => s.currentProject?.path);
@@ -159,6 +161,40 @@ export function EditorIntegrationTab() {
 
   const availabilityMap = new Map(discoveredEditors.map((d) => [d.id, d]));
 
+  // The inventory rule: the current choice and anything that needs attention stay in
+  // view; the healthy remainder, with its paths, sits behind a disclosure.
+  const selectedEntry = discoveredEditors.find((d) => d.id === selectedId);
+  const missingEditors = discoveredEditors.filter((d) => !d.available && d.id !== selectedId);
+  const otherFoundEditors = discoveredEditors.filter((d) => d.available && d.id !== selectedId);
+  const foundCount = discoveredEditors.filter((d) => d.available).length;
+
+  const renderEditorEntry = (d: DiscoveredEditor) => (
+    <li
+      key={d.id}
+      data-editor-entry={d.id}
+      className="flex min-w-0 items-center gap-2 text-xs text-text-secondary"
+    >
+      {d.available ? (
+        <CheckCircle className="w-3.5 h-3.5 text-text-secondary shrink-0" aria-label="Found" />
+      ) : (
+        <AlertCircle className="w-3.5 h-3.5 text-text-secondary shrink-0" aria-label="Not found" />
+      )}
+      <span
+        className={cn(
+          "shrink-0 whitespace-nowrap",
+          d.available ? "text-text-primary" : "text-text-secondary"
+        )}
+      >
+        {EDITOR_LABELS[d.id]}
+      </span>
+      {d.executablePath && (
+        <span className="min-w-0 truncate font-mono text-text-secondary" title={d.executablePath}>
+          {d.executablePath}
+        </span>
+      )}
+    </li>
+  );
+
   // No saved preference yet counts as dirty: the auto-selected editor is only a
   // suggestion until it is saved, and main falls back to discovery order until then.
   const isDirty =
@@ -232,48 +268,63 @@ export function EditorIntegrationTab() {
         />
 
         {selectedId !== "custom" && discoveredEditors.length > 0 && (
-          <SettingsRow
-            label="Detected editors"
-            layout="stacked"
-            control={
-              <ul className="space-y-1">
-                {discoveredEditors.map((d) => (
-                  <li
-                    key={d.id}
-                    className="flex min-w-0 items-center gap-2 text-xs text-text-secondary"
-                  >
-                    {d.available ? (
-                      <CheckCircle
-                        className="w-3.5 h-3.5 text-text-secondary shrink-0"
-                        aria-label="Found"
-                      />
-                    ) : (
-                      <AlertCircle
-                        className="w-3.5 h-3.5 text-text-secondary shrink-0"
-                        aria-label="Not found"
-                      />
-                    )}
-                    <span
-                      className={cn(
-                        "shrink-0 whitespace-nowrap",
-                        d.available ? "text-text-primary" : "text-text-secondary"
-                      )}
+          <>
+            <SettingsRow
+              label="Detected editors"
+              description={`${foundCount} of ${discoveredEditors.length} found on this machine`}
+              layout="stacked"
+              control={
+                <div className="space-y-1">
+                  {selectedEntry && <ul>{renderEditorEntry(selectedEntry)}</ul>}
+                  {missingEditors.length > 0 && (
+                    <p
+                      data-editor-missing=""
+                      className="flex min-w-0 items-start gap-2 text-xs text-text-secondary"
                     >
-                      {EDITOR_LABELS[d.id]}
-                    </span>
-                    {d.executablePath && (
-                      <span
-                        className="min-w-0 truncate font-mono text-text-secondary"
-                        title={d.executablePath}
-                      >
-                        {d.executablePath}
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-px" aria-hidden="true" />
+                      <span>
+                        Not found: {missingEditors.map((d) => EDITOR_LABELS[d.id]).join(", ")}
                       </span>
+                    </p>
+                  )}
+                </div>
+              }
+            />
+            {otherFoundEditors.length > 0 && (
+              <div>
+                <button
+                  type="button"
+                  aria-expanded={showDetected}
+                  aria-controls={detectedRegionId}
+                  onClick={() => setShowDetected((v) => !v)}
+                  className={cn(
+                    "group flex w-full items-center gap-2 py-2.5 pl-4 pr-4 text-left",
+                    "text-sm text-text-secondary hover:text-text-primary transition-colors",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+                  )}
+                >
+                  <ChevronRight
+                    data-animated-chevron
+                    className={cn(
+                      "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 group-hover:text-text-primary",
+                      showDetected ? "rotate-90" : "rotate-0"
                     )}
-                  </li>
-                ))}
-              </ul>
-            }
-          />
+                    aria-hidden="true"
+                  />
+                  {showDetected
+                    ? "Hide detected editors"
+                    : `Show detected editors (${otherFoundEditors.length})`}
+                </button>
+                <div id={detectedRegionId}>
+                  {showDetected && (
+                    <ul className="space-y-1 pb-3 pl-4 pr-4">
+                      {otherFoundEditors.map(renderEditorEntry)}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         {selectedId === "custom" && (

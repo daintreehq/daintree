@@ -344,8 +344,9 @@ export function GitHubSettingsTab() {
                 </span>
               ) : undefined
             }
+            layout="stacked"
             control={
-              <>
+              <div className="flex flex-wrap gap-2">
                 {isGhAvailable && (
                   <Button
                     onClick={handlePreviewCliImport}
@@ -364,7 +365,7 @@ export function GitHubSettingsTab() {
                   <ExternalLink aria-hidden="true" />
                   Create token on GitHub
                 </Button>
-              </>
+              </div>
             }
           />
         </SettingsGroup>

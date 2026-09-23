@@ -59,3 +59,42 @@ describe("WorktreeSettingsTab path pattern", () => {
     );
   });
 });
+
+describe("WorktreeSettingsTab load failure", () => {
+  it("keeps the pattern unavailable, unvalidated and unmodified, and retries the load", async () => {
+    dispatch.mockImplementation(async (id: string) =>
+      id === "worktreeConfig.get"
+        ? { ok: false, error: { message: "IPC unavailable" } }
+        : { ok: true, result: {} }
+    );
+    render(
+      <TooltipProvider>
+        <WorktreeSettingsTab />
+      </TooltipProvider>
+    );
+    await act(async () => {});
+
+    const input = screen.getByRole("textbox") as HTMLInputElement;
+    expect(input.disabled).toBe(true);
+    expect(input.getAttribute("aria-invalid")).toBe("false");
+    expect(screen.queryByText("Pattern cannot be empty")).toBeNull();
+    expect(screen.queryByRole("button", { name: RESET_NAME })).toBeNull();
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("Path pattern didn't load")).toBeTruthy();
+    expect(screen.getByText("IPC unavailable")).toBeTruthy();
+
+    dispatch.mockImplementation(async (id: string) =>
+      id === "worktreeConfig.get"
+        ? { ok: true, result: { pathPattern: CUSTOM_PATTERN } }
+        : { ok: true, result: {} }
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+
+    expect(screen.queryByText("Path pattern didn't load")).toBeNull();
+    expect(input.disabled).toBe(false);
+    expect(input.value).toBe(CUSTOM_PATTERN);
+    expect(screen.getByRole("button", { name: RESET_NAME })).toBeTruthy();
+  });
+});

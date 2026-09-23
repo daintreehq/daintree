@@ -15,9 +15,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
+import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { logError, logWarn } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import type { ActionId } from "@shared/types/actions";
 import {
   useLayoutConfigStore,
   usePerformanceModeStore,
@@ -37,7 +38,7 @@ import { formatBytes } from "@/lib/formatBytes";
 import { actionService } from "@/services/ActionService";
 import { useCachedProjectViewsStore } from "@/store/cachedProjectViewsStore";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
-import { usePanelLimitStore } from "@/store/panelLimitStore";
+import { computeHardwareDefaults, usePanelLimitStore } from "@/store/panelLimitStore";
 import {
   useMemoryLeakConfigStore,
   DEFAULT_AUTO_RESTART_THRESHOLD_MB,
@@ -108,6 +109,21 @@ const TERMINAL_SUBTABS: SettingsSubtabItem[] = [
 ];
 
 const TERMINAL_SUBTAB_IDS = TERMINAL_SUBTABS.map((s) => s.id);
+
+type SaveGroup =
+  "resources" | "project-views" | "input" | "grid-layout" | "scrollback" | "accessibility";
+
+interface SaveFailure {
+  group: SaveGroup;
+  retry: () => void;
+}
+
+async function dispatchSetting(actionId: ActionId, args: unknown): Promise<void> {
+  const result = await actionService.dispatch(actionId, args, { source: "user" });
+  if (!result.ok) {
+    throw new Error(result.error.message);
+  }
+}
 
 interface TerminalSettingsTabProps {
   activeSubtab: string | null;
@@ -190,109 +206,136 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
     }));
   }, [performanceMode, scrollbackLines]);
 
-  const handleScrollbackChange = async (value: number) => {
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+
+  // Every save here rolls its value back on failure (the actions do it themselves;
+  // the direct IPC calls pass a rollback), so the banner only has to say so and
+  // offer the same write again.
+  const persist = async (
+    group: SaveGroup,
+    save: () => Promise<unknown>,
+    logMessage: string,
+    rollback?: () => void
+  ): Promise<void> => {
     try {
-      const result = await actionService.dispatch(
-        "terminalConfig.setScrollback",
-        { scrollbackLines: value },
-        { source: "user" }
-      );
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
+      await save();
+      setSaveFailure((current) => (current?.group === group ? null : current));
     } catch (error) {
-      logError("Failed to persist scrollback setting", error);
+      rollback?.();
+      logError(logMessage, error);
+      setSaveFailure({
+        group,
+        retry: () => void persist(group, save, logMessage, rollback),
+      });
     }
   };
 
-  const handleStrategyChange = (strategy: PanelLayoutStrategy) => {
-    void actionService.dispatch("panel.gridLayout.setStrategy", { strategy }, { source: "user" });
-  };
+  const saveError = (group: SaveGroup) =>
+    saveFailure?.group === group ? (
+      <SettingsLoadErrorBanner
+        title="Couldn't save that change"
+        message="The setting is back to its previous value."
+        onRetry={saveFailure.retry}
+      />
+    ) : null;
+
+  const handleScrollbackChange = (value: number) =>
+    persist(
+      "scrollback",
+      () => dispatchSetting("terminalConfig.setScrollback", { scrollbackLines: value }),
+      "Failed to persist scrollback setting"
+    );
+
+  const handleStrategyChange = (strategy: PanelLayoutStrategy) =>
+    void persist(
+      "grid-layout",
+      () => dispatchSetting("panel.gridLayout.setStrategy", { strategy }),
+      "Failed to persist grid layout strategy"
+    );
 
   const handleValueChange = (val: string) => {
     const num = parseInt(val, 10);
     if (!isNaN(num) && num >= 1 && num <= 10) {
-      void actionService.dispatch("panel.gridLayout.setValue", { value: num }, { source: "user" });
+      void persist(
+        "grid-layout",
+        () => dispatchSetting("panel.gridLayout.setValue", { value: num }),
+        "Failed to persist grid layout value"
+      );
     }
   };
 
-  const handlePerformanceModeToggle = async () => {
-    const newValue = !performanceMode;
-    try {
-      const result = await actionService.dispatch(
-        "terminalConfig.setPerformanceMode",
-        { performanceMode: newValue },
-        { source: "user" }
-      );
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-    } catch (error) {
-      logError("Failed to persist performance mode setting", error);
-    }
+  const setPerformanceMode = (value: boolean) =>
+    persist(
+      "resources",
+      () => dispatchSetting("terminalConfig.setPerformanceMode", { performanceMode: value }),
+      "Failed to persist performance mode setting"
+    );
+
+  const setResourceMonitoring = (value: boolean) => {
+    const previous = resourceMonitoringEnabled;
+    setResourceMonitoringEnabled(value);
+    void persist(
+      "resources",
+      () => window.electron.terminalConfig.setResourceMonitoring(value),
+      "Failed to persist resource monitoring setting",
+      () => setResourceMonitoringEnabled(previous)
+    );
   };
 
-  const handleHybridInputEnabledToggle = async () => {
-    const nextValue = !hybridInputEnabled;
-    try {
-      const result = await actionService.dispatch(
-        "terminalConfig.setHybridInputEnabled",
-        { enabled: nextValue },
-        { source: "user" }
-      );
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-    } catch (error) {
-      logError("Failed to persist hybrid input setting", error);
-    }
+  const setMemoryLeakDetection = (value: boolean) => {
+    const previous = memoryLeakDetectionEnabled;
+    setMemoryLeakDetectionEnabled(value);
+    void persist(
+      "resources",
+      () => window.electron.terminalConfig.setMemoryLeakDetection(value),
+      "Failed to persist memory leak detection setting",
+      () => setMemoryLeakDetectionEnabled(previous)
+    );
   };
 
-  const handleHybridInputAutoFocusToggle = async () => {
-    const nextValue = !hybridInputAutoFocus;
-    try {
-      const result = await actionService.dispatch(
-        "terminalConfig.setHybridInputAutoFocus",
-        { enabled: nextValue },
-        { source: "user" }
-      );
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-    } catch (error) {
-      logError("Failed to persist hybrid input focus setting", error);
-    }
+  const saveAutoRestartThreshold = (value: number, previous: number) => {
+    void persist(
+      "resources",
+      () => window.electron.terminalConfig.setMemoryLeakAutoRestartThresholdMb(value),
+      "Failed to persist memory leak auto-restart threshold",
+      () => setAutoRestartThresholdMb(previous)
+    );
   };
 
-  const handleScreenReaderModeChange = async (mode: ScreenReaderMode) => {
-    try {
-      const result = await actionService.dispatch(
-        "terminalConfig.setScreenReaderMode",
-        { mode },
-        { source: "user" }
-      );
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-    } catch (error) {
-      logError("Failed to persist screen reader mode", error);
-    }
-  };
+  const setHybridInputEnabled = (enabled: boolean) =>
+    persist(
+      "input",
+      () => dispatchSetting("terminalConfig.setHybridInputEnabled", { enabled }),
+      "Failed to persist hybrid input setting"
+    );
 
-  const handleCachedProjectViewsChange = async (value: number) => {
-    try {
-      const result = await actionService.dispatch(
-        "terminalConfig.setCachedProjectViews",
-        { cachedProjectViews: value },
-        { source: "user" }
-      );
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-    } catch (error) {
-      logError("Failed to persist cached project views setting", error);
-    }
-  };
+  const setHybridInputAutoFocus = (enabled: boolean) =>
+    persist(
+      "input",
+      () => dispatchSetting("terminalConfig.setHybridInputAutoFocus", { enabled }),
+      "Failed to persist hybrid input focus setting"
+    );
+
+  const handleScreenReaderModeChange = (mode: ScreenReaderMode) =>
+    persist(
+      "accessibility",
+      () => dispatchSetting("terminalConfig.setScreenReaderMode", { mode }),
+      "Failed to persist screen reader mode"
+    );
+
+  const handleCachedProjectViewsChange = (value: number) =>
+    persist(
+      "project-views",
+      () => dispatchSetting("terminalConfig.setCachedProjectViews", { cachedProjectViews: value }),
+      "Failed to persist cached project views setting"
+    );
+
+  // The same recommendation the bulk reset applies; unknown until the hardware
+  // probe answers, and then no row claims to differ from it.
+  const hardwareLimits =
+    hardwareInfo && hardwareInfo.totalMemoryBytes > 0
+      ? computeHardwareDefaults(hardwareInfo.totalMemoryBytes)
+      : null;
 
   const effectiveSubtab =
     activeSubtab && TERMINAL_SUBTAB_IDS.includes(activeSubtab) ? activeSubtab : "performance";
@@ -310,23 +353,18 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
       <div {...subtabPanelProps("terminal", effectiveSubtab)} className="space-y-8">
         {effectiveSubtab === "performance" && (
           <SettingsSection title="Terminal resources">
+            {saveError("resources")}
             <SettingsGroup>
               <SettingsSwitchCard
                 id="terminal-performance-mode"
                 title="Performance mode"
                 subtitle={`Cuts scrollback to ${PERFORMANCE_MODE_SCROLLBACK} lines and turns off animations, for low-end hardware or high-density workflows. Existing terminals keep their scrollback until respawned`}
                 isEnabled={performanceMode}
-                onChange={handlePerformanceModeToggle}
+                onChange={() => void setPerformanceMode(!performanceMode)}
                 ariaLabel="Performance Mode Toggle"
                 colorScheme="amber"
                 isModified={performanceMode}
-                onReset={() =>
-                  void actionService.dispatch(
-                    "terminalConfig.setPerformanceMode",
-                    { performanceMode: false },
-                    { source: "user" }
-                  )
-                }
+                onReset={() => void setPerformanceMode(false)}
                 lifecycleBadge="New terminals"
               />
 
@@ -335,22 +373,10 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 title="Resource monitoring"
                 subtitle="Show per-terminal CPU and memory in panel headers. Polls the process tree every 2.5 seconds"
                 isEnabled={resourceMonitoringEnabled}
-                onChange={() => {
-                  const newValue = !resourceMonitoringEnabled;
-                  setResourceMonitoringEnabled(newValue);
-                  safeFireAndForget(
-                    window.electron.terminalConfig.setResourceMonitoring(newValue),
-                    { context: "Setting terminal resource monitoring" }
-                  );
-                }}
+                onChange={() => setResourceMonitoring(!resourceMonitoringEnabled)}
                 ariaLabel="Resource Monitoring Toggle"
                 isModified={resourceMonitoringEnabled}
-                onReset={() => {
-                  setResourceMonitoringEnabled(false);
-                  safeFireAndForget(window.electron.terminalConfig.setResourceMonitoring(false), {
-                    context: "Resetting terminal resource monitoring",
-                  });
-                }}
+                onReset={() => setResourceMonitoring(false)}
               />
 
               <SettingsDependents
@@ -362,22 +388,9 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   title="Memory leak detection"
                   subtitle="Warn when a terminal's memory keeps growing, with options to restart it"
                   isEnabled={memoryLeakDetectionEnabled}
-                  onChange={() => {
-                    const newValue = !memoryLeakDetectionEnabled;
-                    setMemoryLeakDetectionEnabled(newValue);
-                    safeFireAndForget(
-                      window.electron.terminalConfig.setMemoryLeakDetection(newValue),
-                      { context: "Setting terminal memory leak detection" }
-                    );
-                  }}
+                  onChange={() => setMemoryLeakDetection(!memoryLeakDetectionEnabled)}
                   isModified={memoryLeakDetectionEnabled}
-                  onReset={() => {
-                    setMemoryLeakDetectionEnabled(false);
-                    safeFireAndForget(
-                      window.electron.terminalConfig.setMemoryLeakDetection(false),
-                      { context: "Resetting terminal memory leak detection" }
-                    );
-                  }}
+                  onReset={() => setMemoryLeakDetection(false)}
                 />
 
                 <SettingsDependents
@@ -398,23 +411,17 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                     value={autoRestartThresholdMb}
                     isModified={autoRestartThresholdMb !== DEFAULT_AUTO_RESTART_THRESHOLD_MB}
                     onReset={() => {
+                      const previous = autoRestartThresholdMb;
                       setAutoRestartThresholdMb(DEFAULT_AUTO_RESTART_THRESHOLD_MB);
-                      safeFireAndForget(
-                        window.electron.terminalConfig.setMemoryLeakAutoRestartThresholdMb(
-                          DEFAULT_AUTO_RESTART_THRESHOLD_MB
-                        ),
-                        { context: "Resetting memory leak auto-restart threshold" }
-                      );
+                      saveAutoRestartThreshold(DEFAULT_AUTO_RESTART_THRESHOLD_MB, previous);
                     }}
                     onChange={(e) => {
                       const val = parseInt(e.target.value, 10);
                       if (!isNaN(val)) {
+                        const previous = autoRestartThresholdMb;
                         setAutoRestartThresholdMb(val);
                         if (val >= 1024 && val <= 32768) {
-                          safeFireAndForget(
-                            window.electron.terminalConfig.setMemoryLeakAutoRestartThresholdMb(val),
-                            { context: "Setting memory leak auto-restart threshold" }
-                          );
+                          saveAutoRestartThreshold(val, previous);
                         }
                       }
                     }}
@@ -456,6 +463,11 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                     const val = parseInt(e.target.value, 10);
                     if (!isNaN(val)) setSoftWarningLimit(val);
                   }}
+                  isModified={
+                    !!hardwareLimits && panelLimits.softWarningLimit !== hardwareLimits.soft
+                  }
+                  onReset={() => hardwareLimits && setSoftWarningLimit(hardwareLimits.soft)}
+                  resetAriaLabel="Reset soft warning to the hardware-recommended value"
                 />
 
                 <SettingsNumberInput
@@ -468,6 +480,11 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                     const val = parseInt(e.target.value, 10);
                     if (!isNaN(val)) setConfirmationLimit(val);
                   }}
+                  isModified={
+                    !!hardwareLimits && panelLimits.confirmationLimit !== hardwareLimits.confirm
+                  }
+                  onReset={() => hardwareLimits && setConfirmationLimit(hardwareLimits.confirm)}
+                  resetAriaLabel="Reset confirmation limit to the hardware-recommended value"
                 />
               </SettingsDependents>
 
@@ -481,6 +498,9 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   const val = parseInt(e.target.value, 10);
                   if (!isNaN(val)) setPanelHardLimit(val);
                 }}
+                isModified={!!hardwareLimits && panelLimits.hardLimit !== hardwareLimits.hard}
+                onReset={() => hardwareLimits && setPanelHardLimit(hardwareLimits.hard)}
+                resetAriaLabel="Reset hard limit to the hardware-recommended value"
               />
 
               <SettingsRow
@@ -507,6 +527,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
         {effectiveSubtab === "performance" && (
           <SettingsSection title="Project views">
+            {saveError("project-views")}
             <SettingsGroup>
               <SettingsPresetGroup
                 id="terminal-cached-project-views"
@@ -522,21 +543,16 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
         {effectiveSubtab === "input" && (
           <SettingsSection title="Agent input">
+            {saveError("input")}
             <SettingsGroup>
               <SettingsSwitchCard
                 id="terminal-hybrid-input"
                 title="Hybrid input bar"
                 subtitle="Show the multi-line input bar at the bottom of agent terminals"
                 isEnabled={hybridInputEnabled}
-                onChange={handleHybridInputEnabledToggle}
+                onChange={() => void setHybridInputEnabled(!hybridInputEnabled)}
                 isModified={!hybridInputEnabled}
-                onReset={() =>
-                  void actionService.dispatch(
-                    "terminalConfig.setHybridInputEnabled",
-                    { enabled: true },
-                    { source: "user" }
-                  )
-                }
+                onReset={() => void setHybridInputEnabled(true)}
               />
 
               <SettingsDependents
@@ -548,15 +564,9 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   title="Focus the input bar first"
                   subtitle="Agent panes start with the input bar focused instead of the terminal. Clicking either still wins, and Cmd-Opt-Arrow follows whichever you're using"
                   isEnabled={hybridInputAutoFocus}
-                  onChange={handleHybridInputAutoFocusToggle}
+                  onChange={() => void setHybridInputAutoFocus(!hybridInputAutoFocus)}
                   isModified={!hybridInputAutoFocus}
-                  onReset={() =>
-                    void actionService.dispatch(
-                      "terminalConfig.setHybridInputAutoFocus",
-                      { enabled: true },
-                      { source: "user" }
-                    )
-                  }
+                  onReset={() => void setHybridInputAutoFocus(true)}
                 />
               </SettingsDependents>
             </SettingsGroup>
@@ -646,6 +656,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               id="terminal-grid-layout"
               description="How panels arrange in the grid as you add more."
             >
+              {saveError("grid-layout")}
               <SettingsGroup className="overflow-hidden">
                 <SettingsRow
                   label="Strategy"
@@ -714,6 +725,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             description="Background terminals may temporarily reduce scrollback under memory pressure."
             badge="New terminals"
           >
+            {saveError("scrollback")}
             <SettingsGroup>
               <SettingsPresetGroup
                 label="Base scrollback"
@@ -760,6 +772,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
         {effectiveSubtab === "accessibility" && (
           <SettingsSection title="Assistive technology">
+            {saveError("accessibility")}
             <SettingsGroup>
               <SettingsPresetGroup
                 id="terminal-screen-reader"

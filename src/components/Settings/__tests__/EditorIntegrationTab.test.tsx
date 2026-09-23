@@ -206,6 +206,76 @@ describe("EditorIntegrationTab", () => {
     expect(testButton.disabled).toBe(true);
   });
 
+  // An inventory keeps the current choice and anything needing attention in view,
+  // and discloses the healthy remainder with its paths.
+  describe("detected editors inventory", () => {
+    beforeEach(() => {
+      getConfigMock.mockResolvedValue({
+        preferredEditor: { id: "vscode" },
+        discoveredEditors: [
+          { id: "vscode", available: true, executablePath: "/usr/bin/code" },
+          { id: "cursor", available: false },
+          { id: "zed", available: true, executablePath: "/usr/bin/zed" },
+          { id: "neovim", available: true, executablePath: "/usr/bin/nvim" },
+          { id: "sublime", available: false },
+        ],
+      });
+    });
+
+    const entryIds = (root: ParentNode) =>
+      Array.from(root.querySelectorAll("[data-editor-entry]")).map((el) =>
+        el.getAttribute("data-editor-entry")
+      );
+
+    it("shows the summary, the selection and missing editors, and collapses the rest", async () => {
+      await renderLoadedTab();
+
+      expect(screen.getByText("3 of 5 found on this machine")).toBeTruthy();
+      expect(entryIds(document)).toEqual(["vscode"]);
+      expect(screen.getByText("/usr/bin/code")).toBeTruthy();
+      expect(screen.queryByText("/usr/bin/zed")).toBeNull();
+      expect(screen.getByText("Not found: Cursor, Sublime Text")).toBeTruthy();
+
+      const toggle = screen.getByRole("button", { name: "Show detected editors (2)" });
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      const region = document.getElementById(toggle.getAttribute("aria-controls")!);
+      expect(region).toBeTruthy();
+      expect(entryIds(region!)).toEqual([]);
+
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      expect(toggle.textContent).toBe("Hide detected editors");
+      expect(entryIds(region!)).toEqual(["zed", "neovim"]);
+      expect(screen.getByText("/usr/bin/zed")).toBeTruthy();
+
+      fireEvent.click(toggle);
+      expect(entryIds(region!)).toEqual([]);
+    });
+
+    it("keeps an unavailable selection in view rather than folding it into the missing line", async () => {
+      await renderLoadedTab();
+      selectEditor("cursor");
+
+      expect(entryIds(document)).toEqual(["cursor"]);
+      expect(screen.getByText("Not found: Sublime Text")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Show detected editors (3)" })).toBeTruthy();
+    });
+
+    it("omits the disclosure when the selection is the only editor found", async () => {
+      getConfigMock.mockResolvedValue({
+        preferredEditor: { id: "vscode" },
+        discoveredEditors: [
+          { id: "vscode", available: true, executablePath: "/usr/bin/code" },
+          { id: "zed", available: false },
+        ],
+      });
+      await renderLoadedTab();
+
+      expect(screen.getByText("/usr/bin/code")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /detected editors/ })).toBeNull();
+    });
+  });
+
   // The Test button has to launch the editor the preference names, which the
   // main process only resolves when it is told which project to look at (#12327).
   describe("Test button", () => {

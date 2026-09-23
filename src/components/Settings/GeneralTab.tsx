@@ -140,6 +140,7 @@ export function GeneralTab({
   const buildChannelLabel = getBuildChannelLabel(appVersion);
 
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+  const [showReadyAgents, setShowReadyAgents] = useState(false);
   const [hibernationConfig, setHibernationConfig] = useState<HibernationConfig | null>(null);
   const [sessionRestoreConfig, setSessionRestoreConfig] = useState<SessionRestoreConfig | null>(
     null
@@ -854,13 +855,13 @@ export function GeneralTab({
                   // Anything wanting the user's attention sorts to the top; registry order
                   // is preserved inside each group so the roster does not reshuffle between
                   // visits. The rows a user can act on are why they opened this section.
-                  const installedAgentIds = [
-                    ...installed.filter((id) => !isAgentReady(cliAvailability[id])),
-                    ...installed.filter((id) => isAgentReady(cliAvailability[id])),
-                  ];
-                  const hiddenCount = allAgentIds.length - installedAgentIds.length;
+                  const attentionAgentIds = installed.filter(
+                    (id) => !isAgentReady(cliAvailability[id])
+                  );
+                  const readyAgentIds = installed.filter((id) => isAgentReady(cliAvailability[id]));
+                  const hiddenCount = allAgentIds.length - installed.length;
 
-                  if (installedAgentIds.length === 0) {
+                  if (installed.length === 0) {
                     return (
                       <div className="space-y-3">
                         <p className="text-sm text-text-secondary">
@@ -893,97 +894,139 @@ export function GeneralTab({
                     );
                   }
 
-                  return (
-                    <div className="rounded-[var(--radius-md)] border border-border-default overflow-hidden">
-                      {/* A list, not a stack of divs: eighteen agents is a collection, and a
-                        screen-reader user gets the count and the position from the role. */}
-                      <ul>
-                        {installedAgentIds.map((id, index) => {
-                          const identity = resolveIdentity(id);
-                          const name = identity?.name ?? id;
-                          const ready = isAgentReady(cliAvailability[id]);
-                          const unauthenticated = isAgentUnauthenticated(cliAvailability[id]);
-                          const blocked = isAgentBlocked(cliAvailability[id]);
-                          // Wording states what the probe saw, never what it implies: an
-                          // `unauthenticated` agent is still launchable (isAgentLaunchable)
-                          // because the CLI resolves credentials at runtime. "Login required"
-                          // would send a user to fix something that may not be broken.
-                          // Ready is the expected state, so it still gets no per-row chrome —
-                          // labelling fourteen rows "Ready" is noise, and the section's summary
-                          // line above already states how many are good. Only states needing the
-                          // user's attention are called out. Each carries its own glyph: a blocked
-                          // agent is installed but can't run, and reads distinctly from the
-                          // authentication-needed case so the user doesn't waste time
-                          // re-authenticating a binary that an endpoint security tool is blocking.
-                          // Attention states are tested before `ready` so a probe that ever reports
-                          // both still surfaces the problem rather than falling silent.
-                          const status = blocked
-                            ? { label: "Blocked", Icon: ShieldBan }
-                            : unauthenticated
-                              ? { label: "No credentials detected", Icon: KeyRound }
-                              : ready
-                                ? null
-                                : { label: "Needs setup", Icon: Wrench };
+                  const renderAgentRow = (id: string, bordered: boolean) => {
+                    const identity = resolveIdentity(id);
+                    const name = identity?.name ?? id;
+                    const ready = isAgentReady(cliAvailability[id]);
+                    const unauthenticated = isAgentUnauthenticated(cliAvailability[id]);
+                    const blocked = isAgentBlocked(cliAvailability[id]);
+                    // Wording states what the probe saw, never what it implies: an
+                    // `unauthenticated` agent is still launchable (isAgentLaunchable)
+                    // because the CLI resolves credentials at runtime. "Login required"
+                    // would send a user to fix something that may not be broken.
+                    // Ready is the expected state, so it still gets no per-row chrome —
+                    // labelling fourteen rows "Ready" is noise, and the section's summary
+                    // line above already states how many are good. Only states needing the
+                    // user's attention are called out. Each carries its own glyph: a blocked
+                    // agent is installed but can't run, and reads distinctly from the
+                    // authentication-needed case so the user doesn't waste time
+                    // re-authenticating a binary that an endpoint security tool is blocking.
+                    // Attention states are tested before `ready` so a probe that ever reports
+                    // both still surfaces the problem rather than falling silent.
+                    const status = blocked
+                      ? { label: "Blocked", Icon: ShieldBan }
+                      : unauthenticated
+                        ? { label: "No credentials detected", Icon: KeyRound }
+                        : ready
+                          ? null
+                          : { label: "Needs setup", Icon: Wrench };
 
-                          return (
-                            <li key={id}>
-                              <button
-                                type="button"
-                                data-agent-row={id}
-                                className={cn(
-                                  "settings-list-item group flex w-full items-center gap-3 px-3 py-2 text-left",
-                                  "cursor-pointer transition-colors",
-                                  "hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))]",
-                                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
-                                  index > 0 && "border-t border-border-default"
-                                )}
-                                aria-label={`${name} — ${status ? status.label : "ready"}. Open agent settings`}
-                                onClick={() => onNavigateToAgents?.(id)}
-                              >
-                                {identity ? (
-                                  <AgentIdentityBlock
-                                    Icon={identity.Icon}
-                                    color={identity.color}
-                                    name={name}
-                                    description={identity.description}
-                                    compact
-                                    showDescription={false}
-                                  />
-                                ) : (
-                                  <span className="flex-1 text-sm text-text-primary">{name}</span>
-                                )}
-                                {status && (
-                                  <span
-                                    data-agent-status={status.label}
-                                    className="flex shrink-0 items-center gap-1.5"
-                                    aria-hidden="true"
-                                  >
-                                    {/* Severity rides the glyph, never the prose. Status-coloured
+                    return (
+                      <li key={id}>
+                        <button
+                          type="button"
+                          data-agent-row={id}
+                          className={cn(
+                            "settings-list-item group flex w-full items-center gap-3 px-3 py-2 text-left",
+                            "cursor-pointer transition-colors",
+                            "hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))]",
+                            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
+                            bordered && "border-t border-border-default"
+                          )}
+                          aria-label={`${name} — ${status ? status.label : "ready"}. Open agent settings`}
+                          onClick={() => onNavigateToAgents?.(id)}
+                        >
+                          {identity ? (
+                            <AgentIdentityBlock
+                              Icon={identity.Icon}
+                              color={identity.color}
+                              name={name}
+                              description={identity.description}
+                              compact
+                              showDescription={false}
+                            />
+                          ) : (
+                            <span className="flex-1 text-sm text-text-primary">{name}</span>
+                          )}
+                          {status && (
+                            <span
+                              data-agent-status={status.label}
+                              className="flex shrink-0 items-center gap-1.5"
+                              aria-hidden="true"
+                            >
+                              {/* Severity rides the glyph, never the prose. Status-coloured
                                         text was measured and rejected: the status tokens fail
                                         4.5:1 as body text on most themes, and the notification
                                         surfaces already carry warnings this way. */}
-                                    <status.Icon className="w-3.5 h-3.5 text-status-warning" />
-                                    <span className="text-xs text-text-secondary">
-                                      {status.label}
-                                    </span>
-                                  </span>
-                                )}
-                                {/* The row has always navigated; nothing on it said so. A
+                              <status.Icon className="w-3.5 h-3.5 text-status-warning" />
+                              <span className="text-xs text-text-secondary">{status.label}</span>
+                            </span>
+                          )}
+                          {/* The row has always navigated; nothing on it said so. A
                                     hover-only chevron answers that only after the user has
                                     already guessed, so it rests visible and brightens on
                                     hover. Solid tokens rather than an opacity ramp: dimming
                                     an icon with opacity is lint-banned here, and at 60% this
                                     one measured about 1.7:1 under forced-colors — well under
                                     the 3:1 floor for the only cue that the row is a link. */}
-                                <ChevronRight
-                                  className="w-4 h-4 shrink-0 text-text-secondary transition-colors group-hover:text-text-primary group-focus-visible:text-text-primary"
-                                  aria-hidden="true"
-                                />
-                              </button>
-                            </li>
-                          );
-                        })}
-                      </ul>
+                          <ChevronRight
+                            className="w-4 h-4 shrink-0 text-text-secondary transition-colors group-hover:text-text-primary group-focus-visible:text-text-primary"
+                            aria-hidden="true"
+                          />
+                        </button>
+                      </li>
+                    );
+                  };
+
+                  return (
+                    <div className="rounded-[var(--radius-md)] border border-border-default overflow-hidden">
+                      {/* A list, not a stack of divs: eighteen agents is a collection, and a
+                        screen-reader user gets the count and the position from the role.
+                        Agents needing attention always show; the healthy remainder is an
+                        inventory the section summary already counts, so it sits behind a
+                        disclosure rather than filling the first viewport. */}
+                      {attentionAgentIds.length > 0 && (
+                        <ul>
+                          {attentionAgentIds.map((id, index) => renderAgentRow(id, index > 0))}
+                        </ul>
+                      )}
+
+                      {readyAgentIds.length > 0 && (
+                        <>
+                          <button
+                            type="button"
+                            aria-expanded={showReadyAgents}
+                            aria-controls="general-system-status-ready-agents"
+                            onClick={() => setShowReadyAgents((v) => !v)}
+                            className={cn(
+                              "settings-list-item group flex w-full items-center gap-3 px-3 py-2 text-left",
+                              "cursor-pointer transition-colors",
+                              "hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))]",
+                              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
+                              attentionAgentIds.length > 0 && "border-t border-border-default"
+                            )}
+                          >
+                            <ChevronRight
+                              data-animated-chevron
+                              className={cn(
+                                "w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 group-hover:text-text-primary",
+                                showReadyAgents ? "rotate-90" : "rotate-0"
+                              )}
+                              aria-hidden="true"
+                            />
+                            <span className="flex-1 text-sm text-text-secondary group-hover:text-text-primary transition-colors">
+                              {showReadyAgents
+                                ? "Hide ready agents"
+                                : `Show ${readyAgentIds.length} ready ${readyAgentIds.length === 1 ? "agent" : "agents"}`}
+                            </span>
+                          </button>
+                          <div id="general-system-status-ready-agents">
+                            {showReadyAgents && (
+                              <ul>{readyAgentIds.map((id) => renderAgentRow(id, true))}</ul>
+                            )}
+                          </div>
+                        </>
+                      )}
 
                       {/* The roster's last row rather than a loose link under it: it
                           navigates exactly like the agent rows above, so it takes their shape. */}
