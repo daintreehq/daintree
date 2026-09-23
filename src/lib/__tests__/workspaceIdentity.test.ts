@@ -70,18 +70,26 @@ describe("branchChipState", () => {
     expect(branchChipState("scratch", "feature/x")).toBe("hidden");
   });
 
-  it("reserves the chip's width for a branchless project", () => {
-    // Detached HEAD, or a view that painted before its project bound. The branch may
-    // still arrive, so the width is held rather than collapsed — a late expansion
-    // would shift the titlebar's no-drag region.
+  it("reserves the chip's width for a git project whose branch has not arrived", () => {
+    // A view that painted before its project bound. The branch is still coming, so
+    // the width is held rather than collapsed — a late expansion would shift the
+    // titlebar's no-drag region.
     expect(branchChipState("project", undefined)).toBe("reserved");
   });
 
-  it("reserves rather than shows in the empty state, even with a stale branch", () => {
+  it("answers detached HEAD with its own state rather than a placeholder that never resolves", () => {
+    expect(branchChipState("project", undefined, true, true)).toBe("detached");
+    // A named branch wins: detached is only what is left when there is none.
+    expect(branchChipState("project", "feature/x", true, true)).toBe("visible");
+    expect(branchChipState("project", undefined, false, true)).toBe("hidden");
+  });
+
+  it("drops the chip in the empty state, even with a stale branch", () => {
     // Closing a project nulls it without clearing the worktree selection, so the
-    // branch outlives it. It must not linger visibly beside "Select project".
-    expect(branchChipState("none", undefined)).toBe("reserved");
-    expect(branchChipState("none", "feature/x")).toBe("reserved");
+    // branch outlives it. It must not linger beside "Select project", and there is
+    // no branch coming, so there is no width to hold either.
+    expect(branchChipState("none", undefined)).toBe("hidden");
+    expect(branchChipState("none", "feature/x")).toBe("hidden");
   });
 
   it("drops the chip for a project opened without git — issue #11405", () => {

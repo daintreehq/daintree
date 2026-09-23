@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseNoteWithLinks, middleTruncatePath } from "../textParsing";
+import { parseNoteWithLinks, middleTruncatePath, truncateBranchName } from "../textParsing";
 
 describe("parseNoteWithLinks", () => {
   it("should return a single text segment for plain text", () => {
@@ -100,5 +100,44 @@ describe("middleTruncatePath", () => {
     const path = "src/AbsurdlyLongComponentNameThatGoesOnForever.svelte:12";
     const short = middleTruncatePath(path, 20);
     expect(short.endsWith("Forever.svelte:12")).toBe(true);
+  });
+});
+
+describe("truncateBranchName", () => {
+  const BRANCHES = [
+    "feature/12593-multi-window-open-routing-dock-drop",
+    "fix/11958-worktree-sidebar-rail-overflow-at-narrow-widths",
+    "design/project-pill-with-a-very-long-descriptive-slug",
+    "12345-ticket-first-with-no-prefix-at-all-here",
+    "feature/9999999999999999999999-overlong-ticket",
+    "renovate/major-typescript-eslint-monorepo",
+    "wip/🌴-emoji-in-a-branch-name-that-is-long",
+  ];
+
+  it("leaves a name within the budget untouched", () => {
+    expect(truncateBranchName("develop", 24)).toBe("develop");
+    const exact = "a".repeat(24);
+    expect(truncateBranchName(exact, 24)).toBe(exact);
+  });
+
+  it("fits the budget exactly, with one ellipsis character, keeping a real head and tail", () => {
+    for (const branch of BRANCHES) {
+      const out = truncateBranchName(branch, 24);
+      const chars = Array.from(out);
+      expect(chars.length, out).toBe(24);
+      expect(out.split("…").length - 1, out).toBe(1);
+      expect(out).not.toContain("...");
+      const [head, tail] = out.split("…") as [string, string];
+      expect(branch.startsWith(head), out).toBe(true);
+      expect(branch.endsWith(tail), out).toBe(true);
+    }
+  });
+
+  it("keeps a leading ticket number whole when there is room left for the slug", () => {
+    for (const branch of BRANCHES) {
+      const ticket = /^(?:[^/]+\/)?(\d+)[-_]/.exec(branch);
+      if (!ticket || ticket[0].length + 7 > 24) continue;
+      expect(truncateBranchName(branch, 24).split("…")[0], branch).toContain(ticket[1]);
+    }
   });
 });

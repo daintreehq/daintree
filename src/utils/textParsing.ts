@@ -90,6 +90,31 @@ export function middleTruncate(text: string, maxLength: number = 40): string {
   );
 }
 
+/**
+ * Middle-truncates a git branch name while keeping what tells branches apart.
+ *
+ * Branches share their prefixes (`feature/`, `fix/`) and are told apart by the
+ * ticket number after the prefix and the slug at the end. A character-halving cut
+ * spends its budget on the prefix and splits the ticket (`feature/125...-dock-drop`);
+ * this keeps `prefix/ticket-` whole when it leaves room for a real tail, and gives
+ * the rest of the budget to the end of the slug.
+ */
+export function truncateBranchName(branch: string, maxLength: number = 24): string {
+  const chars = Array.from(branch);
+  if (chars.length <= maxLength) return branch;
+
+  const lead = /^(?:[^/]+\/)?\d+[-_]/u.exec(branch)?.[0];
+  const leadLength = lead ? Array.from(lead).length : 0;
+  // The tail needs a few characters to carry the slug; below that the ticket
+  // costs more than it earns and the plain halving cut is the better answer.
+  const MIN_TAIL = 6;
+  const headLength =
+    lead && leadLength + 1 + MIN_TAIL <= maxLength ? leadLength : Math.ceil((maxLength - 1) / 2);
+  const tailLength = maxLength - 1 - headLength;
+
+  return `${chars.slice(0, headLength).join("")}…${chars.slice(chars.length - tailLength).join("")}`;
+}
+
 export function formatTimestamp(timestamp: number | null | undefined): string {
   if (!timestamp) {
     return "Never active";

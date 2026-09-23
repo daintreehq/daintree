@@ -68,12 +68,14 @@ const STATES = [
   "long-name",
   "long-both",
   "branch-pending",
+  "detached",
   "no-git",
   "scratch",
   "none",
   "hover",
   "open",
   "focus",
+  "tooltip",
   "narrow",
 ] as const;
 
@@ -98,7 +100,7 @@ test.afterAll(async () => {
 
 async function open(page: Page, theme: string): Promise<void> {
   await stubViteHmrClient(page);
-  await page.setViewportSize({ width: 1180, height: 1200 });
+  await page.setViewportSize({ width: 1180, height: 1700 });
   await page.goto(`${server!.baseURL}/project-pill-preview.html?theme=${theme}`);
   await expect(page.locator("[data-preview-shell]")).toBeAttached();
   await page.evaluate(() => document.fonts.ready);
@@ -117,10 +119,19 @@ async function snapState(page: Page, state: string, file: string): Promise<strin
   if (!s || !p || p.width < 16 || p.height < 16) {
     throw new Error(`${state}: no real box (${JSON.stringify({ s, p })}) — refusing to write`);
   }
-  const x = Math.max(s.x, p.x - MARGIN_X);
-  const right = Math.min(s.x + s.width, p.x + p.width + MARGIN_X);
+  let x = Math.max(s.x, p.x - MARGIN_X);
+  let right = Math.min(s.x + s.width, p.x + p.width + MARGIN_X);
+  let bottom = s.y + s.height;
+  if (state === "tooltip") {
+    // Portaled to the body, so it is measured on its own and folded into the crop.
+    const tip = await page.locator("[data-radix-popper-content-wrapper]").first().boundingBox();
+    if (!tip) throw new Error("tooltip: content not rendered — refusing to write");
+    x = Math.min(x, tip.x - 12);
+    right = Math.max(right, tip.x + tip.width + 12);
+    bottom = Math.max(bottom, tip.y + tip.height + 12);
+  }
   const out = path.join(OUT_DIR, file);
-  await page.screenshot({ path: out, clip: { x, y: s.y, width: right - x, height: s.height } });
+  await page.screenshot({ path: out, clip: { x, y: s.y, width: right - x, height: bottom - s.y } });
   return out;
 }
 

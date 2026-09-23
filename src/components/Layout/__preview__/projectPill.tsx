@@ -3,11 +3,10 @@ import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { resolveAppTheme } from "@shared/theme/themes";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import { BrandSurface } from "@/components/icons";
-import { middleTruncate } from "@/utils/textParsing";
 import { activeWorkspaceIdentity, branchChipState } from "@/lib/workspaceIdentity";
-import { ToolbarProjectPill } from "../ToolbarProjectPill";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ToolbarProjectPill, ToolbarProjectPillTooltipBody, shortSha } from "../ToolbarProjectPill";
 import "@/index.css";
 
 /**
@@ -31,10 +30,14 @@ const themeId = params.get("theme") ?? "daintree";
 
 interface Fixture {
   slug: string;
-  project?: { name: string; emoji: string; gitBacked?: boolean };
+  project?: { name: string; emoji: string; path?: string; gitBacked?: boolean };
   scratch?: { name: string };
   branch?: string;
+  /** HEAD's commit when detached. */
+  detachedAt?: string;
   open?: boolean;
+  /** Render the hover tooltip open beneath the pill. */
+  tooltip?: boolean;
   /** Width of the stand-in toolbar strip, in px. */
   width?: number;
 }
@@ -63,12 +66,27 @@ const FIXTURES: Fixture[] = [
     branch: "fix/11958-worktree-sidebar-rail-overflow-at-narrow-widths",
   },
   { slug: "branch-pending", project: { name: "Daintree", emoji: "🌴" } },
+  {
+    slug: "detached",
+    project: { name: "Daintree", emoji: "🌴" },
+    detachedAt: "3f9a2c1e8b7d6a5f4e3d2c1b0a9f8e7d6c5b4a39",
+  },
   { slug: "no-git", project: { name: "Notes", emoji: "📝", gitBacked: false } },
   { slug: "scratch", scratch: { name: "Scratch 3" } },
   { slug: "none" },
   { slug: "hover", project: { name: "Daintree", emoji: "🌴" }, branch: "develop" },
   { slug: "open", project: { name: "Daintree", emoji: "🌴" }, branch: "develop", open: true },
   { slug: "focus", project: { name: "Daintree", emoji: "🌴" }, branch: "develop" },
+  {
+    slug: "tooltip",
+    project: {
+      name: "helios-analytics-dashboard-platform",
+      emoji: "☀️",
+      path: "/Users/dev/Projects/clients/helios/helios-analytics-dashboard-platform",
+    },
+    branch: "fix/11958-worktree-sidebar-rail-overflow-at-narrow-widths",
+    tooltip: true,
+  },
   {
     slug: "narrow",
     project: { name: "Daintree", emoji: "🌴" },
@@ -84,10 +102,26 @@ function PillRow({ fixture }: { fixture: Fixture }) {
   const chipState = branchChipState(
     identity.kind,
     fixture.branch,
-    fixture.project?.gitBacked ?? true
+    fixture.project?.gitBacked ?? true,
+    fixture.detachedAt !== undefined
+  );
+  const pill = (
+    <ToolbarProjectPill
+      workspaceIdentity={identity}
+      emoji={fixture.project?.emoji}
+      chipState={chipState}
+      branchName={fixture.branch}
+      headSha={fixture.detachedAt}
+      isDropdownOpen={fixture.open ?? false}
+      data-state={fixture.open ? "open" : "closed"}
+    />
   );
   return (
-    <div data-shot={fixture.slug} className="flex flex-col gap-1 py-2">
+    <div
+      data-shot={fixture.slug}
+      className="flex flex-col gap-1 py-2"
+      style={fixture.tooltip ? { paddingBottom: 72 } : undefined}
+    >
       <div className="px-4 font-mono text-2xs text-text-muted">{fixture.slug}</div>
       <BrandSurface surface="surface-toolbar">
         <div
@@ -97,15 +131,25 @@ function PillRow({ fixture }: { fixture: Fixture }) {
         >
           <div />
           <div className="relative flex items-center justify-center min-w-0 max-w-full justify-self-center">
-            <ToolbarProjectPill
-              workspaceIdentity={identity}
-              emoji={fixture.project?.emoji}
-              chipState={chipState}
-              branchName={fixture.branch}
-              truncatedBranchName={fixture.branch ? middleTruncate(fixture.branch, 24) : undefined}
-              isDropdownOpen={fixture.open ?? false}
-              data-state={fixture.open ? "open" : "closed"}
-            />
+            {fixture.tooltip ? (
+              <Tooltip open>
+                <TooltipTrigger asChild>{pill}</TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-[28rem]">
+                  <ToolbarProjectPillTooltipBody
+                    name={identity.name}
+                    branchLabel={
+                      fixture.branch ??
+                      (fixture.detachedAt
+                        ? `detached at ${shortSha(fixture.detachedAt)}`
+                        : undefined)
+                    }
+                    path={fixture.project?.path}
+                  />
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              pill
+            )}
           </div>
           <div />
         </div>

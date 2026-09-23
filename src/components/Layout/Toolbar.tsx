@@ -91,7 +91,6 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { middleTruncate } from "@/utils/textParsing";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useToolbarOverflow } from "@/hooks/useToolbarOverflow";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
@@ -130,7 +129,7 @@ import { isPanelLimitError } from "@/services/actions/definitions/panelLimitErro
 import { LazyProjectSwitcherPalette } from "@/lazyPanels";
 import { ProjectIdentityEditor } from "@/components/Project/ProjectIdentityEditor";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
-import { ToolbarProjectPill } from "./ToolbarProjectPill";
+import { ToolbarProjectPill, ToolbarProjectPillTooltipBody, shortSha } from "./ToolbarProjectPill";
 import { useUIStore } from "@/store/uiStore";
 import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
@@ -2185,12 +2184,19 @@ export function Toolbar({
   }, [handleDropdownClose, suppressPillTooltipForFocusRestore]);
 
   const activeSearchableProject = projectSwitcher.activeProject;
-  const truncatedBranchName = branchName ? middleTruncate(branchName, 24) : undefined;
+  const headSha = activeWorktree?.isDetached ? activeWorktree.head : undefined;
   const chipState = branchChipState(
     workspaceIdentity.kind,
     branchName,
-    isGitBackedProject(currentProject)
+    isGitBackedProject(currentProject),
+    activeWorktree?.isDetached ?? false
   );
+  const pillBranchLabel =
+    chipState === "visible"
+      ? branchName
+      : chipState === "detached"
+        ? `detached at ${shortSha(headSha) ?? "unknown commit"}`
+        : undefined;
   const { copy: copyPillPath } = useCopyWithFeedback({ announcement: "Path copied" });
   const handleCopyProjectPath = useCallback(() => {
     if (!currentProject) return;
@@ -2261,10 +2267,10 @@ export function Toolbar({
       <TooltipTrigger asChild>
         <ToolbarProjectPill
           workspaceIdentity={workspaceIdentity}
-          emoji={currentProject ? (currentProject.emoji ?? "•") : undefined}
+          emoji={currentProject?.emoji}
           chipState={chipState}
           branchName={branchName}
-          truncatedBranchName={truncatedBranchName}
+          headSha={headSha}
           isDropdownOpen={isDropdownOpen}
           onClick={() => projectSwitcher.open("dropdown")}
           onPointerEnter={clearPillTooltipFocusSuppression}
@@ -2489,23 +2495,20 @@ export function Toolbar({
                 </ContextMenu>
                 {currentProject && (
                   <TooltipContent side="bottom" className="max-w-[28rem]">
-                    <div className="flex flex-col gap-0.5">
-                      <div className="text-xs font-medium">
-                        {currentProject.name}
-                        {branchName ? ` · ${branchName}` : ""}
-                      </div>
-                      <div className="text-text-muted font-mono text-2xs truncate">
-                        {currentProject.path}
-                      </div>
-                    </div>
+                    <ToolbarProjectPillTooltipBody
+                      name={currentProject.name}
+                      branchLabel={pillBranchLabel}
+                      path={currentProject.path}
+                    />
                   </TooltipContent>
                 )}
                 {!currentProject && currentScratch && (
                   <TooltipContent side="bottom" className="max-w-[28rem]">
-                    <div className="flex flex-col gap-0.5">
-                      <div className="text-xs font-medium">{currentScratch.name}</div>
-                      <div className="text-text-muted text-2xs">Scratch workspace</div>
-                    </div>
+                    <ToolbarProjectPillTooltipBody
+                      name={currentScratch.name}
+                      branchLabel={undefined}
+                      path={undefined}
+                    />
                   </TooltipContent>
                 )}
               </Tooltip>
