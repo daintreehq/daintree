@@ -76,7 +76,15 @@ describe("ToolbarProjectPill", () => {
     const { chip } = renderCase(CASES[1]!);
     expect(chip).not.toBeNull();
     expect(chip!.getAttribute("aria-hidden")).toBe("true");
-    expect((chip!.textContent ?? "").trim()).toBe("");
+    // Any text inside is layout scaffolding that never paints.
+    for (const node of Array.from(chip!.querySelectorAll("span"))) {
+      const ownText = Array.from(node.childNodes)
+        .filter((n) => n.nodeType === Node.TEXT_NODE)
+        .map((n) => n.textContent ?? "")
+        .join("")
+        .trim();
+      if (ownText) expect(node.closest(".invisible"), ownText).not.toBeNull();
+    }
   });
 
   it("names a detached HEAD by its commit rather than waiting on a branch", () => {

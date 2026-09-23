@@ -150,6 +150,16 @@ test("Project pill — states and themes", async ({ browser }) => {
 
   for (const theme of FULL_THEMES) {
     await open(page, theme);
+    // The pending chip holds the resolved chip's line box; a shorter placeholder
+    // makes the whole pill twitch when the branch lands.
+    const chipBox = (state: string) =>
+      page.locator(`[data-shot="${state}"] .toolbar-project-chip`).boundingBox();
+    const [pending, resolved] = await Promise.all([chipBox("branch-pending"), chipBox("rest")]);
+    if (!pending || !resolved || Math.abs(pending.height - resolved.height) > 0.5) {
+      throw new Error(
+        `${theme}: pending chip ${pending?.height}px tall vs resolved ${resolved?.height}px`
+      );
+    }
     for (const state of STATES) {
       const pill = page.locator(`[data-shot="${state}"] [data-testid="project-switcher-trigger"]`);
       if (state === "hover") {

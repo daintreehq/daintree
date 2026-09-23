@@ -1,4 +1,4 @@
-import type { ComponentPropsWithRef } from "react";
+import { Fragment, type ComponentPropsWithRef } from "react";
 import { ChevronsUpDown, FileText, GitBranch, GitCommitHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SkeletonBone } from "@/components/ui/Skeleton";
@@ -84,8 +84,13 @@ export function ToolbarProjectPill({
             <GitBranch className="toolbar-project-chip-icon h-3 w-3 shrink-0" />
           )}
           {chipState === "reserved" ? (
-            // Roughly a short branch's width, so the pill barely moves when it lands.
-            <SkeletonBone className="h-1.5 w-10 rounded-full" />
+            // An invisible short-branch-width run of mono text gives the placeholder
+            // the label's own line box, so neither the chip's height nor a short
+            // branch's width changes when the name lands. The bone sits over it.
+            <span className="toolbar-project-chip-label relative">
+              <span className="invisible">{"0".repeat(7)}</span>
+              <SkeletonBone className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full" />
+            </span>
           ) : (
             <span className="toolbar-project-chip-label">
               {chipState === "visible" && branchName
@@ -117,7 +122,15 @@ export function ToolbarProjectPillTooltipBody({
         {branchLabel ? ` · ${branchLabel}` : ""}
       </div>
       {path ? (
-        <div className="text-text-secondary font-mono text-2xs break-all">{path}</div>
+        // Breaks after a separator where it can, inside a segment only where it must.
+        <div className="text-text-secondary font-mono text-2xs break-words">
+          {path.split(/(?<=[/\\])/).map((segment, i) => (
+            <Fragment key={i}>
+              {segment}
+              <wbr />
+            </Fragment>
+          ))}
+        </div>
       ) : (
         <div className="text-text-secondary text-2xs">Scratch workspace</div>
       )}
