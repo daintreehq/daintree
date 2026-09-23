@@ -103,6 +103,18 @@ function copySetting<K extends keyof HelpAssistantSettings>(
   target[key] = source[key];
 }
 
+const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
+  modelId: "Model",
+  customArgs: "Custom CLI args",
+  debugLogging: "Debug logging",
+  docSearch: "Search documentation",
+  daintreeControl: "Daintree control",
+  idleHibernateMinutes: "Hibernate after",
+  tier: "Capability tier",
+  bypassPermissions: "Bypass",
+  auditRetention: "Audit log retention",
+};
+
 interface SaveFailure {
   group: SaveGroup;
   patch: Partial<HelpAssistantSettings>;
@@ -313,8 +325,11 @@ export function DaintreeAssistantSettingsTab() {
   // Failures of one-off actions stay on the section they belong to, not at the page foot.
   const [privacyError, setPrivacyError] = useState<string | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [rotateError, setRotateError] = useState<string | null>(null);
   // A failed read must not pass for an empty history.
   const [auditReadFailed, setAuditReadFailed] = useState(false);
+  // Unread, the recording switch would show its optimistic default as if it were fact.
+  const [auditConfigFailed, setAuditConfigFailed] = useState(false);
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const [copied, setCopied] = useState(false);
   const [showRotateConfirm, setShowRotateConfirm] = useState(false);
@@ -498,16 +513,23 @@ export function DaintreeAssistantSettingsTab() {
   // viewer hydrate independently of the settings + MCP status round-trips.
   // `allSettled` so a stats failure doesn't silently blank the record list.
   const refreshAuditRecords = async (): Promise<void> => {
-    const [recordsResult, statsResult, turnsResult] = await Promise.allSettled([
+    const [recordsResult, statsResult, turnsResult, configResult] = await Promise.allSettled([
       window.electron.mcpServer.getLogRecords(),
       window.electron.mcpServer.getAuditStats(),
       window.electron.mcpServer.getTurnOutcomeRecords(),
+      window.electron.mcpServer.getAuditConfig(),
     ]);
+    setAuditReadFailed(recordsResult.status === "rejected" || turnsResult.status === "rejected");
+    if (configResult.status === "fulfilled") {
+      setAuditEnabled(configResult.value.enabled);
+      setAuditConfigFailed(false);
+    } else {
+      setAuditConfigFailed(true);
+      logError("Failed to load MCP audit config for assistant tab", configResult.reason);
+    }
     if (recordsResult.status === "fulfilled") {
       setAuditRecords(recordsResult.value);
-      setAuditReadFailed(false);
     } else {
-      setAuditReadFailed(true);
       logError("Failed to load MCP audit records for assistant tab", recordsResult.reason);
     }
     if (statsResult.status === "fulfilled") {
@@ -548,11 +570,13 @@ export function DaintreeAssistantSettingsTab() {
           if (turnsResult.status === "fulfilled") {
             setTurnRecords(turnsResult.value);
           } else {
+            setAuditReadFailed(true);
             logError("Failed initial turn outcomes load for assistant tab", turnsResult.reason);
           }
           if (configResult.status === "fulfilled") {
             setAuditEnabled(configResult.value.enabled);
           } else {
+            setAuditConfigFailed(true);
             logError("Failed initial audit config load for assistant tab", configResult.reason);
           }
         })
@@ -731,7 +755,7 @@ export function DaintreeAssistantSettingsTab() {
     saveFailure?.group === group ? (
       <SettingsLoadErrorBanner
         title="Couldn't save that change"
-        message="The setting is back to its previous value."
+        message={`${SETTING_LABEL[patchedKeys(saveFailure.patch)[0] ?? "modelId"]} is back to its previous value.`}
         onRetry={() => void persist(saveFailure.patch)}
       />
     ) : null;
@@ -836,12 +860,12 @@ export function DaintreeAssistantSettingsTab() {
     if (isRotating) return;
     setIsRotating(true);
     try {
-      setConnectionError(null);
+      setRotateError(null);
       const key = await window.electron.mcpServer.rotateApiKey();
       setMcpStatus((prev) => (prev ? { ...prev, apiKey: key } : prev));
       setShowRotateConfirm(false);
     } catch (err) {
-      setConnectionError(formatErrorMessage(err, "Couldn't rotate key"));
+      setRotateError(formatErrorMessage(err, "Couldn't rotate key"));
       logError("Failed to rotate MCP API key", err);
     } finally {
       setIsRotating(false);
@@ -850,6 +874,7 @@ export function DaintreeAssistantSettingsTab() {
 
   const handleCancelRotate = () => {
     if (isRotating) return;
+    setRotateError(null);
     setShowRotateConfirm(false);
   };
 
@@ -915,19 +940,23 @@ export function DaintreeAssistantSettingsTab() {
       label="MCP server"
       description={
         mcpState === "ready" ? (
-          <StatusLine tone="ok">
+          <StatusLine live tone="ok">
             {runtimeSnapshot.port ? `Running on port ${runtimeSnapshot.port}` : "Running"}
           </StatusLine>
         ) : mcpState === "starting" ? (
-          <StatusLine tone="idle">Server is starting…</StatusLine>
+          <StatusLine live tone="idle">
+            Server is starting…
+          </StatusLine>
         ) : mcpState === "failed" ? (
-          <StatusLine tone="error">
+          <StatusLine live tone="error">
             MCP server failed to start.{" "}
             {runtimeSnapshot.lastError ?? "Check the MCP server tab for details."}
           </StatusLine>
         ) : (
-          <StatusLine tone="idle">
-            MCP server is off, so the assistant can&apos;t reach Daintree actions
+          <StatusLine live tone="idle">
+            {settings.daintreeControl
+              ? "MCP server is off, so the assistant can't reach Daintree actions"
+              : "MCP server is off. Turning on Daintree control starts it."}
           </StatusLine>
         )
       }
@@ -977,6 +1006,8 @@ export function DaintreeAssistantSettingsTab() {
               options={modelOptions}
               controlWidth="wide"
               disabled={settingsUnavailable}
+              isModified={settings.modelId !== DEFAULT_SETTINGS.modelId}
+              onReset={() => handleModelChange(MODEL_DEFAULT_SENTINEL)}
             />
           )}
         </SettingsGroup>
@@ -1037,9 +1068,7 @@ export function DaintreeAssistantSettingsTab() {
             isModified={settings.daintreeControl !== DEFAULT_SETTINGS.daintreeControl}
             onReset={() => void persist({ daintreeControl: DEFAULT_SETTINGS.daintreeControl })}
           />
-          {settings.daintreeControl && !loading && (
-            <SettingsDependents>{mcpStatusRow}</SettingsDependents>
-          )}
+          {!loading && <SettingsDependents>{mcpStatusRow}</SettingsDependents>}
         </SettingsGroup>
       </SettingsSection>
 
@@ -1107,9 +1136,11 @@ export function DaintreeAssistantSettingsTab() {
       >
         {saveError("privacy")}
         {privacyError && <InlineError>{privacyError}</InlineError>}
-        {auditReadFailed && (
+        {(auditReadFailed || auditConfigFailed) && (
           <InlineError onRetry={() => void refreshAuditRecords()}>
-            Couldn&apos;t read the audit log, so the diagnostics below may be incomplete.
+            {auditConfigFailed
+              ? "Couldn't read the audit settings, so recording is shown as unknown."
+              : "Couldn't read the audit log, so the diagnostics below may be incomplete."}
           </InlineError>
         )}
         <SettingsGroup>
@@ -1124,7 +1155,10 @@ export function DaintreeAssistantSettingsTab() {
             // Gate on auditLoading too: until getAuditConfig resolves, auditEnabled
             // is still the optimistic default and a late fulfillment would clobber
             // a user toggle made in that window.
-            disabled={loading || auditLoading || isTogglingAudit}
+            disabled={loading || auditLoading || isTogglingAudit || auditConfigFailed}
+            disabledReason={
+              auditConfigFailed ? "Couldn't read whether recording is on. Retry above." : undefined
+            }
           />
           <SettingsPresetGroup
             id="assistant-audit-retention"
@@ -1215,6 +1249,11 @@ export function DaintreeAssistantSettingsTab() {
             value={displayedCustomArgs}
             onChange={handleCustomArgsChange}
             disabled={settingsUnavailable}
+            isModified={displayedCustomArgs !== DEFAULT_SETTINGS.customArgs}
+            onReset={() => {
+              setPendingCustomArgs(null);
+              void persist({ customArgs: DEFAULT_SETTINGS.customArgs });
+            }}
           />
           <SettingsSelect
             label="Hibernate after"
@@ -1247,10 +1286,9 @@ export function DaintreeAssistantSettingsTab() {
             label="Assistant folder"
             description={
               <>
-                Files in <code className="font-mono">~/.daintree/assistant</code> are copied into
-                each new session, where Claude Code, Codex and Copilot pick up their commands and
-                skills. A project&apos;s own <code className="font-mono">.daintree/assistant</code>{" "}
-                takes precedence and can be committed.
+                Commands and skills in <code className="font-mono">~/.daintree/assistant</code> join
+                every new session. A project&apos;s own{" "}
+                <code className="font-mono">.daintree/assistant</code> takes precedence.
               </>
             }
             control={
@@ -1275,14 +1313,10 @@ export function DaintreeAssistantSettingsTab() {
           ) : null
         ) : mcpState !== "ready" ? (
           <SettingsGroup>
-            {settings.daintreeControl ? (
-              <SettingsRow
-                label="MCP server"
-                description="Available once the MCP server is running. Its status is under Behavior."
-              />
-            ) : (
-              mcpStatusRow
-            )}
+            <SettingsRow
+              label="Client config"
+              description="Available while the MCP server is running. Its status is under Behavior."
+            />
           </SettingsGroup>
         ) : !mcpStatus ? (
           <SettingsGroup>
@@ -1342,21 +1376,31 @@ export function DaintreeAssistantSettingsTab() {
         onClose={isRotating ? undefined : handleCancelRotate}
         title="Rotate API key?"
         description="The current key will be invalidated immediately. External clients using this key will need to update their configuration."
-        confirmLabel="Rotate key"
+        confirmLabel={rotateError ? "Try again" : "Rotate key"}
         cancelLabel="Cancel"
         onConfirm={confirmRotateKey}
         isConfirmLoading={isRotating}
         variant="destructive"
         zIndex="nested"
-      />
+      >
+        {rotateError && <InlineError>{rotateError}</InlineError>}
+      </ConfirmDialog>
     </div>
   );
 }
 
 /** A status sentence with its mark: the colour sits on the dot, never on the words. */
-function StatusLine({ tone, children }: { tone: "ok" | "idle" | "error"; children: ReactNode }) {
+function StatusLine({
+  tone,
+  children,
+  live = false,
+}: {
+  tone: "ok" | "idle" | "error";
+  children: ReactNode;
+  live?: boolean;
+}) {
   return (
-    <span className="flex items-start gap-2">
+    <span role={live ? "status" : undefined} className="flex items-start gap-2">
       {tone === "error" ? (
         <AlertCircle className="w-3.5 h-3.5 mt-px shrink-0 text-status-error" aria-hidden="true" />
       ) : (
@@ -1595,7 +1639,7 @@ function NativeGrantsSection({
               className="rounded-[var(--radius-sm)] border border-border-default bg-surface-canvas px-2 py-1.5 space-y-1"
             >
               <div className="flex items-center justify-between gap-2 text-2xs">
-                <span className="font-mono text-text-secondary truncate">
+                <span className="font-mono text-text-secondary break-all">
                   {(grant.allowedTools ?? []).join(", ") || "no tools"}
                 </span>
                 <button
@@ -1619,32 +1663,31 @@ function NativeGrantsSection({
         <div className="text-2xs text-text-secondary">No automation grants active</div>
       )}
 
-      <div className="flex items-end gap-1.5 pt-0.5">
-        <input
-          type="text"
-          value={toolsInput}
-          onChange={(e) => setToolsInput(e.target.value)}
-          placeholder="git.commit terminal.new"
-          aria-label="Tools to approve"
-          className="flex-1 min-w-0 rounded-[var(--radius-sm)] border border-border-default bg-surface-canvas px-2 py-1 text-2xs font-mono text-text-primary placeholder:text-text-placeholder focus-visible:outline-2 focus-visible:outline-accent-primary"
-        />
-        <input
-          type="number"
-          min={1}
-          max={100}
-          value={usesInput}
-          onChange={(e) => setUsesInput(e.target.value)}
-          aria-label="Maximum uses"
-          className="w-12 rounded-[var(--radius-sm)] border border-border-default bg-surface-canvas px-1.5 py-1 text-2xs tabular-nums text-text-primary focus-visible:outline-2 focus-visible:outline-accent-primary"
-        />
-        <button
-          type="button"
-          onClick={approve}
-          disabled={issuing}
-          className="shrink-0 rounded-[var(--radius-sm)] border border-border-default bg-overlay-subtle px-2 py-1 text-2xs text-text-secondary hover:text-text-primary disabled:opacity-50 transition-colors"
-        >
+      <div className="flex flex-wrap items-end gap-2 pt-0.5">
+        <label className="grid min-w-0 flex-1 basis-56 gap-1 text-xs text-text-secondary">
+          Tools to approve
+          <input
+            type="text"
+            value={toolsInput}
+            onChange={(e) => setToolsInput(e.target.value)}
+            placeholder="git.commit terminal.new"
+            className="min-w-0 rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-2 py-1 text-xs font-mono text-text-primary placeholder:text-text-placeholder focus-visible:outline-2 focus-visible:outline-accent-primary"
+          />
+        </label>
+        <label className="grid gap-1 text-xs text-text-secondary">
+          Maximum uses
+          <input
+            type="number"
+            min={1}
+            max={100}
+            value={usesInput}
+            onChange={(e) => setUsesInput(e.target.value)}
+            className="w-20 rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-2 py-1 text-xs tabular-nums text-text-primary focus-visible:outline-2 focus-visible:outline-accent-primary"
+          />
+        </label>
+        <Button variant="outline" size="sm" onClick={approve} disabled={issuing}>
           Approve grant
-        </button>
+        </Button>
       </div>
       {issueError && <InlineError>{issueError}</InlineError>}
     </div>

@@ -1523,6 +1523,31 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(screen.getByLabelText("Capture audit log").getAttribute("aria-checked")).toBe("true");
   });
 
+  // Unread, the switch would show its optimistic "on" as if it were the real setting.
+  it("holds the recording switch and offers Retry when the audit config can't be read", async () => {
+    const getAuditConfig = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("ipc down"))
+      .mockResolvedValue({ enabled: false, maxRecords: 500 });
+    installApi({}, { getAuditConfig });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Couldn't read the audit settings");
+    const toggle = screen.getByLabelText("Capture audit log");
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
+    });
+  });
+
   it("reflects recording-off state loaded from getAuditConfig", async () => {
     installApi(
       {},

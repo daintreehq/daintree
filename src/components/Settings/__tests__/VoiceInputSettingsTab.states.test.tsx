@@ -252,3 +252,16 @@ describe("VoiceInputSettingsTab provider switch", () => {
     expect(deepgramInput?.value).toBe("");
   });
 });
+
+describe("VoiceInputSettingsTab key removal", () => {
+  it("says so when removing a key fails, and keeps showing it as saved", async () => {
+    const key = "sk-proj-abcdefghijklmnop6789";
+    install({ openaiApiKey: key }, { setSettings: vi.fn().mockRejectedValue(new Error("EROFS")) });
+    const { container } = render(<VoiceInputSettingsTab />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Remove key" }));
+
+    await waitFor(() => expect(container.textContent).toContain("Couldn't remove the key"));
+    expect(container.textContent).toContain(maskApiKey(key));
+  });
+});

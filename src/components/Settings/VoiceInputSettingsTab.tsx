@@ -223,6 +223,8 @@ export function VoiceInputSettingsTab() {
   const [settings, setSettings] = useState<VoiceInputSettings>(DEFAULT_SETTINGS);
   const [micPermission, setMicPermission] = useState<MicPermissionStatus>("unknown");
   const [isRequestingMic, setIsRequestingMic] = useState(false);
+  // A check that couldn't answer, said once in the row instead of a silent no-op.
+  const [micNote, setMicNote] = useState<string | null>(null);
   const [newDictionaryWord, setNewDictionaryWord] = useState("");
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const dictionaryInputRef = useRef<HTMLInputElement>(null);
@@ -322,6 +324,7 @@ export function VoiceInputSettingsTab() {
 
   const handleRequestMicPermission = async () => {
     setIsRequestingMic(true);
+    setMicNote(null);
     try {
       // macOS settles this natively. Windows/Linux have no main-process request
       // API — a `true` there only means "clear to attempt capture", so the OS
@@ -346,7 +349,10 @@ export function VoiceInputSettingsTab() {
       // succeeds; trust what the attempt actually proved over an unsettled status.
       if (isConclusive(rechecked)) setMicPermission(rechecked);
       else if (probed !== "unavailable") setMicPermission(probed);
-      else if (rechecked) setMicPermission(rechecked);
+      else {
+        if (rechecked) setMicPermission(rechecked);
+        setMicNote("Couldn't open a microphone. Check one is connected, then re-check.");
+      }
     } catch {
       // Non-fatal — the row keeps its last known status.
     } finally {
@@ -359,8 +365,10 @@ export function VoiceInputSettingsTab() {
   };
 
   const handleRefreshMicPermission = async () => {
-    const status = await window.electron?.voiceInput?.checkMicPermission();
+    setMicNote(null);
+    const status = await readMicPermission();
     if (status) setMicPermission(status);
+    else setMicNote("Couldn't check microphone access. Try again in a moment.");
   };
 
   const addDictionaryWord = () => {
@@ -438,7 +446,7 @@ export function VoiceInputSettingsTab() {
         ) : (
           <>
             Use a Project API key (starts with <code className="font-mono">sk-proj-</code>) for the
-            best security.
+            best security. Keys are stored locally in plain text.
           </>
         )
       }
@@ -482,6 +490,10 @@ export function VoiceInputSettingsTab() {
                 options={PROVIDER_OPTIONS}
                 value={provider}
                 onChange={(v) => void update({ transcriptionProvider: v })}
+                isModified={provider !== DEFAULT_SETTINGS.transcriptionProvider}
+                onReset={() =>
+                  void update({ transcriptionProvider: DEFAULT_SETTINGS.transcriptionProvider })
+                }
               />
 
               {provider === "deepgram" ? (
@@ -495,7 +507,7 @@ export function VoiceInputSettingsTab() {
                   description={
                     settings.deepgramApiKey
                       ? "Stored locally in plain text. Set usage limits on your Deepgram account to cap exposure."
-                      : "Create one in the Deepgram console."
+                      : "Create one in the Deepgram console. Keys are stored locally in plain text."
                   }
                 />
               ) : (
@@ -545,17 +557,16 @@ export function VoiceInputSettingsTab() {
               onRequest={handleRequestMicPermission}
               onOpenSettings={handleOpenMicSettings}
               onRefresh={handleRefreshMicPermission}
+              note={micNote}
             />
 
             <SettingsSelect
               label="Input device"
               description={
                 <>
-                  {devicesError
-                    ? devicesError
-                    : devicesLoading
-                      ? "Detecting devices…"
-                      : "The microphone dictation records from"}
+                  {devicesLoading && !devicesError
+                    ? "Detecting devices…"
+                    : "The microphone dictation records from"}
                   {" · "}
                   <button
                     type="button"
@@ -571,6 +582,8 @@ export function VoiceInputSettingsTab() {
               onValueChange={(v) => void update({ deviceId: v === SYSTEM_DEFAULT_VALUE ? "" : v })}
               options={devices}
               disabled={devicesLoading && devices.length <= 1}
+              isModified={settings.deviceId !== DEFAULT_SETTINGS.deviceId}
+              onReset={() => void update({ deviceId: DEFAULT_SETTINGS.deviceId })}
             />
           </SettingsGroup>
         )}
@@ -670,6 +683,8 @@ export function VoiceInputSettingsTab() {
               subtitle="Correct each transcription automatically after dictation"
               isEnabled={settings.correctionEnabled}
               onChange={() => void update({ correctionEnabled: !settings.correctionEnabled })}
+              isModified={settings.correctionEnabled !== DEFAULT_SETTINGS.correctionEnabled}
+              onReset={() => void update({ correctionEnabled: DEFAULT_SETTINGS.correctionEnabled })}
             />
 
             {settings.correctionEnabled && provider === "deepgram" && (
@@ -730,7 +745,9 @@ type KeyStatus =
   | { kind: "testing" }
   | { kind: "saved"; verified: boolean }
   | { kind: "invalid"; message: string }
-  | { kind: "save-failed" };
+  | { kind: "save-failed" }
+  | { kind: "removing" }
+  | { kind: "remove-failed" };
 
 interface ApiKeyRowProps {
   id?: string;
@@ -769,6 +786,8 @@ function ApiKeyRow({
   const [status, setStatus] = useState<KeyStatus>({ kind: "idle" });
   const statusId = useId();
   const testing = status.kind === "testing";
+  const removing = status.kind === "removing";
+  const savedId = useId();
 
   const handleSave = async () => {
     const key = keyInput.trim();
@@ -801,8 +820,8 @@ function ApiKeyRow({
   };
 
   const handleRemove = async () => {
-    setStatus({ kind: "idle" });
-    await onSave("");
+    setStatus({ kind: "removing" });
+    setStatus((await onSave("")) ? { kind: "idle" } : { kind: "remove-failed" });
   };
 
   const statusLine =
@@ -817,6 +836,11 @@ function ApiKeyRow({
       <>
         <AlertCircle className="w-3.5 h-3.5 shrink-0 text-status-error" aria-hidden="true" />
         {status.message}
+      </>
+    ) : status.kind === "remove-failed" ? (
+      <>
+        <AlertCircle className="w-3.5 h-3.5 shrink-0 text-status-error" aria-hidden="true" />
+        Couldn't remove the key. It's still saved, so you can try again.
       </>
     ) : status.kind === "save-failed" ? (
       <>
@@ -833,11 +857,16 @@ function ApiKeyRow({
       layout="stacked"
       accessory={
         value ? (
-          <span className="rounded-[var(--radius-sm)] border border-border-default bg-surface-canvas px-1.5 py-0.5 font-mono text-2xs text-text-secondary">
+          <span
+            id={savedId}
+            className="rounded-[var(--radius-sm)] border border-border-default bg-surface-canvas px-1.5 py-0.5 font-mono text-2xs text-text-secondary"
+          >
             Saved · {maskApiKey(value)}
           </span>
         ) : (
-          <span className="text-xs text-text-secondary">Not set</span>
+          <span id={savedId} className="text-xs text-text-secondary">
+            Not set
+          </span>
         )
       }
       control={({ labelId, descriptionId, disabled }) => (
@@ -848,7 +877,7 @@ function ApiKeyRow({
                 type={showKey ? "text" : "password"}
                 value={keyInput}
                 aria-labelledby={labelId}
-                aria-describedby={[descriptionId, statusId].filter(Boolean).join(" ")}
+                aria-describedby={[savedId, descriptionId, statusId].filter(Boolean).join(" ")}
                 aria-invalid={status.kind === "invalid" ? true : undefined}
                 onChange={(e) => {
                   setKeyInput(e.target.value);
@@ -896,6 +925,7 @@ function ApiKeyRow({
                 variant="ghost-danger"
                 size="sm"
                 disabled={disabled || testing}
+                loading={removing}
               >
                 Remove key
               </Button>
@@ -936,6 +966,7 @@ interface MicPermissionRowProps {
   onRequest: () => void;
   onOpenSettings: () => void;
   onRefresh: () => void;
+  note?: string | null;
 }
 
 function MicPermissionRow({
@@ -944,6 +975,7 @@ function MicPermissionRow({
   onRequest,
   onOpenSettings,
   onRefresh,
+  note,
 }: MicPermissionRowProps) {
   const ua = navigator.userAgent;
   const isMac = ua.includes("Mac OS X");
@@ -1021,7 +1053,10 @@ function MicPermissionRow({
             className={cn("status-mark mt-1 w-2 h-2 rounded-full shrink-0", statusDisplay.dot)}
             aria-hidden="true"
           />
-          <span>{statusDisplay.text}</span>
+          <span>
+            {statusDisplay.text}
+            {note ? ` ${note}` : ""}
+          </span>
         </span>
       }
       control={
