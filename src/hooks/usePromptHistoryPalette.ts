@@ -41,25 +41,36 @@ function toItem(entry: PromptHistoryEntry): PromptHistoryItem {
   return { ...entry, preview: text, lineCount };
 }
 
+/**
+ * One row per distinct prompt, newest first. The store keeps a fleet
+ * broadcast's repeats apart when the armed set differed, and the global view
+ * merges every project's list — but recall only ever inserts the text, so two
+ * rows for one prompt are two identical choices spending the result cap.
+ */
+function newestPerPrompt(entries: readonly PromptHistoryEntry[]): PromptHistoryEntry[] {
+  const seen = new Set<string>();
+  const out: PromptHistoryEntry[] = [];
+  for (const entry of [...entries].sort((a, b) => b.addedAt - a.addedAt)) {
+    if (seen.has(entry.prompt)) continue;
+    seen.add(entry.prompt);
+    out.push(entry);
+  }
+  return out;
+}
+
 export function usePromptHistoryPalette({ terminalId, projectId }: UsePromptHistoryPaletteOptions) {
   const [scope, setScope] = useState<HistoryScope>("project");
 
   const history = useCommandHistoryStore((s) => s.history);
 
   const items = useMemo(() => {
-    if (scope === "project") {
-      return (projectId ? (history[projectId] ?? []) : []).map(toItem);
-    }
-    const all = Object.values(history).flat();
-    const seen = new Set<string>();
-    const deduped: PromptHistoryItem[] = [];
-    for (const entry of all.sort((a, b) => b.addedAt - a.addedAt)) {
-      if (!seen.has(entry.prompt)) {
-        seen.add(entry.prompt);
-        deduped.push(toItem(entry));
-      }
-    }
-    return deduped;
+    const entries =
+      scope === "project"
+        ? projectId
+          ? (history[projectId] ?? [])
+          : []
+        : Object.values(history).flat();
+    return newestPerPrompt(entries).map(toItem);
   }, [scope, projectId, history]);
 
   const palette = useSearchablePalette<PromptHistoryItem>({

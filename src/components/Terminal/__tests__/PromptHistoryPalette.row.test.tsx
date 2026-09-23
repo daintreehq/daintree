@@ -206,4 +206,20 @@ describe("PromptHistoryRow", () => {
     const { container } = renderRow(makeEntry({ prompt }));
     expect(optionText(container).startsWith("lead")).toBe(true);
   });
+
+  it("opens a phrase search on the phrase, not on an earlier stray word", () => {
+    const prompt = `the ${"lead ".repeat(40)}and then the retry backoff jitter`;
+    const { container } = renderRow(makeEntry({ prompt }), "the retry");
+    const text = optionText(container);
+    expect(text.indexOf("the retry")).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf("the retry")).toBeLessThan(40);
+  });
+
+  it("keeps the match on screen when a long unbroken token precedes it", () => {
+    const prompt = `see https://example.com/${"a".repeat(400)} then fix the retry loop`;
+    const { container } = renderRow(makeEntry({ prompt }), "retry");
+    const text = optionText(container);
+    expect(text.indexOf("retry")).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf("retry")).toBeLessThan(60);
+  });
 });

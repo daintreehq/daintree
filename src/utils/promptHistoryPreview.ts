@@ -53,20 +53,25 @@ const LEAD_CHARS = 20;
 export const PREVIEW_MAX_CHARS = 240;
 
 /**
- * Cut the preview so the first match is on screen, and move the match ranges
- * with it. Browsing shows the prompt from its start; a search whose first match
- * would fall past the ellipsis starts a few words before the match instead,
- * behind a leading "…", so the row shows why it matched.
+ * Cut the preview so its anchor match is on screen, and move the match ranges
+ * with it. The anchor is the FIRST range — `findPreviewMatches` puts the one
+ * that best explains the result there, not the earliest. Browsing shows the
+ * prompt from its start; a search whose anchor would fall past the ellipsis
+ * starts a few words before it instead, behind a leading "…".
  */
 export function excerptPreview(
   text: string,
   indices: readonly MatchRange[] | undefined
 ): PreviewExcerpt {
-  const first = indices?.length ? Math.min(...indices.map(([start]) => start)) : 0;
+  const anchor = indices?.[0]?.[0] ?? 0;
   let start = 0;
-  if (first > VISIBLE_CHARS) {
-    const wordBreak = text.lastIndexOf(" ", first - LEAD_CHARS);
-    start = wordBreak > 0 ? wordBreak + 1 : first - LEAD_CHARS;
+  if (anchor > VISIBLE_CHARS) {
+    const target = anchor - LEAD_CHARS;
+    // Back to a word boundary, but only a short way: a long unbroken token
+    // (a URL, a path) would otherwise rewind the cut hundreds of characters
+    // and slice the anchor off the far end.
+    const wordBreak = text.lastIndexOf(" ", target);
+    start = wordBreak >= target - LEAD_CHARS ? wordBreak + 1 : target;
   }
   const prefix = start > 0 ? "…" : "";
   const body = text.slice(start, start + PREVIEW_MAX_CHARS);
@@ -81,14 +86,19 @@ export function excerptPreview(
 }
 
 /**
- * Where the query appears in the preview, for highlighting.
+ * Where the query appears in the preview, for highlighting — with the range
+ * that best explains the match first, for `excerptPreview` to anchor on.
  *
- * Literal occurrences of each query word first: search ignores where in a
- * prompt a word sits, so the fuzzy scorer's own ranges over a long prompt are
- * scattered fragments of the query's letters, and painting those reads as
- * noise rather than as the reason the row matched. Only when no word occurs
- * literally (a typo) do the scorer's ranges stand in, and then only runs long
- * enough to mean something.
+ * Literal occurrences of each query word: search ignores where in a prompt a
+ * word sits, so the fuzzy scorer's own ranges over a long prompt are scattered
+ * fragments of the query's letters, and painting those reads as noise rather
+ * than as the reason the row matched. Only when no word occurs literally (a
+ * typo) do the scorer's ranges stand in, and then only runs long enough to
+ * mean something.
+ *
+ * The anchor is the whole query where it occurs as a phrase, else the longest
+ * query word — never simply the earliest hit, which for "the retry" is any
+ * "the" in the prompt.
  */
 export function findPreviewMatches(
   text: string,
@@ -96,18 +106,24 @@ export function findPreviewMatches(
   fuzzyRanges: readonly MatchRange[] | undefined
 ): MatchRange[] | undefined {
   const haystack = text.toLowerCase();
-  const ranges: MatchRange[] = [];
-  for (const word of query.toLowerCase().split(/\s+/)) {
-    if (word.length < 2) continue;
-    for (
-      let at = haystack.indexOf(word);
-      at !== -1;
-      at = haystack.indexOf(word, at + word.length)
-    ) {
-      ranges.push([at, at + word.length - 1]);
+  const occurrences = (needle: string): MatchRange[] => {
+    const found: MatchRange[] = [];
+    for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
+      found.push([at, at + needle.length - 1]);
     }
+    return found;
+  };
+  const words = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((word) => word.length >= 2)
+    .sort((a, b) => b.length - a.length);
+  const ranges = words.flatMap(occurrences);
+  if (ranges.length > 0) {
+    const phrase = query.trim().toLowerCase().replace(/\s+/g, " ");
+    const anchor = (words.length > 1 && occurrences(phrase)[0]) || ranges[0]!;
+    return [anchor, ...ranges.filter((range) => range !== anchor)];
   }
-  if (ranges.length > 0) return ranges;
   const fuzzy = fuzzyRanges?.filter(([s, e]) => e - s >= 2);
   return fuzzy?.length ? [...fuzzy] : undefined;
 }

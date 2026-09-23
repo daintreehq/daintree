@@ -3,6 +3,7 @@ import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
+import { KbdChord } from "@/components/ui/Kbd";
 import { SegmentedToggle, type SegmentedToggleOption } from "@/components/ui/SegmentedToggle";
 import { HighlightedText } from "@/components/ui/HighlightedText";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
@@ -57,9 +58,8 @@ export function PromptHistoryRow({
     item.preview,
     query.trim() ? findPreviewMatches(item.preview, query, fuzzyRanges) : undefined
   );
-  const agentName = item.agentId
-    ? (getEffectiveAgentConfig(item.agentId)?.name ?? item.agentId)
-    : null;
+  const agentConfig = item.agentId ? getEffectiveAgentConfig(item.agentId) : undefined;
+  const agentName = item.agentId ? (agentConfig?.name ?? item.agentId) : null;
   const targets = item.armedIds?.length ?? 0;
   // What the history recorded about the send, never what recalling it will do:
   // recall puts the text in this composer and nothing else.
@@ -86,7 +86,11 @@ export function PromptHistoryRow({
     >
       {/* The terminal glyph for a prompt whose agent was never recorded: it was
           sent to a pane, and that is all the history knows. */}
-      <PanelKindIcon iconId={item.agentId ?? "terminal"} size={16} />
+      <PanelKindIcon
+        iconId={agentConfig?.iconId ?? item.agentId ?? "terminal"}
+        color={agentConfig?.color}
+        size={16}
+      />
       <span className="flex-1 min-w-0 truncate text-sm font-medium text-text-primary">
         <HighlightedText text={excerpt.text} indices={excerpt.indices} />
       </span>
@@ -183,7 +187,14 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
       </div>
       {/* Pointer-down is held so a click switches scope without taking focus
           out of the search field — the list keys live there. */}
-      <div onPointerDownCapture={(e) => e.preventDefault()}>
+      <div
+        className="flex shrink-0 items-center gap-2"
+        onPointerDownCapture={(e) => e.preventDefault()}
+      >
+        {/* The chord that opened the palette, named here as the key for this
+            control — Tab moves the list selection, so this is the keyboard
+            route to it. */}
+        <KbdChord shortcut={SHORTCUT} aria-label={SCOPE_TITLE} />
         <SegmentedToggle
           options={SCOPE_OPTIONS}
           value={scope}

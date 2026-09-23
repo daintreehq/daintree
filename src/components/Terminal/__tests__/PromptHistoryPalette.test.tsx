@@ -125,4 +125,18 @@ describe("PromptHistoryPalette", () => {
     expect(optionTexts()).toHaveLength(0);
     expect(document.querySelector('[aria-label="History scope"]')).toBeTruthy();
   });
+
+  it("lists a prompt once in this project, however many times it was sent", () => {
+    seed({
+      [PROJECT]: [
+        { ...entry("a", "run the full test suite", 1), armedIds: ["t1", "t2"] },
+        { ...entry("b", "run the full test suite", 5), armedIds: ["t3"] },
+        entry("c", "summarise the diff", 9),
+      ],
+    });
+    renderPalette();
+    const texts = optionTexts();
+    expect(texts.filter((t) => t.includes("run the full test suite"))).toHaveLength(1);
+    expect(texts).toHaveLength(2);
+  });
 });
