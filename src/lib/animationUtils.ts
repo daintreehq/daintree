@@ -140,6 +140,12 @@ export const UI_STILL_WORKING_MS = 5000;
  *  mechanism constant coupled to a third-party default. */
 export const UI_SPIN_CYCLE_MS = 1_000;
 
+/** The all-clear flash, the window's visual bell. Platform visual bells run
+ *  100–300ms; this sits at the top of that range so a glance from another pane
+ *  still catches it. The CSS reads it through `--all-clear-flash-duration`, so
+ *  the keyframe and the component's unmount fallback share one number. */
+export const ALL_CLEAR_FLASH_DURATION = DURATION_300;
+
 /** One full visible/hidden cycle of the composer's cursor blink. CodeMirror's
  *  own `cursorBlinkRate` default, kept so the timer-driven blink (#12584) reads
  *  exactly like the CSS animation it replaced. A mechanism constant, not a
