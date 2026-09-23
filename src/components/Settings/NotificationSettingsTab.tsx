@@ -174,7 +174,7 @@ function SoundFileRow({
 
 type LoadState = "loading" | "ready" | "error";
 
-type SaveGroup = "agent" | "sound" | "flash" | "quiet";
+type SaveGroup = "agent" | "sound" | "quiet";
 
 const SAVE_GROUP_BY_KEY: Record<keyof NotificationSettings, SaveGroup> = {
   enabled: "agent",
@@ -190,7 +190,7 @@ const SAVE_GROUP_BY_KEY: Record<keyof NotificationSettings, SaveGroup> = {
   escalationSoundFile: "sound",
   workingPulseSoundFile: "sound",
   uiFeedbackSoundEnabled: "sound",
-  flashEnabled: "flash",
+  flashEnabled: "agent",
   quietHoursEnabled: "quiet",
   quietHoursStartMin: "quiet",
   quietHoursEndMin: "quiet",
@@ -447,6 +447,14 @@ export function NotificationSettingsTab() {
               onChange={(v) => update({ workingPulseEnabled: v })}
               {...reset("workingPulseEnabled")}
             />
+            <SwitchRow
+              id="notif-all-clear-flash"
+              label="Flash when agents stop working"
+              description="Briefly flash the window once two or more agents were working and none still is. An agent waiting for input counts as stopped."
+              checked={settings.flashEnabled}
+              onChange={(v) => update({ flashEnabled: v })}
+              {...reset("flashEnabled")}
+            />
           </SettingsDependents>
         </SettingsGroup>
       </SettingsSection>
@@ -510,21 +518,6 @@ export function NotificationSettingsTab() {
               {...reset("uiFeedbackSoundEnabled")}
             />
           </SettingsDependents>
-        </SettingsGroup>
-      </SettingsSection>
-
-      <SettingsSection title="Screen flash">
-        {saveError("flash")}
-        <SettingsGroup>
-          <SettingsSwitchCard
-            title="Flash on all-clear"
-            subtitle="Briefly flash the screen once a working fleet of agents goes fully idle"
-            isEnabled={settings.flashEnabled}
-            onChange={() => update({ flashEnabled: !settings.flashEnabled })}
-            disabled={masterOff}
-            disabledReason={masterOffReason}
-            {...reset("flashEnabled")}
-          />
         </SettingsGroup>
       </SettingsSection>
 

@@ -52,8 +52,9 @@ const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,namib,svalbard,ata
   .filter(Boolean);
 
 const OVERLAY = "[data-all-clear-flash], .animate-all-clear-flash";
-const FRAMES = [0.05, 0.15, 0.3, 0.5, 0.75];
-const PEAK = 0.15;
+const FRAMES = [0.05, 0.15, 0.25, 0.3, 0.5, 0.75];
+// The keyframe peak in src/index.css (`all-clear-flash`).
+const PEAK = 0.25;
 const WINDOW = { width: 1440, height: 900 };
 const PROJECT_NAME = "Helios Dashboard";
 

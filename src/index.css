@@ -152,6 +152,8 @@ code.hljs {
    * Tier 40: Fixed panels (dock, sidebars)
    * Tier 50: Portal overlay
    * Tier 55: Maximized content (terminals)
+   * Tier 56: Window visual bell (the all-clear flash) — ambient, so it stays
+   *          under every modal scrim, popover and toast
    * Tier 60: Modal dialogs (full-screen overlays)
    * Tier 70: Popovers, dropdowns, tooltips (can appear above modals)
    * Tier 75: Nested dialogs (dialogs triggered from within popovers)
@@ -160,6 +162,7 @@ code.hljs {
   --z-panel: 40;
   --z-portal: 50;
   --z-maximized: 55;
+  --z-visual-bell: 56;
   --z-modal: 60;
   --z-popover: 70;
   --z-nested-dialog: 75;
@@ -993,22 +996,39 @@ body,
   0% {
     opacity: 0;
   }
-  15% {
-    opacity: 0.12;
+  25% {
+    opacity: var(--all-clear-flash-peak);
   }
   100% {
     opacity: 0;
   }
 }
 
+/* The all-clear flash is the window's visual bell: an opt-in visual
+ * counterpart of the all-clear sound. It is a neutral luminance shift
+ * (`--theme-tint`: white on dark, black on light), never a status hue, because
+ * "no agent is still working" is not a success and may include agents waiting
+ * for input. The same alpha reads far louder as a dim on a light canvas than
+ * as a lift on a dark one, so the peak is set per polarity. Rest opacity is 0
+ * so a killed animation (performance mode) leaves nothing on screen. */
+:root {
+  --all-clear-flash-peak: 0.09;
+}
+
+.light {
+  --all-clear-flash-peak: 0.07;
+}
+
 .animate-all-clear-flash {
-  animation: all-clear-flash 450ms ease-out forwards;
+  opacity: 0;
+  background-color: var(--theme-tint);
+  animation: all-clear-flash var(--all-clear-flash-duration, 300ms) ease-out forwards;
   will-change: opacity;
 }
 
 /* Onboarding checklist completion — short opacity flash that replaces the
- * confetti for users who opt out of motion. Subtler than all-clear because
- * this is a one-off milestone, not an ambient signal. */
+ * confetti for users who opt out of motion. A one-off milestone, not an
+ * ambient signal. */
 @keyframes checklist-complete-flash {
   0% {
     opacity: 0;
@@ -1300,7 +1320,6 @@ body,
   .animate-action-row-bump,
   .animate-activity-blip,
   .animate-trash-pulse,
-  .animate-all-clear-flash,
   .animate-diagnostics-flash,
   .animate-upstream-badge-flash,
   .animate-border-flash,
@@ -1309,6 +1328,13 @@ body,
     opacity: 1;
     transform: none;
     will-change: auto;
+  }
+
+  /* The all-clear flash has no static form: snapping it to opacity 1 like the
+   * cues above would paint the whole window. The component skips mounting it,
+   * and this covers a preference that flips mid-pulse. */
+  .animate-all-clear-flash {
+    display: none;
   }
 
   /* The global `transition: none` rules below would strip the anti-flicker

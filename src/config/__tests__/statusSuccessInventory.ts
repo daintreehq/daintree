@@ -139,14 +139,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Recorded result of the last CI run on the pull request",
     },
   ],
-  "src/components/AllClearOverlay/AllClearOverlay.tsx": [
-    {
-      category: "transient",
-      signature: "bg-status-success",
-      expectedOccurrences: 1,
-      rationale: "Full-screen all-clear flash; the portal unmounts itself on animationend",
-    },
-  ],
   "src/components/Browser/BrowserToolbar.tsx": [
     {
       category: "transient",
@@ -983,5 +975,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 117;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 133;
+export const EXPECTED_STATUS_SUCCESS_SITES = 116;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 132;
