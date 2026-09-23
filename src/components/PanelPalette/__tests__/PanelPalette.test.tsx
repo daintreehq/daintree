@@ -209,3 +209,25 @@ describe("PanelPalette panel origin (#12272)", () => {
     expect(optionNamed("Local").textContent).toContain("Project plugin");
   });
 });
+
+describe("PanelPalette combobox popup relationship", () => {
+  function combobox() {
+    return document.querySelector('[role="combobox"]')!;
+  }
+
+  it("never claims an expanded popup whose listbox is not in the tree", () => {
+    render(<PanelPalette {...baseProps} query="zzz" results={[]} />);
+    const controls = combobox().getAttribute("aria-controls");
+    const expanded = combobox().getAttribute("aria-expanded") === "true";
+    const controlled = controls ? document.getElementById(controls) : null;
+    expect(expanded ? controlled !== null : true).toBe(true);
+    expect(controls === null || controlled !== null).toBe(true);
+  });
+
+  it("controls the rendered listbox once there are rows", () => {
+    render(<PanelPalette {...baseProps} query="" results={resumeResults} />);
+    const controls = combobox().getAttribute("aria-controls");
+    expect(combobox().getAttribute("aria-expanded")).toBe("true");
+    expect(document.getElementById(controls!)?.getAttribute("role")).toBe("listbox");
+  });
+});

@@ -2309,7 +2309,9 @@ function ProjectPaletteInner({
           if (mode === "dropdown") break;
           e.preventDefault();
           e.stopPropagation();
-          onClose();
+          // The dialog spends its first press the same way the shell does.
+          if (query !== "") onQueryChange("");
+          else onClose();
           break;
         case "Backspace": {
           // Projects only. Both paths confirm now, but the chord means "close
@@ -2329,6 +2331,8 @@ function ProjectPaletteInner({
       results,
       selectedIndex,
       mode,
+      query,
+      onQueryChange,
       onSelectPrevious,
       onSelectNext,
       onSelect,

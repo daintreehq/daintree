@@ -81,7 +81,14 @@ export function PanelPalette({
           break;
         case "Escape":
           e.preventDefault();
-          onClose();
+          // A query clears before the palette closes, as in every SearchablePalette.
+          // Stopped so the dialog's document-level Escape backstop cannot close it.
+          if (query !== "") {
+            e.stopPropagation();
+            onQueryChange("");
+          } else {
+            onClose();
+          }
           break;
         case "Tab":
           e.preventDefault();
@@ -93,7 +100,7 @@ export function PanelPalette({
           break;
       }
     },
-    [onSelectPrevious, onSelectNext, onConfirm, onClose]
+    [onSelectPrevious, onSelectNext, onConfirm, onClose, query, onQueryChange]
   );
 
   const panelCount = usePanelStore((state) =>
@@ -214,10 +221,11 @@ export function PanelPalette({
           onKeyDown={handleKeyDown}
           placeholder="Select a panel type..."
           role="combobox"
-          aria-expanded={isOpen}
+          // The listbox only exists while there are rows to put in it.
+          aria-expanded={isOpen && results.length > 0}
           aria-haspopup="listbox"
           aria-label="Select panel type"
-          aria-controls="panel-list"
+          aria-controls={results.length > 0 ? "panel-list" : undefined}
           aria-activedescendant={activeDescendant}
         />
       </AppPaletteDialog.Header>

@@ -89,9 +89,19 @@ export function NewTerminalPalette({
             onSelectNext();
           }
           break;
+        case "Escape":
+          // The escape-stack entry above never sees a press while the palette
+          // is open — the dialog's document-level backstop closes it first — so
+          // the field clears its own query. An empty field lets Escape close.
+          if (query !== "") {
+            e.preventDefault();
+            e.stopPropagation();
+            onQueryChange("");
+          }
+          break;
       }
     },
-    [onSelectPrevious, onSelectNext, onConfirm]
+    [onSelectPrevious, onSelectNext, onConfirm, query, onQueryChange]
   );
 
   const selectedOption =
@@ -113,9 +123,10 @@ export function NewTerminalPalette({
           onKeyDown={handleKeyDown}
           placeholder="Search terminal types"
           role="combobox"
-          aria-expanded={isOpen}
+          // The listbox only exists while there are rows to put in it.
+          aria-expanded={isOpen && results.length > 0}
           aria-label="Select terminal type"
-          aria-controls="new-terminal-list"
+          aria-controls={results.length > 0 ? "new-terminal-list" : undefined}
           aria-activedescendant={activeDescendant}
         />
       </AppPaletteDialog.Header>

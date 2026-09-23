@@ -207,7 +207,14 @@ export function ResumeSessionsPalette() {
           break;
         case "Escape":
           e.preventDefault();
-          close();
+          // A query clears before the palette closes, as in every SearchablePalette.
+          // Stopped so the dialog's document-level Escape backstop cannot close it.
+          if (query !== "") {
+            e.stopPropagation();
+            setQuery("");
+          } else {
+            close();
+          }
           break;
         case "Tab":
           e.preventDefault();
@@ -216,7 +223,7 @@ export function ResumeSessionsPalette() {
           break;
       }
     },
-    [selectPrevious, selectNext, handleConfirm, close]
+    [selectPrevious, selectNext, handleConfirm, close, query, setQuery]
   );
 
   const setItemRef = useCallback(
