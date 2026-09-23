@@ -167,6 +167,7 @@ function GitPushConfirmDialogInner() {
   const isInSync = isLoaded && commits.length === 0 && !isUnverified && behind === 0;
   const isEmptyUnverified = isLoaded && commits.length === 0 && isUnverified;
   const total = pushRange?.total ?? commits?.length ?? 0;
+  const hasOutgoing = isLoaded && commits.length > 0;
 
   // A destination nobody can name can't be approved — the handler would refuse
   // the write anyway, and guessing `origin` is the bug (#11746). `commits === null`
@@ -254,15 +255,19 @@ function GitPushConfirmDialogInner() {
       first, or force push once the push is refused.
     </PreviewNotice>
   ) : isLoaded && isUnverified ? (
+    // `unverified` covers two causes the preview can't tell apart — the remote
+    // didn't answer, or it named a tip this repository doesn't hold — so the
+    // notice states what is known, not which of the two happened.
     <PreviewNotice
       tone="warning"
-      title={`Couldn't reach ${destination?.remote}`}
+      title="Couldn't verify the outgoing commits"
       onRetry={loadPreview}
       retryTestId="git-push-unverified-retry"
       testId="git-push-unverified"
     >
-      So what {destinationLabel} already has couldn&apos;t be checked, and the list below is worked
-      out from this repository alone — it may include commits the remote already has.
+      {destinationLabel} couldn&apos;t be checked, so the list below is worked out from this
+      repository alone. It may leave out commits this push sends, or include ones the remote already
+      has.
     </PreviewNotice>
   ) : null;
 
@@ -271,15 +276,17 @@ function GitPushConfirmDialogInner() {
       isOpen={true}
       onClose={() => resolveConfirmation(false)}
       title="Push commits?"
-      // Deliberately says "commits", not "these commits": the same sentence has
-      // to be true in the states where there is nothing to point at — in sync,
-      // no destination, preview failed — and a description that asserts the push
-      // will happen sat directly above an error saying it cannot.
+      // Shown while the read is pending and when a push is actually about to
+      // publish something. Blocked and empty states drop it: the consequence of a
+      // push that can't or won't happen sat above the one fact that mattered,
+      // which now leads the frame instead.
       description={
-        <span>
-          Publishing puts commits on the remote, where everyone working from it sees them. Taking
-          them back afterwards needs a force-push.
-        </span>
+        isPending || hasOutgoing ? (
+          <span>
+            Publishing puts commits on the remote, where everyone working from it sees them. Taking
+            them back afterwards needs a force-push.
+          </span>
+        ) : undefined
       }
       confirmLabel="Push commits"
       cancelLabel="Cancel"
@@ -313,7 +320,7 @@ function GitPushConfirmDialogInner() {
               isLoaded && isCreatingBranch
                 ? "creates this branch"
                 : isLoaded && isUnverified
-                  ? "not checked"
+                  ? "not verified"
                   : undefined
             }
           >
@@ -336,7 +343,8 @@ function GitPushConfirmDialogInner() {
 
         {isInSync && (
           <PreviewNote testId="git-push-in-sync">
-            Nothing to publish &mdash; {destinationLabel} already has everything on this branch.
+            Nothing to publish &mdash; as of the last fetch, {destinationLabel} already has
+            everything on this branch.
           </PreviewNote>
         )}
 
@@ -369,8 +377,8 @@ function GitPushConfirmDialogInner() {
           saying it WILL be refused, is noise. */}
       {isLoaded && commits.length > 0 && behind === 0 && (
         <p className="text-2xs text-text-secondary">
-          If the remote has moved on since the last fetch, Git refuses the push rather than
-          overwriting it.
+          If the remote has commits this branch doesn&apos;t by then, Git refuses the push rather
+          than overwriting them.
         </p>
       )}
     </ConfirmDialog>

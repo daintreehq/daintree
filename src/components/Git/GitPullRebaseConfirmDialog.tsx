@@ -290,8 +290,8 @@ function GitPullRebaseConfirmDialogInner() {
       testId="git-pull-rebase-empty-unfetched"
     >
       {upstreamLabel} isn&apos;t available locally, so which of your commits would be rewritten
-      can&apos;t be worked out. Fetch it and retry. If fetching doesn&apos;t bring it in, the branch
-      was renamed or removed on the remote, and the upstream needs pointing somewhere else.
+      can&apos;t be worked out. Fetch it and retry. If it&apos;s still missing after that, check
+      that the upstream branch exists and that the remote&apos;s fetch settings include it.
     </PreviewNotice>
   ) : null;
 
@@ -300,16 +300,18 @@ function GitPullRebaseConfirmDialogInner() {
       isOpen={true}
       onClose={() => resolveConfirmation(false)}
       title="Pull and rebase local commits?"
-      // Describes what rebasing does rather than asserting what this one will do, so
-      // the same sentence stays true in the states with nothing to point at — no
-      // upstream, nothing to replay, preview failed. It also names the concrete
-      // consequence: "cannot be undone" told the user nothing they could act on,
-      // where "the hashes change" is the fact that actually breaks their branch.
+      // Shown while the read is pending and when the rebase will actually rewrite
+      // something. Everywhere else it described a rewrite the frame directly below
+      // said would not happen — nothing incoming, nothing to replay, or blocked —
+      // and it sat above the one fact that mattered. It names the concrete
+      // consequence: "the hashes change" is what actually breaks a branch.
       description={
-        <span>
-          Rebasing replays your local commits on top of the upstream, so each becomes a new commit
-          with a different hash and anything pointing at the old ones stops matching.
-        </span>
+        isPending || rewrites ? (
+          <span>
+            Rebasing replays your local commits on top of the upstream, so each becomes a new commit
+            with a different hash and anything pointing at the old ones stops matching.
+          </span>
+        ) : undefined
       }
       confirmLabel="Pull and rebase"
       cancelLabel="Cancel"
@@ -348,7 +350,7 @@ function GitPullRebaseConfirmDialogInner() {
               isMeasured
                 ? behind > 0
                   ? `${behind} incoming`
-                  : "nothing new since the last fetch"
+                  : "no incoming commits as of the last fetch"
                 : undefined
             }
           >
@@ -371,7 +373,7 @@ function GitPullRebaseConfirmDialogInner() {
 
         {isInSync && (
           <PreviewNote testId="git-pull-rebase-in-sync">
-            Nothing to pull or replay &mdash; {branch} already matches {upstreamLabel}.
+            Nothing incoming and nothing to replay, as of the last fetch.
           </PreviewNote>
         )}
 
@@ -381,7 +383,11 @@ function GitPullRebaseConfirmDialogInner() {
             commits and hid the fourteen it was about to be rebuilt on. */}
         {isMeasured && behind > 0 && (
           <>
-            <PreviewSectionHeading label={`Incoming from ${upstreamLabel}`} count={behind} />
+            <PreviewSectionHeading
+              label="Incoming from"
+              refName={upstreamLabel ?? undefined}
+              count={behind}
+            />
             <CommitRows
               commits={incoming}
               total={behind}
@@ -422,8 +428,8 @@ function GitPullRebaseConfirmDialogInner() {
           conflict caution, only where there is a replay for it to be about. */}
       {isMeasured && (
         <p className="text-2xs text-text-secondary">
-          The pull fetches first, so anything pushed to {upstreamLabel} since the last fetch comes
-          in too.
+          The pull fetches first, so anything pushed to the upstream since the last fetch comes in
+          too.
           {hasReplay &&
             " If a replay hits a conflict, Git stops mid-rebase and leaves the branch there to resolve."}
         </p>

@@ -21,6 +21,14 @@ const SHORT_HASH_LEN = 7;
 /** Rows the loading skeleton draws. Enough to hold the frame's height without claiming a count. */
 const SKELETON_ROWS = 3;
 
+/**
+ * The divider every section after the first draws above itself. Dropped as the
+ * frame's first child, and directly under a notice — which already draws the
+ * rule below itself, so a second one there doubled it.
+ */
+const SECTION_DIVIDER =
+  "border-t border-tint/[0.08] first:border-t-0 [[data-preview-notice]+&]:border-t-0";
+
 export interface PreviewCommit {
   hash: string;
   message: string;
@@ -29,7 +37,9 @@ export interface PreviewCommit {
 
 /** The bordered region that holds everything deciding whether the operation may proceed. */
 export function PreviewFrame({ children }: { children: ReactNode }) {
-  return <div className="rounded-lg border border-tint/[0.08] bg-tint/[0.04] text-xs">{children}</div>;
+  return (
+    <div className="rounded-lg border border-tint/[0.08] bg-tint/[0.04] text-xs">{children}</div>
+  );
 }
 
 export function PreviewSummary({ children, testId }: { children: ReactNode; testId?: string }) {
@@ -105,20 +115,39 @@ export function Bone({ className }: { className?: string }) {
   return (
     <span
       aria-hidden="true"
-      className={cn("inline-block h-3.5 rounded-lg bg-tint/[0.08] animate-pulse-delayed", className)}
+      className={cn(
+        "inline-block h-3.5 rounded-lg bg-tint/[0.08] animate-pulse-delayed",
+        className
+      )}
     />
   );
 }
 
-export function PreviewSectionHeading({ label, count }: { label: string; count?: number }) {
+/**
+ * `refName` is kept out of the uppercase eyebrow on purpose: refs are
+ * case-sensitive, and `INCOMING FROM ORIGIN/RELEASE/NEXT` named a branch that
+ * does not exist.
+ */
+export function PreviewSectionHeading({
+  label,
+  refName,
+  count,
+}: {
+  label: string;
+  refName?: string;
+  count?: number;
+}) {
   return (
-    <div className="px-3 py-2 border-t border-tint/[0.08] first:border-t-0">
+    <div className={cn("px-3 py-2", SECTION_DIVIDER)}>
       <span
         role="heading"
         aria-level={3}
-        className="text-2xs font-semibold uppercase tracking-wider text-text-secondary"
+        className="text-2xs font-semibold uppercase tracking-wider text-text-secondary break-words"
       >
         {label}
+        {refName && (
+          <span className="font-mono font-medium normal-case tracking-normal"> {refName}</span>
+        )}
         {count !== undefined && count > 0 && (
           <span className="ml-1.5 tabular-nums bg-tint/10 rounded-lg px-1 py-0.5 text-3xs font-medium normal-case tracking-normal">
             {count}
@@ -136,11 +165,7 @@ export function PreviewSectionHeading({ label, count }: { label: string; count?:
  */
 export function PreviewSkeleton({ label, testId }: { label: string; testId?: string }) {
   return (
-    <Skeleton
-      label={label}
-      data-testid={testId}
-      className="border-t border-tint/[0.08] first:border-t-0"
-    >
+    <Skeleton label={label} data-testid={testId} className={SECTION_DIVIDER}>
       <ul className="px-3 py-2 space-y-1.5">
         {Array.from({ length: SKELETON_ROWS }).map((_, i) => (
           <li key={i} className="flex items-baseline gap-2">
@@ -186,6 +211,7 @@ export function PreviewNotice({
     <div
       className="px-3 py-2.5 flex items-start gap-2 border-b border-tint/[0.08]"
       role={isError ? "alert" : "status"}
+      data-preview-notice=""
     >
       <AlertTriangle
         aria-hidden="true"
@@ -222,10 +248,7 @@ export function PreviewNotice({
 /** A plain statement standing in for a list — "nothing to publish", "14 behind". */
 export function PreviewNote({ children, testId }: { children: ReactNode; testId?: string }) {
   return (
-    <div
-      className="px-3 py-2.5 text-text-secondary border-t border-tint/[0.08] first:border-t-0"
-      data-testid={testId}
-    >
+    <div className={cn("px-3 py-2.5 text-text-secondary", SECTION_DIVIDER)} data-testid={testId}>
       {children}
     </div>
   );
@@ -241,6 +264,10 @@ export function PreviewNote({ children, testId }: { children: ReactNode; testId?
  *
  * The tail, when the range runs past what was fetched, states the cap as a fact
  * rather than promising rows nothing can open.
+ *
+ * Subjects and authors clip to one line at rest and wrap in full while the
+ * region has keyboard focus, so a keyboard user can read what a pointer user
+ * reads from the hover title — without a control, or a tab stop per row.
  */
 export function CommitRows({
   commits,
@@ -261,11 +288,8 @@ export function CommitRows({
   const hidden = Math.max(0, total - commits.length);
   return (
     <ScrollShadow
-      className={cn(
-        "border-t border-tint/[0.08] first:border-t-0",
-        compact ? "max-h-[132px]" : "max-h-[180px]"
-      )}
-      scrollClassName="scroll-py-8"
+      className={cn(SECTION_DIVIDER, compact ? "max-h-[132px]" : "max-h-[180px]")}
+      scrollClassName="group/commits scroll-py-8"
       tabIndex={0}
       role="region"
       aria-label={label}
@@ -278,14 +302,17 @@ export function CommitRows({
             </span>
             {/* The full subject on hover. Two long subjects sharing a prefix are
                 otherwise indistinguishable once both are clipped. */}
-            <span className="flex-1 min-w-0 truncate text-text-primary" title={commit.message}>
+            <span
+              className="flex-1 min-w-0 truncate text-text-primary group-focus-visible/commits:whitespace-normal group-focus-visible/commits:break-words"
+              title={commit.message}
+            >
               {commit.message}
             </span>
             {/* Bounded, unlike the rest of the row: an author is the least
                 important column, and left unbounded a long name took 45% of the
                 width and truncated the subject to twenty characters. */}
             <span
-              className="text-2xs text-text-secondary shrink-0 max-w-[7rem] truncate"
+              className="text-2xs text-text-secondary shrink-0 max-w-[7rem] truncate group-focus-visible/commits:whitespace-normal"
               title={commit.author}
             >
               {commit.author}

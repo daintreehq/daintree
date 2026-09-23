@@ -549,4 +549,27 @@ describe("GitPullRebaseConfirmDialog", () => {
     expect(await labelsFor(0)).not.toMatch(/rewrites/i);
     expect(await labelsFor(3)).toMatch(/rewrites/i);
   });
+
+  // "Each becomes a new commit with a different hash" is only true when the
+  // rebase rewrites something. Above a branch with nothing incoming it
+  // contradicted the frame directly beneath it.
+  it("states the rewrite's consequence only where something is rewritten", async () => {
+    const describes = async (behind: number) => {
+      mocks.buildPreview.mockResolvedValue(
+        loaded({ rebaseRange: { total: 1, rangeBasis: "tracked" as const, behind, incoming: [] } })
+      );
+      const view = render(<GitPullRebaseConfirmDialog />);
+      await act(async () => {
+        void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+      });
+      const id = screen.getByRole("dialog").getAttribute("aria-describedby");
+      const present = id !== null && document.getElementById(id) !== null;
+      act(() => useGitPullRebaseConfirmStore.getState().resolveConfirmation(false));
+      view.unmount();
+      return present;
+    };
+
+    expect(await describes(2)).toBe(true);
+    expect(await describes(0)).toBe(false);
+  });
 });

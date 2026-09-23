@@ -548,4 +548,40 @@ describe("GitPushConfirmDialog", () => {
 
     expect(screen.queryByTestId("git-push-diverged")).toBeNull();
   });
+
+  // The consequence sentence describes a push that happens. Above a blocked or
+  // empty state it described one that can't, and it sat above the reason why.
+  it("states the push's consequence only where the push will publish something", async () => {
+    const describes = async (preview: Record<string, unknown>) => {
+      mocks.buildPreview.mockResolvedValue(preview);
+      const view = render(<GitPushConfirmDialog />);
+      await act(async () => {
+        void useGitPushConfirmStore.getState().requestConfirmation("/repo");
+      });
+      const id = screen.getByRole("dialog").getAttribute("aria-describedby");
+      const present = id !== null && document.getElementById(id) !== null;
+      act(() => useGitPushConfirmStore.getState().resolveConfirmation(false));
+      view.unmount();
+      return present;
+    };
+    const base = {
+      branch: "topic",
+      repoOperation: null,
+      rebaseStep: null,
+      rebaseTotalSteps: null,
+      hasRemote: true,
+      destination: { remote: "origin", branch: "topic" },
+      pullSource: null,
+      commits: [{ hash: "abcdef12", message: "Local", author: "Ada" }],
+      pushRange: { total: 1, rangeBasis: "tracked" as const, behind: 0 },
+    };
+
+    expect(await describes(base)).toBe(true);
+    expect(await describes({ ...base, branch: null, destination: null, pushRange: null })).toBe(
+      false
+    );
+    expect(
+      await describes({ ...base, commits: [], pushRange: { ...base.pushRange, total: 0 } })
+    ).toBe(false);
+  });
 });
