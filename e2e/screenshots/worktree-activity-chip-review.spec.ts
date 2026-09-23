@@ -74,6 +74,9 @@ const POLISH_CSS = `
   }
 `;
 
+// A calendar date rather than a relative age: "May 6" or "Aug 19, 2025".
+const ABSOLUTE_DATE = /[A-Za-z]{3,} \d{1,2}/;
+
 const MINUTE = 60;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
@@ -390,7 +393,7 @@ test("worktree activity chip review — states and themes", async () => {
         timeout: T_LONG * 2,
       });
       await expect(chipOf(rows.anon)).toHaveText("2d", { timeout: T_LONG * 2 });
-      await expect(chipOf(rows.old)).toHaveText(/\d{4}/, { timeout: T_LONG * 2 });
+      await expect(chipOf(rows.old)).toHaveText(ABSOLUTE_DATE, { timeout: T_LONG * 2 });
       await refreshFresh(page, repo.freshFile);
       await parkPointer(page);
 
@@ -398,7 +401,7 @@ test("worktree activity chip review — states and themes", async () => {
         await snap(page, `${t}-10-sidebar-rest`, page.locator(SEL.sidebar.aside).first());
         await snap(page, `${t}-11-row-fresh`, detailsRowOf(rows.fresh), /now|\d+s/);
         await snap(page, `${t}-12-row-stale`, detailsRowOf(rows.stale), "3h");
-        await snap(page, `${t}-13-row-old`, detailsRowOf(rows.old), /\d{4}/);
+        await snap(page, `${t}-13-row-old`, detailsRowOf(rows.old), ABSOLUTE_DATE);
         await snap(page, `${t}-14-row-anon`, detailsRowOf(rows.anon), "2d");
       });
 
