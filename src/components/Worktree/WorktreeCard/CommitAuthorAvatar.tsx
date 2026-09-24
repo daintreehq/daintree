@@ -134,7 +134,7 @@ export function CommitAuthorAvatar({
       <span
         aria-hidden="true"
         className={cn(
-          "flex shrink-0 items-center justify-center bg-overlay-soft text-text-secondary",
+          "flex shrink-0 items-center justify-center bg-overlay-medium text-text-secondary",
           radius,
           className
         )}
