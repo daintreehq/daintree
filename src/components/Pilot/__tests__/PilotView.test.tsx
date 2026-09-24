@@ -1971,6 +1971,218 @@ describe("PilotView", () => {
 
       expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
     });
+
+    it("keeps the park actions outside the scrolling body", () => {
+      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      render(<PilotView />);
+      altEnter();
+
+      // A tall form on a short window scrolls the body; the verbs must not go
+      // with it.
+      const body = screen.getByRole("group", { name: "Agents" });
+      expect(body.contains(screen.getByTestId("pilot-park-editor"))).toBe(true);
+      expect(body.contains(screen.getByTestId("pilot-park-confirm"))).toBe(false);
+      expect(body.contains(screen.getByTestId("pilot-park-cancel"))).toBe(false);
+    });
+
+    it("names the dialog for the editing mode, and says it on screen", () => {
+      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      render(<PilotView />);
+      const listName = screen.getByRole("dialog").getAttribute("aria-label");
+      altEnter();
+
+      const dialog = screen.getByRole("dialog");
+      const name = dialog.getAttribute("aria-label") ?? "";
+      expect(name).not.toBe(listName);
+      // Label-in-name: what a screen reader announces is what the header shows.
+      expect(dialog.textContent).toContain(name);
+    });
+
+    it("describes the autofocused note with the run it parks", () => {
+      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      render(<PilotView />);
+      altEnter();
+
+      const note = screen.getByTestId("pilot-park-note");
+      const described = (note.getAttribute("aria-describedby") ?? "")
+        .split(" ")
+        .map((id) => document.getElementById(id)?.textContent ?? "")
+        .join(" ");
+      expect(described).toContain("auth spike");
+    });
+
+    it("ties a failed unpark to Unpark, not to Park", async () => {
+      unparkRunMock.mockRejectedValue(new Error("Run attention service unavailable"));
+      seed([
+        run({
+          agentState: "waiting",
+          title: "auth spike",
+          since: NOW - 60_000,
+          park: { parkedAt: NOW - 30_000, note: "old note" },
+        }),
+      ]);
+      render(<PilotView />);
+      altEnter();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("pilot-park-unpark"));
+      });
+
+      const alertId = screen.getByRole("alert").id;
+      expect(alertId).not.toBe("");
+      const describedBy = (testId: string) =>
+        (screen.getByTestId(testId).getAttribute("aria-describedby") ?? "").split(" ");
+      expect(describedBy("pilot-park-unpark")).toContain(alertId);
+      expect(describedBy("pilot-park-confirm")).not.toContain(alertId);
+    });
+
+    it("warns that an exited gate only releases if it runs again", () => {
+      seed([
+        run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),
+        run({ runId: "t2", agentState: "working", title: "alpha", since: NOW - 30_000 }),
+        run({ runId: "t3", agentState: "exited", title: "alpha", since: NOW - 90_000 }),
+      ]);
+      render(<PilotView />);
+      altEnter();
+
+      const group = screen.getByRole("radiogroup");
+      const help = () =>
+        document.getElementById(group.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
+      const [working, exited] = screen
+        .getAllByRole("radio")
+        .filter((r) => r.getAttribute("aria-label")?.startsWith("alpha"));
+      fireEvent.click(working!);
+      const workingCopy = help();
+      fireEvent.click(exited!);
+
+      // Same title, so any difference is down to the exited run alone.
+      expect(help()).toContain("alpha");
+      expect(help()).not.toBe(workingCopy);
+    });
+
+    it("commits with Enter from the gate list, with the gate under the cursor", async () => {
+      seed([
+        run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),
+        run({ runId: "t2", agentState: "working", title: "upstream", since: NOW - 30_000 }),
+      ]);
+      render(<PilotView />);
+      altEnter();
+
+      const gate = screen.getByRole("radio", { name: /upstream/ });
+      fireEvent.click(gate);
+      await act(async () => {
+        fireEvent.keyDown(gate, { key: "Enter" });
+      });
+
+      expect(parkRunMock).toHaveBeenCalledWith("t1", { gateRunId: "t2" });
+    });
+
+    it("marks exactly one gate checked, and the helper describes that choice", () => {
+      seed([
+        run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),
+        run({ runId: "t2", agentState: "working", title: "upstream", since: NOW - 30_000 }),
+      ]);
+      render(<PilotView />);
+      altEnter();
+
+      const group = screen.getByRole("radiogroup");
+      const help = () => document.getElementById(group.getAttribute("aria-describedby") ?? "");
+      const checked = () =>
+        screen.getAllByRole("radio").filter((r) => r instanceof HTMLInputElement && r.checked);
+
+      expect(checked()).toHaveLength(1);
+      const manualCopy = help()?.textContent ?? "";
+      expect(manualCopy).not.toContain("upstream");
+
+      fireEvent.click(screen.getByRole("radio", { name: /upstream/ }));
+
+      expect(checked()).toHaveLength(1);
+      expect(help()?.textContent).toContain("upstream");
+      expect(help()?.textContent).not.toBe(manualCopy);
+    });
+
+    it("hands focus back to the note when a park is rejected", async () => {
+      let reject: (reason: unknown) => void = () => {};
+      parkRunMock.mockReturnValue(
+        new Promise((_, r) => {
+          reject = r;
+        })
+      );
+      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      render(<PilotView />);
+      altEnter();
+
+      const note = screen.getByTestId("pilot-park-note");
+      note.focus();
+      await act(async () => {
+        fireEvent.keyDown(note, { key: "Enter" });
+      });
+      // Chromium drops focus from a control the moment it is disabled; jsdom
+      // does not, so move it away by hand to stand in for that.
+      const elsewhere = document.body.appendChild(document.createElement("button"));
+      act(() => {
+        elsewhere.focus();
+      });
+      expect(document.activeElement).not.toBe(note);
+
+      await act(async () => {
+        reject(new Error("Fleet state is unavailable right now"));
+      });
+
+      expect(screen.getByRole("alert")).toBeTruthy();
+      expect(document.activeElement).toBe(note);
+      elsewhere.remove();
+    });
+
+    it("says so when the chosen gate's run disappears, and falls back to manual", async () => {
+      seed([
+        run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),
+        run({ runId: "t2", agentState: "working", title: "upstream", since: NOW - 30_000 }),
+      ]);
+      render(<PilotView />);
+      altEnter();
+      fireEvent.click(screen.getByRole("radio", { name: /upstream/ }));
+      expect(screen.queryByTestId("pilot-park-gate-lost")).toBeNull();
+
+      act(() => {
+        seed([
+          run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),
+        ]);
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(screen.getByTestId("pilot-park-gate-lost")).toBeTruthy();
+      const manual = screen.getByTestId("pilot-park-gate-none");
+      expect(manual instanceof HTMLInputElement && manual.checked).toBe(true);
+    });
+
+    it("shows the wait on the button that was pressed, not on Park", async () => {
+      unparkRunMock.mockReturnValue(new Promise(() => {}));
+      seed([
+        run({
+          agentState: "waiting",
+          title: "auth spike",
+          since: NOW - 60_000,
+          park: { parkedAt: NOW - 30_000, note: "old note" },
+        }),
+      ]);
+      render(<PilotView />);
+      altEnter();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("pilot-park-unpark"));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+
+      expect(screen.getByTestId("pilot-park-unpark").getAttribute("aria-busy")).toBe("true");
+      expect(screen.getByTestId("pilot-park-confirm").getAttribute("aria-busy")).toBeNull();
+      // Busy, not disabled: disabling the focused control would blur it.
+      const unpark = screen.getByTestId("pilot-park-unpark");
+      expect(unpark instanceof HTMLButtonElement && !unpark.disabled).toBe(true);
+      expect(unpark.getAttribute("aria-disabled")).toBe("true");
+    });
   });
 });
 
