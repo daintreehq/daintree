@@ -101,9 +101,13 @@ describe("buildPulseCalendar — week-column geometry", () => {
       expect(labels[i]!.col - labels[i - 1]!.col).toBeGreaterThanOrEqual(3);
       expect(labels[i]!.label).not.toBe(labels[i - 1]!.label);
     }
-    for (const { col, label } of labels) {
-      const first = calendar.weeks[col]!.find((c) => c !== null)!;
-      expect(parseLocalDay(first.date)!.toLocaleDateString("en-US", { month: "short" })).toBe(
+    // Each label sits over the week that holds the 1st of its month.
+    for (const { col, label } of labels.slice(1)) {
+      const firsts = calendar.weeks[col]!.filter(
+        (c): c is HeatCell => c !== null && parseLocalDay(c.date)!.getDate() === 1
+      );
+      expect(firsts).toHaveLength(1);
+      expect(parseLocalDay(firsts[0]!.date)!.toLocaleDateString("en-US", { month: "short" })).toBe(
         label
       );
     }

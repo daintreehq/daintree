@@ -242,7 +242,7 @@ function PulseSkeleton({ className }: { className?: string }) {
       <div className="pulse-card-header animate-pulse-delayed px-4 py-3 border-b border-border-default flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-4 h-4 rounded-[2px] pulse-skeleton-shimmer shrink-0" />
-          <div className="h-4 pulse-skeleton-shimmer rounded w-36" />
+          <div className="h-4 pulse-skeleton-shimmer rounded-sm w-36" />
         </div>
         <div className="flex items-center gap-2">
           <div className="h-6 pulse-skeleton-shimmer rounded-md w-32" />
@@ -269,7 +269,7 @@ function PulseSkeleton({ className }: { className?: string }) {
           ))}
         </div>
 
-        <div className="h-3 pulse-skeleton-shimmer rounded w-72" />
+        <div className="h-3 pulse-skeleton-shimmer rounded-sm w-72" />
 
         <div className="border-t border-border-default pt-3 min-h-9">
           <div className="flex items-center gap-2">
@@ -282,9 +282,9 @@ function PulseSkeleton({ className }: { className?: string }) {
 
         <div className="border-t border-border-default pt-3">
           <div className="flex items-center gap-4">
-            <div className="h-4 pulse-skeleton-shimmer rounded w-20" />
-            <div className="h-4 pulse-skeleton-shimmer rounded w-24" />
-            <div className="h-4 pulse-skeleton-shimmer rounded w-16" />
+            <div className="h-4 pulse-skeleton-shimmer rounded-sm w-20" />
+            <div className="h-4 pulse-skeleton-shimmer rounded-sm w-24" />
+            <div className="h-4 pulse-skeleton-shimmer rounded-sm w-16" />
           </div>
         </div>
       </div>

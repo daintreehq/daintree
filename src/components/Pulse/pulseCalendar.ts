@@ -73,30 +73,27 @@ export function buildPulseCalendar(cells: HeatCell[]): PulseCalendar {
     weekStart = addDays(weekStart, 7), col += 1
   ) {
     const week: (HeatCell | null)[] = [];
-    let firstRealDay: Date | null = null;
     for (let row = 0; row < DAYS_PER_WEEK; row += 1) {
       const day = addDays(weekStart, row);
       const cell = byDay.get(day.getTime()) ?? null;
       week.push(cell);
-      if (cell) {
-        positions.set(cell.date, { row, col });
-        firstRealDay ??= day;
+      if (!cell) continue;
+      positions.set(cell.date, { row, col });
+
+      // A month is labelled over the week holding its first day in range —
+      // the 1st, or the range's opening day for the leading partial month —
+      // so the axis marks where each month actually begins. A week holds at
+      // most one month start; if the range opens in its last days, the later
+      // month takes the column.
+      const monthKey = day.getFullYear() * 12 + day.getMonth();
+      if (monthKey !== lastLabelledMonth) {
+        lastLabelledMonth = monthKey;
+        const label = day.toLocaleDateString("en-US", { month: "short" });
+        if (monthLabels[monthLabels.length - 1]?.col === col) monthLabels.pop();
+        monthLabels.push({ col, label });
       }
     }
     weeks.push(week);
-
-    // A column is labelled with the month its first real day belongs to, the
-    // first time that month appears — the month boundary, like a wall calendar.
-    if (firstRealDay) {
-      const monthKey = firstRealDay.getFullYear() * 12 + firstRealDay.getMonth();
-      if (monthKey !== lastLabelledMonth) {
-        lastLabelledMonth = monthKey;
-        monthLabels.push({
-          col,
-          label: firstRealDay.toLocaleDateString("en-US", { month: "short" }),
-        });
-      }
-    }
   }
 
   // When two labels would collide, drop the earlier one: it names a partial

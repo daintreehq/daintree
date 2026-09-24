@@ -3085,8 +3085,16 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
      on Canvas — invisible. Grid empty cells stay visible because they're
      <button>s with the border; give the legend's empty swatch an equivalent
      CanvasText border so "Less" remains a visible box. */
-  [data-testid="pulse-heatmap-legend"] .pulse-heat-cell:not([data-heat-level]) {
+  [data-testid="pulse-heatmap-legend"] .pulse-heat-cell {
     border: 1px solid CanvasText;
+  }
+
+  /* The latest-active ring is a box-shadow, which forced colors drops. Redraw
+     it as a dotted outline — distinct from the solid Highlight focus outline
+     above, so "last active" and "focused here" never read as one mark. */
+  .pulse-heat-cell[data-latest-active] {
+    outline: 1px dotted CanvasText;
+    outline-offset: 1px;
   }
 
   /* The canvas-home's collapsed pulse ribbon (ProjectPulseStrip.MiniRibbon).

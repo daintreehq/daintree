@@ -23,6 +23,7 @@ const GAP_PX = 3;
 const PITCH_PX = CELL_SIZE_PX + GAP_PX;
 const WEEKDAY_GUTTER_PX = 24;
 const MONTH_ROW_PX = 14;
+const TODAY_LABEL_PX = 36;
 
 // Per-theme opaque heat stops (pulse-heat-1..4) step in both lightness and
 // chroma (GitHub light-contributions model) rather than one hue at four alphas
@@ -92,8 +93,10 @@ function getCountText(cell: HeatCell): string {
 
 function formatDay(cell: HeatCell): string {
   const day = parseLocalDay(cell.date);
-  if (!day) return cell.date;
-  return day.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  const formatted = day
+    ? day.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
+    : cell.date;
+  return cell.isToday ? `Today, ${formatted}` : formatted;
 }
 
 function PulseHeatmapCell({
@@ -134,6 +137,9 @@ function PulseHeatmapCell({
           role="gridcell"
           aria-colindex={col + 1}
           data-cell-date={cell.date}
+          // Forced colors strips the ring's box-shadow; this hook lets that
+          // mode redraw the latest-active marker as an outline.
+          data-latest-active={cell.isMostRecentActive ? "" : undefined}
           // Clamp to >=1 for the CSS-level cue so a future renderer that emits
           // a positive-count cell with level: 0 doesn't render a 0-sized
           // CanvasText shape under forced-colors. The data layer currently
@@ -187,6 +193,8 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
   const calendar = useMemo(() => buildPulseCalendar(cells), [cells]);
   const { weeks, monthLabels, positions, days } = calendar;
   const gridWidth = weeks.length > 0 ? weeks.length * PITCH_PX - GAP_PX : 0;
+  const today = days.find((cell) => cell.isToday);
+  const todayRow = today ? positions.get(today.date)?.row : undefined;
 
   const cellRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const initialFocusKey = useMemo(() => {
@@ -246,7 +254,7 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
     <div
       className="grid"
       style={{
-        gridTemplateColumns: `${WEEKDAY_GUTTER_PX}px ${gridWidth}px`,
+        gridTemplateColumns: `${WEEKDAY_GUTTER_PX}px ${gridWidth}px ${TODAY_LABEL_PX}px`,
         gridTemplateRows: `${MONTH_ROW_PX}px auto`,
       }}
     >
@@ -272,6 +280,21 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
             {label}
           </span>
         ))}
+      </div>
+
+      {/* Today is always the grid's last day, but "the last cell" is a rule a
+          reader has to know; the label says it. It sits beside today's row,
+          past the grid's edge, where it never competes with a cell. */}
+      <div aria-hidden="true" className="relative col-start-3 row-start-2 select-none">
+        {todayRow !== undefined && (
+          <span
+            data-testid="pulse-heatmap-today"
+            className="absolute left-1.5 text-3xs text-text-secondary"
+            style={{ top: `${todayRow * PITCH_PX}px`, lineHeight: `${CELL_SIZE_PX}px` }}
+          >
+            Today
+          </span>
+        )}
       </div>
 
       <div
