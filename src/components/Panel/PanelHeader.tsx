@@ -72,6 +72,7 @@ import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnounc
 import {
   useAriaKeyshortcuts,
   useBackgroundPanelStats,
+  useEffectiveCombo,
   useKeybindingDisplay,
   useTabOverflow,
 } from "@/hooks";
@@ -375,10 +376,10 @@ function PanelHeaderComponent({
   const dismissFleetFailure = useFleetFailureStore((s) => s.dismissId);
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(id));
 
-  const duplicateShortcut = useKeybindingDisplay("terminal.duplicate");
-  const moveToDockShortcut = useKeybindingDisplay("terminal.moveToDock");
-  const maximizeShortcut = useKeybindingDisplay("terminal.maximize");
-  const closeShortcut = useKeybindingDisplay("terminal.close");
+  const duplicateShortcut = useEffectiveCombo("terminal.duplicate");
+  const moveToDockShortcut = useEffectiveCombo("terminal.moveToDock");
+  const maximizeShortcut = useEffectiveCombo("terminal.maximize");
+  const closeShortcut = useEffectiveCombo("terminal.close");
   const duplicateAriaShortcut = useAriaKeyshortcuts("terminal.duplicate");
   const moveToDockAriaShortcut = useAriaKeyshortcuts("terminal.moveToDock");
   const maximizeAriaShortcut = useAriaKeyshortcuts("terminal.maximize");

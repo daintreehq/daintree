@@ -97,6 +97,7 @@ import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import {
   useAriaKeyshortcuts,
   useDohertyGate,
+  useEffectiveCombo,
   useKeepMounted,
   useKeybindingDisplay,
   useShortcutHintHover,
@@ -772,7 +773,7 @@ export function Toolbar({
   const forgeStatsRef = useRef<ForgeStatsHandle>(null);
 
   const { handleCopyTree, handleCopyTreeWithOptions } = useWorktreeActions();
-  const sidebarShortcut = useKeybindingDisplay("nav.toggleSidebar");
+  const sidebarShortcut = useEffectiveCombo("nav.toggleSidebar");
   const copyTreeShortcut = useKeybindingDisplay("worktree.copyTree");
   const devServerShortcut = useKeybindingDisplay("devServer.start");
   const notificationsShortcut = useKeybindingDisplay("notifications.toggle");
@@ -783,6 +784,9 @@ export function Toolbar({
   const terminalShortcut = useKeybindingDisplay("agent.terminal");
   const browserShortcut = useKeybindingDisplay("agent.browser");
   const fileBrowserShortcut = useKeybindingDisplay("worktree.openFileBrowserPanel");
+  const copyTreeCombo = useEffectiveCombo("worktree.copyTree");
+  const devServerCombo = useEffectiveCombo("devServer.start");
+  const fileBrowserCombo = useEffectiveCombo("worktree.openFileBrowserPanel");
   const sidebarAriaShortcut = useAriaKeyshortcuts("nav.toggleSidebar");
   const copyTreeAriaShortcut = useAriaKeyshortcuts("worktree.copyTree");
   const fileBrowserAriaShortcut = useAriaKeyshortcuts("worktree.openFileBrowserPanel");
@@ -1304,7 +1308,7 @@ export function Toolbar({
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
                     {hasWorkspace
-                      ? createTooltipContent("Browse files", fileBrowserShortcut)
+                      ? createTooltipContent("Browse files", fileBrowserCombo)
                       : "Open a project or scratch to browse files"}
                   </TooltipContent>
                 </Tooltip>
@@ -1340,7 +1344,7 @@ export function Toolbar({
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent side="bottom">
-                      {createTooltipContent("Open dev preview", devServerShortcut)}
+                      {createTooltipContent("Open dev preview", devServerCombo)}
                     </TooltipContent>
                   </Tooltip>
                 </span>
@@ -1458,7 +1462,7 @@ export function Toolbar({
                     ) : !activeWorktree ? (
                       "Open a worktree first"
                     ) : (
-                      createTooltipContent("Copy context", copyTreeShortcut)
+                      createTooltipContent("Copy context", copyTreeCombo)
                     )}
                   </TooltipContent>
                 </Tooltip>
@@ -1599,6 +1603,7 @@ export function Toolbar({
       sidebarAriaShortcut,
       sidebarHintHover,
       copyTreeShortcut,
+      copyTreeCombo,
       copyTreeAriaShortcut,
       currentProject,
       handleCopyTreeOpenChange,
@@ -1624,10 +1629,10 @@ export function Toolbar({
       notificationsEnabled,
       pluginButtonIds,
       pluginConfigs,
-      devServerShortcut,
+      devServerCombo,
       devServerHintHover,
       openFileBrowser,
-      fileBrowserShortcut,
+      fileBrowserCombo,
       fileBrowserAriaShortcut,
       fileBrowserHintHover,
     ]

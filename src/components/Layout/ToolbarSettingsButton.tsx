@@ -10,7 +10,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
-import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { TOOLBAR_UNPIN_LABEL } from "./toolbarMenuStrings";
 
@@ -36,7 +36,7 @@ export function ToolbarSettingsButton({
   onPreloadSettings,
   "data-toolbar-item": dataToolbarItem,
 }: ToolbarSettingsButtonProps) {
-  const settingsShortcut = useKeybindingDisplay("app.settings");
+  const settingsShortcut = useEffectiveCombo("app.settings");
   const settingsAriaShortcut = useAriaKeyshortcuts("app.settings");
   const settingsHover = useShortcutHintHover("app.settings");
   const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);

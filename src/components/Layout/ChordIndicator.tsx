@@ -327,7 +327,6 @@ export function ChordIndicator() {
                         <KbdChord
                           shortcut={item.combo}
                           density="bare"
-                          aria-label={item.displayKey}
                           // The row lifts its label to primary text when
                           // selected; the key follows, or it sits under the
                           // 4.5:1 floor on the raised fill over bright content.

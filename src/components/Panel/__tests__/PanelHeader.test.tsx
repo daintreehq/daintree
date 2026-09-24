@@ -56,6 +56,7 @@ vi.mock("@/hooks", () => ({
   useBackgroundPanelStats: () => ({ activeCount: 0, workingCount: 0 }),
   useTabOverflow: () => mockHiddenTabIds,
   useKeybindingDisplay: (actionId: string) => mockKeybindingDisplays[actionId] ?? "",
+  useEffectiveCombo: (actionId: string) => mockKeybindingDisplays[actionId] || undefined,
   // Sentinel so tests can prove the close button's aria-keyshortcuts is present
   // on grid but omitted on dock. Only terminal.close resolves — keeps other
   // buttons (maximize, etc.) shortcut-less so unrelated tests are unaffected.

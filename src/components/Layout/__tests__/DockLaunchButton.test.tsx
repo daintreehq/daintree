@@ -173,6 +173,7 @@ const mockKeybindings: Record<string, string> = {};
 vi.mock("@/hooks", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   useKeybindingDisplay: (actionId: string) => mockKeybindings[actionId] ?? "",
+  useEffectiveCombo: (actionId: string) => mockKeybindings[actionId],
 }));
 
 vi.mock("@/components/KeyboardShortcuts", () => ({
@@ -2898,20 +2899,20 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       // The launcher row is keyed by panel KIND; the binding lives on the action
       // behind that kind's toolbar button. A row resolving the wrong action
       // would render nothing, or another panel's combo.
-      mockKeybindings["agent.terminal"] = "⌘⌥T";
-      mockKeybindings["worktree.openFileBrowserPanel"] = "⌘⌥E";
+      mockKeybindings["agent.terminal"] = "Cmd+Alt+T";
+      mockKeybindings["worktree.openFileBrowserPanel"] = "Cmd+Alt+E";
       const { container } = renderButton({ agents: READY });
 
-      expect(rowByName(container, "Terminal").textContent).toContain("⌘⌥T");
-      expect(rowByName(container, "File Browser").textContent).toContain("⌘⌥E");
+      expect(rowByName(container, "Terminal").textContent).toContain("Ctrl Alt T");
+      expect(rowByName(container, "File Browser").textContent).toContain("Ctrl Alt E");
       // ...and a row with no binding renders no stray hint.
-      expect(rowByName(container, "Browser").textContent).not.toContain("⌘");
+      expect(rowByName(container, "Browser").querySelector("kbd")).toBeNull();
     });
 
     it("shows an agent row's own binding", () => {
-      mockKeybindings["agent.claude"] = "⌘1";
+      mockKeybindings["agent.claude"] = "Cmd+1";
       const { container } = renderButton({ agents: READY });
-      expect(rowByName(container, "Claude").textContent).toContain("⌘1");
+      expect(rowByName(container, "Claude").textContent).toContain("Ctrl 1");
     });
 
     it("says it is still detecting rather than showing an empty agent inventory", () => {

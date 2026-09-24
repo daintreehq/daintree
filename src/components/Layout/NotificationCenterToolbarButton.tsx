@@ -5,7 +5,7 @@ import { Bell, BellOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
-import { useAriaKeyshortcuts, useKeybindingDisplay } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo } from "@/hooks";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
@@ -254,7 +254,7 @@ export function NotificationCenterToolbarButton({
     setDndAnnouncement(next ? "OS Do Not Disturb active" : "OS Do Not Disturb off");
   }, [osDndActive, isDndActive, notificationsEnabled]);
 
-  const shortcut = useKeybindingDisplay("notifications.toggle");
+  const shortcut = useEffectiveCombo("notifications.toggle");
   const ariaShortcut = useAriaKeyshortcuts("notifications.toggle");
 
   if (!notificationsEnabled) return null;

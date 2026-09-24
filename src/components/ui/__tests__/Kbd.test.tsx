@@ -79,3 +79,26 @@ describe("KbdChord", () => {
     });
   });
 });
+
+describe("KbdChord modifier glyph face", () => {
+  it.each(["default", "compact", "bare"] as const)(
+    "sets every macOS modifier glyph in one face and every other key in mono (%s)",
+    (density) => {
+      const { container } = render(
+        <KbdChord shortcut="Ctrl+Alt+Shift+Cmd+K Cmd+Enter" isMac density={density} />
+      );
+      const chips = Array.from(container.querySelectorAll("kbd"));
+      const glyphs = chips.filter((k) => /^[⌘⇧⌥⌃]$/.test(k.textContent ?? ""));
+      const others = chips.filter((k) => !glyphs.includes(k));
+      expect(glyphs.length).toBe(5);
+      expect(others.length).toBeGreaterThan(0);
+
+      const face = (k: Element) =>
+        k.className.split(/\s+/).filter((c) => /^font-(mono|sans)$/.test(c));
+      for (const k of glyphs) expect(face(k)).toEqual([face(glyphs[0]!)[0]]);
+      expect(face(glyphs[0]!)).not.toEqual(["font-mono"]);
+      for (const k of others) expect(face(k)).toEqual(["font-mono"]);
+      for (const k of chips) expect(k.className).toContain("leading-none");
+    }
+  );
+});

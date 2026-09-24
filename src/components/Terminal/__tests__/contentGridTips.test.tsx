@@ -4,6 +4,7 @@ import { act, render, fireEvent, cleanup } from "@testing-library/react";
 
 vi.mock("@/hooks/useKeybinding", () => ({
   useKeybindingDisplay: () => "",
+  useEffectiveCombo: () => undefined,
 }));
 
 const { dispatch } = vi.hoisted(() => ({ dispatch: vi.fn() }));

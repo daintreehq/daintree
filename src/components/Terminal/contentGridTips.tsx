@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useStore } from "zustand";
-import { Kbd } from "@/components/ui/Kbd";
-import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { Kbd, KbdChord } from "@/components/ui/Kbd";
+import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -35,7 +35,7 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to jump between open panels
+        Press <KbdChord shortcut={shortcut} /> to jump between open panels
       </>
     ),
     actionId: "nav.quickSwitcher",
@@ -51,7 +51,7 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to open a new terminal in this worktree
+        Press <KbdChord shortcut={shortcut} /> to open a new terminal in this worktree
       </>
     ),
     actionId: "terminal.new",
@@ -68,8 +68,8 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to open the panel palette — add terminals, file browsers, web
-        browsers, or dev previews
+        Press <KbdChord shortcut={shortcut} /> to open the panel palette — add terminals, file
+        browsers, web browsers, or dev previews
       </>
     ),
     actionId: "panel.palette",
@@ -85,7 +85,7 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to launch a Claude agent in this worktree
+        Press <KbdChord shortcut={shortcut} /> to launch a Claude agent in this worktree
       </>
     ),
     // `agent.claude`, NOT `agent.terminal`. The tip says "launch a Claude
@@ -113,7 +113,7 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to launch a Gemini agent in this worktree
+        Press <KbdChord shortcut={shortcut} /> to launch a Gemini agent in this worktree
       </>
     ),
     // Same correction as the Claude tip above.
@@ -131,7 +131,8 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to inject the project file tree into the focused terminal
+        Press <KbdChord shortcut={shortcut} /> to inject the project file tree into the focused
+        terminal
       </>
     ),
     actionId: "terminal.inject",
@@ -147,7 +148,8 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to open the command palette and search all available commands
+        Press <KbdChord shortcut={shortcut} /> to open the command palette and search all available
+        commands
       </>
     ),
     actionId: "action.palette.open",
@@ -163,7 +165,7 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to open the worktree palette and switch branches
+        Press <KbdChord shortcut={shortcut} /> to open the worktree palette and switch branches
       </>
     ),
     actionId: "worktree.openPalette",
@@ -179,7 +181,8 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to open the worktrees overview and manage all your branches
+        Press <KbdChord shortcut={shortcut} /> to open the worktrees overview and manage all your
+        branches
       </>
     ),
     actionId: "worktree.overview.open",
@@ -196,7 +199,7 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to quickly switch between available AI agents
+        Press <KbdChord shortcut={shortcut} /> to quickly switch between available AI agents
       </>
     ),
     actionId: "agent.palette",
@@ -214,7 +217,7 @@ export const TIPS: TipEntry[] = [
     message: <>Create a new worktree to isolate each task on its own branch</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to create a new worktree
+        Press <KbdChord shortcut={shortcut} /> to create a new worktree
       </>
     ),
     actionId: "worktree.createDialog.open",
@@ -225,7 +228,7 @@ export const TIPS: TipEntry[] = [
 export function LiveTipMessage({ tip }: { tip: TipEntry }) {
   "use memo";
   const lookupId = tip.shortcutActionId ?? tip.actionId ?? "";
-  const shortcut = useKeybindingDisplay(lookupId);
+  const shortcut = useEffectiveCombo(lookupId);
   if (tip.messageWithShortcut && shortcut) {
     return <>{tip.messageWithShortcut(shortcut)}</>;
   }

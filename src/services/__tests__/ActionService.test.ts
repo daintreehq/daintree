@@ -2122,7 +2122,7 @@ describe("ActionService", () => {
       service.register(makeAction("test.action"));
       await service.dispatch("test.action" as ActionId, undefined, { source: "user" });
 
-      expect(mockShow).toHaveBeenCalledWith("test.action", "⌘K");
+      expect(mockShow).toHaveBeenCalledWith("test.action", "Cmd+K");
       expect(mockIncrementCount).toHaveBeenCalledWith("test.action");
     });
 
@@ -2303,7 +2303,7 @@ describe("ActionService", () => {
         await service.dispatch("test.insideDialog" as ActionId, undefined, { source: "user" });
 
         expect(mockIncrementCount).toHaveBeenCalledWith("test.insideDialog");
-        expect(mockShow).toHaveBeenCalledWith("test.insideDialog", "⌘K");
+        expect(mockShow).toHaveBeenCalledWith("test.insideDialog", "Cmd+K");
       });
 
       it("suppresses the hint when one overlay replaces another at the same depth", async () => {
@@ -2335,7 +2335,7 @@ describe("ActionService", () => {
         await service.dispatch("test.transientDialog" as ActionId, undefined, { source: "user" });
 
         expect(mockIncrementCount).toHaveBeenCalledWith("test.transientDialog");
-        expect(mockShow).toHaveBeenCalledWith("test.transientDialog", "⌘K");
+        expect(mockShow).toHaveBeenCalledWith("test.transientDialog", "Cmd+K");
       });
 
       it("suppresses the hint when a claim id is released and re-registered", async () => {
@@ -2368,7 +2368,7 @@ describe("ActionService", () => {
         await service.dispatch("test.closesDialog" as ActionId, undefined, { source: "user" });
 
         expect(mockIncrementCount).toHaveBeenCalledWith("test.closesDialog");
-        expect(mockShow).toHaveBeenCalledWith("test.closesDialog", "⌘K");
+        expect(mockShow).toHaveBeenCalledWith("test.closesDialog", "Cmd+K");
       });
     });
   });

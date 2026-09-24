@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { BrandMark } from "@/components/icons";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
-import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { actionService } from "@/services/ActionService";
@@ -182,7 +182,7 @@ export function AgentButton({
   "data-toolbar-item": dataToolbarItem,
 }: AgentButtonProps) {
   const hasWorktrees = useWorktreeStore((s) => s.worktrees.size > 0);
-  const displayCombo = useKeybindingDisplay(`agent.${type}`);
+  const effectiveCombo = useEffectiveCombo(`agent.${type}`);
   const ariaShortcut = useAriaKeyshortcuts(`agent.${type}`);
   const hover = useShortcutHintHover(`agent.${type}`);
   const agentSettings = useAgentSettingsStore((s) => s.settings);
@@ -334,7 +334,7 @@ export function AgentButton({
         ? `Start ${config.name}${presetSegment}${visibleStateSuffix} — sign-in not detected`
         : `Start ${config.name}${presetSegment}${visibleStateSuffix}`
       : unavailableLabel;
-  const tooltipShortcut = isLaunchable ? displayCombo : undefined;
+  const tooltipShortcut = isLaunchable ? effectiveCombo : undefined;
   const chevronTooltip = isLoading
     ? `Checking ${config.name} CLI availability...`
     : isLaunchable

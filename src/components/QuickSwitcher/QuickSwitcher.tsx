@@ -1,12 +1,9 @@
 import { useCallback, useId } from "react";
+import { KbdChord } from "@/components/ui/Kbd";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
-import {
-  KBD_CLASS,
-  PaletteFooterHints,
-  PaletteNoMatchHint,
-} from "@/components/ui/AppPaletteDialog";
+import { PaletteFooterHints, PaletteNoMatchHint } from "@/components/ui/AppPaletteDialog";
 import { QuickSwitcherItem } from "./QuickSwitcherItem";
-import { useKeybindingDisplay, useEffectiveCombo } from "@/hooks/useKeybinding";
+import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import type {
   QuickSwitcherItem as QuickSwitcherItemData,
   UseQuickSwitcherReturn,
@@ -79,7 +76,7 @@ export function QuickSwitcher({
     [footerHintId]
   );
 
-  const newTerminalShortcut = useKeybindingDisplay("terminal.new");
+  const newTerminalShortcut = useEffectiveCombo("terminal.new");
   const quickSwitcherShortcut = useEffectiveCombo("nav.quickSwitcher");
 
   return (
@@ -124,7 +121,7 @@ export function QuickSwitcher({
         <p className="mt-2 text-xs text-text-secondary">
           {newTerminalShortcut ? (
             <>
-              Press <kbd className={KBD_CLASS}>{newTerminalShortcut}</kbd> to create a terminal.
+              Press <KbdChord shortcut={newTerminalShortcut} /> to create a terminal.
             </>
           ) : (
             "Create a terminal to get started."

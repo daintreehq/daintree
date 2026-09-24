@@ -39,7 +39,7 @@ import { VoiceInputButton } from "./VoiceInputButton";
 import { Archive, Loader2 } from "lucide-react";
 import { Paperclip } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useVoiceWaitSubmit } from "./hooks/useVoiceWaitSubmit";
 import { registerInputController, unregisterInputController } from "@/store/terminalInputStore";
@@ -230,7 +230,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
       return s.stashedEditorStates.has(key);
     });
-    const popStashShortcut = useKeybindingDisplay("terminal.popStash");
+    const popStashShortcut = useEffectiveCombo("terminal.popStash");
     const [value, setValue] = useState(() => getDraftInput(terminalId, projectId));
     const submitAfterCompositionRef = useRef(false);
     const isComposingRef = useRef(false);

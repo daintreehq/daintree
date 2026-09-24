@@ -121,7 +121,7 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 }));
 
 vi.mock("@/hooks", () => ({
-  useKeybindingDisplay: () => null,
+  useEffectiveCombo: () => undefined,
   useAriaKeyshortcuts: () => undefined,
   useShortcutHintHover: () => ({
     onPointerEnter: () => {},

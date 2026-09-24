@@ -404,9 +404,9 @@ describe("comboToAriaKeyshortcuts — edge cases", () => {
     expect(comboToAriaKeyshortcuts("   ", true)).toBeUndefined();
   });
 
-  it("handles literal + key (Ctrl++)", () => {
-    expect(comboToAriaKeyshortcuts("Ctrl++", false)).toBe("Control++");
-    expect(comboToAriaKeyshortcuts("Cmd+Shift++", true)).toBe("Meta+Shift++");
+  it("spells a literal + key as Plus (Ctrl++)", () => {
+    expect(comboToAriaKeyshortcuts("Ctrl++", false)).toBe("Control+Plus");
+    expect(comboToAriaKeyshortcuts("Cmd+Shift++", true)).toBe("Meta+Shift+Plus");
   });
 
   it("uppercases single-char keys", () => {
@@ -493,5 +493,30 @@ describe("describeChord", () => {
 
   it("returns an empty string for an empty shortcut", () => {
     expect(describeChord("", true)).toBe("");
+  });
+
+  it("omits every sequence the chips show as more than one step", () => {
+    const edgeCases = ["Cmd++ Cmd+P", "Cmd+K +", "Cmd+K  Cmd+S", "Ctrl++", "Cmd+Shift+P"];
+    for (const combo of [...edgeCases, ...combos]) {
+      for (const mac of [true, false]) {
+        const aria = comboToAriaKeyshortcuts(combo, mac);
+        if (parseChord(combo, mac).length > 1) expect(aria, combo).toBeUndefined();
+        else expect(aria, combo).not.toMatch(/\+\+|\+$/);
+      }
+    }
+  });
+
+  it("speaks exactly the steps and keys the chips show, literal plus included", () => {
+    const edgeCases = ["Cmd++ Cmd+P", "Cmd+K +", "Ctrl++", " Cmd + Shift + P ", "Cmd+K  Cmd+S"];
+    for (const combo of [...edgeCases, ...combos]) {
+      for (const mac of [true, false]) {
+        const shown = parseChord(combo, mac);
+        const spoken = describeChord(combo, mac).split(", then ");
+        expect(spoken.length, combo).toBe(shown.length);
+        spoken.forEach((step, i) => {
+          if (shown[i]!.includes("+")) expect(step, combo).toMatch(/\bPlus\b/);
+        });
+      }
+    }
   });
 });

@@ -96,6 +96,29 @@ function splitStepKeys(step: string): string[] {
 }
 
 /**
+ * Split a shortcut into its chord steps' raw keys.
+ *
+ * Collapse whitespace around a JOINING `+` so " Cmd + Shift + P " stays a
+ * single chord step. Remaining whitespace is the chord-step separator.
+ *
+ * Only a `+` between two keys joins. A `+` standing alone as a step
+ * ("Cmd+K +") or doubled as a literal key before a step break ("Cmd++ Cmd+P")
+ * is a key, and the whitespace beside it is a step boundary — collapsing it
+ * there dropped the literal step or merged two steps into one.
+ */
+function splitChordSteps(shortcut: string): string[][] {
+  const normalized = shortcut
+    .trim()
+    .replace(/\s+\+\s+(?=\S)/g, "+")
+    .replace(/(?<=[^\s+])\+\s+(?=\S)/g, "+")
+    .replace(/\s+\+(?=[^\s+])/g, "+");
+  return normalized
+    .split(/\s+/)
+    .map((step) => splitStepKeys(step))
+    .filter((tokens) => tokens.length > 0);
+}
+
+/**
  * Parse a shortcut string into display tokens grouped by chord step.
  *
  * @example
@@ -106,25 +129,7 @@ function splitStepKeys(step: string): string[] {
  */
 export function parseChord(shortcut: string, isMac: boolean): string[][] {
   if (!shortcut || !shortcut.trim()) return [];
-
-  // Collapse whitespace around a JOINING `+` so " Cmd + Shift + P " stays a
-  // single chord step. Remaining whitespace is the chord-step separator.
-  //
-  // Only a `+` between two keys joins. A `+` standing alone as a step
-  // ("Cmd+K +") or doubled as a literal key before a step break ("Cmd++ Cmd+P")
-  // is a key, and the whitespace beside it is a step boundary — collapsing it
-  // there dropped the literal step or merged two steps into one.
-  const normalized = shortcut
-    .trim()
-    .replace(/\s+\+\s+(?=\S)/g, "+")
-    .replace(/(?<=[^\s+])\+\s+(?=\S)/g, "+")
-    .replace(/\s+\+(?=[^\s+])/g, "+");
-  const steps = normalized
-    .split(/\s+/)
-    .map((step) => splitStepKeys(step))
-    .filter((tokens) => tokens.length > 0);
-
-  return steps.map((tokens) => tokens.map((token) => mapToken(token, isMac)));
+  return splitChordSteps(shortcut).map((tokens) => tokens.map((token) => mapToken(token, isMac)));
 }
 
 // ── Search utilities ──────────────────────────────────────────────────────
@@ -217,6 +222,8 @@ const ARIA_WIN_MODIFIERS: Record<string, string> = {
 };
 
 const ARIA_KEY_NAMES: Record<string, string> = {
+  // `+` is the grammar's own joiner, so the literal key is spelled out.
+  "+": "Plus",
   return: "Enter",
   enter: "Enter",
   escape: "Escape",
@@ -261,7 +268,7 @@ function mapAriaToken(rawToken: string, modifiers: Record<string, string>): stri
  *
  * @example
  * comboToAriaKeyshortcuts("Cmd+Shift+P", true)  // "Meta+Shift+P"
- * comboToAriaKeyshortcuts("Ctrl++", false)      // "Control++"
+ * comboToAriaKeyshortcuts("Ctrl++", false)      // "Control+Plus"
  * comboToAriaKeyshortcuts("Cmd+K T", true)      // undefined (chord)
  * comboToAriaKeyshortcuts(undefined, true)      // undefined
  */
@@ -272,13 +279,11 @@ export function comboToAriaKeyshortcuts(
   if (!combo || !combo.trim()) return undefined;
 
   const modifiers = isMac ? ARIA_MAC_MODIFIERS : ARIA_WIN_MODIFIERS;
-  const normalized = combo.trim().replace(/\s*\+\s*/g, "+");
-
-  const steps = normalized
-    .split(/\s+/)
-    .map((step) => splitStepKeys(step))
-    .filter((tokens) => tokens.length > 0)
-    .map((tokens) => tokens.map((token) => mapAriaToken(token, modifiers)).join("+"));
+  // The same step split the chips use, so a literal-plus chord is still seen
+  // as two steps and omitted rather than merged into one wrong shortcut.
+  const steps = splitChordSteps(combo).map((tokens) =>
+    tokens.map((token) => mapAriaToken(token, modifiers)).join("+")
+  );
 
   if (steps.length === 0) return undefined;
   if (steps.length > 1) return undefined;
@@ -394,11 +399,8 @@ function spokenToken(rawToken: string, isMac: boolean): string {
  */
 export function describeChord(shortcut: string, isMac: boolean): string {
   if (!shortcut || !shortcut.trim()) return "";
-  const normalized = shortcut.trim().replace(/\s*\+\s*/g, "+");
-  return normalized
-    .split(/\s+/)
-    .map((step) => splitStepKeys(step))
-    .filter((tokens) => tokens.length > 0)
+  // The same step split the chips use, so what is spoken is what is shown.
+  return splitChordSteps(shortcut)
     .map((tokens) => tokens.map((token) => spokenToken(token, isMac)).join(" "))
     .join(", then ");
 }

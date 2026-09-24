@@ -9,14 +9,14 @@ import {
   TOOLTIP_FOCUS_SUPPRESS_MS,
 } from "@/lib/tooltipDismissRegistry";
 
-const { getDisplayComboMock, subscribeMock } = vi.hoisted(() => ({
-  getDisplayComboMock: vi.fn(() => "⌘B"),
+const { getEffectiveComboMock, subscribeMock } = vi.hoisted(() => ({
+  getEffectiveComboMock: vi.fn<() => string | undefined>(() => "Cmd+B"),
   subscribeMock: vi.fn(() => () => {}),
 }));
 
 vi.mock("@/services/KeybindingService", () => ({
   keybindingService: {
-    getDisplayCombo: getDisplayComboMock,
+    getEffectiveCombo: getEffectiveComboMock,
     subscribe: subscribeMock,
   },
 }));
@@ -77,7 +77,7 @@ describe("useShortcutHintHover", () => {
     const { result } = renderHook(() => useShortcutHintHover("nav.toggleSidebar"));
 
     act(() => {
-      vi.advanceTimersByTime(10); // let the useEffect for displayCombo run
+      vi.advanceTimersByTime(10); // let the useEffect for the combo run
     });
 
     act(() => {
@@ -97,7 +97,7 @@ describe("useShortcutHintHover", () => {
     const hint = shortcutHintStore.getState().activeHint;
     expect(hint).not.toBeNull();
     expect(hint!.actionId).toBe("nav.toggleSidebar");
-    expect(hint!.displayCombo).toBe("⌘B");
+    expect(hint!.combo).toBe("Cmd+B");
   });
 
   it("cancels dwell timer on pointer leave", () => {
@@ -128,8 +128,8 @@ describe("useShortcutHintHover", () => {
     expect(shortcutHintStore.getState().activeHint).toBeNull();
   });
 
-  it("skips when displayCombo is empty", () => {
-    getDisplayComboMock.mockReturnValue("");
+  it("skips when the action has no binding", () => {
+    getEffectiveComboMock.mockReturnValue(undefined);
 
     shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 0 });
 
@@ -178,7 +178,7 @@ describe("useShortcutHintHover", () => {
   });
 
   it("suppresses hint for non-milestone non-zero count", () => {
-    getDisplayComboMock.mockReturnValue("⌘B");
+    getEffectiveComboMock.mockReturnValue("Cmd+B");
     // Count 3 is not a milestone
     shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 3 });
 
@@ -335,7 +335,7 @@ describe("useShortcutHintHover", () => {
   // --- Focus parity tests (WCAG 1.4.13) ---
 
   it("shows hint immediately on focus, positioned from getBoundingClientRect", () => {
-    getDisplayComboMock.mockReturnValue("⌘B");
+    getEffectiveComboMock.mockReturnValue("Cmd+B");
     shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 0 });
 
     const { result } = renderHook(() => useShortcutHintHover("nav.toggleSidebar"));
@@ -352,13 +352,13 @@ describe("useShortcutHintHover", () => {
     const hint = shortcutHintStore.getState().activeHint;
     expect(hint).not.toBeNull();
     expect(hint!.actionId).toBe("nav.toggleSidebar");
-    expect(hint!.displayCombo).toBe("⌘B");
+    expect(hint!.combo).toBe("Cmd+B");
     expect(hint!.x).toBe(42);
     expect(hint!.y).toBe(84);
   });
 
-  it("skips focus hint when displayCombo is empty", () => {
-    getDisplayComboMock.mockReturnValue("");
+  it("skips focus hint when the action has no binding", () => {
+    getEffectiveComboMock.mockReturnValue(undefined);
     shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 0 });
 
     const { result } = renderHook(() => useShortcutHintHover("nav.toggleSidebar"));
@@ -375,7 +375,7 @@ describe("useShortcutHintHover", () => {
   });
 
   it("suppresses focus hint when trigger data-state is delayed-open", () => {
-    getDisplayComboMock.mockReturnValue("⌘B");
+    getEffectiveComboMock.mockReturnValue("Cmd+B");
     shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 0 });
 
     const { result } = renderHook(() => useShortcutHintHover("nav.toggleSidebar"));
@@ -394,7 +394,7 @@ describe("useShortcutHintHover", () => {
   });
 
   it("suppresses focus hint for non-milestone non-zero count", () => {
-    getDisplayComboMock.mockReturnValue("⌘B");
+    getEffectiveComboMock.mockReturnValue("Cmd+B");
     // Count 3 is not a milestone
     shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 3 });
 
@@ -415,7 +415,7 @@ describe("useShortcutHintHover", () => {
     // A dialog's focus restoration lands on the trigger with nothing
     // hovered — the teaching hint must not fire, mirroring the tooltip
     // focus-open suppression.
-    getDisplayComboMock.mockReturnValue("⌘B");
+    getEffectiveComboMock.mockReturnValue("Cmd+B");
     shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 0 });
 
     const { result } = renderHook(() => useShortcutHintHover("nav.toggleSidebar"));
@@ -441,7 +441,7 @@ describe("useShortcutHintHover", () => {
   });
 
   it("hides the hint on blur", () => {
-    getDisplayComboMock.mockReturnValue("⌘B");
+    getEffectiveComboMock.mockReturnValue("Cmd+B");
     shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 0 });
 
     const { result } = renderHook(() => useShortcutHintHover("nav.toggleSidebar"));
@@ -462,7 +462,7 @@ describe("useShortcutHintHover", () => {
   });
 
   it("blur does not hide a hint owned by a different element", () => {
-    getDisplayComboMock.mockReturnValue("⌘B");
+    getEffectiveComboMock.mockReturnValue("Cmd+B");
     shortcutHintStore.getState().hydrateCounts({
       "nav.toggleSidebar": 0,
       "panel.togglePortal": 0,
@@ -481,7 +481,9 @@ describe("useShortcutHintHover", () => {
     });
     // B's hint then takes over (simulating a pointer dwell on B).
     act(() => {
-      shortcutHintStore.getState().show("panel.togglePortal", "⌘P", { x: 9, y: 9 });
+      shortcutHintStore
+        .getState()
+        .show("panel.togglePortal", "Cmd+P", { x: 9, y: 9, origin: "hover" });
     });
     expect(shortcutHintStore.getState().activeHint!.actionId).toBe("panel.togglePortal");
 
@@ -499,7 +501,7 @@ describe("useShortcutHintHover", () => {
   });
 
   it("focus cancels a pending pointer dwell timer (no double-show)", () => {
-    getDisplayComboMock.mockReturnValue("⌘B");
+    getEffectiveComboMock.mockReturnValue("Cmd+B");
     shortcutHintStore.getState().hydrateCounts({ "nav.toggleSidebar": 0 });
 
     const { result } = renderHook(() => useShortcutHintHover("nav.toggleSidebar"));

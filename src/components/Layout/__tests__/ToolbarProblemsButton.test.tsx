@@ -91,7 +91,7 @@ function getIconHostClassName(container: HTMLElement): string {
 
 vi.mock("@/hooks", () => ({
   useAriaKeyshortcuts: () => "",
-  useKeybindingDisplay: () => "",
+  useEffectiveCombo: () => undefined,
   useShortcutHintHover: () => ({}),
 }));
 

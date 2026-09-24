@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
-import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { useFocusStore } from "@/store/focusStore";
@@ -106,7 +106,7 @@ export function ToolbarAssistantButton({
     return best;
   });
   const mcp = useMcpReadiness();
-  const shortcut = useKeybindingDisplay("help.togglePanel");
+  const shortcut = useEffectiveCombo("help.togglePanel");
   const ariaShortcut = useAriaKeyshortcuts("help.togglePanel");
   const hintHover = useShortcutHintHover("help.togglePanel");
 

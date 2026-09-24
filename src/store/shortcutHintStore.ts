@@ -18,11 +18,43 @@ function flushHintedHover(hintedHover: Set<string>): void {
   window.electron?.shortcutHints?.setHintedHover([...hintedHover])?.catch(() => {});
 }
 
+/**
+ * What raised the hint. A hint that follows a click is feedback and expires on
+ * its own; one raised by hover or focus is content on hover or focus (WCAG
+ * 1.4.13) and has to stay until the pointer leaves, focus moves, or Escape.
+ */
+export type ShortcutHintOrigin = "dispatch" | "hover" | "focus";
+
+export interface ShortcutHintRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+export interface ShortcutHint {
+  actionId: string;
+  /** The effective combo as the keybinding registry stores it (`Cmd+Shift+P`). */
+  combo: string;
+  origin: ShortcutHintOrigin;
+  x: number;
+  y: number;
+  /** The element that raised a hover or focus hint. */
+  trigger?: ShortcutHintRect;
+}
+
+export interface ShortcutHintPlacement {
+  x: number;
+  y: number;
+  origin: Exclude<ShortcutHintOrigin, "dispatch">;
+  trigger?: ShortcutHintRect;
+}
+
 export interface ShortcutHintState {
   counts: Record<string, number>;
   hydrated: boolean;
   pointer: { x: number; y: number; ts: number } | null;
-  activeHint: { actionId: string; displayCombo: string; x: number; y: number } | null;
+  activeHint: ShortcutHint | null;
   /** Tracks (actionId, count) pairs that have already triggered a hover hint. */
   hintedHover: Set<string>;
 }
@@ -32,7 +64,7 @@ export interface ShortcutHintActions {
   /** Seeds the one-shot hover gate from persisted keys (`actionId@count`). */
   hydrateHintedHover(keys: string[]): void;
   recordPointer(x: number, y: number): void;
-  show(actionId: string, displayCombo: string, position?: { x: number; y: number }): boolean;
+  show(actionId: string, combo: string, placement?: ShortcutHintPlacement): boolean;
   hide(): void;
   incrementCount(actionId: string): void;
   /** Returns true if a hover-triggered hint is eligible for this action at its current count. */
@@ -62,26 +94,21 @@ export const shortcutHintStore = createStore<ShortcutHintStore>((set, get) => ({
     set({ pointer: { x, y, ts: Date.now() } });
   },
 
-  show(actionId: string, displayCombo: string, position?: { x: number; y: number }): boolean {
-    const { counts } = get();
-
-    let x: number;
-    let y: number;
-    if (position) {
-      // Hover path: use explicit position. Caller (hook) handles eligibility.
-      x = position.x;
-      y = position.y;
-    } else {
-      // Dispatch path: use pointer tracking with milestone gating.
-      const { pointer } = get();
-      if (!pointer) return false;
-      if (Date.now() - pointer.ts > POINTER_STALE_MS) return false;
-      if (!HINT_MILESTONES.has(counts[actionId] ?? 0)) return false;
-      x = pointer.x;
-      y = pointer.y;
+  show(actionId: string, combo: string, placement?: ShortcutHintPlacement): boolean {
+    if (placement) {
+      // Hover/focus path: caller (hook) handles eligibility.
+      const { x, y, origin, trigger } = placement;
+      set({ activeHint: { actionId, combo, origin, x, y, trigger } });
+      return true;
     }
 
-    set({ activeHint: { actionId, displayCombo, x, y } });
+    // Dispatch path: use pointer tracking with milestone gating.
+    const { counts, pointer } = get();
+    if (!pointer) return false;
+    if (Date.now() - pointer.ts > POINTER_STALE_MS) return false;
+    if (!HINT_MILESTONES.has(counts[actionId] ?? 0)) return false;
+
+    set({ activeHint: { actionId, combo, origin: "dispatch", x: pointer.x, y: pointer.y } });
     return true;
   },
 

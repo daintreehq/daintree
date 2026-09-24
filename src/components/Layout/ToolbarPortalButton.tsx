@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { MessageSquareMore } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
-import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { usePortalStore } from "@/store";
 
 const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
@@ -14,7 +14,7 @@ export function ToolbarPortalButton({
 }) {
   const portalOpen = usePortalStore((state) => state.isOpen);
   const togglePortal = usePortalStore((state) => state.toggle);
-  const portalShortcut = useKeybindingDisplay("panel.togglePortal");
+  const portalShortcut = useEffectiveCombo("panel.togglePortal");
   const portalAriaShortcut = useAriaKeyshortcuts("panel.togglePortal");
   const portalHintHover = useShortcutHintHover("panel.togglePortal");
 

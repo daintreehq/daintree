@@ -6,7 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { PortalToolbar } from "../PortalToolbar";
 
 vi.mock("@/hooks", () => ({
-  useKeybindingDisplay: () => "",
+  useEffectiveCombo: () => undefined,
   useAriaKeyshortcuts: () => undefined,
   useOverlayClaim: () => {},
 }));

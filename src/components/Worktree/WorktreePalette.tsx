@@ -1,8 +1,8 @@
 import { cn } from "@/lib/utils";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
-import { KBD_CLASS } from "@/components/ui/AppPaletteDialog";
-import { useKeybindingDisplay, useEffectiveCombo } from "@/hooks/useKeybinding";
+import { KbdChord } from "@/components/ui/Kbd";
+import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import type { WorktreeState } from "@/types";
@@ -94,7 +94,7 @@ export function WorktreePalette({
   onConfirm,
   onClose,
 }: WorktreePaletteProps) {
-  const createWorktreeShortcut = useKeybindingDisplay("worktree.createDialog.open");
+  const createWorktreeShortcut = useEffectiveCombo("worktree.createDialog.open");
   const worktreePaletteShortcut = useEffectiveCombo("worktree.openPalette");
 
   return (
@@ -134,7 +134,7 @@ export function WorktreePalette({
         <p className="mt-2 text-xs text-text-secondary">
           {createWorktreeShortcut ? (
             <>
-              Press <kbd className={KBD_CLASS}>{createWorktreeShortcut}</kbd> to create a worktree.
+              Press <KbdChord shortcut={createWorktreeShortcut} /> to create a worktree.
             </>
           ) : (
             "Create a worktree to get started."
