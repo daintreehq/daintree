@@ -59,6 +59,11 @@ const FIXTURES: ReadonlyArray<{ name: string; expect: RegExp[]; absent?: RegExp[
     expect: [/Workspace service unavailable/],
     absent: [/Couldn.t load worktrees/],
   },
+  {
+    name: "loading-service-error",
+    expect: [/Workspace service unavailable/],
+    absent: [/Couldn.t load worktrees/],
+  },
   { name: "disconnected-service-error", expect: [/Workspace service unavailable/] },
 ];
 

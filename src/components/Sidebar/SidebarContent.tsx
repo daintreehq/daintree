@@ -569,9 +569,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const workspaceRoot = useWorkspaceRoot();
   const worktreeLoadError = useProjectStore((state) => state.worktreeLoadError);
   // A load that already failed is not still loading. The store keeps
-  // `isLoading` when a switch's load throws, and the skeleton under the
-  // failure banner said the list was loading and had failed at once.
-  const isLoading = isStoreLoading && worktreeLoadError === null;
+  // `isLoading` when a switch's load throws or the host dies before the first
+  // snapshot, and the skeleton branch would say the list is loading while
+  // hiding the only recovery — Retry for the one, Restart for the other.
+  const isLoading = isStoreLoading && worktreeLoadError === null && error === null;
   useProjectSettings();
   const { availability, agentSettings } = useAgentLauncher();
   const {

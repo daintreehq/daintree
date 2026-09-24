@@ -630,12 +630,17 @@ describe("SidebarContent disconnected project — issue #12576", () => {
     // A switch whose load threw leaves the store `isLoading`; a skeleton under
     // the failure banner says the list is loading and has failed at once.
     expect(source).toMatch(/isLoading: isStoreLoading,/);
-    expect(source).toContain("const isLoading = isStoreLoading && worktreeLoadError === null;");
+    const derivation = source.match(/const isLoading = isStoreLoading && ([^;]+);/);
+    expect(derivation).not.toBeNull();
+    // Both failures end the loading state: the skeleton branch mounts neither
+    // banner, so a failure it swallowed would have no recovery on screen.
+    expect(derivation![1]).toContain("worktreeLoadError === null");
+    expect(derivation![1]).toContain("error === null");
     expect(source.match(/\bisStoreLoading\b/g)).toHaveLength(2);
     const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
     const branch = source.slice(branchStart, source.indexOf("if (worktrees.length === 0) {"));
     expect(branch).toContain("<Skeleton");
-    expect(branch).not.toMatch(/worktreeLoadErrorBanner|<WorktreeLoadErrorBanner/);
+    expect(branch).not.toMatch(/worktreeLoadErrorBanner|<WorktreeLoadErrorBanner|\{errorBanner\}/);
   });
 
   it("offers Retry only when Restart is not the fix", () => {

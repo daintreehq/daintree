@@ -144,6 +144,15 @@ const FIXTURES: Record<string, Fixture> = {
     loadError: SHORT_ERROR,
     serviceError: SERVICE_ERROR,
   },
+  /** The host died before the first snapshot: still flagged loading, nothing to show. */
+  "loading-service-error": {
+    what: "service error while the list store is still loading",
+    worktrees: [],
+    isLoading: true,
+    isInitialized: false,
+    loadError: null,
+    serviceError: SERVICE_ERROR,
+  },
   /** Disconnected with a fatal service error: the service banner stands alone. */
   "disconnected-service-error": {
     what: "never connected, with a workspace-service error",
