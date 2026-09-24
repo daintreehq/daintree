@@ -1,4 +1,5 @@
 import { FROZEN_NOW } from "@/components/Layout/__preview__/bootstrap";
+import "./transitionShims";
 import "@/lib/trustedTypesPolicy";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
