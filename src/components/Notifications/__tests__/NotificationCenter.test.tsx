@@ -1,5 +1,12 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
+import {
+  render as rtlRender,
+  screen,
+  waitFor,
+  act,
+  fireEvent,
+  within,
+} from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach, type MockInstance } from "vitest";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
@@ -11,6 +18,22 @@ import { NotificationCenter } from "../NotificationCenter";
 import { useProjectStore } from "@/store/projectStore";
 import { APP_SOURCE_LABEL } from "@/lib/notificationSourceLabel";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+// The header's icon controls carry real tooltips, which the app mounts under
+// App.tsx's provider.
+function render(ui: React.ReactElement) {
+  return rtlRender(ui, { wrapper: TooltipProvider });
+}
+
+async function openHeaderMenu(label: string): Promise<void> {
+  const trigger = screen.getByLabelText(label);
+  await act(async () => {
+    fireEvent.pointerDown(trigger, { button: 0 });
+    fireEvent.pointerUp(trigger, { button: 0 });
+    fireEvent.click(trigger);
+  });
+}
 
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 const getMock = vi.hoisted(() => vi.fn());
@@ -449,15 +472,10 @@ describe("NotificationCenter pause menu", () => {
     expect(vi.mocked(notifyLib.notify)).not.toHaveBeenCalled();
   });
 
-  it("dispatches notification settings tab from the footer link", async () => {
+  it("dispatches notification settings tab from the overflow menu", async () => {
     const onClose = vi.fn();
     render(<NotificationCenter open onClose={onClose} />);
-    const trigger = screen.getByLabelText("Pause notifications");
-    await act(async () => {
-      fireEvent.pointerDown(trigger, { button: 0 });
-      fireEvent.pointerUp(trigger, { button: 0 });
-      fireEvent.click(trigger);
-    });
+    await openHeaderMenu("More notification actions");
 
     await act(async () => {
       fireEvent.click(screen.getByLabelText("Notification settings"));
@@ -471,18 +489,17 @@ describe("NotificationCenter pause menu", () => {
     );
   });
 
-  it("dispatches notification settings tab from 'Custom…' (deferred picker stub)", async () => {
+  it("routes 'Schedule quiet hours…' to the notification settings tab", async () => {
     const onClose = vi.fn();
     render(<NotificationCenter open onClose={onClose} />);
-    const trigger = screen.getByLabelText("Pause notifications");
-    await act(async () => {
-      fireEvent.pointerDown(trigger, { button: 0 });
-      fireEvent.pointerUp(trigger, { button: 0 });
-      fireEvent.click(trigger);
-    });
+    await openHeaderMenu("Pause notifications");
 
+    // One route to settings per menu: the pause menu used to offer both
+    // "Custom…" and "Notification settings…", and both went to the same tab.
+    expect(screen.queryByText("Custom…")).toBeNull();
+    expect(screen.queryByLabelText("Notification settings")).toBeNull();
     await act(async () => {
-      fireEvent.click(screen.getByText("Custom…"));
+      fireEvent.click(screen.getByText("Schedule quiet hours…"));
     });
 
     expect(onClose).toHaveBeenCalled();
@@ -1007,9 +1024,21 @@ describe("NotificationCenter empty state — muted", () => {
 });
 
 describe("NotificationCenter overflow menu", () => {
-  it("does not render overflow trigger when there are no entries", () => {
+  it("keeps settings reachable with an empty inbox but offers nothing to clear", async () => {
     render(<NotificationCenter open onClose={() => {}} />);
-    expect(screen.queryByLabelText("More notification actions")).toBeNull();
+    await openHeaderMenu("More notification actions");
+    expect(screen.getByLabelText("Notification settings")).toBeTruthy();
+    expect(screen.queryByText("Clear all…")).toBeNull();
+    expect(screen.queryByRole("menuitemcheckbox")).toBeNull();
+  });
+
+  it("never opens onto a lone item once there is history", async () => {
+    setEntries([makeEntry()]);
+    render(<NotificationCenter open onClose={() => {}} />);
+    await openHeaderMenu("More notification actions");
+    const items =
+      screen.getAllByRole("menuitem").length + screen.queryAllByRole("menuitemcheckbox").length;
+    expect(items).toBeGreaterThan(1);
   });
 
   it("renders overflow trigger as a button when entries exist", () => {
@@ -1041,7 +1070,7 @@ describe("NotificationCenter overflow menu", () => {
       fireEvent.click(trigger);
     });
 
-    const clearItem = screen.getByText("Clear all");
+    const clearItem = screen.getByText("Clear all…");
     await act(async () => {
       fireEvent.click(clearItem);
     });
@@ -1069,7 +1098,6 @@ describe("NotificationCenter overflow menu", () => {
     expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(callOrder).toEqual(["clearAll", "onClose"]);
-    expect(screen.queryByLabelText("More notification actions")).toBeNull();
   });
 
   it("leaves the history intact when the clear confirm is dismissed", async () => {
@@ -1083,7 +1111,7 @@ describe("NotificationCenter overflow menu", () => {
       fireEvent.click(trigger);
     });
     await act(async () => {
-      fireEvent.click(screen.getByText("Clear all"));
+      fireEvent.click(screen.getByText("Clear all…"));
     });
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
@@ -1302,51 +1330,49 @@ describe("NotificationCenter — Needs attention pinned section", () => {
 });
 
 describe("NotificationCenter — Group by context toggle", () => {
-  it("does not render the toggle when there are no entries", () => {
+  it("offers no grouping choice when there are no entries", async () => {
     render(<NotificationCenter open onClose={vi.fn()} />);
-    expect(screen.queryByLabelText("Group by project or worktree")).toBeNull();
+    await openHeaderMenu("More notification actions");
+    expect(
+      screen.queryByRole("menuitemcheckbox", { name: /Group by project or worktree/ })
+    ).toBeNull();
   });
 
-  it("renders the toggle when entries exist", () => {
+  it("offers grouping as a checked menu item when entries exist", async () => {
     setEntries([makeEntry()]);
     render(<NotificationCenter open onClose={vi.fn()} />);
-    expect(screen.getByLabelText("Group by project or worktree")).toBeTruthy();
+    await openHeaderMenu("More notification actions");
+    const item = screen.getByRole("menuitemcheckbox", { name: /Group by project or worktree/ });
+    expect(item.getAttribute("aria-checked")).toBe("false");
   });
 
-  it("clicking the toggle flips groupByContext optimistically", async () => {
+  it("selecting the item flips groupByContext", async () => {
     setEntries([makeEntry()]);
     render(<NotificationCenter open onClose={vi.fn()} />);
-
-    const toggle = screen.getByLabelText("Group by project or worktree");
-    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    await openHeaderMenu("More notification actions");
 
     await act(async () => {
-      fireEvent.click(toggle);
+      fireEvent.click(
+        screen.getByRole("menuitemcheckbox", { name: /Group by project or worktree/ })
+      );
     });
 
     expect(useNotificationSettingsStore.getState().groupByContext).toBe(true);
-    expect(screen.getByLabelText("Group by project or worktree").getAttribute("aria-pressed")).toBe(
-      "true"
-    );
   });
 
-  it("uses aria-pressed as the sole state signal — no border outline in either state", async () => {
+  it("reflects an existing grouping as checked, and clears it when selected again", async () => {
+    useNotificationSettingsStore.setState({ groupByContext: true });
     setEntries([makeEntry()]);
     render(<NotificationCenter open onClose={vi.fn()} />);
-
-    // The shared toolbar-icon-button armed styling keys off aria-pressed; a
-    // per-state border class would be a contradictory second signal and make
-    // the toggle's geometry differ from its sibling icon buttons.
-    const toggle = screen.getByLabelText("Group by project or worktree");
-    expect(toggle.className).not.toMatch(/\bborder\b|border-daintree-text\/15|border-transparent/);
+    await openHeaderMenu("More notification actions");
+    const item = screen.getByRole("menuitemcheckbox", { name: /Group by project or worktree/ });
+    expect(item.getAttribute("aria-checked")).toBe("true");
 
     await act(async () => {
-      fireEvent.click(toggle);
+      fireEvent.click(item);
     });
 
-    const pressed = screen.getByLabelText("Group by project or worktree");
-    expect(pressed.getAttribute("aria-pressed")).toBe("true");
-    expect(pressed.className).not.toMatch(/\bborder\b|border-daintree-text\/15|border-transparent/);
+    expect(useNotificationSettingsStore.getState().groupByContext).toBe(false);
   });
 
   it("renders context section headers with worktree names when groupByContext is on", () => {
@@ -3213,5 +3239,64 @@ describe("NotificationCenter — fleet-volume triage", () => {
     await waitFor(() => expect(document.activeElement).toBe(items[0]));
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
     await waitFor(() => expect(document.activeElement).toBe(rows[0]));
+  });
+});
+
+describe("NotificationCenter — row menu triage", () => {
+  async function openRowMenu(container: HTMLElement, index = 0): Promise<void> {
+    const row = container.querySelectorAll<HTMLElement>('[role="listitem"]')[index]!;
+    const trigger = within(row).getByLabelText(/^Options for /);
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+  }
+
+  it("reads an unread row, and offers to unread it once read", async () => {
+    setEntries([makeEntry({ id: "r1", type: "info", seenAsToast: false })]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+
+    await openRowMenu(container);
+    expect(screen.queryByRole("menuitem", { name: /Mark as unread/ })).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: /Mark as read/ }));
+    });
+    expect(useNotificationHistoryStore.getState().entries[0]?.seenAsToast).toBe(true);
+
+    await openRowMenu(container);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: /Mark as unread/ }));
+    });
+    expect(useNotificationHistoryStore.getState().entries[0]?.seenAsToast).toBe(false);
+  });
+
+  it("archives the whole thread from its row, keeping every entry", async () => {
+    setEntries([
+      makeEntry({ id: "t1", correlationId: "thread-a", timestamp: 2 }),
+      makeEntry({ id: "t2", correlationId: "thread-a", timestamp: 1 }),
+    ]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+
+    await openRowMenu(container);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: /^Archive/ }));
+    });
+
+    const entries = useNotificationHistoryStore.getState().entries;
+    expect(entries).toHaveLength(2);
+    expect(entries.every((e) => e.archivedAt !== null)).toBe(true);
+  });
+
+  it("offers no Archive on a row that is already archived", async () => {
+    setEntries([makeEntry({ id: "old", archivedAt: Date.now() - 1000 })]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Archived" }));
+    });
+
+    await openRowMenu(container);
+    expect(screen.queryByRole("menuitem", { name: /^Archive/ })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: /Mark as/ })).toBeTruthy();
   });
 });

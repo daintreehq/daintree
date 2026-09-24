@@ -10,6 +10,9 @@ import {
   Copy,
   Bug,
   ArrowRight,
+  Archive,
+  Mail,
+  MailOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
@@ -30,6 +33,7 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -166,6 +170,9 @@ interface NotificationCenterEntryProps {
   onConsumeSnoozePending?: () => void;
   onSnooze?: (option: SnoozeDurationOption) => void;
   onUnsnooze?: () => void;
+  /** Row-menu twins of the list's `e` and `u` keys; absent, the item is too. */
+  onArchive?: () => void;
+  onToggleRead?: () => void;
   /**
    * False where something above the row already names its project and
    * worktree — a grouped section header — so the row doesn't say it twice.
@@ -197,6 +204,8 @@ export function NotificationCenterEntry({
   onConsumeSnoozePending,
   onSnooze,
   onUnsnooze,
+  onArchive,
+  onToggleRead,
   showSource = true,
   compact = false,
 }: NotificationCenterEntryProps) {
@@ -237,7 +246,11 @@ export function NotificationCenterEntry({
       role={role}
       onFocus={onFocus}
       className={cn(
-        "group flex items-start gap-2 pl-4 pr-3 py-2.5 hover:bg-overlay-subtle transition-colors",
+        "group flex items-start gap-2 pl-4 pr-3 hover:bg-overlay-subtle transition-colors",
+        // The rail is a preview, so it is packed tighter than the list: at the
+        // list's rhythm three pinned rows took nearly half the panel before
+        // anything that had just arrived.
+        compact ? "py-1.5" : "py-2.5",
         // The shared palette-row focus treatment, not a bespoke ring: `outline`
         // survives Windows High Contrast where a box-shadow ring does not, and
         // the offset is negative because this row is full-bleed inside three
@@ -392,7 +405,12 @@ export function NotificationCenterEntry({
           </p>
         )}
         {entry.actions && entry.actions.length > 0 && (
-          <div className="col-span-2 row-start-5 mt-1.5 flex flex-wrap gap-1.5">
+          <div
+            className={cn(
+              "col-span-2 row-start-5 flex flex-wrap gap-1.5",
+              compact ? "mt-1" : "mt-1.5"
+            )}
+          >
             {entry.actions.map((action, index) => {
               const manifest = actionService.get(action.actionId as ActionId);
               const isAvailable = manifest !== null && manifest.enabled;
@@ -512,6 +530,9 @@ export function NotificationCenterEntry({
             onConsumeSnoozePending={onConsumeSnoozePending}
             onSnooze={onSnooze}
             onUnsnooze={onUnsnooze}
+            isRead={!isNew}
+            onArchive={onArchive}
+            onToggleRead={onToggleRead}
           />
           {onDismiss && (
             <button
@@ -653,6 +674,9 @@ interface RowOptionsMenuProps {
   onConsumeSnoozePending?: () => void;
   onSnooze?: (option: SnoozeDurationOption) => void;
   onUnsnooze?: () => void;
+  isRead: boolean;
+  onArchive?: () => void;
+  onToggleRead?: () => void;
 }
 
 function RowOptionsMenu({
@@ -665,6 +689,9 @@ function RowOptionsMenu({
   onConsumeSnoozePending,
   onSnooze,
   onUnsnooze,
+  isRead,
+  onArchive,
+  onToggleRead,
 }: RowOptionsMenuProps) {
   const eventKind = entry.context?.eventKind;
   const hasContextActions = isNotificationEventKind(eventKind) || !!entry.context?.projectId;
@@ -679,7 +706,9 @@ function RowOptionsMenu({
   const supportsGoToSource = !!entry.context?.panelId;
   const hasDiagnosticsActions =
     supportsCopyCorrelationId || supportsReportOnGitHub || supportsGoToSource;
-  const hasActions = hasContextActions || supportsSnooze || hasDiagnosticsActions;
+  const hasTriageActions = !!onToggleRead || !!onArchive;
+  const hasActions =
+    hasTriageActions || hasContextActions || supportsSnooze || hasDiagnosticsActions;
   const [open, setOpen] = useState(false);
   // `h` asks for the snooze durations, not the whole menu, so it opens a menu
   // of just those. A controlled submenu opened in the same frame as its parent
@@ -814,6 +843,27 @@ function RowOptionsMenu({
           </>
         ) : (
           <>
+            {/* Triage first — the same verbs, and the same keys, as the list:
+                without these a pointer user could only read or archive one
+                notification by learning `u` and `e`, or by doing it to all. */}
+            {onToggleRead && (
+              <DropdownMenuItem onSelect={onToggleRead}>
+                {isRead ? (
+                  <Mail data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                ) : (
+                  <MailOpen data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                )}
+                {isRead ? "Mark as unread" : "Mark as read"}
+                <DropdownMenuShortcut aria-hidden="true">U</DropdownMenuShortcut>
+              </DropdownMenuItem>
+            )}
+            {onArchive && (
+              <DropdownMenuItem onSelect={onArchive}>
+                <Archive data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Archive
+                <DropdownMenuShortcut aria-hidden="true">E</DropdownMenuShortcut>
+              </DropdownMenuItem>
+            )}
             {supportsSnooze &&
               (isSnoozed ? (
                 <DropdownMenuItem
@@ -835,7 +885,8 @@ function RowOptionsMenu({
                   <DropdownMenuSubContent>{durationItems}</DropdownMenuSubContent>
                 </DropdownMenuSub>
               ))}
-            {supportsSnooze && hasDiagnosticsActions && <DropdownMenuSeparator />}
+            {(hasTriageActions || supportsSnooze) &&
+              (hasDiagnosticsActions || hasContextActions) && <DropdownMenuSeparator />}
             {supportsCopyCorrelationId && (
               <DropdownMenuItem onSelect={handleCopyCorrelationId}>
                 <Copy data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
@@ -860,9 +911,6 @@ function RowOptionsMenu({
               </DropdownMenuItem>
             )}
             {hasDiagnosticsActions && hasContextActions && <DropdownMenuSeparator />}
-            {!hasDiagnosticsActions && supportsSnooze && hasContextActions && (
-              <DropdownMenuSeparator />
-            )}
             {isNotificationEventKind(eventKind) && (
               <DropdownMenuItem
                 onSelect={() => {
