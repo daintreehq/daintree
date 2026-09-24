@@ -5,6 +5,7 @@ import { TerminalErrorBanner } from "../TerminalErrorBanner";
 import { ScrollbackRestoreErrorBanner } from "../ScrollbackRestoreErrorBanner";
 import { AgentCompletionBanner } from "../AgentCompletionBanner";
 import { TerminalRestartStatusBanner } from "../TerminalRestartStatusBanner";
+import { WorktreeMoveBanner } from "../WorktreeMoveBanner";
 
 const noop = () => undefined;
 const NOW = 1_758_600_000_000;
@@ -54,11 +55,14 @@ function scrollback(error: TerminalScrollbackRestoreError, isRestarting = false)
   );
 }
 
+const MOVE_DESTINATION =
+  "/Users/greg/Projects/Daintree/daintree-worktrees/fix-sidebar-sync-signals";
+
 export type BannerPlacement = "top" | "bottom";
 
 export interface TerminalBannerFixture {
   name: string;
-  group: "errors" | "status";
+  group: "errors" | "status" | "move";
   what: string;
   placement: BannerPlacement;
   render: () => ReactNode;
@@ -252,6 +256,36 @@ export const TERMINAL_BANNER_FIXTURES: TerminalBannerFixture[] = [
         onSendToAgent={noop}
       />
     ),
+  },
+  {
+    name: "move-tell",
+    group: "move",
+    what: "agent pane moved to another worktree, tell offered",
+    placement: "top",
+    render: () => (
+      <WorktreeMoveBanner destinationPath={MOVE_DESTINATION} onTell={noop} onDismiss={noop} />
+    ),
+  },
+  {
+    name: "move-failed",
+    group: "move",
+    what: "agent pane moved, the tell did not reach the terminal",
+    placement: "top",
+    render: () => (
+      <WorktreeMoveBanner
+        destinationPath={MOVE_DESTINATION}
+        deliveryFailed
+        onTell={noop}
+        onDismiss={noop}
+      />
+    ),
+  },
+  {
+    name: "move-gone",
+    group: "move",
+    what: "agent pane moved, destination worktree since removed",
+    placement: "top",
+    render: () => <WorktreeMoveBanner destinationPath={undefined} onTell={noop} onDismiss={noop} />,
   },
 ];
 

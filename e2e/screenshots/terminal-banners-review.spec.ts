@@ -17,6 +17,8 @@
  *   DAINTREE_SHOT_TERMINAL_BANNERS  required — any truthy value runs the capture
  *   DAINTREE_SHOT_DIR               output directory (default artifacts/terminal-banner-shots)
  *   DAINTREE_SHOT_THEMES            comma-separated theme sweep (default: daintree,bondi,namib)
+ *   DAINTREE_SHOT_GROUPS            comma-separated fixture groups (default: every group)
+ *   DAINTREE_SHOT_WIDTHS            comma-separated pane widths in CSS px (default: 320,560,1100)
  *
  * Output:
  *   <group>-<width>-<theme>.png     every fixture in the group, stacked, at one pane width
@@ -49,13 +51,21 @@ const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,namib")
   .filter(Boolean);
 
 /** A 2x2 grid on a laptop, a 2-column split, and a pane maximised on a wide display. */
-const WIDTHS = [320, 560, 1100] as const;
+const WIDTHS = (process.env.DAINTREE_SHOT_WIDTHS ?? "320,560,1100")
+  .split(",")
+  .map((w) => Number(w.trim()))
+  .filter((w) => w > 0);
 
 /** Mirrors `TERMINAL_BANNER_FIXTURES` group sizes; a sheet short of its count has a silent gap. */
-const GROUPS = [
+const ALL_GROUPS = [
   { name: "errors", count: 10 },
   { name: "status", count: 8 },
+  { name: "move", count: 3 },
 ] as const;
+
+const GROUP_FILTER = process.env.DAINTREE_SHOT_GROUPS?.split(",").map((g) => g.trim());
+const GROUPS = ALL_GROUPS.filter((g) => !GROUP_FILTER || GROUP_FILTER.includes(g.name));
+const INCLUDES_OVERFLOW = GROUPS.some((g) => g.name === "errors");
 
 const ATTACH_TIMEOUT_MS = 30_000;
 const PAGE = "/terminal-banners-preview.html";
@@ -140,6 +150,45 @@ async function openSheet(
   return shell;
 }
 
+/**
+ * The worktree move notice is seen on every agent move, so it has to stay one
+ * row wherever a pane has room for one, and clearing it must never mean a trip
+ * to the far edge of a wide pane: the × follows whatever precedes it.
+ */
+async function expectMoveNoticeClustered(page: Page, width: number) {
+  const notices = await page.locator("[data-banner-slot] > [role]").evaluateAll((els) =>
+    els.map((el) => {
+      const box = el.getBoundingClientRect();
+      const controls = el.querySelector("[data-banner-controls]")!.getBoundingClientRect();
+      const dismiss = el
+        .querySelector('[aria-label="Dismiss worktree move notice"]')!
+        .getBoundingClientRect();
+      // Text spans measure the words, not the column they sit in.
+      const text = [...el.querySelectorAll("span")]
+        .filter((span) => !span.closest("[data-banner-controls]") && span.textContent)
+        .map((span) => span.getBoundingClientRect());
+      const textRight = Math.max(...text.map((r) => r.right));
+      const textBottom = Math.max(...text.map((r) => r.bottom));
+      return {
+        height: box.height,
+        wrapped: controls.top >= textBottom - 1,
+        textToControls: controls.left - textRight,
+        controlsToDismiss: dismiss.left - controls.left,
+        controlsWidth: controls.width,
+      };
+    })
+  );
+  for (const notice of notices) {
+    if (!notice.wrapped) {
+      expect(notice.textToControls, "controls follow the text").toBeLessThanOrEqual(16);
+    }
+    expect(notice.controlsToDismiss, "the × ends the control group").toBeLessThanOrEqual(
+      notice.controlsWidth
+    );
+    if (width >= 560) expect(notice.height, "one row on a pane with room").toBeLessThanOrEqual(40);
+  }
+}
+
 test("terminal banner family — every state, three pane widths, every theme", async ({
   context,
 }) => {
@@ -157,19 +206,24 @@ test("terminal banner family — every state, three pane widths, every theme", a
     for (const width of WIDTHS) {
       for (const group of GROUPS) {
         written.push(
-          await withPage(context, `${group.name} ${width} ${theme}`, async (page) =>
-            snap(
-              await openSheet(page, `theme=${theme}&group=${group.name}`, width, group.count),
-              `${group.name}-${width}-${theme}.png`
-            )
-          )
+          await withPage(context, `${group.name} ${width} ${theme}`, async (page) => {
+            const sheet = await openSheet(
+              page,
+              `theme=${theme}&group=${group.name}`,
+              width,
+              group.count
+            );
+            if (group.name === "move") await expectMoveNoticeClustered(page, width);
+            return snap(sheet, `${group.name}-${width}-${theme}.png`);
+          })
         );
       }
     }
   }
 
   const theme = THEMES[0]!;
-  for (const width of [320, 560] as const) {
+  const overflowWidths = INCLUDES_OVERFLOW ? ([320, 560] as const) : [];
+  for (const width of overflowWidths) {
     written.push(
       await withPage(context, `overflow ${width}`, async (page) => {
         await openSheet(page, `theme=${theme}&fixture=spawn-enoent`, width, 1);
@@ -184,6 +238,6 @@ test("terminal banner family — every state, three pane widths, every theme", a
 
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(onDisk.length).toBe(THEMES.length * WIDTHS.length * GROUPS.length + 2);
+  expect(onDisk.length).toBe(THEMES.length * WIDTHS.length * GROUPS.length + overflowWidths.length);
   console.log(`[terminal-banner-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });
