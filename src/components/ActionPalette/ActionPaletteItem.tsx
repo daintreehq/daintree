@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { createTooltipWithShortcut, isMac } from "@/lib/platform";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { paletteSummary } from "@/lib/paletteSummary";
 import { KbdChord } from "@/components/ui/Kbd";
 import { HighlightedText } from "@/components/ui/HighlightedText";
 import { getActionMatchRanges } from "@/lib/actionPaletteSearch";
@@ -22,18 +23,7 @@ import { ACTION_CATEGORY_COLORS, ACTION_CATEGORY_DEFAULT_COLOR } from "@/config/
 export const PIN_SHORTCUT = "Alt+P";
 export const HIDE_SHORTCUT = "Alt+H";
 
-/**
- * The first sentence of an action's description. Manifest descriptions are
- * written for the agents that read the MCP tool surface too, so many run on
- * into implementation notes ("This is a …", "It accepts a subset of …") that
- * truncate mid-clause in a one-line row. The row shows what the action does;
- * search still reads the whole description.
- */
-export function paletteSummary(description: string): string {
-  const match = /^(.+?(?<!\b\w)[.!?])(\s+[A-Z]|$)/.exec(description.trim());
-  const sentence = match ? match[1]! : description.trim();
-  return sentence.replace(/\.$/, "");
-}
+export { paletteSummary };
 
 const ROW_CONTROL_CLASS =
   "inline-flex items-center justify-center w-6 h-6 rounded-[var(--radius-sm)] bg-transparent border-0 text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors";

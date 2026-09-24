@@ -145,9 +145,11 @@ export interface SearchablePaletteProps<T> {
    * `footer` or `getFooter` is also set — those win, in that order. Use a
    * stable reference (module-level fn or `useCallback`) to avoid recomputing
    * the footer node every render. Called only while a row is selected; with
-   * nothing selected the footer carries no hint.
+   * nothing selected the footer carries no hint. Return `null` for a selection
+   * Enter will not act on (an unavailable row) and the footer carries no hint
+   * for it either.
    */
-  getActionLabel?: (selectedItem: T) => string;
+  getActionLabel?: (selectedItem: T) => string | null;
   /** Additional className for AppPaletteDialog.Body */
   bodyClassName?: string;
   /** Custom content before the list */
@@ -234,28 +236,90 @@ export function SearchablePalette<T>({
     }
   }, [selectedIndex, results]);
 
-  // Announce the result count to screen readers on the trailing edge of a
-  // filter pass. Gated on the `isFiltering` true→false transition (mirrors the
-  // visual stale-dim signal) and debounced 400ms so fast typists don't chatter
-  // the live region. Empty-query passes are skipped — the listbox already
-  // reflects the no-input state and an "N results" announcement there is noise.
+  // One owner for "N results". Two things can end with a count worth saying —
+  // a filter pass settling and an announced load landing — and they often end
+  // in the same commit. Each schedules through here, so the later one replaces
+  // the earlier and a single count is spoken. The count is read when the timer
+  // fires, not when it is set, so a list that is still filling says what it
+  // settled on.
+  //
+  // Zero results render `AppPaletteDialog.Empty`, which announces its own
+  // "No matches for …". Saying "0 results" as well gives the same news two
+  // owners, so zero is skipped — except for a `renderBody` consumer, which
+  // draws no Empty and has only the count.
+  const resultCountRef = useRef(results.length);
+  const hasCustomBodyRef = useRef(renderBody !== undefined);
+  useEffect(() => {
+    resultCountRef.current = results.length;
+    hasCustomBodyRef.current = renderBody !== undefined;
+  });
+  const countTimerRef = useRef<number | null>(null);
+  const cancelCount = useCallback(() => {
+    if (countTimerRef.current !== null) {
+      window.clearTimeout(countTimerRef.current);
+      countTimerRef.current = null;
+    }
+  }, []);
+  const scheduleCount = useCallback(() => {
+    cancelCount();
+    countTimerRef.current = window.setTimeout(() => {
+      countTimerRef.current = null;
+      const count = resultCountRef.current;
+      if (count === 0 && !hasCustomBodyRef.current) return;
+      useAnnouncerStore
+        .getState()
+        .announce(count === 1 ? "1 result" : `${count} results`, "polite");
+    }, UI_DOHERTY_THRESHOLD);
+  }, [cancelCount]);
+  useEffect(() => cancelCount, [cancelCount]);
+
+  // A filter pass is announced on its trailing edge — the `isFiltering`
+  // true→false transition that also clears the visual stale-dim — and debounced
+  // so fast typists don't chatter the live region: a new pass cancels the last
+  // one's pending count. Empty-query passes are skipped; the listbox already
+  // shows the no-input state and a count there is noise.
   const prevIsFilteringRef = useRef(isFiltering);
   useEffect(() => {
     const wasFiltering = prevIsFilteringRef.current;
     prevIsFilteringRef.current = isFiltering;
-    if (!wasFiltering || isFiltering) return;
+    if (isFiltering) {
+      cancelCount();
+      return;
+    }
+    if (!wasFiltering) return;
     // Hosts now keep palettes mounted through their exit animation (#9917), so a
     // late filter pass can resolve after close — don't announce to a closed,
     // invisible palette.
     if (!isOpen) return;
     if (!query.trim()) return;
-    const count = results.length;
-    const timer = window.setTimeout(() => {
-      const message = count === 1 ? "1 result" : `${count} results`;
-      useAnnouncerStore.getState().announce(message, "polite");
-    }, UI_DOHERTY_THRESHOLD);
-    return () => window.clearTimeout(timer);
-  }, [isFiltering, query, results.length, isOpen]);
+    scheduleCount();
+  }, [isFiltering, query, isOpen, cancelCount, scheduleCount]);
+
+  // The header's loading sweep is aria-hidden, so a slow load needs words too
+  // (WCAG 4.1.3 counts busy indicators as status). Same Doherty gate as the
+  // sweep's own onset: a fast load says nothing. Keyed to the load alone, so
+  // rows arriving or a query changing mid-load never restart it. Once an
+  // announced load lands, the count owner above says what it brought.
+  const loadAnnouncedRef = useRef(false);
+  useEffect(() => {
+    if (!isOpen) {
+      loadAnnouncedRef.current = false;
+      cancelCount();
+      return undefined;
+    }
+    if (isLoading) {
+      const timer = window.setTimeout(() => {
+        loadAnnouncedRef.current = true;
+        useAnnouncerStore.getState().announce("Loading results", "polite");
+      }, UI_DOHERTY_THRESHOLD);
+      return () => window.clearTimeout(timer);
+    }
+    if (loadAnnouncedRef.current) {
+      loadAnnouncedRef.current = false;
+      scheduleCount();
+    }
+    return undefined;
+  }, [isOpen, isLoading, cancelCount, scheduleCount]);
 
   useEscapeStack(isOpen, () => {
     if (query !== "") {

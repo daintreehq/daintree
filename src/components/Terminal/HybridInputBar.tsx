@@ -41,6 +41,11 @@ import { Paperclip } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
+import {
+  COMPOSER_CONTROL_FOCUS_CLASS,
+  COMPOSER_CONTROL_HOVER_BG_CLASS,
+  COMPOSER_CONTROL_TEXT_CLASS,
+} from "./composerControlStyles";
 import { useVoiceWaitSubmit } from "./hooks/useVoiceWaitSubmit";
 import { registerInputController, unregisterInputController } from "@/store/terminalInputStore";
 import type { CommandResult } from "@shared/types/commands";
@@ -916,6 +921,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       "--ib-hover-bg": inputBarColors.shellHoverBg,
       "--ib-focus-bg": inputBarColors.shellFocusBg,
       "--ib-accent": inputBarColors.accent,
+      "--ib-fg": inputBarColors.foreground,
     } as React.CSSProperties;
 
     // One hook instance serves both hosts, so its hover state says a drag is
@@ -1046,19 +1052,31 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 <span className="text-xs text-text-secondary">Finishing dictation…</span>
               </div>
             )}
-            <button
-              ref={pickerRef}
-              type="button"
-              onClick={openPicker}
-              disabled={disabled}
-              // `h-6` gives the picker a 24px target without changing the
-              // glyph: at `leading-5` alone the button was 20px tall, under the
-              // WCAG 2.5.8 floor, and its spacing circle overlaps the canvas.
-              className="flex h-6 shrink-0 items-center select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-daintree-accent/65 hover:text-daintree-accent/85 transition-colors cursor-pointer focus-visible:outline-hidden"
-              aria-label="Open command picker"
-            >
-              ❯
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  ref={pickerRef}
+                  type="button"
+                  onClick={openPicker}
+                  disabled={disabled}
+                  // `h-6 w-6` is the WCAG 2.5.8 floor on both axes: at `leading-5`
+                  // the button was 20px tall, and at its old `pl-2 pr-1` it was
+                  // 19px wide with its spacing circle over the canvas.
+                  //
+                  // Colour comes from the shell's own palette, like every
+                  // control in it — see `composerControlStyles.ts`.
+                  className={cn(
+                    "flex h-6 w-6 shrink-0 items-center justify-center select-none rounded-[var(--radius-sm)] font-mono text-xs font-semibold leading-5 transition-colors cursor-pointer",
+                    COMPOSER_CONTROL_TEXT_CLASS,
+                    COMPOSER_CONTROL_FOCUS_CLASS
+                  )}
+                  aria-label="Open command picker"
+                >
+                  <span aria-hidden="true">❯</span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Open command picker</TooltipContent>
+            </Tooltip>
             <ContextMenu>
               <ContextMenuTrigger asChild onContextMenu={handleEditorContextMenu}>
                 {/* `min-w-0`: a flex item defaults to `min-width: auto`, so the
@@ -1134,8 +1152,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                       disabled={disabled}
                       className={cn(
                         "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
-                        "text-text-secondary hover:text-text-primary hover:bg-tint/[0.06]",
-                        "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary",
+                        COMPOSER_CONTROL_TEXT_CLASS,
+                        COMPOSER_CONTROL_HOVER_BG_CLASS,
+                        COMPOSER_CONTROL_FOCUS_CLASS,
                         "disabled:pointer-events-none disabled:opacity-40"
                       )}
                       aria-label="Attach files"
@@ -1154,7 +1173,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                         // 24px to clear the WCAG 2.5.8 floor. The spacing
                         // exception cannot rescue a smaller one here — its circle
                         // overlaps the attach and mic targets either side.
-                        className="flex items-center justify-center h-6 w-6 rounded-full text-daintree-accent/55 hover:text-daintree-accent/80 hover:bg-tint/[0.06] transition-colors cursor-pointer"
+                        className={cn(
+                          "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
+                          COMPOSER_CONTROL_TEXT_CLASS,
+                          COMPOSER_CONTROL_HOVER_BG_CLASS,
+                          COMPOSER_CONTROL_FOCUS_CLASS
+                        )}
                         aria-label="Restore stashed input"
                       >
                         <Archive className="h-3.5 w-3.5" />

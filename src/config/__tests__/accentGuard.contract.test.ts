@@ -158,7 +158,6 @@ const DURABLE_ALLOWLIST = new Set([
 const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
   "#5978-5986-pre-existing": [
     "src/components/Commands/CommandBuilder.tsx",
-    "src/components/Commands/CommandPicker.tsx",
     "src/components/DevPreview/DevPreviewEmptyStates.tsx",
     "src/components/Layout/DockedNonPtyPanelItem.tsx",
     "src/components/Layout/DockedTabGroup.tsx",
