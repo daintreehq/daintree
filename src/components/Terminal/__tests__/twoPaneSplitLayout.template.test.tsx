@@ -16,23 +16,49 @@ const services = vi.hoisted(() => ({
     vi.fn<(worktreeId: string, ratio: number, panels: [string, string]) => void>(),
 }));
 
-const splitState = vi.hoisted(() => ({
-  ratioByWorktreeId: {},
-  config: { enabled: true, defaultRatio: 0.6, preferPreview: false },
-  commitRatioIfChanged: services.commitRatioIfChanged,
-  resetWorktreeRatio: () => {},
-  setWorktreeRatio: () => {},
+// A real store, so a commit or reset re-renders the controller the way the app's
+// does — the precedence between the stored ratio and a pending local one is under
+// test. Commit and reset write through; the spy records what was committed.
+type SplitEntry = { ratio: number; panels: [string, string] };
+const splitStore = vi.hoisted(() => ({
+  current: null as null | {
+    setState: (partial: { ratioByWorktreeId: Record<string, SplitEntry> }) => void;
+  },
 }));
 
-// Asymmetric, so a template hardcoded to equal halves would show.
-const DEFAULT_RATIO = splitState.config.defaultRatio;
+const DEFAULT_RATIO = 0.6;
 
-vi.mock("@/store", () => ({
-  useTwoPaneSplitStore: <T,>(selector: (state: typeof splitState) => T) => selector(splitState),
-}));
+vi.mock("@/store", async () => {
+  const { create } = await import("zustand");
+  const useTwoPaneSplitStore = create<{
+    ratioByWorktreeId: Record<string, SplitEntry>;
+    config: { enabled: boolean; defaultRatio: number; preferPreview: boolean };
+    commitRatioIfChanged: (worktreeId: string, ratio: number, panels: [string, string]) => void;
+    resetWorktreeRatio: (worktreeId: string) => void;
+    setWorktreeRatio: () => void;
+  }>()((set) => ({
+    ratioByWorktreeId: {},
+    // Asymmetric, so a template hardcoded to equal halves would show.
+    config: { enabled: true, defaultRatio: 0.6, preferPreview: false },
+    commitRatioIfChanged: (worktreeId, ratio, panels) => {
+      services.commitRatioIfChanged(worktreeId, ratio, panels);
+      set((state) => ({
+        ratioByWorktreeId: { ...state.ratioByWorktreeId, [worktreeId]: { ratio, panels } },
+      }));
+    },
+    resetWorktreeRatio: (worktreeId) =>
+      set((state) => {
+        const { [worktreeId]: _removed, ...rest } = state.ratioByWorktreeId;
+        return { ratioByWorktreeId: rest };
+      }),
+    setWorktreeRatio: () => {},
+  }));
+  splitStore.current = useTwoPaneSplitStore;
+  return { useTwoPaneSplitStore };
+});
 
 vi.mock("@/store/twoPaneSplitStore", () => ({
-  resolveEffectiveRatio: () => undefined,
+  resolveEffectiveRatio: (entry: { ratio: number } | undefined) => entry?.ratio,
 }));
 
 vi.mock("@/services/TerminalInstanceService", () => ({
@@ -107,6 +133,7 @@ describe("TwoPaneSplitLayout grid template", () => {
     frames.clear();
     services.lockResize.mockClear();
     services.commitRatioIfChanged.mockClear();
+    splitStore.current?.setState({ ratioByWorktreeId: {} });
     vi.stubGlobal("ResizeObserver", StubResizeObserver);
     vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
       frames.set(++nextFrame, cb);
@@ -150,6 +177,37 @@ describe("TwoPaneSplitLayout grid template", () => {
     const [left, , right] = tracksOf(onGridTemplateChange.mock.calls.at(-1)?.[0]);
     expect(fractionOf(left)).toBeGreaterThan(DEFAULT_RATIO);
     expect(fractionOf(left) + fractionOf(right)).toBeCloseTo(1);
+  });
+
+  it("commits a keyboard step as it happens, at the value the key produced", () => {
+    const onGridTemplateChange = vi.fn<(template: string | null) => void>();
+    const { getByRole } = renderController(onGridTemplateChange);
+
+    fireEvent.keyDown(getByRole("separator"), { key: "ArrowLeft" });
+
+    const [left] = tracksOf(onGridTemplateChange.mock.calls.at(-1)?.[0]);
+    expect(services.commitRatioIfChanged).toHaveBeenCalledTimes(1);
+    const committed = services.commitRatioIfChanged.mock.calls[0]![1];
+    expect(committed).toBeLessThan(DEFAULT_RATIO);
+    expect(fractionOf(left)).toBeCloseTo(committed);
+  });
+
+  it("returns to the default ratio on reset, whatever moved the divider last", () => {
+    const onGridTemplateChange = vi.fn<(template: string | null) => void>();
+    const { getByRole } = renderController(onGridTemplateChange);
+    const separator = getByRole("separator");
+    const leftFraction = () => fractionOf(tracksOf(onGridTemplateChange.mock.calls.at(-1)?.[0])[0]);
+
+    fireEvent.keyDown(separator, { key: "End" });
+    expect(leftFraction()).toBeGreaterThan(DEFAULT_RATIO);
+    fireEvent.keyDown(separator, { key: "Enter" });
+    expect(leftFraction()).toBeCloseTo(DEFAULT_RATIO);
+
+    fireEvent.mouseDown(separator, { button: 0, clientX: 600 });
+    fireEvent.mouseMove(document, { clientX: 300 });
+    expect(leftFraction()).toBeLessThan(DEFAULT_RATIO);
+    fireEvent.doubleClick(separator);
+    expect(leftFraction()).toBeCloseTo(DEFAULT_RATIO);
   });
 
   it("clears the template on unmount so the grid falls back to its own columns", () => {

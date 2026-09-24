@@ -21,15 +21,17 @@ export function DockPopoverResizeHandle({ handleProps, isResizing }: Props) {
         // load-bearing focus anchors, not a secondary resize affordance
         // (Accent Color Restraint). Keyboard focus is conveyed by the lifted
         // indicator line plus the neutral overlay.
-        "hover:bg-overlay-soft transition-colors focus-visible:outline-hidden focus-visible:bg-overlay-medium",
-        isResizing && "bg-overlay-medium"
+        "transition-colors focus-visible:outline-hidden focus-visible:bg-overlay-medium",
+        // Hover styling is off while resizing, or it outranks the drag state.
+        isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft"
       )}
     >
       <div
         className={cn(
-          "w-8 h-px rounded-full transition-[height] duration-150 delay-100 group-hover/resize:h-0.5",
-          "bg-daintree-text/20 group-hover/resize:bg-daintree-text/35 group-focus-visible/resize:bg-daintree-text/60 group-focus-visible/resize:h-0.5",
-          isResizing && "bg-daintree-text/50"
+          "w-8 rounded-full transition-[height] duration-150 delay-100",
+          isResizing
+            ? "h-0.5 bg-text-primary/50"
+            : "h-px bg-text-primary/20 group-hover/resize:h-0.5 group-hover/resize:bg-text-primary/35 group-focus-visible/resize:bg-text-primary/60 group-focus-visible/resize:h-0.5"
         )}
       />
     </div>

@@ -209,15 +209,17 @@ export function DevPreviewToolDrawerChrome({
           "group/resize absolute inset-y-0 -left-1.5 z-20 flex w-3 cursor-col-resize items-center justify-center",
           // Neutral throughout: a resize handle is a secondary affordance, and
           // the accent in this region belongs to the tool itself.
-          "transition-colors hover:bg-overlay-soft focus-visible:bg-overlay-medium focus-visible:outline-hidden",
-          isResizing && "bg-overlay-medium"
+          "transition-colors focus-visible:bg-overlay-medium focus-visible:outline-hidden",
+          // Hover styling is off while resizing, or it outranks the drag state.
+          isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft"
         )}
       >
         <div
           className={cn(
-            "h-8 w-px rounded-full transition-[width] delay-100 duration-150 group-hover/resize:w-0.5",
-            "bg-text-primary/20 group-hover/resize:bg-text-primary/35 group-focus-visible/resize:h-8 group-focus-visible/resize:w-0.5 group-focus-visible/resize:bg-text-primary/60",
-            isResizing && "bg-text-primary/50"
+            "h-8 rounded-full transition-[width] delay-100 duration-150",
+            isResizing
+              ? "w-0.5 bg-text-primary/50"
+              : "w-px bg-text-primary/20 group-hover/resize:w-0.5 group-hover/resize:bg-text-primary/35 group-focus-visible/resize:w-0.5 group-focus-visible/resize:bg-text-primary/60"
           )}
         />
       </div>

@@ -23,6 +23,11 @@ export interface GridScene {
   width: number;
   height: number;
   panes: GridPane[];
+  /**
+   * Draw the two-pane split instead of the column grid: the left pane's share of
+   * the width, with the real divider in its own track between the two panes.
+   */
+  split?: number;
 }
 
 export const GRID_SCENES = {
@@ -263,6 +268,56 @@ export const GRID_SCENES = {
         kind: "terminal",
         title: "zsh",
         isFocused: false,
+        body: "shell",
+      },
+    ],
+  },
+  "split-agent-browser": {
+    what: "the two-pane split — an agent beside the page it is building, at the preview-first ratio",
+    cols: 2,
+    width: 1400,
+    height: 560,
+    split: 0.35,
+    panes: [
+      {
+        id: "g-split-claude",
+        kind: "terminal",
+        title: "Claude: Fix the login redirect loop",
+        agentId: "claude",
+        agentState: "working",
+        isFocused: true,
+        body: "agent-working",
+      },
+      {
+        id: "g-split-browser",
+        kind: "browser",
+        title: "localhost:5173",
+        isFocused: false,
+        body: "browser",
+      },
+    ],
+  },
+  "split-two-agents": {
+    what: "the two-pane split at an even ratio — two terminals, the divider between like panes",
+    cols: 2,
+    width: 1400,
+    height: 560,
+    split: 0.5,
+    panes: [
+      {
+        id: "g-split-codex",
+        kind: "terminal",
+        title: "Codex: write funnel tests",
+        agentId: "codex",
+        agentState: "waiting",
+        isFocused: false,
+        body: "agent-idle",
+      },
+      {
+        id: "g-split-shell",
+        kind: "terminal",
+        title: "zsh",
+        isFocused: true,
         body: "shell",
       },
     ],

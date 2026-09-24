@@ -140,11 +140,6 @@ const DURABLE_ALLOWLIST = new Set([
   // Current rebase step indicator in the conflict UI (single primary anchor per active focus region)
   "src/components/Worktree/ReviewHub/ConflictPanel.tsx",
 
-  // File-browser tree-column resize handle: focus ring + grip accent mark the
-  // one keyboard-focusable separator (single focus anchor per active focus
-  // region), mirroring the PortalDock/Sidebar resize-handle convention (#11331)
-  "src/panels/file-browser/FileBrowserPane.tsx",
-
   // Worktree overview list: the active-descendant cursor row. The list is a
   // single tab stop whose arrow keys move `aria-activedescendant`, so the
   // cursor is NOT DOM focus and cannot be written as a `focus-visible:` variant
@@ -165,20 +160,16 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Commands/CommandBuilder.tsx",
     "src/components/Commands/CommandPicker.tsx",
     "src/components/DevPreview/DevPreviewEmptyStates.tsx",
-    "src/components/Diagnostics/DiagnosticsDock.tsx",
     "src/components/Layout/DockedNonPtyPanelItem.tsx",
     "src/components/Layout/DockedTabGroup.tsx",
     "src/components/Layout/DockedTerminalItem.tsx",
-    "src/components/Layout/Sidebar.tsx",
     "src/components/Layout/VoiceRecordingToolbarButton.tsx",
     "src/components/Panel/TabButton.tsx",
-    "src/components/Portal/PortalDock.tsx",
     "src/components/Recovery/CrashRecoveryDialog.tsx",
     "src/components/Settings/SettingsDialog.tsx",
     "src/components/Settings/SettingsSubtabBar.tsx",
     "src/components/Terminal/ContentGridDefault.tsx",
     "src/components/Terminal/HybridInputBar.tsx",
-    "src/components/Terminal/TwoPaneSplitDivider.tsx",
     "src/components/Terminal/VoiceInputButton.tsx",
     "src/components/TerminalRecipe/RecipeEditor.tsx",
     "src/components/Worktree/QuickCreatePalette.tsx",

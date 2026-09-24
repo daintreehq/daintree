@@ -288,6 +288,9 @@ describe("ContentGrid panel identity across layout changes (#12476)", () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
   });
 
   it("keeps later panels mounted when an earlier grid panel closes", () => {
@@ -368,11 +371,22 @@ describe("ContentGrid panel identity across layout changes (#12476)", () => {
     expect(container.querySelector('[role="separator"]')).toBeNull();
   });
 
+  // Press on the divider and move without releasing, so the ratio stays pending
+  // in the controller rather than committed to the store.
+  function holdDividerDrag(divider: HTMLElement) {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 0, y: 0, width: 1000, height: 600 })
+    );
+    fireEvent.mouseDown(divider, { button: 0, clientX: 500 });
+    fireEvent.mouseMove(document, { clientX: 760 });
+  }
+
   it("flushes a pending divider ratio to its own split when another split replaces it", () => {
     setGrid({ cells: ["a", "b"], split: true });
     const { container, getByRole, rerender } = render(view());
 
-    fireEvent.keyDown(getByRole("separator"), { key: "ArrowRight" });
+    // A held drag is what leaves a ratio pending; a key step commits at once.
+    holdDividerDrag(getByRole("separator"));
     const pending = fractionOf(gridTracks(container)[0]);
     expect(pending).toBeGreaterThan(splitState.config.defaultRatio);
     expect(split.commitRatioIfChanged).not.toHaveBeenCalled();
@@ -389,7 +403,7 @@ describe("ContentGrid panel identity across layout changes (#12476)", () => {
     setGrid({ cells: ["a", "b"], split: true });
     const { getByRole, rerender } = render(view());
     const divider = getByRole("separator");
-    fireEvent.keyDown(divider, { key: "ArrowRight" });
+    holdDividerDrag(divider);
 
     setGrid({ cells: ["a", "b"], split: true });
     rerender(view());

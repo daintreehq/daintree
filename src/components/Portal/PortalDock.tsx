@@ -489,8 +489,9 @@ export function PortalDock() {
             tabIndex={0}
             className={cn(
               "group absolute -left-1.5 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-50",
-              "hover:bg-overlay-soft transition-colors focus:outline-hidden focus:bg-tint/[0.04] focus:ring-1 focus:ring-daintree-accent/50",
-              isResizing && "bg-overlay-medium"
+              "transition-colors outline-hidden focus-visible:bg-overlay-medium focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
+              // Hover styling is off while resizing, or it outranks the drag state.
+              isResizing ? "bg-overlay-medium" : "hover:bg-overlay-soft"
             )}
             onMouseDown={handleResizeStart}
             onDoubleClick={handleResizeDoubleClick}
@@ -498,10 +499,11 @@ export function PortalDock() {
           >
             <div
               className={cn(
-                "w-px h-8 rounded-full transition-[width] duration-150 delay-100 group-hover:w-0.5",
-                "bg-daintree-text/20",
-                "group-hover:bg-daintree-text/35 group-focus:bg-accent-primary",
-                isResizing && "bg-daintree-text/50"
+                "h-8 rounded-full transition-[width] duration-150 delay-100",
+                // The focus outline is the accent; the grip stays neutral.
+                isResizing
+                  ? "w-0.5 bg-text-primary/50"
+                  : "w-px bg-text-primary/20 group-hover:w-0.5 group-hover:bg-text-primary/35 group-focus-visible:w-0.5 group-focus-visible:bg-text-primary/50"
               )}
             />
           </div>
