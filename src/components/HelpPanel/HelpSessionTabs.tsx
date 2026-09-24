@@ -43,14 +43,18 @@ function TabStateIndicator({ agentState }: { agentState: AgentState | null | und
 /**
  * The label, split so the part that identifies the lane cannot be truncated away.
  *
- * Every label here is `Session N`, which means the word carries none of the
- * information and the last token carries all of it — and a plain `truncate` removes
- * them in exactly the wrong order. Splitting at the LAST space rather than formatting
- * a known shape keeps the component honest about what it is given: it receives an
- * opaque string, and a label with no space simply truncates as before. The tail keeps
- * its leading space via `whitespace-pre` so the two halves read as one word pair.
+ * A fallback `Session N` label puts none of the information in the word and all of it
+ * in the last token — and a plain `truncate` removes them in exactly the wrong order.
+ * Splitting at the LAST space keeps the numeral whole. The tail keeps its leading space
+ * via `whitespace-pre` so the two halves read as one word pair.
+ *
+ * An observed task title is the opposite shape: its last word is no more identifying
+ * than its first, and pinning it would truncate the start of the sentence instead of
+ * the end. It has already been capped to a tab's worth of text, so it simply
+ * truncates from the end like every other tab in the app.
  */
-function TabLabel({ label }: { label: string }) {
+function TabLabel({ label, isTaskTitle }: { label: string; isTaskTitle: boolean }) {
+  if (isTaskTitle) return <span className="truncate">{label}</span>;
   const split = label.lastIndexOf(" ");
   if (split <= 0) return <span className="truncate">{label}</span>;
   return (
@@ -63,7 +67,16 @@ function TabLabel({ label }: { label: string }) {
 
 export interface HelpSessionTab {
   slot: number;
+  /**
+   * The lane's name everywhere it is shown — the tab, its accessible name, its close
+   * control and the close confirm. Either the agent's trimmed task title or `Session N`.
+   */
   label: string;
+  /**
+   * The untrimmed task title when `label` came from one, for the tab's tooltip. Absent
+   * on a `Session N` fallback, which is also how the label knows which shape it has.
+   */
+  fullTitle?: string | undefined;
   agentState: AgentState | null | undefined;
 }
 
@@ -175,6 +188,9 @@ function SessionTabChip({
         // The close control is pointer-only by design (see below), so the keyboard route
         // to it has to be advertised rather than discovered.
         aria-keyshortcuts="Delete"
+        // The whole task title, since the visible one may be capped or truncated. Only
+        // for a task title: a `Session N` tooltip would repeat the tab word for word.
+        title={tab.fullTitle}
         onClick={() => onSelect(tab.slot)}
         onFocus={() => onFocusTab(tab.slot)}
         className={cn(
@@ -199,7 +215,7 @@ function SessionTabChip({
         )}
       >
         <TabStateIndicator agentState={agentState} />
-        <TabLabel label={tab.label} />
+        <TabLabel label={tab.label} isTaskTitle={tab.fullTitle !== undefined} />
       </button>
       <button
         type="button"

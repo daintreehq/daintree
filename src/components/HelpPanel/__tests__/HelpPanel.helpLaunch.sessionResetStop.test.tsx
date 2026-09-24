@@ -1321,6 +1321,71 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     expect(helpPanelState.closeSlot).toHaveBeenCalledWith(1);
   });
 
+  it("names a lane after the task its agent reports, and falls back to its number otherwise", () => {
+    // Lane 1 has set a task title; lane 0 only echoes its identity, which says nothing
+    // about the conversation and must not replace the number.
+    setupTwoLanes();
+    Object.assign(panelStoreState.panelsById["term-1"]!, {
+      detectedAgentId: "claude",
+      lastObservedTitle: "✳ Claude Code",
+    });
+    Object.assign(panelStoreState.panelsById["term-2"]!, {
+      detectedAgentId: "claude",
+      lastObservedTitle: "✳ fix   auth\ntests",
+    });
+
+    const { container } = render(<HelpPanel width={380} />);
+    const tabs = Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'));
+
+    expect(tabs.map((t) => t.getAttribute("aria-label"))).toEqual(["Session 1", "fix auth tests"]);
+    expect(tabs[1]!.getAttribute("title")).toBe("fix auth tests");
+    expect(tabs[0]!.hasAttribute("title")).toBe(false);
+    expect(closeButtonFor(container, "fix auth tests")).toBeTruthy();
+  });
+
+  it("caps a long task title in the tab and keeps the whole of it in the tooltip", () => {
+    setupTwoLanes();
+    const long = "refactor the assistant session strip so every lane carries a name";
+    Object.assign(panelStoreState.panelsById["term-2"]!, {
+      detectedAgentId: "claude",
+      lastObservedTitle: long,
+    });
+
+    const { container } = render(<HelpPanel width={380} />);
+    const tab = container.querySelectorAll<HTMLElement>('[role="tab"]')[1]!;
+    const label = tab.getAttribute("aria-label")!;
+
+    expect(label.endsWith("…")).toBe(true);
+    expect(Array.from(label).length).toBeLessThanOrEqual(28);
+    expect(tab.getAttribute("title")).toBe(long);
+  });
+
+  it("drops a lane's task title once its agent exits", () => {
+    setupTwoLanes({ backgroundAgentState: "exited" });
+    Object.assign(panelStoreState.panelsById["term-2"]!, {
+      detectedAgentId: "claude",
+      lastObservedTitle: "fix auth tests",
+    });
+
+    const { container } = render(<HelpPanel width={380} />);
+    const tabs = Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'));
+
+    expect(tabs.map((t) => t.getAttribute("aria-label"))).toEqual(["Session 1", "Session 2"]);
+  });
+
+  it("names the task in the close confirm, quoted as the entity being closed", () => {
+    setupTwoLanes({ backgroundAgentState: "working" });
+    Object.assign(panelStoreState.panelsById["term-2"]!, {
+      detectedAgentId: "claude",
+      lastObservedTitle: "fix auth tests",
+    });
+
+    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(closeButtonFor(container, "fix auth tests"));
+
+    expect(getByTestId("dialog-title").textContent).toBe("Close 'fix auth tests'?");
+  });
+
   it("keeps the lane when the close confirm is cancelled", () => {
     setupTwoLanes({ backgroundAgentState: "working" });
 

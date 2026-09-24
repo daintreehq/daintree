@@ -29,6 +29,8 @@ import { HelpIntroBanner } from "./HelpIntroBanner";
 import { HelpPanelHeader } from "./HelpPanelHeader";
 import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "./HelpSessionTabs";
 import { HelpSessionLaneRuntime } from "./HelpSessionLaneRuntime";
+import { trimSessionTabTitle } from "./sessionTabTitle";
+import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
 import {
   acquireHelpSessionController,
   releaseHelpSessionController,
@@ -59,6 +61,7 @@ import { isAssistantFocused, useMacroFocusStore } from "@/store/macroFocusStore"
 // hand-listed hook set) across the HelpPanel/controller suites, so pulling a new
 // hook through it would crash every one of them on an undefined destructure.
 import { useScratchStore } from "@/store/scratchStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
 import { useFocusStore } from "@/store/focusStore";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { buildResumeLatestCommand } from "@shared/types/agentSettings";
@@ -1050,21 +1053,46 @@ export function HelpPanel({
     )
   );
 
+  // The agent's own name for each lane, through the same composition every other
+  // title surface uses — identity echoes ("Claude Code"), user-locked titles and exited
+  // agents all come back null and fall through to `Session N`. Selected as strings so
+  // `useShallow` skips the render when an OSC update left every lane's task unchanged,
+  // which is most of them: the spinner glyphs that churn the raw title are already gone.
+  const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
+  const laneTaskTitles = usePanelStore(
+    useShallow((s: ReturnType<typeof usePanelStore.getState>) =>
+      openSlots.map((slot) => {
+        if (showAgentTaskTitles === false) return null;
+        const laneTerminalId = useHelpPanelStore.getState().sessions[slot]?.terminalId;
+        if (!laneTerminalId) return null;
+        const panel = s.panelsById[laneTerminalId];
+        return panel && isPtyPanel(panel) ? getTerminalTaskTitle(panel) : null;
+      })
+    )
+  );
+
   const sessionTabs = useMemo<HelpSessionTab[]>(
     () =>
-      openSlots.map((slot, index) => ({
-        slot,
-        // Numbered by SLOT, which is the lane's durable identity, rather than by
-        // position in the strip. Position renumbers: closing the first of three
-        // lanes used to rename the two behind it, so a conversation the user had
-        // been calling "Session 3" silently became "Session 2" and the name they
-        // navigated back to belonged to a different session. A gap at 2 is a much
-        // smaller cost than a label that lies, and the gap closes on its own —
-        // `openSlot` always takes the lowest free slot.
-        label: `Session ${slot + 1}`,
-        agentState: laneAgentStates[index],
-      })),
-    [openSlots, laneAgentStates]
+      openSlots.map((slot, index) => {
+        const task = trimSessionTabTitle(laneTaskTitles[index]);
+        return {
+          slot,
+          // Numbered by SLOT, which is the lane's durable identity, rather than by
+          // position in the strip. Position renumbers: closing the first of three
+          // lanes used to rename the two behind it, so a conversation the user had
+          // been calling "Session 3" silently became "Session 2" and the name they
+          // navigated back to belonged to a different session. A gap at 2 is a much
+          // smaller cost than a label that lies, and the gap closes on its own —
+          // `openSlot` always takes the lowest free slot.
+          //
+          // A task title replaces the number rather than joining it: the strip is
+          // narrow, and the number was only ever standing in for a name.
+          label: task?.label ?? `Session ${slot + 1}`,
+          fullTitle: task?.fullTitle,
+          agentState: laneAgentStates[index],
+        };
+      }),
+    [openSlots, laneAgentStates, laneTaskTitles]
   );
 
   // Bring back the tabs for lanes whose conversations an eviction or crash
@@ -1171,10 +1199,17 @@ export function HelpPanel({
     setPendingCloseSlot(null);
   }, []);
 
-  const pendingCloseLabel =
+  // A task title is free text, so it is quoted the way every confirm quotes the entity
+  // it names; `Session N` is already a name and reads wrong in quotes.
+  const pendingCloseTab =
     pendingCloseSlot === null
-      ? null
-      : (sessionTabs.find((tab) => tab.slot === pendingCloseSlot)?.label ?? "this session");
+      ? undefined
+      : sessionTabs.find((tab) => tab.slot === pendingCloseSlot);
+  const pendingCloseLabel = !pendingCloseTab
+    ? "this session"
+    : pendingCloseTab.fullTitle !== undefined
+      ? `'${pendingCloseTab.label}'`
+      : pendingCloseTab.label;
 
   const handleNewSession = useCallback(() => {
     if (!terminalId || !agentId) return;
@@ -1766,7 +1801,7 @@ export function HelpPanel({
       />
       <ConfirmDialog
         isOpen={pendingCloseSlot !== null}
-        title={`Close ${pendingCloseLabel ?? "this session"}?`}
+        title={`Close ${pendingCloseLabel}?`}
         description="The assistant will stop and the conversation will be discarded"
         confirmLabel="Close session"
         onConfirm={handleConfirmCloseSlot}
