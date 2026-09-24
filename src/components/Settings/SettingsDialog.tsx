@@ -1555,7 +1555,7 @@ export function SettingsScopeMenu({
             data-settings-scope-trigger=""
             className={cn(
               "settings-scope-trigger group flex items-center gap-1 h-8 max-w-full px-3 rounded-[var(--radius-md)]",
-              "transition-colors duration-150 ease-out",
+              "transition-[background-color] duration-150 ease-out",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
             )}
           >
@@ -1649,7 +1649,7 @@ export function NavItem({
       className={cn(
         // scroll-my clears the list's 16px scroll fade, so keeping the active item in
         // view never parks it under the fade where it reads as dimmed.
-        "relative text-left px-3 h-7 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full scroll-my-6",
+        "relative text-left px-3 h-7 rounded-[var(--radius-md)] text-sm transition-[background-color,color] duration-150 ease-out flex items-center gap-2 w-full scroll-my-6",
         // Inset, like the subtab bar: the item spans the scrollport, so a positive
         // offset had both vertical sides of the ring clipped away.
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
