@@ -224,11 +224,23 @@ export function TwoPaneSplitLayout({
     }
   }, [localRatio, activeWorktreeId, commitRatioIfChanged, terminals]);
 
-  const handleRatioCommit = useCallback(() => {
-    flushPendingRatio();
-  }, [flushPendingRatio]);
+  const handleRatioCommit = useCallback(
+    (committed?: number) => {
+      if (committed === undefined) {
+        flushPendingRatio();
+        return;
+      }
+      if (!activeWorktreeId) return;
+      commitRatioIfChanged(activeWorktreeId, committed, [terminals[0].id, terminals[1].id]);
+      setLocalRatio(null);
+    },
+    [flushPendingRatio, activeWorktreeId, commitRatioIfChanged, terminals]
+  );
 
   const handleDoubleClick = useCallback(() => {
+    // A pending local ratio outranks the stored one, so reset has to drop it
+    // too or the split stays where it was.
+    setLocalRatio(null);
     if (activeWorktreeId) {
       resetWorktreeRatio(activeWorktreeId);
     }

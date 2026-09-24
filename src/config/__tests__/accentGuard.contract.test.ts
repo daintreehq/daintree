@@ -178,7 +178,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Settings/SettingsSubtabBar.tsx",
     "src/components/Terminal/ContentGridDefault.tsx",
     "src/components/Terminal/HybridInputBar.tsx",
-    "src/components/Terminal/TwoPaneSplitDivider.tsx",
     "src/components/Terminal/VoiceInputButton.tsx",
     "src/components/TerminalRecipe/RecipeEditor.tsx",
     "src/components/Worktree/QuickCreatePalette.tsx",
