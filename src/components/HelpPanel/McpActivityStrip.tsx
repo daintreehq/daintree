@@ -56,6 +56,7 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
   const [records, setRecords] = useState<McpAuditRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [fetching, setFetching] = useState(false);
   // Bumped to re-read the log without closing: a Retry, or a call settling
   // while the popover is open.
   const [reloadKey, setReloadKey] = useState(0);
@@ -74,6 +75,7 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
     setOpen(false);
     setRecords([]);
     setLoading(false);
+    setFetching(false);
     setError(false);
   }, [sessionId]);
 
@@ -83,6 +85,7 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
     const seq = ++fetchSeq.current;
     // A refresh keeps the rows on screen; only a first read shows the skeleton.
     setLoading((wasLoading) => wasLoading || !hasRecords.current);
+    setFetching(true);
 
     void (async () => {
       try {
@@ -94,6 +97,7 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
         hasRecords.current = mine.length > 0;
         setRecords(mine);
         setLoading(false);
+        setFetching(false);
         // Cleared on success rather than at the start, so a retry in flight
         // keeps its error row (and its focused button) until it has an answer.
         setError(false);
@@ -102,6 +106,7 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
         logWarn("[McpActivityStrip] Failed to load audit records", { error: err });
         setError(true);
         setLoading(false);
+        setFetching(false);
       }
     })();
   }, [open, sessionId, reloadKey]);
@@ -207,6 +212,7 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
           records={records}
           loading={loading}
           error={error}
+          busy={fetching}
           onRetry={() => setReloadKey((k) => k + 1)}
           onOpenAuditLog={() => {
             setOpen(false);

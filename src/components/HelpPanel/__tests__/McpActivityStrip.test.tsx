@@ -487,6 +487,50 @@ describe("McpActivityStrip", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: /back/ }));
   });
 
+  it("leaves focus where the user moved it while a retry was in flight", async () => {
+    getAuditRecords.mockRejectedValueOnce(new Error("boom"));
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    retry.focus();
+
+    let resolveRetry: (v: McpAuditRecord[]) => void = () => {};
+    getAuditRecords.mockReturnValueOnce(
+      new Promise<McpAuditRecord[]>((res) => {
+        resolveRetry = res;
+      })
+    );
+    fireEvent.click(retry);
+    const footer = screen.getByRole("button", { name: /open full audit log/i });
+    footer.focus();
+
+    await act(async () => {
+      resolveRetry([makeRecord({ id: "1", toolId: "back" })]);
+    });
+    expect(document.activeElement).toBe(footer);
+  });
+
+  it("marks a background-refresh error row busy while its retry is in flight", async () => {
+    getAuditRecords.mockResolvedValueOnce([makeRecord({ id: "1", toolId: "kept" })]);
+    const { rerender } = render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    const popover = await screen.findByTestId("popover-content");
+    await within(popover).findByText("kept");
+    getAuditRecords.mockRejectedValueOnce(new Error("boom"));
+    rerender(
+      <McpActivityStrip
+        sessionId="session-a"
+        activity={makeActivity({ status: "settled", toolId: "next", startedAt: 9 })}
+      />
+    );
+    const retry = await within(popover).findByRole("button", { name: "Retry" });
+    expect(within(popover).getByRole("alert").getAttribute("aria-busy")).toBeNull();
+
+    getAuditRecords.mockReturnValueOnce(new Promise<McpAuditRecord[]>(() => {}));
+    fireEvent.click(retry);
+    expect(within(popover).getByRole("alert").getAttribute("aria-busy")).toBe("true");
+  });
+
   it("re-reads the list when a call settles while it is open", async () => {
     getAuditRecords.mockResolvedValueOnce([makeRecord({ id: "1", toolId: "first" })]);
     const { rerender } = render(<McpActivityStrip sessionId="session-a" activity={null} />);

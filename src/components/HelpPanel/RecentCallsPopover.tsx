@@ -88,6 +88,8 @@ interface RecentCallsPopoverProps {
   records: McpAuditRecord[];
   loading: boolean;
   error: boolean;
+  /** A read is in flight, including a background refresh that shows no skeleton. */
+  busy: boolean;
   onRetry: () => void;
   onOpenAuditLog: () => void;
 }
@@ -96,6 +98,7 @@ export function RecentCallsPopover({
   records,
   loading,
   error,
+  busy,
   onRetry,
   onOpenAuditLog,
 }: RecentCallsPopoverProps) {
@@ -109,24 +112,32 @@ export function RecentCallsPopover({
   }, [tick]);
   const baseId = useId();
 
-  // A Retry that succeeds unmounts itself. If it held focus, hand focus to the
-  // first call rather than dropping it on the document.
+  // Recovery unmounts Retry. If it still held focus at that moment — the user
+  // didn't move on while the read was in flight — hand focus to the first call
+  // rather than dropping it on the document.
   const containerRef = useRef<HTMLDivElement>(null);
-  const retryHadFocus = useRef(false);
+  const retryHasFocus = useRef(false);
   useEffect(() => {
-    if (error || !retryHadFocus.current) return;
-    retryHadFocus.current = false;
+    if (error || !retryHasFocus.current) return;
+    retryHasFocus.current = false;
     containerRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
   }, [error]);
 
+  // `Button` owns its own `aria-busy` (through `loading`, which paints an
+  // undelayed spinner a sub-second read would only flash), so the in-flight
+  // state sits on the row the Retry belongs to.
   const retry = (
     <Button
       variant="outline"
       size="xs"
-      aria-busy={loading || undefined}
-      onClick={() => {
-        retryHadFocus.current = true;
-        onRetry();
+      onClick={onRetry}
+      onFocus={() => {
+        retryHasFocus.current = true;
+      }}
+      // A blur with somewhere to go is the user moving on; one without is the
+      // button being removed, which is the case the handoff exists for.
+      onBlur={(event) => {
+        if (event.relatedTarget) retryHasFocus.current = false;
       }}
     >
       Retry
@@ -147,7 +158,11 @@ export function RecentCallsPopover({
       <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-1">
         {error && records.length === 0 ? (
           // Checked before `loading` so a retry in flight keeps its button.
-          <div role="alert" className="flex items-center justify-between gap-2 px-2 py-1.5">
+          <div
+            role="alert"
+            aria-busy={busy || undefined}
+            className="flex items-center justify-between gap-2 px-2 py-1.5"
+          >
             <span className="text-text-secondary">Couldn't load recent calls</span>
             {retry}
           </div>
@@ -168,7 +183,11 @@ export function RecentCallsPopover({
           <>
             {/* A failed refresh keeps what was already read on screen. */}
             {error && (
-              <div role="alert" className="flex items-center justify-between gap-2 px-2 py-1">
+              <div
+                role="alert"
+                aria-busy={busy || undefined}
+                className="flex items-center justify-between gap-2 px-2 py-1"
+              >
                 <span className="text-text-secondary">Couldn't refresh recent calls</span>
                 {retry}
               </div>
