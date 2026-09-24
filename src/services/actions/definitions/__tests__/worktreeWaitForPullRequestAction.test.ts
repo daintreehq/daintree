@@ -14,8 +14,12 @@ type Row = { id: string; branch?: string; prNumber?: number; linked?: unknown };
 
 let rows = new Map<string, Row>();
 
-function setRows(next: Row[]): void {
+function setRows(next: Row[], hostOnly: Row[] = []): void {
   rows = new Map(next.map((r) => [r.id, r]));
+  worktreeClientMock.getAllWithStatus.mockResolvedValue({
+    worktrees: [...next, ...hostOnly],
+    gitBacked: true,
+  });
 }
 
 function linkedPr(number: number, state = "open") {
@@ -86,6 +90,7 @@ describe("worktree.waitForPullRequest", () => {
         },
       ],
     });
+    // Every row was already in the store, so the host is never asked.
     expect(worktreeClientMock.getAllWithStatus).not.toHaveBeenCalled();
   });
 
@@ -149,7 +154,45 @@ describe("worktree.waitForPullRequest", () => {
     ]);
   });
 
-  it("rejects a worktree this project does not have, without echoing the id", async () => {
+  it("waits on a worktree the host has but the store has not received yet", async () => {
+    vi.useFakeTimers();
+    // A create result can beat the store update carrying the new row.
+    setRows([{ id: "wt-a" }], [{ id: "wt-new" }]);
+
+    const pending = run({ worktreeIds: ["wt-a", "wt-new"] });
+    await vi.advanceTimersByTimeAsync(500);
+    setRows([{ id: "wt-a" }, { id: "wt-new", linked: linkedPr(4) }]);
+    await vi.advanceTimersByTimeAsync(300);
+
+    const result = await pending;
+    expect(result.timedOut).toBe(false);
+    expect((result.worktrees as Array<{ prNumber: number | null }>)[1].prNumber).toBe(4);
+  });
+
+  it("keeps the sibling rows' answer when one worktree is deleted mid-wait", async () => {
+    vi.useFakeTimers();
+    setRows([{ id: "wt-a" }, { id: "wt-b" }]);
+
+    const pending = run({ worktreeIds: ["wt-a", "wt-b"] });
+    await vi.advanceTimersByTimeAsync(500);
+    setRows([{ id: "wt-b", linked: linkedPr(9) }]);
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(await pending).toEqual({
+      timedOut: false,
+      worktrees: [
+        { worktreeId: "wt-a", prNumber: null, prUrl: null, prState: null },
+        {
+          worktreeId: "wt-b",
+          prNumber: 9,
+          prUrl: "https://github.com/o/r/pull/9",
+          prState: "open",
+        },
+      ],
+    });
+  });
+
+  it("rejects a worktree neither the store nor the host has, without echoing the id", async () => {
     setRows([{ id: "wt-a" }]);
 
     await expect(run({ worktreeIds: ["wt-a", "wt-secret"] })).rejects.toThrow(/^Unknown worktree/);

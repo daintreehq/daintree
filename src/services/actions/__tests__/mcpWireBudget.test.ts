@@ -503,11 +503,14 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // holding an earlier reading has nothing else to tell that session from its
   // successor, and would otherwise go on addressing a conversation that ended.
   // Its description was written under the property target rather than over it.
-  // 62_200 → 63_250 for #12717's `worktree.waitForPullRequest`, measured at
-  // 63_224 B: its description, the `worktreeIds`/`timeoutMs` arguments, and the
+  // 62_200 → 63_300 for #12717's `worktree.waitForPullRequest`, measured at
+  // 63_265 B: its description, the `worktreeIds`/`timeoutMs` arguments, and the
   // output schema, since the per-worktree rows are read back as structured
-  // content. The property descriptions were cut to the target before measuring.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 63_250;
+  // content. `timedOut` names that detection pauses while the project is in
+  // the background — without it a supervisor reads a string of expired waits
+  // on a backgrounded project as "no PR yet". The property descriptions were
+  // cut to the target before measuring.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 63_300;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet

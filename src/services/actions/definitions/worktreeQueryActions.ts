@@ -444,7 +444,7 @@ export function registerWorktreeQueryActions(
         timedOut: z
           .boolean()
           .describe(
-            "True when no requested worktree had a detected PR by the deadline. Call again to keep waiting."
+            "True when no requested worktree had a detected PR by the deadline; call again. Detection pauses while its project is in the background."
           ),
       }),
       mcpOutputSchema: true,
@@ -463,17 +463,29 @@ export function registerWorktreeQueryActions(
         );
         const deadline = Date.now() + budgetMs;
 
+        // A row missing from the store is not proof the worktree is unknown:
+        // a create result and the store's update travel on unordered
+        // transports (see `fetchSetupStatus`). Only the host can refuse an id.
+        const initial = store.getState().worktrees;
+        if (worktreeIds.some((id) => !initial.has(id))) {
+          const { worktrees: hostRows } = await worktreeClient.getAllWithStatus();
+          const hostIds = new Set(hostRows.map((w) => w.id));
+          if (worktreeIds.some((id) => !initial.has(id) && !hostIds.has(id))) {
+            throw new Error("Unknown worktree — the workspace host has no worktree with that id.");
+          }
+        }
+
         for (;;) {
           const { worktrees } = store.getState();
           const rows = worktreeIds.map((worktreeId) => {
-            const worktree = worktrees.get(worktreeId);
-            if (!worktree) {
-              throw new Error("Unknown worktree — this project has no worktree with that id.");
-            }
+            // Absent here means not yet arrived, or deleted mid-wait. Neither
+            // has a PR to report, and neither should cost the sibling rows
+            // their answer; a later call refuses an id the host has dropped.
+            //
             // `linked` is the source of truth (#8452); the flat pr* fields can
             // outlive a branch switch that cleared it. `linked: null` is that
             // explicit clear, and it reads as "not detected" like absence does.
-            const pr = worktree.linked?.pr;
+            const pr = worktrees.get(worktreeId)?.linked?.pr;
             return {
               worktreeId,
               prNumber: pr?.ref.number ?? null,

@@ -50,6 +50,7 @@ vi.mock("../../services/issueExtractor.js", () => ({
   deriveIssueTitleFromBranch: vi.fn().mockReturnValue(undefined),
 }));
 
+import { readFile } from "fs/promises";
 import { GitStatusPass, type GitStatusPassHost } from "../GitStatusPass.js";
 import { StatPrecheck } from "../StatPrecheck.js";
 import { BaseDivergence } from "../BaseDivergence.js";
@@ -178,6 +179,7 @@ function makeHost(overrides: Partial<GitStatusPassHost> = {}): GitStatusPassHost
       state.worktreeChanges = v;
     },
     clearPRInfo: vi.fn(),
+    clearLinked: vi.fn(),
     onBranchChanged: vi.fn(),
     onRemoved: vi.fn(),
     stop: vi.fn(),
@@ -561,5 +563,25 @@ describe("GitStatusPass", () => {
 
     expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
     expect(host.isUpdating).toBe(false);
+  });
+
+  it("clears the canonical PR linkage along with the flat PR fields on a branch change", async () => {
+    // The PR service's own clear names the old branch, so the host's branch
+    // guard drops it; without this the new branch keeps the old `linked.pr`.
+    mockGetGitDir.mockResolvedValue("/test/worktree/.git");
+    vi.mocked(readFile).mockImplementation((async (path: unknown) => {
+      if (String(path).endsWith("HEAD")) return "ref: refs/heads/feature/y\n";
+      throw new Error("ENOENT");
+    }) as unknown as typeof readFile);
+    mockGetWorktreeChangesWithStats.mockResolvedValue(makeChanges());
+    const { pass, host } = makePass();
+
+    await pass.run(false);
+
+    expect(host.branch).toBe("feature/y");
+    expect(host.clearPRInfo).toHaveBeenCalledTimes(1);
+    expect(host.clearLinked).toHaveBeenCalledTimes(1);
+    expect(host.onBranchChanged).toHaveBeenCalledWith("feature/y");
+    vi.mocked(readFile).mockRejectedValue(new Error("ENOENT"));
   });
 });

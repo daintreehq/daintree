@@ -2840,7 +2840,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         timedOut: {
           type: "boolean",
           description:
-            "True when no requested worktree had a detected PR by the deadline. Call again to keep waiting.",
+            "True when no requested worktree had a detected PR by the deadline; call again. Detection pauses while its project is in the background.",
         },
       },
       required: ["worktrees", "timedOut"],
