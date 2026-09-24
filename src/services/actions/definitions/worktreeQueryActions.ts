@@ -405,7 +405,7 @@ export function registerWorktreeQueryActions(
       id: "worktree.waitForPullRequest",
       title: "Wait for worktree pull request",
       description:
-        "Wait until a pull request is detected for any of the given worktrees. Detection is a cached background poll, so this reports when a PR was seen, not when it was opened, and a PR is not proof its agent has finished. Returns at once for a PR already detected. Running out of time is not a failure: drop the worktrees that matched and call again.",
+        "Wait until any given worktree has a detected pull request. Detection is a cached background poll: a PR seen, not a PR opened, and not proof its agent finished. Returns at once if one is already detected. A timeout is not a failure: call again without the worktrees that matched.",
       category: "worktree",
       kind: "query",
       danger: "safe",
@@ -415,9 +415,7 @@ export function registerWorktreeQueryActions(
           .array(z.string().min(1))
           .min(1)
           .max(MAX_WAIT_FOR_PR_TARGETS)
-          .describe(
-            `Worktrees to wait on, 1 to ${MAX_WAIT_FOR_PR_TARGETS}. The wait ends when any of them has a detected PR.`
-          ),
+          .describe(`Worktrees to wait on, 1 to ${MAX_WAIT_FOR_PR_TARGETS}.`),
         timeoutMs: z
           .number()
           .int()
@@ -425,7 +423,7 @@ export function registerWorktreeQueryActions(
           .max(MAX_WAIT_FOR_PR_TIMEOUT_MS)
           .optional()
           .describe(
-            `Milliseconds to wait; 0 reads now. Default and maximum ${MAX_WAIT_FOR_PR_TIMEOUT_MS}. Detection runs every 30s to 2min, so call again.`
+            `Milliseconds to wait; 0 reads now. Default and max ${MAX_WAIT_FOR_PR_TIMEOUT_MS}.`
           ),
       }),
       resultSchema: z.object({
@@ -438,13 +436,11 @@ export function registerWorktreeQueryActions(
               prState: z.enum(["open", "merged", "closed", "declined"]).nullable(),
             })
           )
-          .describe(
-            "One entry per requested worktree, in request order. PR fields are null where none has been detected yet."
-          ),
+          .describe("One per requested worktree, in order; PR fields null until detected."),
         timedOut: z
           .boolean()
           .describe(
-            "True when no requested worktree had a detected PR by the deadline; call again. Detection pauses while its project is in the background."
+            "True if no PR was detected in time. Detection pauses while the project is backgrounded."
           ),
       }),
       mcpOutputSchema: true,

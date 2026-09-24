@@ -2766,7 +2766,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "worktree",
     danger: "safe",
     description:
-      "Wait until a pull request is detected for any of the given worktrees. Detection is a cached background poll, so this reports when a PR was seen, not when it was opened, and a PR is not proof its agent has finished. Returns at once for a PR already detected. Running out of time is not a failure: drop the worktrees that matched and call again.",
+      "Wait until any given worktree has a detected pull request. Detection is a cached background poll: a PR seen, not a PR opened, and not proof its agent finished. Returns at once if one is already detected. A timeout is not a failure: call again without the worktrees that matched.",
     enabled: true,
     id: "worktree.waitForPullRequest",
     inputSchema: {
@@ -2781,12 +2781,10 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             type: "string",
             minLength: 1,
           },
-          description:
-            "Worktrees to wait on, 1 to 32. The wait ends when any of them has a detected PR.",
+          description: "Worktrees to wait on, 1 to 32.",
         },
         timeoutMs: {
-          description:
-            "Milliseconds to wait; 0 reads now. Default and maximum 25000. Detection runs every 30s to 2min, so call again.",
+          description: "Milliseconds to wait; 0 reads now. Default and max 25000.",
           type: "integer",
           minimum: 0,
           maximum: 25000,
@@ -2834,13 +2832,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             required: ["worktreeId", "prNumber", "prUrl", "prState"],
             additionalProperties: false,
           },
-          description:
-            "One entry per requested worktree, in request order. PR fields are null where none has been detected yet.",
+          description: "One per requested worktree, in order; PR fields null until detected.",
         },
         timedOut: {
           type: "boolean",
           description:
-            "True when no requested worktree had a detected PR by the deadline; call again. Detection pauses while its project is in the background.",
+            "True if no PR was detected in time. Detection pauses while the project is backgrounded.",
         },
       },
       required: ["worktrees", "timedOut"],

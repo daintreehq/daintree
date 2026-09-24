@@ -7185,7 +7185,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "worktree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Wait until a pull request is detected for any of the given worktrees. Detection is a cached background poll, so this reports when a PR was seen, not when it was opened, and a PR is not proof its agent has finished. Returns at once for a PR already detected. Running out of time is not a failure: drop the worktrees that matched and call again.",
+    "description": "Wait until any given worktree has a detected pull request. Detection is a cached background poll: a PR seen, not a PR opened, and not proof its agent finished. Returns at once if one is already detected. A timeout is not a failure: call again without the worktrees that matched.",
     "examples": undefined,
     "id": "worktree.waitForPullRequest",
     "keywords": undefined,

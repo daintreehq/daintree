@@ -354,13 +354,13 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // holds, not whether the agent is waiting, and a permission prompt is never
   // in it — without that, "no unanswered question" reads as "nothing to answer"
   // while the pane sits on an approval dialog.
-  // 11_647 → 11_969 for #12717's `worktree.waitForPullRequest`, the measured
+  // 11_647 → 11_904 for #12717's `worktree.waitForPullRequest`, the measured
   // total. The surface had no headroom, so a new external tool could not land
   // at any wording. What the prose has to carry is that detection is a cached
   // poll — a PR seen, not a PR opened — that a PR is not proof its agent has
   // finished, and that running out of time means call again; a supervisor
   // missing any of those advances its queue on the wrong signal.
-  const MAX_EXTERNAL_TOTAL_BYTES = 11_969;
+  const MAX_EXTERNAL_TOTAL_BYTES = 11_904;
 
   // Raised from 48_000 by #11908, which put seven tools on the in-app surface
   // (a deterministic session resume, the four bookmark mutations, and the two

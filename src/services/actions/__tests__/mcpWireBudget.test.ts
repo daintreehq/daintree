@@ -504,8 +504,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // successor, and would otherwise go on addressing a conversation that ended.
   // Its description was written under the property target rather than over it.
   // 62_200 → 63_300 for #12717's `worktree.waitForPullRequest`, measured at
-  // 63_265 B: its description, the `worktreeIds`/`timeoutMs` arguments, and the
-  // output schema, since the per-worktree rows are read back as structured
+  // 63_298 B on top of #12745's `lastTypedInputAt`, which landed first and
+  // took 285 B of the headroom — the tool's prose was cut again to absorb it
+  // rather than raise past 63_300. The spend is its description, the
+  // `worktreeIds`/`timeoutMs` arguments, and the output schema, since the per-worktree rows are read back as structured
   // content. `timedOut` names that detection pauses while the project is in
   // the background — without it a supervisor reads a string of expired waits
   // on a backgrounded project as "no PR yet". The property descriptions were
