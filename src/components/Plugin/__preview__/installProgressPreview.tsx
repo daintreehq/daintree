@@ -119,20 +119,28 @@ function HeaderStandIn() {
   );
 }
 
-/** The installed list and detail pane the banner pushes down. */
+/**
+ * The installed list and detail pane the banner pushes down. Real text, not
+ * grey bars: bars read as a loading skeleton, and nothing below the banner is
+ * loading during an install.
+ */
+const PLUGINS = [
+  { name: "GitHub", tagline: "Pull requests, issues and CI" },
+  { name: "Linear", tagline: "Issues and cycles" },
+  { name: "Sentry", tagline: "Errors from your running app" },
+  { name: "Vercel", tagline: "Deployments and previews" },
+];
+
 function BodyStandIn() {
   return (
     <div data-harness-decoration aria-hidden="true" className="flex flex-1 min-h-0">
       <div className="w-80 shrink-0 border-r border-border-default flex flex-col">
-        <div className="p-3 border-b border-border-default space-y-2">
-          <div className="h-7 rounded-[var(--radius-md)] bg-overlay-subtle" />
-          <div className="flex gap-1">
-            {[44, 56, 40, 52].map((w) => (
-              <div key={w} className="h-4 rounded-sm bg-overlay-subtle" style={{ width: w }} />
-            ))}
+        <div className="p-3 border-b border-border-default">
+          <div className="flex h-7 items-center rounded-[var(--radius-md)] border border-border-default px-2 text-xs text-text-secondary">
+            Search plugins
           </div>
         </div>
-        {["GitHub", "Linear", "Sentry", "Vercel"].map((name, i) => (
+        {PLUGINS.map(({ name, tagline }, i) => (
           <div
             key={name}
             className={
@@ -141,18 +149,19 @@ function BodyStandIn() {
                 : "flex items-center gap-2 px-3 py-2"
             }
           >
-            <div className="h-6 w-6 rounded-[var(--radius-md)] bg-overlay-medium" />
-            <div className="flex-1 space-y-1">
+            <Package className="h-4 w-4 shrink-0 text-text-secondary" />
+            <div className="min-w-0 flex-1">
               <div className="text-sm text-text-primary">{name}</div>
-              <div className="h-2 w-32 rounded-sm bg-overlay-subtle" />
+              <div className="truncate text-xs text-text-secondary">{tagline}</div>
             </div>
           </div>
         ))}
       </div>
-      <div className="flex-1 p-6 space-y-3">
-        <div className="h-5 w-48 rounded-sm bg-overlay-medium" />
-        <div className="h-3 w-80 rounded-sm bg-overlay-subtle" />
-        <div className="h-3 w-72 rounded-sm bg-overlay-subtle" />
+      <div className="flex-1 p-6 space-y-2">
+        <div className="text-base font-medium text-text-primary">GitHub</div>
+        <p className="max-w-md text-sm text-text-secondary">
+          Pull requests, issues and CI status for the repositories in this project.
+        </p>
       </div>
     </div>
   );
