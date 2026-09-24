@@ -598,14 +598,16 @@ export function WorktreeOverviewModal({
     return true;
   }, [hasSelection, clearSelection]);
 
-  /** Enter in the search field switches to the cursor row, or the top result. */
+  /**
+   * Enter in the search field switches to the top result — the one row the
+   * user can see it will act on. The list's cursor is not painted while the
+   * field has focus, so preferring it here would switch to a row nothing on
+   * screen had pointed at.
+   */
   const handleSearchSubmit = useCallback(() => {
-    const target =
-      (activeDescendantId &&
-        visibleIds.find((id) => getWorktreeOverviewCellId(id) === activeDescendantId)) ??
-      visibleIds[0];
+    const target = visibleIds[0];
     if (target) activateWorktree(target);
-  }, [activeDescendantId, visibleIds, activateWorktree]);
+  }, [visibleIds, activateWorktree]);
 
   /**
    * Focus the field before the reset: the button that asked for it unmounts as
@@ -658,9 +660,13 @@ export function WorktreeOverviewModal({
         onClose={handleDismiss}
         ariaLabel="Worktrees"
         tier="workspace"
+        // The whole box is budgeted, not just the results: the palette sits
+        // 15vh down, so a 60vh list plus header, facet summary and footer ran
+        // the footer off a laptop-height window.
+        className="flex max-h-[calc(85dvh-16px)] flex-col"
         initialFocusRef={searchInputRef}
       >
-        <div data-testid="worktree-overview-modal" className="flex flex-col">
+        <div data-testid="worktree-overview-modal" className="flex min-h-0 flex-1 flex-col">
           {/* Selection is a mode change, and a screen reader has to hear it. The
               region exists before its text changes, and is atomic so "3 of 13
               selected" is read as one phrase. */}
@@ -669,6 +675,7 @@ export function WorktreeOverviewModal({
           </div>
 
           <AppPaletteDialog.Header
+            className="shrink-0"
             label="Worktrees"
             shortcut={overviewShortcut}
             trailing={countLabel}
@@ -700,7 +707,7 @@ export function WorktreeOverviewModal({
 
           {filteredWorktrees.length > 0 && <WorktreeOverviewColumnHeaders />}
 
-          <ScrollShadow className="max-h-[60vh]" scrollClassName="scroll-py-2">
+          <ScrollShadow className="min-h-0 flex-1 max-h-[60vh]" scrollClassName="scroll-py-2">
             {isLoading && worktrees.length === 0 ? (
               <Skeleton label="Loading worktrees" className="flex flex-col">
                 {Array.from({ length: 4 }).map((_, i) => (
@@ -774,7 +781,7 @@ export function WorktreeOverviewModal({
               bulk actions while a selection is active — next to the count they
               apply to. */}
           {hasSelection ? (
-            <AppPaletteDialog.Footer className="justify-between">
+            <AppPaletteDialog.Footer className="shrink-0 justify-between">
               <div className="flex items-center gap-3 min-w-0">
                 <span className="text-text-primary font-medium tabular-nums">
                   {selectedIds.size} selected
@@ -813,7 +820,7 @@ export function WorktreeOverviewModal({
               </div>
             </AppPaletteDialog.Footer>
           ) : filteredWorktrees.length > 0 ? (
-            <AppPaletteDialog.Footer>
+            <AppPaletteDialog.Footer className="shrink-0">
               <PaletteFooterHints
                 primaryHint={{ keys: ["↵"], label: "to switch" }}
                 hints={[

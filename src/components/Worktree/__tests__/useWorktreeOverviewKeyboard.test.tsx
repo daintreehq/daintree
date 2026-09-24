@@ -217,6 +217,24 @@ describe("useWorktreeOverviewKeyboard — single-column list", () => {
     expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId(IDS[2]!));
   });
 
+  it("PageDown moves by the rows the viewport shows, less one kept as overlap", () => {
+    const { getByTestId } = render(<Harness worktreeIds={IDS} />);
+    const grid = getByTestId("grid");
+    // A viewport five rows tall: a page is four rows.
+    Object.defineProperty(grid.parentElement!, "clientHeight", { configurable: true, value: 300 });
+    for (const id of IDS) {
+      Object.defineProperty(getByTestId(`cell-${id}`), "offsetHeight", {
+        configurable: true,
+        value: 60,
+      });
+    }
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "PageDown" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId(IDS[4]!));
+    fireEvent.keyDown(grid, { key: "PageUp" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId(IDS[0]!));
+  });
+
   it("Home and End reach the ends of the list, not of a visual row", () => {
     const { getByTestId } = render(<Harness worktreeIds={IDS} />);
     const grid = getByTestId("grid");

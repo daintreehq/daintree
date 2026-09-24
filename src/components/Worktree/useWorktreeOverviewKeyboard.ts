@@ -263,6 +263,27 @@ export interface UseWorktreeOverviewKeyboardReturn {
 }
 
 /**
+ * How far PageUp/PageDown move. In a list it is a page: the rows the scroll
+ * viewport shows, less one kept as overlap so the eye has an anchor. A grid,
+ * or a list that cannot be measured (no layout yet), keeps three visual rows.
+ */
+function pageStride(
+  gridEl: HTMLElement | null,
+  currentId: string,
+  columnCount: number,
+  isList: boolean
+): number {
+  const fallback = Math.max(1, columnCount * 3);
+  if (!isList || !gridEl) return fallback;
+  const cell = document.getElementById(getWorktreeOverviewCellId(currentId));
+  const viewport = gridEl.parentElement;
+  const rowHeight = cell?.offsetHeight ?? 0;
+  const viewportHeight = viewport?.clientHeight ?? 0;
+  if (rowHeight <= 0 || viewportHeight <= 0) return fallback;
+  return Math.max(1, Math.floor(viewportHeight / rowHeight) - 1);
+}
+
+/**
  * 2D keyboard navigation + selection substrate for the worktree overview grid.
  *
  * Built parallel to {@link useWorktreeSidebarKeyboard}: one tab stop on the
@@ -525,12 +546,12 @@ export function useWorktreeOverviewKeyboard({
               : computeRowExtreme(currentIndex, 1, columnCount, total, sectionSizesRef.current);
           break;
         case "PageDown": {
-          const stride = Math.max(1, columnCount * 3);
+          const stride = pageStride(gridEl, currentId, columnCount, isList);
           targetIndex = Math.min(total - 1, currentIndex + stride);
           break;
         }
         case "PageUp": {
-          const stride = Math.max(1, columnCount * 3);
+          const stride = pageStride(gridEl, currentId, columnCount, isList);
           targetIndex = Math.max(0, currentIndex - stride);
           break;
         }

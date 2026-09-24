@@ -46,7 +46,7 @@ export function WorktreeOverviewColumnHeaders() {
     <div
       aria-hidden="true"
       className={cn(
-        "grid items-end py-1.5 border-b border-divider",
+        "grid shrink-0 items-end py-1.5 border-b border-divider",
         OVERVIEW_ROW_COLUMNS,
         OVERVIEW_ROW_GAP,
         OVERVIEW_ROW_INSET,
