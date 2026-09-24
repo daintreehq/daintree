@@ -153,8 +153,9 @@ code.hljs {
    * Tier 40: Fixed panels (dock, sidebars)
    * Tier 50: Portal overlay
    * Tier 55: Maximized content (terminals)
-   * Tier 56: Window visual bell (the all-clear flash) — ambient, so it stays
-   *          under every modal scrim, popover and toast
+   * Tier 56: Ambient overlays — the window visual bell (the all-clear flash)
+   *          and the panel move ghost — so they stay under every modal scrim,
+   *          popover and toast
    * Tier 60: Modal dialogs (full-screen overlays)
    * Tier 70: Popovers, dropdowns, tooltips (can appear above modals)
    * Tier 75: Nested dialogs (dialogs triggered from within popovers)

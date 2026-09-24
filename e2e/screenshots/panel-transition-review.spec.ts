@@ -25,7 +25,8 @@
  *   DAINTREE_SHOT_THEMES           default daintree,namib,svalbard
  *
  * Output: `<fixture>-<theme>-<frame>.png`, where frame is `before`, `t30`, `t60`,
- * `t90` (percent of the flight) or `after` (the dock at rest once the flight ends).
+ * `t90` (percent of the flight) or `after` (the dock at rest once the flight ends);
+ * plus `restore-<theme>-<frame>.png` for a dock chip flying back into the grid.
  * Never writes a PNG it has not verified, and counts the files itself.
  */
 
@@ -46,8 +47,11 @@ const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,namib,svalbard")
   .map((t) => t.trim())
   .filter(Boolean);
 
-/** The pane each fixture minimizes: the grid's top-right agent. */
+/** The pane each fixture minimizes (the grid's top-right agent) and the chip it restores. */
 const TARGET = "p-codex";
+const DOCKED = "d-tests";
+/** Themes the restore flight is captured in — one dark, one light. */
+const RESTORE_THEMES = ["daintree", "svalbard"];
 const FRAMES = [0.3, 0.6, 0.9] as const;
 const ATTACH_TIMEOUT_MS = 30_000;
 const CLOCK_START = Date.UTC(2026, 0, 1);
@@ -140,22 +144,27 @@ async function load(page: Page, fixture: string, theme: string) {
   await expect(page.locator("[data-dock-density]")).toBeVisible();
 }
 
-/** Run the grid pane's minimize sequence on TARGET. */
-async function minimize(page: Page) {
+type Direction = "minimize" | "restore";
+
+/** Run the grid pane's minimize sequence on TARGET, or the chip's restore on DOCKED. */
+async function move(page: Page, direction: Direction = "minimize") {
   await page.evaluate(
-    (id) => (window as unknown as { __minimize(id: string): void }).__minimize(id),
-    TARGET
+    ([dir, id]) =>
+      (window as unknown as Record<string, (id: string) => void>)[
+        dir === "minimize" ? "__minimize" : "__restore"
+      ]!(id),
+    [direction, direction === "minimize" ? TARGET : DOCKED] as const
   );
   // React commits on a MessageChannel task, which the fake clock does not hold.
   await page.waitForTimeout(100);
 }
 
-/** Minimize TARGET and hold the flight at `progress`. */
-async function flyTo(page: Page, progress: number) {
+/** Start a flight and hold it at `progress`. */
+async function flyTo(page: Page, progress: number, direction: Direction = "minimize") {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Animation.enable");
   await cdp.send("Animation.setPlaybackRate", { playbackRate: 0 });
-  await minimize(page);
+  await move(page, direction);
   // One frame, so the ghost's rAF arms the flight.
   await page.clock.runFor(17);
   await page.waitForTimeout(50);
@@ -199,7 +208,7 @@ test("panel transition — minimize flight, every theme", async ({ context }) =>
     written.push(
       await withPage(context, `${fixture} ${theme} after`, async (page) => {
         await load(page, fixture, theme);
-        await minimize(page);
+        await move(page);
         await page.clock.runFor(2_000);
         await page.waitForTimeout(400);
         await expect(page.locator(OVERLAY)).toHaveCount(0);
@@ -212,11 +221,42 @@ test("panel transition — minimize flight, every theme", async ({ context }) =>
     );
   };
 
+  const shootRestore = async (theme: string) => {
+    for (const progress of FRAMES) {
+      const frame = `t${Math.round(progress * 100)}`;
+      written.push(
+        await withPage(context, `restore ${theme} ${frame}`, async (page) => {
+          await load(page, "few", theme);
+          await flyTo(page, progress, "restore");
+          return snap(page.locator("body"), `restore-${theme}-${frame}.png`);
+        })
+      );
+    }
+    written.push(
+      await withPage(context, `restore ${theme} after`, async (page) => {
+        await load(page, "few", theme);
+        await move(page, "restore");
+        await page.clock.runFor(2_000);
+        await page.waitForTimeout(400);
+        await expect(page.locator(OVERLAY)).toHaveCount(0);
+        await expect(page.locator(`[data-dock-item-id="${DOCKED}"]`)).toHaveCount(0);
+        await expect(
+          page.locator(`[data-panel-id="${DOCKED}"][data-panel-location="grid"]`)
+        ).toBeVisible();
+        return snap(shell(page), `restore-${theme}-after.png`);
+      })
+    );
+  };
+
   for (const theme of THEMES) await shoot("few", theme);
   await shoot("busy", THEMES[0]!);
+  for (const theme of RESTORE_THEMES.filter((t) => THEMES.includes(t))) await shootRestore(theme);
 
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(onDisk.length).toBe((THEMES.length + 1) * (FRAMES.length + 2));
+  const restoreThemes = RESTORE_THEMES.filter((t) => THEMES.includes(t)).length;
+  expect(onDisk.length).toBe(
+    (THEMES.length + 1) * (FRAMES.length + 2) + restoreThemes * (FRAMES.length + 1)
+  );
   console.log(`[transition-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });

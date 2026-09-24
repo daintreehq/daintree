@@ -11,13 +11,15 @@ import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
+import { setPanelStoreAccessor } from "@/store/storeAccessors";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { usePluginContextMenuItemsStore } from "@/store/pluginContextMenuItemsStore";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import { ContentDock } from "@/components/Layout/ContentDock";
 import { DockPanelOffscreenContainer } from "@/components/Layout/DockPanelOffscreenContainer";
-import { PanelTransitionOverlay, triggerPanelTransition } from "../PanelTransitionOverlay";
+import { PanelTransitionOverlay } from "../PanelTransitionOverlay";
+import { animatePanelMove } from "../animatePanelMove";
 import "@/index.css";
 
 /**
@@ -27,9 +29,10 @@ import "@/index.css";
  * page mounts the real `PanelTransitionOverlay` and the real `ContentDock` against the
  * real stores and theme tokens, under a stand-in grid whose panes carry the same
  * `data-panel-id` hook the real `ContentPanel` does. The spec installs a fake clock,
- * calls `window.__minimize(id)` — the same sequence the grid pane's minimize button
- * runs — and then pauses every animation in the overlay at a chosen point in the
- * flight, so each capture is one frame of the real motion.
+ * calls `window.__minimize(id)` or `window.__restore(id)` — the same sequences the
+ * grid pane's minimize button and the dock chip's "move to grid" run — and then
+ * pauses every animation in the overlay at a chosen point in the flight, so each
+ * capture is one frame of the real motion.
  *
  * Opt-in only: `DAINTREE_SHOT_PANELTRANSITION=1`, see panel-transition-review.spec.ts.
  *
@@ -122,6 +125,11 @@ setCurrentViewStore(worktreeStore);
 useWorktreeSelectionStore.setState({ activeWorktreeId: ACTIVE });
 usePreferencesStore.setState({ dockDensity: "normal" });
 usePluginContextMenuItemsStore.setState({ entries: [], init() {} });
+// Registered by the store orchestrator at app boot; the transition reads the store through it.
+setPanelStoreAccessor(() => {
+  const s = usePanelStore.getState();
+  return { panelsById: s.panelsById, panelIds: s.panelIds, tabGroups: s.tabGroups };
+});
 usePanelStore.setState({
   panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
   panelIds: panels.map((p) => p.id),
@@ -129,31 +137,13 @@ usePanelStore.setState({
   tabGroups: new Map(),
 });
 
-/**
- * The grid pane's minimize sequence, verbatim from `GridPanel.handleMinimize`: measure
- * the pane, fire the ghost, then dock it.
- */
-function minimize(terminalId: string): void {
-  const panelElement = document.querySelector(`[data-panel-id="${terminalId}"]`);
-  if (panelElement) {
-    const sourceRect = panelElement.getBoundingClientRect();
-    const dockElement = document.querySelector("[data-dock-density]");
-    if (dockElement) {
-      const dockRect = dockElement.getBoundingClientRect();
-      triggerPanelTransition(
-        terminalId,
-        "minimize",
-        { x: sourceRect.x, y: sourceRect.y, width: sourceRect.width, height: sourceRect.height },
-        {
-          x: dockRect.x + dockRect.width / 2 - 50,
-          y: dockRect.y + dockRect.height / 2 - 16,
-          width: 100,
-          height: 32,
-        }
-      );
-    }
-  }
-  usePanelStore.getState().moveTerminalToDock(terminalId);
+/** The grid pane's minimize button and the dock chip's "move to grid", as the app runs them. */
+function minimize(panelId: string): void {
+  animatePanelMove(panelId, "minimize", () => usePanelStore.getState().moveTerminalToDock(panelId));
+}
+
+function restore(panelId: string): void {
+  animatePanelMove(panelId, "restore", () => usePanelStore.getState().moveTerminalToGrid(panelId));
 }
 
 /**
@@ -186,7 +176,7 @@ function freeze(progress: number): number {
   return animations.length;
 }
 
-Object.assign(window, { __minimize: minimize, __freeze: freeze });
+Object.assign(window, { __minimize: minimize, __restore: restore, __freeze: freeze });
 
 function StandInPane({ id }: { id: string }) {
   const panel = usePanelStore(useShallow((s) => s.panelsById[id]));
