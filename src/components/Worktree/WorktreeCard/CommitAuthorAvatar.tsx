@@ -93,7 +93,9 @@ export function CommitAuthorAvatar({
 }: CommitAuthorAvatarProps) {
   const AgentIcon = resolveCommitAgentIcon(author);
   const square = commitAvatarIsSquare(author);
-  const radius = square ? "rounded-md" : "rounded-full";
+  // `rounded-xs`: the scale's `md` is a full circle at 16px, which would
+  // paint a bot as a person.
+  const radius = square ? "rounded-xs" : "rounded-full";
   const box = { width: size, height: size } as const;
 
   // Ordered image tiers tried before initials: forge picture, then a
