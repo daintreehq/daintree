@@ -18,7 +18,7 @@ import { IMPORT_CONFIG_EVENT } from "./importConfigEvent";
 /** Groups this dialog's notifications so a repeat import replaces the last report. */
 const IMPORT_CONFIG_ACTION_ID = "app.importConfig";
 
-/** Names shown per line before the rest collapse into "and N more". */
+/** Added names shown before the rest fold behind "and N more". */
 const MAX_NAMED = 3;
 
 /**
@@ -42,19 +42,22 @@ function describeSection(section: ConfigBundlePreviewSection): string {
   return parts.join(", ");
 }
 
-/** "a", "a and b", "a, b and c", "a, b, c and 2 more". */
-function listNames(names: string[], max = MAX_NAMED): string {
+/** "a", "a and b", "a, b and c". */
+function joinNames(names: string[]): string {
   if (names.length <= 1) return names.join("");
-  if (names.length <= max) return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-  return `${names.slice(0, max).join(", ")} and ${names.length - max} more`;
+  return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
-/** A scalar shows the value it moves between; everything else is just its name. */
+/**
+ * A scalar shows the value it moves between, a renamed entry the name it takes,
+ * and everything else just its name.
+ */
 function nameChange(change: ConfigBundlePreviewChange): string {
   if (change.kind === "update" && change.from !== undefined && change.to !== undefined) {
     return `${change.label} (${change.from} → ${change.to})`;
   }
   if (change.kind === "add" && change.to !== undefined) return `${change.label} (${change.to})`;
+  if (change.renamedTo) return `${change.label} (becomes ${change.renamedTo})`;
   return change.label;
 }
 
@@ -97,8 +100,8 @@ function outcomeMessage(report: ConfigImportReport, preview: ConfigBundlePreview
   if (reasons.length === 0) {
     return `Configuration imported — ${countLabel(applied, "setting", "settings")} changed${tail}`;
   }
-  const more = reasons.length > 1 ? `, plus ${reasons.length - 1} more` : "";
-  return `Configuration imported with ${reasons.length} skipped — ${reasons[0]}${more}${tail}`;
+  const more = reasons.length > 1 ? `, plus ${reasons.length - 1} more in the inbox` : "";
+  return `Configuration imported with ${reasons.length} skipped. ${reasons[0]}${more}${tail}`;
 }
 
 interface ApplyFailure {
@@ -107,11 +110,22 @@ interface ApplyFailure {
   detail?: string;
 }
 
+/** Section rows whose only setting is the section itself, named by its value alone. */
+const VALUE_ONLY_SECTIONS = new Set<ConfigBundlePreviewSection["section"]>(["worktreeConfig"]);
+
+const ROW = "py-2 first:pt-0 last:pb-0";
+const DETAIL = "mt-0.5 text-xs text-text-secondary";
+
 function SectionRow({ section }: { section: ConfigBundlePreviewSection }) {
-  const replaced = section.changes.filter((c) => c.kind === "update").map(nameChange);
+  const [showAllAdded, setShowAllAdded] = useState(false);
+  const replaced = section.changes.filter((c) => c.kind === "update");
   const added = section.changes.filter((c) => c.kind === "add").map(nameChange);
+  const hiddenAdded = showAllAdded ? 0 : Math.max(0, added.length - MAX_NAMED);
+  const shownAdded = hiddenAdded > 0 ? added.slice(0, MAX_NAMED) : added;
+  const valueOnly = VALUE_ONLY_SECTIONS.has(section.section);
+
   return (
-    <li className="py-2 first:pt-0 last:pb-0">
+    <li className={ROW}>
       <div className="flex items-baseline justify-between gap-4">
         <span className="text-sm text-text-primary">
           {CONFIG_BUNDLE_SECTION_LABELS[section.section]}
@@ -120,11 +134,32 @@ function SectionRow({ section }: { section: ConfigBundlePreviewSection }) {
           {describeSection(section)}
         </span>
       </div>
-      {replaced.length > 0 && (
-        <p className="mt-0.5 text-xs text-text-secondary">Replaces {listNames(replaced)}</p>
-      )}
+      {/* Replacements are what the import takes away, so they are never
+          collapsed — only additions fold behind "and N more". */}
+      {replaced.length > 0 &&
+        (valueOnly ? (
+          replaced.map((change) => (
+            <p key={change.key} className={DETAIL}>
+              Replaces <code className="font-mono break-all">{change.from ?? change.label}</code>{" "}
+              with <code className="font-mono break-all">{change.to ?? "the bundle's value"}</code>
+            </p>
+          ))
+        ) : (
+          <p className={DETAIL}>Replaces {joinNames(replaced.map(nameChange))}</p>
+        ))}
       {added.length > 0 && (
-        <p className="mt-0.5 text-xs text-text-secondary">Adds {listNames(added)}</p>
+        <p className={DETAIL}>
+          Adds {hiddenAdded > 0 ? `${shownAdded.join(", ")} and ` : joinNames(shownAdded)}
+          {hiddenAdded > 0 && (
+            <button
+              type="button"
+              className="rounded-[var(--radius-sm)] text-text-primary underline underline-offset-2 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+              onClick={() => setShowAllAdded(true)}
+            >
+              {hiddenAdded} more
+            </button>
+          )}
+        </p>
       )}
     </li>
   );
@@ -147,6 +182,9 @@ export function ImportConfigDialog() {
   const [applyFailure, setApplyFailure] = useState<ApplyFailure | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [exportNote, setExportNote] = useState<{ text: string; failed: boolean } | null>(null);
+  /** Bumped per failure so the body scrolls back to the banner that explains it. */
+  const [failureCount, setFailureCount] = useState(0);
+  const backupRef = useRef<HTMLDivElement>(null);
   /**
    * Synchronous single-flight gate. `isApplying` is state and settles a render
    * later, so two activations in the same tick would both pass a state check —
@@ -248,6 +286,11 @@ export function ImportConfigDialog() {
       const result = await window.electron.configBundle.export();
       if (result.outcome === "canceled" || !result.filePath) return;
       const name = result.filePath.split(/[\\/]/).pop() ?? result.filePath;
+      // The Export button unmounts on success; hand its focus to Cancel rather
+      // than let it fall to the document once the native save dialog returns.
+      const cancel = backupRef.current
+        ?.closest<HTMLElement>('[role="dialog"], [role="alertdialog"]')
+        ?.querySelector<HTMLElement>('[data-confirm-role="cancel"]');
       const omitted = result.omittedSecretPaths.length;
       setExportNote({
         failed: false,
@@ -256,6 +299,7 @@ export function ImportConfigDialog() {
             ? `Current values saved to '${name}', without ${countLabel(omitted, "value that looked like a secret", "values that looked like secrets")}`
             : `Current values saved to '${name}'`,
       });
+      requestAnimationFrame(() => cancel?.focus());
     } catch (error) {
       logError("[importConfig] Failed to export current configuration", error);
       setExportNote({
@@ -284,9 +328,10 @@ export function ImportConfigDialog() {
       // unknown — say that rather than guess in either direction.
       setApplyFailure({
         description:
-          "Daintree couldn't confirm what was written. Check the settings listed below before trying again.",
+          "Daintree couldn't confirm what was written. Check these settings in Settings before trying again.",
         detail: formatErrorMessage(error, ""),
       });
+      setFailureCount((n) => n + 1);
       inFlight.current = false;
       setIsApplying(false);
       return;
@@ -302,6 +347,7 @@ export function ImportConfigDialog() {
       setApplyFailure({
         description: report.errors[0] ?? "The bundle couldn't be applied. Nothing was changed.",
       });
+      setFailureCount((n) => n + 1);
       return;
     }
 
@@ -325,12 +371,20 @@ export function ImportConfigDialog() {
       return;
     }
 
+    const reasons = skippedReasons(report, preview);
     notify({
-      type: skippedReasons(report, preview).length > 0 ? "warning" : "success",
+      type: reasons.length > 0 ? "warning" : "success",
       priority: "high",
-      transient: true,
+      // A clean import needs no record. Skips do: the toast names one, and the
+      // inbox keeps every one of them.
+      transient: reasons.length === 0,
       context: { eventKind: "settings" },
       message: outcomeMessage(report, preview),
+      ...(reasons.length > 1
+        ? {
+            inboxMessage: `Configuration imported with ${reasons.length} skipped. ${reasons.join(". ")}`,
+          }
+        : {}),
       supersedeKey: IMPORT_CONFIG_ACTION_ID,
     });
   }, [preview, close]);
@@ -352,20 +406,15 @@ export function ImportConfigDialog() {
       }
       description={
         replacesAny
-          ? "Adds or replaces each setting below with the value in this file. Everything else stays as it is."
+          ? "Adds or replaces each setting below with the value in this file. Everything else stays as it is, and Daintree keeps no copy of what's replaced."
           : "Adds each setting below from this file. Everything else stays as it is."
       }
       confirmLabel={applyFailure ? "Try again" : "Import configuration"}
       variant="destructive"
       isConfirmLoading={isApplying}
       onConfirm={handleConfirm}
-      hint={
-        isApplying
-          ? "Importing configuration…"
-          : applyFailure
-            ? "Import stopped — details above"
-            : undefined
-      }
+      hint={isApplying ? "Importing…" : undefined}
+      bodyResetKey={failureCount}
       hasPreview
     >
       {applyFailure && (
@@ -373,30 +422,26 @@ export function ImportConfigDialog() {
           severity="error"
           title="Import stopped"
           description={applyFailure.description}
-          {...(applyFailure.detail ? { contextLine: applyFailure.detail } : {})}
+          {...(applyFailure.detail
+            ? { contextLine: applyFailure.detail, contextLineTruncate: "middle" as const }
+            : {})}
           className="rounded-[var(--radius-md)]"
         />
       )}
-      <ul className="divide-y divide-border-subtle">
-        {changed.map((section) => (
-          <SectionRow key={section.section} section={section} />
-        ))}
-      </ul>
-      {unknown.length > 0 && (
-        <p className="text-xs text-text-secondary">
-          Left out, because this version of Daintree doesn&apos;t support{" "}
-          {unknown.length === 1 ? "it" : "them"}: {listNames(unknown, 4)}
-        </p>
-      )}
+      {/* Ahead of the list, not after it: the way back has to be seen before
+          the confirm, and a busy preview scrolls past anything below it. */}
       {replacesAny && (
-        <div className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2">
+        <div
+          ref={backupRef}
+          className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] bg-overlay-subtle px-3 py-2"
+        >
           <p
             className={
               exportNote?.failed ? "text-xs text-status-error" : "text-xs text-text-secondary"
             }
             role="status"
           >
-            {exportNote?.text ?? "Daintree doesn't keep a copy of the values this replaces"}
+            {exportNote?.text ?? "Export the current values first to keep a way back"}
           </p>
           {(!exportNote || exportNote.failed) && (
             <Button
@@ -412,6 +457,27 @@ export function ImportConfigDialog() {
           )}
         </div>
       )}
+      <ul className="divide-y divide-border-subtle">
+        {changed.map((section) => (
+          <SectionRow key={section.section} section={section} />
+        ))}
+        {unknown.length > 0 && (
+          <li className={ROW}>
+            <div className="flex items-baseline justify-between gap-4">
+              <span className="text-sm text-text-primary">Not supported by this version</span>
+              <span className="shrink-0 text-xs text-text-secondary">left out</span>
+            </div>
+            <p className={DETAIL}>
+              {unknown.map((key, i) => (
+                <span key={key}>
+                  {i > 0 && (i === unknown.length - 1 ? " and " : ", ")}
+                  <code className="font-mono">{key}</code>
+                </span>
+              ))}
+            </p>
+          </li>
+        )}
+      </ul>
     </ConfirmDialog>
   );
 }

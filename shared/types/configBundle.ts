@@ -119,6 +119,12 @@ export interface ConfigBundlePreviewChange {
   label: string;
   kind: "add" | "update";
   /**
+   * For a replaced agent, recipe or custom theme the bundle also renames: the
+   * incoming name. `label` stays the current one, since that is what the user
+   * recognises and what the import takes away.
+   */
+  renamedTo?: string;
+  /**
    * Display values before and after, for scalar settings only (theme fields,
    * notification settings, the worktree path pattern). Absent for structured
    * entries, where a value would be a JSON blob rather than something to read.

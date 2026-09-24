@@ -76,6 +76,7 @@ interface PreviewChange {
   key: string;
   label: string;
   kind: "add" | "update";
+  renamedTo?: string;
   from?: string;
   to?: string;
 }
@@ -155,7 +156,7 @@ const BUSY: PreviewSection[] = [
     ),
   ]),
   section("globalRecipes", 2, [
-    upd("r-bug-bash", "Bug bash"),
+    { ...upd("r-bug-bash", "Bug bash"), renamedTo: "Weekly bug bash" },
     add("r-fleet", "Full review fleet"),
     add("r-triage", "Nightly triage"),
     add("r-release", "Release checklist"),

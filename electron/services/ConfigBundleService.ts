@@ -222,14 +222,29 @@ function describeChanges(
   const incomingRecord = isRecord(incoming) ? incoming : {};
   const currentRecord = isRecord(current) ? current : {};
 
+  /**
+   * A replacement is named by what the user has now, since that is what they
+   * lose; the incoming name rides along only when the import changes it.
+   */
+  const named = (
+    key: string,
+    kind: "add" | "update",
+    incomingName: string | undefined,
+    currentName: string | undefined,
+    suffix = ""
+  ): ConfigBundlePreviewChange => {
+    const label = (kind === "update" ? (currentName ?? incomingName) : incomingName) ?? key;
+    const renamed =
+      kind === "update" && currentName && incomingName && incomingName !== currentName
+        ? { renamedTo: `${incomingName}${suffix}` }
+        : {};
+    return { key, kind, label: `${label}${suffix}`, ...renamed };
+  };
+
   const describe = (key: string, kind: "add" | "update"): ConfigBundlePreviewChange => {
     switch (id) {
       case "userAgentRegistry":
-        return {
-          key,
-          kind,
-          label: recordName(incomingRecord, key) ?? recordName(currentRecord, key) ?? key,
-        };
+        return named(key, kind, recordName(incomingRecord, key), recordName(currentRecord, key));
       case "agentSettings":
         return { key, kind, label: getEffectiveAgentConfig(key)?.name ?? key };
       case "keybindingOverrides":
@@ -237,10 +252,13 @@ function describeChanges(
       case "appTheme": {
         if (key.startsWith("theme:")) {
           const schemeId = key.slice("theme:".length);
-          const label =
-            schemeName(schemeId, incomingRecord.customSchemes, currentRecord.customSchemes) ??
-            schemeId;
-          return { key, kind, label: `${label} (custom theme)` };
+          return named(
+            key,
+            kind,
+            schemeName(schemeId, incomingRecord.customSchemes),
+            schemeName(schemeId, currentRecord.customSchemes),
+            " (custom theme)"
+          );
         }
         const isScheme = key.endsWith("SchemeId");
         const show = (value: unknown) =>
@@ -272,11 +290,15 @@ function describeChanges(
           to: displayScalar(incomingRecord[key]),
         };
       case "globalRecipes": {
-        const find = (list: unknown) =>
-          Array.isArray(list) ? list.find((r) => isRecord(r) && String(r.id) === key) : undefined;
-        const recipe = find(incoming) ?? find(current);
-        const name = isRecord(recipe) && typeof recipe.name === "string" ? recipe.name : "";
-        return { key, kind, label: name.trim() || key };
+        const nameIn = (list: unknown) => {
+          const recipe = Array.isArray(list)
+            ? list.find((r) => isRecord(r) && String(r.id) === key)
+            : undefined;
+          const name =
+            isRecord(recipe) && typeof recipe.name === "string" ? recipe.name.trim() : "";
+          return name || undefined;
+        };
+        return named(key, kind, nameIn(incoming), nameIn(current));
       }
     }
   };

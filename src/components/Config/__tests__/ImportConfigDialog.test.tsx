@@ -132,6 +132,38 @@ describe("ImportConfigDialog", () => {
     expect(text).toContain("Daintree → Bondi");
   });
 
+  it("never folds away a replacement, and folds additions only until asked", async () => {
+    const many = (kind: "add" | "update", prefix: string) =>
+      Array.from({ length: 6 }, (_, i) => ({
+        key: `${prefix}${i}`,
+        label: `${prefix} ${i}`,
+        kind,
+      }));
+    await open(
+      ready([section("keybindingOverrides", [...many("update", "Lost"), ...many("add", "New")])])
+    );
+
+    // Everything the import takes away is named up front.
+    for (let i = 0; i < 6; i++) expect(bodyText()).toContain(`Lost ${i}`);
+
+    const hidden = () =>
+      Array.from({ length: 6 }, (_, i) => `New ${i}`).filter((n) => !bodyText().includes(n));
+    expect(hidden().length).toBeGreaterThan(0);
+    const more = screen.getByRole("button", { name: `${hidden().length} more` });
+    fireEvent.click(more);
+    expect(hidden()).toEqual([]);
+  });
+
+  it("puts the way back ahead of the list it protects", async () => {
+    await open(REPLACING);
+    const backup = screen.getByRole("button", { name: /Export a backup/ });
+    const firstRow = screen.getByText("Keyboard shortcuts");
+    // DOCUMENT_POSITION_FOLLOWING: the row comes after the backup route.
+    expect(
+      backup.compareDocumentPosition(firstRow) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
   it("offers a backup only when the import would replace something", async () => {
     await open(REPLACING);
     expect(screen.queryByRole("button", { name: /Export a backup/ })).not.toBeNull();

@@ -559,6 +559,17 @@ describe("ConfigBundleService.preview", () => {
       to: "trees/{branch-slug}",
     });
     expect(byKey.get("agentSettings/claude")?.from).toBeUndefined();
+    // A replacement renamed by the bundle is named by what the user has now —
+    // that's what they lose — with the incoming name alongside.
+    expect(byKey.get("globalRecipes/r1")).toMatchObject({
+      label: "Old fleet",
+      renamedTo: "Renamed fleet",
+    });
+    expect(byKey.get("userAgentRegistry/shared")).toMatchObject({
+      label: "Local",
+      renamedTo: "Imported",
+    });
+    expect(byKey.get("globalRecipes/r2")?.renamedTo).toBeUndefined();
   });
 
   it("omits sections the bundle doesn't carry", async () => {
