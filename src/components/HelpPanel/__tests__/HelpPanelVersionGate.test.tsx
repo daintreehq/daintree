@@ -8,6 +8,11 @@ import type { VersionTooOld } from "@/controllers/HelpSessionController";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { HelpPanelVersionGate } from "../HelpPanelVersionGate";
 
+const openExternal = vi.fn();
+vi.mock("@/clients/systemClient", () => ({
+  systemClient: { openExternal: (...args: unknown[]) => openExternal(...args) },
+}));
+
 const CLAUDE: VersionTooOld = {
   agentId: "claude",
   agentName: "Claude",
@@ -79,6 +84,12 @@ describe("HelpPanelVersionGate", () => {
     expect(gate.textContent).not.toMatch(/run this/i);
   });
 
+  it("routes an install the registry has no command for to the agent's docs", () => {
+    renderGate(OPENCODE);
+    fireEvent.click(screen.getByRole("button", { name: /installed another way/i }));
+    expect(openExternal).toHaveBeenCalledWith(getAgentConfig("opencode")!.install!.docsUrl);
+  });
+
   it("offers no action that claims to update the CLI itself", () => {
     renderGate(CLAUDE);
     expect(screen.queryByRole("button", { name: /^update/i })).toBeNull();
@@ -123,7 +134,7 @@ describe("HelpPanelVersionGate", () => {
     const { setChecking } = renderGate(CLAUDE);
     setChecking(true);
     setChecking(false);
-    expect(screen.getByRole("status").textContent).toBe("Still on version 2.0.14");
+    expect(screen.getByRole("status").textContent).toBe("Last detected version 2.0.14");
   });
 
   it("announces the block once when the gate replaces the launch", () => {

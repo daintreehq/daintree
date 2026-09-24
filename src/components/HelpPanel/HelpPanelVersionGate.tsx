@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, Settings2 } from "lucide-react";
+import { ExternalLink, RefreshCw, Settings2 } from "lucide-react";
 import { CircleArrowUp } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { CopyableCommand } from "@/components/Setup/CopyableCommand";
+import { systemClient } from "@/clients/systemClient";
 import { getAgentConfig } from "@/config/agents";
 import { extractInspectUrl, isManualOnlyCommand } from "@/lib/agentInstall";
 import { isWindows } from "@/lib/platform";
@@ -59,6 +60,7 @@ export function HelpPanelVersionGate({
 }: HelpPanelVersionGateProps) {
   const { agentId, agentName, installedVersion, requiredVersion } = versionTooOld;
   const methods = updateMethods(agentId);
+  const docsUrl = getAgentConfig(agentId)?.install?.docsUrl;
 
   // A check that settles with the gate still up found nothing newer. Derived from
   // the falling edge during render (not an effect) so the result lands in the same
@@ -89,12 +91,13 @@ export function HelpPanelVersionGate({
       ? `Update ${agentName} the way you installed it, then check again.`
       : "Update it the way you installed it, then check again.";
 
-  // Says what the probe saw, not what it concluded: a still-blocked result means
-  // the detected version is still short, not that no newer release exists.
+  // Says what is known, not what was concluded. A still-blocked result means the
+  // last version detected is still short — not that no newer release exists, and
+  // not necessarily a fresh reading (a failed probe keeps the previous block).
   const status = isCheckingVersion
     ? `Checking ${agentName} version…`
     : checkedWithoutChange
-      ? `Still on version ${installedVersion}`
+      ? `Last detected version ${installedVersion}`
       : "";
 
   return (
@@ -132,6 +135,18 @@ export function HelpPanelVersionGate({
               />
             </div>
           ))}
+          {/* The registry only knows some install routes. Someone who used another
+              one gets the agent's own docs rather than a dead end. */}
+          {docsUrl && (
+            <button
+              type="button"
+              onClick={() => void systemClient.openExternal(docsUrl)}
+              className="inline-flex items-center gap-1 text-xs text-text-secondary underline underline-offset-2 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded-[var(--radius-sm)]"
+            >
+              Installed another way? {agentName} docs
+              <ExternalLink className="w-3 h-3" aria-hidden="true" />
+            </button>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2 pt-1">
