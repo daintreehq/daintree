@@ -43,6 +43,8 @@ export interface E2EToastInput {
   historyEntryId?: string;
   /** When set, renders an action button with this label. */
   actionLabel?: string;
+  /** A full action manifest, for surfaces that render several (the grid bar). Wins over `actionLabel`. */
+  actions?: { label: string; variant?: "primary" | "secondary" }[];
   /** Past-tense confirmation label; enables the success-flash flow. */
   successLabel?: string;
   /** When true, the action's onClick resolves after `asyncDelayMs` (spinner path). */
@@ -122,6 +124,11 @@ function buildApi(): NotificationsE2EApi {
         correlationId: input.correlationId,
         historyEntryId: input.historyEntryId,
         action,
+        actions: input.actions?.map((a) => ({
+          label: a.label,
+          variant: a.variant,
+          onClick: () => {},
+        })),
       });
     },
     backdateNotification: (id, firstShownAt) => {

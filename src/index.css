@@ -2881,7 +2881,9 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
    * reports `prefers-contrast: more` alongside `forced-colors: active` on a
    * high-contrast Windows palette — so on the platform this block exists for,
    * Cancel reached 2px, the destructive button was already 2px, and the two
-   * rendered identically. Pinning the others back to 1px rather than raising the
+   * rendered identically. The same held for a notification's primary action,
+   * whose 2px hook sits at (0,1,0) and lost to this rule until it was exempted.
+   * Pinning the others back to 1px rather than raising the
    * destructive to 3px: the 1px/2px pair is the distinction that was designed,
    * and the later block's own purpose — a visible border where Preflight left
    * none — is already served by the 1px shorthand above.
@@ -2901,7 +2903,8 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
   html
     :where(button, [role="button"], [type="button"], [type="submit"], [type="reset"]):not(
       [data-variant="destructive"],
-      [data-variant="contrast"]
+      [data-variant="contrast"],
+      [data-notification-action="primary"]
     ) {
     border-width: 1px;
   }
@@ -2991,10 +2994,10 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     background: ButtonText;
   }
 
-  /* Inbox row actions. Primary is marked by a status-info fill and border; both
-     are flattened, leaving "Pull and rebase" and "Open review" identical, so the
-     recommended action loses its recommendation at exactly the moment the row is
-     reporting a failure. */
+  /* Notification actions, in inbox rows and the grid bar. Primary is marked by
+     a fill and border that forced colours flatten, leaving "Pull and rebase" and
+     "Open review" identical, so the recommended action loses its recommendation
+     at exactly the moment the notification is reporting a failure. */
   [data-notification-action="primary"] {
     border: 2px solid ButtonText;
   }

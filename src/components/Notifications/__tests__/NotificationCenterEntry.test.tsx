@@ -1069,3 +1069,25 @@ describe("NotificationCenterEntry — row menu names the full source", () => {
     expect(screen.getByRole("menu").textContent).not.toContain(APP_SOURCE_LABEL);
   });
 });
+
+describe("NotificationCenterEntry forced-colors action hook", () => {
+  it("marks exactly the recommended action for the forced-colors primary border", () => {
+    getMock.mockReturnValue({ enabled: true });
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({
+          actions: [
+            { label: "Pull and rebase", actionId: "terminal.kill" },
+            { label: "Open review", actionId: "terminal.kill", variant: "secondary" },
+          ],
+        })}
+      />
+    );
+    expect(screen.getByRole("button", { name: "Pull and rebase" }).dataset.notificationAction).toBe(
+      "primary"
+    );
+    expect(screen.getByRole("button", { name: "Open review" }).dataset.notificationAction).not.toBe(
+      "primary"
+    );
+  });
+});

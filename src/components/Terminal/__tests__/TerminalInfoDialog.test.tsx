@@ -384,9 +384,7 @@ describe("TerminalInfoDialog", () => {
       });
 
       renderDialog();
-      await screen.findByTestId("terminal-info-body");
-
-      expect(screen.getByText("--verbose")).toBeTruthy();
+      expect(await screen.findByText("--verbose")).toBeTruthy();
       expect(screen.getByText("claude-opus-4-6")).toBeTruthy();
       const overview = screen.getByTestId("terminal-info-overview");
       // The agent and its state belong in the overview, not four sections down.
@@ -410,9 +408,9 @@ describe("TerminalInfoDialog", () => {
       });
 
       renderDialog();
-      await screen.findByTestId("terminal-info-body");
-
-      expect(screen.getByText("Agent has exited")).toBeTruthy();
+      // The body renders before `terminal.info.get` resolves, so wait for the
+      // fetched value itself rather than the container.
+      expect(await screen.findByText("Agent has exited")).toBeTruthy();
     });
   });
 });
