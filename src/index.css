@@ -2494,6 +2494,12 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
    outline-color and removes box-shadow entirely. We ensure critical UI boundaries
    remain visible by using CSS system color keywords. */
 @media (forced-colors: active) {
+  /* Every dock chip already wears a system-colour border here, so the panel
+     transition's receiving cue, drawn on top of one, would vanish into it. */
+  [data-panel-transition-cue] {
+    border: 2px solid Highlight;
+  }
+
   /* Every mark at full strength; the digit beside it still says "empty". */
   .quick-state-glyph-empty {
     opacity: 1;
