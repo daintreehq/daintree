@@ -42,9 +42,18 @@ export function PreviewFrame({ children }: { children: ReactNode }) {
   );
 }
 
-export function PreviewSummary({ children, testId }: { children: ReactNode; testId?: string }) {
+export function PreviewSummary({
+  children,
+  testId,
+  busy,
+}: {
+  children: ReactNode;
+  testId?: string;
+  /** A value in the list is still being read, e.g. a size walk behind a bone. */
+  busy?: boolean;
+}) {
   return (
-    <dl className="px-3 py-2 space-y-1.5" data-testid={testId}>
+    <dl className="px-3 py-2 space-y-1.5" data-testid={testId} aria-busy={busy || undefined}>
       {children}
     </dl>
   );
@@ -209,7 +218,9 @@ export function PreviewNotice({
   const isError = tone === "error";
   return (
     <div
-      className="px-3 py-2.5 flex items-start gap-2 border-b border-tint/[0.08]"
+      // No rule under a notice that closes the frame: the frame's own border is
+      // already there, and the two drew a double edge.
+      className="px-3 py-2.5 flex items-start gap-2 border-b border-tint/[0.08] last:border-b-0"
       role={isError ? "alert" : "status"}
       data-preview-notice=""
     >

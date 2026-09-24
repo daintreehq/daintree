@@ -1,7 +1,7 @@
 {
   "generated": "2026-09-24",
-  "total": 129,
-  "files": 57,
+  "total": 123,
+  "files": 55,
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
@@ -212,51 +212,6 @@
       "decision": "keep",
       "category": "icon-affordance",
       "evidence": "<Spinner> is an icon — the colour is an affordance, not prose"
-    },
-    {
-      "file": "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx",
-      "ordinal": 0,
-      "line": 230,
-      "start": 8395,
-      "end": 8416,
-      "token": "text-daintree-text/35",
-      "variants": "",
-      "step": 35,
-      "group": "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx#8383",
-      "branch": "6470F/7591T/7933F/8044F",
-      "decision": "keep",
-      "category": "decorative-glyph",
-      "evidence": "single non-word glyph (separator, chevron, bullet)"
-    },
-    {
-      "file": "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx",
-      "ordinal": 1,
-      "line": 300,
-      "start": 10820,
-      "end": 10841,
-      "token": "text-daintree-text/35",
-      "variants": "",
-      "step": 35,
-      "group": "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx#10808",
-      "branch": "10225F/10359F/10716F",
-      "decision": "keep",
-      "category": "decorative-glyph",
-      "evidence": "single non-word glyph (separator, chevron, bullet)"
-    },
-    {
-      "file": "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx",
-      "ordinal": 2,
-      "line": 307,
-      "start": 11103,
-      "end": 11124,
-      "token": "text-daintree-text/35",
-      "variants": "",
-      "step": 35,
-      "group": "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx#11091",
-      "branch": "10927F/11064T",
-      "decision": "keep",
-      "category": "decorative-glyph",
-      "evidence": "single non-word glyph (separator, chevron, bullet)"
     },
     {
       "file": "src/components/DevPreview/DevPreviewEmptyStates.tsx",
