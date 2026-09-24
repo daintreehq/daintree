@@ -36,6 +36,11 @@ interface WorktreeSidebarSearchBarProps {
    */
   onEscape?: () => boolean;
   /**
+   * Enter in the field. The overview is a quick switcher as much as a table:
+   * type, Enter, and you are there — the field acts on the results it filters.
+   */
+  onSubmit?: () => void;
+  /**
    * Filter scope / reorder status ("1 of 2 worktrees · Drag to reorder is off while
    * searching") rendered under the field, sharing a row with "Clear all".
    * Visual-only — screen readers are served by the caller's debounced
@@ -73,6 +78,7 @@ export function WorktreeSidebarSearchBar({
   filterSummaryText,
   trailing,
   onEscape,
+  onSubmit,
 }: WorktreeSidebarSearchBarProps) {
   const query = useWorktreeFilterStore((state) => state.query);
   const liveQuery = useWorktreeFilterStore((state) => state.liveQuery);
@@ -174,6 +180,12 @@ export function WorktreeSidebarSearchBar({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" && onSubmit && !isPopoverOpen && !e.nativeEvent.isComposing) {
+        e.preventDefault();
+        e.stopPropagation();
+        onSubmit();
+        return;
+      }
       // ArrowDown hands off to the results below. The field takes initial
       // focus on this surface, so "type a query, arrow to the match" is the
       // first thing anyone does — and without this it did nothing, because
@@ -210,7 +222,7 @@ export function WorktreeSidebarSearchBar({
       }
       internalRef.current?.blur();
     },
-    [isPopoverOpen, liveQuery, handleClearSearch, onArrowIntoResults, onEscape]
+    [isPopoverOpen, liveQuery, handleClearSearch, onArrowIntoResults, onEscape, onSubmit]
   );
 
   const setRefs = useCallback(

@@ -61,6 +61,9 @@ export function WorktreeOverviewColumnHeaders() {
   );
 }
 
+/** Beyond the lead session, at most this many compact marks before "+N". */
+const MAX_SECONDARY_MARKS = 2;
+
 /**
  * Which session speaks for the row on its second line. The one that needs the
  * user comes first, then live work; an idle agent only when nothing else is
@@ -174,7 +177,18 @@ export function WorktreeOverviewRow({
     leadMark?.state && leadMark.state !== "idle" && leadMark.state !== "exited"
       ? STATE_ICONS[leadMark.state]
       : null;
-  const otherCount = marks.length - 1;
+  const secondaryMarks = marks.slice(1, 1 + MAX_SECONDARY_MARKS);
+  const overflowCount = marks.length - 1 - secondaryMarks.length;
+
+  // The one exception the row leads with, beside the title: the things that
+  // need a human, which a 12px mark inside another section let slide past.
+  const ciFailed = showPr && pr.ciStatus?.state === "failure";
+  const exception =
+    conflictCount > 0
+      ? `${conflictCount} conflict${conflictCount === 1 ? "" : "s"}`
+      : ciFailed
+        ? "CI failed"
+        : null;
 
   const sessionLines = marks.map((m) => ({
     id: m.terminal.id,
@@ -288,6 +302,12 @@ export function WorktreeOverviewRow({
                     Current
                   </span>
                 )}
+                {exception && (
+                  <span className="flex shrink-0 items-center gap-1 text-2xs font-medium text-status-error">
+                    <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                    {exception}
+                  </span>
+                )}
               </div>
               <div className="mt-1 flex items-center gap-2 min-w-0 pl-6 text-2xs text-text-secondary">
                 <span className="truncate font-mono">{branchLabel}</span>
@@ -338,28 +358,65 @@ export function WorktreeOverviewRow({
                       <span className="truncate text-text-primary" aria-hidden="true">
                         {leadMark?.chrome.label}
                       </span>
-                      {LeadStateIcon && leadMark?.state && (
+                      {leadMark?.state && (
                         <span
                           className="flex shrink-0 items-center gap-1 text-text-secondary"
                           aria-hidden="true"
                         >
-                          <LeadStateIcon
-                            className={cn(
-                              "h-3 w-3",
-                              STATE_COLORS[leadMark.state],
-                              leadMark.state === "working" &&
-                                "animate-spin-slow motion-reduce:animate-none"
-                            )}
-                          />
+                          {LeadStateIcon && (
+                            <LeadStateIcon
+                              className={cn(
+                                "h-3 w-3",
+                                STATE_COLORS[leadMark.state],
+                                leadMark.state === "working" &&
+                                  "animate-spin-slow motion-reduce:animate-none"
+                              )}
+                            />
+                          )}
                           {STATE_LABELS[leadMark.state]}
                         </span>
                       )}
-                      {otherCount > 0 && (
+                      {/* The others, as the sidebar draws them: who, and in
+                          what state — so "+1" never hides whether the second
+                          session is an agent at work or a plain shell. */}
+                      {secondaryMarks.length > 0 && (
+                        <span
+                          className="ml-1 flex shrink-0 items-center gap-2 border-l border-divider pl-2"
+                          aria-hidden="true"
+                        >
+                          {secondaryMarks.map(({ terminal, chrome, state }) => {
+                            const Glyph =
+                              state && state !== "idle" && state !== "exited"
+                                ? STATE_ICONS[state]
+                                : null;
+                            return (
+                              <span key={terminal.id} className="flex items-center gap-0.5">
+                                <TerminalIcon
+                                  kind={terminal.kind}
+                                  chrome={chrome}
+                                  className="h-3 w-3 shrink-0"
+                                />
+                                {Glyph && state && (
+                                  <Glyph
+                                    className={cn(
+                                      "h-3 w-3",
+                                      STATE_COLORS[state],
+                                      state === "working" &&
+                                        "animate-spin-slow motion-reduce:animate-none"
+                                    )}
+                                  />
+                                )}
+                              </span>
+                            );
+                          })}
+                        </span>
+                      )}
+                      {overflowCount > 0 && (
                         <span
                           className="shrink-0 tabular-nums text-text-secondary"
                           aria-hidden="true"
                         >
-                          +{otherCount}
+                          +{overflowCount}
                         </span>
                       )}
                     </div>
@@ -409,15 +466,6 @@ export function WorktreeOverviewRow({
               </div>
               {(fileCount > 0 || ahead > 0 || behind > 0) && (
                 <div className="mt-1 flex items-center justify-end gap-1.5 text-2xs text-text-secondary">
-                  {conflictCount > 0 && (
-                    <span
-                      className="flex items-center gap-0.5 text-status-error"
-                      aria-label={`${conflictCount} conflict${conflictCount === 1 ? "" : "s"}`}
-                    >
-                      <AlertTriangle className="h-3 w-3" aria-hidden="true" />
-                      {conflictCount}
-                    </span>
-                  )}
                   {fileCount > 0 && (
                     <span>
                       {fileCount} file{fileCount === 1 ? "" : "s"}

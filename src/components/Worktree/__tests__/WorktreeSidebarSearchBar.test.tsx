@@ -48,6 +48,27 @@ describe("WorktreeSidebarSearchBar", () => {
     resetWorktreeFilterStore();
   });
 
+  it("hands Enter to the host so a typed query can act on its top result", () => {
+    const onSubmit = vi.fn();
+    render(<WorktreeSidebarSearchBar variant="palette" onSubmit={onSubmit} />, {
+      wrapper: TooltipProvider,
+    });
+    fireEvent.change(getInput(), { target: { value: "hand" } });
+    fireEvent.keyDown(getInput(), { key: "Enter" });
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets the host claim Escape before the field spends it on the query", () => {
+    const onEscape = vi.fn(() => true);
+    render(<WorktreeSidebarSearchBar variant="palette" onEscape={onEscape} />, {
+      wrapper: TooltipProvider,
+    });
+    fireEvent.change(getInput(), { target: { value: "hand" } });
+    fireEvent.keyDown(getInput(), { key: "Escape" });
+    expect(onEscape).toHaveBeenCalledTimes(1);
+    expect(getInput().value).toBe("hand");
+  });
+
   it("renders the X clear button with the 'Clear search' aria-label when text is typed", () => {
     renderBar();
     fireEvent.change(getInput(), { target: { value: "foo" } });

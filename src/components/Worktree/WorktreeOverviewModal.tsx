@@ -24,6 +24,7 @@ import { isPtyPanel } from "@shared/types/panel";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { actionService } from "@/services/ActionService";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { describeActiveFacets } from "@/lib/worktreeFilterOptions";
 import {
   matchesFilters,
   matchesQuickStateFilter,
@@ -597,6 +598,33 @@ export function WorktreeOverviewModal({
     return true;
   }, [hasSelection, clearSelection]);
 
+  /** Enter in the search field switches to the cursor row, or the top result. */
+  const handleSearchSubmit = useCallback(() => {
+    const target =
+      (activeDescendantId &&
+        visibleIds.find((id) => getWorktreeOverviewCellId(id) === activeDescendantId)) ??
+      visibleIds[0];
+    if (target) activateWorktree(target);
+  }, [activeDescendantId, visibleIds, activateWorktree]);
+
+  /**
+   * Focus the field before the reset: the button that asked for it unmounts as
+   * the results come back, and focus would otherwise fall to the document.
+   */
+  const handleClearAllFilters = useCallback(() => {
+    searchInputRef.current?.focus();
+    clearAllFilters();
+  }, [clearAllFilters]);
+
+  const activeFacetText = describeActiveFacets({
+    statusFilters,
+    typeFilters,
+    prIssueFilters,
+    sessionFilters,
+    activityFilters,
+    devServerFilters,
+  });
+
   const createWorktree = useCallback(() => {
     void actionService.dispatch("worktree.createDialog.open", undefined, { source: "user" });
   }, []);
@@ -651,6 +679,8 @@ export function WorktreeOverviewModal({
               onArrowIntoResults={handleArrowIntoResults}
               chipCounts={chipCounts}
               onEscape={handleSearchEscape}
+              onSubmit={handleSearchSubmit}
+              filterSummaryText={activeFacetText || null}
             />
             {/* The sidebar's own quick-state bar, full-bleed under the field
                 like the agent overview's, so the header's rule closes the
@@ -693,7 +723,7 @@ export function WorktreeOverviewModal({
                     // available" and lost its recovery button.
                     { filterLabel: "filters", noMatchMessage: "No worktrees match these filters" })}
                 noMatchContent={
-                  <Button variant="subtle" size="sm" onClick={clearAllFilters}>
+                  <Button variant="subtle" size="sm" onClick={handleClearAllFilters}>
                     Clear all filters
                   </Button>
                 }
