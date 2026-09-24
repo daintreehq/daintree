@@ -6,7 +6,11 @@ import type { BackendStatus, PanelGridState } from "@/store/panelStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useTerminalInputStore, type LastTypedAgentTarget } from "@/store/terminalInputStore";
-import { useTypingLocatorStore } from "@/store/typingLocatorStore";
+import {
+  formatTypingLocatorMessage,
+  useTypingLocatorStore,
+  type TypingLocatorMessage,
+} from "@/store/typingLocatorStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
@@ -111,13 +115,13 @@ export function resolveInsertTarget(inputs: TargetInputs): InsertTargetResolutio
  * Both receipts go through the same pair: the pill for sighted users, a polite
  * announcement because the pill is `aria-hidden`.
  */
-function report(message: string): void {
+function report(message: TypingLocatorMessage): void {
   useTypingLocatorStore.getState().showLocator(message);
-  useAnnouncerStore.getState().announce(message, "polite");
+  useAnnouncerStore.getState().announce(formatTypingLocatorMessage(message), "polite");
 }
 
 function reportRefused(): void {
-  report("No agent is available for a file reference");
+  report({ kind: "file-refused", lead: "File reference not added: no agent available" });
 }
 
 /**
@@ -223,7 +227,11 @@ export function useInsertFileReference(): InsertFileReference {
     // silently claim the routing target on the sole-agent fallback path.
 
     panelState.pingTerminal(resolvedId);
-    report(`File reference added to ${getTerminalDisplayTitle(target, "compact")}`);
+    report({
+      kind: "file-added",
+      lead: "File reference added to",
+      target: getTerminalDisplayTitle(target, "full"),
+    });
     return true;
   }, []);
 

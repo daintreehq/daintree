@@ -12,9 +12,9 @@ import { DEFAULT_TERMINAL_FONT_FAMILY, DEFAULT_TERMINAL_FONT_SIZE } from "@/conf
 import {
   UI_PALETTE_ENTER_DURATION,
   UI_PALETTE_EXIT_DURATION,
-  UI_TRANSIENT_HINT_DWELL_MS,
+  UI_TYPING_LOCATOR_DWELL_MS,
 } from "@/lib/animationUtils";
-import { useTypingLocatorStore } from "@/store/typingLocatorStore";
+import { useTypingLocatorStore, type TypingLocatorMessage } from "@/store/typingLocatorStore";
 import { TypingLocator } from "../TypingLocator";
 import "@/index.css";
 
@@ -54,26 +54,24 @@ let holding: HoldMode = "none";
 function heldSetTimeout(handler: TimerHandler, delay?: number, ...args: unknown[]): number {
   if (typeof delay === "number") {
     if (holding === "all" && delay >= 500) return -1;
-    if (holding === "unmount" && delay > UI_TRANSIENT_HINT_DWELL_MS) return -1;
+    if (holding === "unmount" && delay > UI_TYPING_LOCATOR_DWELL_MS) return -1;
   }
   return realSetTimeout(handler, delay, ...args);
 }
 Reflect.set(window, "setTimeout", heldSetTimeout);
 
 /** The labels the two product callers compose, with realistic pane titles. */
-const FIXTURES: Record<string, () => void> = {
-  locate: () => useTypingLocatorStore.getState().showLocator("Typing into Claude"),
-  task: () => useTypingLocatorStore.getState().showLocator("Typing into Fix flaky shard rebalance"),
-  long: () =>
-    useTypingLocatorStore
-      .getState()
-      .showLocator(
-        "Typing into Refactor TerminalResizeController so reflow keeps the viewport anchor stable across multiple passes"
-      ),
-  "file-added": () =>
-    useTypingLocatorStore.getState().showLocator("File reference added to Claude"),
-  refused: () =>
-    useTypingLocatorStore.getState().showLocator("No agent is available for a file reference"),
+const FIXTURES: Record<string, TypingLocatorMessage> = {
+  locate: { kind: "typing", lead: "Typing into", target: "Claude" },
+  task: { kind: "typing", lead: "Typing into", target: "Claude: Fix flaky shard rebalance" },
+  long: {
+    kind: "typing",
+    lead: "Typing into",
+    target:
+      "Claude: Refactor TerminalResizeController so reflow keeps the viewport anchor stable across multiple passes",
+  },
+  "file-added": { kind: "file-added", lead: "File reference added to", target: "Claude" },
+  refused: { kind: "file-refused", lead: "File reference not added: no agent available" },
 };
 
 declare global {
@@ -92,7 +90,7 @@ window.__typingLocator = {
   show: (id) => {
     const fixture = FIXTURES[id];
     if (!fixture) throw new Error(`unknown typing-locator fixture: ${id}`);
-    fixture();
+    useTypingLocatorStore.getState().showLocator(fixture);
   },
   clear: () => useTypingLocatorStore.getState().clearLocator(),
   hold: (mode) => {
@@ -102,7 +100,7 @@ window.__typingLocator = {
   timings: {
     enter: UI_PALETTE_ENTER_DURATION,
     exit: UI_PALETTE_EXIT_DURATION,
-    dwell: UI_TRANSIENT_HINT_DWELL_MS,
+    dwell: UI_TYPING_LOCATOR_DWELL_MS,
   },
 };
 

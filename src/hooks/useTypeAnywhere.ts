@@ -9,7 +9,7 @@ import { useTypingLocatorStore } from "@/store/typingLocatorStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
-import { UI_PALETTE_EXIT_DURATION, UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
+import { UI_PALETTE_EXIT_DURATION, UI_TYPING_LOCATOR_DWELL_MS } from "@/lib/animationUtils";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import {
   findPanelIdForElement,
@@ -31,7 +31,7 @@ const FOCUS_ATTEMPT_FRAMES = 30;
  * re-announce, and once it is gone a keystroke still landing off-screen earns a
  * fresh locate.
  */
-export const LOCATE_EPISODE_MS = UI_TRANSIENT_HINT_DWELL_MS + UI_PALETTE_EXIT_DURATION;
+export const LOCATE_EPISODE_MS = UI_TYPING_LOCATOR_DWELL_MS + UI_PALETTE_EXIT_DURATION;
 
 /**
  * Panel ids are opaque and may contain characters that are not selector-safe,
@@ -131,9 +131,11 @@ export function useTypeAnywhere(): void {
 
         scrollPanelIntoView(panelId);
         panelStore.pingTerminal(panelId);
-        useTypingLocatorStore
-          .getState()
-          .showLocator(`Typing into ${getTerminalDisplayTitle(panel, "compact")}`);
+        useTypingLocatorStore.getState().showLocator({
+          kind: "typing",
+          lead: "Typing into",
+          target: getTerminalDisplayTitle(panel, "full"),
+        });
         // Deliberately no preventDefault: the keystroke belongs to that
         // terminal and stays exactly where the user aimed it.
         return;
@@ -194,9 +196,11 @@ export function useTypeAnywhere(): void {
       panelStore.setPreferredTerminalFocusTarget("hybridInput");
       panelStore.setFocused(targetId);
       scrollPanelIntoView(targetId);
-      useTypingLocatorStore
-        .getState()
-        .showLocator(`Typing into ${getTerminalDisplayTitle(target, "compact")}`);
+      useTypingLocatorStore.getState().showLocator({
+        kind: "typing",
+        lead: "Typing into",
+        target: getTerminalDisplayTitle(target, "full"),
+      });
       // The pill now names the rescue target, so any locate episode it replaced
       // is over — returning to that pane deserves to be announced again.
       locateEpisodeRef.current = null;

@@ -59,10 +59,11 @@ vi.mock("@/store/fleetArmingStore", () => ({ useFleetArmingStore: asStore(fleetS
 vi.mock("@/store/projectStore", () => ({ useProjectStore: asStore(projectState) }));
 
 const { showLocatorMock, announceMock } = vi.hoisted(() => ({
-  showLocatorMock: vi.fn<(label: string) => void>(),
+  showLocatorMock: vi.fn<(message: TypingLocatorMessage) => void>(),
   announceMock: vi.fn<(msg: string, priority?: string) => void>(),
 }));
-vi.mock("@/store/typingLocatorStore", () => ({
+vi.mock("@/store/typingLocatorStore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/store/typingLocatorStore")>()),
   useTypingLocatorStore: asStore({ showLocator: showLocatorMock }),
 }));
 vi.mock("@/store/accessibilityAnnouncerStore", () => ({
@@ -72,6 +73,7 @@ vi.mock("@/store/accessibilityAnnouncerStore", () => ({
 import type { PtyPanelData } from "@shared/types/panel";
 import { shallow } from "zustand/shallow";
 import { resolveInsertTarget, useInsertFileReference } from "../useInsertFileReference";
+import { formatTypingLocatorMessage, type TypingLocatorMessage } from "@/store/typingLocatorStore";
 
 /**
  * Mirrors the fixture `typeAnywhere.test.ts` uses: PTY panels are
@@ -493,7 +495,12 @@ describe("useInsertFileReference — writing", () => {
     act(() => {
       result.current.insert("/repo/a.ts");
     });
-    expect(showLocatorMock).toHaveBeenCalledWith(expect.stringContaining("Claude"));
+    expect(showLocatorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "file-added", target: expect.stringContaining("Claude") })
+    );
+    // The announcement is the pill's own sentence, so the two can never disagree.
+    const shown = showLocatorMock.mock.calls[0]![0];
+    expect(announceMock).toHaveBeenCalledWith(formatTypingLocatorMessage(shown), "polite");
     expect(announceMock).toHaveBeenCalledWith(expect.stringContaining("Claude"), "polite");
   });
 
@@ -508,8 +515,9 @@ describe("useInsertFileReference — writing", () => {
     });
     expect(inputState.setDraftInput).not.toHaveBeenCalled();
     // A dead click is unobservable — the refusal has to say something.
-    expect(showLocatorMock).toHaveBeenCalledWith(expect.stringContaining("No agent"));
-    expect(announceMock).toHaveBeenCalledWith(expect.stringContaining("No agent"), "polite");
+    expect(showLocatorMock).toHaveBeenCalledWith(expect.objectContaining({ kind: "file-refused" }));
+    const shown = showLocatorMock.mock.calls[0]![0];
+    expect(announceMock).toHaveBeenCalledWith(formatTypingLocatorMessage(shown), "polite");
   });
 
   it("ignores an empty path rather than writing a bare @", () => {

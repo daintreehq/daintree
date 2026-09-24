@@ -36,13 +36,13 @@ const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,namib")
   .map((t) => t.trim())
   .filter(Boolean);
 
-/** Mirrors `FIXTURES` in the preview entry, which runs under Vite aliases this loader lacks. */
+/** A distinctive fragment of each fixture in the preview entry, which runs under Vite aliases this loader lacks. */
 const LABELS: Record<string, string> = {
-  locate: "Typing into Claude",
-  task: "Typing into Fix flaky shard rebalance",
-  long: "Typing into Refactor TerminalResizeController",
-  "file-added": "File reference added to Claude",
-  refused: "No agent is available for a file reference",
+  locate: "Claude",
+  task: "Fix flaky shard rebalance",
+  long: "Refactor TerminalResizeController",
+  "file-added": "File reference added to",
+  refused: "File reference not added",
 };
 
 interface LocatorApi {
@@ -94,8 +94,8 @@ async function open(page: Page, theme: string, layout: "grid" | "narrow" = "grid
 }
 
 function pill(page: Page, fixture: string) {
-  // The innermost element carrying the label, whatever the markup around it.
-  return page.locator("[data-locator-host] div", { hasText: LABELS[fixture] }).last();
+  // The pill itself, holding the fixture that was asked for.
+  return page.locator("[data-locator-host] [data-typing-locator]", { hasText: LABELS[fixture] });
 }
 
 type Hold = "none" | "all" | "unmount";
