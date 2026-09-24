@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Play, RotateCw, Server, Square, X } from "lucide-react";
+import { CircleStop, Play, RotateCw, Server, X } from "lucide-react";
 import type { DevPreviewSessionState, DevPreviewSessionStatus } from "@shared/types/ipc/devPreview";
 import { cn } from "@/lib/utils";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -141,11 +141,7 @@ function DevServerRow({
             title={stopLabel}
             className={actionClass}
           >
-            {isError ? (
-              <X className="w-3.5 h-3.5" />
-            ) : (
-              <Square className="w-3 h-3" fill="currentColor" />
-            )}
+            {isError ? <X className="w-3.5 h-3.5" /> : <CircleStop className="w-3.5 h-3.5" />}
           </button>
         )}
       </div>
