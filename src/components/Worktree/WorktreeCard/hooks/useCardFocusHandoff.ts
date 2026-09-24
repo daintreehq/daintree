@@ -16,11 +16,20 @@ export function useCardFocusHandoff<T extends HTMLElement>(): (node: T | null) =
     if (!root) return;
     return () => {
       if (!root.contains(document.activeElement)) return;
-      const row = root.closest("[data-worktree-row]");
-      const target =
-        row?.querySelector<HTMLElement>("[data-card-select-overlay]") ??
-        root.closest<HTMLElement>('[role="gridcell"]');
-      target?.focus({ preventScroll: true });
+      // Sidebar cards own a tabbable select overlay. Overview grid cells are not
+      // focusable themselves — the grid holds focus and tracks the cell with
+      // aria-activedescendant — so the grid is the fallback there.
+      const candidates = [
+        root
+          .closest("[data-worktree-row]")
+          ?.querySelector<HTMLElement>("[data-card-select-overlay]"),
+        root.closest<HTMLElement>('[role="gridcell"]'),
+        root.closest<HTMLElement>('[role="grid"]'),
+      ];
+      for (const candidate of candidates) {
+        candidate?.focus({ preventScroll: true });
+        if (candidate && document.activeElement === candidate) return;
+      }
     };
   }, [root]);
 
