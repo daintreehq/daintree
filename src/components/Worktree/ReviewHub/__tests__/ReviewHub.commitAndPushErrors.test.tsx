@@ -664,7 +664,9 @@ describe("ReviewHub", () => {
 
       const banner = await screen.findByTestId("review-hub-push-error");
       expect(banner.getAttribute("data-reason")).toBe("push-rejected-outdated");
-      expect(banner.textContent).toMatch(/Pull and rebase, or force push to overwrite/i);
+      expect(banner.textContent).toMatch(/Pull and rebase before pushing/i);
+      // The copy must never offer a recovery the banner has no control for.
+      expect(banner.textContent).not.toMatch(/force push/i);
       // Primary CTA renders even without leaseSha — it just doesn't get the
       // force-push secondary CTA (would silently degrade to plain --force).
       const primary = screen.getByTestId("review-hub-push-error-cta");
@@ -920,12 +922,37 @@ describe("ReviewHub", () => {
       expect(screen.queryByTestId("review-hub-push-error-details")).toBeNull();
 
       const toggle = screen.getByTestId("review-hub-push-error-toggle");
-      expect(toggle.textContent).toMatch(/Show details/i);
+      const collapsedLabel = toggle.textContent;
+      expect(collapsedLabel).toMatch(/output/i);
       expect(toggle.getAttribute("aria-expanded")).toBe("false");
       fireEvent.click(toggle);
-      expect(screen.getByTestId("review-hub-push-error-details").textContent).toBe(rawError);
-      expect(toggle.textContent).toMatch(/Hide details/i);
+      const details = screen.getByTestId("review-hub-push-error-details");
+      expect(details.textContent).toBe(rawError);
+      expect(toggle.getAttribute("aria-controls")).toBe(details.id);
+      // Toggle labels never change with state; `aria-expanded` carries it.
+      expect(toggle.textContent).toBe(collapsedLabel);
       expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    });
+
+    it("dismissing the banner hides it without forgetting the failure", async () => {
+      pushMock.mockRejectedValue(
+        Object.assign(new Error("[remote rejected] main -> main (pre-receive hook declined)"), {
+          name: "GitOperationError",
+          gitReason: "hook-rejected",
+        })
+      );
+
+      await triggerCommitAndPush();
+      await screen.findByTestId("review-hub-push-error");
+      // While the banner owns the failure, the rail does not repeat it.
+      expect(screen.queryByTestId("readiness-item-push-failed")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss push failure" }));
+
+      expect(screen.queryByTestId("review-hub-push-error")).toBeNull();
+      // The failure is still true, so the rail takes it back as a blocker.
+      expect(screen.getByTestId("readiness-item-push-failed")).toBeTruthy();
+      expect(screen.getByTestId("review-readiness-level").dataset.level).toBe("blocked");
     });
 
     it("shows hook-rejected banner with collapsed raw stderr", async () => {
@@ -1221,7 +1248,6 @@ describe("ReviewHub", () => {
       );
       expect(screen.queryByTestId("review-hub-push-error-details")).toBeNull();
       const toggle = screen.getByTestId("review-hub-push-error-toggle");
-      expect(toggle.textContent).toMatch(/Show details/i);
       expect(toggle.getAttribute("aria-expanded")).toBe("false");
       fireEvent.click(toggle);
       expect(screen.getByTestId("review-hub-push-error-details").textContent).toBe(retryError);

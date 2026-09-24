@@ -206,6 +206,11 @@ export function ReviewHubContent({
   const [forgeErrorCode, setForgeErrorCode] = useState<string | undefined>(undefined);
   const [forgeProviderId, setForgeProviderId] = useState<string | null>(null);
   const [showPushDetails, setShowPushDetails] = useState(false);
+  // Dismissing the banner hides the presentation only. The failure itself stays
+  // in `pushError`, so readiness gating is unchanged and the rail takes the
+  // `push-failed` blocker back; the next failed attempt shows the banner again.
+  const [pushBannerDismissed, setPushBannerDismissed] = useState(false);
+  const showPushBanner = pushError !== null && !pushBannerDismissed;
   const [pushProgress, setPushProgress] = useState<Map<string, PushProgressEvent>>(new Map());
   const [pushTargetBranch, setPushTargetBranch] = useState<string | null>(null);
   const [isPushing, setIsPushing] = useState(false);
@@ -833,7 +838,7 @@ export function ReviewHubContent({
    * see the note at the `ReadinessRail` call site. Never used for gating.
    */
   const railSummary = useMemo<ReviewReadinessSummary>(() => {
-    if (!pushError) return readinessSummary;
+    if (!showPushBanner) return readinessSummary;
     const drop = (items: ReviewReadinessItem[]) => items.filter((i) => i.id !== "push-failed");
     const blockers = drop(readinessSummary.blockers);
     const warnings = drop(readinessSummary.warnings);
@@ -858,7 +863,7 @@ export function ReviewHubContent({
       infos: drop(readinessSummary.infos),
       nextActions: drop(readinessSummary.nextActions),
     };
-  }, [readinessSummary, pushError]);
+  }, [readinessSummary, showPushBanner]);
 
   const refresh = useCallback(async () => {
     if (!worktreePath) return;
@@ -958,6 +963,7 @@ export function ReviewHubContent({
 
   useEffect(() => {
     setShowPushDetails(false);
+    setPushBannerDismissed(false);
   }, [pushError]);
 
   // Read the latest initialCommitMessage without re-running the open/close
@@ -1963,7 +1969,7 @@ export function ReviewHubContent({
             }}
           />
         )}
-        {pushError && (
+        {pushError && showPushBanner && (
           <PushErrorBanner
             pushError={pushError}
             behindCount={behindCount}
@@ -1982,6 +1988,7 @@ export function ReviewHubContent({
             onRetryPush={() => void handleRetryPush()}
             onPullRebase={() => void confirmPullRebase()}
             onForcePush={() => void handleForcePush()}
+            onDismiss={() => setPushBannerDismissed(true)}
           />
         )}
 
@@ -2217,7 +2224,7 @@ export function ReviewHubContent({
                         // the pane contradicting itself.
                         description={
                           pushError
-                            ? "Nothing left to commit — resolve the push above to publish them."
+                            ? `Nothing left to commit — resolve the push above to publish ${aheadCount === 1 ? "it" : "them"}.`
                             : "Nothing left to commit — these commits just aren't on the remote yet."
                         }
                         action={
