@@ -106,6 +106,12 @@ export interface AppDialogProps {
   zIndex?: DialogZIndex;
   initialFocus?: DialogInitialFocus;
   restoreFocusTo?: RestoreFocusTarget;
+  /**
+   * Try `restoreFocusTo` before the trigger, not only once the trigger is gone —
+   * for a dialog whose content moves the user's place away from where they
+   * opened it (a viewer stepped to another item returns focus to that item).
+   */
+  preferRestoreFocusTo?: boolean;
   "data-testid"?: string;
 }
 
@@ -137,6 +143,7 @@ export function AppDialog({
   zIndex = "modal",
   initialFocus,
   restoreFocusTo,
+  preferRestoreFocusTo = false,
   "data-testid": dataTestId,
 }: AppDialogProps) {
   // A dock popover renders above the standard modal tier, so a dialog opened
@@ -169,9 +176,11 @@ export function AppDialog({
   // changed identity (e.g. a caller passing an inline function), the cleanup
   // would fire mid-open and restore focus prematurely.
   const restoreFocusToRef = useRef(restoreFocusTo);
+  const preferRestoreFocusToRef = useRef(preferRestoreFocusTo);
   useEffect(() => {
     restoreFocusToRef.current = restoreFocusTo;
-  }, [restoreFocusTo]);
+    preferRestoreFocusToRef.current = preferRestoreFocusTo;
+  }, [restoreFocusTo, preferRestoreFocusTo]);
 
   const restoreFocus = useCallback(() => {
     const el = previousActiveElement.current;
@@ -182,6 +191,13 @@ export function AppDialog({
     // through Radix's focus path, and this runs an exit animation after
     // the close-transition clear already fired (issue #11030).
     clearDialogOverlays();
+    if (preferRestoreFocusToRef.current) {
+      const preferred = resolveRestoreFocusTarget(restoreFocusToRef.current);
+      if (preferred?.isConnected) {
+        preferred.focus();
+        if (document.activeElement === preferred) return;
+      }
+    }
     if (document.contains(el)) {
       el.focus();
       return;
