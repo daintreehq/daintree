@@ -4,6 +4,7 @@ import { render, act } from "@testing-library/react";
 import { TrashContainer } from "../TrashContainer";
 import { usePanelStore } from "@/store";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 import type { PanelInstance } from "@shared/types/panel";
 import type { TrashedTerminal } from "@/store/slices";
@@ -473,6 +474,47 @@ describe("TrashContainer", () => {
     // The countdown displayed by TrashGroupItem must use the soonest-to-expire
     // member; the sortKey/LIFO change must not bleed into this prop.
     expect(getByTestId("trash-group-item-grp").getAttribute("data-earliest")).toBe("1000");
+  });
+
+  describe("worktree sections", () => {
+    function inWorktree(id: string, worktreeId: string, expiresAt: number) {
+      const item = makeTrashedItem(id, expiresAt);
+      return { ...item, terminal: { ...item.terminal, worktreeId } as PanelInstance };
+    }
+
+    afterEach(() => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+    });
+
+    it("splits rows into this worktree and other worktrees, LIFO within each", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-a" });
+      const { getByRole } = render(
+        <TrashContainer
+          trashedTerminals={[
+            inWorktree("here-old", "wt-a", 1_000),
+            inWorktree("away", "wt-b", 9_000),
+            inWorktree("here-new", "wt-a", 5_000),
+          ]}
+        />
+      );
+
+      const here = getByRole("group", { name: "This worktree" }).textContent ?? "";
+      const away = getByRole("group", { name: "Other worktrees" }).textContent ?? "";
+      expect(here).toContain("Terminal here-new");
+      expect(here).toContain("Terminal here-old");
+      expect(here).not.toContain("Terminal away");
+      expect(away).toContain("Terminal away");
+      expect(here.indexOf("Terminal here-new")).toBeLessThan(here.indexOf("Terminal here-old"));
+    });
+
+    it("omits a section with nothing in it", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-a" });
+      const { queryByRole } = render(
+        <TrashContainer trashedTerminals={[inWorktree("away", "wt-b", 1_000)]} />
+      );
+      expect(queryByRole("group", { name: "This worktree" })).toBeNull();
+      expect(queryByRole("group", { name: "Other worktrees" })).not.toBeNull();
+    });
   });
 
   describe("empty trash", () => {

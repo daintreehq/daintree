@@ -24,6 +24,8 @@ import { TrashGroupItem } from "./TrashGroupItem";
 import {
   DOCK_STATUS_PILL_CLASS,
   DOCK_STATUS_PILL_OPEN_CLASS,
+  DOCK_POPOVER_SECTIONS,
+  DockPopoverSection,
   DockStatusPillLabel,
   dockStatusScopeDescription,
   useDockPopoverFocusHandoff,
@@ -316,6 +318,18 @@ export function TrashContainer({
     return items.sort((a, b) => b.sortKey - a.sortKey);
   }, [trashedTerminals]);
 
+  // Same split as the Waiting popover; LIFO holds within each section.
+  const { hereItems, elsewhereItems } = useMemo(() => {
+    const here: TrashDisplayItem[] = [];
+    const elsewhere: TrashDisplayItem[] = [];
+    for (const item of displayItems) {
+      const worktreeId =
+        item.type === "group" ? item.groupMetadata.worktreeId : item.terminal.worktreeId;
+      ((worktreeId ?? null) === (activeWorktreeId ?? null) ? here : elsewhere).push(item);
+    }
+    return { hereItems: here, elsewhereItems: elsewhere };
+  }, [displayItems, activeWorktreeId]);
+
   // The footer only earns its space when rows are actually out of sight, so the
   // question is whether the list overflows, not how many items it holds — a
   // count threshold would guess wrong the moment a row grows a second line.
@@ -543,7 +557,7 @@ export function TrashContainer({
                     promising a durability the surface does not have — the
                     per-row deadline alone never explains the rule. */}
                 <span className="text-3xs text-text-secondary">
-                  From every worktree, gone for good {TRASH_TTL_SECONDS}s after closing
+                  Gone for good {TRASH_TTL_SECONDS}s after closing
                 </span>
               </div>
               <Button
@@ -575,36 +589,46 @@ export function TrashContainer({
               // never knew there was anything out of sight.
               className="p-1 flex flex-col gap-1 max-h-[300px] overflow-y-auto"
             >
-              {displayItems.map((item) => {
-                if (item.type === "group") {
-                  const worktreeName = item.groupMetadata.worktreeId
-                    ? worktreeMap.get(item.groupMetadata.worktreeId)?.name
-                    : undefined;
-                  return (
-                    <TrashGroupItem
-                      key={item.groupRestoreId}
-                      groupRestoreId={item.groupRestoreId}
-                      groupMetadata={item.groupMetadata}
-                      terminals={item.terminals}
-                      worktreeName={worktreeName}
-                      earliestExpiry={item.earliestExpiry}
-                      onRequestRemove={requestRemoval}
-                    />
-                  );
-                } else {
-                  const worktreeName = item.terminal.worktreeId
-                    ? worktreeMap.get(item.terminal.worktreeId)?.name
-                    : undefined;
-                  return (
-                    <TrashBinItem
-                      key={item.terminal.id}
-                      terminal={item.terminal}
-                      trashedInfo={item.trashedInfo}
-                      worktreeName={worktreeName}
-                      onRequestRemove={requestRemoval}
-                    />
-                  );
-                }
+              {DOCK_POPOVER_SECTIONS.map((section) => {
+                const items = section.key === "here" ? hereItems : elsewhereItems;
+                if (items.length === 0) return null;
+                const showWorktree = section.key === "elsewhere";
+                return (
+                  <DockPopoverSection key={section.key} label={section.label}>
+                    {items.map((item) => {
+                      if (item.type === "group") {
+                        const worktreeName = item.groupMetadata.worktreeId
+                          ? worktreeMap.get(item.groupMetadata.worktreeId)?.name
+                          : undefined;
+                        return (
+                          <TrashGroupItem
+                            key={item.groupRestoreId}
+                            groupRestoreId={item.groupRestoreId}
+                            groupMetadata={item.groupMetadata}
+                            terminals={item.terminals}
+                            worktreeName={worktreeName}
+                            showWorktree={showWorktree}
+                            earliestExpiry={item.earliestExpiry}
+                            onRequestRemove={requestRemoval}
+                          />
+                        );
+                      }
+                      const worktreeName = item.terminal.worktreeId
+                        ? worktreeMap.get(item.terminal.worktreeId)?.name
+                        : undefined;
+                      return (
+                        <TrashBinItem
+                          key={item.terminal.id}
+                          terminal={item.terminal}
+                          trashedInfo={item.trashedInfo}
+                          worktreeName={worktreeName}
+                          showWorktree={showWorktree}
+                          onRequestRemove={requestRemoval}
+                        />
+                      );
+                    })}
+                  </DockPopoverSection>
+                );
               })}
             </div>
 

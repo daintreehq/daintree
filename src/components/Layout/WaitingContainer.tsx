@@ -33,6 +33,8 @@ import {
 import {
   DOCK_STATUS_PILL_CLASS,
   DOCK_STATUS_PILL_OPEN_CLASS,
+  DOCK_POPOVER_SECTIONS,
+  DockPopoverSection,
   DockStatusPillLabel,
   dockStatusScopeDescription,
   useDockPopoverFocusHandoff,
@@ -292,58 +294,45 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
             </div>
 
             <div className="p-1 flex flex-col gap-1 max-h-[360px] overflow-y-auto">
-              {[
-                { key: "here", label: "This worktree", items: hereItems },
-                { key: "elsewhere", label: "Other worktrees", items: elsewhereItems },
-              ].map(
-                (section) =>
-                  section.items.length > 0 && (
-                    <div
-                      key={section.key}
-                      role="group"
-                      aria-label={section.label}
-                      className="flex shrink-0 flex-col gap-px"
-                    >
-                      <div
-                        className="flex h-5 items-center px-2 text-3xs font-medium text-text-secondary"
-                        aria-hidden="true"
-                      >
-                        {section.label}
-                      </div>
-                      {section.items.map((item) => {
-                        // A row in "This worktree" doesn't repeat the worktree it's in.
-                        const showWorktree = section.key === "elsewhere";
-                        if (item.type === "group") {
-                          return (
-                            <WaitingGroupItem
-                              key={item.group.id}
-                              group={item.group}
-                              waitingTerminals={item.waitingTerminals}
-                              worktreeMap={worktreeMap}
-                              showWorktree={showWorktree}
-                              onActivate={handleActivate}
-                              onKill={(id) => setKillConfirmId(id)}
-                            />
-                          );
-                        }
-                        const worktreeName =
-                          showWorktree && item.terminal.worktreeId
-                            ? worktreeMap.get(item.terminal.worktreeId)?.name
-                            : undefined;
+              {DOCK_POPOVER_SECTIONS.map((section) => {
+                const items = section.key === "here" ? hereItems : elsewhereItems;
+                if (items.length === 0) return null;
+                // A row in "This worktree" doesn't repeat the worktree it's in.
+                const showWorktree = section.key === "elsewhere";
+                return (
+                  <DockPopoverSection key={section.key} label={section.label}>
+                    {items.map((item) => {
+                      if (item.type === "group") {
                         return (
-                          <WaitingSingleItem
-                            key={item.terminal.id}
-                            terminal={item.terminal}
-                            groupId={item.groupId}
-                            worktreeName={worktreeName}
+                          <WaitingGroupItem
+                            key={item.group.id}
+                            group={item.group}
+                            waitingTerminals={item.waitingTerminals}
+                            worktreeMap={worktreeMap}
+                            showWorktree={showWorktree}
                             onActivate={handleActivate}
                             onKill={(id) => setKillConfirmId(id)}
                           />
                         );
-                      })}
-                    </div>
-                  )
-              )}
+                      }
+                      const worktreeName =
+                        showWorktree && item.terminal.worktreeId
+                          ? worktreeMap.get(item.terminal.worktreeId)?.name
+                          : undefined;
+                      return (
+                        <WaitingSingleItem
+                          key={item.terminal.id}
+                          terminal={item.terminal}
+                          groupId={item.groupId}
+                          worktreeName={worktreeName}
+                          onActivate={handleActivate}
+                          onKill={(id) => setKillConfirmId(id)}
+                        />
+                      );
+                    })}
+                  </DockPopoverSection>
+                );
+              })}
             </div>
           </div>
         </PopoverContent>
