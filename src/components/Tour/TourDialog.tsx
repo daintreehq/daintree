@@ -40,19 +40,6 @@ function isTypingTarget(target: EventTarget | null): boolean {
   );
 }
 
-/** Position in the tour, beside the title like a wizard's step count. */
-function ChapterCount({ player }: { player: TourPlayer }) {
-  const { chapterIndex } = useTourPlayerState(player);
-  return (
-    <span
-      className="shrink-0 text-sm tabular-nums text-text-secondary"
-      data-testid="tour-chapter-count"
-    >
-      Chapter {chapterIndex + 1} of {TOUR_CHAPTERS.length}
-    </span>
-  );
-}
-
 function TourBody({
   player,
   onClose,
@@ -129,9 +116,27 @@ function TourBody({
   };
 
   return (
-    // Player keys mirror common video players and cover the footer too, where
-    // focus starts. `contents` keeps the dialog's own column layout intact.
+    // Player keys mirror common video players and cover the whole dialog —
+    // header and footer too, where focus starts. `contents` keeps the dialog's
+    // own column layout intact.
     <div className="contents" onKeyDown={onKeyDown}>
+      <AppDialog.Header>
+        <div className="flex min-w-0 items-center gap-3">
+          <AppDialog.Title
+            icon={<DaintreeIcon size={20} className="shrink-0 text-text-secondary" />}
+          >
+            Daintree Tour
+          </AppDialog.Title>
+          {/* Position in the tour, beside the title like a wizard's step count. */}
+          <span
+            className="shrink-0 text-sm tabular-nums text-text-secondary"
+            data-testid="tour-chapter-count"
+          >
+            Chapter {state.chapterIndex + 1} of {TOUR_CHAPTERS.length}
+          </span>
+        </div>
+        <AppDialog.CloseButton aria-label="Close tour" />
+      </AppDialog.Header>
       <div className="px-6 py-5">
         {/* One player: stage, caption band and bar share a frame, like a video.
             The stage is the only part of the dialog that can give up space, so
@@ -157,7 +162,8 @@ function TourBody({
           <TourControls player={player} onMutedChange={onMutedChange} />
         </div>
         <div className="sr-only" aria-live="polite" aria-atomic="true">
-          {`Chapter ${state.chapterIndex + 1} of ${TOUR_CHAPTERS.length}: ${chapter.title}. ${chapter.summary}`}
+          {/* Position and title only: the narration starts at the same moment. */}
+          {`Chapter ${state.chapterIndex + 1} of ${TOUR_CHAPTERS.length}: ${chapter.title}`}
         </div>
       </div>
       <AppDialog.Footer
@@ -216,17 +222,6 @@ export function TourDialog({
       initialFocus="confirm"
       data-testid="daintree-tour"
     >
-      <AppDialog.Header>
-        <div className="flex min-w-0 items-center gap-3">
-          <AppDialog.Title
-            icon={<DaintreeIcon size={20} className="shrink-0 text-text-secondary" />}
-          >
-            Daintree Tour
-          </AppDialog.Title>
-          {player && <ChapterCount player={player} />}
-        </div>
-        <AppDialog.CloseButton aria-label="Close tour" />
-      </AppDialog.Header>
       {player && (
         <TourPlayerContext.Provider value={player}>
           <TourBody

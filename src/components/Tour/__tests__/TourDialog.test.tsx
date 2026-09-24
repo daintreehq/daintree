@@ -212,6 +212,18 @@ describe("TourDialog", () => {
       expect(document.activeElement).toBe(screen.getByRole("slider"));
     });
 
+    it("keeps focus on the card when K holds it from the Stay here button", () => {
+      const { end } = renderAt(1);
+      end();
+      const stay = screen.getByRole("button", { name: "Stay here" });
+      stay.focus();
+      fireEvent.keyDown(stay, { key: "k" });
+      expect(screen.queryByRole("button", { name: "Stay here" })).toBeNull();
+      expect(document.activeElement?.getAttribute("aria-label")).toBe(
+        `Next: ${TOUR_CHAPTERS[2]!.title}`
+      );
+    });
+
     it("counts down afresh after a held chapter plays again", () => {
       const { end, player } = renderAt(1);
       end();
@@ -234,6 +246,19 @@ describe("TourDialog", () => {
     fireEvent.click(segment, { detail: 1, clientX: 80 });
     expect(player!.getState().chapterIndex).toBe(2);
     expect(player!.getTime()).toBe(0);
+  });
+
+  it("answers player keys from the header as well as the body", () => {
+    renderDialog();
+    const mute = screen.getByRole("button", { name: "Mute narration" });
+    fireEvent.keyDown(screen.getByRole("heading", { level: 2 }), { key: "m" });
+    expect(mute.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("announces a new chapter by position and title, leaving the words to the narration", () => {
+    renderDialog({ initialChapter: 2 });
+    const announcement = document.querySelector("[aria-live='polite']")!.textContent;
+    expect(announcement).toBe(`Chapter 3 of ${TOUR_CHAPTERS.length}: ${TOUR_CHAPTERS[2]!.title}`);
   });
 
   it("keeps keyboard focus on the track when a chapter is chosen from it", () => {

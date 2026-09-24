@@ -87,6 +87,36 @@ const RING_STYLE = {
 
 const COUNTDOWN_TICK_MS = 250;
 
+/**
+ * Goes with the countdown, however the hold was asked for (this button or the
+ * K key), so if it had focus it hands it to the card's primary on the way out.
+ */
+function StayHereButton({
+  onHold,
+  onLeaveWithFocus,
+}: {
+  onHold: () => void;
+  onLeaveWithFocus: () => void;
+}) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const leaveRef = useRef(onLeaveWithFocus);
+  useEffect(() => {
+    leaveRef.current = onLeaveWithFocus;
+  }, [onLeaveWithFocus]);
+  useLayoutEffect(() => {
+    const node = ref.current;
+    return () => {
+      if (node && node === document.activeElement) leaveRef.current();
+    };
+  }, []);
+  return (
+    <Button ref={ref} variant="ghost" size="sm" onClick={onHold}>
+      <Pause className="fill-current" aria-hidden="true" />
+      Stay here
+    </Button>
+  );
+}
+
 /** Whole seconds left on a running countdown, for the visible readout. */
 function useCountdown(running: boolean): number {
   const total = Math.round(TOUR_AUTO_ADVANCE_MS / 1000);
@@ -230,18 +260,7 @@ function EndCard({
           Replay
         </Button>
         {autoAdvance && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              // The button goes with the countdown; keep focus on the card.
-              nextRef.current?.focus();
-              onHold();
-            }}
-          >
-            <Pause className="fill-current" aria-hidden="true" />
-            Stay here
-          </Button>
+          <StayHereButton onHold={onHold} onLeaveWithFocus={() => nextRef.current?.focus()} />
         )}
       </div>
     </div>

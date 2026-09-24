@@ -7,7 +7,7 @@
 export interface TourChapter {
   id: string;
   title: string;
-  /** One or two sentences announced with the chapter; the captions carry it on screen. */
+  /** The chapter's one or two sentence synopsis. The player shows captions instead. */
   summary: string;
   narration: string;
 }
