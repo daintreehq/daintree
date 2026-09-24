@@ -195,8 +195,40 @@ describe("worktree.waitForPullRequest", () => {
   it("rejects a worktree neither the store nor the host has, without echoing the id", async () => {
     setRows([{ id: "wt-a" }]);
 
-    await expect(run({ worktreeIds: ["wt-a", "wt-secret"] })).rejects.toThrow(/^Unknown worktree/);
-    await expect(run({ worktreeIds: ["wt-secret"] })).rejects.not.toThrow(/wt-secret/);
+    await expect(run({ worktreeIds: ["wt-a", "wt-secret"], timeoutMs: 0 })).rejects.toThrow(
+      /^Unknown worktree/
+    );
+    await expect(run({ worktreeIds: ["wt-secret"], timeoutMs: 0 })).rejects.not.toThrow(
+      /wt-secret/
+    );
+  });
+
+  it("does not refuse an id while the host cannot answer", async () => {
+    // `gitBacked: null` is an unavailable or unclassified host, not a verdict
+    // that the worktree is gone.
+    setRows([{ id: "wt-a" }]);
+    worktreeClientMock.getAllWithStatus.mockResolvedValue({ worktrees: [], gitBacked: null });
+
+    const result = await run({ worktreeIds: ["wt-a", "wt-new"], timeoutMs: 0 });
+
+    expect(result.timedOut).toBe(true);
+    expect(result.worktrees).toEqual([
+      { worktreeId: "wt-a", prNumber: null, prUrl: null, prState: null },
+      { worktreeId: "wt-new", prNumber: null, prUrl: null, prState: null },
+    ]);
+  });
+
+  it("does not refuse an id whose row arrives while the host read is in flight", async () => {
+    setRows([{ id: "wt-a" }]);
+    worktreeClientMock.getAllWithStatus.mockImplementation(async () => {
+      // A stale host answer that predates the create, and the row landing meanwhile.
+      rows.set("wt-new", { id: "wt-new" });
+      return { worktrees: [{ id: "wt-a" }], gitBacked: true };
+    });
+
+    const result = await run({ worktreeIds: ["wt-a", "wt-new"], timeoutMs: 0 });
+
+    expect(result.timedOut).toBe(true);
   });
 
   it("rejects an empty or oversized target list and an out-of-range timeout", () => {
