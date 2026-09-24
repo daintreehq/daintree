@@ -102,15 +102,26 @@ const COLLAPSED_SEGMENT_SPANS: Record<WorktreeStatusTickState, string> = {
  * closes the gaps, which is the whole encoding. It is also less total ink than
  * the 12x12 corner wedge this lineage started from.
  *
- * The corner means the CORNER: flush at 0,0. A mark held off the edge by a few
- * pixels is a mark floating near a corner, and the whole point of the position
- * is that it is outside the content entirely. The inset is not a design knob,
- * it is a clearance — so it is spent only where something is actually there to
- * clear, which is one surface and not the other:
+ * The inset is not a design knob, it is a clearance — so it is spent only where
+ * something is actually there to clear, and on the axis where it is:
  *
- * - `sidebar` — the card is square and full-bleed (`sidebar.css` cuts the rows
- *   apart with a `border-bottom` gutter, no radius), so nothing clips and the
- *   mark goes on the corner itself.
+ * - `sidebar` — the card is square and full-bleed, so nothing clips, and the
+ *   leading edge stays flush: that edge is the list's own, and a flush bar there
+ *   is the gutter mark every dev tool draws. The TOP is not free. `sidebar.css`
+ *   cuts the rows apart with the PREVIOUS card's 2px `border-bottom`, so a mark
+ *   at y=0 sits against a line exactly as thick as its own gaps. On a dark
+ *   theme that line read as one more gap in the stack; on a light theme, where
+ *   the gutter is nearly invisible, the mark hung between two cards; and under
+ *   `forced-colors` the gutter repaints as a solid CanvasText rule and the first
+ *   segment fuses into it — two segments read as one hanging off a line, and a
+ *   collapsed `cleanup` and `complete` became the same shape. 4px of the card's
+ *   own surface above the mark, twice the gap between its pieces, is what keeps
+ *   the rule from ever reading as a piece and puts the mark unmistakably on the
+ *   card below it. It also lands a collapsed row's square on the header row's
+ *   top (`py-1`), not in the padding above it. The start stays at 0 rather than
+ *   matching the top: 4px in, the collapsed square would sit directly on the
+ *   drag grip's dots, and the grip is the one thing on that edge a mark must
+ *   not be read as part of.
  * - `grid` — the overview cell is `rounded-lg overflow-hidden`, so its arc eats
  *   whatever sits inside it. `--radius-lg` is 10px scaled by the theme's
  *   `--theme-radius-scale`, and inside the cell's 1px border the clip radius is
@@ -121,7 +132,7 @@ const COLLAPSED_SEGMENT_SPANS: Record<WorktreeStatusTickState, string> = {
  *   ~1.5 would start shaving the first segment; the theme schema puts no
  *   ceiling on that number, so it is the one thing that can move this.
  *
- * Equal on both axes wherever it is inset, so the mark sits on the corner's
+ * Equal on both axes in the grid, so the mark sits on the rounded corner's
  * diagonal rather than hanging off one edge of it.
  *
  * `collapsed` shrinks the whole thing to a 6x6 square. A collapsed row is one
@@ -140,11 +151,11 @@ const COLLAPSED_SEGMENT_SPANS: Record<WorktreeStatusTickState, string> = {
  * itself logical, so a physical inset would put the two on the same side again
  * under RTL.
  *
- * `z-30`, not the `z-20` this sat at while it was inset. Three full-card
- * overlays paint at `z-20` and come later in the tree, so they win the tie: the
- * border flash and the input receipt (`inset-0` in `WorktreeCard`) and
- * sidebar.css's `::after` drop-target ring (`inset 0 0 0 2px`). At 4px in, none
- * of them reached the mark. Flush on the edge, all three run straight down it —
+ * `z-30`, not `z-20`. Three full-card overlays paint at `z-20` and come later
+ * in the tree, so they win the tie: the border flash and the input receipt
+ * (`inset-0` in `WorktreeCard`) and sidebar.css's `::after` drop-target ring
+ * (`inset 0 0 0 2px`). Flush on the sidebar's leading edge, all three run
+ * straight down it —
  * and a continuous line over a segmented one does not merely tint it, it
  * BRIDGES the gaps and flattens all three states to one bar. The forced-colors
  * row outline is fine either way: an `outline` on the card root paints with the
@@ -176,7 +187,7 @@ export function WorktreeStatusTick({
       className={cn(
         "absolute z-30 cursor-default gap-0.5",
         collapsed ? "grid h-1.5 w-1.5 grid-cols-2 grid-rows-2" : "flex h-4 w-1 flex-col",
-        variant === "grid" ? "top-1 start-1" : "top-0 start-0"
+        variant === "grid" ? "top-1 start-1" : "top-1 start-0"
       )}
       data-testid="worktree-status-tick"
       data-state={state}

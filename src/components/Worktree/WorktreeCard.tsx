@@ -1093,7 +1093,10 @@ export function WorktreeCard({
                   collapsed={effectiveIsCollapsed}
                 />
               </TooltipTrigger>
-              <TooltipContent side="right" align="start" className="text-xs">
+              {/* Above the mark, not beside it: the mark sits on the card's
+                  leading corner, so anything opening to its right or below
+                  lands on the title it is describing. */}
+              <TooltipContent side="top" align="start" className="text-xs">
                 {CHIP_LABELS[chipState]}
               </TooltipContent>
             </Tooltip>
