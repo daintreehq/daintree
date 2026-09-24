@@ -112,25 +112,32 @@ async function open(page: Page, name: ConsoleFixtureName, theme: string): Promis
   return frame;
 }
 
+/** The rendered row for a fixture row, found by its own message text. */
+function rowFor(page: Page, fixture: ConsoleStackFixture, index: number): Locator {
+  const row = fixture.rows[index]!;
+  const first = row.args[0];
+  const text =
+    first && first.type === "primitive" ? String(first.value) : row.summaryText.split("\n")[0]!;
+  return page.locator(`${FRAME} [class~="group/row"]`).filter({ hasText: text }).first();
+}
+
+function toggleIn(row: Locator): Locator {
+  return row.getByRole("button", { name: /stack trace/i }).first();
+}
+
 /**
- * Rows render in order and each carries at most one disclosure, so the
- * fixture's row index maps to the nth row that has one.
+ * Expansion is component state, so it is performed with real clicks. A row
+ * may open on its own (an uncaught exception's stack), so a toggle already
+ * expanded is left alone rather than clicked shut.
  */
 async function expandRows(page: Page, fixture: ConsoleStackFixture): Promise<void> {
-  if (!fixture.expand) return;
-  const rowsWithStacks = fixture.rows
-    .map((row, i) => ({ row, i }))
-    .filter(({ row }) => (row.stackTrace?.callFrames.length ?? 0) > 0)
-    .map(({ i }) => i);
-  for (const index of fixture.expand) {
-    const nth = rowsWithStacks.indexOf(index);
-    if (nth < 0) throw new Error(`row ${index} has no stack trace to expand`);
-    const toggle = stackToggles(page).nth(nth);
-    await toggle.click();
+  for (const index of fixture.expand ?? []) {
+    const toggle = toggleIn(rowFor(page, fixture, index));
+    await expect(toggle, `row ${index} offers no stack trace`).toBeVisible();
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
     const first = fixture.rows[index]!.stackTrace!.callFrames[0]!;
     await expect(
-      page
-        .locator(FRAME)
+      rowFor(page, fixture, index)
         .getByText(first.functionName || "(anonymous)", { exact: true })
         .first()
     ).toBeVisible();
@@ -154,8 +161,8 @@ async function drive(page: Page, fixture: ConsoleStackFixture): Promise<void> {
       break;
     }
     case "hover-toggle": {
-      const target = stackToggles(page).nth(2);
-      await target.hover();
+      // The warning row: a disclosure in every revision of the console.
+      await toggleIn(rowFor(page, fixture, 2)).hover();
       break;
     }
     default:
@@ -166,13 +173,11 @@ async function drive(page: Page, fixture: ConsoleStackFixture): Promise<void> {
 
 /** What each fixture must show before its PNG is written. */
 async function expectFixtureState(page: Page, fixture: ConsoleStackFixture): Promise<void> {
-  const withStacks = fixture.rows.filter((r) => (r.stackTrace?.callFrames.length ?? 0) > 0);
-  await expect(stackToggles(page)).toHaveCount(withStacks.length);
+  await expect(page.locator(`${FRAME} [class~="group/row"]`)).toHaveCount(fixture.rows.length);
   for (const index of fixture.expand ?? []) {
     const last = fixture.rows[index]!.stackTrace!.callFrames.at(-1)!;
     await expect(
-      page
-        .locator(FRAME)
+      rowFor(page, fixture, index)
         .getByText(last.functionName || "(anonymous)", { exact: true })
         .last()
     ).toBeAttached();

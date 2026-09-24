@@ -183,7 +183,7 @@ export const CONSOLE_FIXTURES = {
   "session-collapsed": { width: 900, height: 360, rows: SESSION },
   "uncaught-expanded": { width: 900, height: 520, rows: [ROW_LOG, ROW_UNCAUGHT], expand: [1] },
   "warning-expanded": { width: 900, height: 420, rows: SESSION, expand: [2] },
-  "log-expanded": { width: 900, height: 360, rows: SESSION, expand: [1, 3] },
+  "log-expanded": { width: 900, height: 360, rows: SESSION, expand: [3] },
   "trace-deep": { width: 900, height: 520, rows: [ROW_BOOT, ROW_TRACE], expand: [1] },
   "native-frames": { width: 900, height: 360, rows: [ROW_BOOT, ROW_NATIVE], expand: [1] },
   "narrow-long-urls": { width: 460, height: 520, rows: [ROW_LOG, ROW_LONG], expand: [1] },
