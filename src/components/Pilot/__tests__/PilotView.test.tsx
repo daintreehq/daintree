@@ -1971,6 +1971,126 @@ describe("PilotView", () => {
 
       expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
     });
+
+    it("commits with Enter from the gate list, with the gate under the cursor", async () => {
+      seed([
+        run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),
+        run({ runId: "t2", agentState: "working", title: "upstream", since: NOW - 30_000 }),
+      ]);
+      render(<PilotView />);
+      altEnter();
+
+      const gate = screen.getByRole("radio", { name: /upstream/ });
+      fireEvent.click(gate);
+      await act(async () => {
+        fireEvent.keyDown(gate, { key: "Enter" });
+      });
+
+      expect(parkRunMock).toHaveBeenCalledWith("t1", { gateRunId: "t2" });
+    });
+
+    it("marks exactly one gate checked, and the helper describes that choice", () => {
+      seed([
+        run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),
+        run({ runId: "t2", agentState: "working", title: "upstream", since: NOW - 30_000 }),
+      ]);
+      render(<PilotView />);
+      altEnter();
+
+      const group = screen.getByRole("radiogroup");
+      const help = () => document.getElementById(group.getAttribute("aria-describedby") ?? "");
+      const checked = () =>
+        screen.getAllByRole("radio").filter((r) => r instanceof HTMLInputElement && r.checked);
+
+      expect(checked()).toHaveLength(1);
+      const manualCopy = help()?.textContent ?? "";
+      expect(manualCopy).not.toContain("upstream");
+
+      fireEvent.click(screen.getByRole("radio", { name: /upstream/ }));
+
+      expect(checked()).toHaveLength(1);
+      expect(help()?.textContent).toContain("upstream");
+      expect(help()?.textContent).not.toBe(manualCopy);
+    });
+
+    it("hands focus back to the note when a park is rejected", async () => {
+      let reject: (reason: unknown) => void = () => {};
+      parkRunMock.mockReturnValue(
+        new Promise((_, r) => {
+          reject = r;
+        })
+      );
+      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      render(<PilotView />);
+      altEnter();
+
+      const note = screen.getByTestId("pilot-park-note");
+      note.focus();
+      await act(async () => {
+        fireEvent.keyDown(note, { key: "Enter" });
+      });
+      // Chromium drops focus from a control the moment it is disabled; jsdom
+      // does not, so move it away by hand to stand in for that.
+      const elsewhere = document.body.appendChild(document.createElement("button"));
+      act(() => {
+        elsewhere.focus();
+      });
+      expect(document.activeElement).not.toBe(note);
+
+      await act(async () => {
+        reject(new Error("Fleet state is unavailable right now"));
+      });
+
+      expect(screen.getByRole("alert")).toBeTruthy();
+      expect(document.activeElement).toBe(note);
+      elsewhere.remove();
+    });
+
+    it("says so when the chosen gate's run disappears, and falls back to manual", async () => {
+      seed([
+        run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),
+        run({ runId: "t2", agentState: "working", title: "upstream", since: NOW - 30_000 }),
+      ]);
+      render(<PilotView />);
+      altEnter();
+      fireEvent.click(screen.getByRole("radio", { name: /upstream/ }));
+      expect(screen.queryByTestId("pilot-park-gate-lost")).toBeNull();
+
+      act(() => {
+        seed([
+          run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),
+        ]);
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(screen.getByTestId("pilot-park-gate-lost")).toBeTruthy();
+      const manual = screen.getByTestId("pilot-park-gate-none");
+      expect(manual instanceof HTMLInputElement && manual.checked).toBe(true);
+    });
+
+    it("shows the wait on the button that was pressed, not on Park", async () => {
+      unparkRunMock.mockReturnValue(new Promise(() => {}));
+      seed([
+        run({
+          agentState: "waiting",
+          title: "auth spike",
+          since: NOW - 60_000,
+          park: { parkedAt: NOW - 30_000, note: "old note" },
+        }),
+      ]);
+      render(<PilotView />);
+      altEnter();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("pilot-park-unpark"));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+
+      expect(screen.getByTestId("pilot-park-unpark").getAttribute("aria-busy")).toBe("true");
+      expect(screen.getByTestId("pilot-park-confirm").getAttribute("aria-busy")).toBeNull();
+    });
   });
 });
 

@@ -1706,7 +1706,17 @@ export function PilotView() {
       tier="overview"
     >
       <AppPaletteDialog.Header
-        label={scopedName === null ? "All agents" : "Agents by worktree"}
+        // The editor names its own mode: with the list gone, "All agents" was
+        // a title for a surface no longer on screen.
+        label={
+          parkTarget !== null
+            ? parkTarget.existingPark !== undefined
+              ? "Edit park"
+              : "Park agent"
+            : scopedName === null
+              ? "All agents"
+              : "Agents by worktree"
+        }
         shortcut={scopedName === null ? pilotShortcut : scopedShortcut}
       >
         {/*
