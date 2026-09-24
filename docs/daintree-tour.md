@@ -37,3 +37,5 @@ The script encodes each recording to Ogg Opus with `ffmpeg`, transcribes it with
 ## Previewing
 
 `tour-preview.html` renders the dialog outside Electron with a stubbed onboarding bridge: `?theme=<id>`, `?chapter=<id>`, `?t=<seconds>` to freeze a moment, `?muted=1`. `window.__tour` is the live player.
+
+`DAINTREE_SHOT_TOUR=1 npx playwright test --project=screenshots tour-dialog-review` captures the dialog's states (paused, playing, long caption, end card, held, finish, track hover, stage focus, transition, short window) across themes into `artifacts/tour-dialog-shots/` (`DAINTREE_SHOT_DIR` overrides), and asserts the focus handoffs in a real browser.
