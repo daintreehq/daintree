@@ -81,12 +81,13 @@ export function HelpPanelVersionGate({
       );
   }, [agentName, installedVersion, requiredVersion]);
 
+  // Always conditional on the install method, even with one command listed: the
+  // registry cannot see a native or package-manager install it has no command for,
+  // and an unqualified "run this" would update a copy that is not the one on PATH.
   const instruction =
     methods.length === 0
       ? `Update ${agentName} the way you installed it, then check again.`
-      : methods.length === 1
-        ? "Run this in a terminal, then check again."
-        : "Run the one that matches how you installed it, then check again.";
+      : "Update it the way you installed it, then check again.";
 
   // Says what the probe saw, not what it concluded: a still-blocked result means
   // the detected version is still short, not that no newer release exists.
@@ -123,9 +124,7 @@ export function HelpPanelVersionGate({
           </p>
           {methods.map((method) => (
             <div key={method.label} className="space-y-1">
-              {methods.length > 1 && (
-                <p className="text-xs font-medium text-text-secondary">{method.label}</p>
-              )}
+              <p className="text-xs font-medium text-text-secondary">{method.label}</p>
               <CopyableCommand
                 command={method.command}
                 inspectUrl={extractInspectUrl(method.command)}
@@ -157,7 +156,9 @@ export function HelpPanelVersionGate({
           </Button>
         </div>
 
-        <p role="status" className={cn("text-xs text-text-secondary", !status && "sr-only")}>
+        {/* Its line is reserved even while empty, so a check starting or settling
+            never re-centres the block under the pointer that just pressed it. */}
+        <p role="status" className="min-h-4 text-xs text-text-secondary">
           {status}
         </p>
       </div>

@@ -71,6 +71,14 @@ describe("HelpPanelVersionGate", () => {
     }
   });
 
+  it("names the install method on every command, even when only one is listed", () => {
+    renderGate(CLAUDE);
+    const gate = screen.getByTestId("help-version-too-old");
+    expect(gate.textContent).toContain("npm");
+    expect(gate.textContent).toContain("the way you installed it");
+    expect(gate.textContent).not.toMatch(/run this/i);
+  });
+
   it("offers no action that claims to update the CLI itself", () => {
     renderGate(CLAUDE);
     expect(screen.queryByRole("button", { name: /^update/i })).toBeNull();
@@ -101,6 +109,14 @@ describe("HelpPanelVersionGate", () => {
     expect(status().textContent).toBe("Checking Claude version…");
     // Visible, so reduced motion (which stills the spinner) still shows the check.
     expect(status().classList.contains("sr-only")).toBe(false);
+  });
+
+  it("reserves the status line so a check never moves the gate", () => {
+    const { setChecking } = renderGate(CLAUDE);
+    const before = screen.getByRole("status").className;
+    expect(before).toContain("min-h-4");
+    setChecking(true);
+    expect(screen.getByRole("status").className).toBe(before);
   });
 
   it("reports what a settled check saw, not a conclusion about releases", () => {
