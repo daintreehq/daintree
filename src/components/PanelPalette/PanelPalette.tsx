@@ -149,8 +149,7 @@ export function PanelPalette({
         className={cn(
           PALETTE_ROW_CLASS,
           "w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
-          "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary",
-          isUnavailable && "opacity-50"
+          "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
         )}
         onClick={() => onSelect(kind)}
       >
@@ -158,7 +157,14 @@ export function PanelPalette({
           <PanelKindIcon iconId={kind.iconId} color={kind.color} size={16} />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-text-primary truncate">
+          {/* Unavailable steps the name down the ramp rather than fading the
+              row, which took the "Not installed" badge — the reason — with it. */}
+          <div
+            className={cn(
+              "text-sm font-medium truncate",
+              isUnavailable ? "text-text-secondary" : "text-text-primary"
+            )}
+          >
             <HighlightedText
               text={kind.name}
               indices={findMatchIndices(matchesById.get(kind.id), "name")}
