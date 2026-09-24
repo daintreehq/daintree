@@ -496,7 +496,10 @@ describe("GitHubListItem", () => {
     };
     render(<GitHubListItem item={issueWithAssignee} type="issue" />);
     const slot = screen.getByLabelText("Assigned to alice");
-    expect(slot.querySelector("img")?.getAttribute("src")).toBe("https://example.com/alice.png");
+    // The 16px slot asks the forge for a 2× picture.
+    const src = new URL(slot.querySelector("img")!.getAttribute("src")!);
+    expect(`${src.origin}${src.pathname}`).toBe("https://example.com/alice.png");
+    expect(src.searchParams.get("s")).toBe("32");
   });
 
   it("renders only first assignee avatar when multiple assignees", () => {

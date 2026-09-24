@@ -14,6 +14,7 @@ import { FolderGit2 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { cn } from "@/lib/utils";
+import { Avatar, avatarUrlAtSize } from "@/components/ui/Avatar";
 import { worktreeClient, forgeClient, agentSettingsClient, systemClient } from "@/clients";
 import { patchIssueAssigneeCache } from "@/lib/forgeResourceCache";
 import { logError } from "@/utils/logger";
@@ -1197,13 +1198,18 @@ export function BulkCreateWorktreeDialog({
                       />
                     </span>
                     {currentUserAvatar ? (
-                      <img
-                        src={`${currentUserAvatar}${currentUserAvatar.includes("?") ? "&" : "?"}s=48`}
+                      <Avatar
+                        src={avatarUrlAtSize(currentUserAvatar, 32)}
                         alt=""
-                        className="h-4 w-4 shrink-0 rounded-full"
+                        className="h-4 w-4"
                       />
                     ) : (
-                      <UserPlus className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      <span
+                        className="flex h-4 w-4 shrink-0 items-center justify-center"
+                        aria-hidden="true"
+                      >
+                        <UserPlus className="h-3.5 w-3.5" />
+                      </span>
                     )}
                     {/* Blank while the lookup is still out: naming a failure
                         before there is one is worse than naming nothing. */}

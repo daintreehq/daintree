@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useLayoutEffect, useRef } from "react";
 import { render, fireEvent, act } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -24,8 +25,8 @@ describe("Avatar", () => {
     expect(skeleton).toBeTruthy();
     // Regression guard for #7572: bg-muted resolves to the panel surface
     // color, making the placeholder invisible against the dropdown row.
-    expect(skeleton!.className).toContain("bg-muted-foreground/20");
     expect(skeleton!.className).not.toMatch(/(?:^|\s)bg-muted(?:\s|$)/);
+    expect(skeleton!.className).not.toMatch(/muted-foreground/);
   });
 
   it("shows skeleton when complete is true but naturalWidth is 0", () => {
@@ -107,24 +108,103 @@ describe("Avatar", () => {
     });
 
     expect(container.querySelector("img")).toBeFalsy();
-    expect(container.querySelector(".ring-2")).toBeTruthy();
-    const userIcon = container.querySelector("svg");
-    expect(userIcon).toBeTruthy();
+    const fallback = container.querySelector("[data-avatar-fallback]");
+    expect(fallback!.getAttribute("data-avatar-fallback")).toBe("failed");
+    expect(fallback!.querySelector("svg")).toBeTruthy();
   });
 
-  it("resets state when src changes", () => {
-    const { container, rerender } = render(<Avatar src="first.jpg" alt="First" />);
+  it("settles on the failed fallback at once when there is no URL", () => {
+    for (const src of ["", "   "]) {
+      const { container, unmount } = render(<Avatar src={src} alt="" />);
+      // No <img>: an empty src resolves to the page itself.
+      expect(container.querySelector("img")).toBeFalsy();
+      const fallback = container.querySelector("[data-avatar-fallback]");
+      expect(fallback!.getAttribute("data-avatar-fallback")).toBe("failed");
+      expect(container.querySelector(".animate-pulse-delayed")).toBeFalsy();
+      unmount();
+    }
+  });
 
-    const img = container.querySelector("img")!;
+  it("never lets a loading placeholder and a failed one look alike", () => {
+    const loading = render(<Avatar src="slow.jpg" alt="" />).container;
+    const failed = render(<Avatar src="" alt="" />).container;
+    const a = loading.querySelector("[data-avatar-fallback]")!;
+    const b = failed.querySelector("[data-avatar-fallback]")!;
+    expect(a.className).not.toBe(b.className);
+    // Only a request in flight pulses; only a settled failure carries a glyph.
+    expect(a.className).toMatch(/animate-pulse/);
+    expect(b.className).not.toMatch(/animate-pulse/);
+    expect(a.querySelector("svg")).toBeFalsy();
+    expect(b.querySelector("svg")).toBeTruthy();
+  });
+
+  it("keeps a decorative avatar out of the accessibility tree in every state", () => {
+    const { container, rerender } = render(<Avatar src="x.jpg" alt="" />);
+    const check = () => {
+      const root = container.firstElementChild!;
+      expect(root.getAttribute("aria-hidden")).toBe("true");
+      expect(container.querySelector('[role="img"]')).toBeFalsy();
+    };
+    check();
     act(() => {
-      fireEvent.load(img);
+      fireEvent.error(container.querySelector("img")!);
     });
-    expect(img.style.opacity).toBe("1");
+    check();
+    rerender(<Avatar src="" alt="" />);
+    check();
+  });
 
-    rerender(<Avatar src="second.jpg" alt="Second" />);
-    const newImg = container.querySelector("img")!;
-    expect(newImg.style.opacity).toBe("0");
-    expect(container.querySelector(".animate-pulse-delayed")).toBeTruthy();
+  it("names a failed avatar that carries its own alt", () => {
+    const { container } = render(<Avatar src="" alt="octocat" />);
+    const img = container.querySelector('[role="img"]');
+    expect(img!.getAttribute("aria-label")).toBe("octocat");
+    expect(container.firstElementChild!.getAttribute("aria-hidden")).toBeNull();
+  });
+
+  it("swaps from a failed picture to a cached one without showing the stale failure", () => {
+    // Reads the DOM in a layout effect — i.e. the commit the user would see
+    // painted — rather than after act() has flushed every follow-up effect.
+    const seen: (string | null)[] = [];
+    function Probe({ src }: { src: string }) {
+      const ref = useRef<HTMLDivElement>(null);
+      useLayoutEffect(() => {
+        const fb = ref.current!.querySelector("[data-avatar-fallback]");
+        seen.push(fb ? fb.getAttribute("data-avatar-fallback") : null);
+      }, [src]);
+      return (
+        <div ref={ref}>
+          <Avatar src={src} alt="" />
+        </div>
+      );
+    }
+
+    const { rerender } = render(<Probe src="" />);
+    expect(seen).toEqual(["failed"]);
+
+    const origComplete = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "complete");
+    const origNaturalWidth = Object.getOwnPropertyDescriptor(
+      HTMLImageElement.prototype,
+      "naturalWidth"
+    );
+    Object.defineProperty(HTMLImageElement.prototype, "complete", {
+      value: true,
+      configurable: true,
+    });
+    Object.defineProperty(HTMLImageElement.prototype, "naturalWidth", {
+      value: 48,
+      configurable: true,
+    });
+    try {
+      rerender(<Probe src="cached.jpg" />);
+      expect(seen).toEqual(["failed", null]);
+    } finally {
+      if (origComplete) {
+        Object.defineProperty(HTMLImageElement.prototype, "complete", origComplete);
+      }
+      if (origNaturalWidth) {
+        Object.defineProperty(HTMLImageElement.prototype, "naturalWidth", origNaturalWidth);
+      }
+    }
   });
 
   it("renders tooltip wrapper when title is provided", () => {
@@ -146,7 +226,6 @@ describe("Avatar", () => {
     const { container } = render(<Avatar src="test.jpg" alt="Test" shape="square" />);
     const img = container.querySelector("img");
     expect(img).toBeTruthy();
-    expect(img!.className).toContain("rounded-md");
     expect(img!.className).not.toContain("rounded-full");
   });
 

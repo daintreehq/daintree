@@ -2522,6 +2522,15 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     forced-color-adjust: none;
   }
 
+  /* An avatar placeholder is only a tinted background, which forced colors
+     erases — the slot would read as a gap in a row of faces. An inset outline
+     keeps its shape and size; the failed glyph takes the text colour. */
+  [data-avatar-fallback] {
+    outline: 1px solid CanvasText;
+    outline-offset: -1px;
+    color: CanvasText;
+  }
+
   /* The trash TTL meter is a coloured background against a coloured track, and
    * forced colors replaces both — which leaves a bar whose length carries the
    * remaining-time signal with no edge to see it against. Give the fill a

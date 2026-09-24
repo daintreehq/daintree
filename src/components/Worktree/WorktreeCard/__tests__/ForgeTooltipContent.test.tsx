@@ -142,7 +142,9 @@ describe("ForgeTooltipContent avatars", () => {
   it("handles a missing avatar URL without crashing", () => {
     const data = { ...baseIssue, author: user("ghost", "") };
     const { container } = render(<IssueTooltipContent data={data} />);
-    expect(imgSrcs(container)[0]).toBe("");
+    // No URL settles on the fallback; no <img src=""> that would fetch the page.
+    expect(imgSrcs(container)).not.toContain("");
+    expect(container.querySelector('[data-avatar-fallback="failed"]')).toBeTruthy();
     expect(screen.getByText("ghost")).toBeDefined();
   });
 
