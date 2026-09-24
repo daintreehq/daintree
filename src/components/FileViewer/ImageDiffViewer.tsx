@@ -309,8 +309,9 @@ function SwipeCompare({ sides, relPath }: { sides: OkSides; relPath: string }) {
         }}
       >
         <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-daintree-text/60 shadow-[0_0_0_1px_var(--color-surface-canvas)]" />
-        <div className="relative flex h-6 w-3.5 items-center justify-center rounded border border-border-default bg-surface-sidebar">
-          <GripVertical className="h-3 w-3 text-muted-foreground" />
+        {/* Colour on the wrapper: forced colours keep an SVG's own colour class. */}
+        <div className="relative flex h-6 w-3.5 items-center justify-center rounded border border-border-default bg-surface-sidebar text-muted-foreground">
+          <GripVertical className="h-3 w-3" />
         </div>
       </div>
     </div>
