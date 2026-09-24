@@ -649,7 +649,15 @@ describe("external tool surface budget (#11585)", () => {
   // is not ownership-scoped and the ownership gate is per tool, not per field.
   // The caller names a panel it created and the host resolves everything else,
   // so the slot buys a bounded read of that one agent's reply, never a path.
-  const EXTERNAL_BUDGET_MAX = 33;
+  //
+  // 33 → 34 for #12717's `worktree.waitForPullRequest`. A supervisor working a
+  // queue ("start the next agent once this one has opened its PR") had no way
+  // to learn a PR existed except polling `gh` from its own shell, and the loop
+  // one real session wrote swallowed errors and missed two PRs. Daintree
+  // already detects the PR and every worktree listing carries it; the slot
+  // buys waiting on that observation rather than re-deriving it, and it grants
+  // no write of any kind.
+  const EXTERNAL_BUDGET_MAX = 34;
 
   it(`advertises at most ${EXTERNAL_BUDGET_MAX} tools`, () => {
     expect(TIER_ALLOWLISTS.external.size).toBeLessThanOrEqual(EXTERNAL_BUDGET_MAX);

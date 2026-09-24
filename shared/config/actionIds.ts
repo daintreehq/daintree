@@ -56,6 +56,7 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.inject",
   "worktree.getAvailableBranch",
   "worktree.waitUntilReady",
+  "worktree.waitForPullRequest",
   "worktree.createWithRecipe",
   "worktree.compareDiff",
   "worktree.reviewReadiness",

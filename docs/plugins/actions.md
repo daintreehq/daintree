@@ -554,6 +554,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `worktree.sessions.trashAll` | Trash all sessions | confirm | `confirmed?`, `worktreeId?` |
 | `worktree.setActive` | Set active worktree | safe | `worktreeId` |
 | `worktree.switchIndex` | Switch to worktree by index | safe | `index` |
+| `worktree.waitForPullRequest` | Wait for worktree pull request | safe | `worktreeIds`, `timeoutMs?` |
 | `worktree.waitUntilReady` | Wait until worktree ready | safe | `timeoutMs?`, `worktreeId?`, `worktreePath?` |
 
 ## See also

@@ -354,7 +354,13 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // holds, not whether the agent is waiting, and a permission prompt is never
   // in it — without that, "no unanswered question" reads as "nothing to answer"
   // while the pane sits on an approval dialog.
-  const MAX_EXTERNAL_TOTAL_BYTES = 11_647;
+  // 11_647 → 11_904 for #12717's `worktree.waitForPullRequest`, the measured
+  // total. The surface had no headroom, so a new external tool could not land
+  // at any wording. What the prose has to carry is that detection is a cached
+  // poll — a PR seen, not a PR opened — that a PR is not proof its agent has
+  // finished, and that running out of time means call again; a supervisor
+  // missing any of those advances its queue on the wrong signal.
+  const MAX_EXTERNAL_TOTAL_BYTES = 11_904;
 
   // Raised from 48_000 by #11908, which put seven tools on the in-app surface
   // (a deterministic session resume, the four bookmark mutations, and the two
@@ -440,7 +446,11 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // reporting unsaved work stages the user's confirm and fails the call; a
   // caller missing the second reads the refusal as a bug. The 257 B is exactly
   // its description.
-  const MAX_COHORT_TOTAL_BYTES = 56_314;
+  // 56_314 → 56_657 for #12717's `worktree.waitForPullRequest`, carried at the
+  // workbench floor for the subset invariant — the external surface may not
+  // reach past the assistant's. Its 343 B is the whole of the increase, so this
+  // stays the measured total rather than an allowance.
+  const MAX_COHORT_TOTAL_BYTES = 56_657;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

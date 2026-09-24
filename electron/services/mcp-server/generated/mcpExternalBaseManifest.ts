@@ -2761,4 +2761,89 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     requiresArgs: true,
     title: "Set active worktree",
   },
+  {
+    band: "reversible",
+    category: "worktree",
+    danger: "safe",
+    description:
+      "Wait until any given worktree has a detected pull request. Detection is a cached background poll: a PR seen, not a PR opened, and not proof its agent finished. Returns at once if one is already detected. A timeout is not a failure: call again without the worktrees that matched.",
+    enabled: true,
+    id: "worktree.waitForPullRequest",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        worktreeIds: {
+          minItems: 1,
+          maxItems: 32,
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+          description: "Worktrees to wait on, 1 to 32.",
+        },
+        timeoutMs: {
+          description: "Milliseconds to wait; 0 reads now. Default and max 25000.",
+          type: "integer",
+          minimum: 0,
+          maximum: 25000,
+        },
+      },
+      required: ["worktreeIds"],
+    },
+    kind: "query",
+    mcpAnnotations: {
+      readOnlyHint: true,
+      idempotentHint: false,
+      destructiveHint: false,
+    },
+    name: "worktree.waitForPullRequest",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        worktrees: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              worktreeId: {
+                type: "string",
+              },
+              prNumber: {
+                type: ["number", "null"],
+              },
+              prUrl: {
+                type: ["string", "null"],
+              },
+              prState: {
+                anyOf: [
+                  {
+                    type: "string",
+                    enum: ["open", "merged", "closed", "declined"],
+                  },
+                  {
+                    type: "null",
+                  },
+                ],
+              },
+            },
+            required: ["worktreeId", "prNumber", "prUrl", "prState"],
+            additionalProperties: false,
+          },
+          description: "One per requested worktree, in order; PR fields null until detected.",
+        },
+        timedOut: {
+          type: "boolean",
+          description:
+            "True if no PR was detected in time. Detection pauses while the project is backgrounded.",
+        },
+      },
+      required: ["worktrees", "timedOut"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Wait for worktree pull request",
+  },
 ];

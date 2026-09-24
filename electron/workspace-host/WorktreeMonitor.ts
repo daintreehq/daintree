@@ -886,6 +886,7 @@ export class WorktreeMonitor {
         monitor.worktreeChanges = value;
       },
       clearPRInfo: () => monitor.clearPRInfo(),
+      clearLinked: () => monitor.clearLinked(),
       onBranchChanged: (branch: string) => monitor.callbacks.onBranchChanged?.(monitor.id, branch),
       onRemoved: () => monitor.callbacks.onRemoved?.(monitor.id),
       stop: () => monitor.stop(),

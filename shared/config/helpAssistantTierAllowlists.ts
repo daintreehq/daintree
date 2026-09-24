@@ -33,6 +33,9 @@ export const WORKBENCH_TIER_TOOLS = [
   // Read-only, and the counterpart to the setup state every worktree listing
   // now carries: a caller that can see `running` must be able to wait for it.
   "worktree.waitUntilReady",
+  // Same argument for the PR every listing carries: a caller that can see a PR
+  // appear must be able to wait for it rather than poll the listing (#12717).
+  "worktree.waitForPullRequest",
   "worktree.resource.status",
   "worktree.compareDiff",
   "worktree.reviewReadiness",
