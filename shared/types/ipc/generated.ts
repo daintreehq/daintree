@@ -1101,7 +1101,7 @@ export interface GeneratedIpcInvokeMap {
     args: [arg: string | { step: string | null; agentSetupIds?: string[] | undefined } | null];
     result: void;
   };
-  "onboarding:tour-mark-launcher-shown": {
+  "onboarding:tour-dismiss-invite": {
     args: [];
     result: import("./maps.js").TourOnboardingState;
   };

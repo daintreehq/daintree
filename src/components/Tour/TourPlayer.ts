@@ -273,8 +273,13 @@ export class TourPlayer {
     const onEnded = () => {
       slot.flowing = false;
       slot.ended = true;
-      // The timeline runs a little past the voice; finish that tail on the wall clock.
-      if (isLive()) this.startClock();
+      // The timeline runs a little past the voice; finish that tail on the wall
+      // clock, from wherever the voice actually stopped — frames may have been
+      // throttled while it played, leaving the last sample behind.
+      if (isLive()) {
+        this.setTime(Math.min(Math.max(this.time, audio.currentTime), this.timing.duration));
+        this.startClock();
+      }
     };
     audio.addEventListener("canplaythrough", onReady);
     audio.addEventListener("playing", onPlaying);

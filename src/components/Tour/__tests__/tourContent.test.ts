@@ -14,7 +14,15 @@ const SCENE_FILES: Record<string, string> = {
   agents: "AgentsScene.tsx",
   state: "StateScene.tsx",
   fleet: "FleetScene.tsx",
+  files: "FilesScene.tsx",
+  context: "ContextScene.tsx",
+  preview: "PreviewScene.tsx",
+  github: "GitHubScene.tsx",
   review: "ReviewScene.tsx",
+  pilot: "PilotScene.tsx",
+  assistant: "AssistantScene.tsx",
+  palette: "PaletteScene.tsx",
+  outro: "OutroScene.tsx",
 };
 
 /** Every cue id a scene reads, by the two shapes scenes use to name one. */
@@ -28,7 +36,8 @@ function cuesReadBy(source: string): Set<string> {
 describe("tour content", () => {
   it("gives every chapter a scene and every scene a chapter", () => {
     expect(new Set(TOUR_CHAPTERS.map((c) => c.id))).toEqual(new Set(Object.keys(SCENE_FILES)));
-    expect(new Set(readdirSync(SCENES_DIR))).toEqual(new Set(Object.values(SCENE_FILES)));
+    const sceneFiles = readdirSync(SCENES_DIR).filter((name) => name.endsWith("Scene.tsx"));
+    expect(new Set(sceneFiles)).toEqual(new Set(Object.values(SCENE_FILES)));
   });
 
   // A narration edit that drops or renames a marker would leave the scene's

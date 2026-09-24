@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolveOpenState } from "../DaintreeTourHost";
 import { TOUR_CHAPTERS } from "../tourChapters";
 
-const base = { completed: false, launcherSessions: 1, muted: false, lastChapter: 0 };
+const base = { completed: false, dismissed: false, muted: false, lastChapter: 0 };
 
 describe("resolveOpenState", () => {
   it("resumes an unfinished tour where it was left", () => {

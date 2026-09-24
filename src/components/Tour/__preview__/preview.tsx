@@ -33,6 +33,23 @@ applyAppThemeToRoot(document.documentElement, resolveAppTheme(themeId));
 document.body.style.background = "var(--color-surface-canvas)";
 document.body.style.margin = "0";
 
+/** Canvas-space centres of every `data-tour-anchor`, for refreshing `ANCHOR` in MockApp.tsx. */
+Reflect.set(window, "__tourAnchors", () => {
+  const canvas = document.querySelector<HTMLElement>("[data-tour-canvas]");
+  if (!canvas) return {};
+  const box = canvas.getBoundingClientRect();
+  const scale = box.width / canvas.offsetWidth;
+  const anchors: Record<string, { x: number; y: number }> = {};
+  for (const el of document.querySelectorAll<HTMLElement>("[data-tour-anchor]")) {
+    const r = el.getBoundingClientRect();
+    anchors[el.dataset.tourAnchor!] = {
+      x: Math.round((r.left + r.width / 2 - box.left) / scale),
+      y: Math.round((r.top + r.height / 2 - box.top) / scale),
+    };
+  }
+  return anchors;
+});
+
 function onPlayer(player: TourPlayer) {
   Reflect.set(window, "__tour", player);
   if (freezeAt !== null) {

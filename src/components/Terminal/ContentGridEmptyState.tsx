@@ -18,7 +18,7 @@ import { RotatingTip } from "./contentGridTips";
 import { RecipeRunner } from "./RecipeRunner/RecipeRunner";
 import { ResumeSessionLine } from "./ResumeSessionLine";
 import { LauncherQuickActions } from "./LauncherQuickActions";
-import { TourLauncherButton } from "@/components/Tour/TourLauncherButton";
+import { TourInviteCard } from "@/components/Tour/TourInviteCard";
 
 const PATH_TRUNCATE_LENGTH = 52;
 
@@ -511,13 +511,17 @@ export function ContentGridEmptyState({
               </div>
             )}
 
-            {/* Last in the column: the tour offer is teaching content for a
-                new user's first sessions, and nothing below the launch anchor
-                may move it. The button renders its own section only when the
-                tour is still on offer, so an ineligible user gets no gap. */}
+            {/* Last in the column: the tour's invitation is teaching content, and
+                nothing below the launch anchor may move it. It renders its own
+                section only while the tour is on offer, so there's no gap. */}
             {hasLaunchTarget && (
-              <TourLauncherButton
-                className={cn("mt-6 flex justify-center", SECTION_ENTRY, SECTION_ENTRY_DELAY_6)}
+              <TourInviteCard
+                className={cn(
+                  "mt-6 flex w-full justify-center",
+                  LAUNCHER_MEASURE,
+                  SECTION_ENTRY,
+                  SECTION_ENTRY_DELAY_6
+                )}
               />
             )}
           </section>

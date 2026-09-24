@@ -28,21 +28,12 @@ const DEFAULT_CHECKLIST: ChecklistState = {
 
 const DEFAULT_TOUR: TourOnboardingState = {
   completed: false,
-  launcherSessions: 0,
+  dismissed: false,
   muted: false,
   lastChapter: 0,
 };
 
 const SKIP_E2E = isE2ESkipFirstRunDialogs;
-
-// The empty-grid launcher counts app sessions, not renders or project views:
-// every project view mounts its own grid, and each would otherwise bump it.
-let tourLauncherCountedThisSession = false;
-
-/** Test seam — the session latch is module state. */
-export function resetTourLauncherSessionForTests(): void {
-  tourLauncherCountedThisSession = false;
-}
 
 function normalizeCount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
@@ -53,7 +44,7 @@ function normalizeTour(raw: unknown): TourOnboardingState {
   const tour = raw as Record<string, unknown>;
   return {
     completed: tour.completed === true,
-    launcherSessions: normalizeCount(tour.launcherSessions),
+    dismissed: tour.dismissed === true,
     muted: tour.muted === true,
     lastChapter: normalizeCount(tour.lastChapter),
   };
@@ -266,17 +257,13 @@ export const onboardingNamespace = defineIpcNamespace({
         store.set("onboarding.checklist.celebrationShown", true);
       }
     ),
-    markTourLauncherShown: op(
-      ONBOARDING_METHOD_CHANNELS.markTourLauncherShown,
-      (): TourOnboardingState => {
-        const tour = getOnboardingState().tour;
-        if (SKIP_E2E || tourLauncherCountedThisSession) return tour;
-        tourLauncherCountedThisSession = true;
-        const next = { ...tour, launcherSessions: tour.launcherSessions + 1 };
-        store.set("onboarding.tour", next);
-        return next;
-      }
-    ),
+    dismissTourInvite: op(ONBOARDING_METHOD_CHANNELS.dismissTourInvite, (): TourOnboardingState => {
+      const tour = getOnboardingState().tour;
+      if (SKIP_E2E) return tour;
+      const next = { ...tour, dismissed: true };
+      store.set("onboarding.tour", next);
+      return next;
+    }),
     setTourProgress: op(
       ONBOARDING_METHOD_CHANNELS.setTourProgress,
       (update: TourProgressUpdate): TourOnboardingState => {

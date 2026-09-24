@@ -218,6 +218,18 @@ describe("TourPlayer", () => {
     expect(player.getState().status).toBe("ended");
   });
 
+  it("starts the tail from where the voice stopped, even if frames lagged behind it", () => {
+    const { player, audios, advance } = setup([voiced(10.6, "a")]);
+    player.play();
+    audios[0]!.fire("canplaythrough");
+    audios[0]!.currentTime = 8;
+    advance(16);
+    audios[0]!.currentTime = 10;
+    audios[0]!.fire("ended");
+    advance(300);
+    expect(player.getTime()).toBeCloseTo(10.3);
+  });
+
   it("restarts the voice when seeking back after it ended", () => {
     const { player, audios, advance } = setup([voiced(10.6, "a")]);
     player.play();

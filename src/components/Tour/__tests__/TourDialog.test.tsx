@@ -103,11 +103,15 @@ describe("TourDialog", () => {
     expect(screen.getByTestId("hint").textContent).toBe(`4 of ${TOUR_CHAPTERS.length}`);
   });
 
-  it("finishes from the last chapter: completes, then closes", () => {
+  it("finishes from the last chapter: completes, closes, and hands over to Getting Started", () => {
     const { props } = renderDialog({ initialChapter: TOUR_CHAPTERS.length - 1 });
+    const gettingStarted = vi.fn();
+    window.addEventListener("daintree:show-getting-started", gettingStarted);
     fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    window.removeEventListener("daintree:show-getting-started", gettingStarted);
     expect(props.onCompleted).toHaveBeenCalled();
     expect(props.onClose).toHaveBeenCalled();
+    expect(gettingStarted).toHaveBeenCalledTimes(1);
   });
 
   it("jumps straight to a chapter from the progress track", () => {

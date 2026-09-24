@@ -28,6 +28,7 @@ import { formatTimeAgo } from "@/utils/timeAgo";
 import { middleTruncate } from "@/utils/textParsing";
 import { CHECKLIST_ITEMS } from "@/components/Onboarding/checklistItems";
 import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboarding";
+import { TourWelcomeLink } from "@/components/Tour/TourInviteCard";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getAgentConfig } from "@/config/agents";
 import { LAUNCHABLE_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
@@ -112,6 +113,9 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   const hasProjects = topProjects.length > 0;
   const { checklist } = gettingStarted;
   const { loaded: onboardingLoaded, setupBannerDismissed } = useAgentDiscoveryOnboarding();
+  // The tour link waits until agent setup has been answered, so a first launch
+  // never has it competing with Open project and the setup banner.
+  const tourLinkEnabled = onboardingLoaded && setupBannerDismissed;
 
   const visibleShortcutTips = useMemo(
     () => SHORTCUT_TIPS.filter(({ actionId }) => keybindingService.getDisplayCombo(actionId)),
@@ -192,6 +196,9 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
               <p className="text-sm text-text-secondary leading-relaxed font-medium @min-[1920px]/welcome:text-base">
                 A habitat for your AI agents.
               </p>
+              <div className="mt-3">
+                <TourWelcomeLink enabled={tourLinkEnabled} />
+              </div>
             </div>
           )}
 

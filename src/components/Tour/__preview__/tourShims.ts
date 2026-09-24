@@ -7,7 +7,7 @@ import type { TourOnboardingState } from "@shared/types";
  */
 const tour: TourOnboardingState = {
   completed: false,
-  launcherSessions: 0,
+  dismissed: false,
   muted: false,
   lastChapter: 0,
 };
@@ -15,7 +15,10 @@ const tour: TourOnboardingState = {
 installPreviewShims({
   onboarding: {
     get: async () => ({ tour: structuredClone(tour) }),
-    markTourLauncherShown: async () => structuredClone(tour),
+    dismissTourInvite: async () => {
+      tour.dismissed = true;
+      return structuredClone(tour);
+    },
     setTourProgress: async (update: { completed?: boolean; lastChapter?: number }) => {
       if (update.completed) tour.completed = true;
       if (typeof update.lastChapter === "number") tour.lastChapter = update.lastChapter;

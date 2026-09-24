@@ -20,7 +20,7 @@ Scenes never use wall-clock literals for anything the narration talks about: the
 Edit the words in `tourChapters.ts`, then:
 
 ```bash
-npm run tour:audio                 # voices only the chapters whose text changed (Inworld, voice "Simon")
+npm run tour:audio                 # voices only the chapters whose text changed (Inworld voice "Reed", led by an `[informative]` delivery tag)
 npm run tour:audio -- --force      # re-voice everything
 npm run tour:audio -- --no-upload  # dry run: timings only, nothing published
 ```
@@ -32,7 +32,7 @@ It needs `INWORLD_API_KEY` and `CLOUDFLARE_API_TOKEN` (uploads go through `wrang
 1. Record one file per chapter, named by chapter id: `welcome`, `worktrees`, `agents`, `state`, `fleet`, `review` (`.wav`, `.m4a`, `.mp3`, `.flac` or `.ogg`). Read the narration as written in `tourChapters.ts` — small ad-libs are fine, but reworded sentences shift the cues.
 2. Put them in one folder and run `npm run tour:audio -- --recordings <folder>`.
 
-The script transcribes each recording with OpenAI (`OPENAI_API_KEY`) to get word timestamps, lands every cue on the word as actually spoken, encodes to Ogg Opus with `ffmpeg`, uploads, and rewrites the manifest. A chapter without a recording keeps its previous audio. Preview the result with the harness below before committing.
+The script encodes each recording to Ogg Opus with `ffmpeg`, transcribes it with Inworld speech-to-text (`inworld/inworld-stt-1` by default; `--stt-model` picks another model Inworld routes, e.g. `groq/whisper-large-v3`) to get word timestamps, lands every cue on the word as actually spoken, uploads, and rewrites the manifest. Words the recogniser mishears are interpolated between their neighbours; if fewer than 60% of words line up, that chapter fails and nothing is published for it. A chapter without a recording keeps its previous audio. Preview the result with the harness below before committing.
 
 ## Previewing
 

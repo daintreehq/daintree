@@ -90,32 +90,40 @@ export function TourControls({
         {TOUR_CHAPTERS.map((chapter, i) => {
           const current = i === state.chapterIndex;
           return (
-            <button
-              key={chapter.id}
-              type="button"
-              aria-label={`Chapter ${i + 1}: ${chapter.title}`}
-              aria-current={current ? "step" : undefined}
-              className="group flex h-6 min-w-0 flex-1 items-center rounded-sm outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-border-interactive"
-              onClick={(event) => {
-                if (!current) {
-                  player.goTo(i, { autoplay: true });
-                  return;
-                }
-                const rect = event.currentTarget.getBoundingClientRect();
-                if (rect.width > 0 && event.detail > 0) {
-                  player.seek(((event.clientX - rect.left) / rect.width) * player.timing.duration);
-                }
-              }}
-            >
-              <span
-                className={cn(
-                  "relative h-1 w-full overflow-hidden rounded-full transition-[height] duration-150 ease-out group-hover:h-1.5",
-                  i < state.chapterIndex ? "bg-text-primary" : "bg-overlay-strong"
-                )}
-              >
-                {current && <CurrentFill player={player} />}
-              </span>
-            </button>
+            <Tooltip key={chapter.id}>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={`Chapter ${i + 1}: ${chapter.title}`}
+                  aria-current={current ? "step" : undefined}
+                  className="group flex h-6 min-w-0 flex-1 cursor-pointer items-center rounded-sm outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-border-interactive"
+                  onClick={(event) => {
+                    // A pointer click lands exactly where it points, in whichever
+                    // chapter; keyboard activation (detail 0) goes to its start.
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    const fraction =
+                      event.detail > 0 && rect.width > 0
+                        ? Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
+                        : 0;
+                    if (!current) player.goTo(i, { autoplay: true });
+                    else if (state.status === "ended") player.play();
+                    player.seek(fraction * player.timing.duration);
+                  }}
+                >
+                  <span
+                    className={cn(
+                      "relative h-1 w-full overflow-hidden rounded-full transition-[height] duration-150 ease-out group-hover:h-1.5",
+                      i < state.chapterIndex ? "bg-text-primary" : "bg-overlay-strong"
+                    )}
+                  >
+                    {current && <CurrentFill player={player} />}
+                  </span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {i + 1}. {chapter.title}
+              </TooltipContent>
+            </Tooltip>
           );
         })}
       </div>

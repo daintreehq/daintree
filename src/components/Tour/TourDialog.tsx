@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { TourControls } from "./TourControls";
 import { TourPlayer, type TourAudio } from "./TourPlayer";
-import { TourStage } from "./TourStage";
+import { TourCaption, TourStage } from "./TourStage";
 import { TOUR_CHAPTERS } from "./tourChapters";
 import { resolveTourTimings } from "./tourTiming";
 import { TourPlayerContext, useTourPlayerState } from "./useTourPlayer";
@@ -49,11 +49,11 @@ function TourBody({
   player: TourPlayer;
 }) {
   const state = useTourPlayerState(player);
+  // Holding stops a finished chapter's countdown; any new chapter or replay starts fresh.
+  const [heldAt, setHeldAt] = useState<number | null>(null);
+  const held = state.status === "ended" && heldAt === state.chapterIndex;
   const chapter = TOUR_CHAPTERS[state.chapterIndex]!;
   const isLast = state.chapterIndex === TOUR_CHAPTERS.length - 1;
-  // Captions carry the narration whenever the voice isn't: muted, or the
-  // timeline running on the silent clock for any reason.
-  const showCaptions = state.muted || state.silent;
 
   const reachedRef = useRef(onChapterReached);
   const completedRef = useRef(onCompleted);
@@ -70,16 +70,27 @@ function TourBody({
     if (isLast && state.status === "ended") completedRef.current();
   }, [isLast, state.status]);
 
+  const advance = () => {
+    if (isLast) {
+      completedRef.current();
+      onClose();
+      // The tour teaches the map; the checklist walks the first real task.
+      window.dispatchEvent(new CustomEvent("daintree:show-getting-started"));
+    } else {
+      player.next();
+    }
+  };
+
   const onKeyDown = (event: React.KeyboardEvent) => {
     if (event.metaKey || event.ctrlKey || event.altKey || isTypingTarget(event.target)) return;
     const onButton = event.target instanceof HTMLButtonElement;
     switch (event.key) {
       case "k":
-        player.toggle();
-        break;
       case " ":
-        if (onButton) return;
-        player.toggle();
+        if (event.key === " " && onButton) return;
+        // On a finished chapter, pause means "stay here", not "replay".
+        if (state.status === "ended") setHeldAt(state.chapterIndex);
+        else player.toggle();
         break;
       case "m":
         player.setMuted(!state.muted);
@@ -102,7 +113,21 @@ function TourBody({
     // focus starts. `contents` keeps the dialog's own column layout intact.
     <div className="contents" onKeyDown={onKeyDown}>
       <div className="flex flex-col gap-4 px-6 pb-5 pt-5">
-        <TourStage chapterId={chapter.id} showCaptions={showCaptions} />
+        <TourStage
+          chapterId={chapter.id}
+          endCard={
+            state.status === "ended"
+              ? {
+                  nextTitle: TOUR_CHAPTERS[state.chapterIndex + 1]?.title ?? null,
+                  held,
+                  onHold: () => setHeldAt(state.chapterIndex),
+                  onNext: advance,
+                  onReplay: () => player.play(),
+                }
+              : null
+          }
+        />
+        <TourCaption />
         <TourControls player={player} onMutedChange={onMutedChange} />
         <div className="flex min-h-[3.75rem] flex-col gap-1">
           <h3 className="text-base font-semibold text-text-primary">{chapter.title}</h3>
@@ -117,17 +142,7 @@ function TourBody({
         secondaryAction={
           state.chapterIndex > 0 ? { label: "Back", onClick: () => player.previous() } : undefined
         }
-        primaryAction={{
-          label: isLast ? "Finish" : "Next",
-          onClick: () => {
-            if (isLast) {
-              completedRef.current();
-              onClose();
-            } else {
-              player.next();
-            }
-          },
-        }}
+        primaryAction={{ label: isLast ? "Finish" : "Next", onClick: advance }}
       />
     </div>
   );

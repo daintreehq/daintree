@@ -1,35 +1,57 @@
 import type { TourCaption, TourChapterTiming } from "./tourTypes";
 
-const CUE_PATTERN = /\[\[([a-z0-9-]+)\]\]/g;
+/** `[[cue-id]]` marks a scene cue; `[anything else]` is a delivery direction for the voice. */
+const MARKUP_PATTERN = /\[\[([a-z0-9-]+)\]\]|\[([^[\]]+)\]/g;
 
 export interface ParsedNarration {
-  /** Narration with cue markers removed — exactly what the voice reads. */
+  /** The words alone: no cues, no directions. What captions show and cues index into. */
   text: string;
   words: string[];
   /** Cue id → index of the word it fires on. */
   cueWordIndex: Record<string, number>;
+  /**
+   * What the voice is sent: the words with each delivery direction (`[warmly]`,
+   * `[sigh]`) kept in place before the word it leads. Directions shape how a
+   * line is said, never what it says, so they stay out of captions and cues.
+   */
+  spoken: string;
 }
 
 export function parseNarration(narration: string): ParsedNarration {
   const cueWordIndex: Record<string, number> = {};
   const words: string[] = [];
+  const spokenWords: string[] = [];
+  let pendingDirections: string[] = [];
   let cursor = 0;
-  for (const match of narration.matchAll(CUE_PATTERN)) {
-    words.push(...splitWords(narration.slice(cursor, match.index)));
-    const id = match[1]!;
-    if (id in cueWordIndex) throw new Error(`Duplicate tour cue "${id}"`);
-    cueWordIndex[id] = words.length;
+
+  const pushText = (segment: string) => {
+    for (const word of segment.split(/\s+/).filter(Boolean)) {
+      words.push(word);
+      spokenWords.push([...pendingDirections, word].join(" "));
+      pendingDirections = [];
+    }
+  };
+
+  for (const match of narration.matchAll(MARKUP_PATTERN)) {
+    pushText(narration.slice(cursor, match.index));
     cursor = match.index! + match[0].length;
+    if (match[1] !== undefined) {
+      const id = match[1];
+      if (id in cueWordIndex) throw new Error(`Duplicate tour cue "${id}"`);
+      cueWordIndex[id] = words.length;
+    } else {
+      pendingDirections.push(`[${match[2]!.trim()}]`);
+    }
   }
-  words.push(...splitWords(narration.slice(cursor)));
+  pushText(narration.slice(cursor));
+
   for (const [id, index] of Object.entries(cueWordIndex)) {
     if (index >= words.length) throw new Error(`Tour cue "${id}" has no word after it`);
   }
-  return { text: words.join(" "), words, cueWordIndex };
-}
-
-function splitWords(segment: string): string[] {
-  return segment.split(/\s+/).filter(Boolean);
+  if (pendingDirections.length > 0) {
+    throw new Error(`Delivery direction ${pendingDirections.join(" ")} has no words after it`);
+  }
+  return { text: words.join(" "), words, cueWordIndex, spoken: spokenWords.join(" ") };
 }
 
 /** Stable short hash of the spoken text, so a manifest entry can be detected as stale. */
@@ -43,8 +65,8 @@ export function hashNarration(text: string): string {
 }
 
 /**
- * Fingerprint of everything timing depends on: the spoken words and where each
- * cue sits among them. Moving or renaming a cue without touching a word still
+ * Fingerprint of everything the audio and timing depend on: the spoken words,
+ * their delivery directions, and where each cue sits among them. Moving or renaming a cue without touching a word still
  * invalidates the chapter's generated timing.
  */
 export function narrationFingerprint(parsed: ParsedNarration): string {
@@ -52,7 +74,8 @@ export function narrationFingerprint(parsed: ParsedNarration): string {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([id, index]) => `${id}@${index}`)
     .join(",");
-  return hashNarration(`${parsed.text}\n${cues}`);
+  // `spoken` carries the delivery directions too, so retuning a line's tone re-voices it.
+  return hashNarration(`${parsed.spoken}\n${cues}`);
 }
 
 const LEAD_IN = 0.3;
@@ -82,6 +105,20 @@ export interface WordAlignment {
 }
 
 const alnum = (s: string) => s.replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();
+
+/**
+ * Drop delivery tags (`[informative]`, `[whisper]`) from a TTS alignment. The
+ * engine reads them as direction, not words, but still reports them as tokens,
+ * which would otherwise stop the narration matching the spoken text exactly.
+ */
+export function stripDirectionTags(alignment: WordAlignment): WordAlignment {
+  const keep = alignment.words.map((word) => !/^\s*\[[^\]]*\]\s*$/.test(word));
+  return {
+    words: alignment.words.filter((_, i) => keep[i]),
+    wordStartTimeSeconds: alignment.wordStartTimeSeconds.filter((_, i) => keep[i]),
+    wordEndTimeSeconds: alignment.wordEndTimeSeconds.filter((_, i) => keep[i]),
+  };
+}
 
 export interface AlignedWords {
   starts: number[];

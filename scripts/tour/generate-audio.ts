@@ -4,6 +4,7 @@
  *   npm run tour:audio                          # Inworld TTS for stale chapters
  *   npm run tour:audio -- --force               # re-voice every chapter
  *   npm run tour:audio -- --recordings <dir>    # use your own recordings
+ *   npm run tour:audio -- --recordings <dir> --stt-model groq/whisper-large-v3
  *   npm run tour:audio -- --no-upload           # dry run: timings only, nothing published
  *
  * Audio never lands in the repo. Each chapter is encoded to Ogg Opus in a temp
@@ -13,10 +14,10 @@
  *
  * Recordings mode: drop `<chapter-id>.{wav,mp3,m4a,ogg,flac}` files in a
  * folder (ids are in tourChapters.ts). Read the narration text as written.
- * Word timestamps come from OpenAI transcription, so every scene cue lands on
- * the word you actually spoke — no hand-timing.
+ * Word timestamps come from Inworld speech-to-text, so every scene cue lands
+ * on the word you actually spoke — no hand-timing.
  *
- * Env: INWORLD_API_KEY (TTS), OPENAI_API_KEY (recordings), CLOUDFLARE_API_TOKEN
+ * Env: INWORLD_API_KEY (TTS and STT), CLOUDFLARE_API_TOKEN
  * (upload, via wrangler; CLOUDFLARE_ACCOUNT_ID if the token spans accounts).
  */
 import { execFileSync } from "node:child_process";
@@ -30,13 +31,20 @@ import {
   buildTiming,
   narrationFingerprint,
   parseNarration,
+  stripDirectionTags,
   type WordAlignment,
 } from "../../src/components/Tour/tourNarration";
 import { TOUR_TIMING_MANIFEST } from "../../src/components/Tour/tourTiming.generated";
 import type { TourTimingManifest } from "../../src/components/Tour/tourTypes";
 
+// Inworld's "Simon" — articulate and steady, made for technical tutorials —
+// read plainly, the way the tour was first voiced. The slug names its CDN
+// folder and also marks chapters as current, so it changes with the voice.
 const INWORLD_VOICE = "Simon";
+const INWORLD_VOICE_SLUG = "simon";
 const INWORLD_MODEL = "inworld-tts-2";
+/** Inworld's own recogniser; `--stt-model` takes any model Inworld's STT endpoint routes. */
+const DEFAULT_STT_MODEL = "inworld/inworld-stt-1";
 const BUCKET = "daintree-assets";
 const CDN_ORIGIN = "https://cdn.daintree.org";
 const MANIFEST_PATH = resolve(
@@ -52,16 +60,24 @@ interface Args {
   upload: boolean;
   recordings: string | null;
   only: string[] | null;
+  sttModel: string;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { force: false, upload: true, recordings: null, only: null };
+  const args: Args = {
+    force: false,
+    upload: true,
+    recordings: null,
+    only: null,
+    sttModel: DEFAULT_STT_MODEL,
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--force") args.force = true;
     else if (arg === "--no-upload") args.upload = false;
     else if (arg === "--recordings") args.recordings = resolve(argv[++i] ?? "");
     else if (arg === "--only") args.only = (argv[++i] ?? "").split(",").filter(Boolean);
+    else if (arg === "--stt-model") args.sttModel = argv[++i] ?? DEFAULT_STT_MODEL;
     else throw new Error(`Unknown argument: ${arg}`);
   }
   return args;
@@ -97,31 +113,49 @@ async function synthesize(text: string): Promise<{ audio: Buffer; alignment: Wor
   };
   const alignment = body.timestampInfo?.wordAlignment;
   if (!alignment) throw new Error("Inworld response carried no word alignment");
-  return { audio: Buffer.from(body.audioContent, "base64"), alignment };
+  return {
+    audio: Buffer.from(body.audioContent, "base64"),
+    alignment: stripDirectionTags(alignment),
+  };
 }
 
-async function transcribeWords(file: string): Promise<WordAlignment> {
-  const form = new FormData();
-  form.append("file", new Blob([readFileSync(file)]), basename(file));
-  form.append("model", "whisper-1");
-  form.append("response_format", "verbose_json");
-  form.append("timestamp_granularities[]", "word");
-  const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+/**
+ * Word timestamps for a real recording, from Inworld speech-to-text. The input
+ * is the Ogg Opus file we publish, so the times are measured on exactly the
+ * audio the app plays.
+ */
+async function transcribeWords(file: string, modelId: string): Promise<WordAlignment> {
+  const response = await fetch("https://api.inworld.ai/stt/v1/transcribe", {
     method: "POST",
-    headers: { Authorization: `Bearer ${requireEnv("OPENAI_API_KEY")}` },
-    body: form,
+    headers: {
+      Authorization: `Basic ${requireEnv("INWORLD_API_KEY")}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      transcribeConfig: {
+        modelId,
+        language: "en-US",
+        audioEncoding: "OGG_OPUS",
+        sampleRateHertz: 48000,
+        numberOfChannels: 1,
+        includeWordTimestamps: true,
+      },
+      audioData: { content: readFileSync(file).toString("base64") },
+    }),
   });
   if (!response.ok) {
-    throw new Error(`Transcription failed (${response.status}): ${await response.text()}`);
+    throw new Error(`Inworld STT failed (${response.status}): ${await response.text()}`);
   }
   const body = (await response.json()) as {
-    words?: { word: string; start: number; end: number }[];
+    transcription?: {
+      wordTimestamps?: { word: string; startTimeMs: number; endTimeMs: number }[];
+    };
   };
-  const words = body.words ?? [];
+  const words = body.transcription?.wordTimestamps ?? [];
   return {
     words: words.map((w) => w.word),
-    wordStartTimeSeconds: words.map((w) => w.start),
-    wordEndTimeSeconds: words.map((w) => w.end),
+    wordStartTimeSeconds: words.map((w) => w.startTimeMs / 1000),
+    wordEndTimeSeconds: words.map((w) => w.endTimeMs / 1000),
   };
 }
 
@@ -198,7 +232,7 @@ async function main(): Promise<void> {
   }
   if (args.upload) requireEnv("CLOUDFLARE_API_TOKEN");
 
-  const voice = args.recordings ? "recorded" : `inworld-${INWORLD_VOICE.toLowerCase()}`;
+  const voice = args.recordings ? "recorded" : `inworld-${INWORLD_VOICE_SLUG}`;
   const workDir = mkdtempSync(join(tmpdir(), "daintree-tour-"));
   const manifest: TourTimingManifest = {
     version: 1,
@@ -211,7 +245,8 @@ async function main(): Promise<void> {
     const parsed = parseNarration(chapter.narration);
     const narrationHash = narrationFingerprint(parsed);
     const existing = manifest.chapters[chapter.id];
-    const sameVoice = TOUR_TIMING_MANIFEST.voice === voice;
+    // Per chapter: a partial run (--only) must not vouch for chapters it never touched.
+    const sameVoice = (existing?.voice ?? TOUR_TIMING_MANIFEST.voice) === voice;
     // A dry run records timing without a URL; a publishing run must not take
     // that entry as done, or the chapter would ship silent.
     const published = !args.upload || Boolean(existing?.audioUrl);
@@ -230,11 +265,11 @@ async function main(): Promise<void> {
         continue;
       }
       console.log(`→ ${chapter.id}: transcribing ${basename(recording)}`);
-      alignment = await transcribeWords(recording);
       encoded = toOggOpus(recording, workDir);
+      alignment = await transcribeWords(encoded, args.sttModel);
     } else {
-      console.log(`→ ${chapter.id}: voicing with ${INWORLD_VOICE}`);
-      const result = await synthesize(parsed.text);
+      console.log(`→ ${chapter.id}: voicing with ${INWORLD_VOICE_SLUG}`);
+      const result = await synthesize(parsed.spoken);
       const raw = join(workDir, `${chapter.id}.tts.ogg`);
       writeFileSync(raw, result.audio);
       alignment = result.alignment;
@@ -265,6 +300,7 @@ async function main(): Promise<void> {
     manifest.chapters[chapter.id] = {
       ...buildTiming(parsed, starts, duration, args.upload ? url : null),
       narrationHash,
+      voice,
     };
   }
 

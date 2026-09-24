@@ -1,27 +1,51 @@
 import type { ComponentType, ReactNode } from "react";
 import { MousePointer2, RadioTower } from "lucide-react";
-import { ClaudeIcon, CodexIcon, GeminiIcon } from "@/components/icons";
+import { AntigravityIcon, ClaudeIcon, CodexIcon } from "@/components/icons";
 import { STATE_COLORS, STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
 import { getAgentConfig } from "@/config/agents";
 import { cn } from "@/lib/utils";
 import type { AgentState } from "@/types";
-import { useSecondsSinceCue, useTimelineIndex, type TimelinePoint } from "../useTourPlayer";
+import {
+  useSecondsSinceCue,
+  useTimelineIndex,
+  useTourPlayer,
+  type TimelinePoint,
+} from "../useTourPlayer";
+
+/** Breathing room between the last typed character and the moment it's acted on. */
+const TYPING_MARGIN_S = 0.15;
+
+/**
+ * Typing speed that finishes the text before a later cue, never slower than
+ * `floor`. Keeps typed prompts ahead of the Enter they lead to whatever pace
+ * the narrator reads at — a re-recording can't leave a prompt half-typed.
+ */
+export function typingRate(
+  length: number,
+  startAt: number,
+  finishAt: number | undefined,
+  floor: number
+): number {
+  if (finishAt === undefined) return floor;
+  const available = finishAt - startAt - TYPING_MARGIN_S;
+  return available > 0 ? Math.max(floor, length / available) : floor * 4;
+}
 
 /** Scenes are authored on a fixed canvas and scaled to fit the stage. */
 export const TOUR_CANVAS = { width: 640, height: 360 } as const;
 
-export type MockAgentId = "claude" | "codex" | "gemini";
+export type MockAgentId = "claude" | "codex" | "antigravity";
 
 const AGENT_ICONS: Record<MockAgentId, ComponentType<{ className?: string }>> = {
   claude: ClaudeIcon,
   codex: CodexIcon,
-  gemini: GeminiIcon,
+  antigravity: AntigravityIcon,
 };
 
 const AGENT_NAMES: Record<MockAgentId, string> = {
   claude: "Claude",
   codex: "Codex",
-  gemini: "Gemini",
+  antigravity: "Antigravity",
 };
 
 export function MockAgentIcon({ agent, className }: { agent: MockAgentId; className?: string }) {
@@ -50,7 +74,13 @@ export function MockStateGlyph({ state }: { state: AgentState | null }) {
   const Icon = STATE_ICONS[state];
   return (
     <span className={cn("inline-flex size-3.5 shrink-0 items-center", STATE_COLORS[state])}>
-      <Icon className="size-3.5" />
+      {/* The working spinner turns exactly as it does in a real pane header. */}
+      <Icon
+        className={cn(
+          "size-3.5",
+          state === "working" && "animate-spin-slow motion-reduce:animate-none"
+        )}
+      />
     </span>
   );
 }
@@ -83,6 +113,8 @@ export function MockLines({
 
 interface MockPaneProps {
   agent: MockAgentId;
+  /** Prefix for this pane's spotlight anchors (`<anchor>-glyph`, `-armed`, `-input`). Defaults to the agent. */
+  anchor?: string;
   state?: AgentState | null;
   armed?: boolean;
   focused?: boolean;
@@ -96,6 +128,7 @@ interface MockPaneProps {
 
 export function MockPane({
   agent,
+  anchor = agent,
   state = null,
   armed = false,
   focused = false,
@@ -117,11 +150,12 @@ export function MockPane({
         className
       )}
     >
-      <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border-subtle bg-surface-panel-elevated px-2.5">
-        <MockAgentIcon agent={agent} />
+      <div className="flex h-6 shrink-0 items-center gap-1.5 border-b border-border-subtle bg-surface-panel-elevated px-2">
+        <MockAgentIcon agent={agent} className="size-3" />
         <span className="truncate text-2xs font-medium text-text-primary">{title ?? name}</span>
         <span className="flex-1" />
         <span
+          data-tour-anchor={`${anchor}-armed`}
           className={cn(
             "inline-flex text-category-amber-text transition-opacity duration-150 ease-out",
             armed ? "opacity-100" : "opacity-0"
@@ -129,11 +163,16 @@ export function MockPane({
         >
           <RadioTower className="size-3" aria-hidden="true" />
         </span>
-        <MockStateGlyph state={state} />
+        <span data-tour-anchor={`${anchor}-glyph`} className="inline-flex">
+          <MockStateGlyph state={state} />
+        </span>
       </div>
-      <div className="min-h-0 flex-1 px-3 py-2.5">{children}</div>
-      <div className="shrink-0 px-2 pb-2">
-        <div className="flex h-6 items-center gap-2 rounded-md border border-border-subtle bg-surface-input px-2">
+      <div className="min-h-0 flex-1 overflow-hidden px-2.5 py-2">{children}</div>
+      <div className="shrink-0 px-1.5 pb-1.5">
+        <div
+          data-tour-anchor={`${anchor}-input`}
+          className="flex h-5 items-center gap-2 rounded-md border border-border-subtle bg-surface-input px-2"
+        >
           {input ? (
             <span className="truncate text-2xs text-text-primary">{input}</span>
           ) : (
@@ -156,18 +195,30 @@ export function MockTyping({
   text,
   delay = 0,
   charsPerSecond = 22,
+  finishBy,
   caret = true,
 }: {
   cue: string;
   text: string;
   /** Seconds after the cue before the first character. */
   delay?: number;
+  /** The slowest the text types; it speeds up if `finishBy` needs it to. */
   charsPerSecond?: number;
+  /** A cue (plus offset) the text must be fully typed by. */
+  finishBy?: TimelinePoint;
   caret?: boolean;
 }) {
+  const player = useTourPlayer();
   const since = useSecondsSinceCue(cue);
   if (since === null || since < delay) return null;
-  const shown = text.slice(0, Math.floor((since - delay) * charsPerSecond));
+  const cues = player.timing.cues;
+  const startAt = (cues[cue] ?? 0) + delay;
+  const finishAt =
+    finishBy && cues[finishBy.cue] !== undefined
+      ? cues[finishBy.cue]! + (finishBy.offset ?? 0)
+      : undefined;
+  const rate = typingRate(text.length, startAt, finishAt, charsPerSecond);
+  const shown = text.slice(0, Math.floor((since - delay) * rate));
   const done = shown.length >= text.length;
   return (
     <>
@@ -187,6 +238,8 @@ export interface CursorStop {
 export interface CursorStep extends TimelinePoint {
   at: CursorStop;
   click?: boolean;
+  /** A key held for this step, shown riding beside the pointer (e.g. "⇧ Shift"). */
+  modifier?: string;
 }
 
 /**
@@ -199,6 +252,7 @@ export function useMockCursor(start: CursorStop, steps: readonly CursorStep[]) {
   return {
     at: step?.at ?? start,
     clickKey: step?.click ? String(index) : null,
+    modifier: step?.modifier ?? null,
     visible: index >= 0,
   };
 }
@@ -229,11 +283,13 @@ export function MockStreamingLines({
 export function MockCursor({
   at,
   clickKey,
+  modifier = null,
   visible = true,
 }: {
   at: CursorStop;
   /** Changing this replays the click ring; null shows none. */
   clickKey: string | null;
+  modifier?: string | null;
   visible?: boolean;
 }) {
   return (
@@ -256,6 +312,14 @@ export function MockCursor({
         className="relative size-4 fill-text-primary text-surface-canvas drop-shadow-sm"
         strokeWidth={1.5}
       />
+      <span
+        className={cn(
+          "absolute left-4 top-3.5 whitespace-nowrap rounded-sm border border-border-strong bg-surface-panel-elevated px-1 py-px text-3xs font-medium text-text-primary transition-opacity duration-150 ease-out",
+          modifier ? "opacity-100" : "opacity-0"
+        )}
+      >
+        {modifier ?? ""}
+      </span>
     </div>
   );
 }

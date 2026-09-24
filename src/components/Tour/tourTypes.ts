@@ -30,7 +30,7 @@ export interface TourTimingManifest {
   /** Bumped whenever the narration source changes shape; stale entries are ignored. */
   version: number;
   voice: string;
-  chapters: Record<string, TourChapterTiming & { narrationHash: string }>;
+  chapters: Record<string, TourChapterTiming & { narrationHash: string; voice?: string }>;
 }
 
 export type TourPlaybackStatus = "idle" | "playing" | "paused" | "ended";

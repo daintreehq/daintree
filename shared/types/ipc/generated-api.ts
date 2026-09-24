@@ -467,6 +467,9 @@ export interface GeneratedElectronAPI {
     dismissSetupBanner(
       ...args: IpcInvokeMap["onboarding:dismiss-setup-banner"]["args"]
     ): Promise<IpcInvokeMap["onboarding:dismiss-setup-banner"]["result"]>;
+    dismissTourInvite(
+      ...args: IpcInvokeMap["onboarding:tour-dismiss-invite"]["args"]
+    ): Promise<IpcInvokeMap["onboarding:tour-dismiss-invite"]["result"]>;
     dismissWelcomeCard(
       ...args: IpcInvokeMap["onboarding:dismiss-welcome-card"]["args"]
     ): Promise<IpcInvokeMap["onboarding:dismiss-welcome-card"]["result"]>;
@@ -491,9 +494,6 @@ export interface GeneratedElectronAPI {
     markToastSeen(
       ...args: IpcInvokeMap["onboarding:mark-toast-seen"]["args"]
     ): Promise<IpcInvokeMap["onboarding:mark-toast-seen"]["result"]>;
-    markTourLauncherShown(
-      ...args: IpcInvokeMap["onboarding:tour-mark-launcher-shown"]["args"]
-    ): Promise<IpcInvokeMap["onboarding:tour-mark-launcher-shown"]["result"]>;
     markWaitingNudgeSeen(
       ...args: IpcInvokeMap["onboarding:mark-waiting-nudge-seen"]["args"]
     ): Promise<IpcInvokeMap["onboarding:mark-waiting-nudge-seen"]["result"]>;

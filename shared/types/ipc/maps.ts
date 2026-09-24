@@ -175,8 +175,8 @@ export interface ChecklistState {
 
 export interface TourOnboardingState {
   completed: boolean;
-  /** App sessions in which the empty-grid tour launcher has been shown. */
-  launcherSessions: number;
+  /** The user turned down the tour's invitation; it is never offered again unasked. */
+  dismissed: boolean;
   muted: boolean;
   /** Chapter the user last reached, so a reopened tour resumes there. */
   lastChapter: number;

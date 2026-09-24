@@ -581,6 +581,22 @@ body,
   animation: tour-click-ring 450ms ease-out 1 both;
 }
 
+/* Daintree Tour end card — the ring around Next drains over the auto-advance
+ * countdown. Its length is the countdown, so the duration comes from the
+ * component (--tour-countdown) rather than a shared tier. */
+@keyframes tour-countdown {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: var(--tour-ring-length);
+  }
+}
+
+.tour-countdown-ring {
+  animation: tour-countdown var(--tour-countdown) linear 1 both;
+}
+
 /* Activity light pulse animation for very recent activity */
 @keyframes activity-pulse {
   0%,
@@ -1341,6 +1357,11 @@ body,
 
   .tour-click-ring {
     display: none;
+  }
+
+  /* The countdown still runs; the draining ring is motion, so it holds full. */
+  .tour-countdown-ring {
+    animation: none;
   }
 
   /* The all-clear flash has no static form: snapping it to opacity 1 like the

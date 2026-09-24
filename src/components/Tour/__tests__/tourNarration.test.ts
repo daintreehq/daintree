@@ -6,6 +6,7 @@ import {
   hashNarration,
   narrationFingerprint,
   parseNarration,
+  stripDirectionTags,
 } from "../tourNarration";
 
 describe("parseNarration", () => {
@@ -14,6 +15,21 @@ describe("parseNarration", () => {
     expect(parsed.text).toBe("Click the plus button, then type a name.");
     expect(parsed.words[parsed.cueWordIndex.plus!]).toBe("plus");
     expect(parsed.words[parsed.cueWordIndex.type!]).toBe("type");
+  });
+
+  it("keeps delivery directions for the voice and out of the words and cues", () => {
+    const parsed = parseNarration(
+      "[informative] Click [[plus]] the plus. [lower voice, more serious] Then [sigh] wait."
+    );
+    expect(parsed.text).toBe("Click the plus. Then wait.");
+    expect(parsed.words[parsed.cueWordIndex.plus!]).toBe("the");
+    expect(parsed.spoken).toBe(
+      "[informative] Click the plus. [lower voice, more serious] Then [sigh] wait."
+    );
+  });
+
+  it("rejects a delivery direction with nothing to say after it", () => {
+    expect(() => parseNarration("All done. [happy]")).toThrow(/no words after it/);
   });
 
   it("rejects duplicate cues and cues with nothing after them", () => {
@@ -83,10 +99,31 @@ describe("hashNarration", () => {
 });
 
 describe("narrationFingerprint", () => {
+  it("changes when only a delivery direction changes", () => {
+    expect(narrationFingerprint(parseNarration("[happy] Welcome in"))).not.toBe(
+      narrationFingerprint(parseNarration("[sad] Welcome in"))
+    );
+  });
+
   it("changes when a cue moves or is renamed even though the words don't", () => {
     const base = narrationFingerprint(parseNarration("Click [[a]] the plus button"));
     expect(narrationFingerprint(parseNarration("Click the [[a]] plus button"))).not.toBe(base);
     expect(narrationFingerprint(parseNarration("Click [[b]] the plus button"))).not.toBe(base);
     expect(narrationFingerprint(parseNarration("Click [[a]] the plus button"))).toBe(base);
+  });
+});
+
+describe("stripDirectionTags", () => {
+  it("drops delivery tags so the spoken words still align exactly", () => {
+    const alignment = stripDirectionTags({
+      words: ["[informative]", " ", "Welcome", " ", "to", " ", "Daintree", "."],
+      wordStartTimeSeconds: [0, 0, 0, 0.41, 0.41, 0.53, 0.53, 1.11],
+      wordEndTimeSeconds: [0, 0, 0.41, 0.41, 0.53, 0.53, 1.11, 1.2],
+    });
+    expect(alignment.words).not.toContain("[informative]");
+    expect(alignWordStarts(["Welcome", "to", "Daintree."], alignment)).toEqual({
+      starts: [0, 0.41, 0.53],
+      matched: 3,
+    });
   });
 });

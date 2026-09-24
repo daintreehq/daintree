@@ -406,7 +406,7 @@ export interface StoreSchema {
     };
     tour?: {
       completed: boolean;
-      launcherSessions: number;
+      dismissed: boolean;
       muted: boolean;
       lastChapter: number;
     };
@@ -847,7 +847,7 @@ const storeOptions = {
       },
       tour: {
         completed: false,
-        launcherSessions: 0,
+        dismissed: false,
         muted: false,
         lastChapter: 0,
       },
