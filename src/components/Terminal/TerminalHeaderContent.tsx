@@ -385,7 +385,7 @@ export function TerminalHeaderContent({
           every poll and must not compete with the fleet announcer (#9204). The severity hysteresis encodes a semantic
           timing and is intentionally NOT normalized to a motion tier. */}
       {showResource && (
-        <Tooltip autoDismiss={false}>
+        <Tooltip autoDismiss={false} disableHoverableContent={false}>
           <TooltipTrigger asChild>
             <div
               className="inline-flex items-center gap-1.5 px-1 text-2xs font-mono shrink-0 rounded-sm tabular-nums"
@@ -410,14 +410,14 @@ export function TerminalHeaderContent({
                   SEVERITY_TONE[cpuSeverity]
                 )}
               />
-              {/* One block reserved at the width of "999% · 1023M" plus any marks
+              {/* One block reserved at the width of "1000% · 10.0G" plus any marks
                   showing, slack at its trailing end: the line holds still as
                   digits come and go, and the reading stays tight against the
                   line's end dot. */}
               <span
                 className="flex items-center text-text-secondary"
                 style={{
-                  minWidth: `calc(12ch + ${
+                  minWidth: `calc(11ch + 0.5rem + ${
                     [cpuSeverity, memorySeverity].filter((b) => b !== "muted").length
                   } * ${SEVERITY_MARK_WIDTH})`,
                 }}
