@@ -51,6 +51,8 @@ const OUTPUT_DIR = process.env.DESIGN_CAPTURE_DIR
 
 const MOD = process.platform === "darwin" ? "Meta" : "Control";
 const DIALOG = '[role="dialog"][aria-label="All agents"]';
+/** The dialog renames itself while the editor owns it, so shots find it by content. */
+const EDITOR_DIALOG = '[role="dialog"]:has([data-testid="pilot-park-editor"])';
 
 const POLISH_CSS = `
   ::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
@@ -308,7 +310,7 @@ async function snap(page: Page, theme: string, slug: string, expect: string): Pr
   if (!(await page.locator(expect).first().isVisible())) {
     throw new Error(`${slug}: expected ${expect} to be visible before capture`);
   }
-  const box = await page.locator(DIALOG).first().boundingBox();
+  const box = await page.locator(EDITOR_DIALOG).first().boundingBox();
   if (!box) throw new Error(`${slug}: dialog has no box`);
   const pad = 32;
   const viewport = page.viewportSize() ?? { width: 1680, height: 1050 };
