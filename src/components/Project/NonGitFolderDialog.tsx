@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { FolderOpen } from "@/components/icons";
@@ -42,6 +42,8 @@ export function NonGitFolderDialog({
   onCancel,
 }: NonGitFolderDialogProps) {
   const [step, setStep] = useState<NonGitFolderStep>(initialStep);
+  const openConsequenceId = useId();
+  const initConsequenceId = useId();
 
   // Re-arm on close rather than on open: the dialog animates out while still
   // mounted, and resetting the step on the way in would swap the body back to
@@ -87,20 +89,20 @@ export function NonGitFolderDialog({
         </div>
 
         {/* Each answer carries its own cost, labelled with the button that
-            chooses it, so the consequence is read at the moment of choice. */}
+            chooses it and attached to that button as its description, so the
+            consequence is read — or announced — at the moment of choice. */}
         <dl className="space-y-3 text-sm">
           <div className="space-y-0.5">
             <dt className="font-medium text-text-primary">Open without git</dt>
-            <dd className="text-text-secondary">
-              Terminals, agents, recipes, and the file browser work now. Worktrees, review, and
-              diffs need a repository. Opening changes nothing in the folder.
+            <dd id={openConsequenceId} className="text-text-secondary">
+              Opening won&rsquo;t change anything in this folder. Terminals, agents, recipes, and
+              the file browser work; worktrees, review, and diffs need git.
             </dd>
           </div>
           <div className="space-y-0.5">
             <dt className="font-medium text-text-primary">Initialize repository</dt>
-            <dd className="text-text-secondary">
-              Adds git to the folder so everything works. You&rsquo;ll see exactly what it writes
-              before anything changes.
+            <dd id={initConsequenceId} className="text-text-secondary">
+              Preview the repository setup next. Nothing changes until you confirm.
             </dd>
           </div>
         </dl>
@@ -111,13 +113,19 @@ export function NonGitFolderDialog({
           <Button variant="ghost" size="sm" onClick={onCancel} data-confirm-role="cancel">
             Cancel
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setStep("initialize")}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setStep("initialize")}
+            aria-describedby={initConsequenceId}
+          >
             Initialize repository
           </Button>
           <Button
             variant="contrast"
             size="sm"
             onClick={onOpenWithoutGit}
+            aria-describedby={openConsequenceId}
             data-confirm-role="confirm"
           >
             Open without git

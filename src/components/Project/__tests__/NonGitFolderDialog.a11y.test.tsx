@@ -111,6 +111,25 @@ describe("NonGitFolderDialog — real dialog wiring", () => {
     expect(explained.sort()).toEqual(answers.sort());
   });
 
+  it("attaches each answer's consequence to the button that chooses it", () => {
+    renderDialog();
+
+    const explanations = new Map(
+      Array.from(document.querySelectorAll("dt")).map((dt) => [
+        dt.textContent!.trim(),
+        dt.nextElementSibling,
+      ])
+    );
+    const answers = footerActions().filter((button) => button.dataset.confirmRole !== "cancel");
+
+    for (const button of answers) {
+      const describedBy = button.getAttribute("aria-describedby");
+      const description = describedBy ? document.getElementById(describedBy) : null;
+      expect(description).not.toBeNull();
+      expect(description).toBe(explanations.get(button.textContent!.trim()));
+    }
+  });
+
   it("offers a visible way out that chooses neither answer", () => {
     const props = renderDialog();
 
