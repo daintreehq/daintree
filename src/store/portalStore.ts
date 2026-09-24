@@ -426,6 +426,16 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
   };
 };
 
+function normalizeLinkUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase().replace(/^www\./, "");
+    return `${host}${u.pathname.replace(/\/+$/, "")}`;
+  } catch {
+    return url.trim().toLowerCase();
+  }
+}
+
 const portalStoreCreator: StateCreator<
   PortalState & PortalActions,
   [],
@@ -474,7 +484,14 @@ const portalStoreCreator: StateCreator<
       // Build final system links ordered per DEFAULT_SYSTEM_LINKS, merging persisted overrides.
       // Any persisted system links not in defaults are appended (custom system links).
       const defaultIds = new Set(DEFAULT_SYSTEM_LINKS.map((d) => d.id));
-      const normalizedSystemLinks = DEFAULT_SYSTEM_LINKS.map((d) => ({
+      // A shipped service the user already added by hand stays theirs: skip the
+      // new default rather than list the same chat twice.
+      const userUrls = new Set(
+        userLinks.map((l) => (typeof l.url === "string" ? normalizeLinkUrl(l.url) : ""))
+      );
+      const normalizedSystemLinks = DEFAULT_SYSTEM_LINKS.filter(
+        (d) => persistedSystemById.has(d.id) || !userUrls.has(normalizeLinkUrl(d.url))
+      ).map((d) => ({
         ...d,
         ...(persistedSystemById.get(d.id) ?? {}),
         id: d.id,

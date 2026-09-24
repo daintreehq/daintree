@@ -8,6 +8,7 @@ import { PortalToolbar } from "../PortalToolbar";
 vi.mock("@/hooks", () => ({
   useKeybindingDisplay: () => "",
   useAriaKeyshortcuts: () => undefined,
+  useOverlayClaim: () => {},
 }));
 
 const TABS: PortalTab[] = [
@@ -41,9 +42,47 @@ function tabStops() {
 afterEach(() => cleanup());
 
 describe("PortalToolbar tab strip — one way in", () => {
-  it.each([["a"], ["c"], [null]])("has exactly one tab stop when %s is active", (active) => {
+  it.each([
+    ["a", "Claude"],
+    ["c", "New Tab"],
+    [null, "Claude"],
+  ])("makes the %s tab the single tab stop", (active, expected) => {
     renderToolbar(active);
-    expect(tabStops()).toHaveLength(1);
+    expect(tabStops().map((t) => t.getAttribute("aria-label"))).toEqual([expected]);
+  });
+
+  it("wraps arrow navigation at both ends and honours Home", () => {
+    const onTabClick = renderToolbar("a");
+    const first = screen.getByRole("tab", { name: "Claude" });
+    fireEvent.keyDown(first, { key: "ArrowLeft" });
+    expect(onTabClick).toHaveBeenLastCalledWith("c");
+    const last = screen.getByRole("tab", { name: "New Tab" });
+    fireEvent.keyDown(last, { key: "ArrowRight" });
+    expect(onTabClick).toHaveBeenLastCalledWith("a");
+    fireEvent.keyDown(last, { key: "Home" });
+    expect(onTabClick).toHaveBeenLastCalledWith("a");
+  });
+
+  it("navigates from the focused tab, not the selected one", () => {
+    const onTabClick = renderToolbar("a");
+    fireEvent.keyDown(screen.getByRole("tab", { name: "ChatGPT" }), { key: "ArrowRight" });
+    expect(onTabClick).toHaveBeenLastCalledWith("c");
+  });
+
+  it("ignores keys another widget already handled", () => {
+    const onTabClick = renderToolbar("a");
+    const tab = screen.getByRole("tab", { name: "Claude" });
+    const event = new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true });
+    event.preventDefault();
+    tab.dispatchEvent(event);
+    expect(onTabClick).not.toHaveBeenCalled();
+  });
+
+  it("lets Enter on a tab's close button close, not activate", () => {
+    const onTabClick = renderToolbar("a");
+    const close = screen.getByRole("tab", { name: "ChatGPT" }).querySelector("button")!;
+    fireEvent.keyDown(close, { key: "Enter" });
+    expect(onTabClick).not.toHaveBeenCalled();
   });
 
   it("keeps close buttons out of the Tab order", () => {

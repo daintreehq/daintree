@@ -173,7 +173,7 @@ describe("DevServerDashboard", () => {
   it("disables both buttons when the session has no worktreeId", () => {
     mockSessions([session({ status: "error", worktreeId: undefined })]);
     render(<DevServerDashboard />);
-    const stopButton = screen.getByLabelText("Dismiss error for panel-1") as HTMLButtonElement;
+    const stopButton = screen.getByLabelText("Stop dev server for panel-1") as HTMLButtonElement;
     const restartButton = screen.getByLabelText(
       "Restart dev server for panel-1"
     ) as HTMLButtonElement;
@@ -207,5 +207,41 @@ describe("DevServerDashboard", () => {
     ]);
     render(<DevServerDashboard />);
     expect(screen.getByText("Port 3000 in use")).toBeTruthy();
+  });
+
+  it("keeps Stop, not Dismiss, for an error whose server is still running", () => {
+    mockSessions([session({ status: "error", terminalId: "t-1", url: null })]);
+    render(<DevServerDashboard />);
+    expect(screen.queryByLabelText("Dismiss error for feature-foo")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Stop dev server for feature-foo"));
+    expect(stopDevServerByWorktree).toHaveBeenCalledWith({ worktreeId: "wt-1" });
+  });
+
+  it("prefers the error's reason over the latest output", () => {
+    mockSessions([
+      session({
+        status: "error",
+        terminalId: null,
+        url: null,
+        lastOutput: "noise line",
+        error: {
+          type: "port-conflict",
+          message: "Port 3000 in use",
+        } as DevPreviewSessionState["error"],
+      }),
+    ]);
+    render(<DevServerDashboard />);
+    expect(screen.getByText("Port 3000 in use")).toBeTruthy();
+    expect(screen.queryByText("noise line")).toBeNull();
+  });
+
+  it("summarises running and failed servers in the header", () => {
+    mockSessions([
+      session({ panelId: "p1" }),
+      session({ panelId: "p2", worktreeId: "wt-2" }),
+      session({ panelId: "p3", worktreeId: "wt-3", status: "error", terminalId: null }),
+    ]);
+    render(<DevServerDashboard />);
+    expect(screen.getByText("2 running · 1 failed")).toBeTruthy();
   });
 });

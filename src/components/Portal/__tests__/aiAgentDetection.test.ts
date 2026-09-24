@@ -105,4 +105,10 @@ describe("getAIAgentInfo", () => {
   it.each(Object.entries(LINK_TEMPLATES))("ships %s with a registered brand mark", (_key, t) => {
     expect(isRegisteredAgent(t.icon)).toBe(true);
   });
+
+  it("never resolves a hostname to an inherited object property", () => {
+    expect(getAIAgentInfo("https://constructor/")).toBeNull();
+    expect(getAIAgentInfo("https://__proto__/")).toBeNull();
+    expect(getAIAgentInfo("https://tostring/")).toBeNull();
+  });
 });

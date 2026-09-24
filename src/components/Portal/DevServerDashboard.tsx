@@ -69,6 +69,9 @@ function DevServerRow({
   const port = extractPort(session);
   const worktreeId = session.worktreeId;
   const isError = session.status === "error";
+  // A compile error keeps its terminal: stopping then kills a live watcher, so
+  // only a process-less error is a pure dismissal.
+  const isDismissableError = isError && !session.terminalId;
   const isStopped = STOPPED_STATUSES.has(session.status);
   const canStop = worktreeId !== undefined && STOPPABLE_STATUSES.has(session.status);
   // The second line answers "is it up, and where": an error names its reason,
@@ -96,7 +99,7 @@ function DevServerRow({
 
   const restartLabel = isStopped ? "Start" : "Restart";
   // Stopping an errored session only clears its error — there is no process.
-  const stopLabel = isError ? "Dismiss error" : "Stop";
+  const stopLabel = isDismissableError ? "Dismiss error" : "Stop";
 
   return (
     <li
@@ -136,12 +139,18 @@ function DevServerRow({
             onClick={handleStop}
             disabled={!canStop}
             aria-label={
-              isError ? `Dismiss error for ${worktreeName}` : `Stop dev server for ${worktreeName}`
+              isDismissableError
+                ? `Dismiss error for ${worktreeName}`
+                : `Stop dev server for ${worktreeName}`
             }
             title={stopLabel}
             className={actionClass}
           >
-            {isError ? <X className="w-3.5 h-3.5" /> : <CircleStop className="w-3.5 h-3.5" />}
+            {isDismissableError ? (
+              <X className="w-3.5 h-3.5" />
+            ) : (
+              <CircleStop className="w-3.5 h-3.5" />
+            )}
           </button>
         )}
       </div>
@@ -228,10 +237,10 @@ export function DevServerDashboard({ onHide }: { onHide?: () => void }) {
         <Skeleton label="Loading dev servers" className="flex flex-col gap-3 pl-3 pr-2 pt-1.5 pb-3">
           {[0, 1].map((i) => (
             <div key={i} className="flex items-center gap-2.5">
-              <SkeletonBone className="w-2 h-2 rounded-full" />
+              <SkeletonBone immediate className="w-2 h-2 rounded-full" />
               <div className="flex flex-col gap-1.5 flex-1">
-                <SkeletonBone className="h-2.5 w-1/3" />
-                <SkeletonBone className="h-2.5 w-2/3" />
+                <SkeletonBone immediate className="h-2.5 w-1/3" />
+                <SkeletonBone immediate className="h-2.5 w-2/3" />
               </div>
             </div>
           ))}

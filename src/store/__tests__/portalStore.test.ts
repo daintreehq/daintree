@@ -399,6 +399,59 @@ describe("portalStore persistence migration", () => {
     expect(store.getState().width).toBe(600);
   });
 
+  function systemLink(key: string, url: string, enabled = true) {
+    return { id: `system-${key}`, type: "system", title: key, url, icon: key, enabled, order: 0 };
+  }
+
+  it("gives an upgrading user every newly shipped service without touching their existing ones", async () => {
+    const { DEFAULT_SYSTEM_LINKS } = await import("@shared/types/portal");
+    const blob = JSON.stringify({
+      state: {
+        links: [
+          systemLink("claude", "https://claude.ai/new"),
+          systemLink("codex", "https://chatgpt.com/", false),
+          systemLink("gemini", "https://gemini.google.com/app"),
+        ],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: blob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+    const links = store.getState().links;
+
+    for (const d of DEFAULT_SYSTEM_LINKS) {
+      expect(links.some((l) => l.id === d.id)).toBe(true);
+    }
+    expect(links.find((l) => l.id === "system-codex")!.enabled).toBe(false);
+  });
+
+  it("does not add a shipped service the user already added as their own link", async () => {
+    const blob = JSON.stringify({
+      state: {
+        links: [
+          systemLink("claude", "https://claude.ai/new"),
+          {
+            id: "user-grok",
+            type: "user",
+            title: "My Grok",
+            url: "https://www.grok.com",
+            icon: "globe",
+            enabled: false,
+            order: 1,
+          },
+        ],
+      },
+    });
+    installLocalStorageWith({ [STORAGE_KEY]: blob });
+
+    const { usePortalStore: store } = await import("../portalStore");
+    const links = store.getState().links;
+
+    expect(links.some((l) => l.id === "system-grok")).toBe(false);
+    const mine = links.find((l) => l.id === "user-grok");
+    expect(mine?.enabled).toBe(false);
+  });
+
   it("still runs the discovered→system merge migration after version check", async () => {
     const legacyBlob = JSON.stringify({
       state: {

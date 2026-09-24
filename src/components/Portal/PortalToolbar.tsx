@@ -28,7 +28,7 @@ import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePortalStore } from "@/store/portalStore";
 import { PortalIcon } from "./PortalIcon";
-import { useAriaKeyshortcuts, useKeybindingDisplay } from "@/hooks";
+import { useAriaKeyshortcuts, useKeybindingDisplay, useOverlayClaim } from "@/hooks";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
   DropdownMenu,
@@ -120,6 +120,7 @@ function SortableTab({
           tabIndex={isTabStop ? 0 : -1}
           onClick={() => onClick(tab.id)}
           onKeyDown={(e) => {
+            if (e.target !== e.currentTarget) return;
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
               onClick(tab.id);
@@ -294,10 +295,17 @@ export function PortalToolbar({
     (id: UniqueIdentifier) => tabs.find((t) => t.id === id)?.title,
     [tabs]
   );
-  const browserTabAnnouncements = useMemo(
-    () => makeSortableAnnouncements(getBrowserTabLabel, "browser tab"),
-    [getBrowserTabLabel]
-  );
+  const browserTabAnnouncements = useMemo(() => {
+    const base = makeSortableAnnouncements(getBrowserTabLabel, "browser tab");
+    // Drag is pointer-only here, so pickup mustn't promise arrow-key moves.
+    return {
+      ...base,
+      onDragStart: (event: Parameters<typeof base.onDragStart>[0]) => {
+        base.onDragStart(event);
+        return `Picked up ${getBrowserTabLabel(event.active.id) ?? "tab"}.`;
+      },
+    };
+  }, [getBrowserTabLabel]);
 
   const tablistRef = useRef<HTMLDivElement>(null);
   const [overflow, setOverflow] = useState({ before: false, after: false });
@@ -313,6 +321,11 @@ export function PortalToolbar({
     );
   }, []);
 
+  // Set when the user scrolls the strip themselves, so a later resize or title
+  // update doesn't yank it back to the active tab. Cleared on each selection.
+  const userScrolledRef = useRef(false);
+  const programmaticScrollRef = useRef(false);
+
   // Keep the active tab clear of the overflow fade, not just inside the strip.
   const revealActive = useCallback(() => {
     const strip = tablistRef.current;
@@ -320,26 +333,49 @@ export function PortalToolbar({
     if (strip && tab) {
       const left = tab.offsetLeft - strip.offsetLeft;
       const right = left + tab.offsetWidth;
+      let target: number | null = null;
       if (left - OVERFLOW_FADE_PX < strip.scrollLeft) {
-        strip.scrollLeft = Math.max(0, left - OVERFLOW_FADE_PX);
+        target = Math.max(0, left - OVERFLOW_FADE_PX);
       } else if (right + OVERFLOW_FADE_PX > strip.scrollLeft + strip.clientWidth) {
-        strip.scrollLeft = right + OVERFLOW_FADE_PX - strip.clientWidth;
+        target = right + OVERFLOW_FADE_PX - strip.clientWidth;
+      }
+      if (target !== null && Math.abs(target - strip.scrollLeft) > 1) {
+        programmaticScrollRef.current = true;
+        strip.scrollLeft = target;
       }
     }
     measureOverflow();
   }, [activeTabId, measureOverflow]);
 
   useEffect(() => {
+    userScrolledRef.current = false;
+    revealActive();
+  }, [activeTabId, revealActive]);
+
+  useEffect(() => {
     const el = tablistRef.current;
     if (!el) return;
-    revealActive();
     // Tabs change width as fonts land and titles update; the strip alone
     // wouldn't notice.
-    const observer = new ResizeObserver(revealActive);
+    const observer = new ResizeObserver(() => {
+      if (userScrolledRef.current) measureOverflow();
+      else revealActive();
+    });
     observer.observe(el);
     for (const child of Array.from(el.children)) observer.observe(child);
     return () => observer.disconnect();
-  }, [tabs, revealActive]);
+  }, [tabs, revealActive, measureOverflow]);
+
+  const handleStripScroll = () => {
+    if (programmaticScrollRef.current) programmaticScrollRef.current = false;
+    else userScrolledRef.current = true;
+    measureOverflow();
+  };
+
+  const [allTabsOpen, setAllTabsOpen] = useState(false);
+  // The page is a native view drawn over the DOM; claiming an overlay hides it
+  // so the menu isn't painted underneath.
+  useOverlayClaim("portal-all-tabs", allTabsOpen && isOverflowing);
 
   // With no tab selected (the launchpad over existing tabs) the first tab is
   // the strip's entry point, so the tablist never drops out of the Tab order.
@@ -473,7 +509,8 @@ export function PortalToolbar({
             <SortableContext items={tabs.map((t) => t.id)} strategy={horizontalListSortingStrategy}>
               <div
                 ref={tablistRef}
-                onScroll={measureOverflow}
+                onScroll={handleStripScroll}
+                data-row-menu
                 className={cn(
                   "flex min-w-0 flex-1 items-center gap-1 overflow-x-auto scrollbar-none",
                   overflow.before &&
@@ -490,7 +527,13 @@ export function PortalToolbar({
                 aria-label="Portal tabs"
                 aria-orientation="horizontal"
                 onKeyDown={(e) => {
-                  const currentIndex = tabs.findIndex((t) => t.id === tabStopId);
+                  // Keys from a tab's context menu bubble here through the React
+                  // tree; only act on keys that came from a tab in this strip.
+                  if (e.defaultPrevented) return;
+                  const fromTab =
+                    e.target instanceof Element ? e.target.closest('[role="tab"]') : null;
+                  if (!fromTab || !e.currentTarget.contains(fromTab)) return;
+                  const currentIndex = tabs.findIndex((t) => tabDomId(t.id) === fromTab.id);
                   const last = tabs.length - 1;
                   let next: number;
                   switch (e.key) {
@@ -537,7 +580,7 @@ export function PortalToolbar({
             </SortableContext>
           </DndContext>
           {isOverflowing && (
-            <DropdownMenu>
+            <DropdownMenu open={allTabsOpen} onOpenChange={setAllTabsOpen}>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <DropdownMenuTrigger asChild>
