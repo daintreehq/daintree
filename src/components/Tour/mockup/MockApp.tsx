@@ -270,13 +270,13 @@ export function MockApp({
         <span className="flex-1" />
         <span
           data-tour-anchor="project"
-          className="flex items-center gap-1.5 rounded-md border border-border-subtle bg-surface-panel px-2 py-0.5"
+          className="flex min-w-0 max-w-[180px] items-center gap-1.5 whitespace-nowrap rounded-md border border-border-subtle bg-surface-panel px-2 py-0.5"
         >
           <span className="text-3xs">🌿</span>
-          <span className="text-3xs font-medium text-text-primary">shop-app</span>
-          <span className="flex items-center gap-0.5 text-3xs text-text-secondary">
-            <GitBranch className="size-2.5" aria-hidden="true" />
-            {branch}
+          <span className="shrink-0 text-3xs font-medium text-text-primary">shop-app</span>
+          <span className="flex min-w-0 items-center gap-0.5 text-3xs text-text-secondary">
+            <GitBranch className="size-2.5 shrink-0" aria-hidden="true" />
+            <span className="truncate">{branch}</span>
           </span>
         </span>
         <span className="flex-1" />

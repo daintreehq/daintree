@@ -50,13 +50,39 @@ function ordered(runs: readonly Run[], parkedTitle: string | null): readonly Run
   return [...runs.filter((run) => run.title !== parkedTitle), ...parked];
 }
 
+/** The park editor, which takes the list's place until the park is submitted. */
+function ParkEditor() {
+  return (
+    <div className="flex flex-col gap-2 px-1.5 py-1">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <MockAgentIcon agent="antigravity" className="size-3" />
+        <span className="min-w-0 truncate text-3xs text-text-primary">{PARK.title}</span>
+        <span className="shrink-0 text-3xs text-text-secondary">api-server</span>
+      </div>
+      <div className="flex flex-col gap-1">
+        <span className="text-3xs font-medium uppercase text-text-secondary">Note</span>
+        <span className="flex h-5 items-center rounded-md border border-border-input bg-surface-input px-2 text-3xs text-text-secondary">
+          Why is this parked? (optional)
+        </span>
+      </div>
+      <span className="self-end rounded-md bg-text-primary px-2.5 py-1 text-3xs font-medium text-text-inverse">
+        Park
+      </span>
+    </div>
+  );
+}
+
 export function PilotScene() {
   const keys = useCue("open");
   const open = useCue("open", 1.8);
   const sort = useCue("sort");
   const parkCue = useCue("park");
-  const parkKeys = useCue("park", 1.2);
-  const parked = useCue("park", 1.8);
+  // Option Enter opens the park editor; Enter submits it.
+  const parkKeys = useCue("park", 0.9);
+  const editing = useCue("park", 0.7);
+  const enterKey = useCue("park", 1.9);
+  const parked = useCue("park", 2.5);
+  const editorOpen = editing && !parked;
 
   return (
     <MockApp
@@ -95,48 +121,55 @@ export function PilotScene() {
         <MockSearchField>
           <span className="text-text-placeholder">Search agents…</span>
         </MockSearchField>
-        {PROJECTS.map((project, g) => (
-          <div key={project.name} className="flex flex-col">
-            <span className="flex items-center gap-1.5 px-1 py-0.5 text-3xs font-semibold text-text-secondary">
-              {project.name}
-              {project.current && <span className="font-normal">· Current</span>}
-            </span>
-            {ordered(project.runs, parked && g === PARK.group ? PARK.title : null).map((run, i) => {
-              const isTarget = g === PARK.group && run.title === PARK.title;
-              const isParked = parked && isTarget;
-              return (
-                <div
-                  key={run.title}
-                  data-tour-anchor={`pilot-row-${g}-${i}`}
-                  className={cn(
-                    "flex h-[18px] items-center gap-1.5 rounded-md px-1.5 transition-colors duration-150 ease-out",
-                    isTarget && parkCue && !parked ? "bg-overlay-selected" : "bg-transparent"
-                  )}
-                >
-                  <span className="flex size-3 shrink-0 items-center justify-center">
-                    {isParked ? (
-                      <CirclePause className="size-2.5 text-text-secondary" aria-hidden="true" />
-                    ) : (
-                      <MockStateGlyph state={run.state} />
-                    )}
-                  </span>
-                  <MockAgentIcon agent={run.agent} className="size-3" />
-                  <span
-                    className={cn(
-                      "min-w-0 flex-1 truncate text-3xs",
-                      isParked ? "text-text-secondary" : "text-text-primary"
-                    )}
-                  >
-                    {run.title}
-                  </span>
-                  <span className="w-5 text-right text-3xs tabular-nums text-text-secondary">
-                    {run.age}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        ))}
+        {editorOpen && <ParkEditor />}
+        {!editorOpen &&
+          PROJECTS.map((project, g) => (
+            <div key={project.name} className="flex flex-col">
+              <span className="flex items-center gap-1.5 px-1 py-0.5 text-3xs font-semibold text-text-secondary">
+                {project.name}
+                {project.current && <span className="font-normal">· Current</span>}
+              </span>
+              {ordered(project.runs, parked && g === PARK.group ? PARK.title : null).map(
+                (run, i) => {
+                  const isTarget = g === PARK.group && run.title === PARK.title;
+                  const isParked = parked && isTarget;
+                  return (
+                    <div
+                      key={run.title}
+                      data-tour-anchor={`pilot-row-${g}-${i}`}
+                      className={cn(
+                        "flex h-[18px] items-center gap-1.5 rounded-md px-1.5 transition-colors duration-150 ease-out",
+                        isTarget && parkCue && !parked ? "bg-overlay-selected" : "bg-transparent"
+                      )}
+                    >
+                      <span className="flex size-3 shrink-0 items-center justify-center">
+                        {isParked ? (
+                          <CirclePause
+                            className="size-2.5 text-text-secondary"
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <MockStateGlyph state={run.state} />
+                        )}
+                      </span>
+                      <MockAgentIcon agent={run.agent} className="size-3" />
+                      <span
+                        className={cn(
+                          "min-w-0 flex-1 truncate text-3xs",
+                          isParked ? "text-text-secondary" : "text-text-primary"
+                        )}
+                      >
+                        {run.title}
+                      </span>
+                      <span className="w-5 text-right text-3xs tabular-nums text-text-secondary">
+                        {run.age}
+                      </span>
+                    </div>
+                  );
+                }
+              )}
+            </div>
+          ))}
         <div className="mt-1.5 flex items-center gap-3 border-t border-border-subtle px-1 pt-1.5 text-3xs text-text-secondary">
           <span>
             <span className="text-text-primary">↵</span> Open
@@ -147,10 +180,11 @@ export function PilotScene() {
         </div>
       </div>
       <MockKeys keys={["⌥", "↵"]} x={320} y={300} visible={parkCue && !parkKeys} />
+      <MockKeys keys={["↵"]} x={320} y={300} visible={enterKey && !parked} />
       {/* "Whatever is waiting on you" — the top of each group, then the Park hint. */}
       <MockSpotlight
         targets={parkCue ? ["pilot-park"] : ["pilot-row-0-0", "pilot-row-1-0"]}
-        visible={(sort && !parkCue) || (parkCue && !parked)}
+        visible={(sort && !parkCue) || (parkCue && !editing)}
       />
     </MockApp>
   );

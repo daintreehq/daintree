@@ -25,13 +25,14 @@ import { MockMenu, MockPanel, MockSearchField, MockSpotlight } from "./scenePart
 
 const LAUNCHER = ANCHOR.launcher;
 const MENU = { x: LAUNCHER.x - 8, y: LAUNCHER.y + 14, width: 150 };
-// Search field, then 18px rows: Terminal, Browse files, Browser, Dev preview.
-const DEV_PREVIEW_ITEM = { x: MENU.x + 60, y: MENU.y + 91 };
+// The menu's fourth row, Dev preview; measured from the render.
+const DEV_PREVIEW_ITEM = { x: 118, y: 138 };
 
 // Two equal columns once the preview opens; the preview is the right one.
 const COLUMN = (GRID_RECT.width - 6) / 2;
 const PREVIEW_X = GRID_RECT.x + COLUMN + 6;
-const RUN_BUTTON = { x: PREVIEW_X + COLUMN / 2, y: GRID_RECT.y + 150 };
+// The start prompt's Run button, centred in the preview; measured from the render.
+const RUN_BUTTON = { x: PREVIEW_X + COLUMN / 2, y: 229 };
 const CONSOLE_TOGGLE = { x: GRID_RECT.x + GRID_RECT.width - 12, y: GRID_RECT.y + 36 };
 
 const CURSOR: readonly CursorStep[] = [
@@ -112,8 +113,8 @@ export function PreviewScene() {
   const launchCue = useCue("launch");
   const menu = useCue("launch", 0.6);
   const opened = useCue("pickpreview", 0.3);
-  const starting = useCue("start", 0.5);
-  const running = useCue("start", 1.8);
+  const starting = useCue("start", 0.4);
+  const running = useCue("start", 0.8);
   const live = useCue("live", 0.6);
   const consoleCue = useCue("console");
   const drawer = useCue("console", 0.5);

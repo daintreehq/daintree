@@ -25,17 +25,19 @@ const SHIFT = "⇧ Shift";
 
 const GAP = 6;
 const PANE_WIDTH = (GRID_RECT.width - GAP * 2) / 3;
+// The ribbon pushes the panels down once two are armed; measured from the render.
+const RIBBON_SHIFT = 31;
 /** Where pane i's title bar is clicked — shift-click only counts on the title bar. */
-const titleBarAt = (i: number) => ({
+const titleBarAt = (i: number, ribbon = true) => ({
   x: GRID_RECT.x + i * (PANE_WIDTH + GAP) + 64,
-  y: GRID_RECT.y + 12,
+  y: GRID_RECT.y + 12 + (ribbon ? RIBBON_SHIFT : 0),
 });
 const FIRST_INPUT = { x: GRID_RECT.x + 60, y: GRID_RECT.y + GRID_RECT.height - 11 };
 
 const CURSOR: readonly CursorStep[] = [
   // Claude is the focused panel; the first shift-click arms it along with Codex.
-  { cue: "pick", at: titleBarAt(1), modifier: SHIFT },
-  { cue: "pick", offset: 0.5, at: titleBarAt(1), click: true, modifier: SHIFT },
+  { cue: "pick", at: titleBarAt(1, false), modifier: SHIFT },
+  { cue: "pick", offset: 0.5, at: titleBarAt(1, false), click: true, modifier: SHIFT },
   { cue: "pick", offset: 1.0, at: titleBarAt(2), modifier: SHIFT },
   { cue: "pick", offset: 1.5, at: titleBarAt(2), click: true, modifier: SHIFT },
   { cue: "out", offset: 0.1, at: titleBarAt(2), click: true, modifier: SHIFT },

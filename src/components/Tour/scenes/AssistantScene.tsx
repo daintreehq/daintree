@@ -16,6 +16,7 @@ import { MockSpotlight } from "./sceneParts";
 
 const BUTTON = ANCHOR.assistant;
 const REQUEST = "Start issue #52 with Codex";
+const ISSUE_BRANCH = "feature/issue-52-checkout-total";
 const ASKED = { cue: "act" } as const;
 // The idle panel's Start assistant button; measured from the render.
 const START_BUTTON = { x: 552, y: 250 };
@@ -131,7 +132,7 @@ export function AssistantScene() {
 
   return (
     <MockApp
-      branch={created ? "issue-52" : "main"}
+      branch={created ? ISSUE_BRANCH : "main"}
       focus={open ? ["right", "sidebar", "grid"] : openCue ? ["toolbar"] : ["grid"]}
       worktrees={
         <>
@@ -140,7 +141,7 @@ export function AssistantScene() {
           <MockWorktreeCard
             name="issue-52"
             issueTitle="Checkout total rounds wrong"
-            branch="feature/issue-52-checkout-total"
+            branch={ISSUE_BRANCH}
             selected={created}
             states={launched ? [waiting ? "waiting" : "working"] : []}
             className={reveal(created, "left")}

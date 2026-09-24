@@ -16,11 +16,12 @@ import { MockMenu, MockSearchField, MockSpotlight } from "./sceneParts";
 
 const ISSUES = ANCHOR["forge-issues"];
 const LIST = { x: 300, y: ISSUES.y + 14, width: 200 };
-const ISSUE_ROW = { x: LIST.x + 90, y: LIST.y + 38 };
+// #51, the second row, is the one picked; measured from the render.
+const ISSUE_ROW = { x: LIST.x + 90, y: 92 };
 
 // Picking an issue opens the new worktree form with its branch already named.
 const DIALOG = { x: 230, y: 90, width: 250 };
-const CREATE_BUTTON = { x: DIALOG.x + 200, y: DIALOG.y + 84 };
+const CREATE_BUTTON = { x: 417, y: 189 };
 const BRANCH = "feature/issue-51-dark-mode-for-settings";
 
 const CURSOR: readonly CursorStep[] = [
@@ -147,7 +148,10 @@ export function GitHubScene() {
           </div>
         </div>
         <div className="flex justify-end">
-          <span className="rounded-md bg-text-primary px-2.5 py-1 text-3xs font-medium text-text-inverse">
+          <span
+            data-tour-anchor="github-create"
+            className="rounded-md bg-text-primary px-2.5 py-1 text-3xs font-medium text-text-inverse"
+          >
             Create worktree
           </span>
         </div>

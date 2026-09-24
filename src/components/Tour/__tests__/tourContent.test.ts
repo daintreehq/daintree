@@ -61,7 +61,15 @@ describe("tour content", () => {
   it("ships generated timing that matches the current narration", () => {
     for (const chapter of TOUR_CHAPTERS) {
       const entry = TOUR_TIMING_MANIFEST.chapters[chapter.id];
+      expect(entry, `${chapter.id} has no generated timing — run npm run tour:audio`).toBeDefined();
       if (!entry) continue;
+      // Every cue the narration names was voiced, and lands inside the chapter.
+      expect(Object.keys(entry.cues).sort()).toEqual(
+        Object.keys(parseNarration(chapter.narration).cueWordIndex).sort()
+      );
+      for (const [cue, at] of Object.entries(entry.cues)) {
+        expect(at >= 0 && at < entry.duration, `${chapter.id}.${cue} at ${at}s`).toBe(true);
+      }
       expect(entry.narrationHash, `${chapter.id} is stale — run npm run tour:audio`).toBe(
         narrationFingerprint(parseNarration(chapter.narration))
       );
@@ -98,6 +106,5 @@ describe("resolveChapterTiming", () => {
     expect(Object.keys(timing.cues).sort()).toEqual(
       Object.keys(parseNarration(chapter.narration).cueWordIndex).sort()
     );
-    expect(timing.cues).not.toEqual({ first: 1, grid: 2 });
   });
 });
