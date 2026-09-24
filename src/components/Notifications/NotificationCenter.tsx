@@ -767,17 +767,16 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           return;
         }
         case "e": {
-          e.preventDefault();
+          if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+          // Nothing in the Archived tab. `e` is learned as archive, and it used
+          // to turn into a permanent delete here, so the same key that filed
+          // something away destroyed it one tab over. The row's × is the
+          // deliberate delete.
+          if (filter === "archived") return;
           const row = flatRows[activeIndex];
           if (!row) return;
-          // In the Archived tab, 'e' permanently deletes the visible (head)
-          // entry. Do NOT route threads through dismissByCorrelationId — a
-          // live entry sharing the same correlationId would also be destroyed.
-          if (filter === "archived") {
-            dismissEntry(row.entryId);
-          } else {
-            archiveRow(row);
-          }
+          e.preventDefault();
+          archiveRow(row);
           return;
         }
         case "u": {
@@ -814,16 +813,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           return;
       }
     },
-    [
-      rowCount,
-      flatRows,
-      moveFocusTo,
-      dismissEntry,
-      archiveRow,
-      dispatchPrimaryAction,
-      filter,
-      toggleReadForRow,
-    ]
+    [rowCount, flatRows, moveFocusTo, archiveRow, dispatchPrimaryAction, filter, toggleReadForRow]
   );
 
   // Take focus into the panel when it opens. The bell keeps `aria-haspopup` and
@@ -1012,14 +1002,14 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   // alone the breakthrough list named every kind the app has — six or seven
   // names that all said "nothing changed in here". One clause says that.
   const osDndOnly = isOsDndActive && notificationsEnabled && !isSessionMuted && !isScheduledMuted;
+  // A line per clause. Run together with " · " they broke wherever the width
+  // fell, so "Off:" and the kind it named landed on different lines.
   const quietDetail = [
     pillLabel ? (osDndOnly ? "Daintree's own alerts still show" : summaryHeroLine) : "",
     pillLabel ? offLabel : silencedLabel,
     projectOffLabel,
     otherProjectsOffLabel,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  ].filter(Boolean);
   // What "Clear all" actually costs, named in the confirm. The count is the
   // preview; the archived and snoozed breakdown is the part a user standing on
   // the Archived tab would not otherwise expect, since the store call ignores
@@ -1305,9 +1295,11 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
         >
           <div className="min-w-0 flex-1 flex flex-col gap-0.5">
             <span className="font-medium text-text-primary">{quietCause}</span>
-            {/* `text-pretty`: a greedy break stranded "Completed" alone on the
-                second line after "Off:". */}
-            {quietDetail && <span className="text-pretty text-text-secondary">{quietDetail}</span>}
+            {quietDetail.map((clause) => (
+              <span key={clause} className="text-pretty text-text-secondary">
+                {clause}
+              </span>
+            ))}
           </div>
           {isSessionMuted && (
             <button
@@ -1325,7 +1317,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               Resume
             </button>
           )}
-          {!isSessionMuted && hasSilences && (
+          {/* Quiet hours too: they explained the silence and then left the way
+              to change them two menus away. */}
+          {!isSessionMuted && (hasSilences || isScheduledMuted) && (
             <button type="button" onClick={openNotificationSettings} className={SMALL_BUTTON_CLASS}>
               Manage
             </button>

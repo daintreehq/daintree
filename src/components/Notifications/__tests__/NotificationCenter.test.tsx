@@ -693,6 +693,8 @@ describe("NotificationCenter muted pill", () => {
       const pill = screen.getByTestId("notification-muted-pill");
       expect(pill.textContent).toContain("Quiet hours");
       expect(screen.queryByLabelText("Resume notifications")).toBeNull();
+      // Nothing to resume, but the schedule is one click from here.
+      expect(within(pill).getByRole("button", { name: "Manage" })).toBeTruthy();
     } finally {
       vi.useRealTimers();
     }
@@ -2727,7 +2729,7 @@ describe("archived tab and 'e' archive keybinding", () => {
     expect(screen.queryByText("No archived notifications")).not.toBeNull();
   });
 
-  it("'e' in the Archived tab permanently deletes the focused entry", async () => {
+  it("'e' in the Archived tab leaves the entry alone", async () => {
     setEntries([
       makeEntry({ id: "live", message: "Live entry" }),
       makeEntry({ id: "done", message: "Archived entry", archivedAt: Date.now() }),
@@ -2744,10 +2746,23 @@ describe("archived tab and 'e' archive keybinding", () => {
       fireEvent.keyDown(list, { key: "e" });
     });
 
-    // Archived entry is gone from store entirely.
+    // `e` means archive everywhere; one tab over it must not become a delete.
     const entries = useNotificationHistoryStore.getState().entries;
-    expect(entries.find((e) => e.id === "done")).toBeUndefined();
+    expect(entries.find((e) => e.id === "done")).not.toBeUndefined();
     expect(entries.find((e) => e.id === "live")).not.toBeUndefined();
+  });
+
+  it("a modified 'e' does not archive", async () => {
+    setEntries([makeEntry({ id: "keep", message: "Keep me" })]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const list = container.querySelector<HTMLElement>('[role="list"]')!;
+    act(() => {
+      getRows(container)[0]?.focus();
+    });
+    await act(async () => {
+      fireEvent.keyDown(list, { key: "e", metaKey: true });
+    });
+    expect(useNotificationHistoryStore.getState().entries[0]?.archivedAt).toBeNull();
   });
 
   it("the Archived button is not rendered when there are zero entries", () => {
