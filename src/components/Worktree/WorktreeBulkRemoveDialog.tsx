@@ -333,7 +333,7 @@ export function WorktreeBulkRemoveDialog({
     >
       {targets.length > 0 && (
         <div
-          className="border border-divider rounded-[var(--radius-md)] max-h-64 overflow-y-auto divide-y divide-divider"
+          className="border border-divider rounded-[var(--radius-md)] max-h-64 overflow-y-auto divide-y divide-[var(--border-divider)]"
           data-testid="bulk-remove-target-list"
         >
           {targets.map((target) => {

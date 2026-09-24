@@ -65,7 +65,7 @@ function TelemetryRow({ event, isSelected, onSelect }: RowProps) {
       data-selected={isSelected ? "true" : undefined}
       className={cn(
         PALETTE_ROW_CLASS,
-        "flex w-full items-center gap-2 border-b-divider px-3 py-1.5 text-left",
+        "flex w-full items-center gap-2 px-3 py-1.5 text-left",
         "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
         !isSelected && "hover:bg-overlay-subtle"
       )}
