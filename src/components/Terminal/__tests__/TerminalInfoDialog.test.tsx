@@ -139,6 +139,16 @@ describe("TerminalInfoDialog", () => {
       expect(body.contains(overview)).toBe(true);
     });
 
+    // Arriving on the first control would scroll the body past the overview, since
+    // every control sits below it. Focus has to start inside what is read first.
+    it("arrives inside the overview, not on a control below it", async () => {
+      dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
+      renderDialog();
+
+      const overview = await screen.findByTestId("terminal-info-overview");
+      await waitFor(() => expect(overview.contains(document.activeElement)).toBe(true));
+    });
+
     it("keeps the deep diagnostics collapsed until asked for", async () => {
       dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
       renderDialog();

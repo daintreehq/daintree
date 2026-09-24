@@ -47,7 +47,14 @@ function RecipeConflictDialogInner() {
     : `Recipe '${pendingConflict.recipeName}' changed on disk`;
 
   return (
-    <AppDialog isOpen={true} onClose={() => resolveConflict("cancel")} size="sm">
+    <AppDialog
+      isOpen={true}
+      onClose={() => resolveConflict("cancel")}
+      size="sm"
+      // Overwrite comes first in the footer; arriving there would put the
+      // destructive write one reflexive Enter away.
+      initialFocus="confirm"
+    >
       <AppDialog.Header>
         <AppDialog.Title>{title}</AppDialog.Title>
         <AppDialog.CloseButton />
@@ -80,6 +87,7 @@ function RecipeConflictDialogInner() {
             variant="contrast"
             onClick={() => resolveConflict("reload")}
             data-testid="recipe-conflict-reload"
+            data-confirm-role="confirm"
           >
             Reload from disk
           </Button>

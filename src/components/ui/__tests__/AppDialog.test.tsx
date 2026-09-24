@@ -135,6 +135,39 @@ describe("AppDialog focus trapping", () => {
     expect((document.activeElement as HTMLElement).textContent).toBe("First");
   });
 
+  it("arrives past the header close button when the dialog has anything else to focus", async () => {
+    renderDialog({
+      children: (
+        <>
+          <AppDialog.Header>
+            <AppDialog.Title>Title</AppDialog.Title>
+            <AppDialog.CloseButton />
+          </AppDialog.Header>
+          <AppDialog.Body>
+            <button type="button">Body action</button>
+          </AppDialog.Body>
+        </>
+      ),
+    });
+    await act(() => vi.runAllTimersAsync());
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Body action" }));
+  });
+
+  it("falls back to the header close button when it is the only control", async () => {
+    renderDialog({
+      children: (
+        <AppDialog.Header>
+          <AppDialog.Title>Title</AppDialog.Title>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+      ),
+    });
+    await act(() => vi.runAllTimersAsync());
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close dialog" }));
+  });
+
   it("wraps focus forward from last to first element on Tab", async () => {
     renderDialog();
     await act(() => vi.runAllTimersAsync());

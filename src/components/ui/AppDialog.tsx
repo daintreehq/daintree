@@ -245,7 +245,13 @@ export function AppDialog({
           );
         }
         if (!target) {
-          target = getVisibleTabbableElements(root)[0] ?? null;
+          // The header's close button is first in DOM order, but it is the one
+          // control that answers nothing — arriving there makes a reflexive
+          // Enter throw the dialog away. Land on it only when nothing else is
+          // tabbable.
+          const tabbable = getVisibleTabbableElements(root);
+          target =
+            tabbable.find((el) => !el.hasAttribute(DIALOG_CLOSE_ATTR)) ?? tabbable[0] ?? null;
         }
         if (target) {
           target.focus();
@@ -506,6 +512,9 @@ interface AppDialogHeaderProps {
  */
 const DIALOG_INSET = "px-6";
 
+/** Marks the header close button, which initial focus passes over. */
+const DIALOG_CLOSE_ATTR = "data-dialog-close";
+
 // Footer actions announce unavailability with `aria-disabled`, never the native
 // attribute — a natively-disabled button leaves the tab order and refuses focus,
 // so the initial-focus pass above (which resolves Cancel/Confirm by
@@ -552,6 +561,7 @@ AppDialog.CloseButton = function AppDialogCloseButton({
   const context = useContext(AppDialogContext);
   return (
     <SurfaceHeaderCloseButton
+      {...{ [DIALOG_CLOSE_ATTR]: "" }}
       onClick={context?.onClose}
       className={className}
       aria-label={ariaLabel}

@@ -1,4 +1,4 @@
-import { Children, isValidElement, useCallback, useEffect, useId, useState } from "react";
+import { Children, isValidElement, useCallback, useEffect, useId, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { ChevronRight, Info } from "lucide-react";
@@ -570,8 +570,24 @@ Performance:
     });
   }, [buildDiagnostics, copy]);
 
+  // Arrive on the overview's heading rather than the first control: every
+  // control here sits below the overview, and focusing one scrolls the body
+  // past the answers this dialog deliberately puts first.
+  const overviewHeadingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (!isOpen) return;
+    const frame = requestAnimationFrame(() => overviewHeadingRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [isOpen]);
+
   return (
-    <AppDialog isOpen={isOpen} onClose={onClose} size="lg" data-testid="terminal-info-dialog">
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      size="lg"
+      initialFocus="none"
+      data-testid="terminal-info-dialog"
+    >
       <AppDialog.Header>
         <AppDialog.Title icon={<Info className="h-5 w-5" />}>Terminal information</AppDialog.Title>
         <AppDialog.CloseButton />
@@ -591,7 +607,11 @@ Performance:
             data-testid="terminal-info-overview"
           >
             <div className="flex items-baseline justify-between gap-3">
-              <h3 className="text-base font-semibold text-text-primary min-w-0 break-words select-text">
+              <h3
+                ref={overviewHeadingRef}
+                tabIndex={-1}
+                className="text-base font-semibold text-text-primary min-w-0 break-words select-text outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent-primary rounded-xs"
+              >
                 {title ?? "Terminal"}
               </h3>
               {/*
