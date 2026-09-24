@@ -63,32 +63,66 @@ export function NonGitFolderDialog({
   }
 
   return (
-    <AppDialog isOpen={isOpen} onClose={onCancel} size="md" data-testid="non-git-folder-dialog">
-      <AppDialog.Header>
-        <AppDialog.Title icon={<FolderOpen className="h-5 w-5 text-daintree-text/70" />}>
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onCancel}
+      size="md"
+      // Arrive on the answer that writes nothing, so a reflexive Enter opens the
+      // folder rather than dismissing the dialog from the header's close button.
+      initialFocus="confirm"
+      data-testid="non-git-folder-dialog"
+    >
+      <AppDialog.Header className="py-3">
+        <AppDialog.Title icon={<FolderOpen className="h-4 w-4 text-text-secondary" />}>
           {/* A root path ("/", "C:\") has no leaf — name it by the path itself. */}
           Open &lsquo;{basename(directoryPath) || directoryPath}&rsquo;?
         </AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
 
-      <AppDialog.Body className="space-y-3">
-        <PathCaption path={directoryPath} />
-        <p className="text-sm text-text-secondary">
-          This folder isn&rsquo;t a git repository. Open it as-is and terminals, agents, recipes,
-          and the file browser all work — worktrees, review, and diffs stay unavailable until it
-          becomes a repository, and nothing in the folder is touched. Setting up a repository writes
-          into it: you&rsquo;ll see exactly what before it runs.
-        </p>
+      <AppDialog.Body className="space-y-5">
+        <div className="space-y-1.5">
+          <PathCaption path={directoryPath} />
+          <AppDialog.Description>This folder isn&rsquo;t a git repository.</AppDialog.Description>
+        </div>
+
+        {/* Each answer carries its own cost, labelled with the button that
+            chooses it, so the consequence is read at the moment of choice. */}
+        <dl className="space-y-3 text-sm">
+          <div className="space-y-0.5">
+            <dt className="font-medium text-text-primary">Open without git</dt>
+            <dd className="text-text-secondary">
+              Terminals, agents, recipes, and the file browser work now. Worktrees, review, and
+              diffs need a repository. Opening changes nothing in the folder.
+            </dd>
+          </div>
+          <div className="space-y-0.5">
+            <dt className="font-medium text-text-primary">Initialize repository</dt>
+            <dd className="text-text-secondary">
+              Adds git to the folder so everything works. You&rsquo;ll see exactly what it writes
+              before anything changes.
+            </dd>
+          </div>
+        </dl>
       </AppDialog.Body>
 
       <AppDialog.Footer>
-        <Button variant="outline" onClick={() => setStep("initialize")}>
-          Initialize repository
-        </Button>
-        <Button variant="contrast" onClick={onOpenWithoutGit}>
-          Open without git
-        </Button>
+        <div className="flex shrink-0 items-center gap-3">
+          <Button variant="ghost" size="sm" onClick={onCancel} data-confirm-role="cancel">
+            Cancel
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setStep("initialize")}>
+            Initialize repository
+          </Button>
+          <Button
+            variant="contrast"
+            size="sm"
+            onClick={onOpenWithoutGit}
+            data-confirm-role="confirm"
+          >
+            Open without git
+          </Button>
+        </div>
       </AppDialog.Footer>
     </AppDialog>
   );

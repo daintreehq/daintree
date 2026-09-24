@@ -103,6 +103,9 @@ async function snap(
 ): Promise<void> {
   const marker = opts.marker ?? CHOICE_MARKER;
   await page.locator(marker).first().waitFor({ state: "visible", timeout: 8000 });
+  // Park the pointer: a flow that clicked its way here leaves it resting on
+  // whatever button now sits under the last click, and the shot shows a hover.
+  await page.mouse.move(2, 2);
   await settle(page, opts.settleMs);
   if (!(await page.locator(marker).first().isVisible())) {
     throw new Error(`[non-git-shots] "${slug}": marker ${marker} vanished before the shot`);
