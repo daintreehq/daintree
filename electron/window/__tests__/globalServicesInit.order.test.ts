@@ -301,6 +301,7 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     setMcpRegistry,
     setPendingHibernationStore: vi.fn(),
     setPtyClient: vi.fn(),
+    setProjectMetadataReader: vi.fn(),
     startOrphanSweep: vi.fn(),
     validateToken: vi.fn(),
     gcStaleSessions: vi.fn(async () => {}),

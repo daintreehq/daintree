@@ -191,14 +191,19 @@ async function makeBundledHelpFolder(root: string): Promise<string> {
 }
 
 /**
- * Removes the scratch-folder addendum block (#7947) plus its trailing
- * whitespace from a markdown file body so a template-body equality assertion
- * can ignore the addendum that `doProvision` appends unconditionally.
+ * Removes the scratch-folder (#7947) and project-metadata (#12702) addendum
+ * blocks plus their trailing whitespace from a markdown file body so a
+ * template-body equality assertion can ignore the addenda that `doProvision`
+ * appends unconditionally.
  */
-function stripScratchAddendum(content: string): string {
+function stripManagedAddenda(content: string): string {
   return content
     .replace(
       /\n*<!-- DAINTREE_ASSISTANT_SCRATCH_START -->[\s\S]*?<!-- DAINTREE_ASSISTANT_SCRATCH_END -->\n*/,
+      ""
+    )
+    .replace(
+      /\n*<!-- DAINTREE_PROJECT_METADATA_START -->[\s\S]*?<!-- DAINTREE_PROJECT_METADATA_END -->\n*/,
       ""
     )
     .replace(/\n+$/, "");
@@ -3393,7 +3398,7 @@ describe("HelpSessionService", () => {
       // The user's session-dir mutation must be preserved across the
       // hash-gate short-circuit. The scratch-folder addendum is appended
       // unconditionally outside the gate (#7947) — strip it before checking.
-      expect(stripScratchAddendum(claude)).toBe("# mutated");
+      expect(stripManagedAddenda(claude)).toBe("# mutated");
       cpSpy.mockRestore();
     });
 
@@ -3413,7 +3418,7 @@ describe("HelpSessionService", () => {
       const claude = await fs.readFile(path.join(second.sessionPath, "CLAUDE.md"), "utf-8");
       // Strip the unconditional scratch-folder addendum (#7947) before
       // comparing against the bundled template body.
-      expect(stripScratchAddendum(claude)).toBe("# Help v2");
+      expect(stripManagedAddenda(claude)).toBe("# Help v2");
 
       const secondStamp = (
         await fs.readFile(path.join(second.sessionPath, ".template-hash"), "utf-8")
@@ -3479,7 +3484,7 @@ describe("HelpSessionService", () => {
       const claude = await fs.readFile(path.join(first.sessionPath, "CLAUDE.md"), "utf-8");
       // Scratch-folder addendum (#7947) is appended unconditionally outside
       // the hash gate. Strip it to compare against the bundled template body.
-      expect(stripScratchAddendum(claude)).toBe("# Help");
+      expect(stripManagedAddenda(claude)).toBe("# Help");
     });
 
     it("rewrites the lane file with a fresh bearer on every provision, even when the template copy is skipped", async () => {
@@ -3754,6 +3759,117 @@ describe("HelpSessionService", () => {
       expect(secondEnv).not.toBeNull();
       expect(claudeMd).not.toContain(secondEnv!.DAINTREE_ASSISTANT_SCRATCH_DIR);
       expect(claudeMd).toContain("DAINTREE_ASSISTANT_SCRATCH_DIR");
+    });
+  });
+
+  describe("project metadata addendum", () => {
+    const START = "<!-- DAINTREE_PROJECT_METADATA_START -->";
+    const END = "<!-- DAINTREE_PROJECT_METADATA_END -->";
+
+    function metadataBlock(content: string): string {
+      const start = content.indexOf(START);
+      const end = content.indexOf(END);
+      if (start === -1 || end === -1) throw new Error("expected metadata block");
+      return content.slice(start, end + END.length);
+    }
+
+    it("writes the project facts into CLAUDE.md and AGENTS.md", async () => {
+      const reader = vi.fn(async () => ({
+        name: "Example",
+        worktrees: [
+          { path: "/tmp/project", branch: "main", isMainWorktree: true },
+          { path: "/tmp/project-fix", branch: "fix/help", isMainWorktree: false },
+        ],
+        forgeRemote: { name: "origin", url: "https://github.com/acme/example.git" },
+      }));
+      service.setProjectMetadataReader(reader);
+
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(reader).toHaveBeenCalledWith("proj-1", "/tmp/project");
+
+      for (const name of ["CLAUDE.md", "AGENTS.md"]) {
+        const block = metadataBlock(
+          await fs.readFile(path.join(result.sessionPath, name), "utf-8")
+        );
+        expect(block).toContain("- Name: `Example`");
+        expect(block).toContain("- Path: `/tmp/project`");
+        expect(block).toContain("- Project ID: `proj-1`");
+        expect(block).toContain("`/tmp/project` — branch `main` (main worktree)");
+        expect(block).toContain("`/tmp/project-fix` — branch `fix/help`");
+        expect(block).toContain("- Forge remote: `origin` `https://github.com/acme/example.git`");
+        expect(block).toContain("- Assistant tier setting: `action`");
+        expect(block).toContain("Daintree MCP tools: enabled");
+        // Shared by every lane: nothing lane- or session-scoped belongs here.
+        expect(block).not.toContain(result.token);
+        expect(block).not.toContain(result.sessionId);
+      }
+    });
+
+    it("still writes path, tier and MCP state when no reader is wired", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const block = metadataBlock(
+        await fs.readFile(path.join(result.sessionPath, "AGENTS.md"), "utf-8")
+      );
+      expect(block).toContain("- Path: `/tmp/project`");
+      expect(block).toContain("- Assistant tier setting: `action`");
+      expect(block).not.toContain("- Name:");
+      expect(block).not.toContain("worktrees");
+    });
+
+    it("launches without the facts when the reader throws", async () => {
+      service.setProjectMetadataReader(async () => {
+        throw new Error("sqlite is gone");
+      });
+
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const block = metadataBlock(
+        await fs.readFile(path.join(result.sessionPath, "CLAUDE.md"), "utf-8")
+      );
+      expect(block).toContain("- Path: `/tmp/project`");
+      expect(block).not.toContain("- Name:");
+    });
+
+    it("refreshes the block in place on re-provision even when the template copy is skipped", async () => {
+      let name = "Before";
+      service.setProjectMetadataReader(async () => ({ name }));
+
+      const first = await service.provisionSession(provisionInput());
+      if (!first) throw new Error("expected result");
+      name = "After";
+      const cpSpy = vi.spyOn(fs, "cp");
+      const second = await service.provisionSession(provisionInput());
+      if (!second) throw new Error("expected result");
+      expect(cpSpy).not.toHaveBeenCalled();
+
+      for (const file of ["CLAUDE.md", "AGENTS.md"]) {
+        const content = await fs.readFile(path.join(second.sessionPath, file), "utf-8");
+        expect(content.match(/<!-- DAINTREE_PROJECT_METADATA_START -->/g) ?? []).toHaveLength(1);
+        expect(content.match(/<!-- DAINTREE_ASSISTANT_SCRATCH_START -->/g) ?? []).toHaveLength(1);
+        expect(content).toContain("- Name: `After`");
+        expect(content).not.toContain("Before");
+        expect(content.startsWith(file === "CLAUDE.md" ? "# Help" : "# Agents Help")).toBe(true);
+      }
+      cpSpy.mockRestore();
+    });
+
+    it("drops facts a later provision could not read instead of keeping stale ones", async () => {
+      service.setProjectMetadataReader(async () => ({
+        name: "Example",
+        forgeRemote: { name: "origin", url: "https://github.com/acme/example.git" },
+      }));
+      await service.provisionSession(provisionInput());
+
+      service.setProjectMetadataReader(async () => ({ name: "Example" }));
+      const second = await service.provisionSession(provisionInput());
+      if (!second) throw new Error("expected result");
+
+      const content = await fs.readFile(path.join(second.sessionPath, "AGENTS.md"), "utf-8");
+      expect(content).not.toContain("Forge remote");
     });
   });
 });
