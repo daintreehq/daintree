@@ -67,9 +67,9 @@ function renderPhase(phase: Phase, extra: Partial<Record<string, unknown>> = {})
     canOpenExternal: false,
     sessionStorageSnapshot: [],
     isOAuth: true,
-    registrableDomain: "example.com",
     phase,
-    errorMessage: phase === "oauth-error" ? "Sign-in failed" : null,
+    errorCause: phase === "oauth-error" ? "failed" : null,
+    errorMessage: null,
     ...extra,
   };
   return render(
@@ -95,9 +95,9 @@ describe("BlockedNavBanner action selection", () => {
     expect(screen.getByRole("button", { name: /open in external browser/i })).toBeTruthy();
   });
 
-  it("keeps 'Try again' as the primary action on an OAuth error, demoting Copy URL", () => {
+  it("keeps 'Retry' as the primary action on an OAuth error, demoting Copy URL", () => {
     renderPhase("oauth-error");
-    const tryAgain = screen.getByRole("button", { name: /try again/i });
+    const tryAgain = screen.getByRole("button", { name: /^retry$/i });
     const overflow = screen.getByTestId("overflow-content");
     // The recovery action is the inline primary; Copy URL is demoted.
     expect(overflow.contains(tryAgain)).toBe(false);
@@ -143,10 +143,116 @@ describe("blockedNavReducer phase coalescing", () => {
     expect(phaseAfterSecondBlock("oauth-error")).toBe("blocked");
   });
 
-  it("adopts the new URL either way", () => {
-    const state = reachPhase("oauth-started");
-    expect(blockedNavReducer(state, blocked("https://example.com/second"))?.url).toBe(
-      "https://example.com/second"
-    );
+  // Retry and the loopback act on the attempt's own URL and session snapshot,
+  // so an unrelated link blocked mid sign-in must not swap them out.
+  it("keeps the attempt's URL while a sign-in is in flight", () => {
+    for (const phase of ["oauth-started", "oauth-intercepting"] as const) {
+      const state = reachPhase(phase);
+      expect(blockedNavReducer(state, blocked("https://example.com/second"))).toBe(state);
+    }
+  });
+
+  it("adopts the new URL once the previous sign-in has settled", () => {
+    for (const phase of ["blocked", "oauth-completed", "oauth-timed-out", "oauth-error"] as const) {
+      const next = blockedNavReducer(reachPhase(phase), blocked("https://example.com/second"));
+      expect(next?.url).toBe("https://example.com/second");
+    }
+  });
+
+  it("lets a dropped-event fallback end an attempt but never rewrite how it ended", () => {
+    const failed: BlockedNavAction = { type: "OAUTH_RESULT_FAILED", timedOut: false };
+    expect(blockedNavReducer(reachPhase("oauth-started"), failed)?.phase).toBe("oauth-error");
+    expect(
+      blockedNavReducer(reachPhase("oauth-intercepting"), {
+        type: "OAUTH_RESULT_FAILED",
+        timedOut: true,
+      })?.phase
+    ).toBe("oauth-timed-out");
+    for (const phase of ["oauth-completed", "oauth-timed-out", "oauth-error"] as const) {
+      expect(blockedNavReducer(reachPhase(phase), failed)?.phase).toBe(phase);
+    }
+  });
+});
+
+const ALL_PHASES: Phase[] = [
+  "blocked",
+  "oauth-started",
+  "oauth-intercepting",
+  "oauth-completed",
+  "oauth-timed-out",
+  "oauth-error",
+];
+
+function bannerRoot(container: HTMLElement): HTMLElement {
+  const root = container.querySelector<HTMLElement>('[role="status"], [role="alert"]');
+  if (!root) throw new Error("banner did not render a live region");
+  return root;
+}
+
+describe("BlockedNavBanner phase presentation", () => {
+  // An assertive interruption is for something that went wrong; progress and
+  // a finished sign-in wait for a pause (WCAG 4.1.3).
+  it("interrupts only for failures", () => {
+    for (const phase of ALL_PHASES) {
+      const { container, unmount } = renderPhase(phase);
+      const isFailure = phase === "oauth-timed-out" || phase === "oauth-error";
+      expect(bannerRoot(container).getAttribute("role")).toBe(isFailure ? "alert" : "status");
+      unmount();
+    }
+  });
+
+  // A phase the user cannot tell from its neighbour is a phase with no message.
+  it("gives every phase its own title", () => {
+    const titles = ALL_PHASES.map((phase) => {
+      const { container, unmount } = renderPhase(phase);
+      const title = bannerRoot(container).querySelector(".font-medium")?.textContent ?? "";
+      unmount();
+      return title;
+    });
+    expect(titles.every(Boolean)).toBe(true);
+    expect(new Set(titles).size).toBe(titles.length);
+  });
+
+  // A title must never repeat an action on the same banner: a state that reads
+  // like an instruction is how the old started phase looked like its own button.
+  it("never titles a phase with one of its own action labels", () => {
+    for (const phase of ALL_PHASES) {
+      const { container, unmount } = renderPhase(phase);
+      const root = bannerRoot(container);
+      const title = root.querySelector(".font-medium")?.textContent?.trim().toLowerCase();
+      const labels = Array.from(root.querySelectorAll("button")).map((b) =>
+        (b.getAttribute("aria-label") ?? b.textContent ?? "").trim().toLowerCase()
+      );
+      expect(labels).not.toContain(title);
+      unmount();
+    }
+  });
+});
+
+describe("BlockedNavBanner destination naming", () => {
+  function titleFor(url: string, isOAuth = false): string {
+    const { container, unmount } = renderPhase("blocked", {
+      url,
+      isOAuth,
+      canOpenExternal: true,
+    });
+    const title = bannerRoot(container).querySelector(".font-medium")?.textContent ?? "";
+    unmount();
+    return title;
+  }
+
+  it("names a web destination by its whole host, never a guessed suffix", () => {
+    for (const url of [
+      "https://shop.example.co.uk/basket",
+      "https://orchid.github.io/docs",
+      "https://accounts.google.com/o/oauth2/auth",
+    ]) {
+      expect(titleFor(url)).toContain(new URL(url).host);
+    }
+  });
+
+  it("names a custom-scheme destination by its scheme, not its first path word", () => {
+    const title = titleFor("slack://open?team=T1");
+    expect(title).toContain("slack:");
   });
 });

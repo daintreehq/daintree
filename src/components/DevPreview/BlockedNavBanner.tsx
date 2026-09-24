@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
-import { ExternalLink, AlertTriangle, CircleCheck, Copy } from "lucide-react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { Check, Copy, ExternalLink, RotateCw } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "../Terminal/InlineStatusBanner";
 import { BannerOverflowMenu } from "../Terminal/BannerOverflowMenu";
-import { looksLikeOAuthUrl } from "@shared/utils/urlUtils";
+import { Spinner } from "@/components/ui/Spinner";
+import { formatDialogOrigin, looksLikeOAuthUrl } from "@shared/utils/urlUtils";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { SessionStorageEntry } from "./useDevPreviewLoadLifecycle";
 
 type OAuthPhase =
@@ -13,13 +15,20 @@ type OAuthPhase =
   | "oauth-timed-out"
   | "oauth-error";
 
+/**
+ * Why a sign-in ended in `oauth-error`, when the renderer knows. `not-ready`
+ * fails before the browser ever opens; anything else is a failure somewhere in
+ * the round trip, reported by main with an optional raw message.
+ */
+type OAuthErrorCause = "not-ready" | "failed";
+
 interface BlockedNavState {
   url: string;
   canOpenExternal: boolean;
   sessionStorageSnapshot: SessionStorageEntry[];
   isOAuth: boolean;
-  registrableDomain: string;
   phase: OAuthPhase;
+  errorCause: OAuthErrorCause | null;
   errorMessage: string | null;
 }
 
@@ -34,25 +43,49 @@ type BlockedNavAction =
   | { type: "OAUTH_TOKEN_INTERCEPTED" }
   | { type: "OAUTH_COMPLETED" }
   | { type: "OAUTH_TIMED_OUT" }
-  | { type: "OAUTH_ERROR"; message: string }
+  | { type: "OAUTH_ERROR"; message: string | null; cause?: OAuthErrorCause }
+  /**
+   * The invoke result of a failed sign-in. Main normally reports the failure
+   * first as a status event; this only lands when that event was dropped, so it
+   * applies to an attempt still in flight and never overwrites a terminal phase.
+   */
+  | { type: "OAUTH_RESULT_FAILED"; timedOut: boolean }
   | { type: "DISMISS" };
 
 // How long the "Copied" confirmation label lingers before reverting to "Copy URL".
 const COPY_FEEDBACK_MS = 2000;
-// "Sign in completed" is a confirmation, not a state: the banner says the round
-// trip through the browser landed and then gets out of the way. Longer than the
-// copy flash because the user is coming back from another app and has to catch
-// it, short enough that it never becomes standing chrome (#12002).
+// "Signed in" is a confirmation, not a state: the banner says the round trip
+// through the browser landed and then gets out of the way. Longer than the copy
+// flash because the user is coming back from another app and has to catch it,
+// short enough that it never becomes standing chrome (#12002).
 const SIGN_IN_COMPLETED_DISMISS_MS = 6000;
+// Mirrors OAuthLoopbackService's TIMEOUT_MS, which the waiting copy promises.
+const SIGN_IN_TIMEOUT_MINUTES = 5;
 
-function computeRegistrableDomain(url: string): string {
+function isInFlight(phase: OAuthPhase): boolean {
+  return phase === "oauth-started" || phase === "oauth-intercepting";
+}
+
+/**
+ * What the banner names as the destination. A web URL is named by its full host
+ * — the part a user can check, clipped from the left if hostile-length — never a
+ * guessed registrable domain, which reads `co.uk` for a British site. A custom
+ * scheme has no host worth naming (`slack://open` would read as "open"), so it
+ * is named by its scheme.
+ */
+type Destination = { kind: "web"; host: string } | { kind: "scheme"; scheme: string } | null;
+
+function describeDestination(url: string): Destination {
+  const host = formatDialogOrigin(url);
+  let protocol: string;
   try {
-    const hostname = new URL(url).hostname;
-    const segments = hostname.split(".");
-    return segments.length > 1 ? segments.slice(-2).join(".") : hostname;
+    protocol = new URL(url).protocol;
   } catch {
-    return url;
+    return null;
   }
+  if ((protocol === "http:" || protocol === "https:") && host) return { kind: "web", host };
+  if (protocol === "http:" || protocol === "https:") return null;
+  return { kind: "scheme", scheme: protocol };
 }
 
 function blockedNavReducer(
@@ -61,32 +94,25 @@ function blockedNavReducer(
 ): BlockedNavState | null {
   switch (action.type) {
     case "BLOCKED": {
-      const isOAuth = looksLikeOAuthUrl(action.url);
-      // Coalesce: if OAuth is in-flight, update URL data but preserve the
-      // in-flight phase. Only those two — a terminal phase carried forward
-      // would let its dismiss timer close a navigation blocked after it.
-      if (state && (state.phase === "oauth-started" || state.phase === "oauth-intercepting")) {
-        return {
-          ...state,
-          url: action.url,
-          canOpenExternal: action.canOpenExternal,
-          sessionStorageSnapshot: action.sessionStorageSnapshot,
-          isOAuth,
-          registrableDomain: computeRegistrableDomain(action.url),
-        };
-      }
+      // A sign-in in flight owns the banner: its URL and session snapshot are
+      // what Retry and the loopback act on, so a later block cannot replace
+      // them. Only in-flight phases — a terminal phase carried forward would let
+      // its dismiss timer close a navigation blocked after it.
+      if (state && isInFlight(state.phase)) return state;
       return {
         url: action.url,
         canOpenExternal: action.canOpenExternal,
         sessionStorageSnapshot: action.sessionStorageSnapshot,
-        isOAuth,
-        registrableDomain: computeRegistrableDomain(action.url),
+        isOAuth: looksLikeOAuthUrl(action.url),
         phase: "blocked",
+        errorCause: null,
         errorMessage: null,
       };
     }
     case "OAUTH_STARTED":
-      return state ? { ...state, phase: "oauth-started", errorMessage: null } : state;
+      return state
+        ? { ...state, phase: "oauth-started", errorCause: null, errorMessage: null }
+        : state;
     case "OAUTH_TOKEN_INTERCEPTED":
       return state ? { ...state, phase: "oauth-intercepting" } : state;
     case "OAUTH_COMPLETED":
@@ -94,7 +120,19 @@ function blockedNavReducer(
     case "OAUTH_TIMED_OUT":
       return state ? { ...state, phase: "oauth-timed-out" } : state;
     case "OAUTH_ERROR":
-      return state ? { ...state, phase: "oauth-error", errorMessage: action.message } : state;
+      return state
+        ? {
+            ...state,
+            phase: "oauth-error",
+            errorCause: action.cause ?? "failed",
+            errorMessage: action.message,
+          }
+        : state;
+    case "OAUTH_RESULT_FAILED":
+      if (!state || !isInFlight(state.phase)) return state;
+      return action.timedOut
+        ? { ...state, phase: "oauth-timed-out" }
+        : { ...state, phase: "oauth-error", errorCause: "failed", errorMessage: null };
     case "DISMISS":
       return null;
   }
@@ -107,32 +145,40 @@ export interface BlockedNavBannerProps {
   onDispatch: (action: BlockedNavAction) => void;
 }
 
+type CopyState = "idle" | "copied" | "failed";
+
 export function BlockedNavBanner({
   state,
   panelId,
   webviewElement,
   onDispatch,
 }: BlockedNavBannerProps) {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<CopyState>("idle");
+  const url = state?.url;
 
   const handleCopyUrl = useCallback(async () => {
-    if (!state) return;
+    if (!url) return;
     try {
-      await window.electron.clipboard.writeText(state.url);
-      setCopied(true);
+      await window.electron.clipboard.writeText(url);
+      setCopyState("copied");
     } catch {
-      // clipboard unavailable — silently ignore
+      setCopyState("failed");
     }
-  }, [state]);
+  }, [url]);
 
-  // Auto-reset the "Copied" label after a beat. Driven by an effect rather than
-  // a timer ref so no ref is reachable from `buildActions()` during render —
-  // the React Compiler flags transitive ref reads from a render-phase call.
+  // Auto-reset the copy label after a beat. Driven by an effect rather than a
+  // timer ref so no ref is reachable from render — the React Compiler flags
+  // transitive ref reads from a render-phase call.
   useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
+    if (copyState === "idle") return;
+    const timer = setTimeout(() => setCopyState("idle"), COPY_FEEDBACK_MS);
     return () => clearTimeout(timer);
-  }, [copied]);
+  }, [copyState]);
+
+  // A confirmation belongs to the URL it copied, not to the next one.
+  useEffect(() => {
+    setCopyState("idle");
+  }, [url]);
 
   // Listen for OAuth loopback status events from main process
   useEffect(() => {
@@ -149,33 +195,26 @@ export function BlockedNavBanner({
           onDispatch({ type: "OAUTH_TIMED_OUT" });
           break;
         case "error":
-          onDispatch({ type: "OAUTH_ERROR", message: payload.message ?? "Sign-in failed" });
+          onDispatch({ type: "OAUTH_ERROR", message: payload.message ?? null });
           break;
       }
     });
     return cleanup;
   }, [panelId, onDispatch]);
 
-  const handleCancelOAuth = useCallback(async () => {
-    try {
-      await window.electron.webview.cancelOAuthLoopback(panelId);
-    } catch {
-      // cancel may fail if already settled — harmless
-    }
-  }, [panelId]);
+  const handleCancelOAuth = useCallback(() => {
+    // Cancel may fail if already settled — harmless.
+    window.electron.webview.cancelOAuthLoopback(panelId).catch(() => {});
+    onDispatch({ type: "DISMISS" });
+  }, [panelId, onDispatch]);
 
   const handleDismiss = useCallback(() => {
-    // Cancel any in-flight loopback when dismissing from an OAuth phase
-    if (state && (state.phase === "oauth-started" || state.phase === "oauth-intercepting")) {
-      window.electron.webview.cancelOAuthLoopback(panelId).catch(() => {});
-    }
     onDispatch({ type: "DISMISS" });
-  }, [state, panelId, onDispatch]);
+  }, [onDispatch]);
 
   if (!state) return null;
 
   const handleStartOAuth = async () => {
-    const url = state.url;
     onDispatch({ type: "OAUTH_STARTED" });
 
     let wcId: number | undefined;
@@ -186,202 +225,213 @@ export function BlockedNavBanner({
     }
 
     if (wcId == null) {
-      onDispatch({ type: "OAUTH_ERROR", message: "WebView not ready" });
+      onDispatch({ type: "OAUTH_ERROR", message: null, cause: "not-ready" });
       return;
     }
 
     try {
       const result = await window.electron.webview.startOAuthLoopback(
-        url,
+        state.url,
         panelId,
         wcId,
         state.sessionStorageSnapshot
       );
       if (!result.success && result.cause !== "cancelled") {
-        // Status events (onOAuthLoopbackStatus) fire first and carry the
-        // typed failure cause. The invoke result is a fallback for cases
-        // where the event is dropped; the reducer already reflects the
-        // correct phase from the event.
+        onDispatch({ type: "OAUTH_RESULT_FAILED", timedOut: result.cause === "timed-out" });
       }
     } catch (err) {
       onDispatch({
         type: "OAUTH_ERROR",
-        message: err instanceof Error ? err.message : "Sign-in failed",
+        // Empty fallback: with nothing observed, the detail line stays empty.
+        message: formatErrorMessage(err, "") || null,
       });
     }
   };
 
-  const copyAction: BannerAction = {
-    id: "copy-url",
-    label: copied ? "Copied" : "Copy URL",
-    icon: Copy,
-    onClick: handleCopyUrl,
-    disabled: copied,
+  const handleOpenExternal = async () => {
+    try {
+      await window.electron.system.openExternal(state.url);
+      onDispatch({ type: "DISMISS" });
+    } catch {
+      // The banner stays: the link is still here to copy.
+    }
   };
 
-  const buildActions = (): BannerAction[] => {
-    const actions: BannerAction[] = [copyAction];
+  const { phase } = state;
+  const destination = describeDestination(state.url);
+  const hostLabel = destination?.kind === "web" ? destination.host : null;
 
-    switch (state.phase) {
-      case "blocked":
-        if (state.isOAuth) {
-          actions.push({
-            id: "oauth-start",
-            label: "Sign in via browser",
-            icon: ExternalLink,
-            onClick: handleStartOAuth,
-            variant: "primary",
-          });
-        } else if (state.canOpenExternal) {
-          actions.push({
-            id: "open-external",
-            label: "Open in external browser",
-            icon: ExternalLink,
-            onClick: () => {
-              window.electron.system.openExternal(state.url);
-              onDispatch({ type: "DISMISS" });
-            },
-          });
-        }
-        break;
-      case "oauth-started":
+  const copyAction: BannerAction = {
+    id: "copy-url",
+    label:
+      copyState === "copied" ? "Copied" : copyState === "failed" ? "Couldn't copy" : "Copy URL",
+    icon: copyState === "copied" ? Check : Copy,
+    onClick: handleCopyUrl,
+    variant: "dismiss",
+  };
+  const retryAction: BannerAction = {
+    id: "oauth-retry",
+    label: "Retry",
+    icon: RotateCw,
+    onClick: handleStartOAuth,
+    variant: "primary",
+  };
+  const cancelAction: BannerAction = {
+    id: "oauth-cancel",
+    label: "Cancel sign-in",
+    onClick: handleCancelOAuth,
+    variant: "dismiss",
+  };
+
+  switch (phase) {
+    case "blocked": {
+      const actions: BannerAction[] = [];
+      let title: string;
+      if (state.isOAuth) {
+        title = hostLabel
+          ? `Can't show the ${hostLabel} sign-in here`
+          : "Can't show this sign-in page here";
         actions.push({
-          id: "oauth-cancel",
-          label: "Cancel",
-          onClick: () => {
-            handleCancelOAuth();
-            onDispatch({ type: "DISMISS" });
-          },
-          variant: "danger",
-        });
-        break;
-      case "oauth-intercepting":
-        actions.push({
-          id: "oauth-cancel",
-          label: "Cancel",
-          onClick: () => {
-            handleCancelOAuth();
-            onDispatch({ type: "DISMISS" });
-          },
-          variant: "danger",
-        });
-        break;
-      case "oauth-timed-out":
-      case "oauth-error":
-        actions.push({
-          id: "oauth-retry",
-          label: "Try again",
+          id: "oauth-start",
+          label: "Sign in via browser",
           icon: ExternalLink,
           onClick: handleStartOAuth,
           variant: "primary",
         });
-        break;
-      case "oauth-completed":
-        break;
+      } else {
+        title =
+          destination?.kind === "web"
+            ? `Can't open ${destination.host} in the preview`
+            : destination?.kind === "scheme"
+              ? `Can't open ${destination.scheme} links in the preview`
+              : "Can't open this link in the preview";
+        if (state.canOpenExternal) {
+          actions.push({
+            id: "open-external",
+            label: destination?.kind === "web" ? "Open in external browser" : "Open in default app",
+            icon: ExternalLink,
+            onClick: handleOpenExternal,
+            variant: "primary",
+          });
+        }
+      }
+      // With nothing else to offer, copying is the way forward and keeps the
+      // primary treatment; beside another action it steps back.
+      actions.push(actions.length === 0 ? { ...copyAction, variant: "primary" } : copyAction);
+      return (
+        <InlineStatusBanner
+          icon={ExternalLink}
+          severity="warning"
+          layout="pane"
+          title={title}
+          description={
+            state.isOAuth
+              ? "Sign in through your browser and the session comes back to the preview."
+              : undefined
+          }
+          // The OAuth request's query string is noise once the title names the
+          // host; an ordinary link's path is what tells the user which page.
+          contextLine={state.isOAuth ? undefined : state.url}
+          actions={actions}
+          onClose={handleDismiss}
+          role="status"
+        />
+      );
     }
-
-    return actions;
-  };
-
-  const { phase, registrableDomain, url, errorMessage } = state;
-
-  let icon: React.ComponentType<{ className?: string }>;
-  let title: string;
-  let description: string | undefined;
-  let severity: "error" | "warning" | "info" | "success";
-
-  switch (phase) {
-    case "blocked":
-      icon = ExternalLink;
-      title = `Navigation blocked: ${registrableDomain}`;
-      severity = "warning";
-      break;
     case "oauth-started":
-      icon = ExternalLink;
-      title = "Sign in via browser";
-      severity = "warning";
-      break;
+      return (
+        <InlineStatusBanner
+          icon={ExternalLink}
+          severity="info"
+          layout="pane"
+          title="Finish signing in in your browser"
+          description={
+            hostLabel
+              ? `Waiting for ${hostLabel} to send you back. Stops after ${SIGN_IN_TIMEOUT_MINUTES} minutes.`
+              : `Waiting for the browser to send you back. Stops after ${SIGN_IN_TIMEOUT_MINUTES} minutes.`
+          }
+          actions={[cancelAction, copyAction]}
+          role="status"
+        />
+      );
     case "oauth-intercepting":
-      icon = ExternalLink;
-      title = "Sign in via browser";
-      severity = "info";
-      break;
+      return (
+        <InlineStatusBanner
+          icon={SpinnerGlyph}
+          severity="info"
+          layout="pane"
+          title="Finishing sign-in"
+          description="Bringing the session back into the preview."
+          actions={[cancelAction]}
+          role="status"
+        />
+      );
     case "oauth-completed":
-      icon = CircleCheck;
-      title = "Sign in completed";
-      severity = "success";
-      break;
+      return (
+        <InlineStatusBanner
+          severity="success"
+          layout="pane"
+          title={hostLabel ? `Signed in to ${hostLabel}` : "Signed in"}
+          onClose={handleDismiss}
+          autoDismissAfter={SIGN_IN_COMPLETED_DISMISS_MS}
+          role="status"
+        />
+      );
     case "oauth-timed-out":
-      icon = AlertTriangle;
-      title = "Sign in didn't complete";
-      description = "The sign-in timed out. Try again.";
-      severity = "error";
-      break;
-    case "oauth-error":
-      icon = AlertTriangle;
-      title = "Couldn't start sign-in";
-      description = errorMessage ?? undefined;
-      severity = "error";
-      break;
+    case "oauth-error": {
+      const { title, description, detail } = describeFailure(state, hostLabel);
+      return (
+        <InlineStatusBanner
+          severity="error"
+          layout="pane"
+          title={title}
+          description={description}
+          contextLine={detail}
+          action={retryAction}
+          trailingSlot={<BannerOverflowMenu actions={[copyAction]} />}
+          onClose={handleDismiss}
+          role="alert"
+        />
+      );
+    }
   }
+}
 
-  // `buildActions()` returns "Copy URL" followed by the phase-specific action
-  // (e.g. "Sign in via browser", "Try again"). Severity is computed per phase,
-  // so branch on it to satisfy the discriminated union. Non-error phases keep
-  // both actions; the error phases (oauth timeout/failure) keep the
-  // phase-specific recovery as the single primary action and demote "Copy URL"
-  // into the overflow menu.
-  const actions = buildActions();
-  const role = phase === "blocked" || phase === "oauth-started" ? "status" : "alert";
-
-  if (severity === "error") {
-    const primary = actions[actions.length - 1];
-    const overflow = actions.slice(0, -1);
-    return (
-      <InlineStatusBanner
-        icon={icon}
-        title={title}
-        description={description}
-        contextLine={url}
-        severity="error"
-        action={primary}
-        trailingSlot={overflow.length > 0 ? <BannerOverflowMenu actions={overflow} /> : undefined}
-        onClose={handleDismiss}
-        role={role}
-      />
-    );
-  }
-
-  // `success` is the one severity that has to declare how it leaves, so it
-  // cannot ride the shared computed-severity return.
-  if (severity === "success") {
-    return (
-      <InlineStatusBanner
-        icon={icon}
-        title={title}
-        description={description}
-        contextLine={url}
-        severity="success"
-        actions={actions}
-        onClose={handleDismiss}
-        autoDismissAfter={SIGN_IN_COMPLETED_DISMISS_MS}
-        role={role}
-      />
-    );
-  }
-
+/** The banner's glyph slot takes an icon; this lends it the shared spinner. */
+function SpinnerGlyph({ className, style }: { className?: string; style?: CSSProperties }) {
   return (
-    <InlineStatusBanner
-      icon={icon}
-      title={title}
-      description={description}
-      contextLine={url}
-      severity={severity}
-      actions={actions}
-      onClose={handleDismiss}
-      role={role}
-    />
+    <span className={className} style={style} aria-hidden="true">
+      <Spinner className="size-full" />
+    </span>
   );
+}
+
+/**
+ * Failure copy in the user's terms. A raw message from main is an observation
+ * worth keeping, so it rides in the mono detail line rather than being dropped
+ * or promoted into the sentence.
+ */
+function describeFailure(
+  state: BlockedNavState,
+  hostLabel: string | null
+): { title: string; description: string; detail?: string } {
+  if (state.phase === "oauth-timed-out") {
+    return {
+      title: "Sign-in timed out",
+      description: `${hostLabel ?? "The browser"} didn't send you back within ${SIGN_IN_TIMEOUT_MINUTES} minutes.`,
+    };
+  }
+  if (state.errorCause === "not-ready") {
+    return {
+      title: "Couldn't start sign-in",
+      description: "The preview wasn't ready yet. Wait for the page to finish loading.",
+    };
+  }
+  return {
+    title: "Sign-in failed",
+    description: "The session didn't make it back to the preview.",
+    detail: state.errorMessage ?? undefined,
+  };
 }
 
 export { blockedNavReducer, type BlockedNavState, type BlockedNavAction };

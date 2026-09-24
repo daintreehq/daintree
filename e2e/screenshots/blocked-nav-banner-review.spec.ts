@@ -168,12 +168,12 @@ async function expectFixtureState(page: Page, name: BlockedNavFixtureName): Prom
 
 /** The banner's title per phase — what proves the phase reached the render. */
 const PHASE_TITLE: Record<BlockedNavFixture["phase"], RegExp> = {
-  blocked: /Navigation blocked/,
-  "oauth-started": /Sign in via browser/,
-  "oauth-intercepting": /Sign in via browser/,
-  "oauth-completed": /Sign in completed/,
-  "oauth-timed-out": /Sign in didn't complete/,
-  "oauth-error": /Couldn't start sign-in/,
+  blocked: /Can't (open|show)/,
+  "oauth-started": /Finish signing in/,
+  "oauth-intercepting": /Finishing sign-in/,
+  "oauth-completed": /Signed in/,
+  "oauth-timed-out": /Sign-in timed out/,
+  "oauth-error": /Couldn't start sign-in|Sign-in failed/,
 };
 
 /** The frame plus any open menu or tooltip that spills past it. */

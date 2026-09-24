@@ -63,7 +63,7 @@ function phaseAction(f: BlockedNavFixture): BlockedNavAction | null {
     case "oauth-timed-out":
       return { type: "OAUTH_TIMED_OUT" };
     case "oauth-error":
-      return { type: "OAUTH_ERROR", message: f.errorMessage ?? "Sign-in failed" };
+      return { type: "OAUTH_ERROR", message: f.errorMessage ?? null, cause: f.errorCause };
   }
 }
 

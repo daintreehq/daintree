@@ -20,6 +20,8 @@ export interface BlockedNavFixture {
   url: string;
   canOpenExternal: boolean;
   phase: BlockedNavFixturePhase;
+  /** `oauth-error` only: what main reported, or `not-ready` for a start that never left. */
+  errorCause?: "not-ready" | "failed";
   errorMessage?: string;
   /** A pointer or keyboard drive the spec performs after load. */
   drive?: "copied" | "overflow-open" | "keyboard-focus";
@@ -65,7 +67,15 @@ export const BLOCKED_NAV_FIXTURES = {
     url: OAUTH_URL,
     canOpenExternal: true,
     phase: "oauth-error",
-    errorMessage: "WebView not ready",
+    errorCause: "not-ready",
+  },
+  "oauth-failed": {
+    width: 900,
+    url: OAUTH_URL,
+    canOpenExternal: true,
+    phase: "oauth-error",
+    errorCause: "failed",
+    errorMessage: "Navigation failed: net::ERR_CONNECTION_REFUSED",
   },
   "narrow-blocked": { width: 480, url: DOCS_URL, canOpenExternal: true, phase: "blocked" },
   "narrow-oauth-offer": { width: 480, url: OAUTH_URL, canOpenExternal: true, phase: "blocked" },
