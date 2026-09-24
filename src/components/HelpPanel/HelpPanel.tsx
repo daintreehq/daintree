@@ -1042,10 +1042,17 @@ export function HelpPanel({
   const openSlots = useHelpPanelStore(useShallow(selectOpenSlots));
   const canOpenParallelSession = openSlots.length < MAX_ASSISTANT_SLOTS;
 
+  // Subscribed rather than read through `getState()` inside the panel-store selectors
+  // below: a background lane that binds a terminal changes only this, and without the
+  // subscription its tab kept the old terminal's state and name until something else
+  // happened to re-render the panel.
+  const laneTerminalIds = useHelpPanelStore(
+    useShallow((s) => openSlots.map((slot) => s.sessions[slot]?.terminalId ?? null))
+  );
+
   const laneAgentStates = usePanelStore(
     useShallow((s: ReturnType<typeof usePanelStore.getState>) =>
-      openSlots.map((slot) => {
-        const laneTerminalId = useHelpPanelStore.getState().sessions[slot]?.terminalId;
+      laneTerminalIds.map((laneTerminalId) => {
         if (!laneTerminalId) return undefined;
         const panel = s.panelsById[laneTerminalId];
         return panel && isPtyPanel(panel) ? panel.agentState : undefined;
@@ -1061,10 +1068,8 @@ export function HelpPanel({
   const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
   const laneTaskTitles = usePanelStore(
     useShallow((s: ReturnType<typeof usePanelStore.getState>) =>
-      openSlots.map((slot) => {
-        if (showAgentTaskTitles === false) return null;
-        const laneTerminalId = useHelpPanelStore.getState().sessions[slot]?.terminalId;
-        if (!laneTerminalId) return null;
+      laneTerminalIds.map((laneTerminalId) => {
+        if (showAgentTaskTitles === false || !laneTerminalId) return null;
         const panel = s.panelsById[laneTerminalId];
         return panel && isPtyPanel(panel) ? getTerminalTaskTitle(panel) : null;
       })
@@ -1200,7 +1205,8 @@ export function HelpPanel({
   }, []);
 
   // A task title is free text, so it is quoted the way every confirm quotes the entity
-  // it names; `Session N` is already a name and reads wrong in quotes.
+  // it names, and given whole: two tasks that share an opening would otherwise ask
+  // the same question. `Session N` is already a name and reads wrong in quotes.
   const pendingCloseTab =
     pendingCloseSlot === null
       ? undefined
@@ -1208,7 +1214,7 @@ export function HelpPanel({
   const pendingCloseLabel = !pendingCloseTab
     ? "this session"
     : pendingCloseTab.fullTitle !== undefined
-      ? `'${pendingCloseTab.label}'`
+      ? `'${pendingCloseTab.fullTitle}'`
       : pendingCloseTab.label;
 
   const handleNewSession = useCallback(() => {

@@ -527,7 +527,7 @@ describe("HelpSessionTabs", () => {
     expect(spans[0]!.textContent).toBe("fix auth tests");
   });
 
-  it("gives a task-titled tab one name everywhere and its whole title as a tooltip", () => {
+  it("names a task-titled tab by its whole title everywhere but the visible label", () => {
     const { container } = renderStrip({
       tabs: [
         { slot: 0, label: "Session 1", agentState: undefined },
@@ -541,9 +541,13 @@ describe("HelpSessionTabs", () => {
     });
     const [plain, titled] = tabs(container);
 
-    expect(titled!.getAttribute("aria-label")).toBe("refactor the assistant…");
+    // Capped titles that share an opening would otherwise announce identically.
+    expect(titled!.textContent).toBe("refactor the assistant…");
+    expect(titled!.getAttribute("aria-label")).toBe("refactor the assistant session strip");
     expect(titled!.getAttribute("title")).toBe("refactor the assistant session strip");
-    expect(container.querySelector('button[title="Close refactor the assistant…"]')).not.toBeNull();
+    expect(
+      container.querySelector('button[title="Close refactor the assistant session strip"]')
+    ).not.toBeNull();
     // A `Session N` tooltip would only repeat the tab.
     expect(plain!.hasAttribute("title")).toBe(false);
   });

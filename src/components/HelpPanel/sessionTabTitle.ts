@@ -9,6 +9,7 @@
 export const SESSION_TAB_TITLE_MAX_CHARS = 28;
 
 const ELLIPSIS = "…";
+const TRAILING_SEPARATORS = /[\s,.:;|/\\·\-–—]+$/u;
 
 /**
  * An observed task title, reduced to something a tab can hold.
@@ -31,11 +32,14 @@ export function trimSessionTabTitle(
   const chars = Array.from(fullTitle);
   if (chars.length <= maxChars) return { label: fullTitle, fullTitle };
 
-  const head = chars.slice(0, maxChars - 1).join("");
+  // Measured in code points throughout, the same unit as the cap — mixing in UTF-16
+  // indices would let a title full of emoji fall back far further than intended.
+  const head = chars.slice(0, maxChars - 1);
   const wordBreak = head.lastIndexOf(" ");
   const cut = wordBreak >= Math.floor(head.length * 0.6) ? head.slice(0, wordBreak) : head;
   // A cut that lands after "auth:" or "tests," reads as a broken sentence with the
-  // ellipsis bolted on; the dangling punctuation goes with the text it introduced.
-  const tidy = cut.replace(/[\s\p{P}]+$/u, "") || head.trimEnd();
+  // ellipsis bolted on; the dangling separator goes with the text it introduced.
+  // Separators only: a closing bracket or quote is part of the text before it.
+  const tidy = cut.join("").replace(TRAILING_SEPARATORS, "") || head.join("").trimEnd();
   return { label: `${tidy}${ELLIPSIS}`, fullTitle };
 }

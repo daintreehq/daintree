@@ -1353,11 +1353,12 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
 
     const { container } = render(<HelpPanel width={380} />);
     const tab = container.querySelectorAll<HTMLElement>('[role="tab"]')[1]!;
-    const label = tab.getAttribute("aria-label")!;
+    const label = tab.textContent!;
 
     expect(label.endsWith("…")).toBe(true);
     expect(Array.from(label).length).toBeLessThanOrEqual(28);
     expect(tab.getAttribute("title")).toBe(long);
+    expect(tab.getAttribute("aria-label")).toBe(long);
   });
 
   it("drops a lane's task title once its agent exits", () => {

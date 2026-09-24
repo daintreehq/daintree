@@ -67,14 +67,12 @@ function TabLabel({ label, isTaskTitle }: { label: string; isTaskTitle: boolean 
 
 export interface HelpSessionTab {
   slot: number;
-  /**
-   * The lane's name everywhere it is shown — the tab, its accessible name, its close
-   * control and the close confirm. Either the agent's trimmed task title or `Session N`.
-   */
+  /** What the tab shows: the agent's trimmed task title, or `Session N`. */
   label: string;
   /**
-   * The untrimmed task title when `label` came from one, for the tab's tooltip. Absent
-   * on a `Session N` fallback, which is also how the label knows which shape it has.
+   * The untrimmed task title when `label` came from one — the tab's tooltip, its
+   * accessible name and its close control's. Absent on a `Session N` fallback, which
+   * is also how the label knows which shape it has.
    */
   fullTitle?: string | undefined;
   agentState: AgentState | null | undefined;
@@ -180,7 +178,9 @@ function SessionTabChip({
         // identifying tail cannot truncate, and the accessible-name algorithm trims each
         // element's own contribution before joining them — which silently turned
         // "Session 1" into "Session1" for every screen reader.
-        aria-label={tab.label}
+        // The whole task title rather than the capped one: two tasks that share an
+        // opening would otherwise announce identically.
+        aria-label={tab.fullTitle ?? tab.label}
         // The state reaches assistive tech as a DESCRIPTION, not as part of the name. An
         // explicit label on a tab overrides everything inside it, which would take the
         // marker's meaning away from exactly the reader who cannot see the glyph.
@@ -246,7 +246,7 @@ function SessionTabChip({
         // beside this control.
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => onClose(tab.slot)}
-        title={`Close ${tab.label}`}
+        title={`Close ${tab.fullTitle ?? tab.label}`}
         className={cn(
           // 24x24, the WCAG 2.2 SC 2.5.8 floor, reached by growing the BOX and leaving
           // the 12px glyph alone. The chip is exactly 24px tall, so this costs height

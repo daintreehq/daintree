@@ -41,6 +41,20 @@ describe("trimSessionTabTitle", () => {
     );
   });
 
+  it("keeps a closing bracket that belongs to the text before the cut", () => {
+    expect(trimSessionTabTitle("fix auth (Windows) regression in callbacks", 20)!.label).toBe(
+      "fix auth (Windows)…"
+    );
+  });
+
+  it("measures the word-boundary threshold in code points, not UTF-16 units", () => {
+    // Twelve emoji are 24 UTF-16 units. Measured in those, the space after them
+    // clears the threshold and the cut keeps nothing but the emoji; measured in code
+    // points it is too early to be worth falling back to, so the word survives.
+    const result = trimSessionTabTitle(`${"🚀".repeat(12)} supercalifragilistic`)!;
+    expect(result.label).toBe(`${"🚀".repeat(12)} supercalifragi…`);
+  });
+
   it("never splits a surrogate pair", () => {
     const result = trimSessionTabTitle("🚀".repeat(30), 10)!;
     expect(result.label).toBe(`${"🚀".repeat(9)}…`);
