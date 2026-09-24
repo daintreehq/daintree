@@ -135,12 +135,19 @@ describe("RecipeVariablePreview", () => {
     const { container } = renderPreview("Use {{isue_number}}", undefined);
 
     expect(segments(container, "unknown")).toEqual(["{{isue_number}}"]);
+    // Nothing here substitutes, so the preview must not promise values.
+    expect(screen.queryByText(/Values/)).toBeNull();
   });
 
   it("previews a spaced or hyphenated variable so the typo is visible", () => {
     const { container } = renderPreview("Use {{ issue_number }} or {{issue-number}}", undefined);
 
     expect(segments(container, "unknown")).toEqual(["{{ issue_number }}", "{{issue-number}}"]);
+    expect(
+      screen.getByText(
+        "{{ issue_number }} and {{issue-number}} aren't recipe variables and are sent as typed"
+      )
+    ).toBeTruthy();
   });
 
   it("resolves {{number}} to issueNumber when set", () => {

@@ -238,6 +238,7 @@ const PROMPT_FIXTURES: Record<string, string> = {
   short: "/work {{issue_number}}",
   mixed:
     "Pick up {{issue_number}} on {{branch_name}}.\nThe checkout is at {{worktree_path}} and the open PR is {{pr_number}}.\nRun the tests before you push.",
+  typo: "Pick up {{ issue_number }} and check {{isue_number}} before you start.",
   plain: "Review the latest changes and suggest improvements.",
   unknown: "Follow {{Branch_Name}} and use {{foo}} as the ticket id.",
   long: "Audit {{worktree_path}}/packages/dashboard-widgets/src/components/charts/__tests__ for flaky suites and report back on {{number}}.",

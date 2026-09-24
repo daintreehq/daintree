@@ -15,10 +15,9 @@ const TOKEN = "rounded-sm px-0.5 box-decoration-clone outline -outline-offset-1"
 const FILLED = cn(TOKEN, "bg-category-amber-subtle text-category-amber-text outline-current");
 const EMPTY = cn(TOKEN, "outline-dashed text-category-rose-text outline-current");
 
-function formatList(names: string[]): string {
-  const tokens = names.map((n) => `{{${n}}}`);
-  if (tokens.length === 1) return tokens[0]!;
-  return `${tokens.slice(0, -1).join(", ")} and ${tokens[tokens.length - 1]}`;
+function formatList(items: string[]): string {
+  if (items.length === 1) return items[0]!;
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
 function unique(names: string[]): string[] {
@@ -48,6 +47,7 @@ export function RecipeVariablePreview({ initialPrompt, worktreeId }: RecipeVaria
   const missing = unique(segments.flatMap((s) => (s.kind === "missing" ? [s.name] : [])));
   const unknown = unique(segments.flatMap((s) => (s.kind === "unknown" ? [s.text] : [])));
   const source = worktreeSnap ? (worktreeSnap.branch ?? worktreeSnap.name) : null;
+  const substitutes = segments.some((s) => s.kind !== "text" && s.kind !== "unknown");
 
   return (
     <div
@@ -56,9 +56,11 @@ export function RecipeVariablePreview({ initialPrompt, worktreeId }: RecipeVaria
     >
       <div className="mb-1 flex flex-wrap items-baseline gap-x-2 text-xs">
         <span className="font-medium text-text-primary">Prompt preview</span>
-        <span className="min-w-0 text-text-secondary wrap-anywhere">
-          {source ? `Values from ${source}` : "Values fill in from the worktree at launch"}
-        </span>
+        {substitutes && (
+          <span className="min-w-0 text-text-secondary wrap-anywhere">
+            {source ? `Values from ${source}` : "Values fill in from the worktree at launch"}
+          </span>
+        )}
       </div>
       <div className="font-mono text-xs leading-relaxed text-text-primary whitespace-pre-wrap wrap-anywhere">
         {segments.map((segment, i) => {
@@ -95,15 +97,15 @@ export function RecipeVariablePreview({ initialPrompt, worktreeId }: RecipeVaria
       {missing.length > 0 && (
         <p className="mt-1.5 flex items-start gap-1.5 text-xs text-category-rose-text">
           <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
-          <span>
-            {formatList(missing)} {missing.length === 1 ? "has" : "have"} no value in this worktree
-            and {missing.length === 1 ? "launches" : "launch"} empty
+          <span className="min-w-0 wrap-anywhere">
+            {formatList(missing.map((n) => `{{${n}}}`))} {missing.length === 1 ? "has" : "have"} no
+            value in this worktree and {missing.length === 1 ? "launches" : "launch"} empty
           </span>
         </p>
       )}
       {unknown.length > 0 && (
-        <p className="mt-1.5 text-xs text-text-secondary">
-          {unknown.join(", ")}{" "}
+        <p className="mt-1.5 text-xs text-text-secondary wrap-anywhere">
+          {formatList(unknown)}{" "}
           {unknown.length === 1 ? "isn't a recipe variable" : "aren't recipe variables"} and{" "}
           {unknown.length === 1 ? "is" : "are"} sent as typed
         </p>

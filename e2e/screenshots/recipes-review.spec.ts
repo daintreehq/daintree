@@ -333,6 +333,7 @@ test("recipes review", async ({ page }) => {
       ["resolved-full", { view: "manager", prompt: "mixed", worktree: "full" }],
       ["resolved-partial", { view: "manager", prompt: "mixed", worktree: "partial" }],
       ["plain-no-variables", { view: "manager", prompt: "plain", worktree: "full" }],
+      ["runtime-typo", { view: "manager", prompt: "typo" }],
       ["unknown-and-case", { view: "manager", prompt: "unknown", worktree: "partial" }],
       ["long-path", { view: "manager", prompt: "long", worktree: "full" }],
     ];
