@@ -51,7 +51,12 @@ import type { WhenClauseContext } from "@shared/utils/whenClause";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
-import { KILL_RUNNING_AGENT_DIALOG_COPY } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
+import {
+  buildKillRunningAgentCopy,
+  buildRestartRunningAgentCopy,
+  DestructiveConsequence,
+  type DestructiveConfirmCopy,
+} from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
 import {
   TerminalHandOverDialog,
   TerminalHandOverMenuItems,
@@ -357,12 +362,9 @@ export function TerminalContextMenu({
   // session is mid-work. Bare PTY terminals skip this gate and run
   // immediately (matches the action's run-body gate at
   // `terminalLifecycleActions.ts`).
-  const [destructiveConfirm, setDestructiveConfirm] = useState<{
-    kind: "kill" | "restart";
-    title: string;
-    description: string;
-    confirmLabel: string;
-  } | null>(null);
+  const [destructiveConfirm, setDestructiveConfirm] = useState<
+    ({ kind: "kill" | "restart" } & DestructiveConfirmCopy) | null
+  >(null);
 
   // Recent dictation targets surfaced in the context menu must resolve to a
   // live, non-trashed PTY panel that isn't the current one. Persisted entries
@@ -586,10 +588,7 @@ export function TerminalContextMenu({
           if (terminalHasRunningAgentSession(terminal)) {
             setDestructiveConfirm({
               kind: "restart",
-              title: "Restart terminal with running agent?",
-              description:
-                "An agent is mid-work in this terminal. Restarting respawns the process and discards its scrollback. The current agent session will be interrupted.",
-              confirmLabel: "Restart terminal",
+              ...buildRestartRunningAgentCopy(terminal?.title),
             });
             return;
           }
@@ -670,7 +669,7 @@ export function TerminalContextMenu({
           break;
         case "kill":
           if (terminalHasRunningAgentSession(terminal)) {
-            setDestructiveConfirm({ kind: "kill", ...KILL_RUNNING_AGENT_DIALOG_COPY });
+            setDestructiveConfirm({ kind: "kill", ...buildKillRunningAgentCopy(terminal?.title) });
             return;
           }
           if (hasPanelCloseGuard(terminalId)) {
@@ -779,7 +778,7 @@ export function TerminalContextMenu({
       isOpen
       onClose={closeDestructiveConfirm}
       title={destructiveConfirm.title}
-      description={destructiveConfirm.description}
+      description={<DestructiveConsequence copy={destructiveConfirm} />}
       confirmLabel={destructiveConfirm.confirmLabel}
       variant="destructive"
       onConfirm={handleDestructiveConfirm}

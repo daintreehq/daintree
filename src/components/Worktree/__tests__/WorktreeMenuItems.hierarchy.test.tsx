@@ -304,7 +304,7 @@ describe("WorktreeMenuItems — Sessions", () => {
       "Redraw all terminals",
       "Clear session history…",
       "Trash all sessions…",
-      "Terminate all sessions…",
+      "End all sessions…",
     ]);
   });
 

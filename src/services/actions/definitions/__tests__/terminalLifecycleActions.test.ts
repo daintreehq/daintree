@@ -21,7 +21,7 @@ const pendingDestructiveStoreMock = vi.hoisted(() => {
       get pending() {
         return pending;
       },
-      request: vi.fn((snap: unknown) => {
+      request: vi.fn((snap: TerminalPendingDestructiveActionSnapshot) => {
         pending = snap;
       }),
       clear: vi.fn(() => {
@@ -57,6 +57,7 @@ const optimisticPanelCloseMock = vi.hoisted(() => ({
 vi.mock("@/services/terminal/optimisticPanelClose", () => optimisticPanelCloseMock);
 
 import { registerTerminalLifecycleActions } from "../terminalLifecycleActions";
+import type { TerminalPendingDestructiveActionSnapshot } from "@/store/terminalPendingDestructiveActionStore";
 import { MAX_KILL_BATCH_TERMINALS } from "@shared/types/terminalKillBatch";
 
 type MockPanel = {
@@ -882,11 +883,19 @@ describe("terminal.killAll confirm gate", () => {
     await expect(run("terminal.killAll")).rejects.toThrow(/needs confirmation/);
 
     expect(removePanel).not.toHaveBeenCalled();
-    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
-      kind: "killAll",
-      targetCount: 2,
-      runningAgentCount: 1,
-    });
+    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "killAll",
+        targetCount: 2,
+        runningAgentCount: 1,
+      })
+    );
+    // The preview must single out the same terminals the working count names.
+    const [snapshot] = pendingDestructiveStoreMock.state.request.mock.calls.at(-1)!;
+    const flagged = (snapshot.preview ?? [])
+      .flatMap((group) => group.terminals)
+      .filter((terminal) => terminal.hasRunningAgent);
+    expect(flagged).toHaveLength(snapshot.runningAgentCount);
   });
 
   it("kills all when confirmed:true is passed even with running agents", async () => {
@@ -941,11 +950,13 @@ describe("terminal.restartAll confirm gate", () => {
     await expect(run("terminal.restartAll")).rejects.toThrow(/needs confirmation/);
 
     expect(bulkRestartAll).not.toHaveBeenCalled();
-    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
-      kind: "restartAll",
-      targetCount: 2,
-      runningAgentCount: 1,
-    });
+    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "restartAll",
+        targetCount: 2,
+        runningAgentCount: 1,
+      })
+    );
   });
 
   it("restarts when confirmed:true is passed", async () => {

@@ -1,179 +1,307 @@
-import { type ReactElement, useCallback } from "react";
+import { type ReactElement, type ReactNode, useCallback } from "react";
+import { FolderX, GitBranch } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { STATE_COLORS, STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
+import { TRASH_TTL_SECONDS } from "@/components/Layout/trashCountdown";
 import { actionService } from "@/services/ActionService";
+import type { ActionSource } from "@shared/types/actions";
 import { closeAndAnnounce } from "@/lib/accessibility";
+import { cn } from "@/lib/utils";
+import { usePanelStore } from "@/store/panelStore";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import {
   useTerminalPendingDestructiveActionStore,
-  type DeletedWorktreeGroupPreviewWorktree,
+  type DestructivePreviewGroup,
   type TerminalPendingDestructiveActionSnapshot,
 } from "@/store/terminalPendingDestructiveActionStore";
 
-interface DialogCopy {
+export interface DestructiveConfirmCopy {
   title: string;
+  /**
+   * The live-work consequence, present only when an agent is working. It leads
+   * the body at full weight because it is the one fact a practised reader must
+   * not skim past; everything else is the standing consequence of the verb.
+   */
+  lead?: string;
   description: string;
+  /**
+   * An alternative to the action, shown after the preview and kept out of the
+   * accessible description: it is advice, not a consequence.
+   */
+  note?: string;
   confirmLabel: string;
 }
 
-// Shared with TerminalContextMenu's local kill dialog so the two copies can't drift.
-export const KILL_RUNNING_AGENT_DIALOG_COPY: DialogCopy = {
-  title: "Kill terminal with running agent?",
-  description:
-    "An agent is mid-work in this terminal. Killing it stops the agent and discards its scrollback. The terminal process and any unsaved output will be lost.",
-  confirmLabel: "Kill terminal",
-};
+function quoted(name: string | undefined, fallback: string): string {
+  const trimmed = name?.trim();
+  return trimmed ? `'${trimmed}'` : fallback;
+}
 
-function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): DialogCopy {
+function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
+  return count === 1 ? singular : pluralForm;
+}
+
+/**
+ * `outcome` is omitted for recoverable actions, whose recovery sentence
+ * already says what happens to the process; repeating it in the lead would
+ * say the same thing twice.
+ */
+function workingLead(count: number, outcome?: string): string | undefined {
+  if (count <= 0) return undefined;
+  const subject = count === 1 ? "1 agent is working" : `${count} agents are working`;
+  return outcome ? `${subject} and ${outcome}.` : `${subject}.`;
+}
+
+/**
+ * Shared with TerminalContextMenu's local kill/restart dialogs so the copies
+ * can't drift.
+ */
+export function buildKillRunningAgentCopy(terminalTitle?: string): DestructiveConfirmCopy {
+  return {
+    title: `Kill ${quoted(terminalTitle, "terminal")}?`,
+    lead: "Its agent is working and will be stopped.",
+    description: "The process ends and its scrollback is discarded.",
+    confirmLabel: "Kill terminal",
+  };
+}
+
+export function buildRestartRunningAgentCopy(terminalTitle?: string): DestructiveConfirmCopy {
+  return {
+    title: `Restart ${quoted(terminalTitle, "terminal")}?`,
+    lead: "Its agent is working and will be interrupted.",
+    description: "The process respawns and its scrollback is discarded.",
+    confirmLabel: "Restart terminal",
+  };
+}
+
+/**
+ * Trashing does not end a process: the PTY keeps running in Recently closed
+ * for the trash TTL and is only killed if nobody restores it. The copy has to
+ * say so, or a recoverable close reads exactly as final as a kill. The
+ * non-breaking space keeps the window from splitting across a line.
+ */
+function recentlyClosedSentence(count: number): string {
+  const ttl = `${TRASH_TTL_SECONDS}\u00a0seconds`;
+  return count === 1
+    ? `It keeps running in Recently closed for ${ttl}. Restore it before then, or its process ends.`
+    : `They keep running in Recently closed for ${ttl}. Restore them before then, or their processes end.`;
+}
+
+function buildCopy(pending: TerminalPendingDestructiveActionSnapshot): DestructiveConfirmCopy {
+  const count = pending.targetCount;
+  const worktree = quoted(pending.worktreeTitle, "this worktree");
   switch (pending.kind) {
     case "kill":
-      return KILL_RUNNING_AGENT_DIALOG_COPY;
+      return buildKillRunningAgentCopy(pending.terminalTitle);
     case "restart":
-      return {
-        title: "Restart terminal with running agent?",
-        description:
-          "An agent is mid-work in this terminal. Restarting respawns the process and discards its scrollback. The current agent session will be interrupted.",
-        confirmLabel: "Restart terminal",
-      };
+      return buildRestartRunningAgentCopy(pending.terminalTitle);
     case "killAll": {
-      const noun = pending.targetCount === 1 ? "terminal" : "terminals";
-      const agentNote =
-        pending.runningAgentCount === 1
-          ? "1 has a running agent."
-          : `${pending.runningAgentCount} have running agents.`;
+      const noun = plural(count, "terminal");
       return {
-        title: `Kill ${pending.targetCount} ${noun}?`,
-        description: `Killing every user-facing terminal stops their processes and discards scrollback. ${agentNote} Active work and unsaved output will be lost.`,
-        confirmLabel: `Kill ${pending.targetCount} ${noun}`,
+        title: `Kill ${count} ${noun}?`,
+        lead: workingLead(pending.runningAgentCount, "will be stopped"),
+        description:
+          count === 1
+            ? "The process ends and its scrollback is discarded."
+            : "Every terminal's process ends and its scrollback is discarded.",
+        confirmLabel: `Kill ${count} ${noun}`,
       };
     }
     case "restartAll": {
-      const noun = pending.targetCount === 1 ? "terminal" : "terminals";
-      const agentNote =
-        pending.runningAgentCount === 1
-          ? "1 has a running agent."
-          : `${pending.runningAgentCount} have running agents.`;
+      const noun = plural(count, "terminal");
       return {
-        title: `Restart ${pending.targetCount} ${noun}?`,
-        description: `Restarting respawns every active terminal and discards scrollback. ${agentNote} Active agent work will be interrupted.`,
-        confirmLabel: `Restart ${pending.targetCount} ${noun}`,
+        title: `Restart ${count} ${noun}?`,
+        lead: workingLead(pending.runningAgentCount, "will be interrupted"),
+        description:
+          count === 1
+            ? "The process respawns and its scrollback is discarded."
+            : "Every terminal respawns and its scrollback is discarded.",
+        confirmLabel: `Restart ${count} ${noun}`,
       };
     }
     case "worktreeRestartAll": {
-      const noun = pending.targetCount === 1 ? "session" : "sessions";
-      const agentNote =
-        pending.runningAgentCount === 1
-          ? "1 has a running agent."
-          : `${pending.runningAgentCount} have running agents.`;
+      const noun = plural(count, "session");
       return {
-        title: `Restart ${pending.targetCount} ${noun} in this worktree?`,
-        description: `Restarting respawns every active session in the worktree and discards scrollback. ${agentNote} Active agent work will be interrupted.`,
-        confirmLabel: `Restart ${pending.targetCount} ${noun}`,
+        title: `Restart ${count} ${noun} in ${worktree}?`,
+        lead: workingLead(pending.runningAgentCount, "will be interrupted"),
+        description:
+          count === 1
+            ? "The session respawns and its scrollback is discarded."
+            : "Every session respawns and its scrollback is discarded.",
+        confirmLabel: `Restart ${count} ${noun}`,
       };
     }
     case "worktreeTrashAll": {
-      const noun = pending.targetCount === 1 ? "session" : "sessions";
-      const agentNote =
-        pending.runningAgentCount === 0
-          ? ""
-          : pending.runningAgentCount === 1
-            ? " 1 has a running agent."
-            : ` ${pending.runningAgentCount} have running agents.`;
+      const noun = plural(count, "session");
       return {
-        title: `Trash ${pending.targetCount} ${noun} in this worktree?`,
-        description: `Every active session in the worktree moves to trash. Running processes and unsaved scrollback will be lost. Sessions can be restored from trash before garbage collection.${agentNote}`,
-        confirmLabel: `Trash ${pending.targetCount} ${noun}`,
+        title: `Trash ${count} ${noun} in ${worktree}?`,
+        lead: workingLead(pending.runningAgentCount),
+        description: recentlyClosedSentence(count),
+        confirmLabel: `Trash ${count} ${noun}`,
       };
     }
     case "worktreeEndAll": {
-      const noun = pending.targetCount === 1 ? "session" : "sessions";
-      const agentNote =
-        pending.runningAgentCount === 0
-          ? ""
-          : pending.runningAgentCount === 1
-            ? " 1 has a running agent."
-            : ` ${pending.runningAgentCount} have running agents.`;
+      const noun = plural(count, "session");
       return {
-        title: `End ${pending.targetCount} ${noun} in this worktree?`,
-        description: `Permanently ends every session in the worktree. Unlike trashing, ended sessions can't be restored — running processes and unsaved scrollback are lost.${agentNote}`,
-        confirmLabel: `End ${pending.targetCount} ${noun}`,
+        title: `End ${count} ${noun} in ${worktree}?`,
+        lead: workingLead(pending.runningAgentCount, "will be stopped"),
+        description:
+          count === 1
+            ? "The session is removed outright and its scrollback is discarded. Unlike trashing, it can't be restored."
+            : "The sessions are removed outright and their scrollback is discarded. Unlike trashing, they can't be restored.",
+        confirmLabel: `End ${count} ${noun}`,
       };
     }
     case "worktreeClearHistory": {
       // No live panels are touched, so `targetCount`/`runningAgentCount` are 0
       // and the copy deliberately says nothing about a session count.
       return {
-        title: "Clear session history for this worktree?",
+        title: `Clear session history for ${worktree}?`,
         description:
-          "Permanently deletes this worktree's recorded resumable-session history so those sessions no longer appear when resuming agents, and those records can't be recovered. Open sessions are unaffected, and bookmarked sessions are kept — deleting a bookmark is the only way to remove one.",
+          "Permanently deletes the records of this worktree's closed sessions, so they no longer appear when you resume an agent. Open and bookmarked sessions are kept.",
         confirmLabel: "Clear session history",
       };
     }
     case "deletedWorktreeDismiss": {
-      const noun = pending.targetCount === 1 ? "terminal" : "terminals";
-      const agentNote =
-        pending.runningAgentCount === 0
-          ? ""
-          : pending.runningAgentCount === 1
-            ? " 1 still has a running agent."
-            : ` ${pending.runningAgentCount} still have running agents.`;
+      const noun = plural(count, "terminal");
       return {
-        title: `Close ${pending.targetCount} ${noun}?`,
-        description: `These terminals outlived their deleted worktree. Closing them moves them to trash and ends their running processes; they can be restored from trash before garbage collection. Drag them to another worktree instead to keep them.${agentNote}`,
-        confirmLabel: `Close ${pending.targetCount} ${noun}`,
+        title: `Close ${count} ${noun} from ${worktree}?`,
+        lead: workingLead(pending.runningAgentCount),
+        description: recentlyClosedSentence(count),
+        note:
+          count === 1
+            ? "To keep it open, cancel and drag it to another worktree."
+            : "To keep one open, cancel and drag it to another worktree.",
+        confirmLabel: `Close ${count} ${noun}`,
       };
     }
     case "deletedWorktreeGroupDismiss": {
       const worktreeCount = pending.preview?.length ?? 0;
       // A member whose terminals all left is dropped from the preview, so the
       // group can be clearing a single worktree even though it holds several.
-      const worktreeNoun = worktreeCount === 1 ? "deleted worktree" : "deleted worktrees";
-      const noun = pending.targetCount === 1 ? "terminal" : "terminals";
-      const agentNote =
-        pending.runningAgentCount === 0
-          ? ""
-          : pending.runningAgentCount === 1
-            ? " 1 still has a running agent."
-            : ` ${pending.runningAgentCount} still have running agents.`;
+      const worktreeNoun = plural(worktreeCount, "deleted worktree");
+      const noun = plural(count, "terminal");
       return {
-        title: `Close ${pending.targetCount} ${noun} from ${worktreeCount} ${worktreeNoun}?`,
-        description: `These terminals outlived the worktrees they belonged to. Closing them moves them to trash and ends their running processes; they can be restored from trash before garbage collection. Drag them to another worktree instead to keep them.${agentNote}`,
-        confirmLabel: `Close ${pending.targetCount} ${noun}`,
+        title: `Close ${count} ${noun} from ${worktreeCount} ${worktreeNoun}?`,
+        lead: workingLead(pending.runningAgentCount),
+        description: recentlyClosedSentence(count),
+        note:
+          count === 1
+            ? "To keep it open, cancel and drag it to another worktree."
+            : "To keep one open, cancel and drag it to another worktree.",
+        confirmLabel: `Close ${count} ${noun}`,
       };
     }
   }
 }
 
 /**
- * D2 preview: a bulk clear spanning several worktrees is the one case where a
- * count tells the user nothing about what they're losing, so the dialog lists
- * the actual terminals it will trash, grouped under the worktree each came
- * from (#7880).
+ * The body of a destructive confirm: the working-agent consequence first, at
+ * full weight, then the standing consequence of the verb. One element, so the
+ * dialog's `aria-describedby` reads both and nothing else.
  */
-function GroupDismissPreview({ preview }: { preview: DeletedWorktreeGroupPreviewWorktree[] }) {
+export function DestructiveConsequence({
+  copy,
+}: {
+  copy: Pick<DestructiveConfirmCopy, "lead" | "description">;
+}): ReactNode {
+  if (!copy.lead) return copy.description;
   return (
-    <ul className="mt-3 max-h-56 space-y-3 overflow-y-auto rounded border border-border-default bg-overlay-subtle p-3">
-      {preview.map((entry) => (
-        <li key={entry.worktreeId}>
-          <span className="block truncate font-mono text-2xs font-medium text-text-secondary">
-            {entry.worktreeTitle}
-          </span>
-          <ul className="mt-1 space-y-0.5">
-            {entry.terminals.map((terminal) => (
-              <li
-                key={terminal.terminalId}
-                className="flex items-center gap-1.5 truncate text-xs text-text-muted"
-              >
-                <span className="truncate">{terminal.terminalTitle}</span>
-                {terminal.hasRunningAgent && (
-                  <span className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-3xs text-text-muted">
-                    Running
+    <>
+      <span className="block font-medium text-text-primary">{copy.lead}</span>
+      <span className="mt-1 block">{copy.description}</span>
+    </>
+  );
+}
+
+/** Kinds whose title already names the one worktree the preview covers. */
+const TITLE_NAMES_WORKTREE = new Set<TerminalPendingDestructiveActionSnapshot["kind"]>([
+  "worktreeRestartAll",
+  "worktreeTrashAll",
+  "worktreeEndAll",
+  "deletedWorktreeDismiss",
+]);
+
+function shouldShowPreview(pending: TerminalPendingDestructiveActionSnapshot): boolean {
+  return (
+    pending.kind !== "kill" &&
+    pending.kind !== "restart" &&
+    pending.kind !== "worktreeClearHistory" &&
+    (pending.preview?.length ?? 0) > 0
+  );
+}
+
+const WorkingIcon = STATE_ICONS.working;
+
+/**
+ * The terminals the action will touch, grouped by worktree, with the working
+ * ones marked in the app's own agent-state vocabulary. A count says how much;
+ * this says which, and which of them hold live work (#7880).
+ */
+function TargetPreview({
+  groups,
+  showGroupTitles,
+  deletedWorktrees,
+}: {
+  groups: DestructivePreviewGroup[];
+  showGroupTitles: boolean;
+  deletedWorktrees: boolean;
+}) {
+  const panelsById = usePanelStore((s) => s.panelsById);
+  const GroupIcon = deletedWorktrees ? FolderX : GitBranch;
+  return (
+    <div
+      // No scroller of its own: a long list grows the dialog body, which already
+      // scrolls with edge shadows, so an overflowing target is never clipped
+      // out of sight inside a nested box.
+      className="divide-y divide-divider rounded-[var(--radius-md)] border border-divider bg-surface-canvas/40"
+      data-testid="destructive-confirm-preview"
+    >
+      {groups.map((group) => (
+        <div key={group.worktreeId || "__none"} className="px-3 py-2">
+          {showGroupTitles && (
+            <div className="mb-1.5 flex min-w-0 items-start gap-1.5 text-xs text-text-secondary">
+              <GroupIcon className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+              <span className="min-w-0 font-mono [overflow-wrap:anywhere]">
+                {group.worktreeTitle}
+              </span>
+            </div>
+          )}
+          <ul
+            className="space-y-1"
+            aria-label={showGroupTitles ? group.worktreeTitle : "Affected terminals"}
+          >
+            {group.terminals.map((terminal) => {
+              const panel = panelsById[terminal.terminalId];
+              return (
+                <li
+                  key={terminal.terminalId}
+                  className="flex min-w-0 items-center gap-2 text-sm text-text-primary"
+                >
+                  <TerminalIcon
+                    chrome={panel ? deriveTerminalChrome(panel) : undefined}
+                    className="h-3.5 w-3.5 shrink-0"
+                  />
+                  <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                    {terminal.terminalTitle.trim() || "Untitled terminal"}
                   </span>
-                )}
-              </li>
-            ))}
+                  {terminal.hasRunningAgent && (
+                    <span className="flex shrink-0 items-center gap-1 text-xs text-text-secondary">
+                      <WorkingIcon
+                        className={cn("h-3 w-3", STATE_COLORS.working)}
+                        aria-hidden="true"
+                      />
+                      Working
+                    </span>
+                  )}
+                </li>
+              );
+            })}
           </ul>
-        </li>
+        </div>
       ))}
-    </ul>
+    </div>
   );
 }
 
@@ -191,6 +319,10 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
 
   const handleConfirm = useCallback(() => {
     if (pending === null) return;
+    // Answer in the voice the action arrived in: a keybinding-raised confirm
+    // must not be read back as a pointer dispatch, or the shortcut hint teaches
+    // the combo the user just pressed.
+    const source: ActionSource = pending.dispatchSource === "keybinding" ? "keybinding" : "user";
     let announcement: string | null = null;
     switch (pending.kind) {
       case "kill":
@@ -201,7 +333,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         void actionService.dispatch(
           "terminal.kill",
           { terminalId: pending.terminalId, confirmed: true },
-          { source: "user" }
+          { source }
         );
         announcement = "Terminal killed";
         break;
@@ -210,18 +342,18 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         void actionService.dispatch(
           "terminal.restart",
           { terminalId: pending.terminalId, confirmed: true },
-          { source: "user" }
+          { source }
         );
         announcement = "Terminal restarted";
         break;
       case "killAll": {
-        void actionService.dispatch("terminal.killAll", { confirmed: true }, { source: "user" });
+        void actionService.dispatch("terminal.killAll", { confirmed: true }, { source });
         const noun = pending.targetCount === 1 ? "terminal" : "terminals";
         announcement = `Killed ${pending.targetCount} ${noun}`;
         break;
       }
       case "restartAll": {
-        void actionService.dispatch("terminal.restartAll", { confirmed: true }, { source: "user" });
+        void actionService.dispatch("terminal.restartAll", { confirmed: true }, { source });
         const noun = pending.targetCount === 1 ? "terminal" : "terminals";
         announcement = `Restarted ${pending.targetCount} ${noun}`;
         break;
@@ -231,7 +363,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         void actionService.dispatch(
           "worktree.sessions.restartAll",
           { worktreeId: pending.worktreeId, confirmed: true },
-          { source: "user" }
+          { source }
         );
         const noun = pending.targetCount === 1 ? "session" : "sessions";
         announcement = `Restarted ${pending.targetCount} ${noun}`;
@@ -242,7 +374,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         void actionService.dispatch(
           "worktree.sessions.trashAll",
           { worktreeId: pending.worktreeId, confirmed: true },
-          { source: "user" }
+          { source }
         );
         const noun = pending.targetCount === 1 ? "session" : "sessions";
         announcement = `Trashed ${pending.targetCount} ${noun}`;
@@ -253,7 +385,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         void actionService.dispatch(
           "worktree.sessions.endAll",
           { worktreeId: pending.worktreeId, confirmed: true },
-          { source: "user" }
+          { source }
         );
         const noun = pending.targetCount === 1 ? "session" : "sessions";
         announcement = `Ended ${pending.targetCount} ${noun}`;
@@ -264,7 +396,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         void actionService.dispatch(
           "worktree.sessions.clearHistory",
           { worktreeId: pending.worktreeId, confirmed: true },
-          { source: "user" }
+          { source }
         );
         announcement = "Cleared session history";
         break;
@@ -278,7 +410,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
         void actionService.dispatch(
           "worktree.sessions.trashAll",
           { worktreeId: pending.worktreeId, confirmed: true },
-          { source: "user" }
+          { source }
         );
         const noun = pending.targetCount === 1 ? "terminal" : "terminals";
         announcement = `Closed ${pending.targetCount} ${noun}`;
@@ -297,7 +429,7 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
           void actionService.dispatch(
             "worktree.sessions.trashAll",
             { worktreeId: entry.worktreeId, confirmed: true },
-            { source: "user" }
+            { source }
           );
         }
         const noun = pending.targetCount === 1 ? "terminal" : "terminals";
@@ -315,23 +447,31 @@ export function TerminalDestructiveActionConfirmDialog(): ReactElement | null {
   if (pending === null) return null;
 
   const copy = buildCopy(pending);
+  const showPreview = shouldShowPreview(pending);
+  const isDeleted =
+    pending.kind === "deletedWorktreeDismiss" || pending.kind === "deletedWorktreeGroupDismiss";
 
   return (
     <ConfirmDialog
       isOpen
       onClose={clear}
       title={copy.title}
-      description={copy.description}
+      description={<DestructiveConsequence copy={copy} />}
       confirmLabel={copy.confirmLabel}
       variant="destructive"
-      // The grouped clear renders a scrollable preview list, which AppDialog
-      // must expose as a plain dialog rather than an alertdialog.
-      hasPreview={pending.kind === "deletedWorktreeGroupDismiss"}
+      // A scrollable preview list makes AppDialog expose a plain dialog
+      // rather than an alertdialog, per the APG.
+      hasPreview={showPreview}
       onConfirm={handleConfirm}
     >
-      {pending.kind === "deletedWorktreeGroupDismiss" && pending.preview && (
-        <GroupDismissPreview preview={pending.preview} />
+      {showPreview && pending.preview && (
+        <TargetPreview
+          groups={pending.preview}
+          showGroupTitles={pending.preview.length > 1 || !TITLE_NAMES_WORKTREE.has(pending.kind)}
+          deletedWorktrees={isDeleted}
+        />
       )}
+      {copy.note && <p className="text-sm text-text-secondary">{copy.note}</p>}
     </ConfirmDialog>
   );
 }

@@ -6,7 +6,6 @@ import { useMenuActionSource } from "@/components/ui/menu-source";
 import { useRecipeStore } from "@/store/recipeStore";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
-import { closeAndAnnounce } from "@/lib/accessibility";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 export type ConfirmDialogState =
@@ -142,70 +141,35 @@ export function useWorktreeActions({
     useFleetArmingStore.getState().armByState("working", "current", false);
   }, [worktree.id]);
 
+  // The three session-wide destructive items dispatch unconfirmed on purpose.
+  // Each action gates itself and stages the app-level confirm
+  // (`TerminalDestructiveActionConfirmDialog`), which names the worktree,
+  // previews the sessions it will touch and flags working agents — one dialog
+  // for these actions whether they come from this menu, the palette or a
+  // keybinding.
   const handleCloseAll = useCallback(() => {
-    const label = worktree.issueTitle ?? worktree.branch;
-    setConfirmDialog({
-      isOpen: true,
-      title: `Trash all sessions for '${label}'?`,
-      description:
-        "Every session in this worktree moves to trash. Active agents, running processes, and unsaved scrollback will be lost. Sessions can be restored from trash before garbage collection.",
-      confirmLabel: "Trash all sessions",
-      variant: "destructive",
-      onConfirm: () => {
-        void actionService.dispatch(
-          "worktree.sessions.trashAll",
-          { worktreeId: worktree.id, confirmed: true },
-          { source: "user" }
-        );
-        closeAndAnnounce(() => setConfirmDialog({ isOpen: false }), "Trashed all sessions");
-      },
-    });
-  }, [worktree.id, worktree.issueTitle, worktree.branch]);
+    void actionService.dispatch(
+      "worktree.sessions.trashAll",
+      { worktreeId: worktree.id },
+      { source: "user" }
+    );
+  }, [worktree.id]);
 
   const handleTerminateAll = useCallback(() => {
-    const label = worktree.issueTitle ?? worktree.branch;
-    setConfirmDialog({
-      isOpen: true,
-      title: `Terminate all sessions for '${label}'?`,
-      description:
-        "This permanently closes every session in this worktree. Active agents, running processes, and unsaved output will be lost.",
-      confirmLabel: "Terminate all",
-      variant: "destructive",
-      onConfirm: () => {
-        // `confirmed: true` clears the action's own D1 gate (added in #11345) so
-        // this already-confirmed call site runs immediately instead of routing
-        // through the app-level pending-store dialog a second time.
-        void actionService.dispatch(
-          "worktree.sessions.endAll",
-          { worktreeId: worktree.id, confirmed: true },
-          { source: "user" }
-        );
-        closeAndAnnounce(() => setConfirmDialog({ isOpen: false }), "Terminated all sessions");
-      },
-    });
-  }, [worktree.id, worktree.issueTitle, worktree.branch]);
+    void actionService.dispatch(
+      "worktree.sessions.endAll",
+      { worktreeId: worktree.id },
+      { source: "user" }
+    );
+  }, [worktree.id]);
 
   const handleClearHistory = useCallback(() => {
-    const label = worktree.issueTitle ?? worktree.branch;
-    setConfirmDialog({
-      isOpen: true,
-      title: `Clear session history for '${label}'?`,
-      description:
-        "This permanently deletes this worktree's recorded resumable-session history, and those records can't be recovered. Open sessions aren't affected, and bookmarked sessions are kept — deleting a bookmark is the only way to remove one.",
-      confirmLabel: "Clear history",
-      variant: "destructive",
-      onConfirm: () => {
-        // See handleTerminateAll: `confirmed: true` clears the clearHistory D1
-        // gate added in #11345 so this confirmed call site doesn't re-prompt.
-        void actionService.dispatch(
-          "worktree.sessions.clearHistory",
-          { worktreeId: worktree.id, confirmed: true },
-          { source: "user" }
-        );
-        closeAndAnnounce(() => setConfirmDialog({ isOpen: false }), "Cleared session history");
-      },
-    });
-  }, [worktree.id, worktree.issueTitle, worktree.branch]);
+    void actionService.dispatch(
+      "worktree.sessions.clearHistory",
+      { worktreeId: worktree.id },
+      { source: "user" }
+    );
+  }, [worktree.id]);
 
   const handleResourceTeardown = useCallback(() => {
     const label = worktree.issueTitle ?? worktree.branch ?? worktree.name;

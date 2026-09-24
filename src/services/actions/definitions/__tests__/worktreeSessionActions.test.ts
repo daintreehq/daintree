@@ -97,12 +97,14 @@ describe("worktree.sessions.trashAll confirm gate", () => {
     await run("worktree.sessions.trashAll", { worktreeId: "wt-1" });
 
     expect(bulkTrashByWorktree).not.toHaveBeenCalled();
-    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
-      kind: "worktreeTrashAll",
-      targetCount: 2,
-      runningAgentCount: 0,
-      worktreeId: "wt-1",
-    });
+    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "worktreeTrashAll",
+        targetCount: 2,
+        runningAgentCount: 0,
+        worktreeId: "wt-1",
+      })
+    );
   });
 
   it("trashes when confirmed:true is passed", async () => {
@@ -140,12 +142,14 @@ describe("worktree.sessions.endAll confirm gate", () => {
     await run("worktree.sessions.endAll", { worktreeId: "wt-1" });
 
     expect(bulkCloseByWorktree).not.toHaveBeenCalled();
-    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
-      kind: "worktreeEndAll",
-      targetCount: 2,
-      runningAgentCount: 0,
-      worktreeId: "wt-1",
-    });
+    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "worktreeEndAll",
+        targetCount: 2,
+        runningAgentCount: 0,
+        worktreeId: "wt-1",
+      })
+    );
   });
 
   it("counts trash, overlay, and background panels (matching bulkCloseByWorktree) but excludes dialog panels and other worktrees", async () => {
@@ -164,12 +168,14 @@ describe("worktree.sessions.endAll confirm gate", () => {
 
     expect(bulkCloseByWorktree).not.toHaveBeenCalled();
     // grid + dock + trash + overlay + background = 5; dialog and wt-2 are excluded.
-    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
-      kind: "worktreeEndAll",
-      targetCount: 5,
-      runningAgentCount: 0,
-      worktreeId: "wt-1",
-    });
+    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "worktreeEndAll",
+        targetCount: 5,
+        runningAgentCount: 0,
+        worktreeId: "wt-1",
+      })
+    );
   });
 
   it("counts only running agents inside the target set — not other worktrees or dialog panels", async () => {
@@ -203,12 +209,14 @@ describe("worktree.sessions.endAll confirm gate", () => {
 
     await run("worktree.sessions.endAll", { worktreeId: "wt-1" });
 
-    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
-      kind: "worktreeEndAll",
-      targetCount: 2,
-      runningAgentCount: 1,
-      worktreeId: "wt-1",
-    });
+    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "worktreeEndAll",
+        targetCount: 2,
+        runningAgentCount: 1,
+        worktreeId: "wt-1",
+      })
+    );
   });
 
   it("does not clear another worktree's pending confirmation when ending this worktree", async () => {
@@ -322,12 +330,14 @@ describe("worktree.sessions.restartAll confirm gate", () => {
     await run("worktree.sessions.restartAll", { worktreeId: "wt-1" });
 
     expect(bulkRestartByWorktree).not.toHaveBeenCalled();
-    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
-      kind: "worktreeRestartAll",
-      targetCount: 2,
-      runningAgentCount: 1,
-      worktreeId: "wt-1",
-    });
+    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "worktreeRestartAll",
+        targetCount: 2,
+        runningAgentCount: 1,
+        worktreeId: "wt-1",
+      })
+    );
   });
 
   it("restarts when confirmed:true is passed even with running agents", async () => {

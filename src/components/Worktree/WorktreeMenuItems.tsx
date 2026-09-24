@@ -750,10 +750,10 @@ export function WorktreeMenuItems({
         <C.Item
           onSelect={onTerminateAll}
           disabled={counts.active === 0}
-          {...counted("Terminate all sessions", counts.active)}
+          {...counted("End all sessions", counts.active)}
         >
           <OctagonX className={ICON} />
-          Terminate all sessions…
+          End all sessions…
           <C.Meta>{counts.active}</C.Meta>
         </C.Item>
       </C.SubContent>
