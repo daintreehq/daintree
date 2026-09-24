@@ -313,7 +313,7 @@ export function PilotParkEditor({
               title can be read before committing to parking it. */}
           <p
             data-testid="pilot-park-target"
-            className="line-clamp-2 text-sm font-medium break-words text-pretty text-text-primary"
+            className="line-clamp-2 text-sm font-medium break-words text-balance text-text-primary"
           >
             {target.row.title}
           </p>
@@ -431,7 +431,7 @@ export function PilotParkEditor({
         </ScrollShadow>
         {/* Describes the CURRENT choice, so the default never reads as if
             something will lift the park automatically. */}
-        <p id={gateHelpId} className="text-xs leading-snug text-pretty text-text-secondary">
+        <p id={gateHelpId} className="text-xs leading-snug text-text-secondary">
           {gateHelpText(chosenGate, note.trim().length > 0)}
         </p>
         {gateLost && (

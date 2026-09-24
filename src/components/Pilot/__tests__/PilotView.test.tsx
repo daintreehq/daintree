@@ -2178,6 +2178,10 @@ describe("PilotView", () => {
 
       expect(screen.getByTestId("pilot-park-unpark").getAttribute("aria-busy")).toBe("true");
       expect(screen.getByTestId("pilot-park-confirm").getAttribute("aria-busy")).toBeNull();
+      // Busy, not disabled: disabling the focused control would blur it.
+      const unpark = screen.getByTestId("pilot-park-unpark");
+      expect(unpark instanceof HTMLButtonElement && !unpark.disabled).toBe(true);
+      expect(unpark.getAttribute("aria-disabled")).toBe("true");
     });
   });
 });
