@@ -1,11 +1,10 @@
-import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import {
   ACTIVITY_HOLD_DURATION,
   DECAY_DURATION,
   getActivityColor,
 } from "@/utils/colorInterpolation";
-import { scheduleFlip } from "@/utils/flipScheduler";
+import { useWallClock } from "@/hooks/useWallClock";
 import { isValidPastTimestamp } from "@/utils/timestamps";
 
 interface ActivityLightProps {
@@ -16,9 +15,19 @@ interface ActivityLightProps {
 const FADE_CADENCE = 15_000;
 const PERFORMANCE_MODE_FLOOR = 60_000;
 
-function isActivelyWorking(timestamp: number | null | undefined): boolean {
-  const now = Date.now();
-  return isValidPastTimestamp(timestamp, now) && now - timestamp < DECAY_DURATION;
+function isActivelyWorking(timestamp: number, now: number): boolean {
+  return now - timestamp < DECAY_DURATION;
+}
+
+function nextFlipDelay(timestamp: number | null | undefined, now: number): number | null {
+  if (!isValidPastTimestamp(timestamp, now)) return null;
+  const elapsed = now - timestamp;
+  if (elapsed >= DECAY_DURATION) return null;
+  const fadeCadence =
+    document.body.dataset.performanceMode === "true" ? PERFORMANCE_MODE_FLOOR : FADE_CADENCE;
+  return elapsed < ACTIVITY_HOLD_DURATION
+    ? ACTIVITY_HOLD_DURATION - elapsed
+    : Math.min(fadeCadence, DECAY_DURATION - elapsed);
 }
 
 /**
@@ -32,30 +41,12 @@ function isActivelyWorking(timestamp: number | null | undefined): boolean {
  * fading, and stops scheduling entirely once idle.
  */
 export function ActivityLight({ lastActivityTimestamp, className }: ActivityLightProps) {
-  const [tick, setTick] = useState(0);
+  const now = useWallClock(lastActivityTimestamp, (at) => nextFlipDelay(lastActivityTimestamp, at));
 
-  useEffect(() => {
-    const now = Date.now();
-    if (!isValidPastTimestamp(lastActivityTimestamp, now)) return;
+  if (!isValidPastTimestamp(lastActivityTimestamp, now)) return null;
 
-    const elapsed = now - lastActivityTimestamp;
-    if (elapsed >= DECAY_DURATION) return;
-
-    const fadeCadence =
-      document.body.dataset.performanceMode === "true" ? PERFORMANCE_MODE_FLOOR : FADE_CADENCE;
-    const delay =
-      elapsed < ACTIVITY_HOLD_DURATION
-        ? ACTIVITY_HOLD_DURATION - elapsed
-        : Math.min(fadeCadence, DECAY_DURATION - elapsed);
-
-    return scheduleFlip(delay, () => setTick((n) => n + 1));
-  }, [lastActivityTimestamp, tick]);
-
-  if (!isValidPastTimestamp(lastActivityTimestamp)) return null;
-
-  void tick;
-  const color = getActivityColor(lastActivityTimestamp);
-  const active = isActivelyWorking(lastActivityTimestamp);
+  const color = getActivityColor(lastActivityTimestamp, now);
+  const active = isActivelyWorking(lastActivityTimestamp, now);
 
   return (
     <div
