@@ -17,6 +17,8 @@
  *   DAINTREE_SHOT_AGENT_SHORTCUT  required — any truthy value runs the capture
  *   DAINTREE_SHOT_DIR             required — output directory (never the repo)
  *   DAINTREE_SHOT_THEMES          comma-separated theme ids (default `,bondi`; empty = app default)
+ *   DAINTREE_SHOT_ROLLOUT         also capture the General tab's shortcut list, the other settings
+ *                                 surface that draws stored bindings (off by default)
  *
  * A manifest.json beside the PNGs lists every state written, and the run fails unless
  * the files on disk match it and every planned state landed.
@@ -38,6 +40,7 @@ import { T_LONG } from "../helpers/timeouts";
 const ENABLED = !!process.env.DAINTREE_SHOT_AGENT_SHORTCUT;
 const OUTPUT_DIR = process.env.DAINTREE_SHOT_DIR ? path.resolve(process.env.DAINTREE_SHOT_DIR) : "";
 const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? ",bondi").split(",");
+const ROLLOUT = !!process.env.DAINTREE_SHOT_ROLLOUT;
 
 const DIALOG = '[role="dialog"]:has(.settings-sidebar)';
 const CLOSE = '[aria-label="Close settings"]';
@@ -274,6 +277,29 @@ async function captureSettings(page: Page, theme: string): Promise<void> {
   await closeSettings(page);
 }
 
+async function captureGeneralShortcuts(page: Page, theme: string): Promise<void> {
+  await step(page, "general-shortcuts", async () => {
+    planned.push("g01-general-shortcuts");
+    await closeSettings(page);
+    await page.evaluate(
+      (detail) => {
+        window.dispatchEvent(new CustomEvent("daintree:open-settings-tab", { detail }));
+      },
+      { tab: "general", subtab: "overview" }
+    );
+    await page.locator(DIALOG).waitFor({ state: "visible", timeout: 20_000 });
+    const toggle = page.locator('[aria-controls="keyboard-shortcuts-content"]');
+    await toggle.scrollIntoViewIfNeeded();
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+    const list = page.locator("#keyboard-shortcuts-content");
+    await expect(list.locator("dl").first()).toBeVisible({ timeout: 5000 });
+    await list.evaluate((el) => el.scrollIntoView({ block: "start" }));
+    await page.mouse.move(2, 2);
+    await snap(page, "g01-general-shortcuts", theme, "#keyboard-shortcuts-content", 12);
+  });
+  await closeSettings(page);
+}
+
 let dockReady = false;
 async function ensureDock(page: Page): Promise<void> {
   if (dockReady) return;
@@ -400,6 +426,7 @@ test("agent shortcut recorder — every state in both hosts", async () => {
       dockReady = false;
       await captureSettings(page, theme);
       await captureTray(page, theme);
+      if (ROLLOUT) await captureGeneralShortcuts(page, theme);
     }
   } finally {
     if (ctx) await closeApp(ctx.app).catch(() => {});
@@ -419,5 +446,5 @@ test("agent shortcut recorder — every state in both hosts", async () => {
   if (unlanded.length > 0) failures.push(`planned but never shot: ${unlanded.join(", ")}`);
   if (failures.length > 0)
     throw new Error(`agent shortcut capture failed:\n  ${failures.join("\n  ")}`);
-  expect(manifest.length).toBe(13 * THEMES.length);
+  expect(manifest.length).toBe((ROLLOUT ? 14 : 13) * THEMES.length);
 });

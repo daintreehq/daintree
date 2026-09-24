@@ -14,6 +14,7 @@ import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { getAgentIds } from "@/config/agents";
 import { AgentIdentityBlock, resolveIdentity } from "@/components/agents/AgentCard";
 import { Button } from "@/components/ui/button";
+import { KbdChord } from "@/components/ui/Kbd";
 import { Badge } from "@/components/ui/badge";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import type {
@@ -131,7 +132,7 @@ type SaveTarget = "sessionRestore" | "updates" | "idleNotify" | "idleAutoClose" 
 
 interface ShortcutDisplay {
   actionId: string;
-  key: string;
+  combo: string;
   description: string;
 }
 
@@ -540,7 +541,7 @@ export function GeneralTab({
 
             return {
               actionId,
-              key: keybindingService.formatComboForDisplay(effectiveCombo),
+              combo: effectiveCombo,
               description: binding.description || actionId,
             };
           })
@@ -1164,9 +1165,11 @@ export function GeneralTab({
                             >
                               <dt className="min-w-0 text-text-primary">{shortcut.description}</dt>
                               <dd className="shrink-0">
-                                <kbd className="settings-kbd px-2 py-1 rounded-[var(--radius-sm)] border text-xs font-mono text-text-primary">
-                                  {shortcut.key}
-                                </kbd>
+                                <KbdChord
+                                  shortcut={shortcut.combo}
+                                  density="bare"
+                                  foreground="primary"
+                                />
                               </dd>
                             </div>
                           ))}
