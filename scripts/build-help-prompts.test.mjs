@@ -144,6 +144,37 @@ describe("help prompt outputs", () => {
       expect(body).toMatch(/on the user's behalf[^\n]*belongs in your reply/);
     });
 
+    // An agent that meets the recipes before it knows which server it has, how
+    // to find a tool, what its tier allows, and what the shell must not do
+    // guesses at all four. Both assistants get the same orientation, first.
+    it.each(ALL_GENERATED)("%s orients the agent before the task recipes", (_name, body) => {
+      const tasksIdx = body.indexOf("## Common Tasks");
+      expect(tasksIdx).toBeGreaterThan(-1);
+      for (const heading of [
+        "## What You Can Do",
+        "## Finding the Right Tool",
+        "## Tier Model",
+        "## Permissions Outside MCP",
+      ]) {
+        const idx = body.indexOf(heading);
+        expect(idx, heading).toBeGreaterThan(-1);
+        expect(idx, heading).toBeLessThan(tasksIdx);
+      }
+      const tier = section(body, "## Tier Model");
+      for (const term of [
+        "`workbench`",
+        "`action`",
+        "`system`",
+        "TIER_NOT_PERMITTED",
+        "mcp.surface",
+      ]) {
+        expect(tier).toContain(term);
+      }
+      expect(tier).toMatch(/confirm-gated/i);
+      expect(section(body, "## What You Can Do")).toMatch(/Without `daintree`/);
+      expect(section(body, "## Finding the Right Tool")).toMatch(/tool name is the action ID/);
+    });
+
     it.each(ALL_GENERATED)("%s lists the canonical topics", (_name, body) => {
       expect(body).toContain("## Topics You Can Help With");
       expect(body).toContain("Getting started and first-run setup");
@@ -152,8 +183,6 @@ describe("help prompt outputs", () => {
     });
   });
 
-  // The help-src partials are per assistant here, not shared: CLAUDE.md has
-  // room for the whole recipe and AGENTS.md has to fit its budget.
   describe("both assistants learn the handback convention", () => {
     // A handback (#12488) is an observation: the agent printed a line, which
     // neither proves the work nor, by its absence, that the agent is still
@@ -187,17 +216,12 @@ describe("help prompt outputs", () => {
       expect(CLAUDE).toContain("ScheduleWakeup");
     });
 
-    it("CLAUDE.md contains the worked-example task recipes", () => {
+    it("CLAUDE.md adds the Claude-only broadcast recipes to the shared ones", () => {
       expect(CLAUDE).toContain("## Common Tasks");
-      expect(CLAUDE).toContain("### Read what one agent is doing");
-      expect(CLAUDE).toContain("### Snapshot multiple terminals at once");
-      expect(CLAUDE).toContain("### Send a prompt to one running agent");
+      expect(CLAUDE).toContain("### Launch agents");
       expect(CLAUDE).toContain("### Broadcast a command to multiple terminals");
-      expect(CLAUDE).toContain("### Spawn an agent on a task");
-      expect(CLAUDE).toContain("### Close terminals");
-      expect(CLAUDE).toContain("## When to Use Which");
-      expect(CLAUDE).toContain("agent.launch");
-      expect(CLAUDE).toContain("terminal.sendCommand");
+      expect(CLAUDE).toContain("### Report on the user's fleet broadcast run");
+      expect(AGENTS).not.toContain("### Broadcast a command to multiple terminals");
     });
 
     // A help session supervising a queue of worktree jobs ran four wake
@@ -235,19 +259,10 @@ describe("help prompt outputs", () => {
       expect(queue).toMatch(/input line is not an instruction/);
     });
 
-    it("CLAUDE.md places Common Tasks before Tier Model", () => {
-      const tasksIdx = CLAUDE.indexOf("## Common Tasks");
-      const tierIdx = CLAUDE.indexOf("## Tier Model");
-      expect(tasksIdx).toBeGreaterThan(-1);
-      expect(tierIdx).toBeGreaterThan(-1);
-      expect(tasksIdx).toBeLessThan(tierIdx);
-    });
-
     // Codex has no ScheduleWakeup and no Claude harness, so the Claude pacing
     // recipe (and the triage prompt built around it) would send it after tools
     // it doesn't have.
-    it("AGENTS.md omits the Tier Model and the Claude harness pacing recipe", () => {
-      expect(AGENTS).not.toContain("## Tier Model");
+    it("AGENTS.md omits the Claude harness pacing recipe", () => {
       expect(AGENTS).not.toContain("## Watching Agent Terminals");
       expect(AGENTS).not.toContain("ScheduleWakeup");
       expect(AGENTS).not.toContain("triage_terminals");
@@ -352,7 +367,7 @@ describe("help prompt outputs", () => {
     });
   });
 
-  // Codex help sessions run at the action tier; without these a session asked to
+  // Codex help sessions run at the user's tier (`action` by default); without these a session asked to
   // launch agents spent its first several calls hunting for `agent.launch`.
   describe("Codex operations recipes", () => {
     // Scoped per recipe: the tool names also appear in shared guidance and in
@@ -407,20 +422,19 @@ describe("help prompt outputs", () => {
       expect(recipe("Wait for agents")).toContain("lastHandback");
     });
 
-    it("AGENTS.md places the recipes ahead of the discovery guidance", () => {
-      const tasksIdx = AGENTS.indexOf("## Common Tasks");
-      const discoveryIdx = AGENTS.indexOf("## Finding the Right Tool");
-      expect(tasksIdx).toBeGreaterThan(-1);
-      expect(discoveryIdx).toBeGreaterThan(-1);
-      expect(tasksIdx).toBeLessThan(discoveryIdx);
-    });
-
     // Codex reads project instructions up to `project_doc_max_bytes` (32 KiB by
     // default) across the whole AGENTS.md chain and truncates past it without
     // telling the model, and the help session appends its scratch note at
     // runtime. Growing past this means trimming, not copying CLAUDE.md across.
     it("AGENTS.md stays well inside Codex's instruction budget", () => {
       expect(Buffer.byteLength(AGENTS, "utf8")).toBeLessThanOrEqual(24 * 1024);
+    });
+
+    // The template is not the whole file Codex reads: provisioning appends
+    // runtime notes (the scratch folder today, session metadata per #12702).
+    // Keep ~3 KiB of the cap free for them rather than spending it here.
+    it("the AGENTS.md template leaves room for runtime notes", () => {
+      expect(Buffer.byteLength(AGENTS, "utf8")).toBeLessThanOrEqual(21_500);
     });
   });
 
