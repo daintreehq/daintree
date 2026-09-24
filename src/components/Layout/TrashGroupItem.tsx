@@ -131,14 +131,14 @@ export function TrashGroupItem({
           aria-controls={`trash-group-${groupRestoreId}`}
         >
           {isExpanded ? (
-            <ChevronDown className="w-3 h-3 text-daintree-text/60" />
+            <ChevronDown className="w-3 h-3 text-text-secondary" />
           ) : (
-            <ChevronRight className="w-3 h-3 text-daintree-text/60" />
+            <ChevronRight className="w-3 h-3 text-text-secondary" />
           )}
         </Button>
 
         <div className="shrink-0 mt-0.5 opacity-60 group-hover:opacity-100 transition-opacity">
-          <Layers className="w-3 h-3 text-daintree-text/70" />
+          <Layers className="w-3 h-3 text-text-secondary" />
         </div>
 
         <div className="flex-1 min-w-0">

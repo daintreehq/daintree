@@ -80,6 +80,8 @@ export function TrashContainer({
   const [isTrashPulsing, setIsTrashPulsing] = useState(false);
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const [showMovedHint, setShowMovedHint] = useState(false);
+  // Hover and focus open the scope tooltip; the moved hint borrows the same one.
+  const [scopeTooltipOpen, setScopeTooltipOpen] = useState(false);
   const [emptyTrashConfirmOpen, setEmptyTrashConfirmOpen] = useState(false);
   const [pendingRemoval, setPendingRemoval] = useState<TrashRemovalRequest | null>(null);
   const [isScrollable, setIsScrollable] = useState(false);
@@ -494,7 +496,7 @@ export function TrashContainer({
       data-visible="true"
     >
       <Popover open={isOpen} onOpenChange={setIsOpen}>
-        <Tooltip open={hintOpen}>
+        <Tooltip open={hintOpen || scopeTooltipOpen} onOpenChange={setScopeTooltipOpen}>
           <TooltipTrigger asChild>
             <PopoverTrigger asChild>
               <Button
@@ -532,7 +534,9 @@ export function TrashContainer({
             </PopoverTrigger>
           </TooltipTrigger>
           <TooltipContent side="top" align="center" sideOffset={6}>
-            Moved to trash
+            {hintOpen
+              ? "Moved to trash"
+              : `Recently closed ${dockStatusScopeDescription(count, hereCount)}`}
           </TooltipContent>
         </Tooltip>
 
