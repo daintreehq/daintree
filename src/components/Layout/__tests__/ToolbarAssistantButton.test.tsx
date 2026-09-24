@@ -375,6 +375,25 @@ describe("ToolbarAssistantButton — agent state pip", () => {
       );
     });
 
+    it("surfaces a lane that waits again after working, though its first wait was read", () => {
+      setLanes(false, ["lane-a"]);
+      setPanel("lane-a", "waiting");
+
+      const { queryByTestId, container } = render(<ToolbarAssistantButton />);
+      act(() => useHelpPanelStore.setState({ isOpen: true }));
+      act(() => useHelpPanelStore.setState({ isOpen: false }));
+      expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
+
+      act(() => setPanel("lane-a", "working"));
+      act(() => setPanel("lane-a", "waiting"));
+      const pip = queryByTestId("assistant-working-pip");
+      expect(pip?.getAttribute("data-visible")).toBe("true");
+      expect(pip!.className).toMatch(/bg-state-waiting/);
+      expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(
+        "Daintree Assistant — Assistant is waiting"
+      );
+    });
+
     it("keeps an acknowledged lane quiet when another lane closes", () => {
       setLanes(false, ["lane-a", "lane-b"]);
       setPanel("lane-a", "working");

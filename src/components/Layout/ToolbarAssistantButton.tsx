@@ -130,17 +130,21 @@ export function ToolbarAssistantButton({
   // that starts waiting is a new request and must not hide behind the first.
   // Scoping to terminalId means a respawned assistant landing on the same state
   // value still reads as unread — a fresh session is always a new event. While
-  // the panel is open the set tracks the live lanes, so closing freezes it at
-  // whatever the user just saw.
+  // the panel is open the set tracks the live lanes. While it is closed a lane
+  // keeps its acknowledgement only until its state moves: waiting, then
+  // working, then waiting again is a second request, not the one already read.
   const laneKeys = assistantTerminalIds.map((terminalId, i) =>
     laneKey(terminalId, laneStates[i] ?? null)
   );
   const laneKeysJoined = laneKeys.join("\u0001");
   const [seenLaneKeys, setSeenLaneKeys] = useState<ReadonlySet<string>>(() => new Set());
   useEffect(() => {
-    if (isVisible) {
-      setSeenLaneKeys(new Set(laneKeysJoined ? laneKeysJoined.split("\u0001") : []));
-    }
+    const current = laneKeysJoined ? laneKeysJoined.split("\u0001") : [];
+    setSeenLaneKeys((seen) => {
+      if (isVisible) return new Set(current);
+      const stillSeen = current.filter((key) => seen.has(key));
+      return stillSeen.length === seen.size ? seen : new Set(stillSeen);
+    });
   }, [isVisible, laneKeysJoined]);
   const unreadState = mostDemandingState(
     laneStates.filter((_, i) => !seenLaneKeys.has(laneKeys[i]!))
