@@ -160,8 +160,11 @@ async function expectFixtureState(page: Page, name: DestructiveFixtureName): Pro
     await expect(card.getByText(new RegExp(cwdTail)).first()).toBeVisible();
   } else {
     const present = spec.meta.cacheDirs.find((d) => d.age !== null);
-    const probe = present?.relPath ?? spec.meta.cacheDirs[0]!.relPath;
-    await expect(card.getByText(probe, { exact: true }).first()).toBeVisible();
+    if (present) {
+      await expect(card.getByText(present.relPath, { exact: true }).first()).toBeVisible();
+    } else {
+      await expect(page.getByTestId("dev-preview-destructive-cache-none")).toBeVisible();
+    }
   }
 }
 
