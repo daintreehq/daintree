@@ -147,7 +147,7 @@ export function SaveFleetDialog({
               <p id={kindHintId} className="text-xs text-text-secondary">
                 {kind === "snapshot"
                   ? `The ${panes(armedCount)} armed now. Panes you close drop out of it.`
-                  : `Whichever panes match when you recall it. ${panes(ruleMatchCount)} match now.`}
+                  : `Whichever panes match when you recall it. ${panes(ruleMatchCount)} ${ruleMatchCount === 1 ? "matches" : "match"} now.`}
               </p>
             }
           >
