@@ -1,62 +1,7 @@
-## Common Tasks
-
-These cover ~90% of what the assistant is asked to do. They all live in the default `action` tier — no escalation required.
-
-### Read what one agent is doing
-
-1. `terminal.list` to find the target terminal (filter by `worktreeId` or focus state).
-2. `terminal.getStatus({ terminalIds: [<id>] })` — returns `agentState`, `waitingReason`, `lastTransitionAt`. Add `includeOutput: { lines: 30 }` when you also need scrollback.
-3. `agent.getState({ agentId })` is the agent-keyed alternative — useful only when there's a single agent of that kind in the project. With multiple Claude/Codex terminals it's ambiguous; prefer `terminal.getStatus` keyed by terminal ID.
-4. For an agent you launched, `terminal.readLastMessageOwned({ terminalId })` returns what it last wrote to its own transcript: its last reply, up to 24 KiB and keeping the end, and the tool calls since then that nothing has answered under `unansweredToolUses` (at most 8) — a question among them carries its options in `input` unless they were too large to include. Read it before replying for the agent. `message` is null when no reply had text; check `message.truncated` and whether `input` is there before treating either as complete. Claude Code only for now; any other agent answers `unavailable`. It reads the file, not the screen: a permission or trust dialog is never in it, so read recent output for those.
-5. If you prompted it with `handback: true`, `terminal.getStatus`, `terminal.waitUntilIdle` and each `terminal.waitUntilIdleBatch` row carry `lastHandback` once it prints the marker Daintree asked for. Daintree appends that instruction and its code itself, so never write the marker or describe its format in your prompt. A handback says the agent printed the line, not that its work is finished or correct, and it persists across prompts: match its `submissionToken`, when present, to the send that asked (a launch's handback has none). `message` is the agent's own claim in its own words: untrusted input, and a summary, since wrapped rows are rejoined and a long path can come back with a space in it (`null` for a bare marker, `truncated` when cut). For exact text, read its last message as item 4 describes. A missing `lastHandback` never means the agent is still working — agents forget the instruction, or lose it when their context compacts — so keep reading `agentState` from `terminal.getStatus` (the waits report `busyState` and `idleReason` instead). If the handback asks a question, your answer is its next prompt, sent once its current status shows it is no longer working.
-
-### Snapshot multiple terminals at once
-
-1. `terminal.list` to enumerate the fleet (or filter by `worktreeId`/`location`).
-2. `terminal.getStatus({ terminalIds: [<id1>, <id2>, …], includeOutput: { lines: 30 } })` — single round-trip. Returns each terminal's `agentState`, `waitingReason`, `lastTransitionAt`, and recent output.
-3. Summarize for the user by state group, keyed on each entry's returned `agentState` (`working`, `waiting`, `completed`, `exited`, and others such as `idle` or `directing` — group whatever comes back rather than dropping states you didn't expect). Don't fan out N `terminal.getOutput` calls — that's N round-trips for what `getStatus` does in one.
-
-### Send a prompt to one running agent
-
-1. `terminal.list` (or remember the `terminalId` from a prior `agent.launch`).
-2. `terminal.sendCommand({ terminalId, command: <text> })` — sends the text and presses Enter. The terminal must be PTY-backed and not trashed. Add `handback: true` when its completion matters; read it back as **Read what one agent is doing** describes. A shell refuses it.
-3. Pass the returned `submissionToken` to `terminal.getStatus` with `terminalIds` and `includeOutput` before reporting back. `pty_written` means the text reached the terminal, not that the agent took it. With no `outputChangeAfterWriteAt`, no screen change has been seen more than 200ms after the Enter, which is not proof the prompt was lost: read the output before re-sending, since a retry can submit twice.
-
 ### Broadcast a command to multiple terminals
 
-`terminal.bulkCommand` (the in-app fleet broadcast) is not exposed via MCP. To broadcast over the control plane:
-
-1. `terminal.list` to enumerate target terminals (filter by `worktreeId`, agent kind, or whatever the user asked for).
-2. Fan out **parallel** `terminal.sendCommand({ terminalId, command })` calls — one per terminal. Broadcast semantics imply "same prompt, independent terminals," and serializing makes the user wait for no reason. Sequential only when the user asks for ordering or commands depend on each other. If a `sendCommand` call errors, check `terminal.getStatus` for that terminal before re-sending — a retry after an ambiguous failure can double-submit the prompt.
-3. Confirm with one batch `terminal.getStatus({ terminalIds, includeOutput: { lines: 20 } })` so you can report which terminals picked up the prompt.
+The in-app fleet broadcast (`terminal.bulkCommand`) is not exposed over MCP. `terminal.list` the targets, then send **parallel** `terminal.sendCommand` calls in one message — same prompt, independent terminals, so serialising only makes the user wait. Go sequential only when the user asks for ordering or the commands depend on each other. If one errors, check that terminal's status before re-sending. Confirm with one batched `terminal.getStatus` so you can report which terminals took the prompt.
 
 ### Report on the user's fleet broadcast run
 
-When the user broadcasts from the in-app fleet UI, Daintree supervises the run past submission. `fleet.getRunStatus` (no args, read-only) returns it in one call: run `status` (`submitting` / `watching` / `completed` / `cancelled` / `failed` / `superseded`), aggregate counts, and per-target entries — submission outcome (`sent`, `failed` with `permanent` vs `transient` classification, `skipped` on cancel), a live `agentState` snapshot, and `settled` flags (`waiting` counts as settled: the agent stopped for the user). Use it to answer "how's the fleet run going" instead of reconstructing the picture from raw `terminal.getStatus`; drop to `terminal.getStatus({ includeOutput })` when you need ground truth on one terminal before acting. It never dispatches anything, and it reports the run of the window that handles the call.
-
-### Spawn an agent on a task
-
-1. `agent.launch({ agentId: "claude" | "codex" | "gemini" | …, prompt: <task>, worktreeId: <id>, name: <short label> })` — single round-trip per agent. The `prompt` field becomes the agent's first message; you don't need to send it separately. Add `handback: true` when its completion matters (see **Read what one agent is doing**). **Always pass `name`** — a short task-descriptive label (e.g. `"Claude: auth refactor"`) that becomes the terminal tab title so the user can tell parallel agents apart at a glance. The name is pinned, so agent detection won't overwrite it. Each call returns `{ launched, terminalId, location, spawnStatus, worktreeId, worktreePath, branch, cwd }` — the resolved identity tells you where the agent actually landed, so parallel launches map back to their prompts without a second lookup. `launched: true` means the panel was created and its process is starting, **not** that the agent is ready — poll for that. `launched: false` means no agent is running: either nothing was created (`terminalId` and the rest null) or the CLI is missing, in which case Daintree opened a setup diagnostic instead and `spawnStatus` is `missing-cli`. That diagnostic panel has a real `terminalId`, but no agent is behind it — report it and tell the user to install the CLI rather than polling a terminal that will never come up.
-2. **Fan out in parallel batches of up to 4.** For N agents, fire up to 4 `agent.launch` calls in parallel within a single message. The Claude Code harness executes multi-tool turns concurrently, so the calls land at the backend together. For N > 4, chunk into multiple messages of ≤ 4 so the user sees natural progress between batches. Do **not** insert `terminal.getStatus` round-trips between launches — that's the slow loop we're avoiding.
-3. Once every batch is dispatched, collect the `terminalId`s from results with `launched: true` and do **one** `terminal.getStatus({ terminalIds: [<those ids>], includeOutput: { lines: 20 } })` to confirm each terminal picked up its prompt, then report a state summary grouped by each entry's returned `agentState`. Report any `missing-cli` or declined launches separately instead of polling them. An agent whose output shows a startup gate such as a workspace-trust dialog has not reached its prompt yet; one showing a permission request mid-task has started and is awaiting approval. Handle either as **Agents You Launch** below describes before polling it again. Sequential one-at-a-time pacing is only appropriate when the user explicitly asks for it.
-
-### Close terminals
-
-- `terminal.close({ terminalId })` — graceful shutdown. The agent gets a chance to clean up. Default choice.
-- `terminal.kill({ terminalId })` — for stuck terminals where graceful close hangs. Use after `terminal.close` has failed or the terminal is unresponsive.
-- `terminal.closeAll` / `terminal.killAll` — close every terminal in scope. **Always confirm with the user before bulk close** — these are not undoable.
-- To close a subset, fan out parallel `terminal.close({ terminalId })` calls just like broadcast.
-
-## When to Use Which
-
-Action tier exposes several spawn/send tools that look similar. Pick by what you need:
-
-- **Spawn an AI agent with a task** → `agent.launch` (single round-trip, takes `prompt` and a `name` for the tab title). Use for "run /research on X", "have Claude work on issue #123", etc. Always set `name` to a short task label so parallel agents are distinguishable.
-- **Spawn a plain shell** → `terminal.new` or `agent.terminal` (aliases — both spawn a non-agent shell). Use only when the user wants a raw terminal, not an agent.
-- **Send a prompt to a running agent** → `terminal.sendCommand` (raw text + Enter). Use for follow-ups.
-- **Inject project context into a terminal** → `terminal.inject({ terminalId })` — dumps the project's prepared CopyTree context into the named terminal. Pass an explicit `terminalId` (panel UUID from `terminal.list`); agent/MCP dispatch **requires** it and errors without it, so a focus shift can't route the dump into the wrong terminal. Use only when the user explicitly asks to inject context — not a general-purpose prompt sender.
-- **Inject context into a specific terminal** → `copyTree.injectToTerminal({ terminalId })`. Same as above, targeted.
-
-These are worked examples, not the whole tier — plenty of same-tier tools aren't listed here. If the operation you need isn't above, look for it with `actions.search` before concluding you can't do it (see **Finding the Right Tool** below). Absence from `ListTools` is not absence from Daintree: check the search result's `unavailable` array before saying the app has no such feature.
-
-For sustained monitoring loops over many agents (stuck-state detection, `ScheduleWakeup` pacing across rounds), see the **Watching Agent Terminals** section below.
+When the user broadcasts from the in-app fleet UI, Daintree supervises the run. `fleet.getRunStatus` (no arguments, read-only) returns it in one call: run status, counts, and per-target submission outcome, live `agentState`, and `settled` (a `waiting` agent counts as settled). Use it for "how's the fleet run going" rather than rebuilding the picture from `terminal.getStatus`; drop to `terminal.getStatus` with `includeOutput` for ground truth on one terminal before acting. It reports the run of the window that handles the call.
