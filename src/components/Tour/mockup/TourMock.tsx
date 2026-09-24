@@ -187,7 +187,7 @@ export function MockPane({
           {input ? (
             <span className="truncate text-2xs text-text-primary">{input}</span>
           ) : (
-            <span className="truncate text-2xs text-text-placeholder">Ask {name}</span>
+            <span className="truncate text-2xs text-text-secondary">Ask {name}</span>
           )}
           <span className="flex-1" />
           {inputAddon}

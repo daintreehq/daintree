@@ -344,7 +344,7 @@ export function MockApp({
           </div>
           <div className="mx-2 flex h-4 shrink-0 items-center gap-1 rounded-sm border border-border-subtle px-1.5">
             <Search className="size-2.5 text-text-secondary" aria-hidden="true" />
-            <span className="text-3xs text-text-placeholder">Search worktrees…</span>
+            <span className="text-3xs text-text-secondary">Search worktrees…</span>
           </div>
           <div data-tour-anchor="worktree-list" className="flex min-h-0 flex-col gap-0.5 px-1.5">
             {worktrees}

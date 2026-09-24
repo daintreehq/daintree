@@ -207,7 +207,7 @@ export function PreviewScene() {
         width={MENU.width}
         header={
           <MockSearchField>
-            <span className="text-text-placeholder">Search agents, panels…</span>
+            <span className="text-text-secondary">Search agents, panels…</span>
           </MockSearchField>
         }
         items={[

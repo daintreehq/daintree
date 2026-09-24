@@ -62,7 +62,7 @@ function PortalPanel({ pasted }: { pasted: boolean }) {
             <Folders className="size-2.5 text-text-secondary" aria-hidden="true" />
             add-search · 42 files
           </span>
-          <span className="flex items-center justify-between text-3xs text-text-placeholder">
+          <span className="flex items-center justify-between text-3xs text-text-secondary">
             Ask anything
             <ArrowUp className="size-2.5 text-text-secondary" aria-hidden="true" />
           </span>

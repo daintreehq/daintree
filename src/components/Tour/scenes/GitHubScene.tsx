@@ -128,7 +128,7 @@ export function GitHubScene() {
         width={LIST.width}
         header={
           <MockSearchField>
-            <span className="text-text-placeholder">Search issues…</span>
+            <span className="text-text-secondary">Search issues…</span>
           </MockSearchField>
         }
         items={[

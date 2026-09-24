@@ -119,9 +119,9 @@ function ReviewSurface({
               <span className="min-w-0 flex-1 truncate text-3xs text-text-primary">
                 {file.name}
               </span>
-              <span className="text-3xs tabular-nums text-status-success">+{file.added}</span>
+              <span className="text-3xs tabular-nums text-text-secondary">+{file.added}</span>
               {file.removed > 0 && (
-                <span className="text-3xs tabular-nums text-status-error">−{file.removed}</span>
+                <span className="text-3xs tabular-nums text-text-secondary">−{file.removed}</span>
               )}
             </div>
           ))}
@@ -160,7 +160,7 @@ function ReviewSurface({
             delay={0.2}
             finishBy={COMMIT_TYPED}
           />
-          {!typing && <span className="text-text-placeholder">Commit message…</span>}
+          {!typing && <span className="text-text-secondary">Commit message…</span>}
         </div>
         <span className="flex h-6 items-center gap-1 rounded-md bg-text-primary px-2.5 text-3xs font-medium text-text-inverse">
           Commit &amp; Push

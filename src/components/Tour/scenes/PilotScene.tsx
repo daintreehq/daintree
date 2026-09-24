@@ -117,7 +117,7 @@ export function PilotScene() {
       >
         <span className="mb-1.5 px-1 text-2xs font-semibold text-text-primary">All agents</span>
         <MockSearchField>
-          <span className="text-text-placeholder">Search agents…</span>
+          <span className="text-text-secondary">Search agents…</span>
         </MockSearchField>
         {editorOpen && <ParkEditor />}
         {!editorOpen &&

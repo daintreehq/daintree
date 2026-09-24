@@ -99,7 +99,7 @@ function AssistantPanel({
                   <MockTyping cue="ask" text={REQUEST} delay={0.3} finishBy={ASKED} />
                 </span>
               ) : (
-                <span className="text-text-placeholder">Ask Claude</span>
+                <span className="text-text-secondary">Ask Claude</span>
               )}
             </div>
             <div

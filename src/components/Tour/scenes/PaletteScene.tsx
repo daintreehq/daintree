@@ -79,7 +79,7 @@ export function PaletteScene() {
 
 function TypedQuery() {
   const typing = useCue("type", 0.2);
-  if (!typing) return <span className="text-text-placeholder">Find an action</span>;
+  if (!typing) return <span className="text-text-secondary">Find an action</span>;
   return (
     <span className="text-text-primary">
       <MockTyping cue="type" text="new" delay={0.2} charsPerSecond={6} />

@@ -9,7 +9,7 @@ export function MockEmptyGrid({ label, className }: { label: string; className?:
       <span className="text-xs font-semibold text-text-primary">{label}</span>
       <span className="flex h-6 w-48 items-center gap-1.5 rounded-md border border-border-default bg-surface-panel px-2">
         <Search className="size-3 text-text-secondary" aria-hidden="true" />
-        <span className="text-3xs text-text-placeholder">Search agents &amp; panels…</span>
+        <span className="text-3xs text-text-secondary">Search agents &amp; panels…</span>
       </span>
     </div>
   );

@@ -20,7 +20,8 @@ import { MockEmptyGrid, MockSpotlight } from "./sceneParts";
 
 const DIALOG = { x: GRID_RECT.x + 119, y: 84, width: 230 } as const;
 const NAME_FIELD = { x: DIALOG.x + 120, y: DIALOG.y + 114 };
-const CREATE_BUTTON = { x: DIALOG.x + 186, y: DIALOG.y + 128 };
+// Measured from the render: the dialog's Create worktree button.
+const CREATE_BUTTON = { x: DIALOG.x + 164, y: DIALOG.y + 150 };
 // The name is done before the pointer sets off for Create.
 const CREATE = { cue: "create" } as const;
 
