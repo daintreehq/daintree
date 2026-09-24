@@ -1405,7 +1405,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         includeOutput: {
           description:
-            "Opt-in. Adds `recentOutput` (last N scrollback lines) and `lastOutputChangeAt` when observed. Off by default to keep responses small.",
+            "Opt-in. Adds `recentOutput` (last N scrollback lines), plus `lastOutputChangeAt` and `lastTypedInputAt` when observed. Off by default to keep responses small.",
           type: "object",
           properties: {
             lines: {
@@ -1454,6 +1454,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               lastOutputChangeAt: {
                 description:
                   "Epoch ms the visible screen last changed, ignoring recognized spinner/timer redraws. Absent if unobserved. Not a hang verdict.",
+                type: "number",
+              },
+              lastTypedInputAt: {
+                description:
+                  "Epoch ms of the last raw input Daintree recorded for the PTY (keys, paste, broadcast; not submit-lane writes). Before `lastTransitionAt` = none since. Not proof of delivery or authorship.",
                 type: "number",
               },
               exitCode: {
@@ -1594,7 +1599,14 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "array",
           items: {
             type: "string",
-            enum: ["armed", "lastCheckResult", "exitCode", "hasPty", "lastOutputChangeAt"],
+            enum: [
+              "armed",
+              "lastCheckResult",
+              "exitCode",
+              "hasPty",
+              "lastOutputChangeAt",
+              "lastTypedInputAt",
+            ],
           },
           description:
             "Fields the answering surface could not observe at all. Absent from every entry, and unknown rather than false.",

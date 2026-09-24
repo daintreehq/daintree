@@ -117,6 +117,30 @@ describe("terminal:get-output-activity (#12495)", () => {
     expect(result["term-a"]).not.toHaveProperty("lastOutputChangeAt");
   });
 
+  it("projects the typed-input time independently of the output time (#12718)", async () => {
+    getTerminalAsync.mockResolvedValue({
+      id: "term-a",
+      projectId: "project-a",
+      lastOutputChangeAt: undefined,
+      lastTypedInputAt: 7_000,
+    });
+
+    await expect(getOutputActivity(SENDER_A, ["term-a"])).resolves.toEqual({
+      "term-a": { status: "read", lastTypedInputAt: 7_000 },
+    });
+
+    getTerminalAsync.mockResolvedValue({
+      id: "term-a",
+      projectId: "project-a",
+      lastOutputChangeAt: 5_000,
+      lastTypedInputAt: 7_000,
+    });
+
+    await expect(getOutputActivity(SENDER_A, ["term-a"])).resolves.toEqual({
+      "term-a": { status: "read", lastOutputChangeAt: 5_000, lastTypedInputAt: 7_000 },
+    });
+  });
+
   it("reports a terminal whose read failed as unreadable, never as read", async () => {
     // `getTerminalAsync` folds an RPC failure into null. A `read` with no
     // timestamp would present that failure as a screen that never changed.

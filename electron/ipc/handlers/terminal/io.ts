@@ -595,9 +595,9 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   };
 
   /**
-   * Read `lastOutputChangeAt` for a set of terminals (#12495), for a
-   * `terminal.getStatus` call that asked for output. The timestamp lives on the
-   * pty-host's viewport tracker, so this is the hop the default poll never
+   * Read `lastOutputChangeAt` and `lastTypedInputAt` for a set of terminals
+   * (#12495, #12718), for a `terminal.getStatus` call that asked for output.
+   * Both live on the pty-host record, so this is the hop the default poll never
    * makes.
    *
    * Same gate and reply shape as submission lookup: every requested id gets an
@@ -617,10 +617,14 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       // `getTerminalAsync` folds an RPC failure into `null`.
       if (!info) return;
       if (!isRecordOwnedBy(info, ctx)) return;
-      out[id] =
-        info.lastOutputChangeAt === undefined
-          ? { status: "read" }
-          : { status: "read", lastOutputChangeAt: info.lastOutputChangeAt };
+      // Projected independently: an input write with no screen change yet
+      // must not hide behind an absent output timestamp.
+      const lookup: TerminalOutputActivityLookup = { status: "read" };
+      if (info.lastOutputChangeAt !== undefined) {
+        lookup.lastOutputChangeAt = info.lastOutputChangeAt;
+      }
+      if (info.lastTypedInputAt !== undefined) lookup.lastTypedInputAt = info.lastTypedInputAt;
+      out[id] = lookup;
     });
     return out;
   };
