@@ -28,6 +28,10 @@ export interface SearchFieldProps extends Omit<
   clearLabel?: string;
   /** Anything else trailing inside the field, after the clear button. */
   trailing?: React.ReactNode;
+  /** Replaces the magnifier — a spinner while results refresh, say. */
+  icon?: React.ReactNode;
+  /** Marks the query itself as unusable (an invalid pattern). */
+  invalid?: boolean;
 }
 
 /**
@@ -49,6 +53,8 @@ export function SearchField({
   onClear,
   clearLabel = "Clear search",
   trailing,
+  icon,
+  invalid = false,
   className,
   value,
   ...inputProps
@@ -80,17 +86,19 @@ export function SearchField({
     <div
       {...fieldProps}
       data-size={size}
+      data-invalid={invalid ? "true" : undefined}
       className={cn("search-field", fieldClassName)}
       style={fieldStyle}
       onPointerDown={handlePointerDown}
     >
-      <Search className="search-field-icon" aria-hidden="true" />
+      {icon ?? <Search className="search-field-icon" aria-hidden="true" />}
       {prefix}
       <input
         ref={setRefs}
         type="text"
         value={value}
         className={cn("search-field-input", className)}
+        aria-invalid={invalid || undefined}
         {...inputProps}
       />
       {onClear && hasValue && (

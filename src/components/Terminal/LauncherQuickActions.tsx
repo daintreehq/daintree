@@ -104,16 +104,16 @@ function PaletteSearchButton() {
       type="button"
       onClick={handleClick}
       aria-keyshortcuts={ariaKeyshortcuts}
-      // `border-strong`, not `border-default`. The fill alone was carrying the
-      // whole distinction and it is a ~1.06:1 lift off the canvas — below what
-      // an eye resolves, so at rest the anchor was really just "the wide one".
-      // The boundary is where the weight can go without spending accent (house
-      // rule: a neutral high-contrast control beats an accent one for a primary
-      // CTA), and it is the one border on the surface that is allowed to be
-      // stronger than `subtle`.
-      className="launcher-press flex w-full items-center gap-2.5 rounded-[var(--radius-md)] border border-border-strong bg-overlay-medium px-3 py-3 text-sm text-text-secondary transition-colors active:scale-[0.98] active:duration-[1ms] hover:bg-overlay-strong hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+      // Drawn as the app's search field at its palette size, so it reads as the
+      // same control as the palette it opens. It keeps a lifted fill rather than
+      // the family's canvas well: it sits ON the canvas, where a canvas-toned
+      // well would leave only the hairline. The magnifier and the label
+      // identify it; the old `border-strong` edge was weight the quiet rest of
+      // the family does not carry.
+      data-size="palette"
+      className="search-field launcher-press w-full py-3 [--search-field-bg:var(--theme-overlay-medium)] active:scale-[0.98] active:duration-[1ms]"
     >
-      <Search className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
+      <Search className="search-field-icon" aria-hidden="true" />
       <span className="min-w-0 flex-1 truncate text-left">Search agents &amp; panels…</span>
       {combo && (
         <span aria-hidden="true">
