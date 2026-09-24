@@ -320,6 +320,23 @@ async function selectWorktree(page: Page, branch: string | null): Promise<void> 
   await settle(page, 400);
 }
 
+/**
+ * Open the main worktree card's actions menu and pick an item under Sessions — the
+ * pointer path to the same session-wide actions the palette reaches.
+ */
+async function pickCardSessionsItem(page: Page, item: RegExp): Promise<void> {
+  const card = page.locator(SEL.worktree.mainCard).first();
+  await card.hover();
+  await card.locator(SEL.worktree.actionsMenu).first().click();
+  const sessions = page.getByRole("menuitem", { name: "Sessions" });
+  await sessions.waitFor({ state: "visible", timeout: 5000 });
+  await sessions.hover();
+  await sessions.press("ArrowRight").catch(() => {});
+  const target = page.getByRole("menuitem", { name: item }).first();
+  await target.waitFor({ state: "visible", timeout: 5000 });
+  await target.click();
+}
+
 test("terminal destructive confirm review — every copy variant", async () => {
   test.info().annotations.push({
     type: "conditional-skip",
@@ -415,6 +432,23 @@ test("terminal destructive confirm review — every copy variant", async () => {
     await step(page, "clear-history", async () => {
       await dispatch(page, "worktree.sessions.clearHistory");
       await snapDialog(page, "08-clear-history", /^Clear session history for '.+'\?$/);
+    });
+
+    // The worktree card menu reaches the same three session-wide actions by pointer.
+    // Whatever dialog it raises must be this one, not a call-site copy of it.
+    await step(page, "menu-trash-all", async () => {
+      await pickCardSessionsItem(page, /^Trash all sessions/);
+      await snapDialog(page, "13-menu-trash-all", /\?$/);
+    });
+
+    await step(page, "menu-end-all", async () => {
+      await pickCardSessionsItem(page, /^(End|Terminate) all sessions/);
+      await snapDialog(page, "14-menu-end-all", /\?$/);
+    });
+
+    await step(page, "menu-clear-history", async () => {
+      await pickCardSessionsItem(page, /^Clear session history/);
+      await snapDialog(page, "15-menu-clear-history", /\?$/);
     });
 
     // Keyboard focus, delivered by the keyboard so Chromium paints :focus-visible. The
