@@ -781,6 +781,8 @@ function RowOptionsMenu({
     if (reportInFlight) return;
     if (!entry.correlationId) return;
     if (entry.type !== "error" && entry.type !== "warning") return;
+    // Leaves for the browser, so the inbox closes behind it like Go to source.
+    useUIStore.getState().closeNotificationCenter();
     setReportInFlight(true);
     void reportNotificationOnGitHub(entry, messageString).finally(() => {
       setReportInFlight(false);

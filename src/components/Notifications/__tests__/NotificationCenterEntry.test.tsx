@@ -812,6 +812,18 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
     expect(dispatchMock).toHaveBeenCalledWith("panel.focus", { panelId: "pane-42" });
   });
 
+  it("closes the inbox when Report on GitHub hands off to the browser", async () => {
+    useUIStore.setState({ notificationCenterOpen: true });
+    render(
+      <NotificationCenterEntry entry={makeEntry({ type: "error", correlationId: "corr-close" })} />
+    );
+    await openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Report on GitHub"));
+    });
+    expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+  });
+
   it("closes the inbox when Go to source takes you to the panel", async () => {
     useUIStore.setState({ notificationCenterOpen: true });
     render(<NotificationCenterEntry entry={makeEntry({ context: { panelId: "pane-42" } })} />);
