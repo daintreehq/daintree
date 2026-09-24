@@ -127,6 +127,11 @@ export function DevPreviewDestructiveConfirmDialog({
       }
       onConfirm={onConfirm}
     >
+      {/* Ahead of the frame, not after it: as the body's last child it took
+          the frame's place in `space-y` and pushed a gap under it. */}
+      <p className="sr-only" role="status" data-testid="dev-preview-destructive-status">
+        {settledAnnouncement(tier, meta, sizes)}
+      </p>
       <PreviewFrame>
         {metaError && (
           <PreviewNotice
@@ -144,9 +149,6 @@ export function DevPreviewDestructiveConfirmDialog({
             <NodeModulesPreview meta={meta} sizes={sizes} />
           ))}
       </PreviewFrame>
-      <p className="sr-only" role="status" data-testid="dev-preview-destructive-status">
-        {settledAnnouncement(tier, meta, sizes)}
-      </p>
     </ConfirmDialog>
   );
 }
