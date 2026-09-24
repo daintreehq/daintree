@@ -506,12 +506,24 @@ export function TooltipFallback({
       {status === "loading" && (
         <div className="space-y-2" aria-hidden="true">
           <div className="space-y-1.5">
-            <div className="animate-pulse-delayed h-2.5 w-full rounded-full bg-tint/[0.1]" />
-            <div className="animate-pulse-delayed h-2.5 w-2/3 rounded-full bg-tint/[0.1]" />
+            <div
+              data-skeleton-bone=""
+              className="animate-pulse-delayed h-2.5 w-full rounded-full bg-tint/[0.1]"
+            />
+            <div
+              data-skeleton-bone=""
+              className="animate-pulse-delayed h-2.5 w-2/3 rounded-full bg-tint/[0.1]"
+            />
           </div>
           <div className="flex items-center gap-3">
-            <div className="animate-pulse-delayed h-2.5 w-16 rounded-full bg-tint/[0.1]" />
-            <div className="animate-pulse-delayed h-2.5 w-20 rounded-full bg-tint/[0.1]" />
+            <div
+              data-skeleton-bone=""
+              className="animate-pulse-delayed h-2.5 w-16 rounded-full bg-tint/[0.1]"
+            />
+            <div
+              data-skeleton-bone=""
+              className="animate-pulse-delayed h-2.5 w-20 rounded-full bg-tint/[0.1]"
+            />
           </div>
         </div>
       )}

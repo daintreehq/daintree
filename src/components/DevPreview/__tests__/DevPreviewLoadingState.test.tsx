@@ -77,14 +77,17 @@ describe("DevPreviewLoadingState", () => {
     expect(caption?.textContent).toBe("Rehydrating preview");
   });
 
-  it("does not place a second live region inside the aria-busy status wrapper", () => {
+  it("speaks the phase from live regions outside the status wrapper, which is not itself live", () => {
     const { container } = render(
       <DevPreviewLoadingState variant="overlay" isLoading phaseLabel="Rehydrating preview" />
     );
     advance(UI_DOHERTY_THRESHOLD);
-    // Every aria-live region lives outside the aria-busy status wrapper, where
-    // it would otherwise be silenced.
-    const liveRegions = container.querySelectorAll("[aria-live]");
+    // The hint speaks the phase. A status wrapper that was also live would say
+    // it a second time, so it is named but `aria-live="off"`, and never busy.
+    const wrapper = container.querySelector('[role="status"]')!;
+    expect(wrapper.getAttribute("aria-live")).toBe("off");
+    expect(wrapper.closest('[aria-busy="true"]')).toBeNull();
+    const liveRegions = container.querySelectorAll('[aria-live]:not([aria-live="off"])');
     expect(liveRegions.length).toBeGreaterThan(0);
     for (const region of liveRegions) {
       expect(region.closest('[role="status"]')).toBeNull();

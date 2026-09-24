@@ -124,10 +124,8 @@ export function Bone({ className }: { className?: string }) {
   return (
     <span
       aria-hidden="true"
-      className={cn(
-        "inline-block h-3.5 rounded-lg bg-tint/[0.08] animate-pulse-delayed",
-        className
-      )}
+      data-skeleton-bone=""
+      className={cn("inline-block h-3.5 rounded-lg bg-tint/[0.1] animate-pulse-delayed", className)}
     />
   );
 }

@@ -180,7 +180,7 @@ const EXCEPTIONS: {
   {
     file: "src/components/Pulse/ProjectPulseCard.tsx",
     match: "rounded-[2px]",
-    count: 3,
+    count: 2,
     reason: "Same heat-cell geometry as PulseHeatmap, plus its loading skeleton",
   },
   {

@@ -220,12 +220,15 @@ function RowSkeleton() {
   return (
     <div className="w-full flex items-center gap-2.5 py-2 px-3 rounded-[var(--radius-md)]">
       <div className="flex items-center gap-2.5 w-full animate-pulse-delayed">
-        <div className="w-8 h-8 rounded-[var(--radius-md)] bg-overlay-strong" />
+        <div
+          data-skeleton-bone=""
+          className="w-8 h-8 rounded-[var(--radius-md)] bg-overlay-strong"
+        />
         <div className="flex-1 space-y-2">
-          <div className="h-3 w-24 rounded-sm bg-overlay-strong" />
-          <div className="h-2 w-36 rounded-sm bg-overlay-strong" />
+          <div data-skeleton-bone="" className="h-3 w-24 rounded-sm bg-overlay-strong" />
+          <div data-skeleton-bone="" className="h-2 w-36 rounded-sm bg-overlay-strong" />
         </div>
-        <div className="w-9 h-5 rounded-full bg-overlay-strong" />
+        <div data-skeleton-bone="" className="w-9 h-5 rounded-full bg-overlay-strong" />
       </div>
     </div>
   );

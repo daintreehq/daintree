@@ -27,15 +27,15 @@ function FullSkeleton({
       <div
         className="flex max-w-[28ch] flex-col items-center gap-3 text-center"
         role="status"
-        aria-busy="true"
+        aria-live="off"
         aria-label={phaseLabel}
       >
         <span className="sr-only">{phaseLabel}</span>
 
         {/* Spinner + visible caption gated by the Doherty threshold. The
-            caption is aria-hidden — the role=status wrapper above owns the AT
-            announcement, and an aria-live here would be silenced by its
-            aria-busy="true" anyway. The phase also flows through the hint. */}
+            caption is aria-hidden. The phase is spoken by the hint below, so
+            this status region is named but not live (`aria-live="off"`): two
+            live regions carrying the same phase would announce it twice. */}
         {showSpinner && (
           <>
             <Spinner size="xl" className="text-daintree-text/45" />
@@ -73,13 +73,13 @@ function OverlaySkeleton({
       <div
         className="flex max-w-[28ch] flex-col items-center gap-3 text-center"
         role="status"
-        aria-busy="true"
+        aria-live="off"
         aria-label={phaseLabel}
       >
         <span className="sr-only">{phaseLabel}</span>
 
-        {/* Visible caption only (aria-hidden) — the wrapper owns the AT
-            announcement; the phase also flows through the hint. */}
+        {/* Visible caption only (aria-hidden). The wrapper is named but not
+            live — the hint below speaks the phase, once. */}
         <Spinner size="xl" className="text-daintree-text/45" />
         <p aria-hidden="true" className="text-sm text-text-secondary break-words">
           {phaseLabel}

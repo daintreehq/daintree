@@ -241,12 +241,18 @@ function PulseSkeleton({ className }: { className?: string }) {
     >
       <div className="pulse-card-header animate-pulse-delayed px-4 py-3 border-b border-border-default flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded-[2px] pulse-skeleton-shimmer shrink-0" />
-          <div className="h-4 pulse-skeleton-shimmer rounded-sm w-36" />
+          <div
+            data-skeleton-bone=""
+            className="w-4 h-4 rounded-[var(--radius-xs)] pulse-skeleton-shimmer shrink-0"
+          />
+          <div
+            data-skeleton-bone=""
+            className="h-4 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-36"
+          />
         </div>
         <div className="flex items-center gap-2">
-          <div className="h-6 pulse-skeleton-shimmer rounded-md w-32" />
-          <div className="w-6 h-6 rounded-md pulse-skeleton-shimmer" />
+          <div data-skeleton-bone="" className="h-6 pulse-skeleton-shimmer rounded-md w-32" />
+          <div data-skeleton-bone="" className="w-6 h-6 rounded-md pulse-skeleton-shimmer" />
         </div>
       </div>
 
@@ -263,28 +269,41 @@ function PulseSkeleton({ className }: { className?: string }) {
           {Array.from({ length: SKELETON_WEEKS * 7 }).map((_, index) => (
             <div
               key={index}
+              data-skeleton-bone=""
               className="rounded-[2px] pulse-skeleton-shimmer shrink-0"
               style={{ width: `${SKELETON_CELL}px`, height: `${SKELETON_CELL}px` }}
             />
           ))}
         </div>
 
-        <div className="h-3 pulse-skeleton-shimmer rounded-sm w-72" />
+        <div
+          data-skeleton-bone=""
+          className="h-3 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-72"
+        />
 
         <div className="border-t border-border-default pt-3 min-h-9">
           <div className="flex items-center gap-2">
-            <div className="h-5 w-16 rounded-full pulse-skeleton-shimmer" />
-            <div className="h-5 w-12 rounded-full pulse-skeleton-shimmer" />
-            <div className="h-5 w-12 rounded-full pulse-skeleton-shimmer" />
-            <div className="h-5 w-24 rounded-full pulse-skeleton-shimmer" />
+            <div data-skeleton-bone="" className="h-5 w-16 rounded-full pulse-skeleton-shimmer" />
+            <div data-skeleton-bone="" className="h-5 w-12 rounded-full pulse-skeleton-shimmer" />
+            <div data-skeleton-bone="" className="h-5 w-12 rounded-full pulse-skeleton-shimmer" />
+            <div data-skeleton-bone="" className="h-5 w-24 rounded-full pulse-skeleton-shimmer" />
           </div>
         </div>
 
         <div className="border-t border-border-default pt-3">
           <div className="flex items-center gap-4">
-            <div className="h-4 pulse-skeleton-shimmer rounded-sm w-20" />
-            <div className="h-4 pulse-skeleton-shimmer rounded-sm w-24" />
-            <div className="h-4 pulse-skeleton-shimmer rounded-sm w-16" />
+            <div
+              data-skeleton-bone=""
+              className="h-4 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-20"
+            />
+            <div
+              data-skeleton-bone=""
+              className="h-4 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-24"
+            />
+            <div
+              data-skeleton-bone=""
+              className="h-4 pulse-skeleton-shimmer rounded-[var(--radius-xs)] w-16"
+            />
           </div>
         </div>
       </div>
@@ -295,10 +314,10 @@ function PulseSkeleton({ className }: { className?: string }) {
 function HealthSectionSkeleton() {
   return (
     <div className="animate-pulse-delayed flex items-center gap-2">
-      <div className="h-5 pulse-skeleton-shimmer rounded-full w-16" />
-      <div className="h-5 pulse-skeleton-shimmer rounded-full w-12" />
-      <div className="h-5 pulse-skeleton-shimmer rounded-full w-12" />
-      <div className="h-5 pulse-skeleton-shimmer rounded-full w-24" />
+      <div data-skeleton-bone="" className="h-5 pulse-skeleton-shimmer rounded-full w-16" />
+      <div data-skeleton-bone="" className="h-5 pulse-skeleton-shimmer rounded-full w-12" />
+      <div data-skeleton-bone="" className="h-5 pulse-skeleton-shimmer rounded-full w-12" />
+      <div data-skeleton-bone="" className="h-5 pulse-skeleton-shimmer rounded-full w-24" />
     </div>
   );
 }

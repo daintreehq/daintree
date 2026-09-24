@@ -509,7 +509,8 @@ describe("BrowserPane webview lifecycle regression", () => {
     });
 
     const status = getByRole("status");
-    expect(status.getAttribute("aria-busy")).toBe("true");
+    // Never busy: on a live region that would hold back its own message.
+    expect(status.closest('[aria-busy="true"]')).toBeNull();
     expect(status.getAttribute("aria-label")).toBe("Loading…");
     expect(status.textContent).toContain("Loading…");
   });
