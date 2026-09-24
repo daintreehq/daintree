@@ -1,6 +1,7 @@
 import { useEffect, useId, useState } from "react";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_INERT_CLASSES } from "@/components/ui/ariaDisabled";
 import { Spinner } from "@/components/ui/Spinner";
 import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
@@ -159,7 +160,7 @@ export function PluginInstallProgressBanner({
                 aria-disabled={!canCancel || undefined}
                 aria-describedby={note && !canCancel ? noteId : undefined}
                 onClick={canCancel ? onCancel : undefined}
-                className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-text-secondary"
+                className={canCancel ? undefined : ARIA_DISABLED_INERT_CLASSES}
               >
                 Cancel install
               </Button>

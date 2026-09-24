@@ -744,7 +744,9 @@ describe("FilePane reveal in file manager (#11386)", () => {
       findButton(container, revealLabel).dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
-    expect(findButton(container, "Retry opening in editor").hasAttribute("disabled")).toBe(false);
+    expect(
+      findButton(container, "Retry opening in editor").getAttribute("aria-disabled")
+    ).toBeNull();
 
     await act(async () => {
       revealGate.resolve({ ok: true, result: undefined });

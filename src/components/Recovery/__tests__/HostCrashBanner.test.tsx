@@ -190,7 +190,7 @@ describe("HostCrashBanner", () => {
     await act(async () => {
       fireEvent.click(button);
     });
-    expect(button.disabled).toBe(false);
+    expect(button.getAttribute("aria-disabled")).toBeNull();
     expect(button.textContent).toMatch(/Restart service/);
   });
 
@@ -205,7 +205,7 @@ describe("HostCrashBanner", () => {
     await act(async () => {
       fireEvent.click(button);
     });
-    expect(button.disabled).toBe(false);
+    expect(button.getAttribute("aria-disabled")).toBeNull();
   });
 
   it("disappears when backend transitions back to connected", () => {

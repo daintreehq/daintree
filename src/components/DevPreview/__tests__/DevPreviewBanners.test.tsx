@@ -123,7 +123,7 @@ describe("DevPreviewStuckBanner", () => {
     const restartButton = screen.getByRole("button", {
       name: /restart dev server/i,
     }) as HTMLButtonElement;
-    expect(restartButton.disabled).toBe(true);
+    expect(restartButton.getAttribute("aria-disabled")).toBe("true");
   });
 });
 

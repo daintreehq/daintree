@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ARIA_DISABLED_INERT_CLASSES } from "@/components/ui/ariaDisabled";
 import { Spinner } from "@/components/ui/Spinner";
 import { usePanelStore } from "@/store/panelStore";
 import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
@@ -72,8 +73,11 @@ export function HostCrashBanner() {
     <Button
       variant="ghost"
       size="sm"
-      onClick={handleSendDiagnostics}
-      disabled={isCollectingDiagnostics}
+      onClick={isCollectingDiagnostics ? undefined : handleSendDiagnostics}
+      // Focusable while collecting, like the banner's own actions: the label
+      // flips under the keyboard user rather than dropping them to <body>.
+      aria-disabled={isCollectingDiagnostics || undefined}
+      className={isCollectingDiagnostics ? ARIA_DISABLED_INERT_CLASSES : undefined}
       aria-label="Send diagnostics"
     >
       <Download aria-hidden="true" />

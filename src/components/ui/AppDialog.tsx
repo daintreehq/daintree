@@ -46,6 +46,7 @@ import {
   SurfaceHeaderCloseButton,
 } from "@/components/ui/SurfaceHeader";
 import { Button } from "./button";
+import { ARIA_DISABLED_CLASSES } from "./ariaDisabled";
 
 type DialogSize = "sm" | "md" | "lg" | "4xl" | "5xl" | "6xl" | "7xl" | "workspace";
 type DialogVariant = "default" | "destructive" | "info";
@@ -510,13 +511,7 @@ const DIALOG_INSET = "px-6";
 // attribute — a natively-disabled button leaves the tab order and refuses focus,
 // so the initial-focus pass above (which resolves Cancel/Confirm by
 // `data-confirm-role` and calls `.focus()` on the match) would silently strand
-// focus outside the dialog. The attribute is advisory, so each action vetoes its
-// own activation in JS; these classes stand in for the `disabled:` variants that
-// stop matching. Applied only when the action itself is disabled: `Button` also
-// synthesises `aria-disabled` while `loading`, and dimming there would fade the
-// spinner it overlays. No `aria-disabled:pointer-events-none` — that would
-// suppress hover and put the control back out of reach.
-const DISABLED_ACTION_CLASSES = "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed";
+// focus outside the dialog. Each action vetoes its own activation in JS.
 
 AppDialog.Header = function AppDialogHeader({ children, className }: AppDialogHeaderProps) {
   // `density` is deliberately not forwarded: every dialog header is comfortable,
@@ -725,7 +720,7 @@ AppDialog.Footer = function AppDialogFooter({
               aria-disabled={secondaryAction.disabled || undefined}
               className={cn(
                 "text-text-secondary hover:text-text-primary",
-                secondaryAction.disabled && DISABLED_ACTION_CLASSES
+                secondaryAction.disabled && ARIA_DISABLED_CLASSES
               )}
               data-confirm-role="cancel"
             >
@@ -746,7 +741,7 @@ AppDialog.Footer = function AppDialogFooter({
               aria-disabled={primaryAction.disabled || undefined}
               aria-describedby={primaryDescribedBy}
               loading={primaryAction.loading}
-              className={primaryAction.disabled ? DISABLED_ACTION_CLASSES : undefined}
+              className={primaryAction.disabled ? ARIA_DISABLED_CLASSES : undefined}
               data-confirm-role="confirm"
             >
               {primaryAction.label}

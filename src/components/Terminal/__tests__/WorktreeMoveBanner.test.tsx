@@ -204,7 +204,7 @@ describe("WorktreeMoveBanner", () => {
     const { onDismiss } = renderBanner(undefined);
 
     const dismiss = screen.getByRole("button", { name: DISMISS });
-    expect(dismiss.hasAttribute("disabled")).toBe(false);
+    expect(dismiss.getAttribute("aria-disabled")).toBeNull();
 
     fireEvent.click(dismiss);
     expect(onDismiss).toHaveBeenCalledTimes(1);

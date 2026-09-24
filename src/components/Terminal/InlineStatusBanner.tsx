@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, type CSSProperties } from "react";
 import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button, type ButtonProps } from "@/components/ui/button";
+import { ARIA_DISABLED_INERT_CLASSES } from "@/components/ui/ariaDisabled";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useWindowControlsInset, useTitleBarSurface } from "@/components/ui/WindowControlsInset";
 import { getVisibleTabbableElements, restoreFocusTo } from "@/lib/accessibility";
@@ -66,7 +67,9 @@ interface BaseInlineStatusBannerProps {
   /**
    * Keep the dismiss button in place but inert. A banner that unmounts its ×
    * while an action is in flight shifts every control beside it; one that
-   * disables it holds the row still.
+   * disables it holds the row still. Like a disabled action, it stays
+   * focusable (`aria-disabled`), so a keyboard user on it isn't dropped to
+   * <body> when it turns inert.
    */
   closeDisabled?: boolean;
   /**
@@ -411,6 +414,7 @@ export function InlineStatusBanner({
 
   const handleClose = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (closeDisabled) return;
     onClose?.();
   };
 
@@ -419,10 +423,11 @@ export function InlineStatusBanner({
       variant="ghost"
       size={isInline ? "icon-xs" : "icon-sm"}
       onClick={handleClose}
-      disabled={closeDisabled}
+      aria-disabled={closeDisabled || undefined}
       aria-label={closeAriaLabel}
       className={cn(
         "shrink-0",
+        closeDisabled && ARIA_DISABLED_INERT_CLASSES,
         isTitleBarSurface && "app-no-drag",
         // Once the strip's controls drop beneath the text, the × keeps the
         // right edge, in the column every neighbouring strip's × occupies.
@@ -493,12 +498,17 @@ export function InlineStatusBanner({
             // be the one thing on the row the user acts on.
             className={cn(
               isInline && "shadow-none inset-shadow-none",
-              isInline && !action.iconOnly && "h-6 px-2.5"
+              isInline && !action.iconOnly && "h-6 px-2.5",
+              action.disabled && !action.loading && ARIA_DISABLED_INERT_CLASSES
             )}
-            disabled={action.disabled}
+            // `aria-disabled`, not `disabled`: most of these flip while the
+            // banner stays up (Restart → Restarting…), and a natively disabled
+            // button drops the keyboard user's focus to <body> as it does.
+            aria-disabled={action.disabled || undefined}
             loading={action.loading}
             onClick={(e) => {
               e.stopPropagation();
+              if (action.disabled) return;
               action.onClick();
             }}
             aria-label={action.ariaLabel}

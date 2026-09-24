@@ -215,11 +215,11 @@ describe("SafeModeBanner", () => {
     fireEvent.click(
       within(screen.getByRole("alertdialog")).getByRole("button", { name: /^Restart normally$/ })
     );
-    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
     await act(async () => {
       await Promise.resolve();
     });
-    expect(button.disabled).toBe(false);
+    expect(button.getAttribute("aria-disabled")).toBeNull();
     expect(button.textContent).toMatch(/Restart normally/);
   });
 
