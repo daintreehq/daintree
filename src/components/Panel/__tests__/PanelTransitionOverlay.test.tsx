@@ -289,6 +289,15 @@ describe("PanelTransitionOverlay", () => {
     expect(shadows.some((s) => !s.includes("transparent"))).toBe(true);
   });
 
+  it("lands with the destination's own corner radius", () => {
+    render(<PanelTransitionOverlay />);
+    const chip = elementAt(targetRect);
+    chip.style.borderTopLeftRadius = "5px";
+    fire("minimize", () => chip);
+    const keyframes = geometry().effect.keyframes;
+    expect(keyframes[keyframes.length - 1]!.borderRadius).toBe("5px");
+  });
+
   it("does not mark the grid pane a restore lands on", () => {
     render(<PanelTransitionOverlay />);
     const pane = elementAt(targetRect);

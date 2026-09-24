@@ -85,6 +85,20 @@ describe("animatePanelMove", () => {
     expect(resolve(target)).toEqual(chipBox);
   });
 
+  it("lands on the chip drawn in a dock slot, not the slot around it", () => {
+    place("p1", "grid");
+    mount({ "data-panel-id": "p1", "data-panel-location": "grid" }, paneBox);
+    animatePanelMove("p1", "minimize", () => place("p1", "dock"));
+
+    const slot = mount({ "data-dock-item-id": "p1" }, { ...chipBox, y: 630, height: 45 });
+    const chip = document.createElement("div");
+    chip.setAttribute("data-dock-item", "");
+    Object.defineProperty(chip, "getBoundingClientRect", { value: () => ({ ...chipBox }) });
+    slot.appendChild(chip);
+
+    expect(resolve(trigger.mock.calls[0]![3])).toEqual(chipBox);
+  });
+
   it("never aims at a chip for a move the store refused", () => {
     place("p1", "grid");
     mount({ "data-panel-id": "p1", "data-panel-location": "grid" }, paneBox);

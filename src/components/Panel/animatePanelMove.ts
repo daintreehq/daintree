@@ -17,7 +17,8 @@ function cssEscape(value: string): string {
 /**
  * The on-screen element standing for any of `ids` in `placement`. A tab group
  * shows up as one element keyed by a single member — the active tab's pane in
- * the grid, the first member's chip in the dock — so every member is tried.
+ * the grid, the first member's chip in the dock — so every member is tried. In
+ * the dock it is the chip itself, not the full-height slot it sits in.
  */
 function findElement(ids: readonly string[], placement: Placement): Element | null {
   for (const id of ids) {
@@ -25,7 +26,9 @@ function findElement(ids: readonly string[], placement: Placement): Element | nu
       placement === "grid"
         ? `[data-panel-id="${cssEscape(id)}"][data-panel-location="grid"]`
         : `[data-dock-item-id="${cssEscape(id)}"]`;
-    const element = document.querySelector(selector);
+    const slot = document.querySelector(selector);
+    // A dock slot is taller than the chip drawn in it; land on the chip itself.
+    const element = placement === "dock" ? (slot?.querySelector("[data-dock-item]") ?? slot) : slot;
     if (!element) continue;
     const { width, height } = element.getBoundingClientRect();
     if (width > 0 && height > 0) return element;

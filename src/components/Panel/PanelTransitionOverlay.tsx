@@ -86,8 +86,10 @@ const TITLE_OPACITY: Partial<Record<TransitionDirection, Stops>> = {
   ],
 };
 
-const RECEIVING_CUE_SHADOW = "0 0 0 1px var(--color-border-strong)";
-const NO_CUE_SHADOW = "0 0 0 1px transparent";
+// Inset, so the hairline follows the chip's own radius and cannot be clipped by
+// the rail it sits in.
+const RECEIVING_CUE_SHADOW = "inset 0 0 0 1px var(--color-border-strong)";
+const NO_CUE_SHADOW = "inset 0 0 0 1px transparent";
 
 type TransitionListener = (transition: TransitionState) => void;
 const listeners = new Set<TransitionListener>();
@@ -187,6 +189,8 @@ function toBox(rect: TransitionRect) {
 interface Resolved {
   rect: TransitionRect;
   element: Element | null;
+  /** The destination's own corner radius, so the ghost lands with its shape. */
+  radius: string | null;
 }
 
 function resolveTarget(target: TransitionTarget): Resolved | null {
@@ -195,9 +199,16 @@ function resolveTarget(target: TransitionTarget): Resolved | null {
   if (value instanceof Element) {
     const { x, y, width, height } = value.getBoundingClientRect();
     const rect = { x, y, width, height };
-    return hasArea(rect) ? { rect, element: value } : null;
+    const radius = getComputedStyle(value).borderTopLeftRadius || null;
+    return hasArea(rect) ? { rect, element: value, radius } : null;
   }
-  return hasArea(value) ? { rect: value, element: null } : null;
+  return hasArea(value) ? { rect: value, element: null, radius: null } : null;
+}
+
+function landing(resolved: Resolved) {
+  return resolved.radius
+    ? { ...toBox(resolved.rect), borderRadius: resolved.radius }
+    : toBox(resolved.rect);
 }
 
 function sameRect(a: TransitionRect, b: TransitionRect): boolean {
@@ -222,7 +233,12 @@ function TransitionGhost({ transition, onDone }: TransitionGhostProps) {
 
     const duration = getPanelTransitionDuration(direction);
     const easing = direction === "minimize" ? PANEL_MINIMIZE_EASING : PANEL_RESTORE_EASING;
-    const from = toBox(sourceRect);
+    // The ghost starts with its own (the pane's) radius; spelled out so a
+    // landing radius has something to interpolate from.
+    const from = {
+      ...toBox(sourceRect),
+      borderRadius: getComputedStyle(element).borderTopLeftRadius,
+    };
     let frame = 0;
     let fallback: ReturnType<typeof setTimeout> | undefined;
     let flight: Animation[] = [];
@@ -267,7 +283,7 @@ function TransitionGhost({ transition, onDone }: TransitionGhostProps) {
         if (!sameRect(next.rect, last) && effect instanceof KeyframeEffect) {
           // Re-aim without restarting the clock; the ghost bends toward the new
           // spot instead of snapping back to the start.
-          effect.setKeyframes([from, toBox(next.rect)]);
+          effect.setKeyframes([from, landing(next)]);
         }
         track(next.rect);
       });
@@ -285,7 +301,7 @@ function TransitionGhost({ transition, onDone }: TransitionGhostProps) {
         return;
       }
       const timing = { duration, fill: "both" as const };
-      geometry = element.animate([from, toBox(resolved.rect)], { ...timing, easing });
+      geometry = element.animate([from, landing(resolved)], { ...timing, easing });
       flight = [
         geometry,
         element.animate(toStops(CONTAINER_OPACITY[direction]), { ...timing, easing: "linear" }),
