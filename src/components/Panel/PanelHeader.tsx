@@ -123,6 +123,7 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 import type { ActionId } from "@shared/types/actions";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 
 /**
  * The window controls keep `icon-xs`'s 24px target but draw a 14px glyph, the
@@ -680,9 +681,12 @@ function PanelHeaderComponent({
     // A tab wider than the strip cannot fit either way; show its start — the
     // brand glyph and the first words are what identify it, not its close.
     if (tabLeft < containerLeft || tabEl.offsetWidth > tabListEl.clientWidth) {
-      tabListEl.scrollTo({ left: tabLeft, behavior: "smooth" });
+      tabListEl.scrollTo({ left: tabLeft, behavior: prefersReducedMotion() ? "auto" : "smooth" });
     } else if (tabRight > containerRight) {
-      tabListEl.scrollTo({ left: tabRight - tabListEl.clientWidth, behavior: "smooth" });
+      tabListEl.scrollTo({
+        left: tabRight - tabListEl.clientWidth,
+        behavior: prefersReducedMotion() ? "auto" : "smooth",
+      });
     }
   }, [activeTabId, isDragging, tabListEl]);
 
