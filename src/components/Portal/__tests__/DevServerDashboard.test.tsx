@@ -69,13 +69,13 @@ describe("DevServerDashboard", () => {
   it("shows the empty state when no active sessions", () => {
     mockSessions([]);
     render(<DevServerDashboard />);
-    expect(screen.getByText("No active dev servers")).toBeTruthy();
+    expect(screen.getByText("Open a Dev Server panel in any worktree to start one")).toBeTruthy();
   });
 
   it("renders no body before the store hydrates", () => {
     mockSessions([], { hydrated: false });
     render(<DevServerDashboard />);
-    expect(screen.queryByText("No active dev servers")).toBeNull();
+    expect(screen.queryByText("Open a Dev Server panel in any worktree to start one")).toBeNull();
     expect(screen.queryByText("Couldn't load dev servers")).toBeNull();
   });
 
@@ -83,7 +83,7 @@ describe("DevServerDashboard", () => {
     mockSessions([], { fetchError: true });
     render(<DevServerDashboard />);
     expect(screen.getByText("Couldn't load dev servers")).toBeTruthy();
-    expect(screen.queryByText("No active dev servers")).toBeNull();
+    expect(screen.queryByText("Open a Dev Server panel in any worktree to start one")).toBeNull();
   });
 
   it("hides plain stopped sessions but keeps restored-stopped", () => {
@@ -92,16 +92,23 @@ describe("DevServerDashboard", () => {
       session({ panelId: "p-restored", status: "restored-stopped", worktreeId: "wt-1" }),
     ]);
     render(<DevServerDashboard />);
-    expect(screen.queryByText("No active dev servers")).toBeNull();
+    expect(screen.queryByText("Open a Dev Server panel in any worktree to start one")).toBeNull();
     expect(screen.getByText("feature-foo")).toBeTruthy();
   });
 
-  it("renders worktree label, port and last output", () => {
+  it("renders a running server's label and port, keeping routine output to the tooltip", () => {
     mockSessions([session({ url: "http://localhost:4321", lastOutput: "ready in 200ms" })]);
-    render(<DevServerDashboard />);
+    const { container } = render(<DevServerDashboard />);
     expect(screen.getByText("feature-foo")).toBeTruthy();
     expect(screen.getByText(":4321")).toBeTruthy();
-    expect(screen.getByText("ready in 200ms")).toBeTruthy();
+    expect(screen.queryByText("ready in 200ms")).toBeNull();
+    expect(container.querySelector("li")?.getAttribute("title")).toBe("ready in 200ms");
+  });
+
+  it("shows progress output while a server is starting", () => {
+    mockSessions([session({ status: "starting", lastOutput: "> app@1.0.0 dev" })]);
+    render(<DevServerDashboard />);
+    expect(screen.getByText("> app@1.0.0 dev")).toBeTruthy();
   });
 
   it("uses predictedUrl for the port when url is null", () => {
@@ -154,12 +161,10 @@ describe("DevServerDashboard", () => {
     expect(stopDevServerByWorktree).toHaveBeenCalledWith({ worktreeId: "wt-1" });
   });
 
-  it("enables stop for errored sessions and fires the stop call", () => {
+  it("offers to dismiss an errored session's error, which fires the stop call", () => {
     mockSessions([session({ status: "error", terminalId: null, url: null })]);
     render(<DevServerDashboard />);
-    const stopButton = screen.getByLabelText(
-      "Stop dev server for feature-foo"
-    ) as HTMLButtonElement;
+    const stopButton = screen.getByLabelText("Dismiss error for feature-foo") as HTMLButtonElement;
     expect(stopButton.disabled).toBe(false);
     fireEvent.click(stopButton);
     expect(stopDevServerByWorktree).toHaveBeenCalledWith({ worktreeId: "wt-1" });
@@ -180,12 +185,63 @@ describe("DevServerDashboard", () => {
     expect(restartByWorktree).not.toHaveBeenCalled();
   });
 
-  it("disables stop for restored-stopped sessions", () => {
+  it("offers start, never stop, for restored-stopped sessions", () => {
     mockSessions([session({ status: "restored-stopped" })]);
     render(<DevServerDashboard />);
-    const stopButton = screen.getByLabelText(
-      "Stop dev server for feature-foo"
-    ) as HTMLButtonElement;
-    expect(stopButton.disabled).toBe(true);
+    expect(screen.queryByLabelText("Stop dev server for feature-foo")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Start dev server for feature-foo"));
+    expect(restartByWorktree).toHaveBeenCalledWith({ worktreeId: "wt-1" });
+  });
+
+  it("names why an errored session failed", () => {
+    mockSessions([
+      session({
+        status: "error",
+        terminalId: null,
+        url: null,
+        error: {
+          type: "port-conflict",
+          message: "Port 3000 in use",
+        } as DevPreviewSessionState["error"],
+      }),
+    ]);
+    render(<DevServerDashboard />);
+    expect(screen.getByText("Port 3000 in use")).toBeTruthy();
+  });
+
+  it("keeps Stop, not Dismiss, for an error whose server is still running", () => {
+    mockSessions([session({ status: "error", terminalId: "t-1", url: null })]);
+    render(<DevServerDashboard />);
+    expect(screen.queryByLabelText("Dismiss error for feature-foo")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Stop dev server for feature-foo"));
+    expect(stopDevServerByWorktree).toHaveBeenCalledWith({ worktreeId: "wt-1" });
+  });
+
+  it("prefers the error's reason over the latest output", () => {
+    mockSessions([
+      session({
+        status: "error",
+        terminalId: null,
+        url: null,
+        lastOutput: "noise line",
+        error: {
+          type: "port-conflict",
+          message: "Port 3000 in use",
+        } as DevPreviewSessionState["error"],
+      }),
+    ]);
+    render(<DevServerDashboard />);
+    expect(screen.getByText("Port 3000 in use")).toBeTruthy();
+    expect(screen.queryByText("noise line")).toBeNull();
+  });
+
+  it("summarises running and failed servers in the header", () => {
+    mockSessions([
+      session({ panelId: "p1" }),
+      session({ panelId: "p2", worktreeId: "wt-2" }),
+      session({ panelId: "p3", worktreeId: "wt-3", status: "error", terminalId: null }),
+    ]);
+    render(<DevServerDashboard />);
+    expect(screen.getByText("2 running · 1 failed")).toBeTruthy();
   });
 });

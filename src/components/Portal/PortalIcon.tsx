@@ -7,8 +7,13 @@ interface PortalIconProps {
   size?: "tab" | "launchpad";
 }
 
+const ICON_CLASS: Record<NonNullable<PortalIconProps["size"]>, string> = {
+  tab: "w-3.5 h-3.5",
+  launchpad: "w-5 h-5",
+};
+
 export function PortalIcon({ icon, size = "launchpad" }: PortalIconProps) {
-  const iconClass = size === "launchpad" ? "w-8 h-8" : "w-3 h-3";
+  const iconClass = ICON_CLASS[size];
 
   if (icon === "globe") {
     return <Globe className={iconClass} />;
