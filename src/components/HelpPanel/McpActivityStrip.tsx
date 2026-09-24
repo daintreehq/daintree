@@ -83,7 +83,6 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
     const seq = ++fetchSeq.current;
     // A refresh keeps the rows on screen; only a first read shows the skeleton.
     setLoading((wasLoading) => wasLoading || !hasRecords.current);
-    setError(false);
 
     void (async () => {
       try {
@@ -95,6 +94,9 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
         hasRecords.current = mine.length > 0;
         setRecords(mine);
         setLoading(false);
+        // Cleared on success rather than at the start, so a retry in flight
+        // keeps its error row (and its focused button) until it has an answer.
+        setError(false);
       } catch (err) {
         if (fetchSeq.current !== seq) return;
         logWarn("[McpActivityStrip] Failed to load audit records", { error: err });
@@ -199,7 +201,7 @@ export function McpActivityStrip({ sessionId, activity, compact = false }: McpAc
         collisionPadding={8}
         onOpenAutoFocus={(event) => event.preventDefault()}
         aria-label="Recent tool calls"
-        className="w-80"
+        className="w-80 max-w-[var(--radix-popover-content-available-width)]"
       >
         <RecentCallsPopover
           records={records}

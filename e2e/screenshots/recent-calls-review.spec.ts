@@ -198,7 +198,7 @@ test("recent tool calls popover — states, widths and themes", async ({ page })
     for (const name of ["empty", "error"] as const) {
       const { panel, content } = await open(page, name, theme, DEFAULT_WIDTH);
       await expect(
-        content.getByText(name === "empty" ? /show up here/i : /couldn't load/i)
+        content.getByText(name === "empty" ? /tool calls here/i : /couldn't load/i)
       ).toBeVisible();
       written.push(await snap(panel, `${name}-${theme}.png`));
     }

@@ -212,7 +212,7 @@ describe("McpActivityStrip", () => {
     getAuditRecords.mockResolvedValue([]);
     render(<McpActivityStrip sessionId="session-a" activity={null} />);
     fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
-    expect(await screen.findByText(/tool calls show up here/i)).toBeTruthy();
+    expect(await screen.findByText(/to see its tool calls here/i)).toBeTruthy();
   });
 
   it("does not flash old-session records after the session changes mid-fetch", async () => {
@@ -234,7 +234,7 @@ describe("McpActivityStrip", () => {
 
     // Reopen under session-b — the stale session-a result must not appear.
     fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
-    expect(await screen.findByText(/tool calls show up here/i)).toBeTruthy();
+    expect(await screen.findByText(/to see its tool calls here/i)).toBeTruthy();
     expect(screen.queryByText("stale-tool")).toBeNull();
   });
 
@@ -445,6 +445,46 @@ describe("McpActivityStrip", () => {
       { source: "user" }
     );
     expect(screen.queryByTestId("popover-content")).toBeNull();
+  });
+
+  it("keeps the rows it already read when a refresh fails", async () => {
+    getAuditRecords.mockResolvedValueOnce([makeRecord({ id: "1", toolId: "kept" })]);
+    const { rerender } = render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    const popover = await screen.findByTestId("popover-content");
+    await within(popover).findByText("kept");
+    getAuditRecords.mockRejectedValueOnce(new Error("boom"));
+    rerender(
+      <McpActivityStrip
+        sessionId="session-a"
+        activity={makeActivity({ status: "settled", toolId: "next", startedAt: 9 })}
+      />
+    );
+    expect(await within(popover).findByText(/couldn't refresh/i)).toBeTruthy();
+    expect(within(popover).getByText("kept")).toBeTruthy();
+  });
+
+  it("keeps Retry mounted while it works, then hands focus to the first call", async () => {
+    getAuditRecords.mockRejectedValueOnce(new Error("boom"));
+    render(<McpActivityStrip sessionId="session-a" activity={null} />);
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    retry.focus();
+
+    let resolveRetry: (v: McpAuditRecord[]) => void = () => {};
+    getAuditRecords.mockReturnValueOnce(
+      new Promise<McpAuditRecord[]>((res) => {
+        resolveRetry = res;
+      })
+    );
+    fireEvent.click(retry);
+    expect(screen.getByRole("button", { name: "Retry" })).toBe(retry);
+    expect(document.activeElement).toBe(retry);
+
+    await act(async () => {
+      resolveRetry([makeRecord({ id: "1", toolId: "back" })]);
+    });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /back/ }));
   });
 
   it("re-reads the list when a call settles while it is open", async () => {

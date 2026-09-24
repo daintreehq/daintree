@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Check, ChevronRight, Copy } from "lucide-react";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { Button } from "@/components/ui/button";
@@ -109,55 +109,94 @@ export function RecentCallsPopover({
   }, [tick]);
   const baseId = useId();
 
-  return (
-    <div className="flex flex-col text-2xs text-text-primary">
-      <div className="px-3 pt-2.5 pb-1.5 text-text-secondary font-medium">Recent tool calls</div>
+  // A Retry that succeeds unmounts itself. If it held focus, hand focus to the
+  // first call rather than dropping it on the document.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const retryHadFocus = useRef(false);
+  useEffect(() => {
+    if (error || !retryHadFocus.current) return;
+    retryHadFocus.current = false;
+    containerRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+  }, [error]);
 
-      <div className="max-h-[min(360px,var(--radix-popover-content-available-height,360px))] overflow-y-auto px-1 pb-1">
-        {loading ? (
+  const retry = (
+    <Button
+      variant="outline"
+      size="xs"
+      aria-busy={loading || undefined}
+      onClick={() => {
+        retryHadFocus.current = true;
+        onRetry();
+      }}
+    >
+      Retry
+    </Button>
+  );
+
+  return (
+    // The whole surface fits the space Radix measured, header and footer
+    // included; only the list between them gives way.
+    <div
+      ref={containerRef}
+      className="flex max-h-[min(440px,var(--radix-popover-content-available-height,440px))] flex-col text-2xs text-text-primary"
+    >
+      <div className="shrink-0 px-3 pt-2.5 pb-1.5 text-text-secondary font-medium">
+        Recent tool calls
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-1">
+        {error && records.length === 0 ? (
+          // Checked before `loading` so a retry in flight keeps its button.
+          <div role="alert" className="flex items-center justify-between gap-2 px-2 py-1.5">
+            <span className="text-text-secondary">Couldn't load recent calls</span>
+            {retry}
+          </div>
+        ) : loading ? (
           <>
             <Skeleton label="Loading recent calls" className="space-y-1.5 px-2 py-1.5">
               <SkeletonBone className="h-3 w-5/6" />
               <SkeletonBone className="h-3 w-4/6" />
               <SkeletonBone className="h-3 w-3/4" />
             </Skeleton>
-            <SkeletonHint className="px-2" />
+            <SkeletonHint firstThreshold={5000} className="px-2" />
           </>
-        ) : error ? (
-          <div role="alert" className="flex items-center justify-between gap-2 px-2 py-1.5">
-            <span className="text-text-secondary">Couldn't load recent calls</span>
-            <Button variant="outline" size="xs" onClick={onRetry}>
-              Retry
-            </Button>
-          </div>
         ) : records.length === 0 ? (
           <p className="px-2 py-1.5 text-text-secondary">
-            Tool calls show up here once the assistant makes one
+            Ask the assistant to work on your project to see its tool calls here
           </p>
         ) : (
-          <ul className="divide-y divide-border-subtle">
-            {groups.map((group, index) => {
-              const headingId = `${baseId}-group-${index}`;
-              return (
-                <li key={group.turnId ?? "unassociated"} className="py-1">
-                  <div id={headingId} className="px-2 pt-0.5 pb-0.5 text-3xs text-text-secondary">
-                    {groupHeading(group, index)}
-                  </div>
-                  <ul aria-labelledby={headingId} className="space-y-0.5">
-                    {group.records.map((record) => (
-                      <RecentCallRow key={record.id} record={record} now={now} />
-                    ))}
-                  </ul>
-                </li>
-              );
-            })}
-          </ul>
+          <>
+            {/* A failed refresh keeps what was already read on screen. */}
+            {error && (
+              <div role="alert" className="flex items-center justify-between gap-2 px-2 py-1">
+                <span className="text-text-secondary">Couldn't refresh recent calls</span>
+                {retry}
+              </div>
+            )}
+            <ul className="divide-y divide-border-subtle">
+              {groups.map((group, index) => {
+                const headingId = `${baseId}-group-${index}`;
+                return (
+                  <li key={group.turnId ?? "unassociated"} className="py-1">
+                    <div id={headingId} className="px-2 pt-0.5 pb-0.5 text-3xs text-text-secondary">
+                      {groupHeading(group, index)}
+                    </div>
+                    <ul aria-labelledby={headingId} className="space-y-0.5">
+                      {group.records.map((record) => (
+                        <RecentCallRow key={record.id} record={record} now={now} />
+                      ))}
+                    </ul>
+                  </li>
+                );
+              })}
+            </ul>
+          </>
         )}
       </div>
 
       {/* The popover is five calls by design; the rest of the history is one
           step away rather than something the user has to know to look for. */}
-      <div className="border-t border-border-subtle px-1 py-1">
+      <div className="shrink-0 border-t border-border-subtle px-1 py-1">
         <button
           type="button"
           onClick={onOpenAuditLog}
