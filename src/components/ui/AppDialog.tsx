@@ -234,36 +234,57 @@ export function AppDialog({
     clearDialogOverlays();
   }, [isOpen]);
 
+  // Initial focus is owed once per opening, and is paid only once the surface
+  // exists. The surface mounts on the render *after* `isOpen` flips, because
+  // `shouldRender` is presence state set from an effect — so a frame queued at the
+  // flip can run before that render commits, find no dialog, and leave focus on
+  // the trigger behind the modal. A click- or keypress-driven open from a surface
+  // that mounts the dialog fresh reliably loses that race.
+  const initialFocusOwedRef = useRef(false);
+
   useEffect(() => {
     if (isOpen) {
       previousActiveElement.current = document.activeElement as HTMLElement;
-      if (effectiveInitialFocus === "none") return;
-      requestAnimationFrame(() => {
-        const root = dialogRef.current;
-        if (!root) return;
-        let target: HTMLElement | null = null;
-        if (effectiveInitialFocus === "cancel" || effectiveInitialFocus === "confirm") {
-          target = root.querySelector<HTMLElement>(
-            `[data-confirm-role="${effectiveInitialFocus}"]`
-          );
-        }
-        if (!target) {
-          // The header's close button is first in DOM order, but it is the one
-          // control that answers nothing — arriving there makes a reflexive
-          // Enter throw the dialog away. Land on it only when nothing else is
-          // tabbable.
-          const tabbable = getVisibleTabbableElements(root);
-          target =
-            tabbable.find((el) => !el.hasAttribute(DIALOG_CLOSE_ATTR)) ?? tabbable[0] ?? null;
-        }
-        if (target) {
-          target.focus();
-        } else {
-          root.focus();
-        }
-      });
+      initialFocusOwedRef.current = effectiveInitialFocus !== "none";
+    } else {
+      initialFocusOwedRef.current = false;
     }
   }, [isOpen, effectiveInitialFocus, restoreFocus]);
+
+  useEffect(() => {
+    if (!isOpen || !shouldRender || !initialFocusOwedRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      const root = dialogRef.current;
+      if (!root || !initialFocusOwedRef.current) return;
+      initialFocusOwedRef.current = false;
+      // A consumer that focuses its own field on open (UpdateCwdDialog,
+      // CreateProjectFolderDialog) has already placed focus inside by the time
+      // this later frame runs; that choice wins. Focus that was already inside
+      // when this opening began is not a choice — a queue-driven dialog reopened
+      // mid-exit still holds the last request's button, and the new request's
+      // initial focus (Cancel, for a destructive one) has to replace it.
+      const active = document.activeElement;
+      if (root.contains(active) && active !== previousActiveElement.current) return;
+      let target: HTMLElement | null = null;
+      if (effectiveInitialFocus === "cancel" || effectiveInitialFocus === "confirm") {
+        target = root.querySelector<HTMLElement>(`[data-confirm-role="${effectiveInitialFocus}"]`);
+      }
+      if (!target) {
+        // The header's close button is first in DOM order, but it is the one
+        // control that answers nothing — arriving there makes a reflexive
+        // Enter throw the dialog away. Land on it only when nothing else is
+        // tabbable.
+        const tabbable = getVisibleTabbableElements(root);
+        target = tabbable.find((el) => !el.hasAttribute(DIALOG_CLOSE_ATTR)) ?? tabbable[0] ?? null;
+      }
+      if (target) {
+        target.focus();
+      } else {
+        root.focus();
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [isOpen, shouldRender, effectiveInitialFocus]);
 
   useEffect(() => {
     return () => {
