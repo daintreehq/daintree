@@ -4,7 +4,6 @@ import { BranchLabel } from "../BranchLabel";
 import { UpstreamSyncBadge } from "./UpstreamSyncBadge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { GitBranch } from "lucide-react";
-import { useResourceProfileStore } from "@/store/resourceProfileStore";
 import type { AggregateCounts } from "./MainWorktreeSummaryRows";
 
 interface MainWorktreeSecondaryRowProps {
@@ -36,10 +35,6 @@ export function MainWorktreeSecondaryRow({
   fetchNetworkFailed,
   aggregateCounts,
 }: MainWorktreeSecondaryRowProps) {
-  const fetchIntervalActiveMs = useResourceProfileStore((s) => s.fetchIntervalActiveMs);
-  const fetchIntervalBackgroundMs = useResourceProfileStore((s) => s.fetchIntervalBackgroundMs);
-  const fetchIntervalMs = isActive ? fetchIntervalActiveMs : fetchIntervalBackgroundMs;
-
   return (
     // px-1 for the same reason as NonMainSecondaryRow — the main card's meta
     // line is the same tier and has to sit on the same x.
@@ -51,7 +46,7 @@ export function MainWorktreeSecondaryRow({
         isMainWorktree={false}
       />
       {/* Always mounted: the badge decides whether it has anything to say, and
-          a failed or stale fetch is worth saying even with no counts — an
+          a failed fetch is worth saying even with no counts — an
           empty line beside the branch otherwise reads as "in sync". */}
       <UpstreamSyncBadge
         aheadCount={aheadCount}
@@ -63,7 +58,6 @@ export function MainWorktreeSecondaryRow({
         hasAuthFailedSignIn={hasAuthFailedSignIn}
         authProviderId={authProviderId}
         containerGapClass="gap-1"
-        fetchIntervalMs={fetchIntervalMs}
       />
       {aggregateCounts && aggregateCounts.worktrees > 0 && (
         <>

@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { BranchLabel } from "../BranchLabel";
 import { UpstreamSyncBadge } from "./UpstreamSyncBadge";
@@ -7,7 +6,6 @@ import { PRBadge } from "./PRBadge";
 import { FileText } from "lucide-react";
 import type { WorktreeState } from "@/types";
 import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
-import { useResourceProfileStore } from "@/store/resourceProfileStore";
 import { computeAlarmTier } from "@/lib/worktreeAlarmTier";
 
 interface NonMainSecondaryRowProps {
@@ -52,14 +50,6 @@ export function NonMainSecondaryRow({
   badges,
 }: NonMainSecondaryRowProps) {
   const prDetectionPaused = usePRCircuitBreakerStore((s) => s.tripped);
-  const fetchIntervalActiveMs = useResourceProfileStore((s) => s.fetchIntervalActiveMs);
-  const fetchIntervalBackgroundMs = useResourceProfileStore((s) => s.fetchIntervalBackgroundMs);
-
-  const fetchIntervalMs = useMemo(
-    () => (worktree.isCurrent ? fetchIntervalActiveMs : fetchIntervalBackgroundMs),
-    [worktree.isCurrent, fetchIntervalActiveMs, fetchIntervalBackgroundMs]
-  );
-
   // Suppress the subordinate PR badge when the PR is already the headline
   // (PR-originated worktrees, #8888) — the linked issue takes the secondary row.
   const showPRBadge =
@@ -81,7 +71,7 @@ export function NonMainSecondaryRow({
   // `hasUpstreamDelta` and is unchanged.
   const isDetached = Boolean(worktree.isDetached);
   // Any status pass or fetch mounts it too: with no counts and no base to
-  // show, the badge's own marks (stale, failed, no upstream) are the only
+  // show, the badge's own marks (failed, no upstream) are the only
   // thing saying what the numbers are worth, and it returns nothing when there
   // is nothing to say.
   const showUpstreamBadge =
@@ -142,7 +132,6 @@ export function NonMainSecondaryRow({
       baseMatchesUpstream={worktree.baseMatchesUpstream}
       baseCompareRef={worktree.baseCompareRef}
       hasNoUpstream={hasNoUpstream}
-      fetchIntervalMs={fetchIntervalMs}
     />
   ) : null;
 

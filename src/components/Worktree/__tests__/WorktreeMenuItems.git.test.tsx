@@ -356,6 +356,31 @@ describe("WorktreeMenuItems Git submenu", () => {
     expect(gitRowLabels(container)).toHaveLength(6);
   });
 
+  it("disables both fetch rows for a repo with no remote, and says why", () => {
+    renderWorktreeMenu({
+      ...gitCallbacks(),
+      worktree: makeWorktree({ ...measured(null), hasRemote: false }),
+    });
+
+    for (const [pattern, label] of [
+      [/^Fetch(No remote)?$/, "Fetch, no remote configured"],
+      [/^Fetch and prune/, "Fetch and prune, no remote configured"],
+    ] as const) {
+      const row = gitRowMatching(pattern);
+      expect(isDisabled(row)).toBe(true);
+      expect(row.textContent).toContain("No remote");
+      expect(row.getAttribute("aria-label")).toBe(label);
+    }
+  });
+
+  it("keeps fetch live while the remotes are unread", () => {
+    // Unknown is not "none": the click is how an unread repo finds out.
+    renderWorktreeMenu({ ...gitCallbacks(), worktree: makeWorktree({ ...measured(null) }) });
+
+    expect(isDisabled(gitRowMatching(/^Fetch$/))).toBe(false);
+    expect(isDisabled(gitRowMatching(/^Fetch and prune$/))).toBe(false);
+  });
+
   it("does not claim an upstream is missing before anything has looked", () => {
     // A card rendered before the first status pass knows nothing about the
     // upstream. Saying "No upstream" there states a fact nobody established;

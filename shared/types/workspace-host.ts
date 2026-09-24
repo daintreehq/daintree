@@ -244,6 +244,13 @@ export interface WorktreeSnapshot {
   /** True when the most recent fetch failed for a transient (non-auth) reason. */
   fetchNetworkFailed?: boolean;
 
+  /**
+   * `false` when `git remote` lists nothing: a local-only repo, which has
+   * nothing to fetch and nothing wrong with it. `true` when it lists any;
+   * absent until a fetch attempt has read the list.
+   */
+  hasRemote?: boolean;
+
   /** True while a background `git fetch` is in-flight for this worktree's repo. */
   isFetchInFlight?: boolean;
 
@@ -372,7 +379,8 @@ export interface WorkspaceFetchResult {
   /** Present when status === "failed". */
   reason?: import("./ipc/errors.js").GitOperationReason;
   /** Why we skipped — for logging / diagnostics. */
-  skipReason?: "no-common-dir" | "in-failure-window" | "auth-suspended" | "stale-generation";
+  skipReason?:
+    "no-common-dir" | "in-failure-window" | "auth-suspended" | "stale-generation" | "no-remotes";
   /**
    * `RepoFetchCoordinator`'s `lastSuccessfulFetch` for the primary
    * (commondir, remote)
@@ -403,8 +411,18 @@ export interface WorkspaceFetchResult {
    * the `no-common-dir` skip path where we have no state to report.
    */
   networkFailed?: boolean;
-  /** Remote this result describes. Absent only on the `no-common-dir` skip. */
+  /**
+   * Remote this result describes. Absent on the `no-common-dir` skip and on
+   * `no-remotes`, where there is no remote to describe.
+   */
   remote?: string;
+  /**
+   * What `git remote` said about the repo on this call: `false` when it listed
+   * none, `true` when it listed any, absent when the list was not read. Only
+   * `false` changes behaviour — a repo with no remote is a normal local-only
+   * state, not a fetch failure.
+   */
+  hasRemote?: boolean;
   /**
    * True when a NON-primary remote of the same call failed. The rest of this
    * result speaks only for the primary remote — deliberately, because an

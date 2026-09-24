@@ -10,7 +10,7 @@
  *   - resting (`≡ develop`) and no upstream (`· local`): pushed-and-idle and
  *     never-pushed branches
  *   - main worktree: unpushed local commits on `develop` itself
- *   - auth failed, network failed, stale, and fetch in flight: real git cannot
+ *   - auth failed, network failed, an old healthy fetch, and fetch in flight: real git cannot
  *     produce these in a capture run (see the "patched" step), so they go
  *     through the worktree MessagePort the renderer already listens on, with
  *     real snapshots patched
@@ -470,7 +470,7 @@ test("upstream sync badge review — states and themes", async () => {
     // The degraded states cannot be produced reliably by real git inside a
     // capture run: auth is only confirmed after three failures spread over
     // 5- and 15-minute backoff windows, every fetch failure also sets
-    // network-failed so "stale but healthy" never occurs on its own, and a
+    // network-failed so "old but healthy" never occurs on its own, and a
     // forced fetch inside the recency window of the last success is skipped
     // without running git at all. Both
     // go through the renderer's own data seam instead: the worktree
@@ -562,9 +562,11 @@ test("upstream sync badge review — states and themes", async () => {
       await snap(page, "A3-sidebar-auth-failed", sidebar);
       await snapTooltip(page, "A4-tip-auth-failed", badge, "authentication");
 
-      // Stale but otherwise healthy: every card last fetched ten minutes ago,
-      // past 1.5x both the active and background intervals. One card's base
-      // compare is the local branch, the "Remote comparison unavailable" case.
+      // Old but otherwise healthy: every card last fetched ten minutes ago,
+      // which is what an app switch leaves behind while fetching is paused.
+      // Age alone earns no mark — the line must read exactly as a fresh one,
+      // with the age only in the tooltip. One card's base compare is the local
+      // branch, the "Remote comparison unavailable" case.
       const tenMinutesAgo = Date.now() - 10 * 60_000;
       for (const s of snapshot.states) {
         await push({
@@ -574,8 +576,7 @@ test("upstream sync badge review — states and themes", async () => {
           isFetchInFlight: false,
           lastFetchedAt: tenMinutesAgo,
           ...(s.branch === B.baseBehind ? { baseCompareRef: BASE } : {}),
-          // A fetch in flight on its own card: it keeps the stale mark, since
-          // the counts are that old until the answer lands.
+          // A fetch in flight on its own card.
           ...(s.branch === B.ahead ? { isFetchInFlight: true } : {}),
           // No base resolved at all, on a branch with no upstream: the marker
           // has to stand on its own.
@@ -584,12 +585,14 @@ test("upstream sync badge review — states and themes", async () => {
             : {}),
         });
       }
-      await expect(badge, "stale never rendered").toHaveAttribute("data-stale", "true", {
-        timeout: T_LONG,
-      });
+      await expect(
+        badgeIn(row(page, B.localResting)),
+        "old-fetch snapshot never rendered"
+      ).toContainText("local", { timeout: T_LONG });
+      await expect(badge.getByTestId("upstream-sync-status"), "age earned a mark").toHaveCount(0);
       await page.mouse.move(1600, 1000);
-      await snap(page, "B0-stale", cardOf(row(page, B.both)), "↓3");
-      await snap(page, "B1-sidebar-stale", sidebar);
+      await snap(page, "B0-old-fetch", cardOf(row(page, B.both)), "↓3");
+      await snap(page, "B1-sidebar-old-fetch", sidebar);
       await snap(page, "B4-in-flight", cardOf(row(page, B.ahead)), /↑\d/);
       // Assert on the line itself: the card's own name contains "local".
       await expect(
@@ -597,7 +600,7 @@ test("upstream sync badge review — states and themes", async () => {
         "no-base marker never rendered"
       ).toContainText("local", { timeout: T_LONG });
       await snap(page, "B5-local-no-base", cardOf(row(page, B.localResting)));
-      await snapTooltip(page, "B2-tip-stale", badge, /stale|out of date/i);
+      await snapTooltip(page, "B2-tip-old-fetch", badge, /Last fetched/);
       await snapTooltip(
         page,
         "B3-tip-local-base",
@@ -606,7 +609,7 @@ test("upstream sync badge review — states and themes", async () => {
       );
 
       // Network failed: what a refused connection leaves behind — the flag,
-      // and the last success still standing, now past the stale threshold.
+      // and the last success still standing.
       for (const s of snapshot.states) {
         await push({
           ...s,

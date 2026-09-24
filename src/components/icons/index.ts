@@ -27,7 +27,6 @@ export {
   CircleSlash, // agent stopped on an error, distinct in shape from a waiting one (Pilot's blocked band)
   CircleX, // CI that failed — the cross the PR badge already uses, enclosed so a glyph standing alone reads as a verdict rather than a dismiss control
   Clock, // recency sort order (most recently opened first)
-  ClockAlert, // ahead/behind counts older than the fetch cadence says they should be — a clock that is late, distinct from Clock's plain ordering and the rate-limit wait
   CloudOff, // a remote or forge that could not be reached — the same glyph the PR and issue badges show when detection is paused
   Coffee, // Daintree keeping the machine from idle-sleeping while agents work — the long-standing keep-awake metaphor
   FileStack, // artifacts an agent left in a terminal — the code, patches and files pulled from its output

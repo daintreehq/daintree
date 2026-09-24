@@ -1777,8 +1777,8 @@ describe("WorktreeHeader external worktree description", () => {
 
 describe("WorktreeHeader — the sync line with no counts and no base", () => {
   // The secondary row used to mount only for a title, a PR, drift or a base,
-  // so every mark the sync line carries on its own — a failed fetch, an age,
-  // a missing upstream — was cut off above it on a card that had none of those.
+  // so every mark the sync line carries on its own — a failed fetch, a
+  // missing upstream — was cut off above it on a card that had none of those.
   it("shows a failed fetch", () => {
     renderHeader({ worktree: { ...baseWorktree, aheadCount: 0, fetchNetworkFailed: true } });
     expect(screen.getByTestId("upstream-sync-status").getAttribute("data-status")).toBe(
@@ -1786,11 +1786,11 @@ describe("WorktreeHeader — the sync line with no counts and no base", () => {
     );
   });
 
-  it("goes stale on its own", () => {
+  it("does not treat an old fetch as a failure", () => {
     renderHeader({
       worktree: { ...baseWorktree, aheadCount: 0, lastFetchedAt: Date.now() - 24 * 60 * 60_000 },
     });
-    expect(screen.getByTestId("upstream-sync-status").getAttribute("data-status")).toBe("stale");
+    expect(screen.queryByTestId("upstream-sync-status")).toBeNull();
   });
 
   it("stays out of the way with nothing to say", () => {

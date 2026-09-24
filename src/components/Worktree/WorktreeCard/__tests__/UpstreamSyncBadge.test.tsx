@@ -499,7 +499,7 @@ describe("UpstreamSyncBadge — a base branch longer than the card (#12074)", ()
   });
 });
 
-describe("UpstreamSyncBadge — staleness follows the clock", () => {
+describe("UpstreamSyncBadge — age alone is never a warning", () => {
   beforeEach(() => {
     vi.useFakeTimers({ now: new Date("2026-09-01T00:00:00Z") });
   });
@@ -507,30 +507,25 @@ describe("UpstreamSyncBadge — staleness follows the clock", () => {
     vi.useRealTimers();
   });
 
-  // A fetch that keeps failing leaves `lastFetchedAt` where it was, so the
-  // props never change — the line has to age on the clock alone, or the card
-  // that most needs to look stale is the one that never does.
-  it("turns stale while mounted as the last fetch ages, with no prop change", () => {
-    const interval = 20_000;
-    renderBadge({ lastFetchedAt: Date.now(), fetchIntervalMs: interval });
-    expect(screen.getByTestId("upstream-sync-indicator").getAttribute("data-stale")).toBeNull();
+  // Fetching pauses on purpose while no window has focus, so an old
+  // `lastFetchedAt` is the normal state after any app switch. Only a failed
+  // fetch earns a mark; the age belongs to the tooltip.
+  it("leaves an aging line unmarked while the clock runs", () => {
+    renderBadge({ aheadCount: 1, lastFetchedAt: Date.now() });
 
     act(() => {
-      vi.advanceTimersByTime(interval * 3);
+      vi.advanceTimersByTime(24 * 60 * 60_000);
     });
 
-    expect(screen.getByTestId("upstream-sync-indicator").getAttribute("data-stale")).toBe("true");
+    expect(screen.queryByTestId("upstream-sync-status")).toBeNull();
+    expect(screen.getByTestId("upstream-sync-indicator").getAttribute("aria-label")).toContain(
+      "Last fetched"
+    );
   });
 
-  it("does not call a fetch stale before it has aged past the threshold", () => {
-    const interval = 60_000;
-    renderBadge({ lastFetchedAt: Date.now(), fetchIntervalMs: interval });
-
-    act(() => {
-      vi.advanceTimersByTime(interval);
-    });
-
-    expect(screen.getByTestId("upstream-sync-indicator").getAttribute("data-stale")).toBeNull();
+  it("renders nothing for an old fetch with nothing else to say", () => {
+    renderBadge({ aheadCount: 0, behindCount: 0, lastFetchedAt: Date.now() - 24 * 60 * 60_000 });
+    expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
   });
 });
 
@@ -550,7 +545,6 @@ describe("UpstreamSyncBadge — degraded states qualify the counts, never erase 
   const states: Record<string, Partial<Props>> = {
     auth: { fetchAuthFailed: true, hasAuthFailedSignIn: true },
     unreachable: { fetchNetworkFailed: true },
-    stale: { lastFetchedAt: Date.now() - 60 * 60_000, fetchIntervalMs: 60_000 },
   };
 
   function countClasses(): string[] {
@@ -591,11 +585,6 @@ describe("UpstreamSyncBadge — degraded states qualify the counts, never erase 
   it("keeps a healthy line unmarked", () => {
     renderBadge(drifted);
     expect(screen.queryByTestId("upstream-sync-status")).toBeNull();
-  });
-
-  it("does not let a fetch in flight clear staleness before its answer lands", () => {
-    renderBadge({ ...drifted, ...states.stale, isFetchInFlight: true });
-    expect(screen.getByTestId("upstream-sync-status").getAttribute("data-status")).toBe("stale");
   });
 });
 

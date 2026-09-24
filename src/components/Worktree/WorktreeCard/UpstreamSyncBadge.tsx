@@ -4,7 +4,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { actionService } from "@/services/ActionService";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { ClockAlert, CloudOff, KeyRound } from "@/components/icons";
+import { CloudOff, KeyRound } from "@/components/icons";
 import type { LucideIcon } from "lucide-react";
 import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 
@@ -42,10 +42,8 @@ interface UpstreamSyncBadgeProps {
    * only the compact marker abbreviates.
    */
   hasNoUpstream?: boolean;
-  fetchIntervalMs?: number;
 }
 
-const STALENESS_MULTIPLIER = 1.5;
 const FLASH_DURATION_MS = 250;
 
 export function UpstreamSyncBadge({
@@ -64,7 +62,6 @@ export function UpstreamSyncBadge({
   baseMatchesUpstream,
   baseCompareRef,
   hasNoUpstream,
-  fetchIntervalMs,
 }: UpstreamSyncBadgeProps) {
   const hasAhead = aheadCount !== undefined && aheadCount > 0;
   const hasBehind = behindCount !== undefined && behindCount > 0;
@@ -174,15 +171,8 @@ export function UpstreamSyncBadge({
     return () => window.clearTimeout(safetyTimer);
   }, [displayedAhead, displayedBehind, displayedBaseAhead, displayedBaseBehind]);
 
-  // Staleness is a function of the clock, not of the props: a fetch that keeps
-  // failing leaves `lastFetchedAt` exactly where it was, so a check keyed only
-  // on the props froze at "fresh" on precisely the card that most needed to
-  // say otherwise. The shared minute clock re-reads it as time passes.
+  // Keeps the tooltip's "Last fetched" age moving between fetches.
   const nowMs = useGlobalMinuteClock();
-  const isStale =
-    lastFetchedAt != null &&
-    fetchIntervalMs != null &&
-    nowMs - lastFetchedAt > fetchIntervalMs * STALENESS_MULTIPLIER;
 
   const handleSignInClick = useCallback(
     (event: React.MouseEvent) => {
@@ -205,15 +195,13 @@ export function UpstreamSyncBadge({
 
   const isAuthActionable = fetchAuthFailed && hasAuthFailedSignIn;
 
-  // One mark at the end of the line says whether the counts can be trusted.
-  // It replaces the opacity fades this line used to use for the same job: a
-  // faded line reads as disabled rather than as doubtful, the fades stacked to
-  // near-invisible when a failed fetch also went stale, and lightness alone is
-  // not a channel anyone can tell apart at a glance. Worst first, so a line
-  // never carries two: an auth failure is the only one the user has to act on,
-  // an unreachable remote explains the staleness that always comes with it,
-  // and plain staleness is what is left. A fetch in flight does not clear it —
-  // the counts are exactly as old as they were until the answer lands.
+  // One mark at the end of the line, and only for a fetch that actually
+  // failed. Age alone never earns one: fetching pauses on purpose while no
+  // window has focus and stretches under a rate-limit throttle, so an overdue
+  // fetch is almost always the cadence working as designed — the same reason
+  // the PR and issue badges dropped their age glyph. The age lives in the
+  // tooltip as "Last fetched". Worst first, so a line never carries two: an
+  // auth failure is the only one the user has to act on.
   // The failure and the way out of it are separate facts. Without a matched
   // forge provider there is no reconnect to offer, but the fetches are still
   // suspended and the counts still frozen, so the key stays and only the
@@ -222,9 +210,7 @@ export function UpstreamSyncBadge({
     ? "auth"
     : fetchNetworkFailed
       ? "unreachable"
-      : isStale
-        ? "stale"
-        : null;
+      : null;
   const StatusIcon = status ? STATUS_ICONS[status] : null;
   const noUpstream = hasNoUpstream === true;
   // Nothing to say, and nothing wrong with saying nothing. A degraded fetch
@@ -256,9 +242,7 @@ export function UpstreamSyncBadge({
       ? "Authentication failed, fetches paused"
       : status === "unreachable"
         ? "Couldn't reach the remote"
-        : status === "stale"
-          ? "Counts may be out of date"
-          : null;
+        : null;
   const localBaseNote = comparedWithLocalBase && showBaseSegment;
   // Everything the tooltip says, in the order it says it, so none of it is
   // reachable by pointer alone.
@@ -425,7 +409,6 @@ export function UpstreamSyncBadge({
           data-testid="upstream-sync-indicator"
           data-fetch-in-flight={isFetchInFlight ? "true" : undefined}
           data-fetch-network-failed={fetchNetworkFailed ? "true" : undefined}
-          data-stale={isStale ? "true" : undefined}
           onAnimationEnd={() => setIsFlashing(false)}
         >
           {line}
@@ -438,7 +421,7 @@ export function UpstreamSyncBadge({
   );
 }
 
-type SyncStatus = "auth" | "unreachable" | "stale";
+type SyncStatus = "auth" | "unreachable";
 
 // The app's own vocabulary for each: KeyRound is what the collapsed alarm pill
 // already shows for broken forge credentials, CloudOff what the PR and issue
@@ -446,16 +429,14 @@ type SyncStatus = "auth" | "unreachable" | "stale";
 const STATUS_ICONS: Record<SyncStatus, LucideIcon> = {
   auth: KeyRound,
   unreachable: CloudOff,
-  stale: ClockAlert,
 };
 
-// Warning only for the one the user has to act on. The other two recover on
-// their own, so they sit at the branch name's tier and do not compete with the
+// Warning only for the one the user has to act on. An unreachable remote
+// recovers on its own, so it sits at the branch name's tier and do not compete with the
 // ↓ counts, which are the line's warning-toned news.
 const STATUS_TONES: Record<SyncStatus, string> = {
   auth: "text-status-warning",
   unreachable: "text-text-secondary",
-  stale: "text-text-secondary",
 };
 
 function describeDrift(ahead: number, behind: number): string {

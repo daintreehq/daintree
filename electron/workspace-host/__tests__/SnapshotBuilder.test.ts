@@ -62,6 +62,7 @@ function makeHost(overrides: Partial<SnapshotBuilderHost> = {}): SnapshotBuilder
     workingTreeChangedDirs: undefined,
     fetchAuthFailed: false,
     fetchNetworkFailed: false,
+    hasRemote: undefined,
     isFetchInFlight: false,
     matchedForgeProviderId: null,
     isExternal: undefined,
@@ -363,5 +364,18 @@ describe("SnapshotBuilder", () => {
       expect(snapshot.issueNumber).toBe(12189);
       expect(snapshot.prNumber).toBe(12189);
     });
+  });
+});
+
+describe("SnapshotBuilder hasRemote", () => {
+  // `false` is the one answer that changes anything downstream, so it must not
+  // be folded to undefined the way the failure flags are.
+  it("keeps a measured no-remote as false", () => {
+    expect(new SnapshotBuilder(makeHost({ hasRemote: false })).build().hasRemote).toBe(false);
+  });
+
+  it("passes a known remote and an unread one through unchanged", () => {
+    expect(new SnapshotBuilder(makeHost({ hasRemote: true })).build().hasRemote).toBe(true);
+    expect(new SnapshotBuilder(makeHost()).build().hasRemote).toBeUndefined();
   });
 });
