@@ -87,10 +87,13 @@ export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
                   <PortalIcon icon={link.icon} size="launchpad" />
                 </span>
                 <span className="flex min-w-0 flex-1 items-baseline gap-2">
-                  <span className="shrink-0 text-sm font-medium text-text-primary">
+                  <span
+                    className="min-w-0 max-w-[70%] shrink-0 truncate text-sm font-medium text-text-primary"
+                    title={link.title}
+                  >
                     {link.title}
                   </span>
-                  <span className="truncate text-xs text-text-secondary group-hover:text-text-primary transition-colors duration-150">
+                  <span className="min-w-0 truncate text-xs text-text-secondary group-hover:text-text-primary transition-colors duration-150">
                     {linkHost(link.url)}
                   </span>
                 </span>

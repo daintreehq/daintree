@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -8,6 +8,7 @@ import {
   ExternalLink,
   Link2,
   Server,
+  ChevronDown,
 } from "lucide-react";
 import {
   DndContext,
@@ -36,6 +37,13 @@ import { PortalIcon } from "./PortalIcon";
 import { useAriaKeyshortcuts, useKeybindingDisplay } from "@/hooks";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
@@ -44,6 +52,8 @@ import {
 } from "@/components/ui/context-menu";
 
 const noopTabAction = (_tabId: string) => {};
+
+const OVERFLOW_FADE_PX = 24;
 
 const tabDomId = (tabId: string) => `portal-tab-${tabId}`;
 
@@ -64,9 +74,11 @@ function SortableTab({
   onReload,
   tabCount,
   tabIndex,
+  isTabStop,
 }: {
   tab: PortalTab;
   isActive: boolean;
+  isTabStop: boolean;
   onClick: (id: string) => void;
   onClose: (id: string) => void;
   onDuplicate: (id: string) => void;
@@ -108,7 +120,7 @@ function SortableTab({
           role="tab"
           aria-selected={isActive}
           aria-label={tab.title}
-          tabIndex={isActive ? 0 : -1}
+          tabIndex={isTabStop ? 0 : -1}
           onClick={() => onClick(tab.id)}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
@@ -125,7 +137,7 @@ function SortableTab({
             "min-w-[88px] max-w-[180px]",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
             isActive
-              ? "bg-overlay-emphasis text-text-primary border-border-strong"
+              ? "bg-overlay-emphasis text-text-primary border-border-strong after:absolute after:inset-x-2.5 after:-bottom-px after:h-0.5 after:rounded-full after:bg-text-primary"
               : "text-text-secondary border-transparent hover:bg-overlay-soft hover:text-text-primary",
             isDragging && "opacity-80 shadow-[var(--theme-shadow-floating)] cursor-grabbing"
           )}
@@ -263,12 +275,51 @@ export function PortalToolbar({
     [getBrowserTabLabel]
   );
 
+  const tablistRef = useRef<HTMLDivElement>(null);
+  const [overflow, setOverflow] = useState({ before: false, after: false });
+  const isOverflowing = overflow.before || overflow.after;
+
+  const measureOverflow = useCallback(() => {
+    const el = tablistRef.current;
+    if (!el) return;
+    const before = el.scrollLeft > 1;
+    const after = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+    setOverflow((prev) =>
+      prev.before === before && prev.after === after ? prev : { before, after }
+    );
+  }, []);
+
+  // Keep the active tab clear of the overflow fade, not just inside the strip.
+  const revealActive = useCallback(() => {
+    const strip = tablistRef.current;
+    const tab = activeTabId ? document.getElementById(tabDomId(activeTabId)) : null;
+    if (strip && tab) {
+      const left = tab.offsetLeft - strip.offsetLeft;
+      const right = left + tab.offsetWidth;
+      if (left - OVERFLOW_FADE_PX < strip.scrollLeft) {
+        strip.scrollLeft = Math.max(0, left - OVERFLOW_FADE_PX);
+      } else if (right + OVERFLOW_FADE_PX > strip.scrollLeft + strip.clientWidth) {
+        strip.scrollLeft = right + OVERFLOW_FADE_PX - strip.clientWidth;
+      }
+    }
+    measureOverflow();
+  }, [activeTabId, measureOverflow]);
+
   useEffect(() => {
-    if (!activeTabId) return;
-    document
-      .getElementById(tabDomId(activeTabId))
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [activeTabId]);
+    const el = tablistRef.current;
+    if (!el) return;
+    revealActive();
+    // Tabs change width as fonts land and titles update; the strip alone
+    // wouldn't notice.
+    const observer = new ResizeObserver(revealActive);
+    observer.observe(el);
+    for (const child of Array.from(el.children)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [tabs, revealActive]);
+
+  // With no tab selected (the launchpad over existing tabs) the first tab is
+  // the strip's entry point, so the tablist never drops out of the Tab order.
+  const tabStopId = tabs.some((t) => t.id === activeTabId) ? activeTabId : (tabs[0]?.id ?? null);
 
   const focusTab = (index: number) => {
     const tab = tabs[index];
@@ -397,12 +448,25 @@ export function PortalToolbar({
           >
             <SortableContext items={tabs.map((t) => t.id)} strategy={horizontalListSortingStrategy}>
               <div
-                className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto scrollbar-none"
+                ref={tablistRef}
+                onScroll={measureOverflow}
+                className={cn(
+                  "flex min-w-0 flex-1 items-center gap-1 overflow-x-auto scrollbar-none",
+                  overflow.before &&
+                    overflow.after &&
+                    "[mask-image:linear-gradient(to_right,transparent,black_24px,black_calc(100%-24px),transparent)]",
+                  overflow.before &&
+                    !overflow.after &&
+                    "[mask-image:linear-gradient(to_right,transparent,black_24px)]",
+                  !overflow.before &&
+                    overflow.after &&
+                    "[mask-image:linear-gradient(to_right,black_calc(100%-24px),transparent)]"
+                )}
                 role="tablist"
                 aria-label="Portal tabs"
                 aria-orientation="horizontal"
                 onKeyDown={(e) => {
-                  const currentIndex = tabs.findIndex((t) => t.id === activeTabId);
+                  const currentIndex = tabs.findIndex((t) => t.id === tabStopId);
                   const last = tabs.length - 1;
                   let next: number;
                   switch (e.key) {
@@ -430,6 +494,7 @@ export function PortalToolbar({
                     key={tab.id}
                     tab={tab}
                     isActive={activeTabId === tab.id}
+                    isTabStop={tabStopId === tab.id}
                     onClick={onTabClick}
                     onClose={onTabClose}
                     onDuplicate={duplicateTab}
@@ -445,6 +510,43 @@ export function PortalToolbar({
               </div>
             </SortableContext>
           </DndContext>
+          {isOverflowing && (
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label={`All tabs (${tabs.length})`}
+                      className={cn(
+                        iconButtonClass,
+                        "flex items-center gap-0.5 text-xs tabular-nums"
+                      )}
+                    >
+                      {tabs.length}
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">All tabs</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="end" className="max-w-[280px]">
+                <DropdownMenuRadioGroup
+                  value={activeTabId ?? ""}
+                  onValueChange={(tabId) => onTabClick(tabId)}
+                >
+                  {tabs.map((tab) => (
+                    <DropdownMenuRadioItem key={tab.id} value={tab.id}>
+                      <span className="flex min-w-0 items-center gap-2">
+                        <PortalIcon icon={tab.icon ?? "globe"} size="tab" />
+                        <span className="truncate">{tab.title}</span>
+                      </span>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <button
