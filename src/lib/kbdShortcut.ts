@@ -222,6 +222,8 @@ const ARIA_WIN_MODIFIERS: Record<string, string> = {
 };
 
 const ARIA_KEY_NAMES: Record<string, string> = {
+  // `+` is the grammar's own joiner, so the literal key is spelled out.
+  "+": "Plus",
   return: "Enter",
   enter: "Enter",
   escape: "Escape",
@@ -266,7 +268,7 @@ function mapAriaToken(rawToken: string, modifiers: Record<string, string>): stri
  *
  * @example
  * comboToAriaKeyshortcuts("Cmd+Shift+P", true)  // "Meta+Shift+P"
- * comboToAriaKeyshortcuts("Ctrl++", false)      // "Control++"
+ * comboToAriaKeyshortcuts("Ctrl++", false)      // "Control+Plus"
  * comboToAriaKeyshortcuts("Cmd+K T", true)      // undefined (chord)
  * comboToAriaKeyshortcuts(undefined, true)      // undefined
  */
@@ -277,13 +279,11 @@ export function comboToAriaKeyshortcuts(
   if (!combo || !combo.trim()) return undefined;
 
   const modifiers = isMac ? ARIA_MAC_MODIFIERS : ARIA_WIN_MODIFIERS;
-  const normalized = combo.trim().replace(/\s*\+\s*/g, "+");
-
-  const steps = normalized
-    .split(/\s+/)
-    .map((step) => splitStepKeys(step))
-    .filter((tokens) => tokens.length > 0)
-    .map((tokens) => tokens.map((token) => mapAriaToken(token, modifiers)).join("+"));
+  // The same step split the chips use, so a literal-plus chord is still seen
+  // as two steps and omitted rather than merged into one wrong shortcut.
+  const steps = splitChordSteps(combo).map((tokens) =>
+    tokens.map((token) => mapAriaToken(token, modifiers)).join("+")
+  );
 
   if (steps.length === 0) return undefined;
   if (steps.length > 1) return undefined;
