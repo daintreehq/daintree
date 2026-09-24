@@ -2,10 +2,10 @@ import { useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
-import { KBD_CLASS } from "@/components/ui/AppPaletteDialog";
+import { KbdChord } from "@/components/ui/Kbd";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { Lock } from "lucide-react";
-import { useKeybindingDisplay, useEffectiveCombo } from "@/hooks/useKeybinding";
+import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import type { SendToAgentItem } from "@/hooks/useSendToAgentPalette";
 
 const getSendToAgentActionLabel = (_item: SendToAgentItem | null): string => "Send to agent";
@@ -97,7 +97,7 @@ export function SendToAgentPalette({
     [selectItem]
   );
 
-  const newTerminalShortcut = useKeybindingDisplay("terminal.new");
+  const newTerminalShortcut = useEffectiveCombo("terminal.new");
   const sendToAgentShortcut = useEffectiveCombo("terminal.sendToAgent");
 
   return (
@@ -135,7 +135,7 @@ export function SendToAgentPalette({
         <p className="mt-2 text-xs text-text-secondary">
           {newTerminalShortcut ? (
             <>
-              Press <kbd className={KBD_CLASS}>{newTerminalShortcut}</kbd> to create a new terminal.
+              Press <KbdChord shortcut={newTerminalShortcut} /> to create a new terminal.
             </>
           ) : (
             "Create another terminal to send selections."

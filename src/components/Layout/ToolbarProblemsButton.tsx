@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
-import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { DIAGNOSTICS_DOCK_REGION_ID } from "@/components/Diagnostics/regionIds";
@@ -45,7 +45,7 @@ export function ToolbarProblemsButton({
     : topologyWatcherDark
       ? ", worktree list may be stale"
       : "";
-  const diagnosticsShortcut = useKeybindingDisplay("panel.toggleDiagnostics");
+  const diagnosticsShortcut = useEffectiveCombo("panel.toggleDiagnostics");
   const diagnosticsAriaShortcut = useAriaKeyshortcuts("panel.toggleDiagnostics");
   const diagnosticsHover = useShortcutHintHover("panel.toggleDiagnostics");
   const isDockOpen = useDiagnosticsStore((state) => state.isOpen);

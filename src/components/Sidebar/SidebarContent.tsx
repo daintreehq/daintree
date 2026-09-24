@@ -30,6 +30,7 @@ import {
   useWorktreeActions,
   useAriaKeyshortcuts,
   useKeybindingDisplay,
+  useEffectiveCombo,
   useDohertyGate,
   useKeepMounted,
 } from "@/hooks";
@@ -375,7 +376,7 @@ interface SidebarContentProps {
 
 function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const overviewShortcut = useKeybindingDisplay("worktree.overview");
-  const refreshShortcut = useKeybindingDisplay("worktree.refresh");
+  const refreshShortcut = useEffectiveCombo("worktree.refresh");
   const createWorktreeShortcut = useKeybindingDisplay("worktree.createDialog.open");
   const overviewAriaShortcut = useAriaKeyshortcuts("worktree.overview");
   const refreshAriaShortcut = useAriaKeyshortcuts("worktree.refresh");

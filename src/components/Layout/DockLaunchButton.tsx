@@ -28,6 +28,8 @@ import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
 import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
 import { agentStateDotColor } from "@/components/Worktree/AgentStatusIndicator";
 import { cn } from "@/lib/utils";
+import { isMac } from "@/lib/platform";
+import { describeChord } from "@/lib/kbdShortcut";
 import { notify } from "@/lib/notify";
 import { deriveAgentDominantStates } from "@/lib/agentDominantStates";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
@@ -1344,8 +1346,8 @@ function DockLaunchOption({
   const comboActionId = shortcutAgentId ? `agent.${shortcutAgentId}` : panelActionId;
   const displayCombo = useKeybindingDisplay(comboActionId);
   // The canonical chord ("Cmd+Alt+C"), which is what `KbdChord` parses into
-  // per-key chips. `displayCombo` is already formatted for the platform and
-  // stays the human-readable string for the tooltip and the spoken label.
+  // per-key chips and `describeChord` speaks. `displayCombo` is already
+  // formatted for the platform and stays the human-readable tooltip string.
   const effectiveCombo = useEffectiveCombo(comboActionId);
 
   // A filtered row must carry the same warnings as its unfiltered twin: an
@@ -1529,7 +1531,7 @@ function DockLaunchOption({
     originLabel,
     isRecent ? "Recent" : undefined,
     launchOutcome ? `Launches ${launchOutcome}` : undefined,
-    displayCombo ? `Shortcut ${displayCombo}` : undefined,
+    effectiveCombo ? `Shortcut ${describeChord(effectiveCombo, isMac())}` : undefined,
     agent?.isNew ? "New" : undefined,
     // Stated only where it applies, so the phrase never advertises a key that
     // would do nothing on this row.
@@ -1679,12 +1681,7 @@ function DockLaunchOption({
             read as one run of trailing text — and the dock button for the very
             same agent, three inches away, already draws it as chips. */}
         {effectiveCombo && (
-          <KbdChord
-            shortcut={effectiveCombo}
-            density="compact"
-            className="ml-2 shrink-0"
-            aria-label={displayCombo}
-          />
+          <KbdChord shortcut={effectiveCombo} density="compact" className="ml-2 shrink-0" />
         )}
 
         {/* Last, immediately before the fixed rail, so its right edge is the same

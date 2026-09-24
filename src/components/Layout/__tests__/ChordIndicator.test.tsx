@@ -179,9 +179,12 @@ describe("ChordIndicator (Cmd+K command HUD)", () => {
     pressCmdK();
     await flushFrames();
     const first = options()[0]!;
-    const keyText = first.querySelector(".sr-only")!.textContent!;
+    // What the user reads off the row: the visible key chips, run together.
+    const keyText = Array.from(first.querySelectorAll("kbd"))
+      .map((k) => k.textContent)
+      .join("");
 
-    fireEvent.change(input()!, { target: { value: keyText.replace(/\+/g, "") } });
+    fireEvent.change(input()!, { target: { value: keyText } });
 
     expect(options().map((o) => o.id)).toContain(first.id);
   });

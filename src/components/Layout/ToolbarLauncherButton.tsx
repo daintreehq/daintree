@@ -4,7 +4,7 @@ import { SquareTerminal, Globe } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
-import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 
 type LauncherType = "terminal" | "browser";
@@ -46,7 +46,7 @@ export function ToolbarLauncherButton({
   "data-toolbar-item": dataToolbarItem,
 }: ToolbarLauncherButtonProps) {
   const config = LAUNCHER_CONFIG[type];
-  const shortcut = useKeybindingDisplay(config.keybindingAction);
+  const shortcut = useEffectiveCombo(config.keybindingAction);
   const ariaShortcut = useAriaKeyshortcuts(config.keybindingAction);
   const launcherHover = useShortcutHintHover(config.keybindingAction);
 

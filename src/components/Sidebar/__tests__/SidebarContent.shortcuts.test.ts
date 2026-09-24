@@ -26,7 +26,7 @@ describe("SidebarContent shortcut labels — issue #5843", () => {
     });
 
     it("uses dynamic hook for worktree.refresh", () => {
-      expect(source).toContain('useKeybindingDisplay("worktree.refresh")');
+      expect(source).toContain('useEffectiveCombo("worktree.refresh")');
     });
 
     it("uses dynamic hook for worktree.createDialog.open", () => {

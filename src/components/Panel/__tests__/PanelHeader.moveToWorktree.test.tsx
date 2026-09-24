@@ -72,6 +72,7 @@ vi.mock("@/hooks", () => ({
   useBackgroundPanelStats: () => ({ activeCount: 0, workingCount: 0 }),
   useTabOverflow: () => new Set(),
   useKeybindingDisplay: () => "",
+  useEffectiveCombo: () => undefined,
   useAriaKeyshortcuts: () => undefined,
 }));
 

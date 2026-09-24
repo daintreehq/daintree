@@ -40,7 +40,7 @@ let mockShortcut = "";
 
 vi.mock("@/hooks", () => ({
   useAriaKeyshortcuts: () => "",
-  useKeybindingDisplay: () => mockShortcut,
+  useEffectiveCombo: () => mockShortcut || undefined,
   useShortcutHintHover: () => ({}),
 }));
 
@@ -519,7 +519,7 @@ describe("ToolbarAssistantButton — tooltip (#12509)", () => {
   });
 
   it("passes the toggle shortcut through to the tooltip", () => {
-    mockShortcut = "⌘⇧A";
+    mockShortcut = "Cmd+Shift+A";
     setHelpPanel({ isOpen: false, terminalId: null });
 
     const { container } = render(<ToolbarAssistantButton />);
@@ -527,6 +527,6 @@ describe("ToolbarAssistantButton — tooltip (#12509)", () => {
       container
         .querySelector('[data-testid="assistant-tooltip"] [data-shortcut]')
         ?.getAttribute("data-shortcut")
-    ).toBe("⌘⇧A");
+    ).toBe("Cmd+Shift+A");
   });
 });

@@ -28,7 +28,7 @@ import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePortalStore } from "@/store/portalStore";
 import { PortalIcon } from "./PortalIcon";
-import { useAriaKeyshortcuts, useKeybindingDisplay, useOverlayClaim } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo, useOverlayClaim } from "@/hooks";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
   DropdownMenu,
@@ -245,8 +245,8 @@ export function PortalToolbar({
   const reorderTabs = usePortalStore((s) => s.reorderTabs);
   const showDevDashboard = usePortalStore((s) => s.showDevDashboard);
   const toggleDevDashboard = usePortalStore((s) => s.toggleDevDashboard);
-  const closePortalShortcut = useKeybindingDisplay("panel.togglePortal");
-  const newTabShortcut = useKeybindingDisplay("portal.newTab");
+  const closePortalShortcut = useEffectiveCombo("panel.togglePortal");
+  const newTabShortcut = useEffectiveCombo("portal.newTab");
   const closePortalAriaShortcut = useAriaKeyshortcuts("panel.togglePortal");
   const newTabAriaShortcut = useAriaKeyshortcuts("portal.newTab");
 

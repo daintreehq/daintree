@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
-import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { actionService } from "@/services/ActionService";
 
@@ -19,7 +19,7 @@ interface ToolbarCommandPaletteButtonProps {
 export function ToolbarCommandPaletteButton({
   "data-toolbar-item": dataToolbarItem,
 }: ToolbarCommandPaletteButtonProps) {
-  const shortcut = useKeybindingDisplay(PALETTE_ACTION_ID);
+  const shortcut = useEffectiveCombo(PALETTE_ACTION_ID);
   const ariaShortcut = useAriaKeyshortcuts(PALETTE_ACTION_ID);
   const hover = useShortcutHintHover(PALETTE_ACTION_ID);
 
