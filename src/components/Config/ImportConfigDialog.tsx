@@ -95,6 +95,16 @@ function skippedReasons(report: ConfigImportReport, preview: ConfigBundlePreview
   return reasons;
 }
 
+/** The outcome's opening sentence, shared by the toast and its inbox record so they can't disagree. */
+function outcomeLead(report: ConfigImportReport, skippedCount: number): string {
+  const applied = report.sections.reduce((sum, section) => sum + section.applied, 0);
+  const skipped = countLabel(skippedCount, "setting", "settings");
+  // Nothing landed: "imported" would claim an outcome that didn't happen.
+  return applied === 0
+    ? `No settings imported — ${skipped} skipped.`
+    : `Configuration imported with ${skipped} skipped.`;
+}
+
 function outcomeMessage(report: ConfigImportReport, preview: ConfigBundlePreview): string {
   const applied = report.sections.reduce((sum, section) => sum + section.applied, 0);
   const reasons = skippedReasons(report, preview);
@@ -102,13 +112,8 @@ function outcomeMessage(report: ConfigImportReport, preview: ConfigBundlePreview
   if (reasons.length === 0) {
     return `Configuration imported — ${countLabel(applied, "setting", "settings")} changed${tail}`;
   }
-  const skipped = countLabel(reasons.length, "setting", "settings");
   const more = reasons.length > 1 ? `, plus ${reasons.length - 1} more in the inbox` : "";
-  // Nothing landed: "imported" would claim an outcome that didn't happen.
-  const lead =
-    applied === 0
-      ? `No settings imported — ${skipped} skipped.`
-      : `Configuration imported with ${skipped} skipped.`;
+  const lead = outcomeLead(report, reasons.length);
   return `${lead} ${reasons[0]}${more}${tail}`;
 }
 
@@ -424,7 +429,7 @@ export function ImportConfigDialog() {
       message: outcomeMessage(report, preview),
       ...(reasons.length > 1
         ? {
-            inboxMessage: `Configuration imported with ${reasons.length} skipped. ${reasons.join(". ")}`,
+            inboxMessage: `${outcomeLead(report, reasons.length)} ${reasons.join(". ")}`,
           }
         : {}),
       supersedeKey: IMPORT_CONFIG_ACTION_ID,

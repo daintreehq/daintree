@@ -9,6 +9,7 @@ import type {
 
 interface NotifyCall {
   message: string;
+  inboxMessage?: string;
   action?: { label: string };
 }
 
@@ -260,7 +261,7 @@ describe("ImportConfigDialog", () => {
     expect(bodyText()).toMatch(/earlier attempt may already have changed/);
   });
 
-  it("doesn't call an import where nothing landed 'imported'", async () => {
+  it("doesn't call an import where nothing landed 'imported', in the toast or the inbox", async () => {
     applyImport.mockResolvedValue({
       outcome: "applied",
       rolledBack: false,
@@ -271,10 +272,13 @@ describe("ImportConfigDialog", () => {
           present: true,
           applied: 0,
           unchanged: 0,
-          skipped: 1,
+          skipped: 2,
           failed: 0,
           errors: [],
-          leaves: [{ key: "terminal.new", status: "skipped", reason: "not a valid shortcut" }],
+          leaves: [
+            { key: "terminal.new", status: "skipped", reason: "not a valid shortcut" },
+            { key: "terminal.split", status: "skipped", reason: "not a valid shortcut" },
+          ],
         },
       ],
     } satisfies ConfigImportReport);
@@ -284,10 +288,14 @@ describe("ImportConfigDialog", () => {
       fireEvent.click(screen.getByRole("button", { name: "Import configuration" }));
     });
 
-    const message = notifyMock.mock.calls.at(-1)?.[0].message ?? "";
+    const call = notifyMock.mock.calls.at(-1)?.[0];
+    const message = call?.message ?? "";
     expect(message).not.toMatch(/^Configuration imported/);
     // The skip is still named by what the user saw in the preview.
     expect(message).toContain("New terminal");
+    // The inbox record the toast points at tells the same story, in full.
+    expect(call?.inboxMessage ?? "").not.toMatch(/^Configuration imported/);
+    expect(call?.inboxMessage).toContain("Split terminal");
   });
 
   it("reports a stale window, not a failed import, when only the refresh fails", async () => {
