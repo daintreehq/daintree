@@ -6,6 +6,7 @@ import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { WorktreeFilterPopover } from "../WorktreeFilterPopover";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import type { ChipCounts } from "@/lib/worktreeFilters";
+import { STATUS_OPTIONS } from "@/lib/worktreeFilterOptions";
 
 const SOURCE = fs.readFileSync(path.resolve(__dirname, "../WorktreeFilterPopover.tsx"), "utf-8");
 
@@ -399,6 +400,47 @@ describe("WorktreeFilterPopover keyboard and focus surfaces", () => {
     const trigger = screen.getByLabelText(/^Filter and sort worktrees/);
     expect(trigger.className).toMatch(/focus-visible:outline\b/);
     expect(trigger.className).toContain("outline-accent-primary");
+  });
+
+  it("lets every section toggle own its whole row, with Clear floating over it", () => {
+    // A Clear slot laid out beside the toggle took a strip off the right of
+    // every header: the hover fill and focus ring stopped short of the edge,
+    // and clicks there did nothing. Anything else in the row must sit out of
+    // flow, and never inside the toggle (no nested interactive content).
+    useWorktreeFilterStore.getState().toggleStatusFilter("dirty");
+    openPopover();
+    const toggles = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button[aria-expanded][aria-controls]")
+    );
+    expect(toggles.length).toBeGreaterThan(1);
+    for (const toggle of toggles) {
+      expect(toggle.querySelector("button, a, input")).toBeNull();
+      expect(toggle.className).toMatch(/focus-visible:outline\b/);
+      const inFlowSiblings = Array.from(toggle.parentElement!.children).filter(
+        (el) => el !== toggle && !/(?:^|\s)absolute(?:\s|$)/.test(el.className)
+      );
+      expect(inFlowSiblings).toEqual([]);
+    }
+    const clear = screen.getByRole("button", { name: "Clear Status filters" });
+    const statusToggle = toggles.find((t) => t.textContent?.startsWith("Status"))!;
+    expect(clear.parentElement).toBe(statusToggle.parentElement);
+  });
+
+  it("names the selected values in a collapsed facet's header", () => {
+    // A count badge said "one filter here" without saying which, so the only
+    // way to answer "what is filtering my list" was to reopen the section.
+    const selected = [STATUS_OPTIONS[1]!, STATUS_OPTIONS[3]!];
+    const unselected = STATUS_OPTIONS.filter((o) => !selected.includes(o));
+    for (const option of selected)
+      useWorktreeFilterStore.getState().toggleStatusFilter(option.value);
+    openPopover();
+    const toggle = screen.getAllByRole("button").find((b) => b.textContent?.startsWith("Status"))!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    const text = toggle.textContent ?? "";
+    for (const option of selected) expect(text).toContain(option.label);
+    for (const option of unselected) expect(text).not.toContain(option.label);
   });
 
   it("owns its sort radios with a labelled radiogroup", () => {
