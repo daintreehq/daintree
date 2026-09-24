@@ -571,6 +571,7 @@ export function InlineStatusBanner({
           is only legible on some of them is not a title. */}
       <div className={cn("flex items-start gap-2 min-w-0", wrapsControls && "flex-1")}>
         <IconComponent
+          data-severity-glyph=""
           className={cn("w-4 h-4 shrink-0 mt-0.5", isNeutral && "text-text-secondary")}
           style={isNeutral ? undefined : { color: `var(${colorVar})` }}
           aria-hidden="true"

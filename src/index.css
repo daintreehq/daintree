@@ -2503,6 +2503,14 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     outline-offset: 2px !important;
   }
 
+  /* Chromium forces an inherited `currentColor` but not a colour set on the SVG
+     itself, by class or inline style — so a severity glyph kept its amber stroke
+     on the white canvas at ~2.6:1. The glyph's shape carries the severity here;
+     its stroke only has to be seen. */
+  [data-severity-glyph] {
+    color: CanvasText !important;
+  }
+
   /* Rings drawn inset on purpose — inside an overflow-hidden group or an
      unpadded scroller, where an outward ring is clipped — must stay inset
      here, or forced colors pushes them back out to be clipped. */
