@@ -94,13 +94,18 @@ function boxOf(keyframe: Keyframe) {
   };
 }
 
-/** Where a two-keyframe box animation puts the ghost at eased `progress`. */
+/** Where a box animation's keyframes put the ghost at eased `progress`. */
 function boxAt(keyframes: Keyframe[], progress: number) {
-  const a = keyframes[0]!;
-  const b = keyframes[keyframes.length - 1]!;
+  const offsets = keyframes.map((k, i) =>
+    typeof k.offset === "number" ? k.offset : i / (keyframes.length - 1)
+  );
+  let i = 0;
+  while (i < keyframes.length - 2 && progress > offsets[i + 1]!) i++;
+  const a = keyframes[i]!;
+  const b = keyframes[i + 1]!;
+  const t = (progress - offsets[i]!) / (offsets[i + 1]! - offsets[i]!);
   const at = (key: "left" | "top" | "width" | "height") =>
-    parseFloat(String(a[key])) +
-    (parseFloat(String(b[key])) - parseFloat(String(a[key]))) * progress;
+    parseFloat(String(a[key])) + (parseFloat(String(b[key])) - parseFloat(String(a[key]))) * t;
   return { left: at("left"), top: at("top"), width: at("width"), height: at("height") };
 }
 
@@ -287,6 +292,36 @@ describe("PanelTransitionOverlay", () => {
     for (const key of ["left", "top", "width", "height"] as const) {
       expect(after[key]).toBeCloseTo(before[key], 6);
     }
+  });
+
+  it("never asks for a negative size when a destination grows mid-flight", () => {
+    render(<PanelTransitionOverlay />);
+    // A restore from a 32px chip into a pane that the grid then grows.
+    const chip: TransitionRect = { x: 50, y: 640, width: 120, height: 32 };
+    let current: TransitionRect = { x: 10, y: 340, width: 500, height: 200 };
+    act(() => {
+      triggerPanelTransition("panel-1", "restore", chip, () => current, "npm test");
+    });
+    runFrames(1);
+    const flight = geometry();
+    for (const [progress, height] of [
+      [0.3, 306],
+      [0.6, 420],
+    ] as const) {
+      flight.effect.progress = progress;
+      const before = boxAt(flight.effect.keyframes, progress);
+      current = { ...current, height };
+      runFrames(1);
+      const after = boxAt(flight.effect.keyframes, progress);
+      for (const key of ["left", "top", "width", "height"] as const) {
+        expect(after[key]).toBeCloseTo(before[key], 6);
+      }
+      for (const keyframe of flight.effect.keyframes) {
+        expect(parseFloat(String(keyframe.width))).toBeGreaterThan(0);
+        expect(parseFloat(String(keyframe.height))).toBeGreaterThan(0);
+      }
+    }
+    expect(boxAt(flight.effect.keyframes, 1).height).toBe(420);
   });
 
   it("calls a flight off when its destination disappears mid-flight", async () => {

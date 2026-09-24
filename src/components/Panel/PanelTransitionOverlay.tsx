@@ -215,22 +215,6 @@ function withRadius(rect: TransitionRect, radius: string | null) {
   return radius ? { ...toBox(rect), borderRadius: radius } : toBox(rect);
 }
 
-/**
- * The start box that puts a straight [start, end] flight at `current` when
- * `progress` of the way there. Re-aiming with it keeps the ghost where it is on
- * screen and bends the rest of its path to the new end, on the same curve and
- * the same deadline.
- */
-function reanchor(current: TransitionRect, end: TransitionRect, progress: number): TransitionRect {
-  const solve = (c: number, e: number) => (c - e * progress) / (1 - progress);
-  return {
-    x: solve(current.x, end.x),
-    y: solve(current.y, end.y),
-    width: solve(current.width, end.width),
-    height: solve(current.height, end.height),
-  };
-}
-
 function lerpRect(a: TransitionRect, b: TransitionRect, t: number): TransitionRect {
   return {
     x: a.x + (b.x - a.x) * t,
@@ -266,8 +250,17 @@ function TransitionGhost({ transition, onDone }: TransitionGhostProps) {
     // The ghost starts with its own (the pane's) radius; spelled out so a
     // landing radius has something to interpolate from.
     const startRadius = getComputedStyle(element).borderTopLeftRadius;
-    let start = sourceRect;
     let end = sourceRect;
+    // Where a re-aim pinned the path: the box the ghost was at, at the eased
+    // progress it was at. Past it, the path runs from there to the new end.
+    let anchor: { rect: TransitionRect; progress: number } | null = null;
+    const boxAt = (progress: number): TransitionRect => {
+      if (!anchor) return lerpRect(sourceRect, end, progress);
+      if (progress <= anchor.progress) {
+        return lerpRect(sourceRect, anchor.rect, progress / anchor.progress);
+      }
+      return lerpRect(anchor.rect, end, (progress - anchor.progress) / (1 - anchor.progress));
+    };
     let endRadius: string | null = null;
     let frame = 0;
     let fallback: ReturnType<typeof setTimeout> | undefined;
@@ -305,13 +298,18 @@ function TransitionGhost({ transition, onDone }: TransitionGhostProps) {
           typeof progress === "number" &&
           progress < 1
         ) {
-          // Re-aim without restarting the clock or moving the ghost: solve for
-          // the start that puts the new path through where it is right now.
-          start = reanchor(lerpRect(start, end, progress), next.rect, progress);
+          // Re-aim without restarting the clock or moving the ghost: pin the
+          // path at the box it is in right now, and run the rest of the curve
+          // from there to the new end. Every box on the path is a real one, so
+          // a destination that grows can never ask for a negative size.
+          const here = boxAt(progress);
+          if (progress > 0) anchor = { rect: here, progress };
           end = next.rect;
+          endRadius = next.radius ?? endRadius;
           effect.setKeyframes([
-            withRadius(start, startRadius),
-            withRadius(end, next.radius ?? endRadius),
+            { offset: 0, ...withRadius(sourceRect, startRadius) },
+            ...(anchor ? [{ offset: anchor.progress, ...toBox(anchor.rect) }] : []),
+            { offset: 1, ...withRadius(end, endRadius) },
           ]);
         }
         track();
@@ -332,10 +330,13 @@ function TransitionGhost({ transition, onDone }: TransitionGhostProps) {
       end = resolved.rect;
       endRadius = resolved.radius;
       const timing = { duration, fill: "both" as const };
-      geometry = element.animate([withRadius(start, startRadius), withRadius(end, endRadius)], {
-        ...timing,
-        easing,
-      });
+      geometry = element.animate(
+        [withRadius(sourceRect, startRadius), withRadius(end, endRadius)],
+        {
+          ...timing,
+          easing,
+        }
+      );
       animations = [
         geometry,
         element.animate(toStops(CONTAINER_OPACITY[direction]), { ...timing, easing: "linear" }),
