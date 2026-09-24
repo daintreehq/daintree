@@ -857,8 +857,13 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Worktrees",
   },
   {
+    // One of the Cmd+Alt overview family beside the agent overview (O) and the
+    // project switcher (P). Not W: Cmd+Alt+W is the macOS "Close all windows"
+    // convention. Not E: on Windows Ctrl+Alt is AltGr, and AltGr+E types € on
+    // German and French layouts. R produces no AltGr character on the common
+    // European layouts.
     actionId: "worktree.overview",
-    combo: "Cmd+Shift+O",
+    combo: "Cmd+Alt+R",
     scope: "global",
     priority: 0,
     description: "Toggle worktrees overview",

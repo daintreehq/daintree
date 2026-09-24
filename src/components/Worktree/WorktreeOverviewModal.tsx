@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
 import { QuickStateFilterBar } from "./QuickStateFilterBar";
 import { WorktreeSidebarSearchBar } from "./WorktreeSidebarSearchBar";
-import { WorktreeOverviewRow } from "./WorktreeOverviewRow";
+import { WorktreeOverviewColumnHeaders, WorktreeOverviewRow } from "./WorktreeOverviewRow";
 import { useWorktreeBulkRemove } from "./useWorktreeBulkRemove";
 import { WorktreeBulkRemoveDialog } from "./WorktreeBulkRemoveDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -629,7 +629,7 @@ export function WorktreeOverviewModal({
         isOpen={isOpen}
         onClose={handleDismiss}
         ariaLabel="Worktrees"
-        tier="overview"
+        tier="workspace"
         initialFocusRef={searchInputRef}
       >
         <div data-testid="worktree-overview-modal" className="flex flex-col">
@@ -662,10 +662,13 @@ export function WorktreeOverviewModal({
                   value={quickStateFilter}
                   onChange={setQuickStateFilter}
                   counts={quickStateCounts}
+                  showLabels
                 />
               </div>
             )}
           </AppPaletteDialog.Header>
+
+          {filteredWorktrees.length > 0 && <WorktreeOverviewColumnHeaders />}
 
           <ScrollShadow className="max-h-[60vh]" scrollClassName="scroll-py-2">
             {isLoading && worktrees.length === 0 ? (

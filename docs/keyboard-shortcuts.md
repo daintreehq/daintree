@@ -122,7 +122,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Switch to previous worktree | `⌘+⌥+[` | `Ctrl+Alt+[` |
 | Open worktree palette | `⌘+K ⌘+O` | `Ctrl+K Ctrl+O` |
 | Create a new worktree | `⌘+K ⌘+N` | `Ctrl+K Ctrl+N` |
-| Toggle worktrees overview | `⌘+⇧+O` | `Ctrl+Shift+O` |
+| Toggle worktrees overview | `⌘+⌥+R` | `Ctrl+Alt+R` |
 | Copy tree context for active worktree | `⌘+⇧+C` | `Ctrl+Shift+C` |
 | Open changes for focused worktree | `⌘+⇧+D` | `Ctrl+Shift+D` |
 | Open file browser panel for focused worktree | `⌘+⌥+F` | `Ctrl+Alt+F` |

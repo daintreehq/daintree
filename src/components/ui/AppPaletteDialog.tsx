@@ -63,11 +63,18 @@ export { KBD_CLASS };
  * one-off measurement, so a second surface that grows the same shape takes
  * this rather than inventing its own number.
  *
- * Three tiers, not a free width per palette — palettes open from the same
+ * `workspace` is the fourth, for a palette whose rows carry several named
+ * sections of their own — the worktree overview's identity, agents, changes
+ * and age — where each section needs room for a line of prose (an agent's
+ * task) rather than a glyph. At the overview tier those sections squeezed to
+ * glyph clusters and ellipses. Still a capped box, inside the 880-980px band
+ * data-heavy dialogs settle on, never a window-sized canvas.
+ *
+ * Four tiers, not a free width per palette — palettes open from the same
  * keyboard reflex and often in sequence, so unconstrained per-surface sizing
  * reads as the box jumping around rather than as a deliberate size.
  */
-export type PaletteSurfaceTier = "anchored" | "command" | "overview";
+export type PaletteSurfaceTier = "anchored" | "command" | "overview" | "workspace";
 
 /**
  * Tailwind needs each class present in source for the JIT compiler, so these
@@ -78,6 +85,7 @@ export const PALETTE_SURFACE_WIDTHS: Record<PaletteSurfaceTier, string> = {
   anchored: "w-[484px] max-w-[calc(100vw-2rem)]",
   command: "w-[608px] max-w-[calc(100vw-2rem)]",
   overview: "w-[672px] max-w-[calc(100vw-2rem)]",
+  workspace: "w-[880px] max-w-[calc(100vw-2rem)]",
 };
 
 export interface AppPaletteDialogProps {

@@ -3,6 +3,7 @@ import { AlertTriangle, Check, Sprout } from "lucide-react";
 import type { AgentState, WorktreeState } from "@/types";
 import type { PtyPanelData } from "@shared/types/panel";
 import { cn } from "@/lib/utils";
+import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { getWorktreeBranchLabel, getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
@@ -26,15 +27,39 @@ import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTi
 import { STATE_COLORS, STATE_ICONS, STATE_LABELS } from "./terminalStateConfig";
 
 /**
- * Column tracks shared by every row, so the columns line up down the list. The
- * worktree column takes what the fixed ones leave: at the palette's overview
- * tier that is ~300px, the sidebar card's own content width, which is what
- * keeps a row's left half reading as the sidebar card it came from.
+ * Column tracks shared by the header and every row, so each section sits on
+ * one vertical axis down the list. The worktree section takes what the fixed
+ * ones leave — at the workspace tier a little wider than the sidebar card
+ * itself, which is what keeps a row's left half reading as that card.
  */
-export const OVERVIEW_ROW_COLUMNS = "grid-cols-[minmax(0,1fr)_144px_88px_36px]";
+export const OVERVIEW_ROW_COLUMNS = "grid-cols-[minmax(0,1fr)_232px_104px_48px]";
+const OVERVIEW_ROW_GAP = "gap-x-5";
+const OVERVIEW_ROW_INSET = "px-4";
 
-/** At most this many agent marks before the rest collapse to "+N". */
-const MAX_AGENT_MARKS = 3;
+/**
+ * Names the sections once, above the list, in the palette's section-label
+ * type — so the columns read as labelled zones rather than a spreadsheet, and
+ * nobody has to decode a column from its contents.
+ */
+export function WorktreeOverviewColumnHeaders() {
+  return (
+    <div
+      aria-hidden="true"
+      className={cn(
+        "grid items-end py-1.5 border-b border-divider",
+        OVERVIEW_ROW_COLUMNS,
+        OVERVIEW_ROW_GAP,
+        OVERVIEW_ROW_INSET,
+        PALETTE_SECTION_LABEL_CLASS
+      )}
+    >
+      <span className="pl-6">Worktree</span>
+      <span>Agents</span>
+      <span className="text-right">Changes</span>
+      <span className="text-right">Active</span>
+    </div>
+  );
+}
 
 /**
  * Which session speaks for the row on its second line. The one that needs the
@@ -143,10 +168,13 @@ export function WorktreeOverviewRow({
   const ahead = worktree.aheadCount ?? 0;
   const behind = worktree.behindCount ?? 0;
 
-  const agentMarks = marks.filter((m) => m.chrome.isAgent);
-  const shownMarks = (agentMarks.length > 0 ? agentMarks : marks).slice(0, MAX_AGENT_MARKS);
-  const hiddenCount = marks.length - shownMarks.length;
-  const lead = leadLine(marks[0]);
+  const leadMark = marks[0];
+  const lead = leadLine(leadMark);
+  const LeadStateIcon =
+    leadMark?.state && leadMark.state !== "idle" && leadMark.state !== "exited"
+      ? STATE_ICONS[leadMark.state]
+      : null;
+  const otherCount = marks.length - 1;
 
   const sessionLines = marks.map((m) => ({
     id: m.terminal.id,
@@ -178,8 +206,12 @@ export function WorktreeOverviewRow({
               onActivate(worktree.id);
             }}
             className={cn(
-              "group/row relative grid items-center gap-x-4 px-3 py-2.5 cursor-pointer select-none",
+              // Top-aligned: every section is a headline over a detail line, so
+              // the headlines share one baseline across the row.
+              "group/row relative grid items-start py-3 cursor-pointer select-none",
               OVERVIEW_ROW_COLUMNS,
+              OVERVIEW_ROW_GAP,
+              OVERVIEW_ROW_INSET,
               !isLast && "border-b border-divider",
               "transition-colors duration-150 ease-out",
               isSelected ? "bg-overlay-medium" : "hover:bg-overlay-soft",
@@ -201,7 +233,7 @@ export function WorktreeOverviewRow({
 
             {/* Worktree: the sidebar card's identity, in the sidebar's words. */}
             <div className="min-w-0">
-              <div className="flex items-center gap-2 min-w-0">
+              <div className="flex h-5 items-center gap-2 min-w-0">
                 <span className="relative flex h-4 w-4 shrink-0 items-center justify-center">
                   {TypeIcon && (
                     <TypeIcon
@@ -252,10 +284,12 @@ export function WorktreeOverviewRow({
                   </span>
                 </TruncatedTooltip>
                 {isCurrent && (
-                  <span className="shrink-0 text-2xs text-text-secondary">· current</span>
+                  <span className="shrink-0 rounded-[var(--radius-xs)] border border-border-default px-1 text-3xs leading-4 text-text-secondary">
+                    Current
+                  </span>
                 )}
               </div>
-              <div className="mt-0.5 flex items-center gap-2 min-w-0 pl-6 text-2xs text-text-secondary">
+              <div className="mt-1 flex items-center gap-2 min-w-0 pl-6 text-2xs text-text-secondary">
                 <span className="truncate font-mono">{branchLabel}</span>
                 {showPr && PrIcon && (
                   <span
@@ -286,46 +320,53 @@ export function WorktreeOverviewRow({
               <Tooltip>
                 <TooltipTrigger asChild>
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2" role="img" aria-label={sessionsLabel}>
-                      {shownMarks.map(({ terminal, chrome, state }) => {
-                        const StateIcon = state ? STATE_ICONS[state] : null;
-                        return (
-                          <span
-                            key={terminal.id}
-                            className="flex items-center gap-1"
-                            aria-hidden="true"
-                          >
-                            <TerminalIcon
-                              kind={terminal.kind}
-                              chrome={chrome}
-                              className="h-3 w-3 shrink-0"
-                            />
-                            {StateIcon && state && state !== "idle" && state !== "exited" && (
-                              <StateIcon
-                                className={cn(
-                                  "h-3 w-3",
-                                  STATE_COLORS[state],
-                                  state === "working" &&
-                                    "animate-spin-slow motion-reduce:animate-none"
-                                )}
-                              />
-                            )}
-                          </span>
-                        );
-                      })}
-                      {hiddenCount > 0 && (
+                    {/* The session that needs you most, in words: who, and what state.
+                        A cluster of bare glyphs asked the reader to decode every
+                        row; the rest of the sessions are a count and a hover away. */}
+                    <div
+                      className="flex h-5 items-center gap-1.5 min-w-0 text-xs"
+                      role="img"
+                      aria-label={sessionsLabel}
+                    >
+                      {leadMark && (
+                        <TerminalIcon
+                          kind={leadMark.terminal.kind}
+                          chrome={leadMark.chrome}
+                          className="h-3.5 w-3.5 shrink-0"
+                        />
+                      )}
+                      <span className="truncate text-text-primary" aria-hidden="true">
+                        {leadMark?.chrome.label}
+                      </span>
+                      {LeadStateIcon && leadMark?.state && (
                         <span
-                          className="text-2xs tabular-nums text-text-secondary"
+                          className="flex shrink-0 items-center gap-1 text-text-secondary"
                           aria-hidden="true"
                         >
-                          +{hiddenCount}
+                          <LeadStateIcon
+                            className={cn(
+                              "h-3 w-3",
+                              STATE_COLORS[leadMark.state],
+                              leadMark.state === "working" &&
+                                "animate-spin-slow motion-reduce:animate-none"
+                            )}
+                          />
+                          {STATE_LABELS[leadMark.state]}
+                        </span>
+                      )}
+                      {otherCount > 0 && (
+                        <span
+                          className="shrink-0 tabular-nums text-text-secondary"
+                          aria-hidden="true"
+                        >
+                          +{otherCount}
                         </span>
                       )}
                     </div>
                     {lead && (
                       <div
                         className={cn(
-                          "mt-0.5 truncate text-2xs text-text-secondary",
+                          "mt-1 truncate pl-5 text-2xs text-text-secondary",
                           lead.mono && "font-mono"
                         )}
                       >
@@ -348,12 +389,14 @@ export function WorktreeOverviewRow({
                 </TooltipContent>
               </Tooltip>
             ) : (
-              <span className="text-2xs text-text-secondary">No sessions</span>
+              <span className="text-xs text-text-secondary" aria-label="No sessions">
+                —
+              </span>
             )}
 
             {/* Changes: size of the diff, then its file count and drift from upstream. */}
             <div className="min-w-0 text-right tabular-nums">
-              <div className="text-xs text-text-secondary">
+              <div className="text-xs leading-5 text-text-secondary">
                 {changes === null ? (
                   "—"
                 ) : fileCount > 0 ? (
@@ -365,7 +408,7 @@ export function WorktreeOverviewRow({
                 )}
               </div>
               {(fileCount > 0 || ahead > 0 || behind > 0) && (
-                <div className="mt-0.5 flex items-center justify-end gap-1.5 text-2xs text-text-secondary">
+                <div className="mt-1 flex items-center justify-end gap-1.5 text-2xs text-text-secondary">
                   {conflictCount > 0 && (
                     <span
                       className="flex items-center gap-0.5 text-status-error"
@@ -392,7 +435,7 @@ export function WorktreeOverviewRow({
             </div>
 
             {/* Age of the last activity, the sidebar's own clock. */}
-            <div className="text-right text-2xs tabular-nums text-text-secondary">
+            <div className="text-right text-xs leading-5 tabular-nums text-text-secondary">
               {worktree.lastActivityTimestamp ? (
                 <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} />
               ) : null}

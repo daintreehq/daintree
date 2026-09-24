@@ -53,6 +53,12 @@ interface QuickStateFilterBarProps {
   trailing?: React.ReactNode;
   /** Placement classes from the host — the palette header draws its own rule. */
   className?: string;
+  /**
+   * Write each segment's name beside its glyph. The sidebar rail has no room
+   * and leans on the tooltip; a surface that does have the room should say
+   * what the glyphs mean rather than make the user hover to find out.
+   */
+  showLabels?: boolean;
 }
 
 export function QuickStateFilterBar({
@@ -61,6 +67,7 @@ export function QuickStateFilterBar({
   counts,
   trailing,
   className,
+  showLabels = false,
 }: QuickStateFilterBarProps) {
   const workingActive = counts !== undefined && counts.working > 0;
   // This row already claimed `role="toolbar"` without implementing any of it,
@@ -133,6 +140,17 @@ export function QuickStateFilterBar({
                     )}
                   >
                     All
+                  </span>
+                )}
+                {showLabels && option.value !== "all" && (
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      "truncate text-xs",
+                      isActive ? "font-medium text-text-primary" : "text-text-secondary"
+                    )}
+                  >
+                    {option.label}
                   </span>
                 )}
                 {hasCount && (
