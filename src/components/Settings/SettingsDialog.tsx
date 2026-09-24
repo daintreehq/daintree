@@ -24,12 +24,18 @@ import {
   usePreferencesStore,
   useSettingsStore,
 } from "@/store";
-import { X, Search, ChevronRight, Info } from "lucide-react";
+import { X, Search, ChevronRight, ChevronDown, Info } from "lucide-react";
 import { SearchField } from "@/components/ui/SearchField";
 import { ArrowLeftRight, TriangleAlert } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { appClient } from "@/clients";
 import type { AppVersionInfo } from "@shared/types/ipc/app";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -98,12 +104,12 @@ function midSentenceLabel(label: string): string {
   return label.charAt(0).toLowerCase() + label.slice(1);
 }
 
-// Labels never change with state — the checked segment says which scope is
-// active, and swapping the words would make the control read as a toggle.
-const SCOPE_OPTIONS = [
-  { value: "global" as const, label: "Global" },
-  { value: "project" as const, label: "Project" },
-];
+// The sidebar heading is the scope switcher, so it names the scope it is showing.
+// Unlike a toggle's label this is a value, which is why it changes with state.
+const SCOPE_TITLES: Record<SettingsScope, string> = {
+  global: "Global settings",
+  project: "Project settings",
+};
 
 const SEARCH_ENTRY_BY_ID = new Map(SETTINGS_SEARCH_INDEX.map((entry) => [entry.id, entry]));
 
@@ -703,6 +709,8 @@ function SettingsDialogInner({
   // pane there is no active tab to speak for, so the nav scope is the honest answer.
   const headerScope: SettingsScope = isSearching ? activeScope : contentScopeForTab(activeTab);
 
+  const navGroups = getSettingsNavGroups(activeScope);
+
   const tabTitles: Record<SettingsTab, string> = {
     ...globalTabTitles,
     ...projectTabTitles,
@@ -738,22 +746,17 @@ function SettingsDialogInner({
             searchInputRef.current?.focus();
           }}
         >
-          <div className="mb-3 px-2 space-y-2">
-            <h2 className="text-sm font-semibold text-text-primary">Settings</h2>
-            {hasProject && (
-              <SegmentedRadioGroup
-                // A radiogroup, not the Select it replaced: two mutually exclusive
-                // contexts that rebuild the nav tree are a view switcher, not a field
-                // value, and screen readers should hear "1 of 2" rather than a combobox.
-                // `settings-scope-control` re-homes --settings-scope-bg onto the thumb,
-                // which is the surface the seven light themes authored it for.
-                className="settings-scope-control"
-                fullWidth
-                aria-label="Settings scope"
-                value={activeScope}
-                onChange={handleScopeSwitch}
-                options={SCOPE_OPTIONS}
+          <div className="mb-2">
+            {hasProject ? (
+              <SettingsScopeMenu
+                scope={activeScope}
+                projectLabel={projectLabel}
+                onScopeChange={handleScopeSwitch}
               />
+            ) : (
+              <h2 className="flex items-center h-8 px-3 text-sm font-semibold text-text-primary">
+                Settings
+              </h2>
             )}
           </div>
 
@@ -782,7 +785,7 @@ function SettingsDialogInner({
 
           <ScrollShadow
             className="flex-1 min-h-0"
-            scrollClassName="space-y-3"
+            scrollClassName="space-y-4"
             // The nav always overflows at ordinary window heights, and the full fade
             // washed a whole row out until it read as a disabled item.
             compact
@@ -794,8 +797,10 @@ function SettingsDialogInner({
             onBlur={handleTablistBlur}
           >
             <LayoutGroup id="settings-nav">
-              {getSettingsNavGroups(activeScope).map((group) => (
-                <NavGroup key={group.label} label={group.label}>
+              {navGroups.map((group) => (
+                // A lone group's label only repeats the heading above it ("Project
+                // settings" over "Project"), so it is dropped rather than shown twice.
+                <NavGroup key={group.label} label={group.label} hideLabel={navGroups.length === 1}>
                   {group.entries.map((entry) => {
                     const tabId = entry.id as SettingsTab;
                     const isLazy = entry.importKind === "lazy";
@@ -828,7 +833,7 @@ function SettingsDialogInner({
             </LayoutGroup>
           </ScrollShadow>
 
-          <div className="pt-2 mt-2 border-t border-border-default px-2">
+          <div className="pt-2 mt-2 border-t border-border-default px-3">
             <span className="settings-meta font-mono">{appVersion}</span>
           </div>
         </div>
@@ -1492,22 +1497,98 @@ function SettingsTabScrollEffect({
   return null;
 }
 
-export function NavGroup({ label, children }: { label: string; children: React.ReactNode }) {
+export function NavGroup({
+  label,
+  hideLabel,
+  children,
+}: {
+  label: string;
+  hideLabel?: boolean;
+  children: React.ReactNode;
+}) {
   return (
     <div role="none">
-      <span
-        // Sentence case like every other label in the dialog — the group names are
-        // already written that way, and forcing them to capitals made the sidebar the
-        // one place that shouted.
-        className="text-xs font-medium text-text-secondary px-3 mb-1 block select-none"
-        aria-hidden="true"
-      >
-        {label}
-      </span>
+      {!hideLabel && (
+        <span
+          // Sentence case like every other label in the dialog — the group names are
+          // already written that way, and forcing them to capitals made the sidebar the
+          // one place that shouted.
+          className="text-xs font-medium text-text-secondary px-3 mb-1 block select-none"
+          aria-hidden="true"
+        >
+          {label}
+        </span>
+      )}
       <div role="none" className="space-y-0.5">
         {children}
       </div>
     </div>
+  );
+}
+
+/**
+ * The sidebar heading, doubling as the scope switcher: one line that says whose settings
+ * these are, and a menu button to change it. A menu, not the segmented tabs it replaced:
+ * the two scopes rebuild the whole nav, so they are two views of the dialog rather than
+ * two values of a field, and the heading was otherwise a bare "Settings" that needed a
+ * second row to finish the sentence.
+ *
+ * The trigger's accessible name is its visible text ("Global settings"), not a generic
+ * "Settings scope" label, so speech input can say what the user sees.
+ */
+export function SettingsScopeMenu({
+  scope,
+  projectLabel,
+  onScopeChange,
+}: {
+  scope: SettingsScope;
+  projectLabel: string;
+  onScopeChange: (scope: SettingsScope) => void;
+}) {
+  return (
+    <h2 className="text-sm font-semibold text-text-primary">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-haspopup="menu"
+            data-settings-scope-trigger=""
+            className={cn(
+              "settings-scope-trigger group flex items-center gap-1 h-8 max-w-full px-3 rounded-[var(--radius-md)]",
+              "transition-colors duration-150 ease-out",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+            )}
+          >
+            <span className="truncate">{SCOPE_TITLES[scope]}</span>
+            <ChevronDown
+              className="w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out group-data-[state=open]:rotate-180"
+              aria-hidden="true"
+            />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-56 font-normal">
+          <DropdownMenuRadioGroup
+            value={scope}
+            onValueChange={(value) => {
+              if (value === "global" || value === "project") onScopeChange(value);
+            }}
+          >
+            <DropdownMenuRadioItem value="global">
+              <span className="flex flex-col min-w-0">
+                <span>{SCOPE_TITLES.global}</span>
+                <span className="text-2xs text-text-secondary">All projects</span>
+              </span>
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="project">
+              <span className="flex flex-col min-w-0">
+                <span>{SCOPE_TITLES.project}</span>
+                <span className="text-2xs text-text-secondary truncate">{projectLabel}</span>
+              </span>
+            </DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </h2>
   );
 }
 
@@ -1568,7 +1649,7 @@ export function NavItem({
       className={cn(
         // scroll-my clears the list's 16px scroll fade, so keeping the active item in
         // view never parks it under the fade where it reads as dimmed.
-        "relative text-left px-3 py-1.5 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full scroll-my-6",
+        "relative text-left px-3 h-7 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full scroll-my-6",
         // Inset, like the subtab bar: the item spans the scrollport, so a positive
         // offset had both vertical sides of the ring clipped away.
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",

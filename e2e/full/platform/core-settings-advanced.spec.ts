@@ -465,7 +465,7 @@ test.describe.serial("Core: Settings Advanced", () => {
       });
       await expect(nav.locator("button", { hasText: "Variables" })).toHaveCount(0);
 
-      // Switch to Project scope (segmented radiogroup) → nav swaps to project tabs.
+      // Switch to Project scope (the heading's scope menu) → nav swaps to project tabs.
       await selectSettingsScope(window, "Project");
 
       await expect(nav.locator("button", { hasText: "Variables" })).toBeVisible({

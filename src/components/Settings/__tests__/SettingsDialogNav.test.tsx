@@ -3,7 +3,7 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { UI_ANIMATION_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
-import { NavGroup, NavItem } from "../SettingsDialog";
+import { NavGroup, NavItem, SettingsScopeMenu } from "../SettingsDialog";
 import type { SettingsTab } from "../settingsTabRegistry";
 
 interface MotionRecord {
@@ -193,5 +193,39 @@ describe("settings nav active indicator (issue #11164)", () => {
     render(<Nav activeTab="general" />);
 
     expect(soleRecord().transition?.duration).toBe(0);
+  });
+});
+
+describe("Settings sidebar heading", () => {
+  it.each(["global", "project"] as const)(
+    "names the %s scope in the scope trigger's accessible name, as it reads on screen",
+    (scope) => {
+      // WCAG 2.5.3: a speech user says what they see. A generic "Settings scope" label
+      // over visible "Global settings" is the failure this pins.
+      render(<SettingsScopeMenu scope={scope} projectLabel="Helios" onScopeChange={() => {}} />);
+      const trigger = document.querySelector<HTMLElement>("[data-settings-scope-trigger]")!;
+
+      expect(trigger.getAttribute("aria-label")).toBeNull();
+      expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
+      expect(trigger.textContent?.toLowerCase()).toContain(scope);
+      expect(screen.getByRole("heading", { level: 2 }).contains(trigger)).toBe(true);
+    }
+  );
+
+  it("drops a group label only when asked, keeping its rows", () => {
+    render(
+      <>
+        <NavGroup label="Shown">
+          <span>row a</span>
+        </NavGroup>
+        <NavGroup label="Hidden" hideLabel>
+          <span>row b</span>
+        </NavGroup>
+      </>
+    );
+
+    expect(screen.queryByText("Shown")).not.toBeNull();
+    expect(screen.queryByText("Hidden")).toBeNull();
+    expect(screen.queryByText("row b")).not.toBeNull();
   });
 });

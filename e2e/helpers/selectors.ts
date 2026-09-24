@@ -62,9 +62,8 @@ export const SEL = {
     shortcutConflictWarning: "text=Conflicts with",
     mcpServerToggle: '[aria-label="Enable MCP server"]',
     mcpConnectionMarker: "text=The server binds to 127.0.0.1",
-    scopeControl: '[role="radiogroup"][aria-label="Settings scope"]',
-    scopeOption: (label: string) =>
-      `[role="radiogroup"][aria-label="Settings scope"] [role="radio"]:text-is("${label}")`,
+    scopeControl: "[data-settings-scope-trigger]",
+    scopeOption: (label: string) => `[role="menuitemradio"]:has-text("${label} settings")`,
     searchResultsRegion: '[role="region"][aria-label="Search results"]',
   },
   panel: {
