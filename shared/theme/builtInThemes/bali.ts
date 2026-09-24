@@ -160,9 +160,9 @@ export const theme: BuiltInThemeSource = {
     "pulse-empty-bg": "#F0F3E4",
     // Marigold heat (a green ramp aliases the field); level-1 must stay ≥ JND
     // above the empty cell.
-    "pulse-heat-high-opacity": "0.90",
-    "pulse-heat-low-opacity": "0.40",
-    "pulse-heat-medium-opacity": "0.66",
+    "pulse-heat-high-opacity": "0.75",
+    "pulse-heat-low-opacity": "0.32",
+    "pulse-heat-medium-opacity": "0.55",
     "pulse-heat-color": "#C8920F",
     "pulse-range-bg": "#F0F3E4",
     "pulse-ring-offset": "#FFFFFF",
