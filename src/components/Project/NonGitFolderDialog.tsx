@@ -63,7 +63,7 @@ export function NonGitFolderDialog({
   }
 
   return (
-    <AppDialog isOpen={isOpen} onClose={onCancel} size="md">
+    <AppDialog isOpen={isOpen} onClose={onCancel} size="md" data-testid="non-git-folder-dialog">
       <AppDialog.Header>
         <AppDialog.Title icon={<FolderOpen className="h-5 w-5 text-daintree-text/70" />}>
           {/* A root path ("/", "C:\") has no leaf — name it by the path itself. */}
