@@ -297,6 +297,19 @@ describe("CommandPicker search", () => {
     expect(inName).toBeGreaterThan(inDescription);
   });
 
+  it("finds a command typed the way its row prints it", () => {
+    const bare = scoreCommand(workIssue, "github:work-issue");
+    expect(bare).not.toBeNull();
+    expect(scoreCommand(workIssue, "/github:work-issue")).toBe(bare);
+  });
+
+  it("treats a bare slash as browsing, not a search", () => {
+    renderPicker(vi.fn(), [createIssue, sync, workIssue]);
+    const browsing = capturedProps!.results.map((c) => c.id);
+    act(() => capturedProps!.onQueryChange("/"));
+    expect(capturedProps!.results.map((c) => c.id)).toEqual(browsing);
+  });
+
   it("puts the best match first under Enter", () => {
     renderPicker(vi.fn(), [createIssue, sync, workIssue]);
     act(() => capturedProps!.onQueryChange("work"));

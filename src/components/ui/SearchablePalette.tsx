@@ -252,12 +252,17 @@ export function SearchablePalette<T>({
     if (!isOpen) return;
     if (!query.trim()) return;
     const count = results.length;
+    // Zero results render `AppPaletteDialog.Empty`, which announces its own
+    // "No matches for …" once typing settles. Saying "0 results" as well gives
+    // the same news two owners. A `renderBody` consumer draws no Empty, so the
+    // count stays its only signal.
+    if (count === 0 && !renderBody) return;
     const timer = window.setTimeout(() => {
       const message = count === 1 ? "1 result" : `${count} results`;
       useAnnouncerStore.getState().announce(message, "polite");
     }, UI_DOHERTY_THRESHOLD);
     return () => window.clearTimeout(timer);
-  }, [isFiltering, query, results.length, isOpen]);
+  }, [isFiltering, query, results.length, isOpen, renderBody]);
 
   useEscapeStack(isOpen, () => {
     if (query !== "") {

@@ -46,7 +46,7 @@ export function getCommandActionLabel(cmd: CommandManifestEntry): string | null 
  * unrelated commands in the list and the wrong one under Enter.
  */
 export function scoreCommand(cmd: CommandManifestEntry, query: string): number | null {
-  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const terms = query.toLowerCase().split(/\s+/).map(stripCommandSlash).filter(Boolean);
   if (terms.length === 0) return 0;
 
   const id = cmd.id.toLowerCase();
@@ -65,6 +65,14 @@ export function scoreCommand(cmd: CommandManifestEntry, query: string): number |
     else return null;
   }
   return total;
+}
+
+/**
+ * Rows print each command as `/github:work-issue`, so a query typed or pasted
+ * the way it reads must find it. The slash is presentation, not part of the id.
+ */
+function stripCommandSlash(term: string): string {
+  return term.replace(/^\/+/, "");
 }
 
 function isSubsequence(needle: string, haystack: string): boolean {
@@ -101,7 +109,8 @@ export function CommandPicker({
 
   const deferredQuery = useDeferredValue(query);
   const isStale = query !== deferredQuery;
-  const trimmedQuery = deferredQuery.trim();
+  // A bare `/` is how a slash command starts, not a search: keep browsing.
+  const trimmedQuery = deferredQuery.split(/\s+/).map(stripCommandSlash).join(" ").trim();
 
   const available = useMemo(
     () =>

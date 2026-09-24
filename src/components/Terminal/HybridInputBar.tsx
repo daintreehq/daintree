@@ -916,6 +916,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       "--ib-hover-bg": inputBarColors.shellHoverBg,
       "--ib-focus-bg": inputBarColors.shellFocusBg,
       "--ib-accent": inputBarColors.accent,
+      "--ib-fg": inputBarColors.foreground,
     } as React.CSSProperties;
 
     // One hook instance serves both hosts, so its hover state says a drag is
@@ -1053,16 +1054,23 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   type="button"
                   onClick={openPicker}
                   disabled={disabled}
-                  // `size-6` is the WCAG 2.5.8 floor on both axes: at `leading-5`
+                  // `h-6 w-6` is the WCAG 2.5.8 floor on both axes: at `leading-5`
                   // the button was 20px tall, and at its old `pl-2 pr-1` it was
                   // 19px wide with its spacing circle over the canvas.
                   //
                   // Neutral, not accent: this marker sits in every composer on
                   // screen, and accent is one signal per focus region — the
-                  // composer's own focus ring already spends it. Its keyboard
-                  // focus is a neutral outline on the glyph, so a Tab onto it
-                  // reads as the button and not as the editor beside it.
-                  className="flex size-6 shrink-0 items-center justify-center select-none rounded-[var(--radius-sm)] font-mono text-xs font-semibold leading-5 text-text-secondary hover:text-text-primary transition-colors cursor-pointer focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-border-strong focus-visible:text-text-primary"
+                  // composer's own focus ring already spends it.
+                  //
+                  // Drawn from the composer's own foreground, not the app's
+                  // text ramp. The shell is painted from the terminal palette,
+                  // which stays dark under a light app theme, so an app token
+                  // lands dark-on-dark there. Mixing toward `--ib-bg` rather
+                  // than transparent keeps it a solid colour whose contrast is
+                  // fixed by the pair, whichever polarity the terminal has.
+                  // Keyboard focus is an outline on the glyph itself, so a Tab
+                  // onto it reads as the button and not the editor beside it.
+                  className="flex h-6 w-6 shrink-0 items-center justify-center select-none rounded-[var(--radius-sm)] font-mono text-xs font-semibold leading-5 text-[color-mix(in_oklab,var(--ib-fg)_72%,var(--ib-bg))] hover:text-[var(--ib-fg)] transition-colors cursor-pointer focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-[color-mix(in_oklab,var(--ib-fg)_60%,var(--ib-bg))] focus-visible:text-[var(--ib-fg)]"
                   aria-label="Open command picker"
                 >
                   <span aria-hidden="true">❯</span>

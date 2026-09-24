@@ -203,4 +203,75 @@ describe("SearchablePalette filter-result live announcement", () => {
 
     expect(announceMock).not.toHaveBeenCalled();
   });
+
+  it("leaves a zero-result pass to the empty state's own announcement", () => {
+    const { rerender } = renderPalette({ query: "zz", results: [], isFiltering: true });
+    rerender(
+      <SearchablePalette<Item>
+        isOpen
+        query="zz"
+        results={[]}
+        selectedIndex={0}
+        onQueryChange={() => {}}
+        onSelectPrevious={() => {}}
+        onSelectNext={() => {}}
+        onConfirm={() => {}}
+        onClose={() => {}}
+        getItemId={(item) => item.id}
+        renderItem={(item) => <div key={item.id}>{item.id}</div>}
+        label="Test"
+        ariaLabel="Test palette"
+        tier="command"
+        isFiltering={false}
+      />
+    );
+    vi.advanceTimersByTime(400);
+    expect(announceMock).not.toHaveBeenCalled();
+  });
+
+  it("still announces a zero count for a custom body, which draws no empty state", () => {
+    const body = () => <div />;
+    const { rerender } = render(
+      <SearchablePalette<Item>
+        isOpen
+        query="zz"
+        results={[]}
+        selectedIndex={0}
+        onQueryChange={() => {}}
+        onSelectPrevious={() => {}}
+        onSelectNext={() => {}}
+        onConfirm={() => {}}
+        onClose={() => {}}
+        getItemId={(item) => item.id}
+        renderItem={(item) => <div key={item.id}>{item.id}</div>}
+        renderBody={body}
+        label="Test"
+        ariaLabel="Test palette"
+        tier="command"
+        isFiltering
+      />
+    );
+    rerender(
+      <SearchablePalette<Item>
+        isOpen
+        query="zz"
+        results={[]}
+        selectedIndex={0}
+        onQueryChange={() => {}}
+        onSelectPrevious={() => {}}
+        onSelectNext={() => {}}
+        onConfirm={() => {}}
+        onClose={() => {}}
+        getItemId={(item) => item.id}
+        renderItem={(item) => <div key={item.id}>{item.id}</div>}
+        renderBody={body}
+        label="Test"
+        ariaLabel="Test palette"
+        tier="command"
+        isFiltering={false}
+      />
+    );
+    vi.advanceTimersByTime(400);
+    expect(announceMock).toHaveBeenCalledWith("0 results", "polite");
+  });
 });
