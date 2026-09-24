@@ -156,7 +156,13 @@ describe("CrossWorktreeDiff file stepping", () => {
     const callsAtEnd = mockCompareWorktrees.mock.calls.length;
     fireEvent.keyDown(window, { key: "]" });
     expect(mockCompareWorktrees.mock.calls.length).toBe(callsAtEnd);
-    expect(screen.getByLabelText("Next file").hasAttribute("disabled")).toBe(true);
+    const next = screen.getByLabelText("Next file");
+    expect(next.getAttribute("aria-disabled")).toBe("true");
+    // Unavailable, not natively disabled, so a focused button keeps focus; and
+    // activating it at the end is a no-op like the key.
+    expect(next.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(next);
+    expect(mockCompareWorktrees.mock.calls.length).toBe(callsAtEnd);
   });
 
   it("stepper buttons navigate like the bracket keys", async () => {
@@ -166,7 +172,7 @@ describe("CrossWorktreeDiff file stepping", () => {
     await waitFor(() => {
       expect(screen.getByTestId("cross-worktree-file-position").textContent).toBe("1 of 3");
     });
-    expect(screen.getByLabelText("Previous file").hasAttribute("disabled")).toBe(true);
+    expect(screen.getByLabelText("Previous file").getAttribute("aria-disabled")).toBe("true");
 
     fireEvent.click(screen.getByLabelText("Next file"));
     await waitFor(() => {

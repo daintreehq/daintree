@@ -1353,10 +1353,12 @@ export function DiffPane({
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={() => navigateFile(-1)}
-                      disabled={!hasPrevFile}
+                      onClick={() => {
+                        if (hasPrevFile) navigateFile(-1);
+                      }}
+                      aria-disabled={!hasPrevFile || undefined}
                       aria-label="Previous file"
-                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-text-primary hover:bg-border-default disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-text-primary hover:bg-border-default aria-disabled:opacity-40 aria-disabled:pointer-events-none"
                     >
                       <ChevronLeft className={TOOLBAR_ICON_CLASS} />
                     </button>
@@ -1373,10 +1375,12 @@ export function DiffPane({
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={() => navigateFile(1)}
-                      disabled={!hasNextFile}
+                      onClick={() => {
+                        if (hasNextFile) navigateFile(1);
+                      }}
+                      aria-disabled={!hasNextFile || undefined}
                       aria-label="Next file"
-                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-text-primary hover:bg-border-default disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-text-primary hover:bg-border-default aria-disabled:opacity-40 aria-disabled:pointer-events-none"
                     >
                       <ChevronRight className={TOOLBAR_ICON_CLASS} />
                     </button>
