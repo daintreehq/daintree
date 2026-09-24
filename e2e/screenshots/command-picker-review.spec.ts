@@ -166,6 +166,49 @@ async function snapTrigger(page: Page, theme: string, focus: boolean): Promise<s
   return out;
 }
 
+/**
+ * The whole composer, stash restore showing, so the prompt marker is judged
+ * beside the controls it shares the shell with: the same surface, the same
+ * colour source, one family.
+ */
+async function snapComposer(page: Page, theme: string, focus: "attach" | null): Promise<string> {
+  await stubViteHmrClient(page);
+  await page.setViewportSize({ width: 1200, height: 800 });
+  await page.goto(
+    `${baseURL}/hybrid-input-preview.html?case=ladder&theme=${theme}&draft=empty&stash=1`
+  );
+  const root = page.locator("[data-hybrid-input-root]").first();
+  await expect(root).toBeVisible({ timeout: 30_000 });
+  await expect(root.getByRole("button", { name: "Restore stashed input" })).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await page.addStyleTag({ content: FREEZE_CSS });
+  if (focus === "attach") {
+    await page.keyboard.press("Shift");
+    const attach = root.getByRole("button", { name: "Attach files" });
+    await attach.focus();
+    await expect(attach).toBeFocused();
+  }
+  await page.waitForTimeout(150);
+  const box = await root.boundingBox();
+  if (!box || box.width < 100 || box.height < 16) {
+    throw new Error(`composer: no real box (${JSON.stringify(box)})`);
+  }
+  const out = path.join(
+    OUT_DIR,
+    `${focus ? "16-composer-attach-focus" : "15-composer-controls"}--${theme}.png`
+  );
+  await page.screenshot({
+    path: out,
+    clip: {
+      x: Math.max(0, box.x - 16),
+      y: Math.max(0, box.y - 16),
+      width: box.width + 32,
+      height: box.height + 32,
+    },
+  });
+  return out;
+}
+
 test("Command picker — states and themes", async ({ page }) => {
   test.info().annotations.push({
     type: "conditional-skip",
@@ -222,6 +265,8 @@ test("Command picker — states and themes", async ({ page }) => {
 
     written.push(await snapTrigger(page, theme, false));
     written.push(await snapTrigger(page, theme, true));
+    written.push(await snapComposer(page, theme, null));
+    written.push(await snapComposer(page, theme, "attach"));
   }
 
   // Forced colours, one theme: the selected row has to survive losing its fill.
@@ -234,6 +279,6 @@ test("Command picker — states and themes", async ({ page }) => {
   expect(pageErrors, `page errors: ${pageErrors.join(" | ")}`).toEqual([]);
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(written.length).toBe(THEMES.length * 13 + 1);
+  expect(written.length).toBe(THEMES.length * 15 + 1);
   console.log(`[command-picker-shots] wrote ${written.length} captures to ${OUT_DIR}`);
 });
