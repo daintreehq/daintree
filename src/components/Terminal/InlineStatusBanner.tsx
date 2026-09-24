@@ -445,6 +445,12 @@ export function InlineStatusBanner({
 
   const showControlsRow = !!trailingSlot || (!stacked && !!onClose) || actionList.length > 0;
 
+  // A stacked banner shows its dismiss in the title row's corner, but it comes
+  // last in the DOM, after the recovery: tabbing into a failure should land on
+  // the fix, not on the way to throw the failure away. The title-bar surface
+  // keeps it in the row, where the window-controls inset still applies.
+  const trailingClose = stacked && !!closeButton && !isTitleBarSurface;
+
   const controlsRow = showControlsRow ? (
     <div
       data-banner-controls
@@ -548,6 +554,7 @@ export function InlineStatusBanner({
         // let the tint applied to that strip bleed over the toolbar beneath it,
         // so a title-bar banner always fills the band it is colouring.
         isTitleBarSurface && "relative min-h-12 app-drag-region",
+        trailingClose && "relative",
         className
       )}
       style={{
@@ -587,9 +594,11 @@ export function InlineStatusBanner({
           </div>
         ) : hasDescription ? (
           <div className="flex-1 min-w-0">
-            <div className="flex justify-between items-start gap-2">
+            <div className={cn("flex justify-between items-start gap-2", trailingClose && "pr-8")}>
               <span className="text-sm font-medium text-text-primary">{title}</span>
-              {stacked && closeButton && <div className="-mt-1 -mr-1">{closeButton}</div>}
+              {stacked && closeButton && !trailingClose && (
+                <div className="-mt-1 -mr-1">{closeButton}</div>
+              )}
             </div>
             {description && (
               <p className="text-xs mt-0.5 break-words text-text-secondary">{description}</p>
@@ -607,6 +616,7 @@ export function InlineStatusBanner({
       </div>
 
       {!isInline && controlsRow}
+      {trailingClose && <div className="absolute top-1 right-2">{closeButton}</div>}
     </div>
   );
 }
