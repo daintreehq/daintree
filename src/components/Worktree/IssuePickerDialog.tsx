@@ -197,7 +197,7 @@ export function IssuePickerDialog({
     <AppDialog isOpen={isOpen} onClose={onClose} size="md" maxHeight="max-h-[70vh]">
       <AppDialog.Header>
         <AppDialog.Title icon={<Link className="w-5 h-5 text-pr-open" />}>
-          Attach Issue
+          Attach issue
         </AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>

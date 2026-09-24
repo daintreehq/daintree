@@ -30,7 +30,7 @@ async function closeAppDialog(window: Page): Promise<void> {
   await expect(window.locator('[role="dialog"]')).toHaveCount(0, { timeout: T_MEDIUM });
 }
 
-function getRecipeEditor(window: Page, title: "Create Recipe" | "Edit Recipe" = "Create Recipe") {
+function getRecipeEditor(window: Page, title: "Create Recipe" | "Edit recipe" = "Create Recipe") {
   return window.getByRole("dialog").filter({ hasText: title });
 }
 
@@ -200,7 +200,7 @@ test.describe.serial("Recipe & onboarding coverage (#9597)", () => {
       // Reopen the recipe and confirm the agent type persisted across the round-trip.
       const reopenManager = await openRecipeManager(window);
       await reopenManager.getByLabel("Edit recipe Typed Recipe").click({ force: true });
-      const reopened = getRecipeEditor(window, "Edit Recipe");
+      const reopened = getRecipeEditor(window, "Edit recipe");
       await expect(reopened).toBeVisible({ timeout: T_MEDIUM });
       await expect(reopened.locator(SEL.recipeEditor.terminalType(0))).toHaveValue("claude", {
         timeout: T_SHORT,

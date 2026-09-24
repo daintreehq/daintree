@@ -52,7 +52,7 @@ test.describe.serial("Core: Terminal Recipes", () => {
       });
     }
 
-    function getRecipeEditor(title: "Create Recipe" | "Edit Recipe" = "Create Recipe") {
+    function getRecipeEditor(title: "Create Recipe" | "Edit recipe" = "Create Recipe") {
       return ctx.window.getByRole("dialog").filter({ hasText: title });
     }
 
@@ -158,7 +158,7 @@ test.describe.serial("Core: Terminal Recipes", () => {
         .locator(SEL.projectSettings.editRecipeButton("E2E Test Recipe"))
         .click({ force: true });
 
-      const editor = getRecipeEditor("Edit Recipe");
+      const editor = getRecipeEditor("Edit recipe");
       await expect(editor).toBeVisible({ timeout: T_MEDIUM });
 
       // Verify saved values loaded
@@ -194,7 +194,7 @@ test.describe.serial("Core: Terminal Recipes", () => {
       await window
         .locator(SEL.projectSettings.editRecipeButton("E2E Test Recipe"))
         .click({ force: true });
-      const editorAgain = getRecipeEditor("Edit Recipe");
+      const editorAgain = getRecipeEditor("Edit recipe");
       await expect(editorAgain).toBeVisible({ timeout: T_MEDIUM });
       await expect(recipeNameInput(editorAgain)).toHaveValue("E2E Test Recipe", {
         timeout: T_SHORT,
@@ -217,7 +217,7 @@ test.describe.serial("Core: Terminal Recipes", () => {
       await expect(editBtn).toBeVisible({ timeout: T_MEDIUM });
       await editBtn.click({ force: true });
 
-      const editor = getRecipeEditor("Edit Recipe");
+      const editor = getRecipeEditor("Edit recipe");
       await expect(editor).toBeVisible({ timeout: T_MEDIUM });
 
       // Update the recipe name
@@ -238,7 +238,7 @@ test.describe.serial("Core: Terminal Recipes", () => {
       await window
         .locator(SEL.projectSettings.editRecipeButton("E2E Updated Recipe"))
         .click({ force: true });
-      const editorAgain = getRecipeEditor("Edit Recipe");
+      const editorAgain = getRecipeEditor("Edit recipe");
       await expect(recipeNameInput(editorAgain)).toHaveValue("E2E Updated Recipe", {
         timeout: T_SHORT,
       });
