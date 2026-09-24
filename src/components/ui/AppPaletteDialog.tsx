@@ -63,11 +63,18 @@ export { KBD_CLASS };
  * one-off measurement, so a second surface that grows the same shape takes
  * this rather than inventing its own number.
  *
- * Three tiers, not a free width per palette — palettes open from the same
+ * `workspace` is the fourth, for a palette whose rows carry several named
+ * sections of their own — the worktree overview's identity, agents, changes
+ * and age — where each section needs room for a line of prose (an agent's
+ * task) rather than a glyph. At the overview tier those sections squeezed to
+ * glyph clusters and ellipses. Still a capped box, inside the 880-980px band
+ * data-heavy dialogs settle on, never a window-sized canvas.
+ *
+ * Four tiers, not a free width per palette — palettes open from the same
  * keyboard reflex and often in sequence, so unconstrained per-surface sizing
  * reads as the box jumping around rather than as a deliberate size.
  */
-export type PaletteSurfaceTier = "anchored" | "command" | "overview";
+export type PaletteSurfaceTier = "anchored" | "command" | "overview" | "workspace";
 
 /**
  * Tailwind needs each class present in source for the JIT compiler, so these
@@ -78,11 +85,20 @@ export const PALETTE_SURFACE_WIDTHS: Record<PaletteSurfaceTier, string> = {
   anchored: "w-[484px] max-w-[calc(100vw-2rem)]",
   command: "w-[608px] max-w-[calc(100vw-2rem)]",
   overview: "w-[672px] max-w-[calc(100vw-2rem)]",
+  workspace: "w-[880px] max-w-[calc(100vw-2rem)]",
 };
+
+/** Why the palette asked to close — for a consumer whose Escape is two-stage. */
+export type PaletteCloseReason = "escape" | "backdrop";
 
 export interface AppPaletteDialogProps {
   isOpen: boolean;
-  onClose: () => void;
+  /**
+   * Called for Escape and for a scrim click, with the reason. A consumer that
+   * treats the two differently reads it rather than inferring the source from
+   * a key flag, which cannot be ordered reliably against a later pointer task.
+   */
+  onClose: (reason?: PaletteCloseReason) => void;
   children: React.ReactNode;
   ariaLabel: string;
   /**
@@ -126,7 +142,8 @@ export function AppPaletteDialog({
   initialFocusRef,
   className,
 }: AppPaletteDialogProps) {
-  useEscapeStack(isOpen, onClose);
+  const closeOnEscape = useCallback(() => onClose("escape"), [onClose]);
+  useEscapeStack(isOpen, closeOnEscape);
   const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const autofocusRafRef = useRef<number | null>(null);
@@ -251,7 +268,7 @@ export function AppPaletteDialog({
 
   useLayoutEffect(() => {
     if (!isOpen) return;
-    const closeThis = () => onCloseRef.current();
+    const closeThis = () => onCloseRef.current("escape");
     const unregister = registerDialogEscapeBackstop(closeThis);
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.isComposing || e.repeat) return;
@@ -310,7 +327,7 @@ export function AppPaletteDialog({
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
       if (e.target === e.currentTarget) {
-        onClose();
+        onClose("backdrop");
       }
     },
     [onClose]

@@ -3155,16 +3155,6 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     outline-offset: -1px;
   }
 
-  /* Overview grid membership: the neutral leading rail is deliberately quiet
-     at normal contrast (accent restraint reserves the loud mark for the
-     keyboard cursor), which leaves it thin here. Widen the rail rather than
-     recolour it or add a second mark — the same ink, the same geometry, just
-     no longer a hairline, so membership does not change identity between the
-     two contrast modes. */
-  [role="gridcell"][aria-selected="true"][data-worktree-overview-cell]::before {
-    width: 5px;
-  }
-
   .assistant-focused {
     border-left-width: 2px;
   }

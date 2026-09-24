@@ -145,14 +145,14 @@ const DURABLE_ALLOWLIST = new Set([
   // region), mirroring the PortalDock/Sidebar resize-handle convention (#11331)
   "src/panels/file-browser/FileBrowserPane.tsx",
 
-  // Worktree overview grid: the active-descendant cursor. The grid is a single
-  // tab stop whose 2D arrow keys move `aria-activedescendant`, so the cursor is
-  // NOT DOM focus and cannot be written as a `focus-visible:` variant the way
-  // the auto-exclusion above expects. It is nonetheless the one load-bearing
-  // anchor in that arrow-key domain, which is what accent is reserved for.
-  // Membership deliberately takes a neutral tint plus inset ring instead, so
-  // the two marks cannot be confused with each other (#11989).
-  "src/components/Worktree/WorktreeOverviewModal.tsx",
+  // Worktree overview list: the active-descendant cursor row. The list is a
+  // single tab stop whose arrow keys move `aria-activedescendant`, so the
+  // cursor is NOT DOM focus and cannot be written as a `focus-visible:` variant
+  // the way the auto-exclusion above expects. It is nonetheless the one
+  // load-bearing anchor in that arrow-key domain, which is what accent is
+  // reserved for. Membership is a neutral fill plus a checked box, so the two
+  // marks cannot be confused with each other (#11989).
+  "src/components/Worktree/WorktreeOverviewRow.tsx",
 ]);
 
 // Pre-existing accent usage inherited from cleanup buckets #5978-#5986 (all

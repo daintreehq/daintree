@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll, onTestFinished } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import { useRef } from "react";
 import {
@@ -13,12 +13,13 @@ import {
 // the column count from its `gridTemplateColumns` track string. Three tracks
 // keeps the 2D arithmetic obvious in the assertions.
 const originalGetComputedStyle = window.getComputedStyle;
+let gridTracks = "100px 100px 100px";
 beforeAll(() => {
   window.getComputedStyle = ((el: Element) => {
     const real = originalGetComputedStyle(el);
     return new Proxy(real, {
       get(target, prop) {
-        if (prop === "gridTemplateColumns") return "100px 100px 100px";
+        if (prop === "gridTemplateColumns") return gridTracks;
         return Reflect.get(target, prop);
       },
     });
@@ -92,6 +93,9 @@ function Harness({
       {worktreeIds.map((id) => (
         <div key={id} role="gridcell" id={getWorktreeOverviewCellId(id)} data-testid={`cell-${id}`}>
           <button data-testid={`btn-${id}`}>inner-{id}</button>
+          <button tabIndex={-1} data-testid={`btn2-${id}`}>
+            second-{id}
+          </button>
         </div>
       ))}
     </div>
@@ -184,6 +188,93 @@ describe("useWorktreeOverviewKeyboard — 2D arrow movement", () => {
     expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("h"));
     fireEvent.keyDown(grid, { key: "Home", ctrlKey: true });
     expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("a"));
+  });
+});
+
+describe("useWorktreeOverviewKeyboard — single-column list", () => {
+  beforeAll(() => {
+    gridTracks = "600px";
+  });
+  afterAll(() => {
+    gridTracks = "100px 100px 100px";
+  });
+
+  it("Left and Right have no neighbour to move to", () => {
+    const { getByTestId } = render(<Harness worktreeIds={IDS} />);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    const before = grid.getAttribute("aria-activedescendant");
+    fireEvent.keyDown(grid, { key: "ArrowRight" });
+    fireEvent.keyDown(grid, { key: "ArrowLeft" });
+    fireEvent.keyDown(grid, { key: "ArrowLeft" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(before);
+  });
+
+  it("ArrowDown moves one row at a time", () => {
+    const { getByTestId } = render(<Harness worktreeIds={IDS} />);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId(IDS[2]!));
+  });
+
+  it("PageDown moves by the rows the viewport shows, less one kept as overlap", () => {
+    const { getByTestId } = render(<Harness worktreeIds={IDS} />);
+    const grid = getByTestId("grid");
+    // A viewport five rows tall: a page is four rows.
+    Object.defineProperty(grid.parentElement!, "clientHeight", { configurable: true, value: 300 });
+    for (const id of IDS) {
+      Object.defineProperty(getByTestId(`cell-${id}`), "offsetHeight", {
+        configurable: true,
+        value: 60,
+      });
+    }
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "PageDown" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId(IDS[4]!));
+    fireEvent.keyDown(grid, { key: "PageUp" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId(IDS[0]!));
+  });
+
+  it("after F2, Up and Down walk the row's own controls and Escape returns to the list", () => {
+    // jsdom has no layout, so every offsetParent is null and the visibility
+    // filter would hide every control; give them the parent a browser would.
+    const offsetParent = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetParent");
+    Object.defineProperty(HTMLElement.prototype, "offsetParent", {
+      configurable: true,
+      get() {
+        return (this as HTMLElement).parentElement;
+      },
+    });
+    onTestFinished(() => {
+      if (offsetParent) Object.defineProperty(HTMLElement.prototype, "offsetParent", offsetParent);
+    });
+    const { getByTestId } = render(<Harness worktreeIds={IDS} />);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "F2" });
+    expect(document.activeElement).toBe(getByTestId("btn-a"));
+    fireEvent.keyDown(getByTestId("btn-a"), { key: "ArrowDown" });
+    expect(document.activeElement).toBe(getByTestId("btn2-a"));
+    fireEvent.keyDown(getByTestId("btn2-a"), { key: "ArrowUp" });
+    expect(document.activeElement).toBe(getByTestId("btn-a"));
+    fireEvent.keyDown(getByTestId("btn-a"), { key: "Escape" });
+    expect(document.activeElement).toBe(grid);
+  });
+
+  it("Home and End reach the ends of the list, not of a visual row", () => {
+    const { getByTestId } = render(<Harness worktreeIds={IDS} />);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    fireEvent.keyDown(grid, { key: "End" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(
+      getWorktreeOverviewCellId(IDS[IDS.length - 1]!)
+    );
+    fireEvent.keyDown(grid, { key: "Home" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId(IDS[0]!));
   });
 });
 

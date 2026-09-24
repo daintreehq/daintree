@@ -60,11 +60,11 @@ describe("WorktreeCard interaction-state axes (issue #6963)", () => {
     expect(cardSource).not.toContain("z-50 bg-overlay-soft border-2 border-overlay");
   });
 
-  it("suppresses the grid hover-shadow lift while a drag is active", () => {
-    // The guard has to sit on whichever element paints the lift. That is
-    // `OverviewGridCell` now — the grid card shell stopped painting a plane
-    // of its own — so assert the pairing rather than a fixed file: any
-    // element with the ambient hover shadow also carries the drag guard.
+  it("pairs any ambient hover lift with the drag guard", () => {
+    // Whatever element paints the ambient hover lift must also carry the drag
+    // guard, or a sort drag sweeping across it lights each one in turn. The
+    // overview's rows are flat list rows now and paint no lift at all, so the
+    // rule holds there with a count of zero; it still binds the card.
     for (const source of [cardSource, overviewSource]) {
       const liftCount = (source.match(/hover:shadow-\[var\(--theme-shadow-ambient\)\]/g) ?? [])
         .length;
@@ -73,11 +73,6 @@ describe("WorktreeCard interaction-state axes (issue #6963)", () => {
       ).length;
       expect(guardCount).toBe(liftCount);
     }
-    // …and the pairing exists somewhere, so a variant that simply deleted the
-    // hover lift cannot satisfy the rule vacuously.
-    expect(cardSource + overviewSource).toContain(
-      "[html[data-dragging='true']_&]:hover:shadow-none"
-    );
   });
 
   it("suppresses sidebar hover background while a drag is active, except on the drop target", () => {

@@ -236,6 +236,42 @@ describe("AppPaletteDialog Escape yielded by the layer underneath", () => {
   });
 });
 
+describe("AppPaletteDialog close reason", () => {
+  beforeEach(() => {
+    _resetForTests();
+    _resetBackstopForTests();
+  });
+
+  afterEach(() => {
+    _resetForTests();
+    _resetBackstopForTests();
+  });
+
+  // A consumer whose Escape is two-stage (clear a selection, then close) needs
+  // to tell Escape from a scrim click, and must not have to infer it from a key
+  // flag it cannot order reliably against a later pointer task.
+  it("says Escape for the key and backdrop for a scrim click", () => {
+    const onClose = vi.fn();
+    render(
+      <AppPaletteDialog isOpen onClose={onClose} ariaLabel="Reason palette" tier="command">
+        <input aria-label="Palette input" />
+      </AppPaletteDialog>
+    );
+
+    screen.getByRole("textbox", { name: "Palette input" }).focus();
+    act(() => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })
+      );
+    });
+    expect(onClose).toHaveBeenLastCalledWith("escape");
+
+    const scrim = screen.getByRole("dialog").parentElement!;
+    fireEvent.click(scrim);
+    expect(onClose).toHaveBeenLastCalledWith("backdrop");
+  });
+});
+
 describe("AppPaletteDialog focus restore", () => {
   beforeEach(() => {
     _resetForTests();

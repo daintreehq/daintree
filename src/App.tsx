@@ -11,7 +11,6 @@ import {
   useGridNavigation,
   useWindowNotifications,
   useWatchedPanelNotifications,
-  useWorktreeActions,
   useMenuActions,
   useErrors,
   useReEntrySummary,
@@ -210,11 +209,10 @@ function AppInner() {
     : latchedGitInit;
   const effectiveGitInitPath = effectiveGitInit?.path ?? null;
   const effectiveGitInitIdentity = effectiveGitInit?.identity ?? null;
-  const { selectWorktree, activeWorktreeId, focusedWorktreeId } = useWorktreeSelectionStore(
+  const { selectWorktree, activeWorktreeId } = useWorktreeSelectionStore(
     useShallow((state) => ({
       selectWorktree: state.selectWorktree,
       activeWorktreeId: state.activeWorktreeId,
-      focusedWorktreeId: state.focusedWorktreeId,
     }))
   );
 
@@ -323,8 +321,6 @@ function AppInner() {
   const closeLogLevelPalette = useCallback(() => {
     usePaletteStore.getState().closePalette("log-level");
   }, []);
-
-  const overviewWorktreeActions = useWorktreeActions();
 
   useAppEventListeners({ onOpenNewTerminalPalette: newTerminalPalette.open });
 
@@ -564,12 +560,8 @@ function AppInner() {
                 closeWorktreeOverview={closeWorktreeOverview}
                 worktrees={worktrees}
                 isLoading={isLoading}
-                focusedWorktreeId={focusedWorktreeId}
                 selectWorktree={selectWorktree}
-                overviewWorktreeActions={overviewWorktreeActions}
                 availability={availability}
-                agentSettings={agentSettings}
-                homeDir={homeDir}
                 crossDiffDialog={crossDiffDialog}
                 shouldMountCrossDiffDialog={shouldMountCrossDiffDialog}
                 closeCrossWorktreeDiff={closeCrossWorktreeDiff}

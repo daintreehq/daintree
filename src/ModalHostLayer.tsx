@@ -10,7 +10,6 @@ import type { UseProjectSwitcherPaletteReturn } from "./hooks/useProjectSwitcher
 import type { UseActionPaletteReturn } from "./hooks/useActionPalette";
 import type { UseWorktreePaletteReturn } from "./hooks/useWorktreePalette";
 import type { UseQuickCreatePaletteReturn } from "./hooks/useQuickCreatePalette";
-import type { WorktreeActions } from "./hooks/useWorktreeActions";
 import type { GettingStartedChecklistState } from "./hooks/app/useGettingStartedChecklist";
 import type { ReEntrySummaryState } from "./hooks/useReEntrySummary";
 import type { UseAgentLauncherReturn } from "./hooks/useAgentLauncher";
@@ -108,12 +107,8 @@ interface ModalHostLayerProps {
   closeWorktreeOverview: () => void;
   worktrees: WorktreeState[];
   isLoading: boolean;
-  focusedWorktreeId: string | null;
   selectWorktree: (id: string, options?: { source?: "user" | "focus" }) => void;
-  overviewWorktreeActions: WorktreeActions;
   availability: UseAgentLauncherReturn["availability"];
-  agentSettings: UseAgentLauncherReturn["agentSettings"];
-  homeDir: string | undefined;
   crossDiffDialog: { isOpen: boolean; initialWorktreeId: string | null };
   shouldMountCrossDiffDialog: boolean;
   closeCrossWorktreeDiff: () => void;
@@ -207,12 +202,8 @@ export function ModalHostLayer({
   closeWorktreeOverview,
   worktrees,
   isLoading,
-  focusedWorktreeId,
   selectWorktree,
-  overviewWorktreeActions,
   availability,
-  agentSettings,
-  homeDir,
   crossDiffDialog,
   shouldMountCrossDiffDialog,
   closeCrossWorktreeDiff,
@@ -640,14 +631,7 @@ export function ModalHostLayer({
               worktrees={worktrees}
               isLoading={isLoading}
               activeWorktreeId={activeWorktreeId}
-              focusedWorktreeId={focusedWorktreeId}
               onSelectWorktree={selectWorktree}
-              onOpenEditor={overviewWorktreeActions.handleOpenEditor}
-              onSaveLayout={undefined}
-              onLaunchAgent={overviewWorktreeActions.handleLaunchAgent}
-              agentAvailability={availability}
-              agentSettings={agentSettings}
-              homeDir={homeDir}
             />
           </Suspense>
         )}
