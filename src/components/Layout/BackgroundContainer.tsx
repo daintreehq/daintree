@@ -599,6 +599,10 @@ function BackgroundGroupItem({
   const tabCount = terminals.length;
   const groupName = `Tab group (${tabCount} ${tabCount === 1 ? "tab" : "tabs"})`;
   const groupWaiting = terminals.filter((t) => t.agentState === "waiting").length;
+  // Named on the header too, so a collapsed group still says where it lives.
+  const groupWorktreeId = groupMetadata.worktreeId ?? terminals[0]?.worktreeId;
+  const groupWorktreeName =
+    showWorktree && groupWorktreeId ? worktreeMap.get(groupWorktreeId)?.name : undefined;
 
   return (
     <div className="rounded-[var(--radius-sm)] bg-transparent hover:bg-tint/5 transition-colors">
@@ -626,6 +630,11 @@ function BackgroundGroupItem({
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-text-secondary group-hover:text-text-primary truncate transition-colors">
             {groupName}
+            {groupWorktreeName && (
+              <span className="ml-1.5 text-3xs text-text-secondary font-normal">
+                {groupWorktreeName}
+              </span>
+            )}
             {groupWaiting > 0 && (
               <span className="ml-1.5 text-3xs text-text-secondary font-normal tabular-nums">
                 · {groupWaiting} waiting
