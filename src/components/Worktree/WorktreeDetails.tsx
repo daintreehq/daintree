@@ -117,7 +117,7 @@ export function WorktreeDetails({
       aria-label="Last activity"
       tabIndex={0}
     >
-      <ActivityLight lastActivityTimestamp={activityTime} className="h-1.5 w-1.5 shrink-0" />
+      <ActivityLight lastActivityTimestamp={activityTime} />
       {activityAuthor && (
         <CommitAuthorAvatar author={activityAuthor} forgeAvatarUrl={forgeAvatarUrl} size={20} />
       )}

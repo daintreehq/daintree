@@ -9,13 +9,13 @@ import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "@/lib
 import { cn } from "@/lib/utils";
 import type { AgentState } from "@shared/types";
 import { ActivityLight } from "../ActivityLight";
-import { AgentStatusIndicator, agentStateDotColor } from "../AgentStatusIndicator";
+import { agentStateDotColor, getAttentionAgentState } from "../terminalStateConfig";
 import { WorktreeActivityChip } from "../WorktreeCard/WorktreeActivityChip";
 import "@/index.css";
 
 /**
  * Standalone visual-review harness for the worktree activity light and the
- * agent-state indicators that live beside it in `AgentStatusIndicator.tsx`.
+ * agent-state pips on the toolbar and dock agent buttons.
  *
  * The light's meaning is its age: solid for five minutes after the last
  * activity, a colour fade over the next five, then a hollow ring. A real session
@@ -24,8 +24,8 @@ import "@/index.css";
  * hollow) are not ones you can ask for. This mounts the REAL `ActivityLight` and
  * `WorktreeActivityChip` at fixed ages against the real theme tokens and
  * `index.css`. The card rows, the toolbar buttons and the labels are harness
- * decoration; the pips use the real `toolbar-pip toolbar-badge` classes and
- * `agentStateDotColor`.
+ * decoration; the pips use the real `toolbar-pip toolbar-badge` classes,
+ * `getAttentionAgentState` and `agentStateDotColor`.
  *
  * Query parameters:
  *   ?theme=<built-in theme id>   (default daintree)
@@ -100,15 +100,15 @@ function DotStrip() {
   return (
     <div className="flex flex-col gap-3 rounded-[var(--radius-md)] bg-surface-panel p-3">
       {[
-        { label: "chip size", className: "h-1.5 w-1.5", zoom: 1 },
-        { label: "4× chip size", className: "h-1.5 w-1.5", zoom: 4 },
+        { label: "chip size", zoom: 1 },
+        { label: "4× chip size", zoom: 4 },
       ].map((row) => (
         <div key={row.label} className="flex items-end gap-5">
           <span className="w-24 shrink-0 text-2xs text-text-secondary">{row.label}</span>
           {AGES.map(({ key, label, age }) => (
             <div key={key} className="flex w-14 flex-col items-center gap-1.5">
               <div style={{ zoom: row.zoom }}>
-                <ActivityLight lastActivityTimestamp={NOW - age} className={row.className} />
+                <ActivityLight lastActivityTimestamp={NOW - age} />
               </div>
               <span className="text-2xs tabular-nums text-text-secondary">{label}</span>
             </div>
@@ -119,16 +119,25 @@ function DotStrip() {
   );
 }
 
-const PIP_STATES: AgentState[] = ["waiting", "directing", "working", "completed", "exited", "idle"];
+/** One agent's sessions, as the toolbar button aggregates them. */
+const PIP_CASES: { label: string; sessions: AgentState[] }[] = [
+  { label: "waiting", sessions: ["waiting"] },
+  { label: "directing", sessions: ["directing"] },
+  { label: "working + waiting", sessions: ["working", "waiting"] },
+  { label: "working + directing", sessions: ["working", "directing"] },
+  { label: "working", sessions: ["working"] },
+  { label: "idle", sessions: ["idle"] },
+];
 
 /** Toolbar-sized icon buttons carrying the real pip classes. */
 function Pips() {
   return (
     <div className="flex items-end gap-4 rounded-[var(--radius-md)] bg-surface-sidebar px-3 py-2">
-      {PIP_STATES.map((state) => {
-        const color = agentStateDotColor(state);
+      {PIP_CASES.map(({ label, sessions }) => {
+        const state = getAttentionAgentState(sessions);
+        const color = state ? agentStateDotColor(state) : null;
         return (
-          <div key={state} className="flex w-16 flex-col items-center gap-1.5">
+          <div key={label} className="flex w-24 flex-col items-center gap-1.5">
             <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)] text-text-secondary">
               <div className="relative">
                 <Bot className="h-4 w-4" aria-hidden="true" />
@@ -139,34 +148,10 @@ function Pips() {
                 />
               </div>
             </div>
-            <span className="text-2xs text-text-secondary">{state}</span>
+            <span className="text-center text-2xs text-text-secondary">{label}</span>
           </div>
         );
       })}
-    </div>
-  );
-}
-
-const BADGE_STATES: AgentState[] = [
-  "working",
-  "directing",
-  "completed",
-  "exited",
-  "waiting",
-  "idle",
-];
-
-function Badges() {
-  return (
-    <div className="flex items-end gap-4 rounded-[var(--radius-md)] bg-surface-panel px-3 py-2">
-      {BADGE_STATES.map((state) => (
-        <div key={state} className="flex w-16 flex-col items-center gap-1.5">
-          <div className="flex h-6 items-center">
-            <AgentStatusIndicator state={state} />
-          </div>
-          <span className="text-2xs text-text-secondary">{state}</span>
-        </div>
-      ))}
     </div>
   );
 }
@@ -180,11 +165,8 @@ function Preview() {
       <Section shot="dots" title="Activity light — decay curve">
         <DotStrip />
       </Section>
-      <Section shot="pips" title="Toolbar agent pips — agentStateDotColor">
+      <Section shot="pips" title="Toolbar agent pips — one agent's sessions">
         <Pips />
-      </Section>
-      <Section shot="badges" title="AgentStatusIndicator">
-        <Badges />
       </Section>
     </div>
   );

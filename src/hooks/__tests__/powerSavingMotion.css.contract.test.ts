@@ -71,7 +71,6 @@ const LOOPS = [
   ".animate-breathe",
   ".animate-pulse",
   ".motion-safe\\:animate-pulse",
-  ".status-working",
   ".forge-status-error",
 ];
 
@@ -86,7 +85,6 @@ describe("power-saving motion CSS", () => {
     ".animate-breathe",
     ".animate-pulse",
     ".motion-safe\\:animate-pulse",
-    ".status-working",
     ".forge-status-error",
   ])("stops the %s loop in an unlayered rule", (target) => {
     expect(ruleFor(target)?.declarations.get("animation")).toBe("none");

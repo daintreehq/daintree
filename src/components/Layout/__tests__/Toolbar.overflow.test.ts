@@ -32,7 +32,7 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
 
     it("imports the agent-state dot helpers and notify", () => {
       expect(source).toContain("agentStateDotColor");
-      expect(source).toContain("deriveAgentDominantStates");
+      expect(source).toContain("deriveAgentAttentionStates");
       expect(source).toContain('import { notify } from "@/lib/notify"');
     });
   });
@@ -50,13 +50,13 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
   });
 
   describe("agent-state dots", () => {
-    it("derives a per-agent dominant state map scoped to the active worktree", () => {
-      expect(source).toContain("agentDominantStates");
+    it("derives a per-agent pip state map scoped to the active worktree", () => {
+      expect(source).toContain("agentAttentionStates");
       // Shared with the launcher so the overflow dot matches the visible
       // agent button; computed inside useShallow so agent ticks that don't
-      // change a dominant state don't re-render the toolbar.
+      // change a pip state don't re-render the toolbar.
       expect(source).toMatch(
-        /useShallow\(\(s\) => deriveAgentDominantStates\(s\.panelsById, s\.panelIds, activeWorktreeId\)\)/
+        /useShallow\(\(s\) => deriveAgentAttentionStates\(s\.panelsById, s\.panelIds, activeWorktreeId\)\)/
       );
     });
 
@@ -65,7 +65,7 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
       // AgentOverflowItem component is the fix (mirrors DockLaunchButton).
       expect(source).toContain("function AgentOverflowItem");
       expect(source).toContain("useKeybindingDisplay(`agent.${id}`)");
-      expect(source).toContain("agentStateDotColor(dominantState)");
+      expect(source).toContain("agentStateDotColor(attentionState)");
     });
   });
 

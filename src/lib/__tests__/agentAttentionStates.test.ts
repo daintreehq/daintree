@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deriveAgentDominantStates } from "../agentDominantStates";
+import { deriveAgentAttentionStates } from "../agentAttentionStates";
 import type { PanelInstance } from "@shared/types/panel";
 import type { AgentState } from "@shared/types";
 
@@ -34,37 +34,39 @@ function ptyPanel(over: {
 
 function derive(panels: PanelInstance[], activeWorktreeId: string | null = null) {
   const panelsById = Object.fromEntries(panels.map((p) => [p.id, p]));
-  return deriveAgentDominantStates(
+  return deriveAgentAttentionStates(
     panelsById,
     panels.map((p) => p.id),
     activeWorktreeId
   );
 }
 
-describe("deriveAgentDominantStates", () => {
+describe("deriveAgentAttentionStates", () => {
   it("keys a panel under its runtime identity, not the agent it booted as", () => {
     // A plain shell that starts Claude has to be tracked under Claude, or the
     // dot lands on the wrong launcher row.
     const map = derive([
-      ptyPanel({ launchAgentId: "terminal", detectedAgentId: "claude", agentState: "working" }),
+      ptyPanel({ launchAgentId: "terminal", detectedAgentId: "claude", agentState: "waiting" }),
     ]);
-    expect(map.get("claude")).toBe("working");
+    expect(map.get("claude")).toBe("waiting");
     expect(map.has("terminal")).toBe(false);
   });
 
   it("falls back to launch intent before any detector result commits", () => {
-    const map = derive([ptyPanel({ launchAgentId: "codex", agentState: "working" })]);
-    expect(map.get("codex")).toBe("working");
+    const map = derive([ptyPanel({ launchAgentId: "codex", agentState: "waiting" })]);
+    expect(map.get("codex")).toBe("waiting");
   });
 
-  it("counts an idle agent as present even though it earns no dot", () => {
-    // `idle` is an active state — the agent is tracked — but the shared ranking
-    // resolves it to no colour, so the row must get an entry with a null value
-    // rather than being left out entirely.
-    const map = derive([ptyPanel({ detectedAgentId: "codex", agentState: "idle" })]);
-    expect(map.has("codex")).toBe(true);
-    expect(map.get("codex")).toBeNull();
-  });
+  it.each(["idle", "working"] as const)(
+    "counts a %s agent as present even though it earns no dot",
+    (agentState) => {
+      // The agent is tracked, but its state wants nothing from the user, so the
+      // row gets an entry with a null value rather than being left out.
+      const map = derive([ptyPanel({ detectedAgentId: "codex", agentState })]);
+      expect(map.has("codex")).toBe(true);
+      expect(map.get("codex")).toBeNull();
+    }
+  );
 
   it.each(["trash", "background", "overlay"])("ignores panels parked in %s", (location) => {
     const map = derive([ptyPanel({ detectedAgentId: "claude", agentState: "working", location })]);
@@ -83,39 +85,37 @@ describe("deriveAgentDominantStates", () => {
   it("counts only the active worktree once one is selected", () => {
     const map = derive(
       [
-        ptyPanel({ detectedAgentId: "claude", agentState: "working", worktreeId: "wt-1" }),
-        ptyPanel({ detectedAgentId: "gemini", agentState: "working", worktreeId: "wt-2" }),
+        ptyPanel({ detectedAgentId: "claude", agentState: "waiting", worktreeId: "wt-1" }),
+        ptyPanel({ detectedAgentId: "gemini", agentState: "waiting", worktreeId: "wt-2" }),
       ],
       "wt-1"
     );
-    expect(map.get("claude")).toBe("working");
+    expect(map.get("claude")).toBe("waiting");
     expect(map.has("gemini")).toBe(false);
   });
 
   it("counts every worktree when none is selected", () => {
     const map = derive([
-      ptyPanel({ detectedAgentId: "claude", agentState: "working", worktreeId: "wt-1" }),
-      ptyPanel({ detectedAgentId: "gemini", agentState: "working", worktreeId: "wt-2" }),
+      ptyPanel({ detectedAgentId: "claude", agentState: "waiting", worktreeId: "wt-1" }),
+      ptyPanel({ detectedAgentId: "gemini", agentState: "directing", worktreeId: "wt-2" }),
     ]);
-    expect(map.get("claude")).toBe("working");
-    expect(map.get("gemini")).toBe("working");
+    expect(map.get("claude")).toBe("waiting");
+    expect(map.get("gemini")).toBe("directing");
   });
 
-  it("collapses several panels of one agent into a single dominant state", () => {
+  it("keeps a waiting session's pip when a sibling of the same agent is working", () => {
     const map = derive([
-      ptyPanel({ detectedAgentId: "claude", agentState: "idle" }),
+      ptyPanel({ detectedAgentId: "claude", agentState: "working" }),
       ptyPanel({ detectedAgentId: "claude", agentState: "waiting" }),
     ]);
     expect(map.size).toBe(1);
-    // Whichever the shared ranking picks, it must be one of the two observed —
-    // never a state no panel is actually in.
-    expect(["idle", "waiting"]).toContain(map.get("claude"));
+    expect(map.get("claude")).toBe("waiting");
   });
 
   it("skips ids that are missing from the panel map", () => {
-    const present = ptyPanel({ detectedAgentId: "claude", agentState: "working" });
-    const map = deriveAgentDominantStates({ [present.id]: present }, [present.id, "ghost"], null);
-    expect(map.get("claude")).toBe("working");
+    const present = ptyPanel({ detectedAgentId: "claude", agentState: "waiting" });
+    const map = deriveAgentAttentionStates({ [present.id]: present }, [present.id, "ghost"], null);
+    expect(map.get("claude")).toBe("waiting");
   });
 
   it("returns primitive values so a shallow selector can bail on unchanged ticks", () => {

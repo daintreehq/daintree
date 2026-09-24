@@ -203,8 +203,8 @@ vi.mock("@/components/PanelPalette/PanelKindIcon", () => ({ PanelKindIcon: () =>
 
 // Empty map: the running pip is irrelevant to pin sync and pulling the real
 // derivation would drag the panel store's whole shape in with it.
-vi.mock("@/lib/agentDominantStates", () => ({
-  deriveAgentDominantStates: () => new Map<string, null>(),
+vi.mock("@/lib/agentAttentionStates", () => ({
+  deriveAgentAttentionStates: () => new Map<string, null>(),
 }));
 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));

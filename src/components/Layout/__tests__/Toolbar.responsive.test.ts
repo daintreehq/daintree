@@ -202,10 +202,10 @@ describe("Toolbar responsive design — issue #4133", () => {
         /overflowIds\.includes\("notification-center"\) && notificationUnreadCount > 0/
       );
       // Agent observations come from the same per-session derivation as the
-      // badge severity, never from the per-agent dominant state — a working
-      // session must not silence a waiting sibling in the name.
+      // badge severity, never from the per-agent pip map — the name counts
+      // every session, where the map holds one state per agent.
       expect(text).toMatch(/observations\.push\(\.\.\.agentObservations\)/);
-      expect(text).not.toMatch(/agentDominantStates\.get\(id\)/);
+      expect(text).not.toMatch(/agentAttentionStates\.get\(id\)/);
       expect(text).not.toMatch(/needs attention|requires attention/);
       // The observations are joined into the tooltip and the aria-label.
       expect(text).toMatch(/tooltipText = `More — \$\{n\} hidden\$\{observations\.length > 0 \?/);

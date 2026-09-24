@@ -26,12 +26,12 @@ import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/
 import { BrandMark, Workflow } from "@/components/icons";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
 import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
-import { agentStateDotColor } from "@/components/Worktree/AgentStatusIndicator";
+import { agentStateDotColor, STATE_LABELS } from "@/components/Worktree/terminalStateConfig";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { describeChord } from "@/lib/kbdShortcut";
 import { notify } from "@/lib/notify";
-import { deriveAgentDominantStates } from "@/lib/agentDominantStates";
+import { deriveAgentAttentionStates } from "@/lib/agentAttentionStates";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { isAgentButtonOnToolbar } from "@shared/utils/agentPinned";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
@@ -229,8 +229,8 @@ export function DockLaunchButton({
   const { newAgentIds, showDiscoveryBadge, readyAgentIds, markAgentsSeen, recordAgentFirstSeen } =
     useLauncherDiscovery(agentAvailability);
 
-  const agentDominantStates = usePanelStore(
-    useShallow((s) => deriveAgentDominantStates(s.panelsById, s.panelIds, activeWorktreeId))
+  const agentAttentionStates = usePanelStore(
+    useShallow((s) => deriveAgentAttentionStates(s.panelsById, s.panelIds, activeWorktreeId))
   );
 
   // Re-probe on view visibility changes (Electron LRU reactivation, tab
@@ -279,13 +279,13 @@ export function DockLaunchButton({
                   savedPresetId
                 )
               : undefined,
-          dominantState: agentDominantStates.get(agent.id) ?? null,
+          attentionState: agentAttentionStates.get(agent.id) ?? null,
           isNew: newAgentIds.has(agent.id),
         };
       }),
     [
       activeWorktreeId,
-      agentDominantStates,
+      agentAttentionStates,
       agentSettings,
       agents,
       ccrPresetsByAgent,
@@ -1297,7 +1297,7 @@ function DockLaunchCaptureRow({ row, onDone }: { row: DockLaunchRow; onDone: () 
   );
 }
 
-function RunningDot({ state }: { state: NonNullable<DockLaunchAgent["dominantState"]> | null }) {
+function RunningDot({ state }: { state: NonNullable<DockLaunchAgent["attentionState"]> | null }) {
   const color = state ? agentStateDotColor(state) : null;
   return (
     <span
@@ -1541,6 +1541,11 @@ function DockLaunchOption({
     // `e2e/helpers/panels.ts` matches rows by, and states provenance for a
     // listener who never sees the trailing span.
     originLabel,
+    // The corner pip is aria-hidden, so the state it draws is spoken here, on
+    // the same gate — worded like the overflow badge's "1 agent waiting".
+    row.kind === "item" && agent?.attentionState
+      ? `Agent ${STATE_LABELS[agent.attentionState]}`
+      : undefined,
     isRecent ? "Recent" : undefined,
     launchOutcome ? `Launches ${launchOutcome}` : undefined,
     effectiveCombo ? `Shortcut ${describeChord(effectiveCombo, isMac())}` : undefined,
@@ -1874,7 +1879,7 @@ function DockLaunchOptionIcon({ row }: { row: DockLaunchRow }) {
       ) : (
         <SquareTerminal className="w-3.5 h-3.5 shrink-0" />
       )}
-      {row.kind === "item" && <RunningDot state={agent.dominantState ?? null} />}
+      {row.kind === "item" && <RunningDot state={agent.attentionState ?? null} />}
     </span>
   );
 }

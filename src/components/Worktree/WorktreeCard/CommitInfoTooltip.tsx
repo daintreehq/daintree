@@ -224,7 +224,7 @@ export function CommitInfoTooltip({
       {showActivity && (
         <div className={hasCommit ? "mt-2.5 border-t border-border-divider pt-2.5" : undefined}>
           <div className="flex items-center gap-1.5 text-2xs text-text-secondary">
-            <ActivityLight lastActivityTimestamp={lastActivityTimestamp} className="h-1.5 w-1.5" />
+            <ActivityLight lastActivityTimestamp={lastActivityTimestamp} />
             <span>
               Last active {activityPhrase} ·{" "}
               <time

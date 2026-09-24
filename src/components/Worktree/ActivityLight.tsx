@@ -62,7 +62,7 @@ export function ActivityLight({ lastActivityTimestamp, className }: ActivityLigh
       aria-hidden="true"
       data-activity-active={active ? "true" : "false"}
       className={cn(
-        "w-2.5 h-2.5 rounded-full transition-colors duration-1000 ease-linear",
+        "h-1.5 w-1.5 shrink-0 rounded-full transition-colors duration-1000 ease-linear",
         active ? "" : "border bg-transparent",
         className
       )}

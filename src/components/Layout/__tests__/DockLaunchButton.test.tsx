@@ -975,6 +975,35 @@ describe("DockLaunchButton", () => {
       expect(rowByName(container, "Claude").getAttribute("aria-label")).toContain("Recent");
     });
 
+    it("speaks the state its corner pip draws, and nothing for a passive session", () => {
+      const saved = { panelsById: panelStoreState.panelsById, panelIds: panelStoreState.panelIds };
+      const session = (state: string) => ({
+        "pty-1": {
+          id: "pty-1",
+          kind: "terminal",
+          location: "grid",
+          detectedAgentId: "claude",
+          agentState: state,
+        },
+      });
+      try {
+        Object.assign(panelStoreState, { panelsById: session("waiting"), panelIds: ["pty-1"] });
+        const waiting = renderButton();
+        expect(rowByName(waiting.container, "Claude").getAttribute("aria-label")).toContain(
+          "Agent waiting"
+        );
+        waiting.unmount();
+
+        Object.assign(panelStoreState, { panelsById: session("working"), panelIds: ["pty-1"] });
+        const working = renderButton();
+        expect(rowByName(working.container, "Claude").getAttribute("aria-label")).not.toMatch(
+          /Agent (working|waiting|directing)/
+        );
+      } finally {
+        Object.assign(panelStoreState, saved);
+      }
+    });
+
     it("does not swallow modified keys, so app shortcuts still work", () => {
       const { container } = renderButton();
       const input = searchInput(container);

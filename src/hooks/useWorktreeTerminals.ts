@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import type { AgentState } from "@/types";
-import { getDominantAgentState } from "@/components/Worktree/AgentStatusIndicator";
+import { getDominantAgentState } from "@/components/Worktree/terminalStateConfig";
 import { deriveTerminalChrome, type TerminalChromeInput } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 

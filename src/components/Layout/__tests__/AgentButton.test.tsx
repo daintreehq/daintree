@@ -146,15 +146,6 @@ vi.mock("@/lib/colorUtils", () => ({
   getBrandColorHex: (id: string) => `#brand-${id}`,
 }));
 
-// Defaults match the historical "ignore the badge in these tests" stance;
-// individual badge tests override these to drive the indicator render path.
-let mockDominantState: string | null = null;
-let mockDotColor: string | null = "";
-vi.mock("@/components/Worktree/AgentStatusIndicator", () => ({
-  getDominantAgentState: () => mockDominantState,
-  agentStateDotColor: () => mockDotColor,
-}));
-
 vi.mock("@/components/ui/button", () => ({
   Button: ({
     children,
@@ -390,8 +381,6 @@ describe("AgentButton preset UX", () => {
     mockCcrPresetsByAgent = {};
     mockMergedPresetsFn = () => [];
     mockCliDetails = {};
-    mockDominantState = null;
-    mockDotColor = "";
     mockPanelsById = {};
     mockPanelIds = [];
     mockPanelIdsByWorktreeId = {};
@@ -1139,8 +1128,6 @@ describe("AgentButton preset UX", () => {
       mockPanelIds = ["panel-1"];
       mockPanelIdsByWorktreeId = { "wt-1": ["panel-1"] };
       mockActiveWorktreeId = "wt-1";
-      mockDominantState = "waiting";
-      mockDotColor = "bg-state-waiting";
 
       const { container } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
@@ -1151,14 +1138,37 @@ describe("AgentButton preset UX", () => {
       expect(badge!.className).toMatch(/bg-state-waiting/);
     });
 
+    it("keeps the waiting pip when a sibling session of the same agent is working", () => {
+      // A busy session must not hide one that is waiting on the user — the
+      // overflow badge counts per panel for the same reason.
+      mockSettings = settingsWith({ claude: { presetId: "user-blue" } });
+      mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
+      mockPanelsById = {
+        "panel-1": activePanel("working"),
+        "panel-2": { ...activePanel("waiting"), id: "panel-2" },
+      };
+      mockPanelIds = ["panel-1", "panel-2"];
+      mockPanelIdsByWorktreeId = { "wt-1": ["panel-1", "panel-2"] };
+      mockActiveWorktreeId = "wt-1";
+
+      const { container, getAllByRole, getByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      const badge = container.querySelector('.relative span[aria-hidden="true"]');
+      expect(badge?.getAttribute("data-visible")).toBe("true");
+      expect(badge!.className).toMatch(/bg-state-waiting/);
+      const chevronIcon = getByTestId("chevron-icon");
+      const primary = getAllByRole("button").find((b) => !b.contains(chevronIcon));
+      expect(primary?.getAttribute("aria-label")).toBe("Start Claude — waiting");
+    });
+
     it("hides the badge span when the helper returns null (passive state)", () => {
       mockSettings = settingsWith({ claude: {} });
       mockPanelsById = { "panel-1": activePanel("working") };
       mockPanelIds = ["panel-1"];
       mockPanelIdsByWorktreeId = { "wt-1": ["panel-1"] };
       mockActiveWorktreeId = "wt-1";
-      mockDominantState = "working";
-      mockDotColor = null;
 
       const { container } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
@@ -1170,8 +1180,6 @@ describe("AgentButton preset UX", () => {
 
     it("hides the badge span when there is no active session", () => {
       mockSettings = settingsWith({ claude: {} });
-      mockDominantState = null;
-      mockDotColor = "bg-state-waiting";
 
       const { container } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
@@ -1192,8 +1200,6 @@ describe("AgentButton preset UX", () => {
       mockPanelIds = ["panel-1"];
       mockPanelIdsByWorktreeId = { "wt-1": ["panel-1"] };
       mockActiveWorktreeId = "wt-1";
-      mockDominantState = "waiting";
-      mockDotColor = "bg-state-waiting";
 
       const { container, getAllByRole, getAllByTestId, getByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
@@ -1222,8 +1228,6 @@ describe("AgentButton preset UX", () => {
       mockPanelIds = ["panel-1"];
       mockPanelIdsByWorktreeId = { "wt-1": ["panel-1"] };
       mockActiveWorktreeId = "wt-1";
-      mockDominantState = "directing";
-      mockDotColor = "bg-state-working";
 
       const { getAllByRole, getAllByTestId, getByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
@@ -1252,8 +1256,6 @@ describe("AgentButton preset UX", () => {
       mockPanelIds = ["panel-1"];
       mockPanelIdsByWorktreeId = { "wt-1": ["panel-1"] };
       mockActiveWorktreeId = "wt-1";
-      mockDominantState = "waiting";
-      mockDotColor = "bg-state-waiting";
 
       const { getAllByTestId } = render(
         <AgentButton
@@ -1277,8 +1279,6 @@ describe("AgentButton preset UX", () => {
       mockPanelIds = ["panel-1"];
       mockPanelIdsByWorktreeId = { "wt-1": ["panel-1"] };
       mockActiveWorktreeId = "wt-1";
-      mockDominantState = "working";
-      mockDotColor = null;
 
       const { getAllByRole, getAllByTestId, getByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
@@ -1299,8 +1299,6 @@ describe("AgentButton preset UX", () => {
     it("omits the state suffix when there is no active session", () => {
       mockSettings = settingsWith({ claude: { presetId: "user-blue" } });
       mockMergedPresetsFn = () => [{ id: "user-blue", name: "Blue" }];
-      mockDominantState = null;
-      mockDotColor = "bg-state-waiting";
 
       const { getAllByRole, getAllByTestId, getByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
@@ -1812,8 +1810,6 @@ describe("AgentButton right-click unpin — issue #9825", () => {
     mockCcrPresetsByAgent = {};
     mockMergedPresetsFn = () => [];
     mockCliDetails = {};
-    mockDominantState = null;
-    mockDotColor = "";
     mockPanelsById = {};
     mockPanelIds = [];
     mockPanelIdsByWorktreeId = {};
@@ -1880,8 +1876,6 @@ describe("AgentButton external links — issue #10350", () => {
     mockCcrPresetsByAgent = {};
     mockMergedPresetsFn = () => [];
     mockCliDetails = {};
-    mockDominantState = null;
-    mockDotColor = "";
     mockPanelsById = {};
     mockPanelIds = [];
     mockPanelIdsByWorktreeId = {};

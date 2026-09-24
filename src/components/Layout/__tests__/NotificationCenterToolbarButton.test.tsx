@@ -548,7 +548,7 @@ describe("NotificationCenterToolbarButton — DND state surface", () => {
   // priority:"low" direct-to-inbox), the bell should play a brief one-shot
   // arrival animation. The animation must not fire during DND/quiet hours
   // and must not fire on the initial mount baseline. Cleanup uses the
-  // onAnimationEnd + safety-timeout pattern from AgentStatusIndicator so
+  // the onAnimationEnd + safety-timeout pattern so
   // no will-change layer hint lingers on the toolbar element.
   describe("inbox arrival animation (issue #6424)", () => {
     it("does not animate on the initial render", () => {
@@ -676,7 +676,7 @@ describe("NotificationCenterToolbarButton — DND state surface", () => {
 
       // Advance past the 250ms safety timeout (DURATION_200 + 50). In jsdom
       // `animationend` doesn't fire via dispatchEvent, so the safety timeout
-      // is the testable cleanup path — same as AgentStatusIndicator.
+      // is the testable cleanup path.
       await act(async () => {
         vi.advanceTimersByTime(300);
       });

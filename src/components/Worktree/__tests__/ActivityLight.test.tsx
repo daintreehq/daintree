@@ -92,10 +92,9 @@ describe("ActivityLight", () => {
 
   it("applies the className prop", () => {
     const { container } = render(
-      <ActivityLight lastActivityTimestamp={Date.now()} className="w-1.5 h-1.5" />
+      <ActivityLight lastActivityTimestamp={Date.now()} className="ml-1" />
     );
-    expect(getDot(container).className).toContain("w-1.5");
-    expect(getDot(container).className).toContain("h-1.5");
+    expect(getDot(container).className).toContain("ml-1");
   });
 
   it.each([

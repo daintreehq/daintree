@@ -50,8 +50,8 @@ interface AgentPipDescriptor {
 }
 
 // Local mapping that includes "working" — broader than the shared
-// agentStateDotColor() in AgentStatusIndicator, which deliberately omits
-// passive states for the worktree tray. Here the toolbar button is the only
+// agentStateDotColor() in terminalStateConfig, which deliberately omits
+// passive states for the agent buttons. Here the toolbar button is the only
 // chrome surfacing assistant state when the panel is closed, so working and
 // directing both earn the green pip alongside the yellow waiting pip.
 const AGENT_PIP_BY_STATE = {

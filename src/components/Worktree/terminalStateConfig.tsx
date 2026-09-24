@@ -38,6 +38,54 @@ export const STATE_PRIORITY = [
   "idle",
 ] as const satisfies readonly AgentState[];
 
+export function getDominantAgentState(states: (AgentState | undefined)[]): AgentState | null {
+  const present = new Set<AgentState>();
+  for (const state of states) {
+    if (state !== undefined) present.add(state);
+  }
+  if (present.size === 0) return null;
+
+  for (const state of STATE_PRIORITY) {
+    if (present.has(state)) {
+      return state === "idle" ? null : state;
+    }
+  }
+  return null;
+}
+
+/**
+ * The states that earn a corner pip on an agent's toolbar or dock button.
+ * Passive states (working, completed, exited, idle) get none, so the few
+ * sessions that want a human stand out on a toolbar running many agents.
+ * Waiting is the agent asking; directing is the user's own unsent prompt.
+ */
+export const ATTENTION_PRIORITY = ["waiting", "directing"] as const satisfies readonly AgentState[];
+
+export type AttentionAgentState = (typeof ATTENTION_PRIORITY)[number];
+
+/**
+ * The pip state for a set of sessions. Deliberately not `STATE_PRIORITY`,
+ * which ranks working first: one busy session would then hide a sibling that
+ * is waiting on the user, which is the one thing the pip exists to show.
+ */
+export function getAttentionAgentState(
+  states: Iterable<AgentState | undefined>
+): AttentionAgentState | null {
+  const present = new Set<AgentState | undefined>(states);
+  return ATTENTION_PRIORITY.find((state) => present.has(state)) ?? null;
+}
+
+// The pip takes the hue of the state's own glyph in STATE_COLORS, so a blue
+// pip and a blue InteractingCircle mean the same thing wherever they appear.
+const AGENT_DOT_COLORS = {
+  waiting: "bg-state-waiting",
+  directing: "bg-category-blue",
+} as const satisfies Record<AttentionAgentState, string>;
+
+export function agentStateDotColor(state: AgentState): string | null {
+  return (AGENT_DOT_COLORS as Partial<Record<AgentState, string>>)[state] ?? null;
+}
+
 export function getEffectiveStateIcon(
   agentState: AgentState
 ): React.ComponentType<{ className?: string }> {

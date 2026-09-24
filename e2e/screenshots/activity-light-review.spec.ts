@@ -1,12 +1,12 @@
 /**
- * Activity light + agent-state indicator visual-review harness.
+ * Activity light + agent-state pip visual-review harness.
  *
  * The activity light's meaning is its age — solid for five minutes, a fade over
  * the next five, then a hollow ring — and a live session only ever shows the one
  * point on that curve the worktree happens to be at. This drives the preview
- * entry (`activity-light-preview.html`), which mounts the REAL `ActivityLight`,
- * `WorktreeActivityChip` and `AgentStatusIndicator` at fixed ages and states
- * against the real theme tokens and `index.css`.
+ * entry (`activity-light-preview.html`), which mounts the REAL `ActivityLight`
+ * and `WorktreeActivityChip` at fixed ages, and pips drawn by the real
+ * attention selector, against the real theme tokens and `index.css`.
  *
  *   DAINTREE_SHOT_ACTIVITY_LIGHT=1 DESIGN_CAPTURE_DIR=/abs/dir \
  *     npx playwright test --project=screenshots activity-light-review
@@ -35,7 +35,7 @@ const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,namib,svalbard,ata
   .map((t) => t.trim())
   .filter(Boolean);
 
-const SECTIONS = ["rows", "dots", "pips", "badges"] as const;
+const SECTIONS = ["rows", "dots", "pips"] as const;
 
 const POLISH_CSS = `
   ::-webkit-scrollbar { display: none !important; }
