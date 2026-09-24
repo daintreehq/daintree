@@ -100,7 +100,7 @@ export const WslGitBanner = React.memo(function WslGitBanner({
 
   if (eligibility === "eligible") {
     return (
-      <div role="status" className={BANNER_SHELL}>
+      <div role="status" data-testid="wsl-git-banner" className={BANNER_SHELL}>
         <div className="flex-1">
           <div className="font-medium text-text-primary">Speed up git on this WSL worktree</div>
           <div className="mt-0.5 text-text-secondary">
@@ -145,7 +145,7 @@ export const WslGitBanner = React.memo(function WslGitBanner({
     // affordance so the user is never stranded on a perpetual skeleton.
     if (reprobeFailed || probeStuck) {
       return (
-        <div role="status" className={BANNER_SHELL}>
+        <div role="status" data-testid="wsl-git-banner" className={BANNER_SHELL}>
           <div className="flex-1">
             <div className="font-medium text-text-primary">Couldn't check WSL distro</div>
             <div className="mt-0.5 text-text-secondary">
@@ -170,7 +170,7 @@ export const WslGitBanner = React.memo(function WslGitBanner({
     }
     if (!showProbeSkeleton) return null;
     return (
-      <div role="status" aria-busy="true" className={BANNER_SHELL}>
+      <div role="status" aria-busy="true" data-testid="wsl-git-banner" className={BANNER_SHELL}>
         <div className="flex-1">
           <div className="h-4 w-48 animate-pulse-delayed rounded bg-overlay-strong" />
           <div className="mt-1.5 h-3 w-full animate-pulse-delayed rounded bg-overlay-subtle" />
@@ -181,7 +181,7 @@ export const WslGitBanner = React.memo(function WslGitBanner({
 
   // eligibility === "ineligible"
   return (
-    <div role="status" className={BANNER_SHELL}>
+    <div role="status" data-testid="wsl-git-banner" className={BANNER_SHELL}>
       <div className="flex-1">
         <div className="font-medium text-text-primary">Git runs via Windows</div>
         <div className="mt-0.5 text-text-secondary">
