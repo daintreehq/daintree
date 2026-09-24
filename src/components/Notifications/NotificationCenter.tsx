@@ -784,6 +784,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           // unread. Lowercase only — uppercase `U` is reserved for a future
           // bulk action and would conflict with Shift-modified navigation.
           if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+          // Archived rows are filed; the store won't unread them, so the key
+          // would do nothing while looking like it should.
+          if (filter === "archived") return;
           e.preventDefault();
           const row = flatRows[activeIndex];
           if (!row) return;
@@ -1433,7 +1436,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                     onSnoozeRow={handleSnoozeForRow}
                     onUnsnoozeRow={handleUnsnoozeForRow}
                     onArchiveRow={filter === "archived" ? undefined : archiveRow}
-                    onToggleReadRow={toggleReadForRow}
+                    onToggleReadRow={filter === "archived" ? undefined : toggleReadForRow}
                   />
                 )}
                 {chronoSections.map((section, sectionIdx) => (
@@ -1463,7 +1466,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                     onSnoozeRow={handleSnoozeForRow}
                     onUnsnoozeRow={handleUnsnoozeForRow}
                     onArchiveRow={filter === "archived" ? undefined : archiveRow}
-                    onToggleReadRow={toggleReadForRow}
+                    onToggleReadRow={filter === "archived" ? undefined : toggleReadForRow}
                   />
                 ))}
               </>
@@ -1613,7 +1616,7 @@ function NeedsAttentionSection({
   onSnoozeRow: (row: FlatRow, option: SnoozeDurationOption) => void;
   onUnsnoozeRow: (row: FlatRow) => void;
   onArchiveRow: ((row: FlatRow) => void) | undefined;
-  onToggleReadRow: (row: FlatRow) => void;
+  onToggleReadRow: ((row: FlatRow) => void) | undefined;
 } & RovingSectionProps) {
   return (
     <div data-testid="needs-attention-section" className="border-b border-divider">
@@ -1704,7 +1707,7 @@ function ChronoSection({
   onSnoozeRow: (row: FlatRow, option: SnoozeDurationOption) => void;
   onUnsnoozeRow: (row: FlatRow) => void;
   onArchiveRow: ((row: FlatRow) => void) | undefined;
-  onToggleReadRow: (row: FlatRow) => void;
+  onToggleReadRow: ((row: FlatRow) => void) | undefined;
   /**
    * Whether the "Needs attention" rail is rendering above this list. That rail
    * is a preview, not a filter — a pinned entry still appears here — so with
@@ -1861,7 +1864,7 @@ interface SnoozeRowProps {
   onUnsnooze: () => void;
   /** The pointer's route to what `e` and `u` do from the keyboard. */
   onArchive: (() => void) | undefined;
-  onToggleRead: () => void;
+  onToggleRead: (() => void) | undefined;
 }
 
 function renderGroup(
@@ -1945,7 +1948,7 @@ function buildSnoozeProps(
     onSnooze: (option) => handlers.onSnooze(row, option),
     onUnsnooze: () => handlers.onUnsnooze(row),
     onArchive: handlers.onArchive ? () => handlers.onArchive?.(row) : undefined,
-    onToggleRead: () => handlers.onToggleRead(row),
+    onToggleRead: handlers.onToggleRead ? () => handlers.onToggleRead?.(row) : undefined,
   };
 }
 
@@ -1955,7 +1958,8 @@ interface RowMenuHandlers {
   onUnsnooze: (row: FlatRow) => void;
   /** Absent in the Archived tab, where there is nothing further to archive to. */
   onArchive: ((row: FlatRow) => void) | undefined;
-  onToggleRead: (row: FlatRow) => void;
+  /** Absent in the Archived tab too: read state doesn't apply to filed rows. */
+  onToggleRead: ((row: FlatRow) => void) | undefined;
 }
 
 function ContextSectionHeader({

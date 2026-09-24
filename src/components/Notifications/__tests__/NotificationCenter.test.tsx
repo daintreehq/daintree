@@ -3324,7 +3324,8 @@ describe("NotificationCenter — row menu triage", () => {
   });
 
   it("offers no Archive on a row that is already archived", async () => {
-    setEntries([makeEntry({ id: "old", archivedAt: Date.now() - 1000 })]);
+    // A correlation id so the row still has a menu (Copy correlation ID).
+    setEntries([makeEntry({ id: "old", correlationId: "c-old", archivedAt: Date.now() - 1000 })]);
     const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Archived" }));
@@ -3332,6 +3333,7 @@ describe("NotificationCenter — row menu triage", () => {
 
     await openRowMenu(container);
     expect(screen.queryByRole("menuitem", { name: /^Archive/ })).toBeNull();
-    expect(screen.getByRole("menuitem", { name: /Mark as/ })).toBeTruthy();
+    // Read state doesn't apply to a filed row, so neither command is offered.
+    expect(screen.queryByRole("menuitem", { name: /Mark as/ })).toBeNull();
   });
 });
